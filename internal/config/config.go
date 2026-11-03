@@ -4,8 +4,9 @@
 //
 // The file is $XDG_CONFIG_HOME/beekeeper/config.yaml (or --config, or
 // $BEEKEEPER_CONFIG). Every field is optional; a missing file is the
-// defaults. The defaults are neutral: memory thresholds are fractions of the
-// machine's RAM, swap or filesystem, and every organisation or desk choice
+// defaults unless explicitly named by $BEEKEEPER_CONFIG. The defaults are
+// neutral: memory thresholds are fractions of the machine's RAM, swap or
+// filesystem, and every organisation or desk choice
 // (the production installation, the installations, the lanes, the role
 // names) is unset until configured. docs/examples/config.yaml is a complete
 // desk's configuration.
@@ -30,7 +31,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/notify"
+	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
 // Browser is the resource every machine has: the one Chrome the Claude in
@@ -73,15 +76,19 @@ type Config struct {
 	// through, and its keeper.
 	Teleport Teleport `yaml:"teleport"`
 
-	GitHub   GitHub   `yaml:"github"`
-	Watch    Watch    `yaml:"watch"`
-	Overlaps Overlaps `yaml:"overlaps"`
-	Claude   Claude   `yaml:"claude"`
-	Omp      Omp      `yaml:"omp"`
-	Desktop  Desktop  `yaml:"desktop"`
-	Memcap   Memcap   `yaml:"memcap"`
-	Lanes    []Lane   `yaml:"lanes"`
-	Merge    Merge    `yaml:"merge"`
+	GitHub   GitHub    `yaml:"github"`
+	Watch    Watch     `yaml:"watch"`
+	Disk     Disk      `yaml:"disk"`
+	Overlaps Overlaps  `yaml:"overlaps"`
+	Claude   Claude    `yaml:"claude"`
+	Omp      Omp       `yaml:"omp"`
+	Agy      Agy       `yaml:"agy"`
+	Codex    Codex     `yaml:"codex"`
+	Desktop  Desktop   `yaml:"desktop"`
+	Memcap   Memcap    `yaml:"memcap"`
+	Run      RunConfig `yaml:"run"`
+	Lanes    []Lane    `yaml:"lanes"`
+	Merge    Merge     `yaml:"merge"`
 	// Units configures the transient user services beekeeper starts.
 	Units  Units  `yaml:"units"`
 	Alerts Alerts `yaml:"alerts"`
@@ -94,11 +101,10 @@ type Config struct {
 	// Lemonade is the host's Lemonade Server, a second model server under
 	// the same model-server lease and ollama's budgets.
 	Lemonade Lemonade `yaml:"lemonade"`
-	// Supervisor is what `handover --prompt` tells a successor supervisor,
-	// how long a relay to it stays open and at what context it is due.
+	// Supervisor configures the supervisor loop.
 	Supervisor Supervisor `yaml:"supervisor"`
 	// Guide is the role that walks the person through the decisions
-	// waiting on them, never in the supervisor's session.
+	// waiting on them.
 	Guide Guide `yaml:"guide"`
 	// Agents configures how a registered agent near its context limit is
 	// handed over to a fresh session.
@@ -106,6 +112,8 @@ type Config struct {
 	// Capacity is how many agents the supervisor keeps busy and the
 	// headroom a new start needs.
 	Capacity Capacity `yaml:"capacity"`
+	// Stop is what beekeeper stop stops besides beekeeper's own units.
+	Stop Stop `yaml:"stop"`
 	// Reporter is the one-off status reporter session the standby watch
 	// starts once per interval.
 	Reporter Reporter `yaml:"reporter"`
@@ -193,25 +201,22 @@ func (s *Sink) defaults() {
 	}
 }
 
-func (s Sink) validate() error {
+func (s Sink) validateEach(report func(error)) {
 	if !s.Enabled() {
 		if s.Workflow != "" || s.Ref != "" || len(s.Verbs) > 0 {
-			return fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink")
+			report(fmt.Errorf("sink: no repo: set sink.repo, the workflow's owner/repo, or nothing of sink"))
 		}
-		return nil
+		return
 	}
-	if err := ownerRepos("sink.repo", []string{s.Repo}); err != nil {
-		return err
-	}
+	ownerReposEach("sink.repo", []string{s.Repo}, report)
 	if strings.TrimSpace(s.Workflow) == "" {
-		return fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo)
+		report(fmt.Errorf("sink.workflow: the workflow of %s to dispatch, its file name or id", s.Repo))
 	}
 	for _, v := range s.Verbs {
 		if !slices.Contains(SinkVerbs, v) {
-			return fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", "))
+			report(fmt.Errorf("sink.verbs: %q is none of %s", v, strings.Join(SinkVerbs, ", ")))
 		}
 	}
-	return nil
 }
 
 // Feedback configures the Slack feedback watch of the standby watch. It
@@ -365,10 +370,7 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
-	// TeamLabel is the issue label of the team's epics (default team/ and
-	// Team's first word, lower-cased: team/bumblebee): the priority list
-	// keeps a ranked epic that carries it whatever its Team field says, so
-	// a label sync that moves the Team never drops a rank.
+	// TeamLabel is read and ignored so an existing configuration loads.
 	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
@@ -381,7 +383,44 @@ type Board struct {
 	Order []BoardStep `yaml:"order"`
 	// Epics is the epic gate, whatever the order says.
 	Epics EpicGate `yaml:"epics"`
+	// ArchiveAfter is how long a closed item stays on the board before
+	// board tidy archives it (default 336h, two weeks; negative: never,
+	// closed items are still moved to Done). TidyEvery is how often the
+	// supervisor loop runs board tidy (default 1h; negative: never).
+	ArchiveAfter Duration `yaml:"archiveAfter"`
+	TidyEvery    Duration `yaml:"tidyEvery"`
+	// EscalateEvery is how long board escalate waits before it looks at a
+	// blocked item again; it asks the person once more only when what holds
+	// the item changed since its note (default 168h, a week; negative: never
+	// escalate).
+	EscalateEvery Duration `yaml:"escalateEvery"`
+	// Claims publishes the desk's session records on their issues, for
+	// the other desks working the same repositories.
+	Claims BoardClaims `yaml:"claims"`
 }
+
+// BoardClaims is a desk's claims on GitHub: each issue a session record
+// serves carries one marker comment of the desk (Desk), which board
+// next and agents start on every other desk honour, and which the desk
+// releases when the record ends.
+type BoardClaims struct {
+	// Off publishes no claim and reads none.
+	Off bool `yaml:"off"`
+	// Desk is the name the desk signs its claims with, which other desks
+	// see on the issues: a neutral name, never a machine's (the issues may
+	// be public). Unset, the desk publishes no claim and still honours the
+	// other desks'.
+	Desk string `yaml:"desk"`
+	// Refresh is how often the desk refreshes a claim that still holds
+	// (default 6h).
+	Refresh Duration `yaml:"refresh"`
+	// StaleAfter is how long another desk's claim holds unrefreshed
+	// (default 24h): older, it is shown and not honoured.
+	StaleAfter Duration `yaml:"staleAfter"`
+}
+
+// DefaultBoardArchiveAfter is board.archiveAfter when unset: two weeks.
+const DefaultBoardArchiveAfter = 14 * 24 * time.Hour
 
 // EpicGate is the epic gate: an epic in a Planning status is in planning,
 // neither it nor any issue under it offered; moving it to Go is the go,
@@ -404,7 +443,8 @@ type BoardStep struct {
 	// Name says why an item of the step is picked.
 	Name string `yaml:"name"`
 	// Status and Kind are the board's Status and Kind values; an
-	// unambiguous part of one ("up next") stands for it.
+	// unambiguous part of one ("up next") stands for it. Kind takes an
+	// item without a Kind by a label naming one: bug or kind/bug for Bug.
 	Status []string `yaml:"status"`
 	Kind   []string `yaml:"kind"`
 	Labels []string `yaml:"labels"`
@@ -421,6 +461,8 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
+	// WorkScope is read and ignored so an existing configuration loads.
+	WorkScope bool `yaml:"workScope"`
 }
 
 // Hooks configures where beekeeper's Claude Code hooks act.
@@ -428,6 +470,15 @@ type Hooks struct {
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
+	// TranscriptGrants authorize exact transcript files or fixture directories per session ID.
+	// Set by the supervisor, never inferred from a hook event.
+	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
+	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
+	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
+	// session would create directly in one, and one git neither tracks nor
+	// ignores in the main working tree of a checkout that sits directly in
+	// one; scratch files go in the session's scratchpad. Empty, off.
+	PersonFolders []string `yaml:"personFolders"`
 }
 
 // HookScope is where the hooks act: in a session beekeeper started or
@@ -636,6 +687,93 @@ type Kube struct {
 	Kubeconfig []string `yaml:"kubeconfig"`
 }
 
+// DiskPruneAuto and DiskPruneAsk select the automatic disk step or the
+// existing manual commands and doctor trims.
+const (
+	DiskPruneAuto = "auto"
+	DiskPruneAsk  = "ask"
+)
+
+// Disk configures automatic disk reclamation. Ask retains the existing
+// on-demand commands and doctor trims, without the automatic disk step.
+type Disk struct {
+	Prune string   `yaml:"prune"`
+	Every Duration `yaml:"every"`
+	// SccacheMaxGiB caps sccache's local cache: a scheduled run trims it least
+	// recently used first to three quarters of the cap; negative disables the cap.
+	SccacheMaxGiB int `yaml:"sccacheMaxGiB"`
+	// Checkouts locates main checkouts whose harness worktrees are inspected.
+	Checkouts []string `yaml:"checkouts"`
+	TrashDirs []string `yaml:"trashDirs"`
+	// BuildDirs adds regenerable directory names inside worktrees.
+	BuildDirs []string `yaml:"buildDirs"`
+	// BuildOutputs associates external build output with its owning worktree.
+	BuildOutputs []BuildOutput `yaml:"buildOutputs"`
+	// Caches are the disk step's cache policies. Beekeeper's own caches are
+	// its default entries (DiskCacheGo, DiskCacheSccache, DiskCacheTmp): an
+	// entry of the same name changes them, mode off drops them.
+	Caches []DiskCache `yaml:"caches"`
+}
+
+// Cache modes of the disk step. Entries removes a root's direct children
+// whole, files its single files, command runs the tool's own cleaner; go and sccache are the built-in Go build
+// cache and sccache trims; off drops an entry.
+const (
+	DiskCacheEntries = "entries"
+	DiskCacheFiles   = "files"
+	DiskCacheCommand = "command"
+	DiskCacheModeGo  = "go"
+	DiskCacheModeSc  = "sccache"
+	DiskCacheOff     = "off"
+)
+
+// Names of the built-in cache entries.
+const (
+	DiskCacheGo      = "go-build"
+	DiskCacheSccache = "sccache"
+	DiskCacheTmp     = "beekeeper-tmp"
+)
+
+// DiskCache is one cache policy of the disk step. Path is absolute (or
+// ~/...) and may be a glob: each match is a cache root. In entries mode a
+// root's direct children are the units, in files mode its files. A unit
+// untouched for OlderThan goes; past MaxGiB the least recently written go
+// until the root fits; under disk pressure a Regenerable cache keeps only
+// what was written within the hour. Nothing written within the hour, nothing
+// a process uses and nothing holding a git checkout is ever removed.
+type DiskCache struct {
+	// Name names the entry in reports (default its path).
+	Name        string   `yaml:"name"`
+	Path        string   `yaml:"path"`
+	Mode        string   `yaml:"mode"`
+	OlderThan   Duration `yaml:"olderThan"`
+	MaxGiB      float64  `yaml:"maxGiB"`
+	Regenerable bool     `yaml:"regenerable"`
+	// Command is mode command's cleaner, the tool's own ("uv cache prune"):
+	// split into words and run without a shell in the cache root, once the
+	// root holds more than MaxGiB and under disk pressure (no MaxGiB: under
+	// pressure only), never while a process references the root.
+	Command string `yaml:"command"`
+}
+
+// MaxBytes is the size budget in bytes; 0 is none.
+func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
+
+// Builtin reports whether name is one of beekeeper's own cache entries.
+func (DiskCache) Builtin(name string) bool {
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp
+}
+
+// BuildOutput is explicitly disposable output of the task in Worktree.
+// It is reclaimed only once that worktree's task ended and no process uses it.
+type BuildOutput struct {
+	Path     string `yaml:"path"`
+	Worktree string `yaml:"worktree"`
+}
+
+// Auto reports whether the disk step runs without a person's answer.
+func (d Disk) Auto() bool { return d.Prune == "" || d.Prune == DiskPruneAuto }
+
 // Teleport configures the Teleport login's keeper: a periodic user unit
 // that renews the SSO login before it expires, under the browser lease.
 type Teleport struct {
@@ -712,10 +850,24 @@ type Reporter struct {
 // Enabled reports whether a reporter is scheduled.
 func (r Reporter) Enabled() bool { return r.Every.Duration > 0 && r.Brief != "" }
 
+// Stop configures beekeeper stop.
+type Stop struct {
+	// Units are more user units (a timer of the desk's own) that beekeeper
+	// stop stops while they run and beekeeper resume starts again.
+	Units []string `yaml:"units"`
+}
+
 // Agents configures the hand-over of registered agents.
 type Agents struct {
+	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
+	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
+	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
+	// the existing local launch path. Execution configures this machine only
+	// when it is itself an execution host; authentication is provisioned there.
+	Hosts     map[string]ExecutionHost `yaml:"hosts,omitempty"`
+	Execution *execution.HostConfig    `yaml:"execution,omitempty"`
 	// RelayAt is an agent's session context, in tokens, at which the watch
-	// says its hand-over due (default: supervisor.relayAt).
+	// says its hand-over due (default 400k).
 	RelayAt Tokens `yaml:"relayAt"`
 	// LastStepGrace is how long the watch holds the hand-over of an agent
 	// over RelayAt whose task is in its last step (its sessions serve record
@@ -729,8 +881,9 @@ type Agents struct {
 	// NoteWait bounds how long `agents handover` waits for the agent's
 	// note on what is in flight (3m).
 	NoteWait Duration `yaml:"noteWait"`
-	// StaleAfter is how long an idle agent whose CLI no longer runs stays on
-	// the roster before the doctor takes it off (24h).
+	// StaleAfter bounds inactivity without a running CLI (24h). An idle or
+	// unkept task holder is retired after this age; gone task holders free
+	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
 	// ArchiveAgreement says where the person agreed that the desktop
 	// sessions of finished workers beekeeper started are archived without
@@ -761,7 +914,54 @@ type Agents struct {
 	// Profiles are the desk's tool profiles by name; one named minimal
 	// replaces the built-in one.
 	Profiles map[string]Profile `yaml:"profiles"`
+	// Mode is how beekeeper runs the sessions it starts (agents start,
+	// agents handover, a role's successor) and wakes: ModeDesktop (the
+	// default) imports them into Claude Desktop and wakes them through it;
+	// ModeBackground starts each as a Claude Code background session
+	// (claude --bg) with Remote Control and none of the caller's CLAUDE*
+	// variables, with no desktop import and no claude:// link, and wakes it
+	// by its messaging, a stopped one by claude --bg --resume.
+	Mode string `yaml:"mode"`
+	// Model is the model of a session beekeeper starts when the start names
+	// none (--model, a successor's holder's); empty: Claude Code's default.
+	Model string `yaml:"model"`
+	// Models is ordered: the first matching nonempty model wins.
+	Models []AgentModelRule `yaml:"models"`
+	// RequireModel refuses omission rather than using a harness default.
+	RequireModel bool `yaml:"requireModel"`
 }
+
+// AgentModelRule selects a model for a named task before provider selection.
+type AgentModelRule struct {
+	Match string `yaml:"match"`
+	Kind  string `yaml:"kind"`
+	Model string `yaml:"model"`
+}
+
+// ModelFor returns the first matching nonempty model, then the desk-wide
+// fallback. A rule may leave the model unset for independent settings.
+func (a Agents) ModelFor(name, kind string) string {
+	for _, r := range a.Models {
+		if strings.TrimSpace(r.Model) == "" {
+			continue
+		}
+		if r.Kind != "" && r.Kind != kind {
+			continue
+		}
+		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
+			return strings.TrimSpace(r.Model)
+		}
+	}
+	return strings.TrimSpace(a.Model)
+}
+
+type ExecutionHost = execution.Host
+
+// The values of agents.mode.
+const (
+	ModeDesktop    = "desktop"
+	ModeBackground = "background"
+)
 
 // Profile is the tool surface of a session beekeeper starts: the headless
 // turns it launches get it on their command line (--tools, and --settings,
@@ -821,13 +1021,106 @@ func (a Agents) ProfileFor(name string) (Profile, bool) {
 	return Profile{}, false
 }
 
-// Capacity is the supervisor's target of busy agents and the memory guards
-// that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+// DefaultCeiling is capacity.ceiling when unset; an explicit 0 stays 0.
+const DefaultCeiling = 10
+
+// Defaults of capacity.usage and capacity.providers.<name> when a usage
+// command is set.
+const (
+	DefaultUsageEvery       = 5 * time.Minute
+	DefaultUsageReportEvery = 30 * time.Minute
+	DefaultUsageTimeout     = 90 * time.Second
+	DefaultUsageStaleAfter  = 15 * time.Minute
+	DefaultUsageHighPercent = 95.0
+)
+
+// DefaultClaudeUsageCommand reads plan windows without a model turn.
+var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--output-format", "json"}
+
+// DefaultAgyUsageCommand is capacity.providers.agy.command when unset, even
+// with agy: {}: agy's local usage report, read without a model turn.
+var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
+
+// DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
+// beekeeper reads the freshest token_count rate_limits event across Codex
+// rollout transcripts in-process.
+var DefaultCodexUsageCommand = []string{CodexHarness, "usage"}
+
+// KindSubscription and KindSelfHosted are capacity.providers.<name>.kind. A
+// subscription provider has a usage reader and a pace; a self-hosted provider
+// (a model served on the desk's own machines, such as an omp agent on a local
+// model) has neither: only a ceiling of sessions at once, its own.
+const (
+	KindSubscription = "subscription"
+	KindSelfHosted   = "self-hosted"
+)
+
+// The agent harness names, the subscription ones besides OmpHarness: a
+// capacity.providers entry of one of these names is that subscription's
+// provider, never a self-hosted one.
+const (
+	OmpHarness    = "omp"
+	ClaudeHarness = "claude"
+	AgyHarness    = "agy"
+	CodexHarness  = "codex"
+)
+
+// DefaultSelfHostedCeiling is the ceiling of busy sessions a self-hosted
+// provider runs with when it sets no ceiling of its own: the machine guards
+// still bound every start, so an unset ceiling is generous rather than tight.
+const DefaultSelfHostedCeiling = 10
+
+// DefaultServeModeStale is how long a cached serving-mode reading stays fresh
+// before capacity.providers.<name>.serveModeCommand runs again.
+const DefaultServeModeStale = time.Minute
+
+// DefaultServeModeSwitchTimeout is how long a serving-mode switch command may
+// run before beekeeper ends it and leaves the mode as its reader reports it.
+const DefaultServeModeSwitchTimeout = time.Minute
+
+// ServeMode is one serving mode of a self-hosted provider: the machine's
+// nodes it occupies while it runs, and the sessions of the model it sustains.
+type ServeMode struct {
+	// Nodes are the machine's nodes the mode occupies: a claim of one of
+	// them is the generic constraint "needs node N exclusively", and the
+	// model never runs in this mode while a constraint holds one. An
+	// empty list occupies no node and no constraint can hold it back.
+	Nodes []string `yaml:"nodes"`
+	// Sessions is the ceiling of busy sessions the model serves while the
+	// mode runs: what the provider's ceiling drops to during a drain into
+	// this mode, and stands at once the switch left it.
+	Sessions int `yaml:"sessions"`
+}
+
+// DefaultAgyGeminiBucket and DefaultAgyClaudeBucket are the usage bucket names
+// `agy -p /usage` prints for Gemini and Claude/GPT models.
+const (
+	DefaultAgyGeminiBucket = "Gemini Models"
+	DefaultAgyClaudeBucket = "Claude and GPT models"
+)
+
+// TaskPolicy constrains model choices for a kind of task. Classes and costs
+// are desk-maintained relative values; no provider price is assumed.
+type TaskPolicy struct {
+	MinClass        int     `yaml:"minClass"`
+	MaxCost         float64 `yaml:"maxCost"`
+	DifferentFamily bool    `yaml:"differentFamily"`
+}
+
+// Capacity is the supervisor's ceiling and model selection policy.
+// Any legacy floor key in YAML is ignored.
 type Capacity struct {
-	// Floor is the fewest busy agents the supervisor keeps (5); Ceiling
-	// the most it starts (10).
-	Floor   int `yaml:"floor"`
-	Ceiling int `yaml:"ceiling"`
+	TaskPolicies map[string]TaskPolicy `yaml:"taskPolicies"`
+	TaskKind     string                `yaml:"-"`
+	AuthorModel  string                `yaml:"-"`
+	AuthorFamily string                `yaml:"-"`
+	// Ceiling is the most busy agents the supervisor starts (10). Zero is
+	// honoured: ceiling 0 refuses every unforced start.
+	Ceiling    int `yaml:"ceiling"`
+	ceilingSet bool
+	// ReviewHeadroom reserves extra subscription sessions for reviews. Zero disables it.
+	ReviewHeadroom    int `yaml:"reviewHeadroom"`
+	reviewHeadroomSet bool
 	// AvailMinMiB is the MemAvailable a start needs (20 GiB), and the floor
 	// under which disk swap's growth refuses a start.
 	AvailMinMiB int `yaml:"availMinMiB"`
@@ -840,6 +1133,759 @@ type Capacity struct {
 	// /proc/pressure/memory, in percent) up to which disk swap's growth is
 	// a warning rather than a refusal (0: any pressure refuses).
 	SwapPSIMax float64 `yaml:"swapPSIMax"`
+	// Usage derives Ceiling from the subscription's 5-hour and 7-day usage
+	// windows read by a configured command; unset, Ceiling stands as
+	// configured.
+	Usage Usage `yaml:"usage"`
+	// Providers configures per-provider (e.g. claude, agy, codex) usage
+	// readers, window thresholds and ceiling targets. Busy agents count
+	// against the provider they run on, while the machine guards and
+	// Capacity.Ceiling cap the total.
+	Providers     map[string]Provider `yaml:"providers"`
+	providerOrder []string
+	// Choices is the ordered list of (harness, model) pairs that
+	// `agents start --harness auto` and `beekeeper capacity` evaluate:
+	// a start takes the eligible subscription with the most 7-day budget
+	// left per hour until its reset, with order breaking ties and
+	// self-hosted choices as fallbacks. Each provider must have room,
+	// its 5-hour window below its threshold and its 7-day use within the
+	// weekly cap and not ahead of the even pace.
+	Choices []Choice `yaml:"choices"`
+	// ReviewSkipPace is read and ignored: a review is decided exactly like
+	// a worker's start, with no pace exception.
+	ReviewSkipPace bool `yaml:"reviewSkipPace"`
+	// Local bounds the busy agents the coordinator's own machine runs,
+	// apart from Ceiling, which bounds the subscriptions across the desk
+	// and its execution hosts.
+	Local LocalCapacity `yaml:"local"`
+}
+
+// LocalCapacity is capacity.local: the coordinator machine's own cap.
+type LocalCapacity struct {
+	// Ceiling is the most busy agents this machine runs (capacity.local.
+	// ceiling): every local start, the loop's and one by hand, worker,
+	// reviewer and resume alike, is refused at it. Every busy agent whose
+	// session runs here counts, a self-hosted provider's included; an
+	// agent on an execution host counts against that host's maxBusy and
+	// never against it. Unset: no local cap, capacity.ceiling and the
+	// machine guards alone bound a local start. 0 refuses every unforced
+	// local start.
+	Ceiling *int `yaml:"ceiling"`
+}
+
+// Limit is capacity.local.ceiling and whether it is set.
+func (l LocalCapacity) Limit() (int, bool) {
+	if l.Ceiling == nil {
+		return 0, false
+	}
+	return *l.Ceiling, true
+}
+
+// Provider configures one provider (such as claude, agy or codex): its own
+// ceiling of busy agents and its usage reader and thresholds. A provider of
+// Kind self-hosted (a model served on the desk's own machines) sets no usage
+// reader: its ceiling alone bounds its busy sessions, and capacity.ceiling
+// bounds only the subscription providers' total.
+type Provider struct {
+	// Kind is KindSubscription (the default: a usage reader and a pace) or
+	// KindSelfHosted (no usage reader; a ceiling of sessions at once).
+	Kind             string `yaml:"kind"`
+	Ceiling          int    `yaml:"ceiling"`
+	ceilingSet       bool
+	ServeModeCommand []string `yaml:"serveModeCommand"`
+	// ServeModeCeilings maps a serving mode read by ServeModeCommand to the
+	// ceiling it stands for; a mode naming none falls back to Ceiling.
+	ServeModeCeilings map[string]int `yaml:"serveModeCeilings"`
+	// ServeModeModes is every serving mode the platform's tool can switch
+	// the model into: the nodes each occupies and the sessions it sustains.
+	// With it configured, a task or lease may claim one of the nodes
+	// exclusively, and beekeeper keeps the model out of every mode that
+	// occupies a held node (see ServeMode).
+	ServeModeModes map[string]ServeMode `yaml:"serveModeModes"`
+	// ServeModeSwitchCommand switches the model into the mode named as its
+	// last argument: beekeeper relays to the platform's own tool and holds
+	// no control of the model itself.
+	ServeModeSwitch []string `yaml:"serveModeSwitchCommand"`
+	// ServeModeSwitchTimeout is how long a switch may take before beekeeper
+	// ends it and leaves the mode as its reader reports it (default 1m).
+	ServeModeSwitchTimeout Duration `yaml:"serveModeSwitchTimeout"`
+	// ServeModeStale is how long a cached serving-mode reading stays fresh
+	// before ServeModeCommand runs again (default 1m).
+	ServeModeStale Duration `yaml:"serveModeStaleAfter"`
+	Usage          `yaml:",inline"`
+}
+
+// SelfHosted reports whether this provider is a model served on the desk's
+// own machines: no usage reader, no pace, a ceiling of its own.
+func (p Provider) SelfHosted() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Kind), KindSelfHosted)
+}
+
+// HasServeMode reports whether this provider's ceiling follows a serving
+// mode read by serveModeCommand.
+func (p Provider) HasServeMode() bool {
+	return p.SelfHosted() && len(p.ServeModeCommand) > 0
+}
+
+// EffectiveServeModeStale is how long a cached serving-mode reading stays
+// fresh before beekeeper runs serveModeCommand again (default 1m).
+func (p Provider) EffectiveServeModeStale() time.Duration {
+	if p.ServeModeStale.Duration > 0 {
+		return p.ServeModeStale.Duration
+	}
+	return DefaultServeModeStale
+}
+
+// ServeModeCeiling is the ceiling the serving mode mode stands for, and
+// whether the provider names one for it.
+func (p Provider) ServeModeCeiling(mode string) (int, bool) {
+	if m, ok := p.serveMode(mode); ok {
+		return m.Sessions, true
+	}
+	if c, ok := p.ServeModeCeilings[mode]; ok {
+		return c, true
+	}
+	for k, c := range p.ServeModeCeilings {
+		if strings.EqualFold(k, mode) {
+			return c, true
+		}
+	}
+	return 0, false
+}
+
+// HasServeModeSwitch reports whether the provider can be switched into
+// another serving mode: the platform's own switch command, and the modes it
+// knows to switch between.
+func (p Provider) HasServeModeSwitch() bool {
+	return p.HasServeMode() && len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) > 0
+}
+
+// EffectiveServeModeSwitchTimeout is how long a switch of this provider's
+// serving mode may take (default 1m).
+func (p Provider) EffectiveServeModeSwitchTimeout() time.Duration {
+	if p.ServeModeSwitchTimeout.Duration > 0 {
+		return p.ServeModeSwitchTimeout.Duration
+	}
+	return DefaultServeModeSwitchTimeout
+}
+
+// serveMode is the mode named mode, matched case-insensitively, and whether
+// the provider knows it.
+func (p Provider) serveMode(mode string) (ServeMode, bool) {
+	if m, ok := p.ServeModeModes[mode]; ok {
+		return m, true
+	}
+	for k, m := range p.ServeModeModes {
+		if strings.EqualFold(k, mode) {
+			return m, true
+		}
+	}
+	return ServeMode{}, false
+}
+
+// ServeModeNodes are the machine's nodes the serving mode mode occupies, and
+// whether the provider knows the mode.
+func (p Provider) ServeModeNodes(mode string) ([]string, bool) {
+	m, ok := p.serveMode(mode)
+	return m.Nodes, ok
+}
+
+// ServeModeReading is one read of a self-hosted provider's serving mode: when
+// it was read, the mode the command answered with, and why the read failed, if
+// it did. The ceiling the mode names is the provider's, resolved by
+// ServeModeCeiling.
+type ServeModeReading struct {
+	At   time.Time `json:"at,omitzero"`
+	Mode string    `json:"mode,omitempty"`
+	Err  string    `json:"error,omitempty"`
+}
+
+// WithServeMode returns the provider with r applied: the ceiling the mode it
+// names, falling back to Ceiling while the mode names none or the read failed.
+func (p Provider) WithServeMode(r ServeModeReading) Provider {
+	if r.Mode != "" && r.Err == "" {
+		if c, ok := p.ServeModeCeiling(r.Mode); ok {
+			p.Ceiling = c
+		}
+	}
+	return p
+}
+
+// Choice is one (harness, model) candidate in Capacity.Choices for
+// `agents start --harness auto` and `beekeeper capacity`.
+type Choice struct {
+	// Kinds limits this choice to task kinds; empty permits all kinds.
+	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
+	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`
+	Family string   `yaml:"family,omitempty" json:"family,omitempty"`
+	// ReviewReserve keeps this percent of the weekly window for reviews.
+	ReviewReserve float64 `yaml:"reviewReserve,omitempty" json:"reviewReserve,omitempty"`
+	// Harness is the agent harness to start ("claude", "agy", "codex", "omp").
+	Harness string `yaml:"harness" json:"harness"`
+	// Model is the model selector passed to the harness.
+	Model string `yaml:"model" json:"model"`
+	// Provider names the entry in Capacity.Providers whose room and windows
+	// govern this choice (default: Harness, or "claude" when Harness is "").
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	// Bucket selects the named usage bucket within Provider when the
+	// provider reports multiple buckets (such as `agy -p /usage`'s
+	// "Gemini Models" and "Claude and GPT models"). Empty: inferred from
+	// Provider.Buckets or the model name.
+	Bucket string `yaml:"bucket,omitempty" json:"bucket,omitempty"`
+	// FiveHourMax overrides Provider.FiveHourMax for this choice when set:
+	// the choice requires fiveHour.usedPercent < FiveHourMax.
+	FiveHourMax    float64 `yaml:"fiveHourMax,omitempty" json:"fiveHourMax,omitempty"`
+	fiveHourMaxSet bool
+	// SevenDayMax is the weekly usedPercent cap of every start on this
+	// choice: a start requires sevenDay.usedPercent < SevenDayMax.
+	SevenDayMax    float64 `yaml:"sevenDayMax,omitempty" json:"sevenDayMax,omitempty"`
+	sevenDayMaxSet bool
+	// PaceMargin is how many percentage points sevenDay.usedPercent must
+	// stay under the 7-day window's elapsed share (pace) to allow this
+	// choice, as a negative number (default: Provider.PaceMargin, else 0);
+	// a positive margin counts as 0: no start runs ahead of the pace.
+	PaceMargin    float64 `yaml:"paceMargin,omitempty" json:"paceMargin,omitempty"`
+	paceMarginSet bool
+	// SkipPace is read and ignored: no start runs ahead of the pace.
+	SkipPace bool `yaml:"skipPace,omitempty" json:"skipPace,omitempty"`
+}
+
+// EffectiveProvider returns the provider name in Capacity.Providers that
+// governs this choice.
+func (c Choice) EffectiveProvider() string {
+	return cmp.Or(strings.TrimSpace(c.Provider), strings.TrimSpace(c.Harness), ClaudeHarness)
+}
+
+// EffectiveBucket returns the usage bucket name for this choice on p.
+func (c Choice) EffectiveBucket(p Provider) string {
+	if b := strings.TrimSpace(c.Bucket); b != "" {
+		return b
+	}
+	return p.BucketFor(c.Model)
+}
+
+// EffectiveFiveHourMax returns the 5-hour usedPercent stop threshold for this
+// choice on p, and whether one is configured.
+func (c Choice) EffectiveFiveHourMax(p Provider) (float64, bool) {
+	if c.fiveHourMaxSet || c.FiveHourMax > 0 {
+		return c.FiveHourMax, true
+	}
+	if p.fiveHourMaxSet || p.FiveHourMax > 0 {
+		return p.FiveHourMax, true
+	}
+	return 0, false
+}
+
+// EffectiveWorkerSevenDayMax returns the choice's worker-specific 7-day
+// usedPercent cap, and whether one is configured.
+func (c Choice) EffectiveWorkerSevenDayMax() (float64, bool) {
+	if c.sevenDayMaxSet || c.SevenDayMax > 0 {
+		return c.SevenDayMax, true
+	}
+	return 0, false
+}
+
+// EffectivePaceMargin returns the percentage-point margin by which 7-day usage
+// may exceed the even weekly pace for this choice on p.
+func (c Choice) EffectivePaceMargin(p Provider) float64 {
+	if c.paceMarginSet || c.PaceMargin != 0 {
+		return c.PaceMargin
+	}
+	if p.paceMarginSet || p.PaceMargin != 0 {
+		return p.PaceMargin
+	}
+	return 0
+}
+
+// UnmarshalYAML records whether fiveHourMax, sevenDayMax and paceMargin were set.
+func (c *Choice) UnmarshalYAML(n *yaml.Node) error {
+	type plain Choice
+	if err := n.Decode((*plain)(c)); err != nil {
+		return err
+	}
+	var set struct {
+		FiveHourMax *float64 `yaml:"fiveHourMax"`
+		SevenDayMax *float64 `yaml:"sevenDayMax"`
+		PaceMargin  *float64 `yaml:"paceMargin"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	c.fiveHourMaxSet = set.FiveHourMax != nil
+	c.sevenDayMaxSet = set.SevenDayMax != nil
+	c.paceMarginSet = set.PaceMargin != nil
+	return nil
+}
+
+// Usage configures the opt-in subscription usage reader of Capacity or a Provider.
+type Usage struct {
+	// Command prints the current usage windows on stdout (JSON fiveHour
+	// and/or sevenDay, or `agy -p /usage` tab-separated lines); empty,
+	// beekeeper reads no subscription usage.
+	Command []string `yaml:"command"`
+	// Every is how often a cached reading stays fresh before beekeeper
+	// runs Command again (default 5m; a window past its resetsAt re-reads
+	// at once).
+	Every Duration `yaml:"every"`
+	// Timeout bounds one run of Command (default 90s).
+	Timeout Duration `yaml:"timeout"`
+	// StaleAfter is how old a usage reading may grow before it counts as
+	// stale, yielding ceiling 0 and room 0 for that provider (default 15m).
+	StaleAfter Duration `yaml:"staleAfter"`
+	// ReportEvery is how often the watch prints a USAGE line (default 30m;
+	// negative: never, watch --once aside).
+	ReportEvery    Duration `yaml:"reportEvery"`
+	reportEverySet bool
+	// HighPercent is the 5-hour window's usedPercent from which USAGE HIGH
+	// holds until fiveHour.resetsAt: unforced starts, resumes and
+	// auto-resume wait, and each busy worker is told once to finish its
+	// step and park (default 95).
+	HighPercent    float64 `yaml:"highPercent"`
+	highPercentSet bool
+	// FiveHourMax and SevenDayMax are hard usedPercent stops for a window:
+	// at or past the threshold the window yields ceiling 0.
+	FiveHourMax    float64 `yaml:"fiveHourMax"`
+	fiveHourMaxSet bool
+	SevenDayMax    float64 `yaml:"sevenDayMax"`
+	sevenDayMaxSet bool
+	// PaceMargin is the default percentage-point margin by which 7-day
+	// usedPercent must stay under the even weekly pace, as a negative number
+	// (default 0); a positive margin counts as 0.
+	PaceMargin    float64 `yaml:"paceMargin"`
+	paceMarginSet bool
+	// FiveHour and SevenDay map a window's usedPercent to a ceiling: the
+	// first band with usedPercent < upTo applies, and at or past the last
+	// band's upTo the window yields 0. When both windows have bands, the
+	// lower ceiling applies.
+	FiveHour []UsageBand `yaml:"fiveHour"`
+	SevenDay []UsageBand `yaml:"sevenDay"`
+	// PaceCaps lower Ceiling when the 7-day window's usedPercent exceeds the
+	// even weekly pace by at least OverBy percentage points.
+	PaceCaps []PaceCap `yaml:"paceCaps"`
+	// Buckets maps a model name or prefix to a bucket name in multi-bucket
+	// usage output (such as `agy -p /usage`).
+	Buckets map[string]string `yaml:"buckets"`
+}
+
+// UsageBand is one usage band of a subscription window: while the window's
+// usedPercent is below UpTo, its target is Ceiling.
+type UsageBand struct {
+	UpTo       float64 `yaml:"upTo"`
+	Ceiling    int     `yaml:"ceiling"`
+	ceilingSet bool
+}
+
+// PaceCap caps Ceiling when the 7-day window's usedPercent exceeds the even
+// weekly pace by at least OverBy percentage points.
+type PaceCap struct {
+	OverBy     float64 `yaml:"overBy"`
+	Ceiling    int     `yaml:"ceiling"`
+	ceilingSet bool
+}
+
+// Enabled reports whether a subscription usage command is configured.
+func (u Usage) Enabled() bool { return len(u.Command) > 0 }
+
+// HighPercentSet reports whether highPercent was explicitly set.
+func (u Usage) HighPercentSet() bool { return u.highPercentSet }
+
+// ReportEverySet reports whether reportEvery was explicitly set.
+func (u Usage) ReportEverySet() bool { return u.reportEverySet }
+
+// EffectiveEvery is Every, or DefaultUsageEvery when unset.
+func (u Usage) EffectiveEvery() time.Duration {
+	if u.Every.Duration > 0 {
+		return u.Every.Duration
+	}
+	return DefaultUsageEvery
+}
+
+// EffectiveTimeout is Timeout, or DefaultUsageTimeout when unset.
+func (u Usage) EffectiveTimeout() time.Duration {
+	if u.Timeout.Duration > 0 {
+		return u.Timeout.Duration
+	}
+	return DefaultUsageTimeout
+}
+
+// EffectiveStaleAfter is StaleAfter, or max(DefaultUsageStaleAfter, 3*EffectiveEvery()) when unset.
+func (u Usage) EffectiveStaleAfter() time.Duration {
+	if u.StaleAfter.Duration > 0 {
+		return u.StaleAfter.Duration
+	}
+	return max(DefaultUsageStaleAfter, 3*u.EffectiveEvery())
+}
+
+// EffectiveHighPercent is HighPercent, or DefaultUsageHighPercent when unset.
+func (u Usage) EffectiveHighPercent() float64 {
+	if u.HighPercent > 0 {
+		return u.HighPercent
+	}
+	return DefaultUsageHighPercent
+}
+
+// BucketFor returns the usage bucket name for model: an exact or prefix match
+// in u.Buckets if configured, else "Gemini Models" for gemini* models and
+// "Claude and GPT models" otherwise.
+func (u Usage) BucketFor(model string) string {
+	m := strings.TrimSpace(model)
+	if len(u.Buckets) > 0 {
+		if b, ok := u.Buckets[m]; ok {
+			return b
+		}
+		lower := strings.ToLower(m)
+		for _, k := range slices.Sorted(maps.Keys(u.Buckets)) {
+			prefix := strings.TrimSuffix(strings.ToLower(k), "*")
+			if prefix != "" && strings.HasPrefix(lower, prefix) {
+				return u.Buckets[k]
+			}
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(m), "gemini") {
+		return DefaultAgyGeminiBucket
+	}
+	return DefaultAgyClaudeBucket
+}
+
+func (u Usage) hasFields() bool {
+	return u.Every.Duration != 0 || u.Timeout.Duration != 0 || u.StaleAfter.Duration != 0 ||
+		u.ReportEvery.Duration != 0 || u.highPercentSet || u.fiveHourMaxSet ||
+		u.sevenDayMaxSet || u.paceMarginSet || len(u.FiveHour) > 0 ||
+		len(u.SevenDay) > 0 || len(u.PaceCaps) > 0 || len(u.Buckets) > 0
+}
+
+// UnmarshalYAML records whether highPercent, fiveHourMax, sevenDayMax,
+// paceMargin and reportEvery were explicitly set.
+func (u *Usage) UnmarshalYAML(n *yaml.Node) error {
+	type plain Usage
+	if err := n.Decode((*plain)(u)); err != nil {
+		return err
+	}
+	var set struct {
+		ReportEvery *Duration `yaml:"reportEvery"`
+		HighPercent *float64  `yaml:"highPercent"`
+		FiveHourMax *float64  `yaml:"fiveHourMax"`
+		SevenDayMax *float64  `yaml:"sevenDayMax"`
+		PaceMargin  *float64  `yaml:"paceMargin"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	u.reportEverySet = set.ReportEvery != nil
+	u.highPercentSet = set.HighPercent != nil
+	u.fiveHourMaxSet = set.FiveHourMax != nil
+	u.sevenDayMaxSet = set.SevenDayMax != nil
+	u.paceMarginSet = set.PaceMargin != nil
+	return nil
+}
+
+// UnmarshalYAML records whether ceiling was explicitly set on the band.
+func (b *UsageBand) UnmarshalYAML(n *yaml.Node) error {
+	type plain UsageBand
+	if err := n.Decode((*plain)(b)); err != nil {
+		return err
+	}
+	var set struct {
+		Ceiling *int `yaml:"ceiling"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	b.ceilingSet = set.Ceiling != nil
+	return nil
+}
+
+// UnmarshalYAML records whether ceiling was explicitly set on the pace cap.
+func (p *PaceCap) UnmarshalYAML(n *yaml.Node) error {
+	type plain PaceCap
+	if err := n.Decode((*plain)(p)); err != nil {
+		return err
+	}
+	var set struct {
+		Ceiling *int `yaml:"ceiling"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	p.ceilingSet = set.Ceiling != nil
+	return nil
+}
+
+// UnmarshalYAML decodes kind, ceiling and either inline or nested usage
+// fields on a provider.
+func (p *Provider) UnmarshalYAML(n *yaml.Node) error {
+	var fc struct {
+		Kind             *string              `yaml:"kind"`
+		Ceiling          *int                 `yaml:"ceiling"`
+		Usage            *Usage               `yaml:"usage"`
+		ServeModeStale   *Duration            `yaml:"serveModeStaleAfter"`
+		ServeModeCmd     *[]string            `yaml:"serveModeCommand"`
+		ServeModeCeiling map[string]int       `yaml:"serveModeCeilings"`
+		ServeModeModes   map[string]ServeMode `yaml:"serveModeModes"`
+		ServeModeSwitch  *[]string            `yaml:"serveModeSwitchCommand"`
+		ServeModeSwitchT *Duration            `yaml:"serveModeSwitchTimeout"`
+	}
+	if err := n.Decode(&fc); err != nil {
+		return err
+	}
+	if err := p.Usage.UnmarshalYAML(n); err != nil {
+		return err
+	}
+	if fc.Usage != nil {
+		p.Usage = *fc.Usage
+	}
+	if fc.Kind != nil {
+		p.Kind = *fc.Kind
+	}
+	if fc.ServeModeStale != nil {
+		p.ServeModeStale = *fc.ServeModeStale
+	}
+	if fc.ServeModeCmd != nil {
+		p.ServeModeCommand = *fc.ServeModeCmd
+	}
+	if fc.ServeModeCeiling != nil {
+		p.ServeModeCeilings = fc.ServeModeCeiling
+	}
+	if fc.ServeModeModes != nil {
+		p.ServeModeModes = fc.ServeModeModes
+	}
+	if fc.ServeModeSwitch != nil {
+		p.ServeModeSwitch = *fc.ServeModeSwitch
+	}
+	if fc.ServeModeSwitchT != nil {
+		p.ServeModeSwitchTimeout = *fc.ServeModeSwitchT
+	}
+	if fc.Ceiling != nil {
+		p.Ceiling, p.ceilingSet = *fc.Ceiling, true
+	}
+	return nil
+}
+
+func (u *Usage) defaults(home string) {
+	if !u.Enabled() {
+		return
+	}
+	for i := range u.Command {
+		u.Command[i] = homePath(home, u.Command[i])
+	}
+	setDur(&u.Every, DefaultUsageEvery)
+	setDur(&u.Timeout, DefaultUsageTimeout)
+	setDur(&u.StaleAfter, max(DefaultUsageStaleAfter, 3*u.Every.Duration))
+	setDur(&u.ReportEvery, DefaultUsageReportEvery)
+	if !u.highPercentSet {
+		u.HighPercent = DefaultUsageHighPercent
+	}
+}
+
+func (u Usage) validateNamedEach(prefix string, report func(error)) {
+	if !u.Enabled() {
+		if u.hasFields() {
+			report(fmt.Errorf("%s: no command: set %s.command, or nothing of %s", prefix, prefix, prefix))
+		}
+		return
+	}
+	if strings.TrimSpace(u.Command[0]) == "" {
+		report(fmt.Errorf("%s.command[0]: empty executable", prefix))
+	}
+	if u.Every.Duration <= 0 {
+		report(fmt.Errorf("%s.every: %s is not positive", prefix, u.Every.Duration))
+	}
+	if u.Timeout.Duration <= 0 {
+		report(fmt.Errorf("%s.timeout: %s is not positive", prefix, u.Timeout.Duration))
+	}
+	if u.StaleAfter.Duration < 0 {
+		report(fmt.Errorf("%s.staleAfter: %s is negative", prefix, u.StaleAfter.Duration))
+	}
+	if !(u.HighPercent > 0 && u.HighPercent <= 100) {
+		report(fmt.Errorf("%s.highPercent: %g is not in (0, 100]", prefix, u.HighPercent))
+	}
+	if u.fiveHourMaxSet && !(u.FiveHourMax > 0 && u.FiveHourMax <= 100) {
+		report(fmt.Errorf("%s.fiveHourMax: %g is not in (0, 100]", prefix, u.FiveHourMax))
+	}
+	if u.sevenDayMaxSet && !(u.SevenDayMax > 0 && u.SevenDayMax <= 100) {
+		report(fmt.Errorf("%s.sevenDayMax: %g is not in (0, 100]", prefix, u.SevenDayMax))
+	}
+	if u.paceMarginSet && (u.PaceMargin < -100 || u.PaceMargin > 100) {
+		report(fmt.Errorf("%s.paceMargin: %g is not in [-100, 100]", prefix, u.PaceMargin))
+	}
+	for _, w := range []struct {
+		name  string
+		bands []UsageBand
+	}{
+		{prefix + ".fiveHour", u.FiveHour},
+		{prefix + ".sevenDay", u.SevenDay},
+	} {
+		prev := 0.0
+		for i, b := range w.bands {
+			switch {
+			case !(b.UpTo > 0 && b.UpTo <= 100):
+				report(fmt.Errorf("%s[%d]: upTo %g is not in (0, 100]", w.name, i, b.UpTo))
+			case b.UpTo <= prev:
+				report(fmt.Errorf("%s[%d]: upTo %g is not above %g: list bands in ascending order", w.name, i, b.UpTo, prev))
+			case !b.ceilingSet:
+				report(fmt.Errorf("%s[%d]: ceiling is required", w.name, i))
+			case b.Ceiling < 0:
+				report(fmt.Errorf("%s[%d]: ceiling %d is negative", w.name, i, b.Ceiling))
+			}
+			prev = b.UpTo
+		}
+	}
+	prevOver := 0.0
+	for i, pc := range u.PaceCaps {
+		name := prefix + ".paceCaps"
+		switch {
+		case !(pc.OverBy > 0 && pc.OverBy <= 100):
+			report(fmt.Errorf("%s[%d]: overBy %g is not in (0, 100]", name, i, pc.OverBy))
+		case pc.OverBy <= prevOver:
+			report(fmt.Errorf("%s[%d]: overBy %g is not above %g: list paceCaps in ascending order", name, i, pc.OverBy, prevOver))
+		case !pc.ceilingSet:
+			report(fmt.Errorf("%s[%d]: ceiling is required", name, i))
+		case pc.Ceiling < 0:
+			report(fmt.Errorf("%s[%d]: ceiling %d is negative", name, i, pc.Ceiling))
+		}
+		prevOver = pc.OverBy
+	}
+}
+
+// Derive returns Capacity with Ceiling derived from the subscription usage
+// windows' effective usedPercent values (nil when a window was not reported)
+// and reports whether USAGE HIGH holds on the 5-hour window.
+func (k Capacity) Derive(fiveHour, sevenDay *float64) (derived Capacity, high bool) {
+	return k.DeriveWithPace(fiveHour, sevenDay, nil)
+}
+
+// DeriveWithPace returns Capacity with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
+func (k Capacity) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Capacity, high bool) {
+	derived = k
+	if !k.Usage.Enabled() {
+		return derived, false
+	}
+	p := Provider{
+		Ceiling:    k.Ceiling,
+		ceilingSet: k.ceilingSet,
+		Usage:      k.Usage,
+	}
+	dp, high := p.DeriveWithPace(fiveHour, sevenDay, pace)
+	derived.Ceiling = dp.Ceiling
+	return derived, high
+}
+
+// Derive returns Provider with Ceiling derived from the subscription usage
+// windows' effective usedPercent values and reports whether USAGE HIGH holds on
+// the 5-hour window.
+func (p Provider) Derive(fiveHour, sevenDay *float64) (derived Provider, high bool) {
+	return p.DeriveWithPace(fiveHour, sevenDay, nil)
+}
+
+// DeriveWithPace returns Provider with Ceiling derived from the 5-hour and
+// 7-day windows and the 7-day even pace.
+func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Provider, high bool) {
+	derived = p
+	if !p.Enabled() {
+		return derived, false
+	}
+	ceiling, banded := p.Ceiling, false
+	apply := func(pct *float64, bands []UsageBand) {
+		if pct == nil || len(bands) == 0 {
+			return
+		}
+		bc := matchBand(*pct, bands)
+		if !banded {
+			ceiling, banded = bc, true
+			return
+		}
+		ceiling = min(ceiling, bc)
+	}
+	apply(fiveHour, p.FiveHour)
+	apply(sevenDay, p.SevenDay)
+	if banded && p.ceilingSet {
+		ceiling = min(ceiling, p.Ceiling)
+	}
+	if sevenDay != nil && pace != nil && len(p.PaceCaps) > 0 {
+		over := *sevenDay - *pace
+		for _, pc := range p.PaceCaps {
+			if over >= pc.OverBy-1e-9 {
+				ceiling = min(ceiling, pc.Ceiling)
+			}
+		}
+	}
+	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
+		ceiling = 0
+	}
+	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
+		ceiling = 0
+	}
+	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
+		derived.Ceiling = 0
+		return derived, true
+	}
+	derived.Ceiling = ceiling
+	return derived, false
+}
+
+func matchBand(used float64, bands []UsageBand) (ceiling int) {
+	for _, b := range bands {
+		if used < b.UpTo {
+			return b.Ceiling
+		}
+	}
+	return 0
+}
+
+// ProviderNames returns the configured providers in their YAML declaration
+// order (or "claude" first, then sorted keys when constructed in Go).
+func (k Capacity) ProviderNames() []string {
+	if len(k.Providers) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(k.Providers))
+	var out []string
+	for _, name := range k.providerOrder {
+		if _, ok := k.Providers[name]; ok && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	if _, ok := k.Providers[ClaudeHarness]; ok && !seen[ClaudeHarness] {
+		seen[ClaudeHarness] = true
+		out = append(out, ClaudeHarness)
+	}
+	for _, name := range slices.Sorted(maps.Keys(k.Providers)) {
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// UnmarshalYAML records whether ceiling and reviewHeadroom were set, and
+// preserves the YAML key order of providers.
+func (k *Capacity) UnmarshalYAML(n *yaml.Node) error {
+	type plain Capacity
+	if err := n.Decode((*plain)(k)); err != nil {
+		return err
+	}
+	var set struct {
+		Ceiling        *int `yaml:"ceiling"`
+		ReviewHeadroom *int `yaml:"reviewHeadroom"`
+	}
+	if err := n.Decode(&set); err != nil {
+		return err
+	}
+	k.ceilingSet = set.Ceiling != nil
+	k.reviewHeadroomSet = set.ReviewHeadroom != nil
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "providers" && n.Content[i+1].Kind == yaml.MappingNode {
+			pn := n.Content[i+1]
+			for j := 0; j+1 < len(pn.Content); j += 2 {
+				k.providerOrder = append(k.providerOrder, pn.Content[j].Value)
+			}
+		}
+	}
+	return nil
 }
 
 // AgentShell configures the prelude Claude Code runs before each Bash
@@ -911,7 +1957,7 @@ type Doctor struct {
 	DockerEvery Duration `yaml:"dockerEvery"`
 	// WorktreeRoots are the folders (~/ allowed) under which the watch
 	// looks for the linked git worktrees of finished workers (default
-	// ~/projects/worktrees).
+	// ~/.local/state/klaus-lab/worktrees).
 	WorktreeRoots []string `yaml:"worktreeRoots"`
 	// WorktreesEvery is how often the watch removes the worktrees whose
 	// pull request merged or closed, and the build output of those that
@@ -979,7 +2025,8 @@ type Serve struct {
 	// (a GitHub org's <org>:<team>, a directory's group name).
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
-	// in none is refused.
+	// in none is refused, a caller in several is the team of TeamGroups'
+	// first. A team's decisions are answered by DecidingGroups.
 	Teams map[string]string `yaml:"teams"`
 	// Supervisors maps a team to the Dex group of its supervisor role, which
 	// may release the team's leases and lift its holds.
@@ -996,9 +2043,15 @@ type Serve struct {
 	// A --for that is an email needs no entry.
 	People map[string]string `yaml:"people"`
 	// Channels maps a team to the Slack channel ID its decisions (--for
-	// team:<name>) are posted to; any member of the team's Dex group (teams)
-	// may answer.
+	// team:<name>) are posted to; any member of the team (its Slack group in
+	// groups, else its Dex group in teams) may answer.
 	Channels map[string]string `yaml:"channels"`
+	// Groups maps a team to the handle of its Slack user group
+	// (team-bumblebee for @team-bumblebee), for a team whose Dex group others
+	// share (an organization-wide group): only the group's members answer its
+	// decisions, as klaus-gateway finds them by their email. A team without
+	// an entry is its Dex group's.
+	Groups map[string]string `yaml:"groups"`
 	// Gateway is the klaus-gateway that puts decisions to their addressee
 	// in Slack; without its URL, decisions stay in beekeeper.
 	Gateway Gateway `yaml:"gateway"`
@@ -1024,6 +2077,54 @@ type ServeIdentity struct {
 	// Dex's cross-client scope (that client trusts ClientID as a peer);
 	// empty, the token is for ClientID.
 	Audience string `yaml:"audience"`
+}
+
+// OrganizationGroups is every group that makes a caller a member:
+// Organization, then Organizations.
+func (s Serve) OrganizationGroups() []string {
+	var out []string
+	if s.Organization != "" {
+		out = append(out, s.Organization)
+	}
+	return append(out, s.Organizations...)
+}
+
+// TeamGroups are the groups in Teams, sorted, the most specific first: a
+// team's own groups before the organization-wide ones, so a member of both
+// a team's group and the organization's is the team's.
+func (s Serve) TeamGroups() []string {
+	org := s.OrganizationGroups()
+	var own, wide []string
+	for _, g := range slices.Sorted(maps.Keys(s.Teams)) {
+		if slices.Contains(org, g) {
+			wide = append(wide, g)
+		} else {
+			own = append(own, g)
+		}
+	}
+	return append(own, wide...)
+}
+
+// DecidingGroups are the groups whose members answer team's decisions: its
+// own groups in Teams, or, for a team that has none, the organization-wide
+// groups mapped to it. A team with its own group is never answered by
+// everyone in the organization.
+func (s Serve) DecidingGroups(team string) []string {
+	org := s.OrganizationGroups()
+	var own, wide []string
+	for _, g := range s.TeamGroups() {
+		switch {
+		case s.Teams[g] != team:
+		case slices.Contains(org, g):
+			wide = append(wide, g)
+		default:
+			own = append(own, g)
+		}
+	}
+	if len(own) > 0 {
+		return own
+	}
+	return wide
 }
 
 // Gateway configures the decisions' delivery through klaus-gateway's
@@ -1056,27 +2157,137 @@ type Guide struct {
 	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
-// Supervisor configures the supervisor: its role and the scope it
-// supervises.
+// Supervisor configures the supervisor, which is the supervisor loop: the
+// user service beekeeper install always installs. No session holds a
+// supervisor role.
 type Supervisor struct {
-	Role `yaml:",inline"`
-	// Scope says what the supervisor watches, in a sentence or two; empty,
-	// the prompt names the resources, lanes and installations configured.
-	Scope string `yaml:"scope"`
+	// ReviewRounds is how many review rounds asking for changes `supervisor
+	// loop` runs for a pull request (default 1): after the last one's
+	// request for changes the worker fixes them and merges on the loop's go
+	// without another review. An approved round is none of them: a new head
+	// after an approval gets its own review only for a change the approval
+	// does not cover (more than a merge of the base, its conflicts'
+	// resolution or a rebase). Never more than two reviews start for one
+	// pull request, whatever this says: a third need is a decision for
+	// guide.person.
+	ReviewRounds int `yaml:"reviewRounds"`
+	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
+	// templates of the briefs the loop starts a reviewer and the next
+	// worker with (.URL, .Repo, .Number, .Head, .Round, .Worker). Empty:
+	// a built-in review brief, and no worker start.
+	ReviewBrief string `yaml:"reviewBrief"`
+	WorkerBrief string `yaml:"workerBrief"`
+	// Hosts are execution host selectors (agents.hosts) the loop's worker
+	// starts may be placed on, in order of preference: when
+	// the local machine leaves no room for the start, or always with
+	// HostsFirst. A host must map the item's repository and pass its own
+	// check (capacity --host); the start is pinned to the repository's
+	// default branch. Reviewers, releases and the loop stay on the coordinator.
+	Hosts []string `yaml:"hosts"`
+	// HostsFirst places a start on the first host of Hosts with room,
+	// whatever the local machine's room is, for what a host can run: a
+	// start a mapped host could run waits without room on any host, as it
+	// does on a full machine; a repository no host maps, or a choice of a
+	// harness no host has an adapter for (every harness but Claude Code),
+	// starts locally within the local room (capacity.local.ceiling among
+	// its guards).
+	HostsFirst bool `yaml:"hostsFirst"`
+	// PostInstall is the command the loop runs after it installed a
+	// release; empty: none.
+	PostInstall []string `yaml:"postInstall"`
+	// Classifier is the command that classifies a report or park the
+	// loop's rules cannot: the event as JSON on stdin, {"class",
+	// "confidence"} on stdout. Empty: none, every such event goes to the
+	// guide unclassified, as one below ClassifierConfidence (default 0.8).
+	Classifier           []string `yaml:"classifier"`
+	ClassifierConfidence float64  `yaml:"classifierConfidence"`
+	// LoopInterval is the loop's pass (30s), ReleaseEvery how often it
+	// looks for a release (10m), NoteDue the due time of the decisions it
+	// files for the guide's person (24h).
+	LoopInterval Duration `yaml:"loopInterval"`
+	ReleaseEvery Duration `yaml:"releaseEvery"`
+	// PostMergeWindow bounds inactivity while awaiting a post-merge report (2h).
+	PostMergeWindow Duration `yaml:"postMergeWindow"`
+	NoteDue         Duration `yaml:"noteDue"`
+	// FillRetryEvery bounds repeated empty or failed board reads while
+	// capacity's ceiling stays unchanged and no agent is done or removed
+	// (5m), doubled for each further one in a row up to four times.
+	FillRetryEvery Duration `yaml:"fillRetryEvery"`
+	// Ownership is whose pull requests the loop reviews and gives the
+	// merge go for.
+	Ownership Ownership `yaml:"ownership"`
 }
 
-// Role configures a relayed role, the supervisor's or the guide's: the
+// DefaultTeamFiles is supervisor.ownership.teamFiles unless the
+// configuration sets it: the team files of giantswarm/github.
+const DefaultTeamFiles = "giantswarm/github/repositories"
+
+// Ownership is a desk's team ownership: which pull requests its supervisor
+// loop reviews and gives the merge go for. Outside github.allowedOrgs it
+// never acts, whatever this says.
+type Ownership struct {
+	// Team is the desk's team as the team files name it (team-bumblebee);
+	// empty, every repository of github.allowedOrgs is the desk's.
+	Team string `yaml:"team"`
+	// TeamFiles is where the organisation declares which team owns a
+	// repository, <owner>/<repo>/<dir> (default DefaultTeamFiles, once Team
+	// is set): every <team>.yaml directly in <dir> lists that team's
+	// repositories of <owner> as `- name: <repo>` entries.
+	TeamFiles string `yaml:"teamFiles"`
+	// Review are the repositories (owner/name, path.Match patterns such as
+	// giantswarm/*-configs) the desk reviews and merges whoever owns them.
+	Review []string `yaml:"review"`
+	// Never are the repositories (patterns as Review's) the desk does no
+	// work on, whatever Review or a person's override says: a pull request
+	// in one, or whose title, head branch or a changed path names one, is
+	// left alone.
+	Never []string `yaml:"never"`
+	// Authors are the logins the desk opens its pull requests as (default:
+	// the login gh acts as): one anybody else opened is left alone.
+	Authors []string `yaml:"authors"`
+	// OwnerWait is how long a worker parked on another team's pull request
+	// waits for that team's review before the loop asks guide.person to
+	// override the ownership of that one pull request (24h).
+	OwnerWait Duration `yaml:"ownerWait"`
+}
+
+// TeamFilesRepo is TeamFiles' repository (owner/repo) and directory.
+func (o Ownership) TeamFilesRepo() (repo, dir string) {
+	owner, rest, _ := strings.Cut(o.TeamFiles, "/")
+	name, dir, _ := strings.Cut(rest, "/")
+	return owner + "/" + name, dir
+}
+
+// validateEach reports a team-files place without a directory and a pattern
+// path.Match cannot read.
+func (o Ownership) validateEach(report func(error)) {
+	if o.TeamFiles != "" {
+		if repo, dir := o.TeamFilesRepo(); dir == "" || strings.HasPrefix(repo, "/") || strings.HasSuffix(repo, "/") {
+			report(fmt.Errorf("teamFiles: %q is not <owner>/<repo>/<dir>", o.TeamFiles))
+		}
+	}
+	for field, patterns := range map[string][]string{"review": o.Review, "never": o.Never} {
+		for _, p := range patterns {
+			if _, err := path.Match(p, ""); err != nil || !strings.Contains(p, "/") || strings.HasSuffix(p, "/") {
+				report(fmt.Errorf("%s: %q is no owner/name pattern", field, p))
+			}
+		}
+	}
+}
+
+// Role configures a relayed role, the guide's: the
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
-	// Skill is the name of the skill the successor runs (supervise, guide).
+	// Model overrides the previous holder's model for every successor.
+	Model string `yaml:"model"`
+	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
 	// instead.
 	Instructions string `yaml:"instructions"`
 	// RelayAt is the role's session context, in tokens, at which the watch
-	// reports the relay due ("400k"; the guide's default is 150k, the
-	// supervisor's 400k).
+	// reports the relay due ("200k" for the guide).
 	RelayAt Tokens `yaml:"relayAt"`
 	// RelayTTL is how long a relay stays open for the successor's start.
 	RelayTTL Duration `yaml:"relayTTL"`
@@ -1085,8 +2296,8 @@ type Role struct {
 	RelayGrace Duration `yaml:"relayGrace"`
 	// RestartGrace is how long beekeeper waits after it first saw the
 	// role's CLI gone: a CLI back under the same session within it is a
-	// restart and keeps the role; past it, the watch says the supervisor
-	// is gone and notifies. The grant rule holds throughout.
+	// restart and keeps the role; past it, the watch says the holder is
+	// gone and starts its successor.
 	RestartGrace Duration `yaml:"restartGrace"`
 	// Dir is the folder a successor starts in (~/ allowed; default: the
 	// folder its predecessor's desktop session started from, not the
@@ -1114,8 +2325,13 @@ type Lane struct {
 	Context string `yaml:"context"`
 }
 
+// DefaultQueueTTL is merge.queueTTL unless the configuration sets it.
+const DefaultQueueTTL = 15 * time.Minute
+
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
+	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
 	Cap int `yaml:"cap"`
@@ -1154,6 +2370,11 @@ type Merge struct {
 	// when the gated command names none: devctl's own 30m is shorter than a
 	// repository's CI restarted from zero by --update-branch.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// BusyBudget is how long a merge with --update-branch keeps its lane
+	// place running devctl again after a run ends on a busy base (its base
+	// moved during every one of devctl's update waits, exit 3), counted from
+	// devctl's first run. Negative: no second run.
+	BusyBudget Duration `yaml:"busyBudget"`
 	// ToolLimit is how long a foreground gate call runs before it exits 76
 	// and leaves the merge to run on outside it, its outcome waking the
 	// caller: below a desktop Bash call's 10-minute limit, which stops the
@@ -1164,12 +2385,22 @@ type Merge struct {
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`
+	// Admin are the repositories (owner/repo) the desk merges with --admin
+	// past their branch ruleset after the approved desk review; only their
+	// merge go names --admin.
+	Admin []string `yaml:"admin"`
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
 func (m Merge) DevctlServes(repo string) bool {
 	owner, _, _ := strings.Cut(repo, "/")
 	return slices.ContainsFunc(m.DevctlOwners, func(o string) bool { return strings.EqualFold(o, owner) })
+}
+
+// AdminMerge says whether the desk merges repo (owner/repo) with --admin
+// after the approved desk review.
+func (m Merge) AdminMerge(repo string) bool {
+	return slices.ContainsFunc(m.Admin, func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // Notify configures what `watch --notify` sends to the desktop.
@@ -1370,7 +2601,32 @@ var DefaultQuietSessions = []string{"test: *"}
 var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
+// WorkerGitHub is coordinator-only App authority. The private key is a vault
+// reference, never a value or a file copied to an execution host.
+type WorkerGitHub struct {
+	AppID         int64            `yaml:"appID"`
+	PrivateKey    string           `yaml:"privateKey"`
+	Installations map[string]int64 `yaml:"installations"`
+}
+
+func (w *WorkerGitHub) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if w.AppID <= 0 || !strings.Contains(w.PrivateKey, "://") || strings.ContainsAny(w.PrivateKey, "\r\n") || len(w.Installations) == 0 {
+		return errors.New("github.workerApp requires appID, privateKey reference and owner installations")
+	}
+	for owner, id := range w.Installations {
+		if !execution.ValidIdentity(owner) || owner != strings.ToLower(owner) || id <= 0 {
+			return errors.New("github.workerApp.installations requires lowercase owners and positive installation IDs")
+		}
+	}
+	return nil
+}
+
 type GitHub struct {
+	WorkerApp *WorkerGitHub `yaml:"workerApp,omitempty"`
+
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
 	// UrgentBound is the budget an urgent merge keeps for itself under the
@@ -1432,7 +2688,10 @@ type Lemonade struct {
 // (the Default* fractions): its absolute value is read with the method of
 // the same name.
 type Watch struct {
-	Interval Duration `yaml:"interval"`
+	// BatchInterval paces routine stdout notices. Negative disables batching;
+	// --once always prints immediately. Action lines never wait for a batch.
+	BatchInterval Duration `yaml:"batchInterval"`
+	Interval      Duration `yaml:"interval"`
 	// Repeat paces how often a lasting condition is handed to the
 	// notifier (which sends it again after notify.repeat); the watch
 	// prints it once when it starts and once when it ends.
@@ -1673,9 +2932,10 @@ var DefaultModels = map[string]Model{
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.1, ContextWindow: 200_000},
 }
 
-// Model returns the entry of model: its id, or its dated snapshot
-// ("claude-haiku-4-5-20251001"). Another model of the same family is not
-// priced like it.
+// Model returns the entry of model: its id, its dated snapshot
+// ("claude-haiku-4-5-20251001"), or its agy effort selector
+// ("claude-opus-5-5-high"). Another model of the same family is not priced
+// like it.
 func (m Metrics) Model(model string) (Model, bool) {
 	if p, ok := m.Models[model]; ok {
 		return p, true
@@ -1683,6 +2943,13 @@ func (m Metrics) Model(model string) (Model, bool) {
 	if i := len(model) - len("-20060102"); i > 0 && model[i] == '-' && isDigits(model[i+1:]) {
 		p, ok := m.Models[model[:i]]
 		return p, ok
+	}
+	for _, suf := range []string{"-low", "-medium", "-high"} {
+		if base, ok := strings.CutSuffix(model, suf); ok {
+			if p, ok := m.Models[base]; ok {
+				return p, true
+			}
+		}
 	}
 	return Model{}, false
 }
@@ -1739,15 +3006,71 @@ type OmpProvider struct {
 	APIKey string `yaml:"apiKey"`
 }
 
+// Agy locates what agy (Antigravity CLI), the third local harness, keeps on
+// disk and how `agents start --harness agy` launches it.
+type Agy struct {
+	// BrainDir holds agy's conversation folders, each with
+	// .system_generated/logs/transcript.jsonl (default
+	// ~/.gemini/antigravity-cli/brain).
+	BrainDir string `yaml:"brainDir"`
+	// ProjectsDir holds agy's project definitions (~/.gemini/config/projects),
+	// used to match a working directory to `--project <id>` on start.
+	ProjectsDir string `yaml:"projectsDir"`
+	// ConversationsDir holds agy's conversation databases
+	// (~/.gemini/antigravity-cli/conversations).
+	ConversationsDir string `yaml:"conversationsDir"`
+	// RemoteControl passes --remote-control to `agy` when starting an agent.
+	RemoteControl bool `yaml:"remoteControl"`
+	// RemoteDaemon is the systemd user service of agy's remote view daemon
+	// (e.g. antigravity-cli-daemon): when set, `agents start --harness agy`
+	// runs `systemctl --user try-restart <remoteDaemon>` once the new
+	// conversation's database exists so the remote view lists it.
+	RemoteDaemon string `yaml:"remoteDaemon"`
+}
+
+// Codex locates what Codex CLI keeps on disk and configures codex worker starts.
+type Codex struct {
+	// SessionsDir holds Codex rollout files (~/.codex/sessions).
+	SessionsDir string `yaml:"sessionsDir"`
+	// AuthFile is the Codex OAuth file symlinked into an isolated worker
+	// CODEX_HOME (~/.codex/auth.json).
+	AuthFile string `yaml:"authFile"`
+	// ConfigFile is the user's Codex config.toml whose [projects.*] trust
+	// tables are copied into an isolated worker CODEX_HOME (~/.codex/config.toml).
+	ConfigFile string `yaml:"configFile"`
+	// Model is the model `agents start --harness codex` starts an agent on
+	// without --model.
+	Model string `yaml:"model"`
+}
+
 // Desktop is how beekeeper shares the person's desktop.
 type Desktop struct {
 	// TypingQuiet is how long the person's keyboards and pointers stay
 	// idle before a claude:// link switches the desktop's window (the
 	// import of agents start, a reopen): a stray keystroke goes into the
 	// window the link opens. A negative value opens links without
-	// watching the input.
+	// watching the input. A browse turn draws the windows Chrome opens
+	// off the person's screen only while their input stays quiet this long,
+	// and watches none when it is negative.
 	TypingQuiet Duration `yaml:"typingQuiet"`
 }
+
+// RunConfig chooses where build commands execute.
+type RunConfig struct {
+	Remote remotebuild.Config `yaml:"remote"`
+	// Tail sizes the tail of a failed run's output beekeeper keeps in its
+	// record and prints once, so the failing test's name survives the
+	// truncation: a systemd size ("256K", "1M"; default
+	// DefaultRunTail, capped at one MiB), or "off" to keep nothing.
+	Tail string `yaml:"tail"`
+}
+
+// DefaultRunTail is how much of a failed run's output beekeeper keeps
+// by default: enough for a test suite's failure block and its panic.
+const DefaultRunTail = "256K"
+
+// runTailRe is a run.tail size: a number with an optional systemd suffix.
+var runTailRe = regexp.MustCompile(`^(\d+)([KkMmGgTt]?)$`)
 
 // Memcap locates the build slots of the memcap wrapper and caps the
 // commands `beekeeper run` runs.
@@ -1766,16 +3089,26 @@ type Memcap struct {
 	// (100 each): the runs' share of the cores while the desktop wants
 	// them too (default DefaultMemcapCPUWeight).
 	CPUWeight int `yaml:"cpuWeight"`
+	// HoldBound is how long a run may hold a build slot before watch names
+	// it and its holder (default 30m): a build longer than that is a
+	// benchmark or a lab proof, which runs with --class and takes no slot.
+	HoldBound Duration `yaml:"holdBound"`
 }
 
 // Duration is a time.Duration written as "30s", "10m" in YAML.
 type Duration struct{ time.Duration }
 
-// UnmarshalYAML parses a Go duration string.
+// UnmarshalYAML parses a Go duration string, or whole days as "7d".
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
 		return err
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n >= 0 {
+			d.Duration = time.Duration(n) * 24 * time.Hour
+			return nil
+		}
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
@@ -1824,6 +3157,9 @@ func Path(flag string) (string, error) {
 		return flag, nil
 	}
 	if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" {
+		if _, err := os.Stat(filepath.Clean(env)); err != nil { //nolint:gosec // the configuration file explicitly selected by the caller
+			return "", err
+		}
 		return env, nil
 	}
 	dir, err := os.UserConfigDir()
@@ -1834,11 +3170,15 @@ func Path(flag string) (string, error) {
 }
 
 // Load reads the file at path and applies the defaults. A configuration
-// that is only incomplete loads: Incomplete names what is missing.
+// that is only incomplete loads: Incomplete names what is missing. A missing
+// file explicitly named by BEEKEEPER_CONFIG is an error, never defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(filepath.Clean(path))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if env := os.Getenv("BEEKEEPER_CONFIG"); env != "" && filepath.Clean(env) == filepath.Clean(path) {
+			return nil, err
+		}
 		raw = nil
 	case err != nil:
 		return nil, err
@@ -1876,8 +3216,15 @@ func (c *Config) Incomplete() []string {
 	return out
 }
 
+func userHomeDir() (string, error) {
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		return filepath.Clean(h), nil
+	}
+	return os.UserHomeDir()
+}
+
 func (c *Config) defaults() error {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return err
 	}
@@ -1886,6 +3233,29 @@ func (c *Config) defaults() error {
 		state = filepath.Join(home, ".local", "state")
 	}
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	setStr(&c.Disk.Prune, DiskPruneAuto)
+	if c.Disk.TrashDirs == nil {
+		c.Disk.TrashDirs = []string{filepath.Join(c.StateDir, "trash"), filepath.Join(state, "trash")}
+	}
+	for i, p := range c.Disk.TrashDirs {
+		c.Disk.TrashDirs[i] = filepath.Clean(homePath(home, p))
+	}
+	setDur(&c.Disk.Every, time.Hour)
+	setInt(&c.Disk.SccacheMaxGiB, 10)
+	for i, p := range c.Disk.Checkouts {
+		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
+	}
+	for i, e := range c.Disk.Caches {
+		if e.Path != "" {
+			c.Disk.Caches[i].Path = filepath.Clean(homePath(home, e.Path))
+		}
+		if e.Name == "" {
+			c.Disk.Caches[i].Name = c.Disk.Caches[i].Path
+		}
+	}
+	for i, o := range c.Disk.BuildOutputs {
+		c.Disk.BuildOutputs[i] = BuildOutput{Path: filepath.Clean(homePath(home, o.Path)), Worktree: filepath.Clean(homePath(home, o.Worktree))}
+	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
 	if c.Identity.Host == "" {
@@ -1893,10 +3263,23 @@ func (c *Config) defaults() error {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
 		}
 	}
-	// The desktop app never restarts a crashed CLI by itself: the grace only
-	// debounces a supervisor someone woke.
-	setDur(&c.Supervisor.RestartGrace, 30*time.Second)
-	c.Supervisor.defaults(home)
+	if c.Supervisor.ReviewRounds == 0 {
+		c.Supervisor.ReviewRounds = 1
+	}
+	if c.Supervisor.ClassifierConfidence == 0 {
+		c.Supervisor.ClassifierConfidence = 0.8
+	}
+	setDur(&c.Supervisor.LoopInterval, 30*time.Second)
+	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
+	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
+	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
+	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
+	if c.Supervisor.Ownership.Team != "" {
+		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
+	}
+	setDur(&c.Supervisor.Ownership.OwnerWait, 24*time.Hour)
+	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
+	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
@@ -1909,12 +3292,12 @@ func (c *Config) defaults() error {
 	setDur(&c.Feedback.Window, 24*time.Hour)
 	// The guide's context is the person's conversation: it relays early.
 	if c.Guide.RelayAt == 0 {
-		c.Guide.RelayAt = 150_000
+		c.Guide.RelayAt = 200_000
 	}
 	c.Guide.defaults(home)
 	setDur(&c.Guide.WaitingTTL, 2*time.Hour)
 	if c.Agents.RelayAt == 0 {
-		c.Agents.RelayAt = c.Supervisor.RelayAt
+		c.Agents.RelayAt = defaultRelayAt
 	}
 	setDur(&c.Agents.LastStepGrace, 30*time.Minute)
 	if c.Agents.LastStepCeiling == 0 {
@@ -1926,10 +3309,17 @@ func (c *Config) defaults() error {
 		c.Agents.Shell.Unalias = DefaultUnalias
 	}
 	setStr(&c.Agents.Shell.Globs, GlobsLiteral)
+	setStr(&c.Agents.Mode, ModeDesktop)
 	c.Reporter.defaults(home, c.Guide.Person)
 	c.Outbound.defaults(home)
 	for i, d := range c.Hooks.Scope.Dirs {
 		c.Hooks.Scope.Dirs[i] = filepath.Clean(homePath(home, d))
+	}
+	for i, d := range c.Hooks.PersonFolders {
+		if d == "~" {
+			d = home
+		}
+		c.Hooks.PersonFolders[i] = filepath.Clean(homePath(home, d))
 	}
 	setInt(&c.Scan.MinLength, 12)
 	c.Secret.TokenFile = homePath(home, c.Secret.TokenFile)
@@ -1961,6 +3351,11 @@ func (c *Config) defaults() error {
 
 	setDur(&c.Overlaps.ActiveWithin, time.Hour)
 	setDur(&c.Board.StaleAfter, 365*24*time.Hour)
+	setDur(&c.Board.ArchiveAfter, DefaultBoardArchiveAfter)
+	setDur(&c.Board.TidyEvery, time.Hour)
+	setDur(&c.Board.EscalateEvery, 7*24*time.Hour)
+	setDur(&c.Board.Claims.Refresh, 6*time.Hour)
+	setDur(&c.Board.Claims.StaleAfter, 24*time.Hour)
 
 	setInt(&c.GitHub.Floor, 2500)
 	setInt(&c.GitHub.UrgentBound, 200)
@@ -1971,6 +3366,7 @@ func (c *Config) defaults() error {
 
 	w := &c.Watch
 	setDur(&w.Interval, 30*time.Second)
+	setDur(&w.BatchInterval, 5*time.Minute)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
 	setDur(&w.SwapWindow, 10*time.Minute)
@@ -1984,7 +3380,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Doctor.DockerEvery, time.Hour)
 	setDur(&c.Doctor.WorktreesEvery, 6*time.Hour)
 	if c.Doctor.WorktreeRoots == nil {
-		c.Doctor.WorktreeRoots = []string{"~/projects/worktrees"}
+		c.Doctor.WorktreeRoots = []string{"~/.local/state/klaus-lab/worktrees"}
 	}
 	for i, r := range c.Doctor.WorktreeRoots {
 		c.Doctor.WorktreeRoots[i] = filepath.Clean(homePath(home, r))
@@ -2018,6 +3414,18 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
+	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
+	c.Agy.BrainDir = homePath(home, c.Agy.BrainDir)
+	c.Agy.ProjectsDir = homePath(home, c.Agy.ProjectsDir)
+	c.Agy.ConversationsDir = homePath(home, c.Agy.ConversationsDir)
+	setStr(&c.Codex.SessionsDir, filepath.Join(home, ".codex", "sessions"))
+	setStr(&c.Codex.AuthFile, filepath.Join(home, ".codex", "auth.json"))
+	setStr(&c.Codex.ConfigFile, filepath.Join(home, ".codex", "config.toml"))
+	c.Codex.SessionsDir = homePath(home, c.Codex.SessionsDir)
+	c.Codex.AuthFile = homePath(home, c.Codex.AuthFile)
+	c.Codex.ConfigFile = homePath(home, c.Codex.ConfigFile)
 	cfg, err := os.UserConfigDir()
 	if err != nil {
 		return err
@@ -2043,7 +3451,7 @@ func (c *Config) defaults() error {
 
 	setInt(&c.Merge.Cap, 5)
 	setInt(&c.Merge.SessionCap, 2)
-	setDur(&c.Merge.QueueTTL, 15*time.Minute)
+	setDur(&c.Merge.QueueTTL, DefaultQueueTTL)
 	setDur(&c.Merge.SeedTTL, 12*time.Hour)
 	setDur(&c.Merge.Settle, 5*time.Minute)
 	setDur(&c.Merge.SettleTimeout, 30*time.Minute)
@@ -2052,6 +3460,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
 	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
 	setDur(&c.Secret.SessionLifetime, 12*time.Hour)
@@ -2059,8 +3468,44 @@ func (c *Config) defaults() error {
 	setStr(&c.Memcap.SlotDir, filepath.Join(state, "memcap", "slots"))
 	setInt(&c.Memcap.Slots, 2)
 	setInt(&c.Memcap.CPUWeight, DefaultMemcapCPUWeight)
-	setInt(&c.Capacity.Floor, 5)
-	setInt(&c.Capacity.Ceiling, 10)
+	setStr(&c.Run.Tail, DefaultRunTail)
+	setDur(&c.Memcap.HoldBound, 30*time.Minute)
+	if !c.Capacity.reviewHeadroomSet {
+		c.Capacity.ReviewHeadroom = 2
+	}
+	if !c.Capacity.ceilingSet && c.Capacity.Ceiling == 0 {
+		c.Capacity.Ceiling = DefaultCeiling
+	}
+	c.Capacity.Usage.defaults(home)
+	for _, name := range slices.Sorted(maps.Keys(c.Capacity.Providers)) {
+		p := c.Capacity.Providers[name]
+		if p.SelfHosted() {
+			// A self-hosted provider has no subscription to keep on pace:
+			// capacity.ceiling, which a desk lowers to hold one on its week,
+			// does not set its target. Without a ceiling of its own it runs
+			// DefaultSelfHostedCeiling sessions at once, bounded by the
+			// machine guards.
+			if !p.ceilingSet {
+				p.Ceiling = DefaultSelfHostedCeiling
+			}
+			for i := range p.ServeModeCommand {
+				p.ServeModeCommand[i] = homePath(home, p.ServeModeCommand[i])
+			}
+		} else if !p.ceilingSet && p.Ceiling == 0 {
+			p.Ceiling = c.Capacity.Ceiling
+		}
+		if name == ClaudeHarness && len(p.Command) == 0 {
+			p.Command = slices.Clone(DefaultClaudeUsageCommand)
+		}
+		if name == AgyHarness && len(p.Command) == 0 && !p.SelfHosted() {
+			p.Command = slices.Clone(DefaultAgyUsageCommand)
+		}
+		if name == CodexHarness && len(p.Command) == 0 {
+			p.Command = slices.Clone(DefaultCodexUsageCommand)
+		}
+		p.defaults(home)
+		c.Capacity.Providers[name] = p
+	}
 	setInt(&c.Capacity.AvailMinMiB, 20<<10)
 	setInt(&c.Capacity.SwapGrowthMaxMiB, 256)
 	al := &c.Alerts
@@ -2095,12 +3540,16 @@ func (c *Config) defaults() error {
 	return nil
 }
 
+// defaultRelayAt is the context, in tokens, at which a role's holder or an
+// agent is relayed unless configured.
+const defaultRelayAt = 400_000
+
 func (r *Role) defaults(home string) {
 	setDur(&r.RelayTTL, 15*time.Minute)
 	setDur(&r.RelayGrace, 30*time.Minute)
 	setDur(&r.RestartGrace, time.Minute)
 	if r.RelayAt == 0 {
-		r.RelayAt = 400_000
+		r.RelayAt = defaultRelayAt
 	}
 	r.Instructions = homePath(home, r.Instructions)
 	r.Dir = homePath(home, r.Dir)
@@ -2109,26 +3558,25 @@ func (r *Role) defaults(home string) {
 // GitHubHosts are the hosts the GitHub token goes to.
 var GitHubHosts = []string{"github.com", "api.github.com", "uploads.github.com"}
 
-func (s *Sandbox) validate() error {
+func (s *Sandbox) validateEach(report func(error)) {
 	for key, ps := range map[string][]string{"sandbox.allowRead": s.AllowRead, "sandbox.allowWrite": s.AllowWrite} {
 		for _, p := range ps {
 			if !filepath.IsAbs(p) {
-				return fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p)
+				report(fmt.Errorf("%s: %q is neither absolute nor under ~/", key, p))
 			}
 		}
 	}
 	if s.ProxyPort < 0 || s.ProxyPort > 65535 {
-		return fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort)
+		report(fmt.Errorf("sandbox.proxyPort: %d is no TCP port", s.ProxyPort))
 	}
 	for _, d := range s.Domains {
 		if openLoopback(d) {
-			return fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d)
+			report(fmt.Errorf("sandbox.domains: %q opens every loopback listener on the host (other sessions' port-forwards, local servers) to the sandbox: name a lab's API server by its port, 127.0.0.1:<port>", d))
 		}
 		if host, port, err := net.SplitHostPort(d); err == nil && Loopback(host) && port == strconv.Itoa(s.ProxyPort) {
-			return fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d)
+			report(fmt.Errorf("sandbox.domains: %q is the egress proxy itself (sandbox.proxyPort)", d))
 		}
 	}
-	return nil
 }
 
 // openLoopback reports whether the egress entry d opens loopback beyond one
@@ -2170,6 +3618,53 @@ func (s *Sandbox) defaults(home string) {
 }
 
 // homePath is p with a leading ~/ resolved against home.
+// validateDiskCaches refuses a cache policy that could reach beyond a cache:
+// a relative path or filesystem root, a bad glob, a rule-less custom entry.
+func validateDiskCachesEach(caches []DiskCache, report func(error)) {
+	names := map[string]bool{}
+	for _, e := range caches {
+		if e.Name == "" || names[e.Name] {
+			report(fmt.Errorf("disk.caches: each entry needs a path or a unique name (%q)", e.Name))
+		}
+		names[e.Name] = true
+		builtin := e.Builtin(e.Name)
+		switch e.Mode {
+		case "", DiskCacheEntries, DiskCacheFiles, DiskCacheOff:
+		case DiskCacheCommand:
+			if strings.TrimSpace(e.Command) == "" {
+				report(fmt.Errorf("disk.caches %s: mode command needs a command", e.Name))
+			}
+		case DiskCacheModeGo, DiskCacheModeSc:
+			if (e.Mode == DiskCacheModeGo) != (e.Name == DiskCacheGo) || (e.Mode == DiskCacheModeSc) != (e.Name == DiskCacheSccache) {
+				report(fmt.Errorf("disk.caches %s: mode %s belongs to the built-in entry of that cache alone", e.Name, e.Mode))
+			}
+		default:
+			report(fmt.Errorf("disk.caches %s: mode %q is none of entries, files, command, off", e.Name, e.Mode))
+		}
+		if e.Command != "" && e.Mode != DiskCacheCommand {
+			report(fmt.Errorf("disk.caches %s: command needs mode command", e.Name))
+		}
+		if e.OlderThan.Duration < 0 || e.MaxGiB < 0 {
+			report(fmt.Errorf("disk.caches %s: olderThan and maxGiB take no negative value", e.Name))
+		}
+		if e.Path == "" {
+			if !builtin {
+				report(fmt.Errorf("disk.caches %s: path is required", e.Name))
+			}
+			continue
+		}
+		if !filepath.IsAbs(e.Path) || filepath.Dir(e.Path) == e.Path {
+			report(fmt.Errorf("disk.caches %s: path must be absolute and not a filesystem root", e.Name))
+		}
+		if _, err := filepath.Match(e.Path, ""); err != nil {
+			report(fmt.Errorf("disk.caches %s: path: %w", e.Name, err))
+		}
+		if !builtin && e.Mode != DiskCacheOff && e.Mode != DiskCacheCommand && e.OlderThan.Duration == 0 && e.MaxGiB == 0 && !e.Regenerable {
+			report(fmt.Errorf("disk.caches %s: set olderThan, maxGiB or regenerable", e.Name))
+		}
+	}
+}
+
 func homePath(home, p string) string {
 	if rest, ok := strings.CutPrefix(p, "~/"); ok {
 		return filepath.Join(home, rest)
@@ -2197,50 +3692,126 @@ func (r *Reporter) defaults(home, person string) {
 	r.Brief, r.Dir = homePath(home, r.Brief), homePath(home, r.Dir)
 }
 
-func (c *Config) validate() error {
+// validate keeps the loader's first-finding contract. The checker uses
+// validateEach to collect independent rules without repeated edit/check rounds.
+func (c *Config) validate() error { return firstFinding(c.validateEach) }
+
+func firstFinding(visit func(func(error))) error {
+	var first error
+	visit(func(err error) {
+		if first == nil {
+			first = err
+		}
+	})
+	return first
+}
+
+func (c *Config) validateEach(report func(error)) {
+	for i, r := range c.Agents.Models {
+		if _, err := regexp.Compile(r.Match); err != nil {
+			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
+		}
+		if strings.TrimSpace(r.Match) == "" {
+			report(fmt.Errorf("agents.models[%d]: match is required", i))
+		}
+	}
+	for kind, p := range c.Capacity.TaskPolicies {
+		if strings.TrimSpace(kind) == "" || p.MinClass < 0 || p.MaxCost < 0 {
+			report(fmt.Errorf("capacity.taskPolicies.%s: nonempty kind and nonnegative class and cost required", kind))
+		}
+	}
+	if err := c.Run.Remote.Validate(); err != nil {
+		report(err)
+	}
+	if c.Run.Tail != "" && c.Run.Tail != "off" && !runTailRe.MatchString(c.Run.Tail) {
+		report(fmt.Errorf("run.tail: want a size with an optional K, M, G or T suffix (256K) or off"))
+	}
+	if c.Disk.Prune != "" && c.Disk.Prune != DiskPruneAuto && c.Disk.Prune != DiskPruneAsk {
+		report(fmt.Errorf("disk.prune: want auto or ask"))
+	}
+	for _, p := range c.Disk.TrashDirs {
+		if !filepath.IsAbs(p) || filepath.Clean(p) == string(filepath.Separator) {
+			report(fmt.Errorf("disk.trashDirs: each entry must be an absolute trash directory, not a filesystem root"))
+		}
+	}
+	for _, n := range c.Disk.BuildDirs {
+		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
+			report(fmt.Errorf("disk.buildDirs: invalid directory %q", n))
+		}
+	}
+	validateDiskCachesEach(c.Disk.Caches, report)
+	for _, o := range c.Disk.BuildOutputs {
+		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
+			report(fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths"))
+		}
+	}
+	if err := c.GitHub.WorkerApp.Validate(); err != nil {
+		report(err)
+	}
+	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
+		report(fmt.Errorf("agents.remoteMCP: %w", err))
+	}
+	identities := map[execution.HostID]bool{}
+	for selector, host := range c.Agents.Hosts {
+		if selector == "local" || !execution.ValidIdentity(selector) || identities[host.Identity] {
+			report(errors.New("agents.hosts requires unique identities and selectors; local is reserved"))
+		}
+		if err := host.ValidateCatalog(); err != nil {
+			report(fmt.Errorf("agents.hosts.%s: %w", selector, err))
+		}
+		identities[host.Identity] = true
+	}
+	if c.Agents.Execution != nil {
+		if err := c.Agents.Execution.Validate(); err != nil {
+			report(fmt.Errorf("agents.execution: %w", err))
+		}
+	}
 	for name := range c.Agents.Profiles {
 		if !profileNamePattern.MatchString(name) {
-			return fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name)
+			report(fmt.Errorf("agents.profiles: %q is no profile name (letters, digits, - and _)", name))
 		}
 	}
-	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "supervisor.profile": c.Supervisor.Profile, "guide.profile": c.Guide.Profile} {
+	for key, name := range map[string]string{"agents.profile": c.Agents.Profile, "guide.profile": c.Guide.Profile} {
 		if _, ok := c.Agents.ProfileFor(name); name != "" && !ok {
-			return fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile)
+			report(fmt.Errorf("%s: %q is no profile: name one of agents.profiles or %s", key, name, MinimalProfile))
 		}
+	}
+	if m := c.Agents.Mode; m != "" && m != ModeDesktop && m != ModeBackground {
+		report(fmt.Errorf("agents.mode: %q: want %s or %s", m, ModeDesktop, ModeBackground))
 	}
 	if g := c.Agents.Shell.Globs; g != "" && g != GlobsLiteral && g != GlobsShell {
-		return fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell)
+		report(fmt.Errorf("agents.shell.globs: %q: want %s or %s", g, GlobsLiteral, GlobsShell))
 	}
 	for _, n := range c.Agents.Shell.Unalias {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("agents.shell.unalias: %q is no command name", n)
+			report(fmt.Errorf("agents.shell.unalias: %q is no command name", n))
 		}
 	}
 	for _, n := range c.Secret.UnlockCommands {
 		if !commandName.MatchString(n) {
-			return fmt.Errorf("secret.unlockCommands: %q is no command name", n)
+			report(fmt.Errorf("secret.unlockCommands: %q is no command name", n))
 		}
 	}
 	for _, f := range c.Secret.Files {
 		if _, err := filepath.Match(f, ""); err != nil || !filepath.IsAbs(f) {
-			return fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f)
+			report(fmt.Errorf("secret.files: %q is no absolute path or glob (~/ allowed)", f))
 		}
 	}
 	for i, id := range c.Secret.AgeIdentities {
 		switch {
 		case id.Recipient == "" && id.PathRegex == "":
-			return fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i)
+			report(fmt.Errorf("secret.ageIdentities[%d]: name a recipient or a pathRegex", i))
 		case id.Recipient != "" && !strings.HasPrefix(id.Recipient, "age1"):
-			return fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient)
+			report(fmt.Errorf("secret.ageIdentities[%d]: recipient %q is no age recipient (age1…)", i, id.Recipient))
 		case !strings.HasPrefix(id.Ref, "op://") && !strings.HasPrefix(id.Ref, "file:///") && !strings.HasPrefix(id.Ref, "store://"):
-			return fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref)
+			report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: want op://<vault>/<item>/<field>, file:///<absolute path> or store://[<entry>]", i, id.Ref))
 		}
 		if _, err := regexp.Compile(id.PathRegex); err != nil {
-			return fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err)
+			report(fmt.Errorf("secret.ageIdentities[%d]: pathRegex: %w", i, err))
 		}
 		if rest, ok := strings.CutPrefix(id.Ref, "op://"); ok {
 			if vault, _, _ := strings.Cut(rest, "/"); vault != c.Secret.Vault && !slices.Contains(c.Secret.AgeVaults, vault) {
-				return fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault)
+				report(fmt.Errorf("secret.ageIdentities[%d]: ref %q: the vault %q is neither secret.vault nor one of secret.ageVaults", i, id.Ref, vault))
 			}
 		}
 	}
@@ -2248,167 +3819,299 @@ func (c *Config) validate() error {
 		s := c.Apps.Secrets[in]
 		switch {
 		case !filepath.IsAbs(s.File):
-			return fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File)
+			report(fmt.Errorf("apps.secrets.%s.file: %q is no absolute path (~/ allowed)", in, s.File))
 		case (s.Name == "") != (s.Namespace == ""):
-			return fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in)
+			report(fmt.Errorf("apps.secrets.%s: name and namespace start an absent file's Secret together", in))
 		}
 	}
 	for i, v := range c.Secret.AgeVaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.ageVaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for i, r := range c.Secret.FileRoots {
 		if !filepath.IsAbs(r) || r == "/" {
-			return fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r)
+			report(fmt.Errorf("secret.fileRoots[%d]: %q: a directory's absolute path (~/ allowed), not the root", i, r))
 		}
 	}
 	for i, v := range c.Secret.Vaults {
 		if v == "" || strings.Contains(v, "/") || c.Secret.Vault == "" {
-			return fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v)
+			report(fmt.Errorf("secret.vaults[%d]: %q: a vault's name, beside secret.vault", i, v))
 		}
 	}
 	for name, p := range c.Omp.Providers {
 		// the message never carries the value someone put there
 		if !opRef(p.APIKey) {
-			return fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name)
+			report(fmt.Errorf("omp.providers.%s.apiKey: want op://<vault>/<item>/<field>, the reference of the provider's key: beekeeper hands an agent the key from the vault, never from a file", name))
 		}
 	}
 	for i, r := range c.Outbound.StoreDeny {
 		for _, g := range []string{r.Vault, r.Item} {
 			if _, err := filepath.Match(g, ""); err != nil {
-				return fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err)
+				report(fmt.Errorf("outbound.storeDeny[%d]: %q: %w", i, g, err))
 			}
+		}
+	}
+	for _, g := range c.Hooks.PersonFolders {
+		if _, err := filepath.Match(g, ""); err != nil {
+			report(fmt.Errorf("hooks.personFolders: %q: %w", g, err))
 		}
 	}
 	for _, g := range c.Outbound.Paths {
 		if _, err := filepath.Match(g, ""); err != nil {
-			return fmt.Errorf("outbound.paths: %q: %w", g, err)
+			report(fmt.Errorf("outbound.paths: %q: %w", g, err))
 		}
 	}
-	if err := c.Sandbox.validate(); err != nil {
-		return err
-	}
+	c.Sandbox.validateEach(report)
 	if r := c.Reporter; r.Every.Duration != 0 && (r.Every.Duration < time.Minute || r.Brief == "") {
-		return fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration)
+		report(fmt.Errorf("reporter: every %s needs at least a minute and a brief", r.Every.Duration))
 	}
 	if c.Feedback.Enabled() && !c.Reporter.Enabled() {
-		return fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief")
+		report(fmt.Errorf("feedback.context: the feedback watch reads the reporter's posts: set reporter.every and reporter.brief"))
 	}
 	if tz := c.Reporter.TZ; tz != "" {
 		if _, err := time.LoadLocation(tz); err != nil {
-			return fmt.Errorf("reporter.tz: %w", err)
+			report(fmt.Errorf("reporter.tz: %w", err))
 		}
 	}
-	if err := ownerRepos("reporter.reviews", c.Reporter.Reviews); err != nil {
-		return err
+	ownerReposEach("reporter.reviews", c.Reporter.Reviews, report)
+	ownerReposEach("plans.repositories", c.Plans.Repositories, report)
+	for repo, method := range c.Merge.Methods {
+		ownerReposEach("merge.methods", []string{repo}, report)
+		if method != "squash" && method != "rebase" && method != "merge" {
+			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
+		}
 	}
-	if err := ownerRepos("plans.repositories", c.Plans.Repositories); err != nil {
-		return err
-	}
-	if err := c.Sink.validate(); err != nil {
-		return err
-	}
+	ownerReposEach("merge.admin", c.Merge.Admin, report)
+	c.Sink.validateEach(report)
 	for i, st := range c.Board.Order {
 		if st.Name == "" {
-			return fmt.Errorf("board.order[%d]: no name", i)
+			report(fmt.Errorf("board.order[%d]: no name", i))
 		}
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
-			return fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name)
+			report(fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name))
 		}
 	}
 	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
-		return fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration)
+		report(fmt.Errorf("teleport: warnBefore %s is past renewBefore %s: the watch would warn before the keeper renews", t.WarnBefore.Duration, t.RenewBefore.Duration))
 	}
 	if t := c.Kube.ContextTemplate; t != "" && !strings.Contains(t, "{installation}") {
-		return fmt.Errorf("kube.contextTemplate: %q has no {installation}", t)
+		report(fmt.Errorf("kube.contextTemplate: %q has no {installation}", t))
 	}
-	for name, r := range map[string]Role{"supervisor": c.Supervisor.Role, "guide": c.Guide.Role} {
-		if r.Skill != "" && r.Instructions != "" {
-			return fmt.Errorf("%s: set skill or instructions, not both", name)
+	if c.Supervisor.ReviewRounds < 0 {
+		report(fmt.Errorf("supervisor.reviewRounds: %d is fewer than one review round (0 is the default, 1)", c.Supervisor.ReviewRounds))
+	}
+	if k := c.Supervisor.ClassifierConfidence; k < 0 || k > 1 {
+		report(fmt.Errorf("supervisor.classifierConfidence: %v is not between 0 and 1", k))
+	}
+	c.Supervisor.Ownership.validateEach(func(err error) { report(fmt.Errorf("supervisor.ownership.%w", err)) })
+	for _, selector := range c.Supervisor.Hosts {
+		if selector == "" || selector == "local" {
+			report(fmt.Errorf("supervisor.hosts: %q names no SSH execution host", selector))
+		}
+		if _, ok := c.Agents.Hosts[selector]; !ok {
+			report(fmt.Errorf("supervisor.hosts: %q is no agents.hosts entry", selector))
 		}
 	}
+	if r := c.Guide.Role; r.Skill != "" && r.Instructions != "" {
+		report(errors.New("guide: set skill or instructions, not both"))
+	}
 	if pd := c.Alerts.PagerDuty; pd.Enabled() && len(pd.Services) == 0 {
-		return fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context)
+		report(fmt.Errorf("alerts.pagerduty.services: reading PagerDuty through muster context %s needs the team's service ids", pd.Context))
 	}
 	if d := c.Alerts.Discover; d.Enabled() && c.Alerts.Team == "" {
-		return errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team")
+		report(errors.New("alerts.discover: discovering the installations that carry the team's HelmReleases needs alerts.team"))
 	}
 	for _, p := range c.Alerts.Discover.Exclude {
 		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("alerts.discover.exclude: %q: %w", p, err)
+			report(fmt.Errorf("alerts.discover.exclude: %q: %w", p, err))
 		}
 	}
 	for i, in := range c.Alerts.Installations {
 		if in.Name == "" {
-			return fmt.Errorf("alerts.installations[%d]: an installation needs a name", i)
+			report(fmt.Errorf("alerts.installations[%d]: an installation needs a name", i))
 		}
 		if in.Floor != "" && !slices.Contains(alerts.Severities, in.Floor) {
-			return fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", "))
+			report(fmt.Errorf("alerts.installations[%d]: floor %q is none of %s", i, in.Floor, strings.Join(alerts.Severities, ", ")))
 		}
 	}
 	if n := c.Alerts.Flap.Changes; n < 0 || n == 1 {
-		return fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n)
+		report(fmt.Errorf("alerts.flap.changes: %d; an alert is flapping from its second change on at the earliest", n))
 	}
 	if p := c.Alerts.PageSeverity; p != "" && !slices.Contains(alerts.Severities, p) {
-		return fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", "))
+		report(fmt.Errorf("alerts.pageSeverity: %q is none of %s", p, strings.Join(alerts.Severities, ", ")))
 	}
 	if g := c.Alerts.OwnerGrace.Duration; g != 0 && g < time.Minute {
-		return fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g)
+		report(fmt.Errorf("alerts.ownerGrace: %s; a page has at least a minute to be owned", g))
 	}
 	if e := c.Upgrades.Every.Duration; e < 0 {
-		return fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e)
+		report(fmt.Errorf("upgrades.every: %s; an installation is read at most this long apart", e))
 	}
-	if err := c.Notify.validate(); err != nil {
-		return err
-	}
+	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
 		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
-			return fmt.Errorf("resources: %q is not a valid resource name", r)
+			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
-	if k := c.Capacity; k.Floor < 0 || k.Ceiling < k.Floor {
-		return fmt.Errorf("capacity: floor %d and ceiling %d; the ceiling is at least the floor", k.Floor, k.Ceiling)
+	if k := c.Capacity; k.Ceiling < 0 {
+		report(fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling))
+	}
+	if c.Capacity.ReviewHeadroom < 0 {
+		report(fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom))
+	}
+	if n, ok := c.Capacity.Local.Limit(); ok && n < 0 {
+		report(fmt.Errorf("capacity.local.ceiling: %d is negative", n))
 	}
 	if c.Capacity.SwapPSIMax < 0 {
-		return fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax)
+		report(fmt.Errorf("capacity.swapPSIMax: %g is not a pressure in percent", c.Capacity.SwapPSIMax))
+	}
+	c.Capacity.Usage.validateNamedEach("capacity.usage", report)
+	for _, name := range c.Capacity.ProviderNames() {
+		if strings.TrimSpace(name) == "" {
+			report(errors.New("capacity.providers: empty provider name"))
+		}
+		p := c.Capacity.Providers[name]
+		if k := strings.TrimSpace(p.Kind); k != "" && k != KindSubscription && k != KindSelfHosted {
+			report(fmt.Errorf("capacity.providers.%s.kind: %q is not %s or %s", name, p.Kind, KindSubscription, KindSelfHosted))
+		}
+		if p.Ceiling < 0 {
+			report(fmt.Errorf("capacity.providers.%s.ceiling: %d is negative", name, p.Ceiling))
+		}
+		if p.SelfHosted() {
+			// claude, agy and codex are the subscription harnesses' names: a
+			// self-hosted provider under one would be matched by a
+			// subscription start's fallback and hand it its room.
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case ClaudeHarness, AgyHarness, CodexHarness:
+				report(fmt.Errorf("capacity.providers.%s: %s names the %s subscription; a %s provider has another name", name, name, name, KindSelfHosted))
+			}
+			if p.Enabled() {
+				report(fmt.Errorf("capacity.providers.%s: a %s provider reads no subscription usage: remove its command", name, KindSelfHosted))
+			}
+			if p.hasFields() {
+				report(fmt.Errorf("capacity.providers.%s: a %s provider has no usage windows: remove its usage fields", name, KindSelfHosted))
+			}
+			if p.ServeModeStale.Duration < 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeStaleAfter: %s is negative", name, p.ServeModeStale.Duration))
+			}
+			if p.ServeModeSwitchTimeout.Duration < 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchTimeout: %s is negative", name, p.ServeModeSwitchTimeout.Duration))
+			}
+			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeCeilings)) {
+				if strings.TrimSpace(mode) == "" {
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: empty mode name", name))
+				}
+				if p.ServeModeCeilings[mode] < 0 {
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d is negative", name, mode, p.ServeModeCeilings[mode]))
+				}
+			}
+			if len(p.ServeModeCommand) > 0 {
+				if strings.TrimSpace(p.ServeModeCommand[0]) == "" {
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand[0]: empty executable", name))
+				}
+				if len(p.ServeModeCeilings) == 0 && len(p.ServeModeModes) == 0 {
+					report(fmt.Errorf("capacity.providers.%s.serveModeCommand: no serveModeCeilings: the command's modes name no ceiling", name))
+				}
+			} else if len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeCeilings: no serveModeCommand: the ceilings name no mode reader", name))
+			}
+			if len(p.ServeModeModes) > 0 && len(p.ServeModeCommand) == 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeCommand: the modes name no mode reader", name))
+			}
+			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeCommand) == 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeCommand: the switch has no mode reader", name))
+			}
+			if len(p.ServeModeSwitch) > 0 && len(p.ServeModeModes) == 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand: no serveModeModes: the switch knows no mode to switch into", name))
+			}
+			if len(p.ServeModeSwitch) > 0 && strings.TrimSpace(p.ServeModeSwitch[0]) == "" {
+				report(fmt.Errorf("capacity.providers.%s.serveModeSwitchCommand[0]: empty executable", name))
+			}
+			if len(p.ServeModeModes) > 0 && len(p.ServeModeSwitch) == 0 {
+				report(fmt.Errorf("capacity.providers.%s.serveModeModes: no serveModeSwitchCommand: the modes name no switch", name))
+			}
+			for _, mode := range slices.Sorted(maps.Keys(p.ServeModeModes)) {
+				m := p.ServeModeModes[mode]
+				if strings.TrimSpace(mode) == "" {
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes: empty mode name", name))
+				}
+				if m.Sessions < 0 {
+					report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: sessions %d is negative", name, mode, m.Sessions))
+				}
+				if c, ok := p.ServeModeCeilings[mode]; ok && c != m.Sessions {
+					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
+				}
+				for _, n := range m.Nodes {
+					if strings.TrimSpace(n) == "" {
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
+					}
+				}
+			}
+			continue
+		}
+		if len(p.ServeModeCommand) > 0 || len(p.ServeModeCeilings) > 0 || len(p.ServeModeModes) > 0 ||
+			len(p.ServeModeSwitch) > 0 || p.ServeModeSwitchTimeout.Duration != 0 {
+			report(fmt.Errorf("capacity.providers.%s: serveModeCommand, serveModeCeilings, serveModeModes and serveModeSwitchCommand belong to a %s provider", name, KindSelfHosted))
+		}
+		p.validateNamedEach("capacity.providers."+name, report)
+	}
+	for i, ch := range c.Capacity.Choices {
+		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
+			report(fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i))
+		}
+		switch {
+		case strings.TrimSpace(ch.Harness) == "":
+			report(fmt.Errorf("capacity.choices[%d]: harness is required", i))
+		case strings.TrimSpace(ch.Model) == "":
+			report(fmt.Errorf("capacity.choices[%d]: model is required", i))
+		case ch.fiveHourMaxSet && !(ch.FiveHourMax > 0 && ch.FiveHourMax <= 100):
+			report(fmt.Errorf("capacity.choices[%d]: fiveHourMax %g is not in (0, 100]", i, ch.FiveHourMax))
+		case ch.sevenDayMaxSet && !(ch.SevenDayMax > 0 && ch.SevenDayMax <= 100):
+			report(fmt.Errorf("capacity.choices[%d]: sevenDayMax %g is not in (0, 100]", i, ch.SevenDayMax))
+		case ch.paceMarginSet && (ch.PaceMargin < -100 || ch.PaceMargin > 100):
+			report(fmt.Errorf("capacity.choices[%d]: paceMargin %g is not in [-100, 100]", i, ch.PaceMargin))
+		}
+		prov := ch.EffectiveProvider()
+		if p, ok := c.Capacity.Providers[prov]; ok && p.SelfHosted() && !strings.EqualFold(strings.TrimSpace(ch.Harness), OmpHarness) {
+			report(fmt.Errorf("capacity.choices[%d]: harness %q is a subscription; %s is a %s provider", i, ch.Harness, prov, KindSelfHosted))
+		}
+		if _, ok := c.Capacity.Providers[prov]; !ok {
+			report(fmt.Errorf("capacity.choices[%d]: provider %q is not in capacity.providers", i, prov))
+		}
 	}
 	if w := c.Watch.SwapWindow.Duration; w != 0 && w < MinSwapSpan {
-		return fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan)
+		report(fmt.Errorf("watch.swapWindow: %s is under the %s a swap growth rate is measured over", w, MinSwapSpan))
 	}
 	if a := c.Agents; a.LastStepCeiling != 0 && a.LastStepCeiling <= a.RelayAt {
-		return fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt)
+		report(fmt.Errorf("agents.lastStepCeiling: %d is not above relayAt %d", a.LastStepCeiling, a.RelayAt))
 	}
-	if err := c.validateLabs(); err != nil {
-		return err
-	}
+	c.validateLabsEach(report)
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
-		return fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB)
+		report(fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB))
 	}
 	faults := map[string]bool{}
 	for i, f := range c.Doctor.Faults {
 		if f.Name == "" || f.Probe == "" || f.Remedy == "" || faults[f.Name] {
-			return fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i)
+			report(fmt.Errorf("doctor.faults[%d]: a fault needs a name of its own, a probe and a remedy", i))
 		}
 		faults[f.Name] = true
 	}
 	names, repos := map[string]bool{}, map[string]string{}
 	for i, l := range c.Lanes {
 		if l.Name == "" || len(l.Repositories) == 0 || strings.Contains(l.Name, "/") {
-			return fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i)
+			report(fmt.Errorf("lanes[%d]: a lane needs a name without a slash and repositories", i))
 		}
 		if names[l.Name] {
-			return fmt.Errorf("lanes: %q is named twice", l.Name)
+			report(fmt.Errorf("lanes: %q is named twice", l.Name))
 		}
 		names[l.Name] = true
 		for _, r := range l.Repositories {
 			if prev, ok := repos[r]; ok {
-				return fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name)
+				report(fmt.Errorf("lanes: %s is in both %q and %q", r, prev, l.Name))
 			}
 			repos[r] = l.Name
 		}
 	}
-	return nil
 }
 
 // machineKinds are the kinds that notified before the machine's lines went
@@ -2425,24 +4128,23 @@ func notifyKind(field, k string) error {
 	return nil
 }
 
-func (n Notify) validate() error {
+func (n Notify) validateEach(report func(error)) {
 	for _, k := range n.Kinds {
 		if err := notifyKind("notify.kinds", k); err != nil {
-			return err
+			report(err)
 		}
 	}
 	for k, u := range n.Urgency {
 		if err := notifyKind("notify.urgency", k); err != nil {
-			return err
+			report(err)
 		}
 		if !slices.Contains(notify.Urgencies, u) {
-			return fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", "))
+			report(fmt.Errorf("notify.urgency.%s: %q is none of %s", k, u, strings.Join(notify.Urgencies, ", ")))
 		}
 	}
 	if _, err := notify.ParseQuietHours(n.QuietHours); err != nil {
-		return fmt.Errorf("notify.quietHours: %w", err)
+		report(fmt.Errorf("notify.quietHours: %w", err))
 	}
-	return nil
 }
 
 // LaneOf is the lane a repository's merges queue in: the configured lane
@@ -2469,34 +4171,58 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 	return Lane{}, false
 }
 
+// serveModeNodeNames are the machine's nodes named by any self-hosted
+// provider's serving modes: the resources a claim of one of them is the
+// generic constraint "needs node N exclusively". A node a mode occupies is
+// leasable even where resources does not list it.
+func (c Capacity) serveModeNodeNames() []string {
+	set := map[string]bool{}
+	for _, p := range c.Providers {
+		if !p.SelfHosted() {
+			continue
+		}
+		for _, m := range p.ServeModeModes {
+			for _, n := range m.Nodes {
+				set[n] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
 // Leasable returns every resource a session can lease: the configured ones,
-// the model server when one is watched, the browser last.
+// the nodes a self-hosted serving mode occupies, the model server when one is
+// watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	for _, n := range c.Capacity.serveModeNodeNames() {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
 	if c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		out = append(out, ModelServer)
 	}
 	return append(out, Browser)
 }
 
-// validateLabs checks that every lab lease is a configured resource and
+// validateLabsEach checks that every lab lease is a configured resource and
 // that no two lab leases map one kind cluster.
-func (c *Config) validateLabs() error {
+func (c *Config) validateLabsEach(report func(error)) {
 	by := map[string]string{}
 	for _, res := range slices.Sorted(maps.Keys(c.Labs)) {
 		cl := c.Labs[res]
 		if !slices.Contains(c.Resources, res) {
-			return fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", "))
+			report(fmt.Errorf("labs: %q is not one of the resources %s", res, strings.Join(c.Resources, ", ")))
 		}
 		if cl == "" {
-			return fmt.Errorf("labs: %q names no kind cluster", res)
+			report(fmt.Errorf("labs: %q names no kind cluster", res))
 		}
 		if other, ok := by[cl]; ok {
-			return fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl)
+			report(fmt.Errorf("labs: %q and %q both map the kind cluster %q", other, res, cl))
 		}
 		by[cl] = res
 	}
-	return nil
 }
 
 // LabCluster is the kind cluster the lab lease res stands for, "" when res
@@ -2519,14 +4245,13 @@ func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }
 
-// ownerRepos refuses an entry of field that is not owner/repo.
-func ownerRepos(field string, repos []string) error {
+// ownerReposEach reports entries of field that are not owner/repo.
+func ownerReposEach(field string, repos []string, report func(error)) {
 	for _, r := range repos {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {
-			return fmt.Errorf("%s: %q is not owner/repo", field, r)
+			report(fmt.Errorf("%s: %q is not owner/repo", field, r))
 		}
 	}
-	return nil
 }
 
 func setStr(p *string, v string) {

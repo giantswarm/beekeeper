@@ -194,9 +194,29 @@ func (r *restartWatch) exec(req *restartRequest) error {
 // brokerProcess and restartBroker read and restart the broker unit
 // (beekeeper-sandbox.service); the tests replace them.
 var (
-	brokerProcess = secret.BrokerProcess
-	restartBroker = secret.RestartBroker
+	brokerProcess         = secret.BrokerProcess
+	restartBroker         = secret.RestartBroker
+	prepareBrokerHandover = func(context.Context) error {
+		path, err := secret.SocketPath()
+		if err != nil {
+			return err
+		}
+		_, err = secret.AskVault(path, secret.VaultRequest{Op: secret.VaultPrepare})
+		return err
+	}
+	revokeBrokerHandover = func(context.Context) error {
+		path, err := secret.SocketPath()
+		if err != nil {
+			return err
+		}
+		_, err = secret.AskVault(path, secret.VaultRequest{Op: secret.VaultRevoke})
+		return err
+	}
 )
+
+func brokerHandoverRefusal(err error) error {
+	return fmt.Errorf("handover unavailable: %w; restart refused; a deliberate `systemctl --user restart %s` drops the vault session and requires a new sign-in", err, secret.BrokerUnit)
+}
 
 // brokerStep is what an install does about the broker unit.
 type brokerStep int
@@ -237,17 +257,17 @@ func brokerDue(pid int, bin, exe string, written time.Time, t *proc.Table) (brok
 
 // restartBrokerOn puts the broker unit onto the binary an install wrote at
 // exe at written: restarted when it runs the replaced one and serves no
-// call, else the restart still due named with its command. A restart drops
-// the broker's vault session, said with it. dry only names the step.
-func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.Time, t *proc.Table, dry bool) {
+// call, else the restart still due named with its command. An unavailable
+// handover refuses the restart. dry only names the step.
+func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.Time, t *proc.Table, dry bool, session bool) {
 	pid, bin, err := brokerProcess()
 	if err != nil {
 		return
 	}
-	const dropped = "its vault session goes with it, the next secret step waits for the broker's sign-in"
+	const handover = "install prepares the vault handover before restarting"
 	due := func(why string) {
-		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d) stays on the replaced binary %s: systemctl --user restart %s puts it on %s; %s\n",
-			"due", secret.BrokerUnit, pid, why, secret.BrokerUnit, exe, dropped)
+		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d) stays on the replaced binary %s: rerun beekeeper install to retry onto %s; %s\n",
+			"due", secret.BrokerUnit, pid, why, exe, handover)
 	}
 	step, calls := brokerDue(pid, bin, exe, written, t)
 	switch step {
@@ -255,12 +275,21 @@ func restartBrokerOn(ctx context.Context, w io.Writer, exe string, written time.
 		due(fmt.Sprintf("while it serves %d call(s), a restart would end them", calls))
 	case brokerRestart:
 		if !dry {
+			if session {
+				if err := prepareBrokerHandover(ctx); err != nil {
+					_, _ = fmt.Fprintf(w, "due     %s (pid %d) stays on the replaced binary: %v\n", secret.BrokerUnit, pid, brokerHandoverRefusal(err))
+					return
+				}
+			}
 			if err := restartBroker(ctx); err != nil {
+				if session {
+					err = errors.Join(err, revokeBrokerHandover(context.WithoutCancel(ctx)))
+				}
 				due(fmt.Sprintf("(%v)", err))
 				return
 			}
 		}
-		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d): on %s now; %s\n", "restart", secret.BrokerUnit, pid, exe, dropped)
+		_, _ = fmt.Fprintf(w, "%-7s %s (pid %d): on %s now; %s\n", "restart", secret.BrokerUnit, pid, exe, handover)
 	}
 }
 

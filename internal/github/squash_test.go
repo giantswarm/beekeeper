@@ -162,7 +162,11 @@ func TestSquashRefusesAnUnansweredReview(t *testing.T) {
 			t.Errorf("%s: %+v, want exit %d with %d unanswered", name, doc, tc.want, tc.open)
 		}
 		if tc.want == SquashRefused {
-			if !strings.HasPrefix(doc.Reason, "unanswered review: 1 item(s)") || !strings.Contains(doc.Reason, "by pat") {
+			prefix := "unanswered review: 1 item(s)"
+			if doc.UnansweredReviews[0].State == "CHANGES_REQUESTED" {
+				prefix = "changes requested: review CHANGES_REQUESTED by pat"
+			}
+			if !strings.HasPrefix(doc.Reason, prefix) || !strings.Contains(doc.Reason, "by pat") {
 				t.Errorf("%s: reason %q", name, doc.Reason)
 			}
 			if strings.Contains(strings.Join(f.calls, "\n"), "-X PUT") {

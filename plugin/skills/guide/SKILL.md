@@ -1,6 +1,7 @@
 ---
 name: guide
 description: Run the guide session — walk the person through the decisions the sessions on the machine wait on, one at a time with the status quo and the why, relay each answer word for word to the session that asked, take their new ideas and input to the right place, and keep the roadmap board current. Always a session of its own, never the supervisor's. Use when the person asks for a guide, wants to go through their open decisions, or when a relayed `beekeeper guide handover --prompt` arrives.
+disable-model-invocation: true
 ---
 
 # guide — the session that guides the person through their decisions
@@ -12,7 +13,7 @@ and keeps the roadmap board true. It is not the supervisor and not a worker: it 
 sets no holds, merges nothing, fixes no code, and runs no research, proofs, subagents or test
 sessions. beekeeper's PreToolUse hook holds it to that: in the guide's session an Edit, Write or
 NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
-reading a page are refused, with the hint to hand the work to the supervisor in one line. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
+reading a page are refused, with the hint to hand the work to the supervisor in one line: an issue in its owning repository, put on the board. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
 ## Goal
 
@@ -29,7 +30,9 @@ roadmap board shows what is really in progress, blocked, in validation and done.
 - **beekeeper** (its `--help` the reference) holds the role and the queue. `beekeeper guide start`
   makes this session the guide or takes a relayed role; `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
-  the person (`GUIDE WAITING`), each answered or closed note, and the guide's own relay (`GUIDE
+  the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
+  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
+  each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due
   first, and the next only once that one is answered or closed. `beekeeper guide queue` is the whole queue: the open notes for the
@@ -41,16 +44,16 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   from `beekeeper log --verb answer.recorded`. `beekeeper guide` shows this session's context against the relay point.
 - **The owning session** of a decision is named in the queue. `beekeeper tail <session>` gives its
   last turns, `ListAgents` its messaging address.
-- **The supervisor** is another session (`/supervise`). It files decisions as `beekeeper note add
-  --for <person>` and never presents them itself; it schedules the work from the board and starts
-  the planning sessions for epics without a plan.
+- **The supervisor** is the supervisor loop (`beekeeper supervisor loop`), a service no session
+  holds. It files decisions as `beekeeper note add --for <person>` and never presents them itself;
+  it schedules the work from the board, reviews and gives the go to merge.
 
 ## Constraints
 
-- **Never in the supervisor's session.** The two roles always run in two sessions: `guide start` in
-  the supervisor's session is refused, and a guide never runs `supervisor start`. The operational
-  side — grants, holds, merges, sessions colliding, the machine — is the supervisor's; what the
-  guide learns about it, and any work, research or proof it meets, goes there in one line.
+- **Not the supervisor.** The supervisor is the supervisor loop, no session: the operational side —
+  holds, merges, sessions colliding, the machine — is the loop's, and a guide never runs it. What
+  the guide learns about it, and any work, research or proof it meets, it files as an issue in its
+  owning repository or hands to the board, in one line.
 - **One decision at a time, only what matters.** The queue is worked in order of what blocks work
   and what falls due first. A decision whose default is right and reversible, one that a decided
   direction or a standing rule already settles, or one that is not the person's to make, is not put
@@ -70,17 +73,24 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   sent. The question dialog names the owning session, and its question carries a `Status quo: …`
   and a `Why: …` part, a `Checked: …` part for a claim that something is merged, green, released,
   rolled or closed, and every issue or PR as its full URL; each option's description is its
-  consequence. The hook refuses a question that lacks one, naming what it lacks. A decision that
-  blocks a session's work also goes to the person's phone with `PushNotification`.
+  consequence. The hook refuses a question that lacks one, naming what it lacks.
+- **Waiting decisions are asked, not listed.** Each `GUIDE DECISION` and `GUIDE WAITING`, and
+  every decision `beekeeper guide next` serves, is put to the person in the question dialog of this
+  conversation, the one they read, one at a time and without waiting for them to ask. A note in the
+  queue is not the asking. A note that is work rather than a decision (a problem found to file in
+  its owning repository) is carried out or handed to the supervisor, not put to the person.
+- **Dialog answers verify once.** Serve the local note with `beekeeper guide next` before asking. Keep its option labels and order in the question dialog, and show the thread URL and head from the note. The completed dialog result hook binds the person's selection and verbatim text to that note in this guide session. Record it with `beekeeper answer <thread> --note <id> --choice <n>` for a selected option, adding the verbatim text if any; free text uses no choice. This channel verifies as the person's word without a terminal confirmation. Cancelled dialogs, other sessions, changed choices and invented text do not verify.
 - **Answers travel word for word.** Each answer, given on a note, in this conversation or on Slack,
   goes to `beekeeper answer <owner/repo#n> [--note <id>] "<the person's words>"` about the issue or PR
   it concerns, which tells the owning session; the supervisor gets a one-line copy. A waiting session
   with no note gets the words by `SendMessage` too. Nothing is paraphrased, softened or extended.
-- **Priorities and goes are the board's.** A priority the person states is `beekeeper priority set
-  <epic> <rank> --as <person>` (`board rank` orders items within a step), their go on an epic is
-  `beekeeper board move` to In Progress; no note carries either. An item held on the person's
-  answer is held by the decision itself (`note add --holds`): the answer, or its default, releases
-  it. A question names its
+- **Priorities and goes are the board's.** Priority is determined by issue Status and order on the
+  board only, never a separate number. A priority the person states is a board move
+  (`beekeeper board move <item> <status>`) or a board reorder
+  (`beekeeper board rank <item> --top | --before <item> | --after <item>`, or `beekeeper board order`);
+  their go on an epic is `beekeeper board move` to In Progress; no note carries either. An item held
+  on the person's answer is held by the decision itself (`note add --holds`): the answer, or its
+  default, releases it. A question names its
   thread (`note add --ref <owner/repo#n>`), and the state the guide leaves the next guide is the
   hand-over.
 - **New ideas and input go where they get worked.** Input on running work goes to its session in the

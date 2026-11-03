@@ -24,6 +24,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
@@ -79,7 +80,7 @@ func (p Party) Is(o Party) bool {
 	return false
 }
 
-// Supervisor is the session holding the watch.
+// Supervisor is the session holding a relayed role (the guide's).
 type Supervisor struct {
 	Party
 	Since time.Time `json:"since"`
@@ -87,9 +88,9 @@ type Supervisor struct {
 	rest rest
 }
 
-// Relay is the supervisor naming its successor: the successor's
-// `supervisor start` takes the role and the grants until Expires; the
-// outgoing supervisor keeps both meanwhile.
+// Relay is a role's holder (the guide) naming its successor: the
+// successor's start takes the role until Expires; the outgoing holder keeps
+// it meanwhile.
 type Relay struct {
 	From    Party     `json:"from"`
 	To      Party     `json:"to"`
@@ -170,8 +171,7 @@ func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
 
 // Role is a relayed role's record: its holder and term, its last relay,
 // the holders relays relieved, what beekeeper saw of its CLI and the relay
-// due the watch reported. The supervisor's lives in State's own fields
-// (SupervisorRole), the guide's in Guide.
+// due the watch reported: the guide's, in Guide.
 type Role struct {
 	Holder   *Supervisor `json:"holder,omitempty"`
 	Relay    *Relay      `json:"relay,omitempty"`
@@ -184,20 +184,22 @@ type Role struct {
 	// Run is the highest run of the role numbered: "<Role> run <Run>".
 	Run int `json:"run,omitempty"`
 	// Asking is the note the guide asks its person now (beekeeper guide
-	// next): served again until it is answered or done.
-	Asking int `json:"asking,omitempty"`
+	// next): served again until it is answered or done. AskingFrom is the
+	// muster context of the central instance that holds it, empty for the
+	// machine's own.
+	Asking     int    `json:"asking,omitempty"`
+	AskingFrom string `json:"askingFrom,omitempty"`
 
 	rest rest
 }
 
-// SupervisorRole is the supervisor's record.
-func (st *State) SupervisorRole() Role {
-	return Role{Holder: st.Supervisor, Relay: st.Relay, Relieved: st.Relieved, CLI: st.SupervisorCLI, RelayDue: st.RelayDue, Run: st.SupervisorRun}
-}
-
-// SetSupervisorRole stores the supervisor's record.
-func (st *State) SetSupervisorRole(r Role) {
-	st.Supervisor, st.Relay, st.Relieved, st.SupervisorCLI, st.RelayDue, st.SupervisorRun = r.Holder, r.Relay, r.Relieved, r.CLI, r.RelayDue, r.Run
+// LocalAsking is the machine's own note the guide asks now, 0 when it
+// asks none or a central instance's.
+func (r Role) LocalAsking() int {
+	if r.AskingFrom != "" {
+		return 0
+	}
+	return r.Asking
 }
 
 // GuideRole is the guide's record.
@@ -210,7 +212,7 @@ func (st *State) GuideRole() Role {
 
 // SetGuideRole stores the guide's record, none when it is empty.
 func (st *State) SetGuideRole(r Role) {
-	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 && r.Asking == 0 {
+	if r.Holder == nil && r.Relay == nil && len(r.Relieved) == 0 && len(r.Fed) == 0 && r.Run == 0 && r.Asking == 0 && r.AskingFrom == "" {
 		st.Guide = nil
 		return
 	}
@@ -241,6 +243,10 @@ type Hold struct {
 	// Except is what a merge hold lets through: a repository (the tool's own
 	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
+	// ExceptSession is the session (by name) a merge hold lets through: its
+	// merges and promotes run, a line's promoter promoting while the hold
+	// keeps every other session's merges off the line.
+	ExceptSession string `json:"exceptSession,omitempty"`
 	// Tool is the binary whose release window this hold is, ToolFrom the
 	// version it reported when the window opened, ToolPR the pull request
 	// that opened it (0 for a promotion), ToolMerged whether it merged and
@@ -291,6 +297,11 @@ func (h Hold) Excepts(repo string, pr int) bool {
 	return h.Except != "" && (strings.EqualFold(h.Except, repo) || strings.EqualFold(h.Except, fmt.Sprintf("%s#%d", repo, pr)))
 }
 
+// Admits reports whether the hold lets the session named session through.
+func (h Hold) Admits(session string) bool {
+	return h.ExceptSession != "" && strings.EqualFold(strings.TrimSpace(h.ExceptSession), strings.TrimSpace(session))
+}
+
 // AwaitsOwnRelease reports whether the hold is a repository's whose lift
 // probe waits on that repository's release or tag: only the repository's
 // own promote cuts it, so the hold lets that promote through.
@@ -323,10 +334,22 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
-	By    Party     `json:"by"`
-	At    time.Time `json:"at"`
-	On    string    `json:"on,omitempty"`
-	Waits string    `json:"waits"`
+	// RefKind caches GitHub's Issue or PullRequest type for this park.
+	RefKind string `json:"refKind,omitempty"`
+	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
+	RefChecked time.Time `json:"refChecked,omitzero"`
+	// ReviewHead proves the caller parked from the PR branch at its published HEAD.
+	// Empty (including parks written by older versions) is a plain wait.
+	ReviewHead string `json:"reviewHead,omitempty"`
+	// PostMerge is work remaining after merge; nil preserves older parks.
+	// An explicit empty string lets the loop close the task without a wake.
+	PostMerge *string `json:"postMerge,omitempty"`
+	// Worktree is the local git worktree root the caller parked from.
+	Worktree string    `json:"worktree,omitempty"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	On       string    `json:"on,omitempty"`
+	Waits    string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -338,14 +361,27 @@ type Park struct {
 	rest rest
 }
 
+// WorkerProblems keeps finding receipts after the watch drains its reports.
+type WorkerProblems struct {
+	Task       string    `json:"task"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	Findings   []string  `json:"findings"`
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
-	Registered time.Time `json:"registered"`
-	Task       string    `json:"task,omitempty"`
-	AssignedAt time.Time `json:"assignedAt,omitzero"`
-	IdleSince  time.Time `json:"idleSince,omitzero"`
-	LastTask   string    `json:"lastTask,omitempty"`
+	// Execution references a coordinating roster entry's remote process.
+	// Its reachability and lifecycle are stored on the matching Start.
+	Execution  *execution.Ref `json:"execution,omitempty"`
+	Registered time.Time      `json:"registered"`
+	// ActivityAt is the latest explicit roster activity (note, wake or resume).
+	ActivityAt       time.Time       `json:"activityAt,omitzero"`
+	Task             string          `json:"task,omitempty"`
+	AssignedAt       time.Time       `json:"assignedAt,omitzero"`
+	IdleSince        time.Time       `json:"idleSince,omitzero"`
+	LastTask         string          `json:"lastTask,omitempty"`
+	ReportedProblems *WorkerProblems `json:"reportedProblems,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -380,6 +416,10 @@ type Agent struct {
 	// its registration and each session start; GHAt when. Empty: not read.
 	GH   string    `json:"gh,omitempty"`
 	GHAt time.Time `json:"ghAt,omitzero"`
+	// Harness is the agent harness the session runs on ("" or "claude",
+	// "omp", "agy"); Model is the model it runs on.
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
 
 	rest rest
 }
@@ -444,12 +484,39 @@ type Note struct {
 	Recommend int      `json:"recommend,omitempty"`
 	// Posted is the gateway's handle on the decision's message, once posted.
 	Posted string `json:"posted,omitempty"`
-	// Held is the board item the decision holds (note add --holds): its
+	// Held is the board item the decision holds (note add --holds), its
+	// first --ref, and AlsoHeld those of its further --ref: each one's
 	// Status set to Blocked / Waiting until the decision closes, then set
-	// back. nil for a note that holds nothing.
-	Held *ItemHold `json:"held,omitempty"`
+	// back. nil and empty for a note that holds nothing.
+	Held     *ItemHold  `json:"held,omitempty"`
+	AlsoHeld []ItemHold `json:"alsoHeld,omitempty"`
+	// Central is the muster context of the central instance that holds
+	// the note, as a machine lists it beside its own; empty for the
+	// machine's own note, and never stored.
+	Central string `json:"central,omitempty"`
 
 	rest rest
+}
+
+// Holds are the board items n holds: Held, then AlsoHeld.
+func (n *Note) Holds() []ItemHold {
+	if n.Held == nil {
+		return nil
+	}
+	return append([]ItemHold{*n.Held}, n.AlsoHeld...)
+}
+
+// HoldOf is n's hold of the board item ref; nil when n holds no such item.
+func (n *Note) HoldOf(ref string) *ItemHold {
+	if n.Held != nil && strings.EqualFold(n.Held.Ref, ref) {
+		return n.Held
+	}
+	for i := range n.AlsoHeld {
+		if strings.EqualFold(n.AlsoHeld[i].Ref, ref) {
+			return &n.AlsoHeld[i]
+		}
+	}
+	return nil
 }
 
 // ItemHold is a board item a decision holds on its person: the issue, the
@@ -509,6 +576,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
@@ -576,6 +646,19 @@ type Record struct {
 	rest rest
 }
 
+// Claim is a record published on its issue as a marker comment other desks
+// read: the comment, the session it names, since when and when this desk
+// last refreshed it.
+type Claim struct {
+	Issue   string    `json:"issue"`
+	Comment int64     `json:"comment"`
+	Session Party     `json:"session"`
+	At      time.Time `json:"at"`
+	Seen    time.Time `json:"seen"`
+
+	rest rest
+}
+
 // AlertOwner is the session that owns a firing alert (alerts own), until the
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
@@ -631,12 +714,25 @@ type App struct {
 	// the person named.
 	Google bool `json:"google,omitempty"`
 	// Account is the Google account a Google OAuth client's sign-in
-	// chooses: the hook answers no other account on Google's chooser.
+	// chooses: the hook answers no other account on Google's chooser; of a
+	// third party's OAuth client, the account the consent is given as.
 	Account string `json:"account,omitempty"`
 	// GitLab is the host of the self-hosted GitLab whose OAuth application
 	// of the person's this is: the hook answers its authorize page there,
 	// by the callback hosts the person named; "" for any other record.
 	GitLab string `json:"gitlab,omitempty"`
+	// OAuth is the sign-in host of a third party's OAuth client the
+	// person consents to as their Account there: the hook answers that
+	// client's consent page on that host; "" for any other record.
+	OAuth string `json:"oauth,omitempty"`
+	// Slack is the workspace host (<workspace>.slack.com) of a Slack app of
+	// the person's whose install consent the hook answers there, SlackApp
+	// its app id and WebhookChannel the channel its webhook posts to, which
+	// the install keeps (lower case, without "#"; "" for an app without
+	// one); Slack is "" for any other record.
+	Slack          string `json:"slack,omitempty"`
+	SlackApp       string `json:"slackApp,omitempty"`
+	WebhookChannel string `json:"webhookChannel,omitempty"`
 	// Declared is where the organisation declares the App:
 	// <repo>@<commit>:<manifest path>, the local manifest of an App on the
 	// person's own account or of a deletion, or the person's own
@@ -696,18 +792,111 @@ type AppCreated struct {
 // the start that created it.
 type Start struct {
 	Party
-	Mode string    `json:"mode"`
-	Dir  string    `json:"dir"`
-	By   Party     `json:"by"`
-	At   time.Time `json:"at"`
+	Execution *ExecutionRecord `json:"execution,omitempty"`
+	Mode      string           `json:"mode"`
+	Dir       string           `json:"dir"`
+	By        Party            `json:"by"`
+	At        time.Time        `json:"at"`
 	// Harness is the agent harness started: "" for Claude Code, "omp".
 	Harness string `json:"harness,omitempty"`
 	// Model is the model the session was started on (--model, as its first
 	// reply names it), which its turns keep; empty: none was chosen.
 	Model string `json:"model,omitempty"`
+	// Background says the session runs as a Claude Code background session
+	// (agents.mode background): it has no desktop session, and its wakes go
+	// by its messaging, a stopped one's by claude --bg --resume.
+	Background bool `json:"background,omitempty"`
 
 	rest rest
 }
+
+// ExecutionRecord is the coordinator's durable admission/activation journal.
+// Request includes the private component callback credential and must never
+// be returned by an operator status or logs command.
+type ExecutionRecord struct {
+	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
+	Completed       bool                               `json:"completed,omitempty"`
+	Settled         bool                               `json:"settled,omitempty"`
+	Messages        []ExecutionMessage                 `json:"messages,omitempty"`
+	Handle          execution.Handle                   `json:"handle"`
+	Request         execution.StartRequest             `json:"request"`
+	RequestDigest   string                             `json:"requestDigest"`
+	Selector        string                             `json:"selector"`
+	Phase           string                             `json:"phase"`
+	Provider        string                             `json:"provider"`
+	Bucket          string                             `json:"bucket,omitempty"`
+	ReservedAt      time.Time                          `json:"reservedAt"`
+	LastActive      time.Time                          `json:"lastActive,omitzero"`
+	Observation     execution.Observation              `json:"observation"`
+	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
+	ControlSequence uint64                             `json:"controlSequence,omitempty"`
+	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
+	// Published is the execution's last publication (agents publish): its
+	// owned branch, the head it pushed and its pull request. Handle.Commit
+	// stays the commit the execution started from.
+	Published *ExecutionPublication `json:"published,omitempty"`
+	// PendingPublication is the last publication request whose bundle
+	// reached the coordinator before publication failed. Cleared once
+	// published.
+	PendingPublication *ExecutionPendingPublication `json:"pendingPublication,omitempty"`
+	// RecoveredTransfer is the last publication bundle digest the
+	// coordinator attempted to recover automatically.
+	RecoveredTransfer string `json:"recoveredTransfer,omitempty"`
+	// StartUnsent says no start request of this reservation has left the
+	// coordinator yet, so the host holds no journal of it. A reservation
+	// recorded before this field existed reads false: maybe sent.
+	StartUnsent bool `json:"startUnsent,omitempty"`
+	// StartSentAt is when the coordinator last sent its start request.
+	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// ReleasedAt is when a reservation the host never acknowledged was
+	// given up, ReleaseReason why: it holds no host or desk slot since.
+	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
+	ReleaseReason string    `json:"releaseReason,omitempty"`
+	rest          rest
+}
+
+// ExecutionPublication is one publication of an SSH execution's branch.
+type ExecutionPublication struct {
+	At     time.Time `json:"at"`
+	Branch string    `json:"branch"`
+	Head   string    `json:"head"`
+	URL    string    `json:"url,omitempty"`
+}
+
+// ExecutionPendingPublication is an unpushed publication request whose
+// bundle transfer is stored on the coordinator.
+type ExecutionPendingPublication struct {
+	At           time.Time `json:"at"`
+	Head         string    `json:"head"`
+	BundleDigest string    `json:"bundleDigest"`
+	Title        string    `json:"title,omitempty"`
+	Body         string    `json:"body,omitempty"`
+	LastError    string    `json:"lastError,omitempty"`
+}
+
+type ExecutionMessage struct {
+	TextDigest string             `json:"textDigest,omitempty"`
+	Resolution string             `json:"resolution,omitempty"`
+	Envelope   execution.Envelope `json:"envelope"`
+	Key        string             `json:"key"`
+	Stage      string             `json:"stage"`
+	Resume     *Park              `json:"resume,omitempty"`
+	rest       rest
+}
+
+func (r *ExecutionRecord) Terminal() bool {
+	if r.Released() {
+		return true
+	}
+	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
+		return false
+	}
+	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
+}
+
+// Released says the reservation was given up before its host acknowledged
+// a start: no process of it can exist.
+func (r *ExecutionRecord) Released() bool { return !r.ReleasedAt.IsZero() }
 
 // Archive is the desktop session of an agent that left the roster while
 // its archive could not be done (its CLI ran a turn, no steward recorded
@@ -725,6 +914,9 @@ type Archive struct {
 	Tried time.Time `json:"tried,omitzero"`
 	// Looked is the last doctor's run that found no steward to ask.
 	Looked time.Time `json:"looked,omitzero"`
+	// Warmed is when the desktop was last made to warm the session's own
+	// CLI to archive itself: the watch leaves that CLI running a while.
+	Warmed time.Time `json:"warmed,omitzero"`
 
 	rest rest
 }
@@ -829,7 +1021,7 @@ func (s Start) of(p Party) bool {
 }
 
 // Knows reports whether p is a session beekeeper started (any mode), holds
-// the supervisor's or the guide's role, or is an agent on the roster: the
+// the guide's role, or is an agent on the roster: the
 // sessions the hooks act in wherever they run.
 func (st *State) Knows(p Party) bool {
 	if p.Session == "" && p.HostSession == "" {
@@ -840,10 +1032,8 @@ func (st *State) Knows(p Party) bool {
 			return true
 		}
 	}
-	for _, h := range []*Supervisor{st.Supervisor, st.GuideRole().Holder} {
-		if h != nil && h.Is(p) {
-			return true
-		}
+	if h := st.GuideRole().Holder; h != nil && h.Is(p) {
+		return true
 	}
 	for _, a := range st.Agents {
 		if a.Is(p) {
@@ -855,19 +1045,10 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
-	Supervisor *Supervisor `json:"supervisor,omitempty"`
-	// Relay is the supervisor's last relay: open, taken or expired.
-	Relay *Relay `json:"relay,omitempty"`
-	// Relieved are the supervisors relays relieved, one per party.
-	Relieved []Relief `json:"relieved,omitempty"`
-	// SupervisorCLI is what beekeeper saw of the supervisor's CLI.
-	SupervisorCLI *CLI `json:"supervisorCLI,omitempty"`
-	// SupervisorRun is the highest supervisor run numbered.
-	SupervisorRun int `json:"supervisorRun,omitempty"`
-	// RelayDue is the relay due the watch reported to the supervisor.
-	RelayDue *RelayDue `json:"relayDue,omitempty"`
-	// Guide is the guide's role, the supervisor's counterpart for the
-	// person's decisions.
+	// LabIdle records when a configured kind lab was first seen unleased.
+	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
+	// Guide is the guide's role: the person's decisions. The supervisor is
+	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
 	// Grants are queued per resource in the order given.
 	Grants []Grant `json:"grants,omitempty"`
@@ -876,7 +1057,14 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
-	Notes    []Note               `json:"notes,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
+	// Parks are the parks of sessions off the roster (agents park by a
+	// session no roster entry names), one per session, its By: the watch
+	// settles and resumes them as it does a roster agent's.
+	Parks []Park `json:"parks,omitempty"`
+	Notes []Note `json:"notes,omitempty"`
 	// Defaulted are the decisions closed by their default within the last
 	// day: an answer that arrives meanwhile replaces the default.
 	Defaulted []Note  `json:"defaulted,omitempty"`
@@ -885,6 +1073,9 @@ type State struct {
 	NextTimer int     `json:"nextTimer,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
+	// Claims are the records this desk published on GitHub as claims
+	// other desks read (board.claims).
+	Claims []Claim `json:"claims,omitempty"`
 	// Starts are the sessions beekeeper started, what the permission hook
 	// answers for.
 	Starts []Start `json:"starts,omitempty"`
@@ -936,16 +1127,83 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// WorkerReports are the reports workers finished with (agents idle
-	// --done) that the supervisor's watch has not printed yet.
+	// WorkerReports are mid-task findings and idle reports that the
+	// supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
+	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
+	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
 	Urgent []Urgent `json:"urgent,omitempty"`
+	// Pairs are the merges declared to land together (the gate's --pair):
+	// neither starts unless the other is next in its lane.
+	Pairs []Pair `json:"pairs,omitempty"`
 	// RoleLines are lines for a role's holder that found none to tell: the
 	// role's next start says them.
 	RoleLines []RoleLine `json:"roleLines,omitempty"`
+	// Stop is the stop of every start, wake, revive, import and merge
+	// (beekeeper stop) while it stands; beekeeper resume lifts it.
+	Stop *Stop `json:"stop,omitempty"`
+	// HostPins are the execution hosts beekeeper updated (agents hosts
+	// update): the release each runs and the policy digest its starts are
+	// pinned to, or why it is held.
+	HostPins []HostPin `json:"hostPins,omitempty"`
+
+	rest rest
+}
+
+// HostPin is an execution host's release and the policy digest beekeeper
+// recorded when it last updated the host, in place of a hand-kept
+// agents.hosts digest, and the hold of a host whose update failed.
+type HostPin struct {
+	Selector     string           `json:"selector"`
+	Identity     execution.HostID `json:"identity"`
+	Version      string           `json:"version,omitempty"`
+	PolicyDigest string           `json:"policyDigest,omitempty"`
+	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	// Tried is the last update attempt, which paces the retries.
+	Tried time.Time `json:"tried,omitzero"`
+	// Held is why the host takes no start: its update to HeldVersion
+	// failed, since HeldAt. The next successful update lifts it.
+	Held        string    `json:"held,omitempty"`
+	HeldAt      time.Time `json:"heldAt,omitzero"`
+	HeldVersion string    `json:"heldVersion,omitempty"`
+	// Reported says the supervisor loop handed the hold on as its finding.
+	Reported bool `json:"reported,omitempty"`
+
+	rest rest
+}
+
+// HostPin is the pin of the execution host selector, nil for none.
+func (st *State) HostPin(selector string) *HostPin {
+	for i := range st.HostPins {
+		if st.HostPins[i].Selector == selector {
+			return &st.HostPins[i]
+		}
+	}
+	return nil
+}
+
+// Stop is a standing beekeeper stop: who stopped the machine's sessions,
+// when and why, and what the stop changed, which beekeeper resume puts
+// back.
+type Stop struct {
+	Reason string    `json:"reason"`
+	By     Party     `json:"by"`
+	At     time.Time `json:"at"`
+	// Holds are the targets of the holds the stop set (merges, github); a
+	// full hold that stood before the stop is not among them and stays.
+	Holds []string `json:"holds,omitempty"`
+	// Replaced are the holds on those targets the stop's replaced: one that
+	// let a merge through, or that would have ended by itself while the
+	// stop stands (a time, a probe). Resume puts each back as it was.
+	Replaced []Hold `json:"replaced,omitempty"`
+	// Units are the installed units the stop stopped (the standby service,
+	// stop.units), which resume starts again.
+	Units []string `json:"units,omitempty"`
+	// Sessions are the names of the sessions the stop ended.
+	Sessions []string `json:"sessions,omitempty"`
 
 	rest rest
 }
@@ -989,11 +1247,53 @@ func (u Urgent) Key() string { return Merge{Repo: u.Repo, PR: u.PR}.Key() }
 // at Window.
 func (u Urgent) Ran() bool { return !u.Window.IsZero() }
 
+// Pair is two merges that must land together, a change split over two
+// repositories: the gate holds the first at its turn until the other is
+// next in its lane too, then starts both, and a refusal of either refuses
+// both with one reason.
+type Pair struct {
+	// Keys are the two merges, owner/repo#n each.
+	Keys []string  `json:"keys"`
+	By   Party     `json:"by"`
+	At   time.Time `json:"at"`
+	// Ready is when each merge's gate last found only the pair holding it
+	// back, by key.
+	Ready map[string]time.Time `json:"ready,omitempty"`
+	// Started is the merge that started first; its sibling then starts
+	// outside merge.cap and merge.sessionCap, the slot taken for both.
+	Started string `json:"started,omitempty"`
+	// Refused is why one of the two was refused, RefusedKey which: the
+	// other's gate refuses it with the same reason.
+	Refused    string `json:"refused,omitempty"`
+	RefusedKey string `json:"refusedKey,omitempty"`
+
+	rest rest
+}
+
+// Sibling is the pair's other merge than key, "" when key is not in it.
+func (p Pair) Sibling(key string) string {
+	switch {
+	case len(p.Keys) != 2:
+		return ""
+	case p.Keys[0] == key:
+		return p.Keys[1]
+	case p.Keys[1] == key:
+		return p.Keys[0]
+	}
+	return ""
+}
+
+// PairOf is the index of the pair key is in, -1 when none.
+func (s *State) PairOf(key string) int {
+	return slices.IndexFunc(s.Pairs, func(p Pair) bool { return p.Sibling(key) != "" })
+}
+
 // WorkerReport is the report a worker finished its task with: what it
 // delivered and the problems it found (broken functions, ways around them,
 // follow-ups). The supervisor's watch prints it once and drops it; the event
 // log keeps it (agents.report, agents.problem).
 type WorkerReport struct {
+	Finished bool      `json:"finished,omitempty"`
 	By       Party     `json:"by"`
 	At       time.Time `json:"at"`
 	Task     string    `json:"task,omitempty"`
@@ -1036,10 +1336,15 @@ func (e *StaleWriterError) Unwrap() error { return e.Load }
 
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
-	Remaining int       `json:"remaining"`
-	Limit     int       `json:"limit"`
-	Reset     time.Time `json:"reset"`
-	At        time.Time `json:"at"`
+	Identity   string             `json:"identity,omitempty"`
+	Login      string             `json:"login,omitempty"`
+	ETag       string             `json:"etag,omitempty"`
+	Identities map[string]Budget  `json:"identities,omitempty"`
+	Windows    map[string]GraphQL `json:"windows,omitempty"`
+	Remaining  int                `json:"remaining"`
+	Limit      int                `json:"limit"`
+	Reset      time.Time          `json:"reset"`
+	At         time.Time          `json:"at"`
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
@@ -1049,9 +1354,14 @@ type Budget struct {
 
 // GraphQL is one reading of the GitHub GraphQL limit.
 type GraphQL struct {
-	Remaining int `json:"remaining"`
-	Limit     int `json:"limit"`
-	// Reset is when a refusal ends; zero when GitHub named no time.
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Login     string   `json:"login,omitempty"`
+	Err       string   `json:"error,omitempty"`
+	Remaining int      `json:"remaining"`
+	Limit     int      `json:"limit"`
+	// Reset is when the window the reading counts resets and a refusal
+	// ends; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
 	// Refused is GitHub's words while it refused GraphQL calls.
 	Refused   string    `json:"refused,omitempty"`
@@ -1064,7 +1374,7 @@ type GraphQL struct {
 // Blocks says the reading's refusal still holds at now: one without a
 // reset holds until a reading says otherwise.
 func (g *GraphQL) Blocks(now time.Time) bool {
-	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
+	return g != nil && (len(g.BlockedBy) > 0 || g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset)))
 }
 
 // The phases of a Merge.
@@ -1205,6 +1515,17 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
+}
+
+// NoteHistory is the optional history of a store that retains central note
+// closures beyond the late-answer window. File-backed stores need not implement it.
+type NoteHistory interface {
+	NoteClosure(int) (*Event, error)
 }
 
 // Store is the seam every command reads and changes the state through.
@@ -1613,21 +1934,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

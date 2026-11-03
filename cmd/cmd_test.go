@@ -181,28 +181,6 @@ func TestOOMOwnerNamesATestKill(t *testing.T) {
 	}
 }
 
-func TestIsWait(t *testing.T) {
-	const devctl = "devctl"
-	yes := [][]string{
-		{devctl, "pr", "merge", "giantswarm/x", "1"},
-		{devctl, "release", "wait", "giantswarm/x", "--pr", "1"},
-		{"gh", "pr", "checks", "1", "--watch"},
-		{"docker", "image", "save", "x"},
-		{kubectlBin, "port-forward", "svc/x", "8080"},
-	}
-	no := [][]string{{devctl, "version"}, {"gh", "pr", "view", "1"}, {kubectlBin, "get", "pods"}}
-	for _, args := range yes {
-		if !isWait(&proc.Process{Comm: args[0], Args: args}) {
-			t.Errorf("%v is a wait", args)
-		}
-	}
-	for _, args := range no {
-		if isWait(&proc.Process{Comm: args[0], Args: args}) {
-			t.Errorf("%v is no wait", args)
-		}
-	}
-}
-
 // A watch's kept port-forwards are the watch's, no session's wait.
 func TestFindWaitsLeavesTheWatchsForwardsOut(t *testing.T) {
 	tab := named(table(
@@ -224,7 +202,7 @@ func TestMinus(t *testing.T) {
 }
 
 func TestUsageExitCode(t *testing.T) {
-	t.Setenv("BEEKEEPER_CONFIG", t.TempDir()+"/none.yaml")
+	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, t.TempDir()+"/config.yaml"))
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", "extra"}, {"--nope"}} {
 		root := New()
@@ -319,7 +297,7 @@ func TestCheckExcept(t *testing.T) {
 		{"github", "giantswarm/devctl", false},
 		{"github", "", true},
 	} {
-		if err := a.checkExcept(c.target, c.except); (err == nil) != c.ok {
+		if err := a.checkExcept(c.target, c.except, ""); (err == nil) != c.ok {
 			t.Errorf("%s except %q: %v", c.target, c.except, err)
 		}
 	}
@@ -329,10 +307,11 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
-	pull, ver, upd, wait, bc, accepts, infra, cand := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate
+	pull, ver, upd, wait, bc, accepts, infra, cand, rg := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard
 	t.Cleanup(func() {
-		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate = pull, ver, upd, wait, bc, accepts, infra, cand
+		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard = pull, ver, upd, wait, bc, accepts, infra, cand, rg
 	})
+	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	toolCandidate = func(context.Context, time.Time) (string, error) { return "", nil }
 	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
 	devctlUpdate = func(context.Context) error { return nil }

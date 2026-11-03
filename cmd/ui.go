@@ -18,7 +18,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/machine"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -82,7 +81,6 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		return nil, err
 	}
 	st := v.st
-	sv := a.supervision(st, v.raw)
 	t, terr := plat.Machine.Processes()
 	var errs []string
 	if terr != nil {
@@ -100,7 +98,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		Overlaps: uiOverlaps(v.Overlaps),
 		Holds:    uiHolds(a.activeHolds(st)),
 		Lanes:    a.uiLanes(st),
-		Roles:    a.uiRoles(st, v.raw, sv),
+		Roles:    a.uiRoles(st, v.raw),
 		Agents:   uiAgents(a.agentViews(st, v.raw)),
 		Notes:    uiNotes(st.Notes),
 		Timers:   uiTimers(st.Timers),
@@ -108,10 +106,7 @@ func (c *collector) Data(ctx context.Context) (*tui.Data, error) {
 		Alerts:   a.uiAlerts(&errs),
 		Events:   a.uiEvents(&errs),
 	}
-	d.Status = tui.Status{SupervisorLive: sv.live, SupervisorGone: sv.down()}
-	if st.Supervisor != nil {
-		d.Status.Supervisor = st.Supervisor.Name
-	}
+	d.Status = tui.Status{SupervisorLoop: v.SupervisorLoop > 0}
 	if s, err := a.status(); err != nil {
 		errs = append(errs, "status: "+err.Error())
 	} else {
@@ -184,16 +179,17 @@ func (a *app) messageSession(ctx context.Context, sessions []*claude.Session, s 
 	person := a.uiPerson()
 	msg := fmt.Sprintf("From %s through beekeeper ui: %s", person, strings.TrimSpace(text))
 	by := state.Party{Name: person}
-	if s.Harness == omp.Harness {
-		id, ok := strings.CutPrefix(s.HostID, omp.HostPrefix)
+	if s.Harness != "" {
+		h := harnessForSession(s)
+		id, ok := strings.CutPrefix(s.HostID, h.HostPrefix())
 		if !ok {
-			return "", refused("%s: an omp session beekeeper did not start takes no message: omp has no way into an interactive session", s.Name)
+			return "", refused("%s: an %s session beekeeper did not start takes no message: %s has no way into an interactive session", s.Name, h.Name(), h.Name())
 		}
-		if err := a.sendOmp(s.Name, id, msg); err != nil {
+		if err := h.Send(a, s.Name, id, msg); err != nil {
 			return "", err
 		}
-		_ = a.store.Log(event(by, "ui.message", "%s: written to its omp inbox", s.Name))
-		return "in its omp inbox: it runs at the next tool round or as the next turn", nil
+		_ = a.store.Log(event(by, "ui.message", "%s: written to its %s inbox", s.Name, h.Name()))
+		return fmt.Sprintf("in its %s inbox: it runs at the next tool round or as the next turn", h.Name()), nil
 	}
 	name, err := uniqueName(sessions, s)
 	if err != nil {
@@ -215,7 +211,7 @@ func (c *collector) takeoverDir() string { return takeover.Dir(c.a.cfg.StateDir)
 
 // TakeOver brings the approvals of the Claude Code session id to this
 // screen: the PermissionRequest hook holds them for its answer while the
-// screen runs. An omp session has none: omp agents run in yolo mode.
+// screen runs. An omp or agy session has none: they run in yolo mode.
 func (c *collector) TakeOver(_ context.Context, id string) error {
 	raw, err := c.running()
 	if err != nil {
@@ -232,8 +228,8 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 	if err != nil {
 		return err
 	}
-	if s.Harness == omp.Harness {
-		return refused("%s: an omp session asks for no approvals (beekeeper's omp agents run in yolo mode): nothing to take over", s.Name)
+	if s.Harness != "" {
+		return refused("%s: an %s session asks for no approvals (beekeeper's %s agents run in yolo mode): nothing to take over", s.Name, s.Harness, s.Harness)
 	}
 	if s.ID == "" {
 		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)
@@ -656,12 +652,11 @@ func uiMerge(m state.Merge) tui.Merge {
 		Release: m.Release, Roll: slices.Clone(m.Roll)}
 }
 
-// uiRoles is the supervisor's and the guide's record as the screen reads
-// them, each with its open relay.
-func (a *app) uiRoles(st *state.State, sessions []*claude.Session, sv supervision) []tui.Role {
-	out := []tui.Role{a.uiRole(supervisorRole, st.SupervisorRole(), sessions, sv)}
+// uiRoles is the guide's record as the screen reads it, with its open
+// relay. The supervisor is the supervisor loop: the status line shows it.
+func (a *app) uiRoles(st *state.State, sessions []*claude.Session) []tui.Role {
 	guide := readHolder(st.GuideRole(), sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
-	return append(out, a.uiRole(guideRole, st.GuideRole(), sessions, guide))
+	return []tui.Role{a.uiRole(guideRole, st.GuideRole(), sessions, guide)}
 }
 
 // uiRole is rl's record with r and sv as the screen reads it.

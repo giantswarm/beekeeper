@@ -375,7 +375,14 @@ func invokesGitHub(cmd string) bool {
 // isGitHubCLI says a command word runs gh or devctl.
 func isGitHubCLI(w string) bool {
 	w = path.Base(w)
-	return w == "gh" || w == "devctl"
+	return w == "gh" || w == devctlComm
+}
+
+// AddRequest records one model request's timestamp, model and token counts so
+// Price can compute Total and LastHour cost and CostUnknown for a harness.
+func (a *Activity) AddRequest(at time.Time, model string, tokens Tokens, window time.Time) {
+	a.window = window
+	a.messages = append(a.messages, message{at: at, model: model, tokens: tokens})
 }
 
 // Price sets the costs and the context window from the configured models.

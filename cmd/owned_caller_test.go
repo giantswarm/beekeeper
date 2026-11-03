@@ -110,7 +110,7 @@ func TestAWaitEndsWithItsCaller(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
 	}()
-	fr := followChild(follow, running, 0, nil, nil, time.Time{}, true)
+	fr := followChild(follow, running, 0, nil, nil, time.Time{}, true, nil)
 	if !fr.ended || fr.left || fr.rc != 128+int(syscall.SIGTERM) {
 		t.Errorf("the gate's follow: %+v, want ended with 143", fr)
 	}

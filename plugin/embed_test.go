@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,14 @@ func TestWorkerRulesNameTheTopics(t *testing.T) {
 		if !strings.HasPrefix(raw, "---\nname: "+topic+"\n") || !strings.HasPrefix(Skill(topic), "# "+topic+" — ") {
 			t.Errorf("%s/SKILL.md is not the %s skill:\n%.200s", topic, topic, raw)
 		}
+	}
+}
+
+// The worker rules say where an agentlab proof runs: outside beekeeper run,
+// whose build slot it would hold while it only waits.
+func TestWorkerRulesKeepAgentlabProofsOutOfTheSlot(t *testing.T) {
+	if !strings.Contains(strings.Join(strings.Fields(WorkerRules()), " "), "an agentlab proof only waits: never under `beekeeper run`") {
+		t.Error("the worker rules do not say an agentlab proof never runs under beekeeper run")
 	}
 }
 
@@ -144,14 +153,13 @@ func TestSkillsSuggestNoLongLeaseWait(t *testing.T) {
 // one-commit PR's commit message otherwise.
 func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
 	merge := strings.Join(strings.Fields(Skill("merge")), " ")
-	if !strings.Contains(merge, `--squash --subject "<PR title> (#<n>)"`) {
+	if !strings.Contains(merge, `--squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`) {
 		t.Error("the merge skill does not name --subject for a personal account's merge")
 	}
 }
 
-// A code scan's finding is raised on main and names where it was raised,
-// and the supervisor dispatches one only once that is the head: a scan of
-// a stale clone reports what main fixed long ago.
+// A code scan's finding is raised on main and names where it was raised: a
+// scan of a stale clone reports what main fixed long ago.
 func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	gh := words(Skill("github"))
@@ -160,19 +168,12 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 			t.Errorf("the github skill does not say %q", want)
 		}
 	}
-	raw, err := Skills.ReadFile(SkillsDir + "/supervise/references/scheduling.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(words(string(raw)), "a code scan's finding only once the commit it names is the default branch's head") {
-		t.Error("the supervisor's scheduling does not check a scan finding's commit against the head")
-	}
 }
 
 // Every gated merge line a shipped skill shows passes --update-branch: from
 // devctl 8.140.0 a head behind its base is exit 3 without it, strict
 // protection or not. The merge skill says what an exit 3 that still says
-// behind gets.
+// behind gets: the behind rule.
 func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	line := regexp.MustCompile("`devctl pr merge [^`]+`")
 	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
@@ -197,11 +198,96 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	for _, want := range []string{
 		"`devctl pr merge <owner/repo> <n> --update-branch`",
 		"`--rebase --update-branch`",
-		`3 still "behind"`,
-		"merge the base into the branch, push, the same merge once more",
+		`3 still "behind": as below, then the same merge again`,
 	} {
 		if !strings.Contains(merge, want) {
 			t.Errorf("the merge skill does not say %q", want)
 		}
+	}
+}
+
+// The role skill loads only from a prompt that opens with its bare slash
+// command (guide handover --prompt, a successor's first prompt, the
+// person), so a worker's skill listing never carries it.
+func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
+	for _, name := range []string{"guide"} {
+		front, _, _ := strings.Cut(strings.TrimPrefix(string(SkillFile(name)), "---\n"), "\n---\n")
+		if !slices.Contains(strings.Split(front, "\n"), "disable-model-invocation: true") {
+			t.Errorf("%s/SKILL.md lacks disable-model-invocation: true:\n%s", name, front)
+		}
+	}
+}
+
+// behindRule is what a branch behind its base gets, per merge method: a
+// rebase line's history stays linear, the gate rebasing the branch.
+const behindRule = "a behind branch merges its base and pushes, never on a rebase line"
+
+// The worker rules and the merge skill give a branch behind its base the
+// same rule, word for word.
+func TestWorkerRulesAndMergeSkillShareTheBehindRule(t *testing.T) {
+	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for name, text := range map[string]string{"the worker rules": WorkerRules(), "the merge skill": Skill("merge")} {
+		if !strings.Contains(words(text), behindRule) {
+			t.Errorf("%s do not say %q", name, behindRule)
+		}
+	}
+}
+
+// The worker rules and worker topic skills name the harness-neutral CLI
+// routes (agents idle --done --report, agents park, note add, the inbox) and
+// say nothing of Claude Code's SendMessage or AskUserQuestion tools.
+func TestWorkerRulesAndTopicsUseHarnessNeutralRoutes(t *testing.T) {
+	rules := strings.Join(strings.Fields(WorkerRules()), " ")
+	for _, want := range []string{
+		"agents idle --done --report",
+		"agents park",
+		"note add",
+		"inbox",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("the worker rules do not name %q", want)
+		}
+	}
+	for _, name := range append([]string{"worker-rules"}, Topics...) {
+		text := Skill(name)
+		for _, tool := range []string{"SendMessage", "AskUserQuestion"} {
+			if strings.Contains(text, tool) {
+				t.Errorf("%s skill names %s", name, tool)
+			}
+		}
+	}
+}
+
+func TestWorkerRulesStateFullURLRuleOnce(t *testing.T) {
+	rules := strings.Join(strings.Fields(WorkerRules()), " ")
+	const want = "Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`."
+	if n := strings.Count(rules, want); n != 1 {
+		t.Errorf("the worker rules state %q %d times, want 1", want, n)
+	}
+}
+
+// https://github.com/giantswarm/beekeeper/issues/1795: the guide asks each
+// waiting decision in the conversation the person reads; no skill assumes
+// a phone or a push notification reaches them.
+func TestTheGuideAsksWaitingDecisionsInItsConversation(t *testing.T) {
+	err := fs.WalkDir(Skills, SkillsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := fs.ReadFile(Skills, path)
+		if err != nil {
+			return err
+		}
+		if lower := strings.ToLower(string(b)); strings.Contains(lower, "pushnotification") || strings.Contains(lower, "phone") {
+			t.Errorf("%s assumes a phone or a push notification reaches the person", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := strings.Join(strings.Fields(Skill("guide")), " ")
+	if !strings.Contains(guide, "in the question dialog of this conversation") || !strings.Contains(guide, "without waiting for them to ask") {
+		t.Error("the guide skill does not ask waiting decisions in its conversation")
 	}
 }

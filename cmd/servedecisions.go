@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +11,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
+	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
@@ -97,23 +100,39 @@ func (g *gateway) close(ctx context.Context, id, outcome, text string) error {
 	return g.do(ctx, "/decisions/"+url.PathEscape(id)+"/close", body, nil)
 }
 
-// do posts body as JSON with the ServiceAccount token and decodes the
-// answer into out; a status other than 2xx is an error carrying the
-// gateway's reason.
+// member reports whether the person with email is in the Slack user group
+// whose handle is group.
+func (g *gateway) member(ctx context.Context, group, email string) (bool, error) {
+	var m struct {
+		Member bool `json:"member"`
+	}
+	err := g.do(ctx, "/groups/"+url.PathEscape(group)+"/members/"+url.PathEscape(email), nil, &m)
+	return m.Member, err
+}
+
+// do posts body as JSON, or without a body GETs path, with the
+// ServiceAccount token and decodes the answer into out; a status other than
+// 2xx is an error carrying the gateway's reason.
 func (g *gateway) do(ctx context.Context, path string, body, out any) error {
 	token, err := os.ReadFile(g.cfg.TokenFile) //nolint:gosec // the configured token file
 	if err != nil {
 		return fmt.Errorf("klaus-gateway token: %w", err)
 	}
-	b, err := json.Marshal(body)
+	method, payload := http.MethodGet, io.Reader(nil)
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		method, payload = http.MethodPost, bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(g.cfg.URL, "/")+path, payload) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(g.cfg.URL, "/")+path, bytes.NewReader(b)) //nolint:gosec // the configured klaus-gateway
-	if err != nil {
-		return err
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	resp, err := g.http.Do(req) //nolint:gosec // the configured klaus-gateway
 	if err != nil {
@@ -169,16 +188,27 @@ func personEmail(cfg config.Serve, name string) string {
 	return ""
 }
 
+// decides reports whether who is n's addressee. A team with a Slack group
+// (serve.groups) is its group's members, as klaus-gateway answers; any other
+// addressee is decidesNote's.
+func (s *server) decides(ctx context.Context, n *state.Note, who identity.Caller) (bool, error) {
+	if t, ok := strings.CutPrefix(n.For, teamPrefix); ok {
+		if group, slack := s.cfg.Serve.Groups[t]; slack {
+			if s.gw == nil {
+				return false, fmt.Errorf("team %s's members are its Slack group @%s, and serve has no klaus-gateway to ask (serve.gateway.url)", t, group)
+			}
+			return s.gw.member(ctx, group, who.Email)
+		}
+	}
+	return decidesNote(s.cfg.Serve, n, who), nil
+}
+
 // decidesNote reports whether who is n's addressee: the person it names, or a
-// member of the Dex group of the team it names.
+// member of a deciding Dex group of the team it names: the team's own group,
+// never an organization-wide one when it has its own.
 func decidesNote(cfg config.Serve, n *state.Note, who identity.Caller) bool {
 	if t, ok := strings.CutPrefix(n.For, teamPrefix); ok {
-		for group, team := range cfg.Teams {
-			if team == t && who.In(group) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(cfg.DecidingGroups(t), who.In)
 	}
 	email := personEmail(cfg, n.For)
 	return email != "" && strings.EqualFold(email, who.Email)
@@ -291,6 +321,37 @@ func (s *server) defaultDue(ctx context.Context, now time.Time) error {
 	for i := range due {
 		s.log.Info("default", "note", due[i].ID, "for", due[i].For, "default", due[i].Default)
 		s.closeDecision(ctx, &due[i], outcomeDefaulted, due[i].Default)
+		if err := s.mailFiler(ctx, &due[i], defaultedLine(&due[i])); err != nil {
+			s.log.Error("default", "note", due[i].ID, "filer", due[i].By.Name, "host", due[i].By.Host, "detail", "telling the filer: "+err.Error())
+		}
 	}
 	return nil
+}
+
+// mailFiler queues line in the mailbox of the person whose agent filed n,
+// addressed to that agent: its machine's watch delivers it to the filing
+// session. A note no machine's agent filed has nobody to tell. The message
+// id is the note's and the line's: a line said twice is queued once.
+func (s *server) mailFiler(ctx context.Context, n *state.Note, line string) error {
+	if n.By.Person == "" || n.By.Host == "" || line == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(n.By.Team + "/" + strconv.Itoa(n.ID) + "/" + line))
+	id := fmt.Sprintf("note-%d-%x", n.ID, sum[:6])
+	var env struct {
+		To   string `json:"to"`
+		From struct {
+			Person string `json:"person"`
+		} `json:"from"`
+		Message a2aMessage `json:"message"`
+	}
+	env.To = agentAddress(state.Agent{Party: n.By})
+	env.From.Person = serveParty.Name
+	env.Message = a2aMessage{MessageID: id, Role: a2aRoleAgent, Parts: []a2aPart{{Kind: a2aKindText, Text: line}}}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	_, err = s.mail.Send(ctx, mailbox.Message{Mailbox: n.By.Person, Sender: serveParty.Name, ID: id, Envelope: raw}, s.now())
+	return err
 }

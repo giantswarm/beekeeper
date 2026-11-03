@@ -33,7 +33,7 @@ const (
 	actionsKey        = "actions"
 	refTwelve         = "ref_12"
 	applicationsTitle = "Applications"
-	notTheChange      = "neither the one permission change"
+	notTheChange      = "neither a permission change"
 	readLevel         = "read"
 )
 

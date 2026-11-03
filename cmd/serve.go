@@ -43,7 +43,8 @@ command prints and the same as structured content.
 Every request carries a Dex ID token (muster forwards the person's): it is
 validated against serve.issuer's keys and serve.clientIDs, and the caller is
 the token's verified email, a member of serve.organization, of the team its
-group in serve.teams names. Releasing another person's lease or lifting
+most specific group in serve.teams names (a team's own group before an
+organization-wide one). Releasing another person's lease or lifting
 their hold is that person's, or the owning team's supervisor role's
 (serve.supervisors). Every call leaves one Kubernetes Event on the resource
 it concerns (the caller's team namespace for a list) and one log line.
@@ -66,11 +67,16 @@ Slack message through klaus-gateway (serve.gateway, POST /decisions, with
 the projected ServiceAccount token): a direct message, or the team's
 channel. A click, the modal or a thread reply calls note_answer through
 muster as the person who answered; only the addressee answers (the
-person's email, or a member of the team's Dex group in serve.teams; the
-first answer closes a team's). A decision klaus-gateway does not take is
+person's email, or a member of the team: of its Slack user group in
+serve.groups, as klaus-gateway answers, else of its own Dex group in
+serve.teams, an organization-wide group only for a team without one;
+the first answer closes a team's). A decision klaus-gateway does not take is
 withdrawn at once. Its message is closed on every path: answered, withdrawn
 (note_done) or at its due time, when serve closes it with its default
-(note.defaulted).`,
+(note.defaulted). The agent that filed it (note_add's agent and host) is
+told its answer (NOTE ANSWERED) or default (NOTE DEFAULTED) through its
+person's mailbox, addressed to local:<host>/<agent>: that machine's watch
+delivers it to the filing session.`,
 		Args: cobra.NoArgs,
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return a.loadConfig()
@@ -86,6 +92,7 @@ withdrawn at once. Its message is closed on every path: answered, withdrawn
 			if err != nil {
 				return err
 			}
+			store.InNamespace(os.Getenv(namespaceEnv))
 			ids, err := identity.New(ctx, a.cfg.Serve)
 			if err != nil {
 				return err
@@ -128,6 +135,10 @@ withdrawn at once. Its message is closed on every path: answered, withdrawn
 // databaseEnv names the URL of the beekeeper database: the mailboxes.
 const databaseEnv = "BEEKEEPER_DATABASE_URL"
 
+// namespaceEnv names serve's own namespace, where the note counter lives
+// (default kube.DefaultNamespace).
+const namespaceEnv = "BEEKEEPER_NAMESPACE"
+
 // server is beekeeper serve: the MCP tools and resources over the
 // Kubernetes store and the mailboxes.
 type server struct {
@@ -161,13 +172,19 @@ type (
 // full before it validates it, so the bound is the server's.
 const mcpMaxBody = 4 << 20
 
-func (s *server) handler() http.Handler {
+// mcpServer is serve's MCP server: its tools and resources.
+func (s *server) mcpServer() *mcpserver.MCPServer {
 	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false),
 		mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(s.subscriptionHooks()))
 	for _, t := range append(s.tools(), s.messageTools()...) {
 		m.AddTool(t.tool, s.handle(t))
 	}
 	s.addResources(m)
+	return m
+}
+
+func (s *server) handler() http.Handler {
+	m := s.mcpServer()
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", s.authenticate(http.MaxBytesHandler(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true)), mcpMaxBody)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -240,7 +257,7 @@ func (s *server) newCall(ctx context.Context, who identity.Caller, req mcp.CallT
 	st := &auditStore{Store: s.store}
 	out := &bytes.Buffer{}
 	return &call{s: s, ctx: ctx, who: who, me: me, store: st, out: out,
-		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out, central: true}}
+		app: &app{cfg: &cfg, as: me.Name, store: st, now: s.now(), out: out, central: true, mailFiler: s.mailFiler}}
 }
 
 // handle runs a tool for the authenticated caller and audits it: the Event

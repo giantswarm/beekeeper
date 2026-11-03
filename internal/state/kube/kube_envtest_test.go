@@ -49,6 +49,9 @@ func envtestStore(t *testing.T) (*Store, *Store, client.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := a.c.Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNamespace}}); err != nil {
+		t.Fatal(err)
+	}
 	return a, b, a.c
 }
 
@@ -75,10 +78,13 @@ const (
 	team     = "bumblebee"
 	graveler = "graveler"
 	muster   = "giantswarm/muster"
+	labHost  = "lab"
+	asked    = "merge?"
 )
 
 var (
-	ana = state.Party{Session: "s-ana", Name: "Agent one", Person: "ana@example.com", Team: team, Host: "lab"}
+	ana = state.Party{Session: "s-ana", Name: "Agent one", Person: "ana@example.com", Team: team, Host: labHost}
+	pia = state.Party{Session: "s-pia", Name: "Agent three", Person: "pia@example.com", Team: "planeteers", Host: labHost}
 	bo  = state.Party{Session: "s-bo", Name: "Agent two", Person: "bo@example.com", Team: team, Host: "laptop"}
 )
 
@@ -270,8 +276,11 @@ func TestEnvtestRecords(t *testing.T) {
 		t.Errorf("notes in the team namespace: %+v, %v", notes.Items, err)
 	}
 
-	// Removing a record deletes its object.
-	if err := a.Update(func(st *state.State) ([]state.Event, error) { st.Notes = nil; return nil, nil }); err != nil {
+	// Closing a note retains its reason outside the open state.
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = nil
+		return []state.Event{{By: ana, Verb: noteDoneEvent, Detail: "#1 withdrawn"}}, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := a.Read(); len(st.Notes) != 0 {
@@ -290,8 +299,8 @@ func TestEnvtestRefusals(t *testing.T) {
 		"local member of a shared record": {func(st *state.State) {
 			st.Merges = nil
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()})
-			st.Supervisor = &state.Supervisor{Party: ana}
-		}, "supervisor"},
+			st.Guide = &state.Role{Holder: &state.Supervisor{Party: ana}}
+		}, "guide"},
 		"two objects": {func(st *state.State) {
 			st.Grants = append(st.Grants, state.Grant{Resource: graveler, To: ana, By: bo, At: time.Now()},
 				state.Grant{Resource: "glean", To: ana, By: bo, At: time.Now()})
@@ -331,12 +340,12 @@ func TestEnvtestRefusals(t *testing.T) {
 }
 
 // A decision closed by its default stays a Note in state defaulted, read
-// back as Defaulted, until it leaves Defaulted, which deletes it.
+// back as Defaulted, until it leaves Defaulted, retaining the close reason.
 func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	a, _, c := envtestStore(t)
 	namespace(t, c, team)
 	ctx := context.Background()
-	for id, text := range map[int]string{1: "merge?", 2: "ship?"} {
+	for id, text := range map[int]string{1: asked, 2: "ship?"} {
 		if err := a.Update(func(st *state.State) ([]state.Event, error) {
 			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: text, By: ana, At: time.Now().Truncate(time.Second)})
 			return nil, nil
@@ -348,7 +357,7 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 		i := slices.IndexFunc(st.Notes, func(n state.Note) bool { return n.ID == 1 })
 		st.Defaulted = append(st.Defaulted, st.Notes[i])
 		st.Notes = slices.Delete(st.Notes, i, i+1)
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -375,8 +384,8 @@ func TestEnvtestKeepsADefaultedDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if s := stateOf(1); !strings.Contains(s, "not found") {
-		t.Errorf("an answered default's Note: %q", s)
+	if s := stateOf(1); s != noteClosed {
+		t.Errorf("an expired default's retained Note: %q", s)
 	}
 }
 
@@ -390,7 +399,7 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	ctx := context.Background()
 	for id := 1; id <= 3; id++ {
 		if err := a.Update(func(st *state.State) ([]state.Event, error) {
-			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: "merge?", By: ana, At: time.Now().Truncate(time.Second)})
+			st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: ana, At: time.Now().Truncate(time.Second)})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -398,7 +407,7 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	}
 	if err := a.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted, st.Notes = st.Notes[:1], st.Notes[1:]
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -406,8 +415,8 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	if err := a.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted, st.Notes = st.Notes, nil
 		return []state.Event{
-			{By: bo, Verb: "note.defaulted", Detail: "#2 defaulted"},
-			{By: bo, Verb: "note.defaulted", Detail: "#3 defaulted"},
+			{By: bo, Verb: noteDefaultedEvent, Detail: "#2 defaulted"},
+			{By: bo, Verb: noteDefaultedEvent, Detail: "#3 defaulted"},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -441,5 +450,161 @@ func TestEnvtestWritesSeveralNotes(t *testing.T) {
 	}
 	if st, _ := a.Read(); len(st.Defaulted) != 2 || len(st.Grants) != 0 {
 		t.Fatalf("a refused update wrote: defaulted %+v, grants %+v", st.Defaulted, st.Grants)
+	}
+}
+
+// A roster entry created but not yet given its status (the create's second
+// write) is no change of another writer's update.
+func TestEnvtestRosterEntryAwaitingItsStatus(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	if err := c.Create(context.Background(), &v1alpha1.RosterEntry{
+		ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: rosterName(bo)},
+		Spec:       v1alpha1.RosterEntrySpec{Address: "local:" + bo.Host + "/" + bo.Name, Party: apiParty(bo), Registered: metav1.Now().Rfc3339Copy()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = append(st.Notes, state.Note{ID: 1, For: ana.Person, Kind: state.NoteDecision, Text: "roster?", By: ana, At: time.Now().Truncate(time.Second)})
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("a note beside a roster entry awaiting its status: %v", err)
+	}
+	r := &v1alpha1.RosterEntry{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: teamNamespace(team), Name: rosterName(bo)}, r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Status.State != "" {
+		t.Fatalf("the note's update wrote the roster entry's status: %+v", r.Status)
+	}
+}
+
+// addNote files a note as by the way note add does: the next number.
+func addNote(t *testing.T, s *Store, by state.Party) int {
+	t.Helper()
+	var id int
+	if err := s.Update(func(st *state.State) ([]state.Event, error) {
+		st.NextNote++
+		id = st.NextNote
+		st.Notes = append(st.Notes, state.Note{ID: id, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: by, At: time.Now().Truncate(time.Second)})
+		return []state.Event{{By: by, Verb: "note.add", Detail: "#" + strconv.Itoa(id) + " merge?"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func closeNote(t *testing.T, s *Store, id int) {
+	t.Helper()
+	if err := s.Update(func(st *state.State) ([]state.Event, error) {
+		st.Notes = slices.DeleteFunc(st.Notes, func(n state.Note) bool { return n.ID == id })
+		return []state.Event{{Verb: noteDoneEvent, Detail: "#" + strconv.Itoa(id) + " withdrawn"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A closed note's number is never handed out again, by any team's add,
+// another writer's or a restarted one's.
+func TestEnvtestNoteNumbersAreNotReused(t *testing.T) {
+	a, b, c := envtestStore(t)
+	namespace(t, c, team)
+	namespace(t, c, pia.Team)
+	first := addNote(t, a, ana)
+	closeNote(t, a, first)
+	second := addNote(t, b, ana)
+	if second == first {
+		t.Fatalf("note #%d closed, the next is #%d again", first, second)
+	}
+	other := addNote(t, a, pia)
+	closeNote(t, b, second)
+	closeNote(t, a, other)
+	if next := addNote(t, New(c), bo); next <= other || next == second || next == first {
+		t.Fatalf("notes #%d, #%d and #%d closed, the next is #%d", first, second, other, next)
+	}
+}
+
+// Concurrent adds of two teams, through two stores, all get numbers of
+// their own: the losers of each round back off and rerun until they win.
+func TestEnvtestConcurrentNoteAdds(t *testing.T) {
+	a, b, c := envtestStore(t)
+	namespace(t, c, team)
+	namespace(t, c, pia.Team)
+	const each = 6
+	var mu sync.Mutex
+	var got []int
+	var wg sync.WaitGroup
+	for i := range 2 * each {
+		s, by := a, ana
+		if i%2 == 1 {
+			s, by = b, pia
+		}
+		wg.Go(func() {
+			id := addNote(t, s, by)
+			mu.Lock()
+			got = append(got, id)
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	slices.Sort(got)
+	if len(slices.Compact(slices.Clone(got))) != 2*each {
+		t.Fatalf("numbers %v", got)
+	}
+	notes := &v1alpha1.NoteList{}
+	if err := c.List(context.Background(), notes); err != nil || len(notes.Items) != 2*each {
+		t.Fatalf("%d Notes: %v", len(notes.Items), err)
+	}
+}
+
+// A note add that keeps losing the counter to another writer gives up at
+// the store's deadline with ErrContended, its note not written.
+func TestEnvtestNoteAddPastTheDeadline(t *testing.T) {
+	a, b, c := envtestStore(t)
+	namespace(t, c, team)
+	namespace(t, c, pia.Team)
+	addNote(t, a, ana) // the stores' first writes, slow on a fresh API server
+	addNote(t, b, pia)
+	a.retryFor = 2 * time.Second
+	runs := 0
+	err := a.Update(func(st *state.State) ([]state.Event, error) {
+		runs++
+		addNote(t, b, pia) // wins the counter before a writes it
+		st.NextNote++
+		st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: ana.Person, Kind: state.NoteDecision, Text: asked, By: ana, At: time.Now().Truncate(time.Second)})
+		return nil, nil
+	})
+	if !errors.Is(err, ErrContended) || !strings.Contains(err.Error(), "the update lost "+strconv.Itoa(runs)+" races") {
+		t.Fatalf("after %d lost races: %v", runs, err)
+	}
+	if runs < 2 {
+		t.Fatalf("gave up after %d run: %v", runs, err)
+	}
+	notes := &v1alpha1.NoteList{}
+	if err := c.List(context.Background(), notes); err != nil || len(notes.Items) != 2+runs {
+		t.Fatalf("%d Notes, the other writer's %d past the first two: %v", len(notes.Items), runs, err)
+	}
+}
+
+// Before the counter's first number, the notes present and the Notes'
+// Events stand in for it: a note closed before the counter existed keeps
+// its number.
+func TestEnvtestNoteCounterStartsAboveTheNotesSeen(t *testing.T) {
+	a, _, c := envtestStore(t)
+	namespace(t, c, team)
+	for range 3 {
+		addNote(t, a, ana)
+	}
+	ctx := context.Background()
+	counter := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: DefaultNamespace, Name: noteCounter}}
+	if err := c.Delete(ctx, counter); err != nil {
+		t.Fatal(err)
+	}
+	closeNote(t, a, 3)
+	if next := addNote(t, a, ana); next != 4 {
+		t.Fatalf("notes #1-#3 present or recorded, the counter gone: the next is #%d", next)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(counter), counter); err != nil || counter.Data[issuedKey] != "4" {
+		t.Fatalf("the counter %v: %v", counter.Data, err)
 	}
 }

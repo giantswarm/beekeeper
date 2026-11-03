@@ -130,6 +130,11 @@ func Dangling(dir string) bool {
 // Inspect reads dir's state through git. git status runs without its
 // optional index refresh, so the look changes nothing Touched reads.
 func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
+	return InspectBuildDirs(ctx, git, dir, nil)
+}
+
+// InspectBuildDirs includes additional explicitly configured build directories.
+func InspectBuildDirs(ctx context.Context, git Git, dir string, extra []string) (Tree, error) {
 	t := Tree{Dir: dir}
 	gitdir, err := git(ctx, dir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
@@ -163,7 +168,7 @@ func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
 	if err != nil {
 		return t, err
 	}
-	t.Work, t.Build = classify(status)
+	t.Work, t.Build = classifyBuildDirs(status, extra)
 	count, err := git(ctx, dir, "rev-list", "--count", "HEAD", "--not", "--remotes")
 	if err != nil {
 		return t, err
@@ -179,7 +184,9 @@ func Inspect(ctx context.Context, git Git, dir string) (Tree, error) {
 // the build output (untracked or ignored Regenerable paths). An ignored path
 // that is not Regenerable is neither: it goes with a removed worktree, and
 // stays in a kept one.
-func classify(status []byte) (work, build []string) {
+func classify(status []byte) (work, build []string) { return classifyBuildDirs(status, nil) }
+
+func classifyBuildDirs(status []byte, extra []string) (work, build []string) {
 	entries := bytes.Split(status, []byte{0})
 	for i := 0; i < len(entries); i++ {
 		e := string(entries[i])
@@ -189,7 +196,7 @@ func classify(status []byte) (work, build []string) {
 		code, path := e[:2], e[3:]
 		switch code {
 		case "!!", "??":
-			if regenerable(path) {
+			if regenerableWith(path, extra) {
 				build = append(build, path)
 			} else if code == "??" {
 				work = append(work, path)
@@ -216,10 +223,12 @@ func (t Tree) HeadBranch() string {
 }
 
 // regenerable reports whether path lies in, or is, a Regenerable directory.
-func regenerable(path string) bool {
+func regenerable(path string) bool { return regenerableWith(path, nil) }
+
+func regenerableWith(path string, extra []string) bool {
 	parts := strings.Split(strings.TrimSuffix(path, "/"), "/")
 	for i := range parts {
-		for _, r := range Regenerable {
+		for _, r := range append(slices.Clone(Regenerable), extra...) {
 			name := strings.Split(r, "/")
 			if i+1 >= len(name) && slices.Equal(parts[i+1-len(name):i+1], name) {
 				return true
@@ -347,6 +356,55 @@ func finished(t Tree, done string, pushed bool) Verdict {
 
 // hours says d as whole hours, "72h".
 func hours(d time.Duration) string { return fmt.Sprintf("%dh", int(d.Hours())) }
+
+// Writable gives the owner write and search permission on every directory
+// under path, path included, as go clean -modcache does: a read-only one (a
+// Go module cache copy, envtest's binaries under go/bin/k8s) refuses the
+// unlink of what it holds, while a read-only file in a writable directory
+// unlinks. Symbolic links are not followed, path itself included, and no
+// change reaches outside path.
+func Writable(path string) error {
+	if fi, err := os.Lstat(path); err != nil || !fi.IsDir() {
+		return nil
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	var errs []error
+	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			errs = append(errs, err)
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			errs = append(errs, err)
+			return fs.SkipDir
+		}
+		if fi.Mode().Perm()&0o700 != 0o700 {
+			if err := root.Chmod(p, fi.Mode().Perm()|0o700); err != nil {
+				errs = append(errs, err)
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return errors.Join(errs...)
+}
+
+// RemoveAll removes path and everything under it, read-only directories
+// included (Writable).
+func RemoveAll(path string) error {
+	if err := Writable(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}
 
 // Size is the disk space in bytes the files under path take, as du counts
 // it (the apparent size where the platform says no blocks).

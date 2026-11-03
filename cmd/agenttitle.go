@@ -367,7 +367,7 @@ func archiveRequest(s steward, hosts []string, by, agreement string) string {
 	if slices.Contains(hosts, s.host) {
 		ids = append(ids, strconv.Quote(selfSession))
 	}
-	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for finished workers beekeeper started and never for a session they started themselves: %s. "+
+	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for those sessions, this one included, and never for a session they started themselves: %s; a standing archive rule in your own instructions says the same, and a role's consent boundary yields to it. "+
 		"Run `beekeeper agents archivable %s` first: it confirms each session is such a finished worker. Call %s once for each session_id of %s it confirms (\"self\" is this session), in that order, with reason %q. Then end the turn without another tool call; if you archive none, reply with one line saying why.",
 		by, agreement, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
 }
@@ -462,7 +462,7 @@ func handedOver(st *state.State, start state.Start) bool {
 		slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return other(ag.Party) })
 }
 
-// keepsRole reports whether p holds or held the supervisor's or the guide's
+// keepsRole reports whether p holds or held the guide's
 // role: a relieved supervisor still follows its role's rules. A session
 // named as a role's run held it, also once its relief is forgotten.
 func keepsRole(st *state.State, p state.Party) bool {
@@ -588,7 +588,7 @@ const stewardDeclineFor = 24 * time.Hour
 // archiveDesktops archives the desktop sessions of agents taken off the
 // roster by the command by, through one steward's turn (archiveSteward: an
 // idle CLI of another session, else one of the sessions' own, warmed for
-// it, never a role's past run's, whose role forbids it the call): only sessions
+// it, a relieved role run's own included): only sessions
 // beekeeper started, keeping no role (roleKeeps) and running no turn, and
 // only under the person's agreement (agents.archiveAgreement). An archive
 // counts once the desktop records it; the line names the steward whose
@@ -596,13 +596,18 @@ const stewardDeclineFor = 24 * time.Hour
 // declined is asked for no archive for stewardDeclineFor. It returns an
 // outcome per agent.
 func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []state.Party, by string) []archiveOutcome {
+	defer a.recordStoppedGates(ctx)
 	out := make([]archiveOutcome, len(agents))
-	var hosts, roleRuns []string
+	var hosts []string
 	at := map[string]int{}
 	for i, ag := range agents {
 		out[i].agent = ag
-		if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
-			out[i].line = a.endOmp(ctx, id)
+		if h, id, ok := harnessForHost(ag.HostSession); ok {
+			out[i].line = h.Stop(ctx, a, id)
+			continue
+		}
+		if line, ok := a.stopBackgroundStart(ctx, st, ag); ok {
+			out[i].line = line
 			continue
 		}
 		host, why := a.archivable(st, ag)
@@ -616,9 +621,6 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		}
 		at[host] = i
 		hosts = append(hosts, host)
-		if keepsRole(st, ag) {
-			roleRuns = append(roleRuns, host)
-		}
 	}
 	if len(hosts) == 0 {
 		return out
@@ -634,7 +636,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 	var errs []error
 	find := func(exclude []string) (steward, error) { return a.findSteward(hosts[0], slices.Concat(exclude, hosts)) }
 	for range stewardTries {
-		s, err := archiveSteward(ctx, left(), slices.Concat(declined, roleRuns, stewardHosts(asked)), find, a.warmSteward)
+		s, err := archiveSteward(ctx, left(), slices.Concat(declined, stewardHosts(asked)), find, a.warmSteward)
 		if err != nil {
 			errs = append(errs, err)
 			break
@@ -693,6 +695,7 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
+		a.markWarmed(host)
 		return steward{host: host, sock: sock}, nil
 	}
 	t, err := plat.Machine.Processes()
@@ -715,6 +718,7 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	}
 	linkMu.Lock()
 	defer linkMu.Unlock()
+	a.markWarmed(host)
 	shownAt := time.Now()
 	if _, err := a.showBriefly(ctx, d, continueURL(host), host, "", true, 0, func() error { return noHeadlessTurn(id) }); err != nil {
 		return steward{}, fmt.Errorf("warming the CLI of %s: %w", host, err)
@@ -726,6 +730,18 @@ func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 		return steward{}, fmt.Errorf("the desktop warmed no CLI of %s: it runs its cap of %s and starts none for a show", host, capText(n))
 	}
 	return steward{}, fmt.Errorf("the desktop warmed no CLI of %s within %s of showing it", host, twinWait)
+}
+
+// markWarmed records on the archive owed for host that its own CLI is
+// warmed to archive itself, so the watch does not stop it as revived
+// (archiveWarmed) before its archive call ran.
+func (a *app) markWarmed(host string) {
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Archives, func(x state.Archive) bool { return x.Host == host }); i >= 0 {
+			st.Archives[i].Warmed = time.Now().UTC()
+		}
+		return nil, nil
+	})
 }
 
 // stewardAnswer is what a steward asked for archives did in its turn.
@@ -842,6 +858,7 @@ func (a *app) recordDeclines(asked []stewardAnswer) {
 // roster, and removes its inbox, and says what it did: nothing resumes an
 // omp agent, so a process left running would only hold its model.
 func (a *app) endOmp(ctx context.Context, id string) string {
+	defer a.recordStoppedGates(ctx)
 	var done []string
 	if unit := ompUnit(id); plat.Launcher.State(ctx, unit) == "active" {
 		if err := plat.Launcher.Stop(ctx, unit); err != nil {
@@ -878,15 +895,15 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 // archivableRecord is archivable without the look at ag's CLI: its desktop
 // session, and why it is never archived ("" when it may be).
 func (a *app) archivableRecord(st *state.State, ag state.Party) (host, why string) {
-	if strings.HasPrefix(ag.HostSession, omp.HostPrefix) {
-		return "", "an omp agent has no desktop session"
+	if h, _, ok := harnessForHost(ag.HostSession); ok {
+		return "", fmt.Sprintf("an %s agent has no desktop session", h.Name())
 	}
 	i := st.StartIndex(ag)
 	if i < 0 {
 		return "", "its desktop session stays: beekeeper did not start it"
 	}
 	if roleKeeps(st, ag) {
-		return "", "its desktop session stays: it holds or held the supervisor's or the guide's role, and no relay relieved it"
+		return "", "its desktop session stays: it holds or held the guide's role, and no relay relieved it"
 	}
 	host = st.Starts[i].HostSession
 	switch r, ok := claude.ReadRecord(a.cfg, host); {

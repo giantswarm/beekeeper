@@ -203,6 +203,10 @@ func (systemdLauncher) Stop(ctx context.Context, name string) error {
 	return systemctlUser(ctx, "stop", name)
 }
 
+func (systemdLauncher) Resume(ctx context.Context, name string) error {
+	return systemctlUser(ctx, "start", name)
+}
+
 // systemctlUser runs one systemctl --user verb on the units.
 func systemctlUser(ctx context.Context, verb string, units ...string) error {
 	out, err := exec.CommandContext(ctx, "systemctl", append([]string{userManager, verb}, units...)...).CombinedOutput() //nolint:gosec // the units beekeeper named
@@ -321,9 +325,16 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 // the slot's slice, the memory cap, and the command at RunNice, which
 // systemd-run applies itself in --scope mode.
 func scopeArgs(name string, c Cap, argv []string) []string {
-	return append([]string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
+	args := []string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
 		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
-		"-p", "OOMPolicy=continue", "--"}, argv...)
+		"-p", "OOMPolicy=continue"}
+	if c.StopWith != "" {
+		// Requisite requires an already active owner without starting it.
+		// PartOf propagates an owned stop; After orders child teardown first.
+		// https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html
+		args = append(args, "-p", "Requisite="+c.StopWith, "-p", "PartOf="+c.StopWith, "-p", "After="+c.StopWith)
+	}
+	return append(append(args, "--"), argv...)
 }
 
 // Adopt starts the transient scope name around the running process pid
@@ -373,6 +384,21 @@ func (systemdCapper) Adopt(pid int, name string, c Cap) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("process %d is not in %s.scope after 5s", pid, name)
+}
+
+// reapTimeout bounds the stop of a run's scope: the service manager sends
+// SIGTERM and, after its stop timeout, SIGKILL to what is left.
+const reapTimeout = 2 * time.Minute
+
+func (systemdCapper) Reap(name string) ([]int, error) {
+	unit := name + ".scope"
+	left := pidsIn(machine.FindMemcapScope(unit))
+	if len(left) == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reapTimeout)
+	defer cancel()
+	return left, systemctlUser(ctx, "stop", unit)
 }
 
 // sizeBytes is a systemd size with base-1024 suffixes, or "infinity", in

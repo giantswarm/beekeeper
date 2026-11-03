@@ -39,7 +39,7 @@ type Item struct {
 	Updated   time.Time `json:"updated"`
 	// Blockers counts the recorded blockers, OpenBlockers the open ones;
 	// OpenBlockedBy names those read (owner/repo#n), from a read of the
-	// board's items or the priority list only.
+	// board's items only.
 	Blockers      int      `json:"blockers,omitempty"`
 	OpenBlockers  int      `json:"openBlockers,omitempty"`
 	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
@@ -113,8 +113,25 @@ type Snapshot struct {
 	// Missing names what GitHub answered with an error and no item's
 	// Missing holds ("<path>: <message>"), a search step's issues for one.
 	Missing []string
-	// Priorities is the priority list Read read with the items.
-	Priorities Priorities
+}
+
+// maxDepth bounds parent walks against cycles.
+const maxDepth = 10
+
+// Parent is the issue ref is a sub-issue of in snap, from its Items and the
+// SubIssues read with them; "" when snap does not say.
+func (snap *Snapshot) Parent(ref string) string {
+	for _, it := range snap.Items {
+		if strings.EqualFold(it.Ref, ref) {
+			return it.Parent
+		}
+		for _, sub := range it.SubIssues {
+			if strings.EqualFold(sub.Ref, ref) {
+				return cmp.Or(sub.Parent, it.Ref)
+			}
+		}
+	}
+	return ""
 }
 
 // Candidate is an item the order offers, in its place.
@@ -124,12 +141,15 @@ type Candidate struct {
 	// sub-issue it is.
 	Step string `json:"step"`
 	Epic string `json:"epic,omitempty"`
+	// Match says what of the step placed it there: the values of its
+	// item that the step's matchers took ("status Backlog, kind Bug by
+	// label bug"), the epic's for a sub-issue offered through one.
+	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
-	// Priority is the rank ByPriority applied, 0 for none; PriorityOf the
-	// epic it is the rank of, the candidate itself or an ancestor.
-	Priority   int    `json:"priority,omitempty"`
-	PriorityOf string `json:"priorityOf,omitempty"`
+	// Claim is another desk's claim of a free candidate that holds no
+	// more (stale): shown, not honoured.
+	Claim string `json:"claim,omitempty"`
 }
 
 // Why says why a free candidate is picked.
@@ -141,22 +161,10 @@ func (c Candidate) Why() string {
 	if c.Status != "" {
 		s += " (" + c.Status + ")"
 	}
-	if p := c.PriorityText(); p != "" {
-		s += ", " + p
+	if c.Claim != "" {
+		s += "; a claim " + c.Claim
 	}
 	return s
-}
-
-// PriorityText says the rank applied: "priority 2", "priority 2 of epic
-// owner/repo#n" when inherited; "" for none.
-func (c Candidate) PriorityText() string {
-	switch {
-	case c.Priority == 0:
-		return ""
-	case strings.EqualFold(c.PriorityOf, c.Ref):
-		return fmt.Sprintf("priority %d", c.Priority)
-	}
-	return fmt.Sprintf("priority %d of epic %s", c.Priority, c.PriorityOf)
 }
 
 // Rank returns the candidates of every step in order, each item once, in
@@ -186,7 +194,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 		byRef[strings.ToLower(it.Ref)] = it
 	}
 	var out []Candidate
-	offer := func(it Item, step, epic, skip string) {
+	offer := func(it Item, step, match, epic, skip string) {
 		if seen[it.Ref] {
 			return
 		}
@@ -197,12 +205,12 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
+		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
 			for _, it := range snap.Search[i] {
-				offer(it, st.Name, "", "")
+				offer(it, st.Name, "search", "", "")
 			}
 			continue
 		}
@@ -210,12 +218,13 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			if seen[it.Ref] || !Matches(st, it, now) {
 				continue
 			}
+			m := matched(st, it)
 			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
-				offer(it, st.Name, "", "")
+				offer(it, st.Name, m, "", "")
 				continue
 			}
 			if len(it.SubIssues) == 0 && len(it.Missing) > 0 {
-				offer(it, st.Name, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
+				offer(it, st.Name, m, "", "sub-issues unknown: "+strings.Join(it.Missing, "; "))
 				continue
 			}
 			seen[it.Ref] = true
@@ -239,7 +248,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				case sub.OnBoard:
 					skip = Unoffered(snap.Order, sub, now)
 				}
-				offer(sub, st.Name, it.Ref, skip)
+				offer(sub, st.Name, m, it.Ref, skip)
 			}
 		}
 	}
@@ -270,9 +279,63 @@ func Unoffered(order []config.BoardStep, it Item, now time.Time) string {
 
 // selects reports whether st's statuses, kinds and labels take it.
 func selects(st config.BoardStep, it Item) bool {
+	kind, _ := kindOf(st.Kind, it)
 	return (len(st.Status) == 0 || slices.Contains(st.Status, it.Status)) &&
-		(len(st.Kind) == 0 || slices.Contains(st.Kind, it.Kind)) &&
+		(len(st.Kind) == 0 || kind != "") &&
 		(len(st.Labels) == 0 || slices.ContainsFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) }))
+}
+
+// kindOf is the one of kinds that it is: its Kind, or for an item without
+// one the kind a label of it stands for ("bug" or "kind/bug" for "Bug 🐞"),
+// that label then label; kind is "" for none.
+func kindOf(kinds []string, it Item) (kind, label string) {
+	if slices.Contains(kinds, it.Kind) {
+		return it.Kind, ""
+	}
+	if it.Kind != "" {
+		return "", ""
+	}
+	for _, l := range it.Labels {
+		w := words(strings.TrimPrefix(strings.ToLower(l), KindLabel))
+		if i := slices.IndexFunc(kinds, func(k string) bool { return words(k) == w }); w != "" && i >= 0 {
+			return kinds[i], l
+		}
+	}
+	return "", ""
+}
+
+// KindLabel is the prefix of an issue label naming its kind: kind/bug.
+const KindLabel = "kind/"
+
+// matched says what of it the matchers of st, which selects it, took:
+// "status Backlog 📦, kind Bug 🐞 by label bug"; "every item" for a step
+// without any.
+func matched(st config.BoardStep, it Item) string {
+	var parts []string
+	if len(st.Status) > 0 {
+		parts = append(parts, "status "+it.Status)
+	}
+	if len(st.Kind) > 0 {
+		k, l := kindOf(st.Kind, it)
+		if l != "" {
+			k += " by label " + l
+		}
+		parts = append(parts, "kind "+k)
+	}
+	if len(st.Labels) > 0 {
+		i := slices.IndexFunc(it.Labels, func(l string) bool { return containsFold(st.Labels, l) })
+		parts = append(parts, "label "+it.Labels[i])
+	}
+	if st.Unblocked {
+		parts = append(parts, "blockers closed")
+	}
+	if d := st.CreatedWithin.Duration; d > 0 {
+		parts = append(parts, "created within "+span(d))
+	}
+	if len(parts) == 0 {
+		return "every item"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // refusal says why st turns away an item it selects: its blockers, a
@@ -317,6 +380,9 @@ func skipReason(it Item, b config.Board, now time.Time) string {
 	}
 	return ""
 }
+
+// ContainsFold says whether list holds s, without regard to case.
+func ContainsFold(list []string, s string) bool { return containsFold(list, s) }
 
 func containsFold(list []string, s string) bool {
 	return slices.ContainsFunc(list, func(x string) bool { return strings.EqualFold(x, s) })

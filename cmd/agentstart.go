@@ -19,7 +19,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
+	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -95,21 +99,20 @@ var desktopWindowActive = claude.DesktopWindowActive
 // screenLocked reports whether a screen locker runs: nobody reads or types
 // in the desktop's window, whatever the compositor still names as focused,
 // and keystrokes go to the locker.
-func screenLocked() bool {
-	t, err := plat.Machine.Processes()
-	return err == nil && claude.ScreenLocked(t)
-}
+func screenLocked() bool { return screenLocker() != "" }
 
 // desktopInput watches the person's keyboards and pointers; tests replace
 // it.
 var desktopInput = func(ctx context.Context) (func() time.Time, error) { return plat.Input.Watch(ctx) }
 
 func (a *app) agentStartCmd() *cobra.Command {
-	var model, dir, task, harness string
-	var desktop, builds, force, dryRun bool
+	var nameFlag, model, dir, task, harness, mode, choiceLine string
+	var host, repository, gitRef string
+	var exclude []string
+	var desktop, builds, force, dryRun, review, ofSelfHosted bool
 	c := &cobra.Command{
-		Use:   agentStartName + " <name> <brief file>",
-		Short: "Start an agent session in bypass from the command line and import it into the desktop",
+		Use:   agentStartName + " [--name <name>] [<name>] <brief file>",
+		Short: "Start an agent session in bypass: imported into the desktop, or a background session with Remote Control",
 		Long: `start starts a Claude Code session without a click and runs it in
 Claude Desktop from its first turn. Before the session exists, beekeeper
 records its id as one of its starts and registers it on the roster under
@@ -118,7 +121,11 @@ open task of a stopped session's entry under that name, which it takes
 over), so the roster shows it at work from its start. A brief naming an
 issue or pull request by URL makes the first one named the session's serve
 record (as sessions serve records it), so board next never offers that
-item again while the worker runs.
+item again while the worker runs. That record is the desk's claim of the
+issue on GitHub too (board.claims): while another desk's live claim holds
+the issue, start refuses with that claim's desk, session and time, exit 3;
+--force starts anyway and the event log records the claim overridden
+(agents.start). A stale claim is said, never honoured.
 
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
@@ -173,7 +180,10 @@ desktop turn, which no profile reaches. --dry-run prints the profile
 applied, the first turn's command line and the first prompt, and starts
 nothing; with --builds it first prints the build slot as the start would
 find it, "free" or the wait with the slots' holders and the waiters ahead,
-without joining the queue or holding a slot.
+without joining the queue or holding a slot. The dry run is judged by the
+same start gate a real start is, and prints its verdict: the auto choice,
+and with --force the verdict it goes over; a verdict without room refuses
+the dry run with exit 3 too (--force aside).
 
 A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
@@ -205,59 +215,314 @@ start says which Chrome mode the desktop recorded, and agents shows it per
 agent (BROWSER asks or skips). --desktop
 is kept for scripts: every start imports past the window's focus now.
 
+--mode background (default: agents.mode, else desktop) starts the session
+as a Claude Code background session instead: "claude --bg" with Remote
+Control under <name>, in bypassPermissions, on --model (default:
+agents.model), under the worker profile's flags, with the brief as its
+first prompt, which its first turn works. No desktop is involved: no
+seed turn, no import, no claude:// link and no reopen unit. The call runs
+with none of the caller's CLAUDE* or CCD* variables, so the session is
+its own, never the caller's: its commands, notes and holds are booked
+under <name>. The claude daemon chooses the session id; start reads it
+from claude agents and has the session on the roster under <name>, busy
+with --task, when it returns, so no agents assign follows. agents wake,
+and every wake beekeeper sends (a note's answer, a timer, the gate's
+word, a parked agent's resume), messages a running background session by name, and
+continues a stopped one with "claude --bg --resume <id> <message>", which
+keeps its Remote Control, mode, name and model. A role's successor and
+agents handover start in the mode agents.mode names.
+
 --harness omp starts an omp (oh-my-pi) agent instead: "omp --mode rpc"
 in yolo approval mode on --model (default: omp.model; with neither, or a
-model omp does not list as provider/id, the start is refused), in
+model omp does not list as provider/id, the start is refused; a bare id,
+as capacity pick returns an omp choice, is the one provider/id omp lists
+for it, and an id two providers list is refused), in
 a transient user unit beekeeper-omp-<id>, with its stdin on a FIFO inbox
 in beekeeper's state folder and the brief as its first message. It is
 registered on the roster as omp_<id> under <name> and shows in sessions
 and agents with harness omp; agents wake writes a message to its inbox,
 which omp delivers at its next tool round or as its next turn. No desktop
-is involved and no import happens.`,
-		Args: cobra.ExactArgs(2),
+is involved and no import happens.
+
+--harness agy starts an Antigravity CLI (agy) agent instead: "beekeeper
+agy-run" driving "agy --input-format stream-json --output-format
+stream-json --dangerously-skip-permissions" on --model (required; no
+harness default, validated against agy models), in a transient user unit
+beekeeper-agy-<id>, with its persistent FIFO inbox in beekeeper's state
+folder and the worker rules and brief as its first message, confirming
+the brief arrived in its own conversation. It is registered on the roster
+as agy_<id> under <name> and shows in sessions and agents with harness
+agy; agents wake queues a message in its inbox, which the PreInvocation
+hook injects before its next model call inside a running turn or agy-run
+sends as its next turn. No desktop is involved and no import happens.
+
+--harness codex starts a Codex CLI agent instead: "beekeeper codex-run"
+driving "codex exec --json" / "codex exec resume --json" in bypass mode on
+--model (default: codex.model; with neither, the start is refused), in a
+transient user unit beekeeper-codex-<id> with an isolated CODEX_HOME, its
+FIFO inbox in beekeeper's state folder and the worker rules + brief as its
+first message. It is registered on the roster as codex_<id> under <name>
+and shows in sessions and agents with harness codex; agents wake queues a
+message in its inbox. The PreToolUse hook delivers it during the running
+turn at its next tool call; with no further tool call it waits for turn end
+(remaining duration unknown), then codex-run delivers it via codex exec
+resume. An idle worker starts that next turn immediately.
+
+--harness auto picks the first non-excluded (harness, model) pair in
+capacity.choices whose provider has room (5-hour and 7-day windows below
+their stops, weekly use within the choice's sevenDayMax worker cap and not
+ahead of the even pace), the pick beekeeper capacity pick prints. Without
+--harness a desk with capacity.choices starts on that pick too (unless
+--model names a model none of them has: claude then), one without them on
+claude. --exclude skips matching choices (by model, harness/model, provider,
+or harness; repeatable). --review marks a review start, which may use
+capacity.reviewHeadroom extra subscription sessions above the worker ceiling;
+--review-of-self-hosted marks the review of a self-hosted model's
+work, which takes no choice on a self-hosted provider.`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := strings.TrimSpace(args[0])
+			var name, briefFile string
+			switch len(args) {
+			case 1:
+				if strings.TrimSpace(nameFlag) == "" {
+					return usageErr("accepts 2 arg(s), received 1")
+				}
+				name, briefFile = strings.TrimSpace(nameFlag), args[0]
+			case 2:
+				if strings.TrimSpace(nameFlag) != "" && strings.TrimSpace(nameFlag) != strings.TrimSpace(args[0]) {
+					return usageErr("--name %q and positional <name> %q disagree", nameFlag, args[0])
+				}
+				name, briefFile = strings.TrimSpace(args[0]), args[1]
+			}
 			if name == "" {
 				return usageErr("an agent needs a name")
 			}
-			// an omp agent whose provider's key is in the vault starts where
-			// the vault session is: the host's broker
-			if harness == omp.Harness && a.ompStartBrokered(model) {
-				return a.agentsOnHost(cmd, args, agentsBrokeredTimeout+time.Minute)
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
+			if a.selectionKind == "" {
+				if review || ofSelfHosted {
+					a.selectionKind = taskKindReview
+				} else {
+					a.selectionKind = workerRole
+				}
+			}
+			if strings.TrimSpace(model) == "" {
+				if model = a.ruleModel(name, a.selectionKind); model != "" {
+					if err := cmd.Flags().Set("model", model); err != nil {
+						return err
+					}
+				}
+			}
+			harness = a.defaultStartHarness(harness, model)
+			if harness == harnessAuto && len(a.liveCapacity().Choices) == 0 {
+				if err := a.requireStartModel(name, ""); err != nil {
+					return err
+				}
+			}
+			if harness != harnessAuto {
+				model = a.effectiveStartModel(harness, model)
+				if err := a.requireStartModel(name, model); err != nil {
+					return err
+				}
+			}
+			kind := startKind(review, ofSelfHosted)
+			if host != "" && host != "local" {
+				base, ok := harnessByName(harness)
+				if harness == harnessAuto {
+					base, ok = claudeHarness{}, true
+				}
+				if !ok {
+					return validateStartHarness(harness, mode)
+				}
+				h, err := executionHarness(base, executionStartOptions{Host: host, Repository: repository, GitRef: gitRef, Harness: harness, Model: model, Mode: mode, Dir: dir, Task: task, Desktop: desktop, Builds: builds, Force: force, Review: review, ReviewOfSelfHosted: ofSelfHosted, Exclude: exclude}, briefFile)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, kind: a.selectionKind, task: task, model: model}
+				if dryRun {
+					return h.DryRun(cmd.Context(), a, sp, nil)
+				}
+				return h.Start(cmd.Context(), a, sp)
+			}
+			if repository != "" || gitRef != "" {
+				return usageErr("--repo and --ref require an SSH --host")
+			}
+			if harness == harnessAuto {
+				choices := a.liveCapacity().Choices
+				if len(choices) == 0 {
+					return usageErr("--harness auto: no capacity.choices configured")
+				}
+				if m := strings.TrimSpace(model); m != "" && !choicesHaveModel(choices, m) {
+					return usageErr("--harness auto and --model %q: model is not in capacity.choices", m)
+				}
+			}
+			resolvedMode, err := a.startMode(mode)
+			if err != nil {
+				return err
+			}
+			if resolvedMode == config.ModeBackground && desktop {
+				return usageErr("--mode background and --desktop: a background session has no desktop turn")
+			}
+			if harness != harnessAuto {
+				if err := validateStartHarness(harness, mode); err != nil {
+					return err
+				}
+				if harness == harnessAgy && strings.TrimSpace(model) == "" && !dryRun {
+					return usageErr("an agy agent needs its model: --model (agy models lists them)")
+				}
 			}
 			// a sandboxed session's start reads its brief and gives the
 			// agent its directory through the broker, within its own lists
-			if err := a.sandboxPaths([]string{args[1]}, []string{dir}); err != nil {
+			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
 				return err
 			}
-			brief, err := readBrief(args[1])
+			brief, err := readBrief(briefFile)
 			if err != nil {
 				return err
+			}
+			// The timer whose command runs this start, from its
+			// environment or, on the broker's side, the flags a brokered
+			// start forwards it in.
+			tm, byTimer, err := timerOfStart(cmd)
+			if err != nil {
+				return err
+			}
+			// another desk's claim of the brief's issue refuses the start,
+			// --force aside, before anything is judged or recorded
+			if err := a.claimGate(cmd.Context(), name, briefIssue(brief), force, dryRun); err != nil {
+				return err
+			}
+			// an omp agent whose provider's key is in the vault starts where
+			// the vault session is: the host's broker
+			if !dryRun && harness == omp.Harness && model != "" {
+				// a bare id resolves once here; the broker and the start get
+				// the selector omp lists
+				model = a.ompQualified(model)
+				if err := cmd.Flags().Set("model", model); err != nil {
+					return err
+				}
+			}
+			if !dryRun && harness == omp.Harness && a.ompStartBrokered(model) {
+				if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+					return err
+				}
+				return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
 			}
 			if task = strings.TrimSpace(task); task == "" {
 				task = briefTask(brief)
 			}
 			gaps := pluginGaps(cmd.Context())
-			if dryRun && harness != omp.Harness {
+			// The dry run is judged by the same start gate a real start is,
+			// and prints its verdict: the machine's guards — MemAvailable,
+			// swap, load, the kind labs — weigh on it as on any start, only
+			// the build slot is the dry run's to show, with --builds, as the
+			// wait it would find, never joined. The gate itself never queues.
+			// A verdict without room still refuses the dry run with exit 3
+			// (--force aside), its words in the error.
+			if dryRun {
 				if builds {
 					if err := a.dryRunSlot(); err != nil {
 						return err
 					}
 				}
-				return a.dryRunStart(cmd.Context(), agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model}, gaps)
+				over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, false, force, exclude, kind)
+				if err != nil {
+					return err
+				}
+				if over == "" && v != nil && v.Room > 0 {
+					if _, err := fmt.Fprintf(a.out, "%s\n", v.verdict()); err != nil {
+						return err
+					}
+				}
+				if harness == harnessAuto {
+					ch, err := pickAutoChoice(v, force)
+					if err != nil {
+						return err
+					}
+					if err := validateStartHarness(ch.Harness, mode); err != nil {
+						return err
+					}
+					if _, err := fmt.Fprintf(a.out, "choice: %s\n", ch.line()); err != nil {
+						return err
+					}
+					if ch.Decision != "" {
+						if _, err := fmt.Fprintln(a.out, "decision: "+ch.Decision); err != nil {
+							return err
+						}
+					}
+					harness = ch.Harness
+					model = ch.Model
+				}
+				if over != "" {
+					if _, err := fmt.Fprintf(a.out, "dry run over %s (--force)\n", over); err != nil {
+						return err
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, mode: mode}
+				h, _ := harnessByName(harness)
+				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
-			over, err := a.startGate(cmd.Context(), name, builds, force)
+			// A timer's start says what the gate did to it in the log.
+			gateFrom := time.Now()
+			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, kind)
+			gateWait := time.Since(gateFrom)
 			if err != nil {
+				if byTimer {
+					a.recordTimerRefusal(name, tm, err)
+				}
 				return err
+			}
+			if harness == harnessAuto {
+				ch, err := pickAutoChoice(v, force)
+				if err != nil {
+					return err
+				}
+				if err := validateStartHarness(ch.Harness, mode); err != nil {
+					return err
+				}
+				if ch.Harness == omp.Harness {
+					// the pick names an omp model by its bare id: the
+					// broker and the start get the selector omp lists
+					ch.Model = a.ompQualified(ch.Model)
+				}
+				if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
+					return err
+				}
+				if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
+					if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
+						return err
+					}
+					return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
+				}
+				harness = ch.Harness
+				model = ch.Model
+				choiceLine = ch.line()
+			} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+				return err
+			}
+			if v != nil && v.Choice != nil && v.Choice.Decision != "" {
+				if _, err := fmt.Fprintln(a.out, "decision: "+v.Choice.Decision); err != nil {
+					return err
+				}
+			}
+			if choiceLine != "" {
+				if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
+					return err
+				}
 			}
 			if over != "" {
 				by, err := a.caller()
 				if err != nil {
 					return err
 				}
-				if err := a.store.Record(event(by, "agents.start", "%s: started over %s (--force)", name, over)); err != nil {
+				if err := a.store.Record(event(by, verbStart, "%s: started over %s (--force)", name, over)); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
@@ -271,47 +536,177 @@ is involved and no import happens.`,
 					return err
 				}
 			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop}
-			switch harness {
-			case omp.Harness:
-				return a.startOmpAgent(cmd.Context(), sp)
-			case "", "claude":
-			default:
-				return usageErr("--harness %q: claude or omp", harness)
+			sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+			if byTimer {
+				line, err := a.recordTimerStart(name, tm, gateWait)
+				if err != nil {
+					return err
+				}
+				sp.brief = line + "\n\n" + sp.brief
 			}
-			sa, err := a.startAgent(cmd.Context(), sp)
+			h, _ := harnessByName(harness)
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
+			if err := h.Start(cmd.Context(), a, sp); err != nil {
+				return err
+			}
+			by, err := a.caller()
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.out, "started %s: session %s, desktop local_%s, in %s, busy with %q\n%s\n",
-				name, sa.id, sa.id, sa.dir, sa.task, sa.turn)
-			if err == nil && sa.kept != "" {
-				_, err = fmt.Fprintf(a.out, "the desktop still shows %s\n", sa.kept)
-			}
-			if err == nil && sa.restored != "" {
-				_, err = fmt.Fprintln(a.out, sa.restored)
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, titleLine(name, sa.title))
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, modelLine(sa.model, sa.want, "local_"+sa.id))
-			}
-			if err == nil {
-				_, err = fmt.Fprintln(a.out, browserLine(sa.chrome))
-			}
-			return err
+			return a.store.Record(event(by, verbStart, "%s: kind %s, harness %s, model %s; %s", name, a.selectionKind, harness, cmp.Or(model, harnessDefaultModel), cmp.Or(startDecision(v), "explicit selection or configured default")))
 		},
 	}
-	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model)")
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
+	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")
+	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
+	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
+	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
 	c.Flags().StringVar(&task, "task", "", "the task the roster shows it busy with (default: the brief's first line)")
-	c.Flags().StringVar(&harness, "harness", "claude", "the agent harness: claude or omp")
+	c.Flags().StringVar(&harness, "harness", "", "the agent harness: claude, omp, agy, codex, or auto (default: auto with capacity.choices, else claude)")
+	c.Flags().StringArrayVar(&exclude, "exclude", nil, "exclude a choice from --harness auto (model, harness/model, provider, or harness; repeatable)")
+	c.Flags().BoolVar(&review, reviewFlag, false, "a desk review start, using reserved review headroom")
+	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the review of a self-hosted model's work: no choice on a self-hosted provider")
+	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start; the event log records the verdict overridden")
+	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
+	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
+	_ = c.Flags().MarkHidden("choice")
+	addTimerFlags(c)
 	return c
+}
+
+// defaultStartHarness is a start's harness: the one named, else auto (the
+// pick of capacity.choices) on a desk with choices, unless model names a
+// model none of them has, else claude.
+func (a *app) defaultStartHarness(harness, model string) string {
+	if harness = strings.TrimSpace(harness); harness != "" {
+		return harness
+	}
+	choices := a.liveCapacity().Choices
+	if m := strings.TrimSpace(model); len(choices) == 0 || m != "" && !choicesHaveModel(choices, m) {
+		return claudeComm
+	}
+	return harnessAuto
+}
+
+func validateStartHarness(harness, mode string) error {
+	if _, ok := harnessByName(harness); !ok {
+		return usageErr("--harness %q: claude, omp, agy, codex, or auto", harness)
+	}
+	switch harness {
+	case omp.Harness, harnessAgy:
+		if strings.TrimSpace(mode) == config.ModeBackground {
+			return usageErr("--mode background and --harness %s: an %s agent is no Claude Code background session", harness, harness)
+		}
+	case codex.Harness:
+		if strings.TrimSpace(mode) == config.ModeBackground {
+			return usageErr("--mode background and --harness %s: a %s agent is no Claude Code background session", harness, harness)
+		}
+	}
+	return nil
+}
+
+func forwardBrokeredChoice(cmd *cobra.Command, harness, model string, choiceLine ...string) error {
+	if err := cmd.Flags().Set("harness", harness); err != nil {
+		return err
+	}
+	if err := cmd.Flags().Set("model", model); err != nil {
+		return err
+	}
+	if len(choiceLine) > 0 && choiceLine[0] != "" && cmd.Flags().Lookup("choice") != nil {
+		return cmd.Flags().Set("choice", choiceLine[0])
+	}
+	return nil
+}
+
+func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir string) error {
+	switch harness {
+	case harnessAgy:
+		resolvedDir, err := a.agentDir(dir, "")
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		bin, err := exec.LookPath(agy.Comm)
+		if err != nil {
+			return err
+		}
+		_, err = agyModel(model, func() ([]string, error) { return agyModels(ctx, bin) })
+		return err
+	case omp.Harness:
+		resolvedDir, err := filepath.Abs(dir)
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		m, err := ompModel(model, a.cfg.Omp.Model, func() ([]string, error) { return a.ompListed(ctx) })
+		if err != nil {
+			return err
+		}
+		_, err = a.ompCredentials(m)
+		return err
+	case codex.Harness:
+		resolvedDir, err := a.agentDir(dir, "")
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		if _, err := a.codexModel(model); err != nil {
+			return err
+		}
+		_, err = exec.LookPath(codex.Comm)
+		return err
+	default:
+		resolvedDir, err := a.agentDir(dir, "")
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(resolvedDir); err != nil || !fi.IsDir() {
+			return usageErr("--dir %s: not a directory", resolvedDir)
+		}
+		_, err = exec.LookPath(claudeComm)
+		return err
+	}
+}
+
+func pickAutoChoice(v *capacityView, force bool) (*choiceView, error) {
+	if v != nil && v.Stopped != "" {
+		return nil, refused("%s", v.verdict())
+	}
+	if v != nil && v.Choice != nil && v.Choice.Harness != "" && v.Choice.Model != "" {
+		return v.Choice, nil
+	}
+	if force && v != nil && v.Choice != nil {
+		for _, cand := range v.Choice.Candidates {
+			// --force overrides capacity, never an exclusion or the one
+			// restriction on the review of a self-hosted model's work.
+			if cand.Reason != "excluded" && cand.Reason != selfHostedReviewer && !strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
+				return &choiceView{
+					Harness:  cand.Harness,
+					Model:    cand.Model,
+					Provider: cand.Provider,
+					Bucket:   cand.Bucket,
+					Review:   v.Choice.Review,
+				}, nil
+			}
+		}
+		return nil, refused("no start: all capacity.choices excluded or barred from the review of a self-hosted model's work")
+	}
+	if v != nil && len(v.Blocks) > 0 {
+		return nil, refused("no start: %s", strings.Join(v.Blocks, "; "))
+	}
+	return nil, refused("no start: no choice in capacity.choices has room")
 }
 
 // agentStart is a session `agents start` or `agents handover` starts.
@@ -320,6 +715,9 @@ type agentStart struct {
 	// role is the role whose profile the session gets (workerRole, or a
 	// relayed role's name); empty: none.
 	role string
+	// kind is the task kind for model policy (a.selectionKind); empty
+	// defaults to role.
+	kind string
 	// task is the roster's task unless the entry taken over holds one.
 	task string
 	// serves is the issue the task works (briefIssue), recorded as the
@@ -336,6 +734,9 @@ type agentStart struct {
 	by *state.Party
 	// desktop asks for its desktop turn from the start (--desktop).
 	desktop bool
+	// mode is the start's mode (--mode): config.ModeDesktop or
+	// config.ModeBackground; empty: agents.mode.
+	mode string
 	// headless runs the brief as the session's first turn from the command
 	// line beside the import: a role's successor, whose first turn only takes
 	// the role and whose relay hands it its desktop turn. Otherwise the first
@@ -376,29 +777,35 @@ type startedAgent struct {
 	// handed are the leases and grants a hand-over gave it from the session
 	// it replaces (handClaims).
 	handed []string
+	// background says it runs as a background session (startBackground):
+	// no desktop fields are set.
+	background bool
 }
 
 // startAgent records and registers the session, starts its first turn in a
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
-	dir, err := a.agentDir(sp.dir)
+	st, err := a.store.Read()
+	if err != nil {
+		return startedAgent{}, err
+	}
+	if err := a.refuseStopped(st, "starting "+sp.name); err != nil {
+		return startedAgent{}, err
+	}
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return startedAgent{}, err
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return startedAgent{}, usageErr("--dir %s: not a directory", dir)
 	}
-	// Watched from the start, the person's input has mostly been quiet
-	// for desktop.typingQuiet by the first reply, or not.
-	deskCtx, stopDesk := context.WithCancel(ctx)
-	defer stopDesk()
-	d, err := a.watchDesk(deskCtx)
+	mode, err := a.startMode(sp.mode)
 	if err != nil {
 		return startedAgent{}, err
 	}
-	bin, err := exec.LookPath("claude")
-	if err != nil {
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, cmp.Or(sp.kind, sp.role)))
+	if err := a.requireStartModel(sp.name, sp.model); err != nil {
 		return startedAgent{}, err
 	}
 	// A profiled session's task runs as a headless turn under its profile:
@@ -429,10 +836,26 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		_, ok := claude.Live(sessions, p)
 		return ok
 	}
+	if mode == config.ModeBackground {
+		return a.startBackground(ctx, sp, dir, profiled, by, live)
+	}
+	// Watched from the start, the person's input has mostly been quiet
+	// for desktop.typingQuiet by the first reply, or not.
+	deskCtx, stopDesk := context.WithCancel(ctx)
+	defer stopDesk()
+	d, err := a.watchDesk(deskCtx)
+	if err != nil {
+		return startedAgent{}, err
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return startedAgent{}, err
+	}
 	id := sp.id
 	if id == "" {
 		id = uuid.NewString()
 	}
+	sp.brief = fillScratchpad(sp.brief, dir, id)
 	s := state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model}
 	var reg registration
 	var handed []string
@@ -445,7 +868,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 		if sp.desktop {
 			st.Agents[len(st.Agents)-1].DesktopTurn = s.At
 		}
-		evs := []state.Event{event(by, "agents.start", "%s: session %s in %s, bypassPermissions, busy with %q", sp.name, id, dir, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: session %s in %s, model %s, bypassPermissions, busy with %q", sp.name, id, dir, cmp.Or(sp.model, harnessDefaultModel), reg.task)}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -487,7 +910,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	d.urgent = a.asksDesktop(id)
 	if profile != "" {
 		sa.turn = profiledTurn(profile)
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		// its row shows from its first turn, as a desktop turn's does
 		d.urgent = func() bool { return true }
 	}
@@ -510,8 +933,16 @@ func (a *app) undelivered(by, p state.Party, why error) error {
 		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
 			st.Agents[i].Undelivered = why.Error()
 		}
-		return []state.Event{event(by, "agents.start", "%s: task not delivered: %v", p.Name, why)}, nil
+		return []state.Event{event(by, verbStart, "%s: task not delivered: %v", p.Name, why)}, nil
 	})
+	if strings.HasPrefix(p.HostSession, agy.HostPrefix) {
+		return fmt.Errorf("%s: task not delivered: %w (start it again with agents start --harness agy, or beekeeper agents remove %q takes it off the roster)",
+			p.Name, why, p.Name)
+	}
+	if strings.HasPrefix(p.HostSession, codex.HostPrefix) {
+		return fmt.Errorf("%s: task not delivered: %w (start it again with agents start --harness codex, or beekeeper agents remove %q takes it off the roster)",
+			p.Name, why, p.Name)
+	}
 	return fmt.Errorf("%s: task not delivered: %w (beekeeper agents wake %q <message> delivers it, beekeeper agents remove %q takes it off the roster)",
 		p.Name, why, p.Name, p.Name)
 }
@@ -566,21 +997,21 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		// runs headless, whose reopen imports it later.
 		if err := a.importVisible(ctx, d, id, sp.name, follow, &sa); err != nil {
 			sa.deferred = err
-			_ = a.store.Record(event(by, "agents.start", "%s: the desktop did not import it (%v)", sp.name, err))
+			_ = a.store.Record(event(by, verbStart, "%s: the desktop did not import it (%v)", sp.name, err))
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
 	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
-		_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
 		sa.turn += " on " + w.model
 	}
-	_ = a.store.Record(event(by, "agents.start", "%s: %s", sp.name, sa.turn))
+	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
 		return sa, err
 	}
@@ -837,6 +1268,11 @@ func (a *app) resolveStartModel(id string) {
 				s.Model = model
 			}
 		}
+		for i := range st.Agents {
+			if ag := &st.Agents[i]; ag.Session == id && ag.Model != "" {
+				ag.Model = model
+			}
+		}
 		return nil, nil
 	})
 }
@@ -868,8 +1304,9 @@ func (a *app) importSession(ctx context.Context, d desk, id, follow string) (str
 
 // showBriefly opens url, which shows host in the desktop's main window, and
 // once it does, shows the session the window showed before again and
-// returns it; empty when there was none to go back to, or it was host or
-// follow. A running desktop gets the link only once d takes it, waiting up
+// returns it; empty when there was none to go back to, or it was host,
+// follow or a superseded session's (supersededHost), whose CLI a show would
+// warm again. A running desktop gets the link only once d takes it, waiting up
 // to away (zero: the caller's wait stands): errDesktopInUse or errTyping
 // when it did not. ready, unless nil,
 // is asked right before the link opens, and its error ends the show.
@@ -896,13 +1333,33 @@ func (a *app) showBriefly(ctx context.Context, d desk, url, host, follow string,
 	if err := plat.Opener.Open(ctx, url, running); err != nil {
 		return "", err
 	}
-	if prev == "" || prev == host || prev == follow || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
+	if prev == "" || prev == host || prev == follow || a.supersededHost(prev) || !awaitFocus(ctx, a.cfg.Claude.DesktopLog, host, focusWait) {
 		return "", nil
 	}
 	if err := plat.Opener.Open(ctx, continueURL(prev), true); err != nil {
 		return "", fmt.Errorf("showing %s again: %w", prev, err)
 	}
 	return prev, nil
+}
+
+// supersededHost reports whether the desktop session host is one beekeeper
+// started whose work ended: a relieved role run's or a hand-over's
+// predecessor's (superseded). The desktop warms the CLI of the session its
+// window shows, which the watch stops as revived; a window sent back to it
+// after each show would warm it again on every start, reopen and wake.
+func (a *app) supersededHost(host string) bool {
+	st, err := a.store.Read()
+	if err != nil {
+		return false
+	}
+	i := slices.IndexFunc(st.Starts, func(x state.Start) bool {
+		return x.HostSession == host || x.Session != "" && "local_"+x.Session == host
+	})
+	if i < 0 {
+		return false
+	}
+	by, _ := superseded(st, st.Starts[i].Party, time.Now())
+	return by != ""
 }
 
 // agentReopenCmd runs once a start's or wake's headless turn has ended: it
@@ -955,6 +1412,14 @@ func (a *app) detachReopen(arg string) error {
 		return err
 	}
 	id := strings.TrimPrefix(arg, "local_")
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
+	}
+	if s := a.readStop(); s != nil {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(s))
+		return err
+	}
 	unit := reopenUnit(id)
 	if err := a.launchReopen(unit, dir, arg, ownUnit()); err != nil {
 		name := id
@@ -979,8 +1444,16 @@ func (a *app) reopenSession(ctx context.Context, arg, turn string) error {
 	// A wake names the desktop id (local_…), a start its session id, which
 	// is the desktop id's too.
 	id := strings.TrimPrefix(arg, "local_")
+	if !a.desktopMode() {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: agents.mode is %s\n", id, a.cfg.Agents.Mode)
+		return err
+	}
 	st, err := a.store.Read()
 	if err != nil {
+		return err
+	}
+	if st.Stop != nil {
+		_, err := fmt.Fprintf(a.out, "reopen: %s left closed: %s\n", id, a.stopText(st.Stop))
 		return err
 	}
 	name, ok := reopens(st, arg)
@@ -1209,17 +1682,17 @@ func reopens(st *state.State, id string) (string, bool) {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 			return ag.HostSession == id || ag.Session != "" && "local_"+ag.Session == id
 		})
-		if i < 0 {
+		if i < 0 || st.Agents[i].Execution != nil {
 			return "", false
 		}
 		return st.Agents[i].Name, true
 	}
-	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Session == id }) {
+	if !slices.ContainsFunc(st.Starts, func(s state.Start) bool { return s.Execution == nil && !s.Background && s.Session == id }) {
 		return "", false
 	}
 	p := state.Party{Session: id}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-	if i < 0 {
+	if i < 0 || st.Agents[i].Execution != nil {
 		return "", false
 	}
 	return st.Agents[i].Name, true
@@ -1411,6 +1884,9 @@ func (a *app) explicitConfig() string {
 	return p
 }
 
+// verbStart logs a start and what it overrode.
+const verbStart = "agents.start"
+
 func resumeURL(id string) string { return "claude://resume?session=" + id }
 
 // recordStart records s as one of beekeeper's starts, forgetting those older
@@ -1423,16 +1899,17 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 	if err != nil {
 		return registration{}, err
 	}
+	ag := &st.Agents[len(st.Agents)-1]
+	ag.Harness, ag.Model = s.Harness, s.Model
 	if reg.task == "" && task != "" {
 		reg.task, reg.assignedAt = task, s.At
-		ag := &st.Agents[len(st.Agents)-1]
 		ag.Task, ag.AssignedAt = task, s.At
 		if serves != "" {
 			st.Records = slices.DeleteFunc(st.Records, func(o state.Record) bool { return o.Session.Is(s.Party) })
 			st.Records = append(st.Records, state.Record{Session: s.Party, Issue: serves, By: s.By, At: s.At})
 		}
 	}
-	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return s.At.Sub(x.At) > startsKept })
+	st.Starts = slices.DeleteFunc(st.Starts, func(x state.Start) bool { return x.Execution == nil && s.At.Sub(x.At) > startsKept })
 	st.Starts = append(st.Starts, s)
 	return reg, nil
 }
@@ -1457,6 +1934,17 @@ func readBrief(path string) (string, error) {
 // brief, enclosed so that a hand-over passes on the brief alone.
 func taskPrompt(brief string) string {
 	return "Your task:\n" + briefOpen + "\n" + brief + "\n" + briefClose
+}
+
+// scratchpadMark stands in the worker rules for the started session's
+// scratchpad, which agents start fills in by absolute path once it knows
+// the session's id.
+const scratchpadMark = "<scratchpad>"
+
+// fillScratchpad names, in a first prompt, the scratchpad of the session id
+// started in dir by absolute path.
+func fillScratchpad(prompt, dir, id string) string {
+	return strings.ReplaceAll(prompt, scratchpadMark, guard.Scratchpad(dir, id))
 }
 
 // workerPrompt is a worker's first prompt: the worker rules beekeeper
@@ -1574,14 +2062,55 @@ func (a *app) dryRunStart(ctx context.Context, sp agentStart, gaps []string) err
 	return err
 }
 
+func (a *app) dryRunOmpStart(sp agentStart, gaps []string) error {
+	dir, err := a.agentDir(sp.dir, sp.role)
+	if err != nil {
+		return err
+	}
+	sp.brief = projectPrompt(dir, sp.brief)
+	model := cmp.Or(sp.model, a.cfg.Omp.Model, "<model>")
+	argv := ompArgv(omp.Comm, model)
+	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as an omp agent on %s, yolo, no desktop import\nstart: %s\n",
+		sp.name, dir, model, strings.Join(argv, " ")); err != nil {
+		return err
+	}
+	if note := gapsNote(gaps); note != "" {
+		if _, err := fmt.Fprintln(a.out, note); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
+	return err
+}
+
 // dryRunTurn prints the profile and the first turn's command line of sp.
 func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
-	dir, err := a.agentDir(sp.dir)
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
 	const id = "<session id>"
+	mode, err := a.startMode(sp.mode)
+	if err != nil {
+		return err
+	}
+	sp.model = cmp.Or(sp.model, a.cfg.Agents.ModelFor(sp.name, cmp.Or(sp.kind, sp.role)))
+	if err := a.requireStartModel(sp.name, sp.model); err != nil {
+		return err
+	}
 	profile := profileName(a.cfg, sp.role)
+	if mode == config.ModeBackground {
+		var flags []string
+		if profile != "" {
+			if flags, err = a.profileFlags(ctx, profile); err != nil {
+				return err
+			}
+		}
+		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", flags...)
+		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s as a background session with Remote Control under %s, none of the caller's CLAUDE* variables, no desktop import\nstart: %s\n",
+			sp.name, dir, cmp.Or(profile, "no profile"), strings.Join(argv, " "))
+		return err
+	}
 	if profile == "" {
 		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under no profile: a seed turn without tools, then its task as a desktop turn with the person's whole tool surface\nseed turn: %s\n",

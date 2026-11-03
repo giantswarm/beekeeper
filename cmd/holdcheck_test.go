@@ -66,3 +66,22 @@ func TestHoldCheckPrintsAVerdictOrNamesTheFailedLookup(t *testing.T) {
 		t.Errorf("failed central lookup: exit %d: %q", code, out)
 	}
 }
+
+// hold set --except-session records the session the hold admits and names
+// it with the target; a github hold and a central one make no exception.
+func TestHoldSetExceptSessionNamesTheAdmittedSession(t *testing.T) {
+	local := holdRunner(t, "")
+	if out, code := local("set", "o/r", "-r", "promoting", "--except-session", "BK 0.156 promoter"); code != 0 || !strings.Contains(out, `held o/r except session "BK 0.156 promoter"`) {
+		t.Errorf("set: exit %d: %q", code, out)
+	}
+	if out, code := local("check", "o/r"); code != ExitRefused || !strings.Contains(out, `o/r except session "BK 0.156 promoter" is held by`) {
+		t.Errorf("check: exit %d: %q", code, out)
+	}
+	if out, code := local("set", "github", "-r", "budget", "--except-session", "x"); code != ExitUsage {
+		t.Errorf("github: exit %d: %q", code, out)
+	}
+	central := holdRunner(t, "central: {context: lab, muster: "+filepath.Join(t.TempDir(), "no-muster")+"}\nlanes: [{name: portal, installation: gazelle, repositories: [o/r]}]\n")
+	if out, code := central("set", "o/r", "-r", "promoting", "--except-session", "x"); code != ExitUsage || !strings.Contains(out, "--except-session") {
+		t.Errorf("central: exit %d: %q", code, out)
+	}
+}

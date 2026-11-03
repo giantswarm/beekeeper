@@ -268,7 +268,8 @@ func TestAppGoogleRecord(t *testing.T) {
 // client id, compared in-process: another declared client id is refused, as
 // are a missing flag and a GitHub App's flags. check allows the
 // application's authorize page on that GitLab for a recorded callback host,
-// the redacted client id by its title too, and refuses another application
+// a redacted client id by the one its consent form carries (--form), never by
+// its title, and refuses another application
 // or callback host there; another host's authorize page stays a consent
 // page elsewhere.
 func TestAppGitLabRecord(t *testing.T) {
@@ -295,7 +296,7 @@ func TestAppGitLabRecord(t *testing.T) {
 		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --declared <ref>"},
 		{append(slices.Clone(base), declFl, declared), "--gitlab needs --client-id <uid>"},
 		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "GitLab application " + app + " is not declared: " + declared + " carries another client id than another-uid"},
-		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google or --gitlab"},
+		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google, --gitlab, --slack or --oauth"},
 		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, permissionFlag, deviceChange), "--gitlab records a consent on a GitLab's authorize page alone"},
 		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--declared names the person's own declaration of a GitLab application's client id, with --gitlab"},
 		{[]string{appAllow, app, gitlabFl, gitlab, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--gitlab needs --callback <host>"},
@@ -317,17 +318,21 @@ func TestAppGitLabRecord(t *testing.T) {
 	}
 	authorize := "https://" + gitlab + "/oauth/authorize?client_id=" + uid + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api"
 	title := "Authorize " + app + " to use your account? · GitLab"
+	const site = "GitLab"
+	redacted := strings.ReplaceAll(authorize, uid, "REDACTED")
 	for name, tc := range map[string]struct {
-		url, title, want string
+		url, title, form, want string
 	}{
-		"its authorize page":     {authorize, title, checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
-		"the redacted client id": {strings.ReplaceAll(authorize, uid, "REDACTED"), title, checkAllow},
-		"another application":    {strings.ReplaceAll(authorize, uid, "REDACTED"), "Authorize other-app · GitLab", checkRefuse + "Refused: " + gitlab + "'s consent page"},
-		"another client id":      {strings.ReplaceAll(authorize, uid, "other-uid"), title, checkRefuse},
-		"another callback host":  {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, checkRefuse},
-		"another GitLab":         {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
+		"its authorize page":           {authorize, title, "", checkAllow + "beekeeper allows the click: the consent page on " + gitlab + " of the person's own GitLab application " + app},
+		"redacted, its form":           {redacted, site, uid, checkAllow},
+		"redacted, another form":       {redacted, site, "other-uid", checkRefuse + "Refused: " + gitlab + "'s consent page of client id other-uid"},
+		"redacted, its title, no form": {redacted, title, "", checkRefuse + "Refused: " + gitlab + "'s consent page \"" + title + "\""},
+		"another client id":            {strings.ReplaceAll(authorize, uid, "other-uid"), title, "", checkRefuse},
+		"another callback host":        {strings.ReplaceAll(authorize, callback, "evil.example.net"), title, "", checkRefuse},
+		"GitLab's title, nothing read": {redacted, site, "", checkRefuse + "Refused: " + gitlab + "'s consent page \"GitLab\""},
+		"another GitLab":               {strings.ReplaceAll(authorize, gitlab, "gitlab.example.net"), title, "", checkRefuse + "Refused: \"" + title + "\" is a consent page (an OAuth grant) on gitlab.example.net"},
 	} {
-		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title); err != nil || !strings.HasPrefix(out, tc.want) {
+		if out, err := runApp(t, a, appCheck, tc.url, titleFlag, tc.title, "--form", tc.form); err != nil || !strings.HasPrefix(out, tc.want) {
 			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
 		}
 	}
@@ -366,7 +371,7 @@ func TestAppPermissionRecord(t *testing.T) {
 		"the navigation to its permissions page": {[]string{appCheck, permissionsPage, navigateFlag}, "allow: beekeeper allows it: the permissions page of the person's own App " + deviceApp + ", declared in " + deviceDeclared + ", on record for the change " + deviceChange + " since "},
 		"the click that selects the level":       {[]string{appCheck, permissionsPage, titleFlag, permissionsTitle, wordsFlag, selectsReadOnly}, "allow: beekeeper allows the call: the permissions page of the person's own App " + deviceApp},
 		"Save changes":                           {[]string{appCheck, permissionsPage, wordsFlag, "Clicks Save changes"}, checkAllow},
-		"another level":                          {[]string{appCheck, permissionsPage, wordsFlag, "Selects Read and write for Members access"}, "refuse: Refused: on the permissions page of the person's own App " + deviceApp + " the call \"Selects Read and write for Members access\" is neither the one permission change on record (" + deviceChange + ") nor Save changes"},
+		"another level":                          {[]string{appCheck, permissionsPage, wordsFlag, "Selects Read and write for Members access"}, "refuse: Refused: on the permissions page of the person's own App " + deviceApp + " the call \"Selects Read and write for Members access\" is neither a permission change on record (" + deviceChange + ") nor Save changes"},
 		"another App's page":                     {[]string{appCheck, strings.Replace(permissionsPage, deviceApp, "other-app", 1), navigateFlag}, "refuse: Refused: the permissions page of the App other-app of example is not on record for a permission change"},
 		"the consent page, no consent on record": {[]string{appCheck, recordedConsent, titleFlag, recordedTitle}, checkRefuse},
 		"another navigation":                     {[]string{appCheck, "https://github.com/organizations/example/settings/installations", navigateFlag}, checkNone},
@@ -559,4 +564,224 @@ func TestAppLifecycleCheck(t *testing.T) {
 			t.Errorf("%s: app check = %q, %v; want %q", name, out, err, tc.want)
 		}
 	}
+}
+
+// A consent to a third party's OAuth client is recorded with --oauth, the
+// client id of a consent page beekeeper knows and the account it is given
+// as, on the person's word: a client beekeeper knows no page of, a missing
+// account or client id, another provider's flags and a GitHub App's are
+// refused. check allows Continue on that client's consent page for a call
+// naming the account and refuses one naming another.
+func TestAppThirdPartyRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	const (
+		name    = "openai-codex"
+		host    = "auth.openai.com"
+		codex   = "app_EMoamEEZ73f0CkXaXp7hrann"
+		account = "person@example.com"
+		consent = "https://" + host + "/sign-in-with-chatgpt/codex/consent"
+		oauth   = "--oauth"
+	)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{appAllow, name, oauth, host, accountFlag, account, wordFlag, "w"}, "--oauth needs --client-id <id>"},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, codex, wordFlag, "w"}, "--oauth needs --account <address>"},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, "app_other", accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client app_other on auth.openai.com"},
+		{[]string{appAllow, name, oauth, "auth.example.net", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "beekeeper knows no consent page of client " + codex + " on auth.example.net"},
+		{[]string{appAllow, name, oauth, host, googleFlag, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--google, --gitlab, --slack or --oauth: a record is of one provider's consent"},
+		{[]string{appAllow, name, oauth, host, callbackFlag, "cb.example.org", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
+		{[]string{appAllow, name, oauth, host, permissionFlag, deviceChange, clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, "--oauth records a consent to a third party's OAuth client alone"},
+		{[]string{appAllow, name, oauth, "auth openai", clientIDFlag, codex, accountFlag, account, wordFlag, "w"}, `--oauth names the client's sign-in host (or its URL), not "auth openai"`},
+		{[]string{appAllow, name, oauth, host, clientIDFlag, codex, accountFlag, account}, "--word"},
+	} {
+		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as "+account); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.OAuthForm) {
+		t.Errorf("check without a record = %q", out)
+	}
+	out, err := runApp(t, a, appAllow, name, oauth, "https://Auth.OpenAI.com/", clientIDFlag, codex, accountFlag, " Person@Example.com ", wordFlag, personsWord)
+	if err != nil || out != "App "+name+" on record, declared in "+oauthDeclared+": the consent on "+host+"/sign-in-with-chatgpt/codex/consent "+
+		"(OpenAI's Codex sign-in with ChatGPT) as "+account+" is answered by the hook\n" {
+		t.Fatalf("app allow --oauth = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, name+"  OAuth "+host+"  client id "+codex+"  account "+account+"  declared in "+oauthDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as "+account); !strings.HasPrefix(out, checkAllow+"beekeeper allows it: the consent page of OpenAI's Codex sign-in") {
+		t.Errorf("check of its consent = %q", out)
+	}
+	if out, _ := runApp(t, a, appCheck, consent, wordsFlag, "Clicks Continue as other@example.com"); !strings.HasPrefix(out, checkRefuse) {
+		t.Errorf("check of another account = %q", out)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
+	if apps := a.allowedApps(); len(apps) != 1 || apps[0].OAuth != host || apps[0].ClientID != codex || apps[0].Account != account {
+		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// A Slack app's install consent is recorded with --slack, its workspace
+// host, app id and client id and the webhook channel its install keeps, on
+// the person's word: a missing or malformed one, another provider's flags
+// and --app-id without --slack are refused. check allows Allow on Slack's
+// install page once the recorded channel is picked, and refuses it before,
+// for another channel and for another client id.
+func TestAppSlackRecord(t *testing.T) {
+	a, _ := stubApp(t)
+	const (
+		name       = "Swarmgeist"
+		ws         = "gigantic.slack.com"
+		appID      = "A08A95JBNH1"
+		client     = "2171500629.8349188396579"
+		slack      = "--slack"
+		appFl      = "--app-id"
+		chanFl     = "--webhook-channel"
+		allowWords = "Clicks Allow"
+		install    = "https://" + ws + "/oauth?client_id=" + client + "&scope=usergroups%3Aread%2Cincoming-webhook&install_redirect=install-on-team"
+	)
+	base := []string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, client, wordFlag, "w"}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{appAllow, name, slack, ws, clientIDFlag, client, wordFlag, "w"}, "--slack needs --app-id <id>"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, wordFlag, "w"}, "--slack needs --client-id <id>"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, "not.an.id", wordFlag, "w"}, "--slack needs --client-id <id>"},
+		{[]string{appAllow, name, slack, "slack.example.org", appFl, appID, clientIDFlag, client, wordFlag, "w"}, "--slack names the workspace's host"},
+		{append(slices.Clone(base), chanFl, "two words"), "--webhook-channel names a Slack channel"},
+		{append(slices.Clone(base), googleFlag), "--google, --gitlab, --slack or --oauth"},
+		{append(slices.Clone(base), callbackFlag, "cb.example.org"), "--slack records a Slack app's install consent alone"},
+		{append(slices.Clone(base), accountFlag, "person@example.com"), "--slack records a Slack app's install consent alone"},
+		{[]string{appAllow, name, appFl, appID, clientIDFlag, client, wordFlag, "w"}, "with --slack"},
+		{[]string{appAllow, name, slack, ws, appFl, appID, clientIDFlag, client}, "--word"},
+	} {
+		if _, err := runApp(t, a, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("app %q = %v, want a refusal with %q", tc.args, err, tc.want)
+		}
+	}
+	if out, _ := runApp(t, a, appCheck, install, "--picked", "#team-bumblebee", wordsFlag, allowWords); !strings.HasPrefix(out, checkRefuse) || !strings.Contains(out, guard.SlackForm) {
+		t.Errorf("check without a record = %q", out)
+	}
+	out, err := runApp(t, a, appAllow, name, slack, "https://Gigantic.Slack.com/", appFl, strings.ToLower(appID), clientIDFlag, client, chanFl, "#Team-Bumblebee", wordFlag, personsWord)
+	if err != nil || out != "App "+name+" on record, declared in "+slackDeclared+": its install consent on "+ws+", keeping the webhook channel #team-bumblebee is answered by the hook\n" {
+		t.Fatalf("app allow --slack = %q, %v", out, err)
+	}
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, name+"  Slack "+ws+"  app id "+appID+"  client id "+client+"  webhook channel #team-bumblebee  declared in "+slackDeclared+"  since ") {
+		t.Errorf("list = %q", out)
+	}
+	for _, tc := range []struct{ picked, words, url, want string }{
+		{"#team-bumblebee", allowWords, install, checkAllow + "beekeeper allows it: Slack's install consent page of the person's own Slack app " + name},
+		{"", allowWords, install, checkRefuse},
+		{"", "Chooses #general in the channel picker", install, checkRefuse},
+		{"#team-bumblebee", allowWords, strings.Replace(install, client, "1.2", 1), checkRefuse},
+		{"", "Clicks Reinstall to Giant Swarm", "https://api.slack.com/apps/" + appID + "/install-on-team", checkAllow},
+	} {
+		if out, _ := runApp(t, a, appCheck, tc.url, "--picked", tc.picked, wordsFlag, tc.words); !strings.HasPrefix(out, tc.want) {
+			t.Errorf("check %q picked %q = %q, want %q", tc.words, tc.picked, out, tc.want)
+		}
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(a.cfg.StateDir, "config.yaml"))
+	if apps := a.allowedApps(); len(apps) != 1 || apps[0].Slack != ws || apps[0].SlackApp != appID || apps[0].Channel != "team-bumblebee" {
+		t.Errorf("allowedApps = %+v", apps)
+	}
+}
+
+// An App holds several grants: a second permission recorded for it keeps
+// the first, the same scope recorded again replaces only that change, a
+// Slack app's consent under the App's name keeps its GitHub grants, and
+// revoke takes every grant of the App off the record.
+func TestAppAllowKeepsGrants(t *testing.T) {
+	a, _ := stubApp(t)
+	declareApps(t, a, map[string]string{"apps/" + deviceApp + "/manifest.json": deviceManifest, "apps/" + recordedApp + "/manifest.json": recordedManifest})
+	const (
+		actions       = "Actions: Read and write"
+		selectsAction = "Selects Read and write for Actions access"
+		ws            = "gigantic.slack.com"
+		slackInstall  = "https://" + ws + "/oauth?client_id=2171500629.8349188396579&scope=usergroups%3Aread"
+	)
+	allow := func(args ...string) {
+		t.Helper()
+		if out, err := runApp(t, a, append([]string{appAllow}, append(args, wordFlag, personsWord)...)...); err != nil {
+			t.Fatalf("app allow %q = %q, %v", args, out, err)
+		}
+	}
+	check := func(want string, args ...string) {
+		t.Helper()
+		if out, err := runApp(t, a, append([]string{appCheck}, args...)...); err != nil || !strings.HasPrefix(out, want) {
+			t.Errorf("app check %q = %q, %v; want %q", args, out, err, want)
+		}
+	}
+	permissions := func() []string {
+		t.Helper()
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, x := range st.Apps {
+			if x.Name == deviceApp {
+				out = append(out, x.Permission)
+			}
+		}
+		return out
+	}
+
+	allow(deviceApp, permissionFlag, deviceChange)
+	allow(deviceApp, permissionFlag, actions)
+	if got := permissions(); !slices.Equal(got, []string{deviceChange, actions}) {
+		t.Fatalf("permissions on record after two = %q", got)
+	}
+	check(checkAllow, permissionsPage, wordsFlag, selectsReadOnly)
+	check(checkAllow, permissionsPage, wordsFlag, selectsAction)
+	check(checkRefuse+"Refused: on the permissions page of the person's own App "+deviceApp+" the call \"Selects Read and write for Members access\" is neither a "+
+		"permission change on record ("+deviceChange+"; "+actions+")", permissionsPage, wordsFlag, "Selects Read and write for Members access")
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, "permission "+deviceChange) || !strings.Contains(out, "permission "+actions) {
+		t.Errorf("list of both = %q", out)
+	}
+
+	allow(deviceApp, permissionFlag, "Members: Read and write")
+	if got := permissions(); !slices.Equal(got, []string{actions, "Members: Read and write"}) {
+		t.Fatalf("permissions on record after the scope again = %q", got)
+	}
+	check(checkRefuse, permissionsPage, wordsFlag, selectsReadOnly)
+	check(checkAllow, permissionsPage, wordsFlag, selectsAction)
+
+	allow(recordedApp, clientIDFlag, recordedClientID, permissionFlag, actions)
+	allow(recordedApp, "--slack", ws, "--app-id", "A08A95JBNH1", clientIDFlag, "2171500629.8349188396579")
+	allow(recordedApp, permissionFlag, "Administration: Read-only")
+	check(checkAllow, recordedConsent, titleFlag, recordedTitle)
+	check(checkAllow, slackInstall, wordsFlag, "Clicks Allow")
+	recordedPermissions := strings.Replace(permissionsPage, deviceApp, recordedApp, 1)
+	check(checkAllow, recordedPermissions, wordsFlag, selectsAction)
+	check(checkAllow, recordedPermissions, wordsFlag, "Selects Read-only for Administration access")
+	allow(recordedApp, clientIDFlag, recordedClientID)
+	check(checkAllow, recordedConsent, titleFlag, recordedTitle)
+	check(checkAllow, recordedPermissions, wordsFlag, selectsAction)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded []string
+	for _, x := range st.Apps {
+		if x.Name == recordedApp {
+			recorded = append(recorded, strings.Join(recordParts(x), ", "))
+		}
+	}
+	if len(recorded) != 4 {
+		t.Errorf("records of %s = %q, want the Actions change, the Slack consent, the Administration change and the GitHub consent", recordedApp, recorded)
+	}
+
+	if out, err := runApp(t, a, "revoke", deviceApp); err != nil || !strings.Contains(out, "off the record") {
+		t.Fatalf("app revoke = %q, %v", out, err)
+	}
+	if got := permissions(); len(got) != 0 {
+		t.Errorf("permissions on record after the revoke = %q", got)
+	}
+	if evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == appRevoked }); len(evs) != 2 {
+		t.Errorf("app.revoke events = %+v, want one per grant", evs)
+	}
+	check(checkRefuse, permissionsPage, navigateFlag)
 }

@@ -123,6 +123,9 @@ type Launcher interface {
 	Thaw(ctx context.Context, name string) error
 	// Stop stops the unit and every process in it.
 	Stop(ctx context.Context, name string) error
+	// Resume starts the installed unit name again, one Stop stopped (the
+	// standby service, a timer).
+	Resume(ctx context.Context, name string) error
 	// State is the unit's state ("active", "inactive", "failed", ...);
 	// empty when unreadable.
 	State(ctx context.Context, name string) string
@@ -141,6 +144,9 @@ const RunNice = 10
 
 // Cap bounds a capped run.
 type Cap struct {
+	// StopWith binds a managed worker's scope to its verified owned service.
+	// Empty keeps the existing independent scope lifecycle.
+	StopWith string
 	// Max is the memory limit, Swap the swap limit ("12G", "0").
 	Max, Swap string
 	// Slice is the slice of the build slot the run holds or shares, under
@@ -170,6 +176,12 @@ type Capper interface {
 	// c.Slice, and returns once it is there: a command the sandbox keeps
 	// from the service manager asks the host for its scope this way.
 	Adopt(pid int, name string, c Cap) error
+	// Reap stops the scope name once its command has exited, with every
+	// process the command left in it (a test's kube-apiserver), and
+	// returns those processes; none when the scope has ended with its
+	// command. A scope that runs on keeps its slot's slice, and so the
+	// slot, busy.
+	Reap(name string) (left []int, err error)
 }
 
 // Opener hands claude:// links to the desktop app.
@@ -224,6 +236,11 @@ type SetupSpec struct {
 	TeleportEvery time.Duration
 	// Notify runs the standby watch with --notify (watch.notify).
 	Notify bool
+	// ConfigPath is the explicit configuration the loop service reads.
+	ConfigPath string
+	// ToolPath is the installing process's PATH, retained for the loop's
+	// external tools when the service manager has a restricted environment.
+	ToolPath string
 }
 
 // Setup is what beekeeper install puts in place for this platform beside

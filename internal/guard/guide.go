@@ -29,7 +29,7 @@ const browserTools = mcpPrefix + "claude-in-chrome__"
 // read it, look at it.
 var browserReads = []string{
 	"tabs_context", "tabs_context_mcp", "tabs_create", "tabs_create_mcp", "navigate",
-	"read_page", "get_page_text", "find", "read_console_messages", "read_network_requests", "shortcuts_list",
+	chromeReadPage, chromePageText, chromeFind, "read_console_messages", "read_network_requests", "shortcuts_list",
 }
 
 // actionKey is the input of the browser's computer tool that names its
@@ -68,8 +68,9 @@ func (h Hook) guideRefusal(ev event) string {
 		return ""
 	}
 	return "Refused: the guide asks and relays, it never works itself, and " + what + " is work. " +
-		"Hand it to the supervisor in one line (SendMessage to the session `beekeeper supervisor status` names): " +
-		"what to do, on which issue or PR (its full URL), and the person's words that asked for it. Then carry on guiding."
+		"Hand it to the supervisor in one line: the supervisor is the supervisor loop, no session a message reaches, " +
+		"so file it as an issue in its owning repository and put it on the board (`beekeeper board move <owner/repo#n> <status>`), " +
+		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it. Then carry on guiding."
 }
 
 // work names the work ev does, "" for a call that asks, relays or reads.
@@ -103,13 +104,8 @@ func work(ev event) string {
 // commandWork is the first command in cmd that does work, at a command
 // position or inside a shell's -c string; "" when none does.
 func commandWork(cmd string) string {
-	if m := guideWork.FindStringSubmatch(cmd); m != nil {
-		return m[1]
-	}
-	for _, cs := range shellStrings(cmd) {
-		if w := commandWork(cs.text); w != "" {
-			return w
-		}
+	if m := commandMatch(guideWork, cmd, nil); m != nil {
+		return cmd[m[2]:m[3]]
 	}
 	return ""
 }
@@ -154,6 +150,10 @@ func parseQuestion(raw any) Question {
 	q.Text = strings.TrimSpace(q.Text)
 	opts, _ := m["options"].([]any)
 	for _, o := range opts {
+		if s, ok := o.(string); ok {
+			q.Options = append(q.Options, s)
+			continue
+		}
 		om, _ := o.(map[string]any)
 		label, _ := om["label"].(string)
 		desc, _ := om["description"].(string)

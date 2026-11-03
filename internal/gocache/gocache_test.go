@@ -169,3 +169,91 @@ func TestUseAndTrimExcludeEachOther(t *testing.T) {
 		t.Fatal("the command still waits after the trim ended")
 	}
 }
+
+// A clear waits for the runs that hold the cache, and a run that starts
+// while it waits waits behind it, so overlapping runs cannot keep it
+// waiting.
+func TestHoldWaitsForRunsAndHoldsBackNewOnes(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	run, err := Use(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan struct{})
+	held := make(chan func())
+	go func() {
+		release, err := Hold(ctx, dir, func() { close(waited) })
+		if err != nil {
+			t.Error(err)
+		}
+		held <- release
+	}()
+	<-waited
+	late, cancel := context.WithTimeout(ctx, 3*lockRetry)
+	defer cancel()
+	if _, err := Use(late, dir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a run that started while the clear waited took the cache: %v", err)
+	}
+	select {
+	case <-held:
+		t.Fatal("the clear held the cache while a run held it")
+	case <-time.After(2 * lockRetry):
+	}
+	run()
+	release := <-held
+	if _, ok, _ := TryTrim(dir); ok {
+		t.Error("a trim took the cache the clear holds")
+	}
+	release()
+	next, err := Use(ctx, dir)
+	if err != nil {
+		t.Fatalf("a run after the clear: %v", err)
+	}
+	next()
+}
+
+func TestHoldWithoutRunsDoesNotWait(t *testing.T) {
+	release, err := Hold(context.Background(), t.TempDir(), func() { t.Error("waited with no run") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+func TestHoldGivesUpWithItsContext(t *testing.T) {
+	dir := t.TempDir()
+	run, err := Use(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*lockRetry)
+	defer cancel()
+	if _, err := Hold(ctx, dir, func() {}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("hold = %v, want the deadline", err)
+	}
+	// The turnstile is given back: a run goes on.
+	again, err := Use(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again()
+}
+
+func TestModDir(t *testing.T) {
+	t.Setenv("GOMODCACHE", "/m")
+	if got := ModDir(); got != "/m" {
+		t.Errorf("GOMODCACHE: %s", got)
+	}
+	t.Setenv("GOMODCACHE", "")
+	t.Setenv("GOPATH", "/p1"+string(os.PathListSeparator)+"/p2")
+	if got := ModDir(); got != "/p1/pkg/mod" {
+		t.Errorf("GOPATH: %s", got)
+	}
+	t.Setenv("GOPATH", "")
+	t.Setenv("HOME", "/h")
+	if got := ModDir(); got != "/h/go/pkg/mod" {
+		t.Errorf("home: %s", got)
+	}
+}

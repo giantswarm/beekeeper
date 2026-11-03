@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -20,12 +21,19 @@ const start = `(?:^[ \t]*|[;&|(]\s*|\$\(\s*|\b(?:then|do|else)\s+)`
 
 // pos is a command position: a start with optional wrappers (timeout 600,
 // time, nice, env, VAR=val, command).
-const pos = start + `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
+const pos = start + posWrappers
+
+// posWrappers are the prefix commands and assignments pos allows in front of a
+// command.
+const posWrappers = `(?:(?:timeout\s+\S+|time|nice(?:\s+-n\s*\d+)?|env(?:\s+\w+=\S*)*|command|\w+=\S*)\s+)*`
 
 // mergePos is a command position for the merge gate: a start with any of the
-// prefix commands that run their arguments as a command, with their options.
-// The build rewrite keeps pos: a wider one would change what it wraps.
-const mergePos = start + `(?:(?:` +
+// reserved words that start a command (if, elif, while,
+// until, !, {) and the prefix commands that run their arguments as a
+// command, with their options. A command a runner runs from its arguments
+// (xargs, find -exec, parallel) is no command position: runnerMerges refuses
+// it. The build rewrite keeps pos: a wider one would change what it wraps.
+const mergePos = start + `(?:(?:if|elif|while|until|!|\{)\s+)*(?:(?:` +
 	`flock(?:\s+(?:-[wE]\s*\S+|--(?:timeout|wait|conflict-exit-code)(?:=|\s+)\S+|-[a-zA-Z]+|--[\w-]+))*\s+[^\s;&|()-]\S*` +
 	`|timeout(?:\s+(?:-[ks]\s*\S+|-\S+))*\s+\d\S*` +
 	`|nice(?:\s+(?:-n\s*-?\d+|-\d+|--adjustment=-?\d+))?` +
@@ -104,6 +112,18 @@ const (
 
 // Hook decides one PreToolUse event.
 type Hook struct {
+	// ExecutionMCP admits only the authenticated coordinator proxy namespace.
+	ExecutionMCP bool
+	// Panic records the failing check and stack without exposing them to the tool.
+	Panic func(check string, stack []byte)
+	check *string
+
+	// MergeGo checks the durable supervisor go for this session and exact head.
+	MergeGo func(session, repo string, pr int, head string) string
+	// GatedOwners are merge.devctlOwners: a merge of their repositories is
+	// the gate's devctl pr merge, never gh pr merge, gh api or curl.
+	GatedOwners  []string
+	mergeSession string
 	// Self is the absolute path of the beekeeper binary a rewrite names.
 	Self string
 	// UnlockCommands are the person's own vault unlock helpers
@@ -113,11 +133,17 @@ type Hook struct {
 	// to the built-in SecretFiles (secret.files), globs allowed; no session
 	// reads them whole.
 	SecretFiles []string
+	// Transcripts protects private conversation stores and explicit session grants.
+	Transcripts TranscriptAccess
 	// ConfigErr is why the configuration did not load: every Bash call is
 	// refused with it, since the guards it configures cannot run.
 	ConfigErr error
 	// Shell is the shell a rewritten command runs in (sh -c semantics).
 	Shell string
+	// GoCache and GoModCache are the Go build and module caches the
+	// machine's builds share, which only beekeeper cache clear go clears;
+	// empty, that cache is not guarded.
+	GoCache, GoModCache string
 	// MaxLabs is how many kind clusters the machine runs at most; read
 	// only for a command that creates one.
 	MaxLabs func() int
@@ -162,12 +188,6 @@ type Hook struct {
 	// socket; "" leaves the name as written, an error refuses the send.
 	// Nil reads every name as written.
 	Agent func(name string) (string, error)
-	// Yours records a `yours <resource>` in a message from the session
-	// holding the supervisor role as the resource's grant to the message's
-	// target (to, after the hook's own redirects) and returns what the
-	// sender is told: the grant recorded, or why none was; "" says nothing.
-	// Nil records nothing.
-	Yours func(session, to, message string) string
 	// Project is the session's own project ($CLAUDE_PROJECT_DIR), whose
 	// instructions Claude Code loads itself; "" takes the call's cwd.
 	Project string
@@ -218,6 +238,15 @@ type Hook struct {
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
+	// PersonFolders are the person's folders (hooks.personFolders, absolute
+	// globs): no file is created directly in one, nor an untracked one in the
+	// main working tree of a checkout that sits directly in one (folders.go);
+	// empty, the guard is off.
+	PersonFolders []string
+	// LiveDirs lists the folders live sessions and processes work in,
+	// read only for a command that moves or removes an existing directory
+	// (liveworktrees.go); nil guards no worktree.
+	LiveDirs func() []string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -248,19 +277,25 @@ type hookOutput struct {
 // pass unchanged. Malformed input passes. A call the hook does not refuse
 // that is the session's first write in another repository carries that
 // repository's instructions as additional context.
-func (h Hook) Decide(input []byte) []byte {
+func (h Hook) Decide(input []byte) (out []byte) {
+	h.beginCheck("decode")
+	defer h.recoverDecision(&out, func(r string) []byte { return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r}) })
 	var ev event
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	if dec.Decode(&ev) != nil {
 		return nil
 	}
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	out := h.labProxy(ev, h.decide(ev))
+	out = h.decide(ev)
+	h.beginCheck("labProxy")
+	out = h.labProxy(ev, out)
 	var o map[string]hookOutput
 	if out != nil && (json.Unmarshal(out, &o) != nil || o["hookSpecificOutput"].PermissionDecision == decisionDeny) {
 		return out
 	}
+	h.beginCheck("repoReads")
 	reads := h.repoReads(ev)
 	if reads == "" {
 		return out
@@ -271,52 +306,81 @@ func (h Hook) Decide(input []byte) []byte {
 }
 
 func (h Hook) decide(ev event) []byte {
+	h.mergeSession = ev.Session
+	h.beginCheck("guideRefusal")
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("sandboxRefusal")
 	if r := h.sandboxRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("desktopBrowserRefusal")
 	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("subscriptionRefusal")
 	if r := subscriptionRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("tabCloseRefusal")
 	if r := tabCloseRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("leaveRefusal")
+	if r := leaveRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("sharedRefusal")
 	if r := sharedRefusal(ev, h.Shared); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("uploadRefusal")
 	if r := uploadRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("frozenRefusal")
 	if r := frozenRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("consent")
 	if out := h.consent(ev); out != nil {
 		return out
 	}
 	if ev.ToolName == AskTool {
+		h.beginCheck("ask")
 		return h.ask(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == SendMessageTool {
+		h.beginCheck("sendMessage")
 		return h.sendMessage(ev.Session, ev.ToolInput)
 	}
 	if ev.ToolName == TaskStopTool {
+		h.beginCheck("taskStop")
 		return h.taskStop(ev.Session, ev.ToolInput)
 	}
+	h.beginCheck("mentionRefusal")
 	if r := mentionRefusal(ev.ToolName, ev.ToolInput, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("transcriptFileRefusal")
+	if r := h.transcriptFileRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("secretFileRefusal")
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("folderRefusal")
+	if r := h.folderRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("connectorWrite")
 	if w := h.Upstream.connectorWrite(ev.ToolName, ev.ToolInput); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
 	if ev.ToolName != bashTool {
+		h.beginCheck("toolRefusal")
 		if r := h.Outbound.toolRefusal(ev.ToolName, ev.ToolInput); r != "" {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 		}
@@ -334,38 +398,59 @@ func (h Hook) decide(ev event) []byte {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	h.beginCheck("bashWrite")
 	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
+	h.beginCheck("kubeRefusal")
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("browserRefusal")
 	if r := h.browserRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("modelServerRefusal")
 	if r := h.modelServerRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("boardReadRefusal")
 	if r := h.boardReadRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("membersRefusal")
 	if r := h.membersRefusal(cmd, ev.Session, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("searchRefusal")
 	if r := h.searchRefusal(cmd, ev.Session); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
-	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles)}).leak(cmd); l != nil {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
-	}
+	h.beginCheck("deleteRefusal")
 	if r := deleteRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("liveWorktreeRefusal")
+	if r := h.liveWorktreeRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("secretGuard")
+	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
+	}
+	h.beginCheck("goCacheRefusal")
+	if r := h.goCacheRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("bashRefusal")
 	if r := h.Outbound.bashRefusal(cmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	origCmd := cmd
 	bg, _ := ev.ToolInput[backgroundKey].(bool)
+	h.beginCheck("gate")
 	cmd, gated := h.gate(cmd, bg)
+	h.beginCheck("hiddenMerges")
 	fixed, hidden, unread := h.hiddenMerges(cmd, bg)
 	if hidden {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a devctl pr merge, release promote, pr wait, release wait or rollout wait " +
@@ -375,16 +460,31 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: a shell's -c or eval string names devctl in a form the merge gate cannot read " +
 			"(a command substitution, a quote left open), so a merge, promote or wait in it would run outside the gate. Run devctl as its own command."})
 	}
+	h.beginCheck("runnerRefusal")
+	if r := h.runnerRefusal(cmd, bg); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("heldMerges")
 	if r := heldMerges(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("ungatedRefusal")
 	if r := h.ungatedRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("pushRefusal")
+	if r := h.pushRefusal(cmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("ghBodyRefusal")
+	if r := h.ghBodyRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
 	}
 
+	h.beginCheck("labRuntime")
 	if h.Sandbox != nil {
 		if m := commandMatch(labRuntime, cmd, notHelp); m != nil {
 			var held []lease.Holder
@@ -398,6 +498,7 @@ func (h Hook) decide(ev event) []byte {
 				strings.TrimSpace(cmd[m[2]:m[3]]), leaseLines(held))})
 		}
 	}
+	h.beginCheck("labLimit")
 	if m := commandMatch(lab, cmd, notHelp); m != nil {
 		running := h.Clusters()
 		target := labTarget(cmd, m, cwd)
@@ -582,7 +683,7 @@ func textCommand(words []string) bool {
 	if !textCommands[name] {
 		return false
 	}
-	if name == "printf" {
+	if name == printfCommand {
 		return len(words) == 1 || !strings.HasPrefix(words[1], "-") // printf -v sets a variable
 	}
 	subs, ok := textSubcommands[name]
@@ -1074,11 +1175,18 @@ func LabCluster(dir string) (string, bool) {
 	return "agentlab", true
 }
 
+func guardHomeDir() (string, error) {
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		return filepath.Clean(h), nil
+	}
+	return os.UserHomeDir()
+}
+
 func expandHome(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
 		return p
 	}
-	home, err := os.UserHomeDir()
+	home, err := guardHomeDir()
 	if err != nil {
 		return p
 	}
@@ -1109,4 +1217,27 @@ func ShellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// beginCheck shares the current check across Hook copies used by adapters.
+func (h *Hook) beginCheck(name string) {
+	if h.check == nil {
+		h.check = new(string)
+	}
+	*h.check = name
+}
+
+func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
+	if recover() == nil {
+		return
+	}
+	check := "PreToolUse"
+	if h.check != nil {
+		check = *h.check
+	}
+	stack := debug.Stack()
+	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
+	if h.Panic != nil {
+		h.Panic(check, stack)
+	}
 }

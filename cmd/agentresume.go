@@ -31,13 +31,22 @@ const waitResumeMessage = "Your headless turn ended while %s ran in the backgrou
 // on a person: their answer reaches it by message or wake, not by a resume.
 var parkedWords = regexp.MustCompile(`(?i)\b(?:note|person|supervisor|guide|answer|review|approval|decision)s?\b`)
 
+// personWaitWords name a person's own word in a park's waits: their answer,
+// a review, a reply, a decision.
+var personWaitWords = regexp.MustCompile(`(?i)\b(?:notes?|persons?|answers?|reviews?|approvals?|decisions?|repl(?:y|ies))\b`)
+
 // parkedOn is what a serve record says the agent waits on when that is a
 // person (guide.person, a note, the supervisor's answer); "" otherwise.
 func parkedOn(waits, person string) string {
-	if parkedWords.MatchString(waits) || person != "" && regexp.MustCompile(`(?i)\b`+regexp.QuoteMeta(person)+`\b`).MatchString(waits) {
+	if parkedWords.MatchString(waits) || namesPerson(waits, person) {
 		return waits
 	}
 	return ""
+}
+
+// namesPerson reports whether waits names person (guide.person).
+func namesPerson(waits, person string) bool {
+	return person != "" && regexp.MustCompile(`(?i)\b`+regexp.QuoteMeta(person)+`\b`).MatchString(waits)
 }
 
 // waitsOf is what the serve record of ag says it waits on; "" for none.

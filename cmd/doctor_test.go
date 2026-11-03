@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -10,7 +13,10 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -30,11 +36,11 @@ func TestPlanChores(t *testing.T) {
 	done.Done, doneBusy.Done = true, true
 	task, doneTask := agent("task", 48*time.Hour), agent("done-task", time.Minute)
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
+	task.AssignedAt = now
 	st := &state.State{
 		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
-		Supervisor: &state.Supervisor{Party: state.Party{Session: "holder"}},
-		Relieved:   []state.Relief{{Party: state.Party{Session: "relieved"}}},
+		Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "holder"}}, Relieved: []state.Relief{{Party: state.Party{Session: "relieved"}}}},
 	}
 	for _, id := range []string{"untitled", "titled", "archived", "holder"} {
 		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: id, HostSession: "local_" + id}})
@@ -54,7 +60,7 @@ func TestPlanChores(t *testing.T) {
 	}
 	busy := func(p state.Party) bool { return p.Session == "done-busy" }
 	var got []string
-	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now) {
+	for _, c := range planChores(st, sessions, record, busy, 24*time.Hour, now, nil) {
 		got = append(got, c.String())
 	}
 	want := []string{
@@ -66,8 +72,100 @@ func TestPlanChores(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("chores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if c := planChores(st, sessions, record, busy, 0, now); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
+	if c := planChores(st, sessions, record, busy, 0, now, nil); slices.ContainsFunc(c, func(c chore) bool { return strings.Contains(c.why, "idle") }) {
 		t.Errorf("staleAfter 0 takes no stale agent off: %v", c)
+	}
+}
+
+// A managed SSH execution is never removed for local CLI staleness or
+// archived in the desktop; once its stop is acknowledged (or it reported
+// done and its execution is terminal), the doctor takes it off the roster.
+func TestDoctorRetiresStoppedSSHExecutions(t *testing.T) {
+	a, _ := stubApp(t)
+	now := a.now
+	ref := func(id string) execution.Ref {
+		return execution.Ref{Host: "exec-host-doctor", Execution: execution.ExecutionID(id), Generation: 1}
+	}
+	runningRef, unackedRef, stoppedRef, doneRunningRef, doneExitedRef := ref("run-1"), ref("stop-unacked"), ref("stop-acked"), ref("done-running"), ref("done-exited")
+	mkAgent := func(name string, r execution.Ref, task string, done bool) state.Agent {
+		return state.Agent{
+			Party:      state.Party{Session: string(r.Execution), Name: name},
+			Execution:  &r,
+			Task:       task,
+			Done:       done,
+			Registered: now.Add(-48 * time.Hour),
+			IdleSince:  now.Add(-48 * time.Hour),
+		}
+	}
+	mkStart := func(name string, r execution.Ref, rec *state.ExecutionRecord) state.Start {
+		rec.Handle = execution.Handle{Ref: r, ConversationID: string(r.Execution)}
+		return state.Start{
+			Party:     state.Party{Session: string(r.Execution), Name: name},
+			Execution: rec,
+			Dir:       "/remote/" + string(r.Execution),
+			At:        now.Add(-48 * time.Hour),
+			Harness:   claudeComm,
+		}
+	}
+	const (
+		sshRunning     = "ssh-running"
+		sshStopUnacked = "ssh-stop-unacked"
+		sshStopped     = "ssh-stopped"
+		sshDoneRunning = "ssh-done-running"
+		sshDoneExited  = "ssh-done-exited"
+	)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{
+			mkAgent(sshRunning, runningRef, "active task", false),
+			mkAgent(sshStopUnacked, unackedRef, "stopping task", false),
+			mkAgent(sshStopped, stoppedRef, "stopped task", false),
+			mkAgent(sshDoneRunning, doneRunningRef, "", true),
+			mkAgent(sshDoneExited, doneExitedRef, "", true),
+		}
+		st.Starts = []state.Start{
+			mkStart(sshRunning, runningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopUnacked, unackedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s1"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+			mkStart(sshStopped, stoppedRef, &state.ExecutionRecord{StopRequest: &execution.StopRequest{ID: "s2"}, Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited, StopRequested: true, StopAcknowledged: true}}),
+			mkStart(sshDoneRunning, doneRunningRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Running}}),
+			mkStart(sshDoneExited, doneExitedRef, &state.ExecutionRecord{Observation: execution.Observation{Reachability: execution.Reachable, ProcessState: execution.Exited}}),
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false }, func(state.Party) bool { return false }, 24*time.Hour, now, nil)
+	var got []string
+	for _, c := range chores {
+		got = append(got, c.String())
+	}
+	want := []string{
+		`take "ssh-stopped" off the roster (its SSH execution was stopped)`,
+		`take "ssh-done-exited" off the roster (it reported its work done)`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("planChores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	removed, err := a.removeAgents(chores, watchParty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed = %+v, want 2", removed)
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining []string
+	for _, ag := range st.Agents {
+		remaining = append(remaining, ag.Name)
+	}
+	if !slices.Equal(remaining, []string{sshRunning, sshStopUnacked, sshDoneRunning}) {
+		t.Fatalf("remaining agents = %v", remaining)
 	}
 }
 
@@ -167,7 +265,7 @@ func TestIdleDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("assign", agentOne, "a task")
-	run(verbIdle, flagDone, flagReport, "merged #1", flagProblem, noProblems)
+	run(verbIdle, flagDone, flagReport, "merged "+prURL, flagProblem, noProblems)
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +293,7 @@ const (
 // agents idle --done requires the report's "Problems found", and each
 // finding reaches the supervisor's watch once.
 func TestIdleDoneProblemsFound(t *testing.T) {
-	const task, merged = "the task", "merged #1"
+	const task, merged = "the task", "merged " + prURL
 	a, out := noteApp(t)
 	run := func(args ...string) error {
 		t.Helper()
@@ -203,6 +301,7 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 		c.SetArgs(args)
 		c.SetOut(out)
 		c.SetErr(out)
+		c.SilenceUsage, c.SilenceErrors = true, true
 		return c.Execute()
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -222,22 +321,39 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 			t.Errorf("%v passed", args)
 		}
 	}
+	for name, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"bare #N in report":       {[]string{verbIdle, flagDone, flagReport, "merged #7", flagProblem, noProblems}, "#7 without its full URL (https://github.com/<owner>/<repo>/issues/7)"},
+		"owner/repo#N in report":  {[]string{verbIdle, flagDone, flagReport, "merged x/y#7", flagProblem, noProblems}, "x/y#7 without its full URL (https://github.com/x/y/issues/7)"},
+		"bare #N in problem":      {[]string{verbIdle, flagDone, flagReport, merged, flagProblem, "blocked by #9"}, "#9 without its full URL (https://github.com/o/r/issues/9)"},
+		"owner/repo#N in problem": {[]string{verbIdle, flagDone, flagReport, merged, flagProblem, "see x/y#9"}, "x/y#9 without its full URL (https://github.com/x/y/issues/9)"},
+	} {
+		if err := run(c.args...); Code(err) != ExitRefused || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want refusal with %q", name, err, c.want)
+		}
+	}
 	if st, _ := a.store.Read(); st.Agents[0].Task != task || st.Agents[0].Done {
 		t.Fatalf("a refused report changed the agent: %+v", st.Agents[0])
 	}
-	found := []string{"giantswarm/github: the reconciler creates no repository; worked around with gh", "follow-up: docs"}
-	if err := run(verbIdle, flagDone, flagReport, "merged #1, released v1.2.3", flagProblem, found[0], flagProblem, found[1]); err != nil {
+	found := []string{
+		"giantswarm/github: the reconciler creates no repository; worked around with gh",
+		"follow-up: docs (note #3, timer #4, `#5`, `multi\n#6`, color: #123; background-color: #123456;, " + prURL + "#issuecomment-1)\n````md\n```\n#8\n```\n````",
+	}
+	reportText := merged + ", released v1.2.3"
+	if err := run(verbIdle, flagDone, flagReport, reportText, flagProblem, found[0], flagProblem, found[1]); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != "merged #1, released v1.2.3" || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != task || rs[0].By.Name != agentOne {
+	if rs := st.WorkerReports; len(rs) != 1 || rs[0].Text != reportText || len(rs[0].Problems) != 2 || rs[0].Problems[0] != found[0] || rs[0].Task != task || rs[0].By.Name != agentOne {
 		t.Fatalf("reports = %+v", st.WorkerReports)
 	}
 	lines, _ := firePending(st, nil, time.Now())
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: the task): merged #1`) ||
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], `WORKER REPORT by "`+agentOne+`" (task: the task): `+merged) ||
 		!strings.HasPrefix(lines[1], `PROBLEM FOUND by "`+agentOne+`": `+found[0]) {
 		t.Errorf("lines = %q", lines)
 	}
@@ -247,20 +363,61 @@ func TestIdleDoneProblemsFound(t *testing.T) {
 }
 
 // A park on a person reaches the supervisor's watch once; a park on a
-// merge ahead in the lane does not.
+// merge ahead in the lane, a timer or the supervisor's lease grant does not,
+// and a park on a lease is said once as a lease wait with its queue place.
 func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 	now := time.Now()
-	st := &state.State{Agents: []state.Agent{
-		{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-		{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
-		{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
-	}}
-	lines, evs := parkedOnPerson(st, "Timo", now)
-	if len(lines) != 2 || len(evs) != 2 || !strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) || !strings.Contains(lines[1], "tells Timo") {
+	lab := labOne
+	queued := state.Party{Name: "on a lease", Session: "s2"}
+	st := &state.State{
+		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
+		Agents: []state.Agent{
+			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
+			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
+			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
+			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
+			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
+			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},
+			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
+		},
+	}
+	lines, evs := parkedNews(st, "Timo", now)
+	if len(lines) != 4 || len(evs) != 4 ||
+		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
+		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Timo"`) || !strings.Contains(lines[1], "tells Timo") ||
+		!strings.HasPrefix(lines[2], `PARKED ON A PERSON: "on a reply"`) ||
+		!strings.HasPrefix(lines[3], `PARKED ON A LEASE: "on a lease" parked on lease agentlab-1`) ||
+		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedOnPerson(st, "Timo", now); len(lines) != 0 {
+	if lines, _ := parkedNews(st, "Timo", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
+	}
+}
+
+// Operational handoffs are not news for the person; explicit human waits are.
+func TestParkOnPersonOperationalHandoffs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		on, waits string
+		want      bool
+	}{
+		"supervisor ready": {"", "rollout ready; waiting for the supervisor", false},
+		"supervisor go":    {"", "awaiting the supervisor's go", false},
+		"guide handoff":    {"", "the guide handoff ready", false},
+		"gate":             {"", "the supervisor's gate", false},
+		"install chain":    {"", "the supervisor's install chain", false},
+		"local note":       {"#787", "install chain ready", true},
+		"central note":     {"central#12", "gate ready", true},
+		"named person":     {"", "operator's go on the install chain", true},
+		"answer":           {"", "awaiting the person's answer", true},
+		"colleague review": {"example/tool#12", "a colleague's review", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := &state.Park{On: tc.on, Waits: tc.waits}
+			if got := parkOnPerson(p, "operator"); got != tc.want {
+				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -291,5 +448,273 @@ func TestStaleBinaries(t *testing.T) {
 	if len(rest) == 2 && staleLine(rest[1]) != "stale binary: pid 5 (beekeeper agents reopen) runs a beekeeper an install replaced; "+
 		"its saves of the state are refused until it ends or is restarted" {
 		t.Errorf("a reopen: %q", staleLine(rest[1]))
+	}
+}
+
+// The doctor checks ~/.gemini/config/hooks.json when agy is installed,
+// reporting when the file or beekeeper's PreToolUse entry is missing or
+// points to another binary, and passing when the entry is in place alongside
+// other named hooks.
+func TestCheckAgyHooks(t *testing.T) {
+	home := t.TempDir()
+	exe := "/opt/bin/beekeeper"
+	if got := checkAgyHooks(home, exe, false); got != "" {
+		t.Fatalf("agy not installed: got %q, want empty", got)
+	}
+	if got := checkAgyHooks(home, exe, true); !strings.Contains(got, "~/.gemini/config/hooks.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing hooks.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = exe
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.AgyHooks = agyHooksPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = home + "/.local/state/beekeeper"
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgyHooks(home, exe, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkAgyHooks(home, "/other/beekeeper", true); !strings.Contains(got, "runs /opt/bin/beekeeper instead of /other/beekeeper") {
+		t.Errorf("other binary: got %q", got)
+	}
+}
+
+// The doctor checks ~/.gemini/config/skills.json and the skills directory it
+// points at when agy is installed, reporting when the file, beekeeper's entry
+// or a skill file is missing or stale, and passing when the entry and skills
+// are in place alongside other entries.
+func TestCheckAgySkills(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	if got := checkAgySkills(home, stateDir, false); got != "" {
+		t.Fatalf("agy not installed: got %q, want empty", got)
+	}
+	if got := checkAgySkills(home, stateDir, true); !strings.Contains(got, "~/.gemini/config/skills.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing skills.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = "/opt/bin/beekeeper"
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.AgySkills = agySkillsPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgySkills(home, stateDir, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkAgySkills(home, filepath.Join(home, ".local", "state", "other"), true); !strings.Contains(got, "points to ~/.local/state/beekeeper/skills instead of ~/.local/state/other/skills") {
+		t.Errorf("stale path: got %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(install.AgySkillsDir(stateDir), "park", "SKILL.md"), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgySkills(home, stateDir, true); !strings.Contains(got, "serves the skills park unlike beekeeper") {
+		t.Errorf("stale skill file: got %q", got)
+	}
+}
+
+func TestCheckCodexHooks(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	exe := "/usr/local/bin/beekeeper"
+	if got := checkCodexHooks(home, stateDir, exe, false); got != "" {
+		t.Fatalf("codex not installed: got %q, want empty", got)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); !strings.Contains(got, "~/.codex/hooks.json is missing; run `beekeeper install`") {
+		t.Fatalf("missing hooks.json: got %q", got)
+	}
+	var e install.Env
+	e.Exe = exe
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.CodexHooks = codexHooksPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if got := checkCodexHooks(home, stateDir, "/other/beekeeper", true); !strings.Contains(got, "runs /usr/local/bin/beekeeper instead of /other/beekeeper") {
+		t.Errorf("other binary: got %q", got)
+	}
+	// Missing worker hooks.json under <stateDir>/codex/home/hooks.json is caught too.
+	if err := os.Remove(install.CodexWorkerHooks(stateDir)); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexHooks(home, stateDir, exe, true); !strings.Contains(got, ".local/state/beekeeper/codex/home/hooks.json is missing; run `beekeeper install`") {
+		t.Errorf("missing worker hooks.json: got %q", got)
+	}
+}
+
+func TestCheckCodexSkills(t *testing.T) {
+	home := t.TempDir()
+	stateDir := filepath.Join(home, ".local", "state", "beekeeper")
+	if got := checkCodexSkills(home, stateDir, false); got != "" {
+		t.Fatalf("codex not installed: got %q, want empty", got)
+	}
+	if got := checkCodexSkills(home, stateDir, true); !strings.Contains(got, "~/.codex/skills is missing; run `beekeeper install`") {
+		t.Fatalf("missing skills dir: got %q", got)
+	}
+	var e install.Env
+	e.Exe = "/usr/local/bin/beekeeper"
+	e.Spec.Home = home
+	e.Settings = home + "/.claude/settings.json"
+	e.CodexSkills = codexSkillsPath(home, true)
+	e.Config = home + "/.config/beekeeper/config.yaml"
+	e.StateDir = stateDir
+	e.Setup = platform.Stub().Setup
+	e.Out = &bytes.Buffer{}
+	if err := install.Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexSkills(home, stateDir, true); got != "" {
+		t.Errorf("installed: got %q, want empty", got)
+	}
+	if err := os.WriteFile(filepath.Join(install.AgySkillsDir(stateDir), "park", "SKILL.md"), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkCodexSkills(home, stateDir, true); !strings.Contains(got, "serves the skills park unlike beekeeper") {
+		t.Errorf("stale skill file: got %q", got)
+	}
+
+	// Custom configured Codex.ConfigFile / Codex.AuthFile derives the user Codex directory.
+	customCodexDir := filepath.Join(home, "custom-codex")
+	customCfg := config.Codex{ConfigFile: filepath.Join(customCodexDir, "config.toml")}
+	if got := codexHooksPath(home, true, customCfg); got != filepath.Join(customCodexDir, "hooks.json") {
+		t.Errorf("codexHooksPath(customCfg) = %q", got)
+	}
+	if got := codexSkillsPath(home, true, customCfg); got != filepath.Join(customCodexDir, "skills") {
+		t.Errorf("codexSkillsPath(customCfg) = %q", got)
+	}
+	if got := checkCodexHooks(home, stateDir, "/usr/local/bin/beekeeper", true, customCfg); !strings.Contains(got, "~/custom-codex/hooks.json is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexHooks(customCfg): got %q", got)
+	}
+	if got := checkCodexSkills(home, stateDir, true, customCfg); !strings.Contains(got, "~/custom-codex/skills is missing; run `beekeeper install`") {
+		t.Errorf("checkCodexSkills(customCfg): got %q", got)
+	}
+}
+
+// The doctor stops the background sessions of finished workers, relieved role
+// runs (whether still on the roster or already removed by their relay) and
+// stale idle entries without a CLI, while leaving active role holders and
+// sessions the person started running.
+func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	a.now = now
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Agents.StaleAfter.Duration = 24 * time.Hour
+
+	doneWorker := state.Party{Session: "aaaaaaaa-0000-4000-8000-000000000001", Name: loopWorker}
+	relievedGuide := state.Party{Session: "bbbbbbbb-0000-4000-8000-000000000002", Name: guideRole.runName(1)}
+	activeGuide := state.Party{Session: "cccccccc-0000-4000-8000-000000000003", Name: guideRole.runName(2)}
+	personSession := state.Party{Session: "dddddddd-0000-4000-8000-000000000004", Name: "person own"}
+
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, p := range []state.Party{doneWorker, relievedGuide, activeGuide} {
+			st.Starts = append(st.Starts, state.Start{Party: p, Mode: state.ModeBypass, Dir: t.TempDir(), At: now.Add(-time.Hour), Background: true})
+		}
+		// doneWorker is on the roster as Done; relievedGuide was already removed
+		// from st.Agents by its relay when activeGuide took over.
+		st.Agents = []state.Agent{
+			{Party: doneWorker, Done: true, IdleSince: now.Add(-10 * time.Minute)},
+			{Party: activeGuide, Task: activeGuide.Name},
+			{Party: personSession, Done: true, IdleSince: now.Add(-10 * time.Minute)},
+		}
+		st.SetGuideRole(state.Role{
+			Holder:   &state.Supervisor{Party: activeGuide, Since: now.Add(-30 * time.Minute)},
+			Run:      2,
+			Relieved: []state.Relief{{Party: relievedGuide, By: activeGuide, At: now.Add(-30 * time.Minute), Taken: now.Add(-30 * time.Minute)}},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := stubBackground(t, "",
+		bgSession{ID: doneWorker.Session[:8], SessionID: doneWorker.Session, Kind: bgKind},
+		bgSession{ID: relievedGuide.Session[:8], SessionID: relievedGuide.Session, Kind: bgKind},
+		bgSession{ID: activeGuide.Session[:8], SessionID: activeGuide.Session, Kind: bgKind},
+		bgSession{ID: personSession.Session[:8], SessionID: personSession.Session, Kind: bgKind},
+	)
+	if _, err := a.doctor(t.Context(), doctorRun{by: watchParty}); err != nil {
+		t.Fatal(err)
+	}
+	var stopped []string
+	for _, c := range *calls {
+		if len(c.argv) == 3 && c.argv[1] == bgStopCmd {
+			stopped = append(stopped, c.argv[2])
+		}
+	}
+	slices.Sort(stopped)
+	if want := []string{doneWorker.Session[:8], relievedGuide.Session[:8]}; !slices.Equal(stopped, want) {
+		t.Fatalf("stopped = %v, want %v", stopped, want)
+	}
+}
+
+// The doctor flags a running supervisor loop whose binary version is older
+// than the installed binary, and stays silent once the loop runs the installed
+// version.
+func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	oldInstalled, oldVerOf, oldRunningVer := installedLoopBinary, loopVersionOf, loopRunningVersion
+	t.Cleanup(func() {
+		installedLoopBinary = oldInstalled
+		loopVersionOf = oldVerOf
+		loopRunningVersion = oldRunningVer
+	})
+	loopRunningVersion = func() string { return testLoopNewVer }
+	installedBin := filepath.Join(t.TempDir(), "beekeeper")
+	if err := os.WriteFile(installedBin, []byte("installed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installedLoopBinary = func() (string, error) { return installedBin, nil }
+	loopVersionOf = func(_ context.Context, path string) string {
+		if path == installedBin {
+			return testLoopNewVer
+		}
+		return ""
+	}
+	pid := os.Getpid()
+	if err := a.store.WriteFile(loopPIDFile, pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rep.staleLoop, "stale supervisor loop: pid ") || !strings.Contains(rep.staleLoop, "runs "+testLoopOldVer+" while "+testLoopNewVer+" is installed") {
+		t.Fatalf("staleLoop = %q, want stale supervisor loop %s vs %s", rep.staleLoop, testLoopOldVer, testLoopNewVer)
+	}
+
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopNewVer}); err != nil {
+		t.Fatal(err)
+	}
+	installedLoopBinary = os.Executable
+	rep, err = a.doctor(t.Context(), doctorRun{by: watchParty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.staleLoop != "" {
+		t.Fatalf("staleLoop on current binary = %q, want empty", rep.staleLoop)
 	}
 }

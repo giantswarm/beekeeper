@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"path"
 	"regexp"
 	"runtime"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -68,6 +68,13 @@ type snapshot struct {
 	KubeContext string `json:"kubeContext,omitempty"`
 	// Teleport is the Teleport login, nil when no keeper is configured.
 	Teleport *teleportView `json:"teleport,omitempty"`
+	// Usage is the subscription usage windows and derived capacity target,
+	// nil when capacity.usage.command is not configured.
+	Usage *usageView `json:"usage,omitempty"`
+	// Providers and Choice are the per-provider usage windows, verdicts and
+	// selected choice when capacity.providers is configured.
+	Providers map[string]*providerView `json:"providers,omitempty"`
+	Choice    *choiceView              `json:"choice,omitempty"`
 	// Unavailable are the sections whose platform part this build does not
 	// have: each prints one "not available" line instead.
 	Unavailable []string `json:"unavailable,omitempty"`
@@ -121,7 +128,7 @@ sit on (with their owner), the kernel
 OOM kills since your last snapshot (every one counted, attributed to a
 memcap scope, a kind lab or the desktop scope; a memcap scope no run.start
 names has an unknown cap, a test run's scope is a test kill), leases, holds and the GitHub
-budget, the count of watch lines the quiet rules held back in the last
+budget (and subscription usage windows when capacity.usage.command is set), the count of watch lines the quiet rules held back in the last
 hour, the installations' alerts, grouped (beekeeper alerts snapshot), and
 their running upgrades (beekeeper watch).
 
@@ -298,6 +305,14 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	}
 	s.Holds = a.activeHolds(st)
 	s.Quiet = a.quietSince(a.now.Add(-time.Hour))
+	capCfg := a.liveCapacity()
+	if len(capCfg.Providers) > 0 {
+		cv := a.resolveProvidersCapacity(ctx, st, sessions, capCfg, false, nil, forWorker)
+		s.Providers = cv.Providers
+		s.Choice = cv.Choice
+	} else {
+		_, s.Usage = a.resolveUsage(ctx, capCfg)
+	}
 	if withBudget {
 		b, err := a.probeBudget(ctx)
 		if err != nil {
@@ -318,38 +333,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 // last reading is older than merge.budgetFresh or its reset has passed (the
 // window it counted is over).
 func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
-	token, err := github.Token(ctx)
-	if err != nil {
-		return github.Budget{}, err
-	}
-	st, err := a.store.Read()
-	if err != nil {
-		return github.Budget{}, err
-	}
-	client := &http.Client{Timeout: 20 * time.Second}
-	b, etag, err := github.Probe(ctx, client, token, a.cfg.GitHub.ProbeRepo, st.BudgetETag)
-	if err != nil {
-		return b, err
-	}
-	now := time.Now().UTC()
-	var g *state.GraphQL
-	if last := st.Budget; last != nil && last.GraphQL != nil && now.Sub(last.GraphQL.At) <= a.cfg.Merge.BudgetFresh.Duration &&
-		(last.GraphQL.Reset.IsZero() || now.Before(last.GraphQL.Reset)) {
-		g = last.GraphQL
-	} else if r := github.ProbeGraphQL(ctx, client, token, now); r.Err == "" {
-		g = &state.GraphQL{Remaining: r.Remaining, Limit: r.Limit, Reset: r.Reset, Refused: r.Refused, Secondary: r.Secondary, At: now}
-	} else {
-		b.GraphQL = &r
-	}
-	if g != nil {
-		b.GraphQL = graphqlOf(g)
-	}
-	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.BudgetETag = etag
-		st.Budget = &state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset, At: now, GraphQL: g}
-		return nil, nil
-	})
-	return b, nil
+	return a.probeIdentities(ctx)
 }
 
 // findWaits lists the long-running commands sessions block on; a watch's
@@ -357,7 +341,7 @@ func (a *app) probeBudget(ctx context.Context) (github.Budget, error) {
 func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait {
 	var out []wait
 	for _, p := range t.ByPID {
-		if !isWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
+		if !claude.IsWait(p) || slices.ContainsFunc(t.Ancestors(p.PID), isWatch) {
 			continue
 		}
 		w := wait{PID: p.PID, Args: p.Cmdline(), Elapsed: p.Elapsed(now).Round(time.Second), Ungated: ungatedProcess(t, p)}
@@ -368,30 +352,6 @@ func findWaits(t *proc.Table, sessions []*claude.Session, now time.Time) []wait 
 	}
 	slices.SortFunc(out, func(x, y wait) int { return int(y.Elapsed - x.Elapsed) })
 	return out
-}
-
-func isWait(p *proc.Process) bool {
-	has := func(words ...string) bool {
-		for _, w := range words {
-			if !slices.Contains(p.Args, w) {
-				return false
-			}
-		}
-		return true
-	}
-	switch p.Comm {
-	case "devctl":
-		return has("pr", "wait") || has("pr", "merge") || has("release", "wait")
-	case "gh":
-		return has("--watch") || has("run", "watch")
-	case "ctr":
-		return has("import")
-	case "docker":
-		return len(p.Args) > 1 && (p.Args[1] == "save" || p.Args[1] == "load" || has("image", "save") || has("image", "load"))
-	case "kubectl":
-		return has("port-forward")
-	}
-	return false
 }
 
 var memcapScope = regexp.MustCompile(guard.ScopePrefix + `(\d+)-`)
@@ -591,6 +551,11 @@ func (a *app) printSnapshot(s *snapshot) {
 	if len(s.Upgrades) > 0 {
 		p("upgrades: %s", strings.Join(upgradeWords(s.Upgrades, a.now), " · "))
 	}
+	if len(s.Providers) > 0 {
+		p("%s", snapshotProvidersLine(a.liveCapacity(), s.Providers, s.Choice, a.now))
+	} else if s.Usage != nil {
+		p("%s", s.Usage.snapshotLine(a.now))
+	}
 	switch {
 	case s.Budget != nil:
 		p("GitHub: %s", budgetLine(a, *s.Budget))
@@ -664,6 +629,9 @@ func budgetLine(a *app, b github.Budget) string {
 	}
 	line := fmt.Sprintf("%d of %d left, resets %s (in %s); floor %d: %s",
 		b.Remaining, b.Limit, clock(a.now, b.Reset), dur(b.Reset.Sub(a.now)), a.cfg.GitHub.Floor, status)
+	if b.Identity != "" {
+		line += fmt.Sprintf(" [REST identity %s/%s]", b.Identity, b.Login)
+	}
 	if g := b.GraphQL; g != nil {
 		line += "; " + graphqlText(a, g)
 	}
@@ -676,15 +644,29 @@ func graphqlOf(g *state.GraphQL) *github.GraphQL {
 	if g == nil {
 		return nil
 	}
-	return &github.GraphQL{Limit: g.Limit, Remaining: g.Remaining, Used: g.Limit - g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary}
+	return &github.GraphQL{Identity: g.Identity, Login: g.Login, BlockedBy: g.BlockedBy, Limit: g.Limit, Remaining: g.Remaining, Used: g.Limit - g.Remaining, Reset: g.Reset, Refused: g.Refused, Secondary: g.Secondary, Err: g.Err}
 }
 
 // graphqlText says the GraphQL limit: its figures, or its refusal with the
 // kind of limit and when it ends.
 func graphqlText(a *app, g *github.GraphQL) string {
+	text := graphqlReadingText(a, g)
+	if g.Identity != "" {
+		text += " [identity " + g.Identity
+		if g.Login != "" {
+			text += "/" + g.Login
+		}
+		text += "]"
+	}
+	return text
+}
+
+func graphqlReadingText(a *app, g *github.GraphQL) string {
 	switch {
 	case g.Err != "":
 		return "GraphQL unknown (" + truncate(g.Err, 60) + ")"
+	case len(g.BlockedBy) > 0 && g.Refused == "":
+		return fmt.Sprintf("GraphQL %d of %d; blocked by identities %s", g.Remaining, g.Limit, strings.Join(g.BlockedBy, ", "))
 	case g.Refused == "":
 		return fmt.Sprintf("GraphQL %d of %d", g.Remaining, g.Limit)
 	}
@@ -753,7 +735,53 @@ func diffSnapshots(prev, cur *snapshot) []string {
 			out = append(out, fmt.Sprintf("GitHub budget %d → %d (%d spent)", prev.Budget.Remaining, cur.Budget.Remaining, d))
 		}
 	}
+	if len(cur.Providers) > 0 && providersChanged(prev.Providers, cur.Providers, prev.Choice, cur.Choice) {
+		out = append(out, snapshotProvidersLine(config.Capacity{}, cur.Providers, cur.Choice, cur.At.Local()))
+	} else if cur.Usage != nil && (prev.Usage == nil ||
+		cur.Usage.Ceiling != prev.Usage.Ceiling || cur.Usage.High != prev.Usage.High || cur.Usage.Error != prev.Usage.Error) {
+		out = append(out, cur.Usage.snapshotLine(cur.At.Local()))
+	}
 	return out
+}
+
+func snapshotProvidersLine(k config.Capacity, providers map[string]*providerView, choice *choiceView, now time.Time) string {
+	names := k.ProviderNames()
+	if len(names) == 0 {
+		for n := range providers {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+	}
+	var parts []string
+	for _, name := range names {
+		if pv := providers[name]; pv != nil {
+			parts = append(parts, name+": "+pv.watchSummary(now))
+		}
+	}
+	if choice != nil {
+		parts = append(parts, "choice: "+choice.summary())
+	}
+	return "usage: " + strings.Join(parts, "; ")
+}
+
+func providersChanged(prev, cur map[string]*providerView, prevChoice, curChoice *choiceView) bool {
+	if len(prev) != len(cur) {
+		return true
+	}
+	for k, c := range cur {
+		p := prev[k]
+		if p == nil || p.Ceiling != c.Ceiling || p.Room != c.Room || p.High != c.High || p.Error != c.Error {
+			return true
+		}
+	}
+	pSum, cSum := "", ""
+	if prevChoice != nil {
+		pSum = prevChoice.summary()
+	}
+	if curChoice != nil {
+		cSum = curChoice.summary()
+	}
+	return pSum != cSum
 }
 
 func minus(a, b []string) []string {

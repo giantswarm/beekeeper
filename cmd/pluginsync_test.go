@@ -108,7 +108,7 @@ func fakePlugins(t *testing.T, ps []installedPlugin) *[]string {
 // selfUpdate runs beekeeper self-update against an update that returns res.
 func selfUpdate(t *testing.T, res update.Result) string {
 	t.Helper()
-	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, filepath.Join(t.TempDir(), "config.yaml")))
 	prev := runUpdate
 	t.Cleanup(func() { runUpdate = prev })
 	runUpdate = func(context.Context, io.Writer, bool) (update.Result, error) { return res, nil }
@@ -170,7 +170,7 @@ func asBinary(t *testing.T, id string) string {
 	binaryIdentity = func() string { return id }
 	runsInstalled = func() bool { return true }
 	syncsUnder = func(string) bool { return true }
-	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(t.TempDir(), "none.yaml"))
+	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, filepath.Join(t.TempDir(), "config.yaml")))
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
 	return filepath.Join(state, project.Name)

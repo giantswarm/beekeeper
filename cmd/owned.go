@@ -131,7 +131,7 @@ func (a *app) yieldToMerges(ctx context.Context, argv []string) error {
 }
 
 // ownerOf says where the outcome of a wait that runs on outside the call
-// goes: a wake of its owner, a registered agent (tellOwner).
+// goes: a wake of its owner, on the roster or off it (tellOwner).
 func ownerOf(me state.Party) string {
 	if me.Session == "" && me.HostSession == "" {
 		return "its outcome reaches nobody, the caller has no session"
@@ -343,12 +343,13 @@ func handOver(base string, r childRun, cli int) {
 // tellOwner hands a finished run's outcome to its owner unless the run's gate
 // handed it to a caller still listening: once the gate is gone without its
 // heard marker (a headless turn that ended, a caller killed, its CLI gone),
-// it logs devctl.unheard and wakes the owner, a registered agent, with the
+// it logs devctl.unheard and wakes the owner, on the roster or off it, with the
 // outcome in one line (agents wake: by name when its CLI runs, else a
 // headless turn). The outcome is owed in the state first (owe), so a
 // merge-child stopped or killed on the way leaves it to the watch, and a
 // hand-over that fails (GitHub unanswered for a stopped merge, a wake the
 // service manager refuses) stays owed for the watch's next try (payOwed).
+// A run its owner stopped with gate stop wakes nobody.
 func (a *app) tellOwner(ctx context.Context, r childResult) {
 	if r.spec.Owner.Session == "" && r.spec.Owner.HostSession == "" {
 		return
@@ -357,12 +358,13 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 		_, _ = fmt.Fprintf(os.Stderr, "%s ended with its caller, nobody is woken\n", r.command())
 		return
 	}
-	if a.store == nil {
-		a.cfgPath = r.spec.Config
-		if err := a.load(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", r.outcome(), r.spec.Owner.Name, err)
-			return
-		}
+	if r.stoppedBy.Is(r.spec.Owner) {
+		_, _ = fmt.Fprintf(os.Stderr, "%s was stopped by its owner (gate stop), nobody is woken\n", r.command())
+		return
+	}
+	if err := a.loadRun(r); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s, unheard by %q: the configuration does not load (%v), nobody is woken\n", r.outcome(), r.spec.Owner.Name, err)
+		return
 	}
 	o := r.owed(time.Now())
 	if err := a.owe(o); err != nil {
@@ -382,13 +384,29 @@ func (a *app) tellOwner(ctx context.Context, r childResult) {
 	a.payOwed(ctx, o)
 }
 
+// loadRun loads, once, the configuration and state of the gate that
+// started r: merge-child loads nothing until its command ended.
+func (a *app) loadRun(r childResult) error {
+	if a.store != nil {
+		return nil
+	}
+	a.cfgPath = r.spec.Config
+	return a.load()
+}
+
 // outcome is the run's outcome in one line: "<command> exit N: <reason>
 // (output in <file>)", the reason the document's verdict and reason (a
 // merge's release), else devctl's last stderr line. A run whose merge-child
 // was stopped (stop) before its command reported a merge has no outcome: the
-// line names the stop, and that nothing waits for the command any more.
+// line names the stop, and who stopped it with gate stop (stoppedBy), and
+// that nothing waits for the command any more.
 func (r childResult) outcome() string {
-	if o, _ := merge.ParseDocument(r.doc); r.stop != 0 && !o.Merged {
+	o, _ := merge.ParseDocument(r.doc)
+	if r.stoppedBy != (state.Party{}) && !o.Merged {
+		return fmt.Sprintf("%s did not settle: %q stopped it (beekeeper gate stop, exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
+			r.command(), r.stoppedBy.Name, r.rc)
+	}
+	if r.stop != 0 && !o.Merged {
 		return fmt.Sprintf("%s did not settle: its waiter was stopped by %s (exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
 			r.command(), signalName(r.stop), r.rc)
 	}
@@ -415,10 +433,13 @@ func signalName(s syscall.Signal) string {
 
 // runReason is what a run's document says about its end (its verdict and
 // reason, the failed checks the reason does not name), else its last stderr
-// line; handCut is a merge's base branch that no Auto-release run
-// tags, whose release nobody awaits. A merge declined on classic branch
+// line, with a busy base's spent budget (busySpent) the last line names;
+// handCut is a merge's base branch that no Auto-release run tags, whose
+// release nobody awaits. A merge declined on classic branch
 // protection is its cause and fix alone (merge.ClassicProtection), which the
-// truncation of devctl's long reason would cut.
+// truncation of devctl's long reason would cut; a head whose workflows never
+// ran (merge.NoRuns) gets what to do after it (merge.NoRunsHint), which the
+// truncation never cuts either.
 func runReason(doc []byte, last, handCut string) string {
 	if why := merge.ClassicProtection(doc); why != "" {
 		return why
@@ -438,6 +459,9 @@ func runReason(doc []byte, last, handCut string) string {
 	if len(unnamed) > 0 {
 		why = strings.Trim(why+"; failed: "+strings.Join(unnamed, ", "), "; ")
 	}
+	if spent := strings.TrimPrefix(last, GatePrefix); merge.BusyBase(doc) && strings.HasPrefix(spent, busySpent) {
+		why += "; " + spent
+	}
 	if o, ok := merge.ParseDocument(doc); ok && o.Merged {
 		rel := o.Release
 		switch {
@@ -451,6 +475,8 @@ func runReason(doc []byte, last, handCut string) string {
 		why = strings.Trim("merged, release "+rel+"; "+why, "; ")
 	}
 	switch {
+	case why != "" && merge.NoRuns(doc):
+		return truncate(why, 300) + "; " + merge.NoRunsHint
 	case why != "":
 		return truncate(why, 300)
 	case last != "":

@@ -19,7 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.StateDir != "/state/beekeeper" || c.LeaseDir != "/state/beekeeper/leases" || c.GitHub.Floor != 2500 ||
-		c.Watch.Interval.Duration != 30*time.Second || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Supervisor.RelayAt != 400_000 || c.Guide.RelayAt != 150_000 {
+		c.Watch.Interval.Duration != 30*time.Second || c.Watch.BatchInterval.Duration != 5*time.Minute || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 200_000 {
 		t.Errorf("defaults = %+v", c)
 	}
 	if len(c.Notify.Kinds) != 5 || c.Notify.Policy().Quiet != nil {
@@ -31,14 +31,14 @@ func TestLoadDefaults(t *testing.T) {
 	if w := c.Watch; w.ToolProcsMax != 1000 || len(w.Tools) != 6 || c.Desktop.TypingQuiet.Duration != 30*time.Second {
 		t.Errorf("LOAD and typing defaults = %d %v %s", w.ToolProcsMax, w.Tools, c.Desktop.TypingQuiet)
 	}
-	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
-		t.Errorf("swap guard defaults = %s %d %g %d", w.SwapWindow, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
+	if w, k := c.Watch, c.Capacity; w.SwapWindow.Duration != 10*time.Minute || k.Ceiling != DefaultCeiling || k.ReviewHeadroom != 2 || k.SwapGrowthMaxMiB != 256 || k.SwapPSIMax != 0 || k.AvailMinMiB != 20<<10 {
+		t.Errorf("swap guard and capacity defaults = %s %d %d %g %d", w.SwapWindow, k.Ceiling, k.SwapGrowthMaxMiB, k.SwapPSIMax, k.AvailMinMiB)
 	}
 	if len(c.Alerts.Quiet) != 0 || !slices.Equal(c.Alerts.Ignore, DefaultIgnore) || c.Alerts.Tenant != "" {
 		t.Errorf("alerts without a team = %+v, want no quiet rule, Watchdog ignored, no tenant", c.Alerts)
 	}
 	if c.Kube.Production != "" || c.Kube.ContextTemplate != "" || len(c.Kube.Kubeconfig) != 0 || c.Kube.Context("alpha") != "" || len(c.Lanes) != 0 || len(c.Merge.DevctlOwners) != 0 ||
-		c.Guide.Skill != "" || c.Guide.Person != "" || c.Supervisor.Skill != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
+		c.Guide.Skill != "" || c.Guide.Person != "" || c.Ollama.URL != "" || c.Lemonade.URL != "" {
 		t.Errorf("organisation and desk defaults are set: %+v", c)
 	}
 	if !c.IsLeasable(Browser) || c.IsLeasable("kind-1") {
@@ -60,7 +60,9 @@ notify:
   kinds: [due, budget]
   quietHours: "22:00-07:00"
   urgency: {due: critical}
-supervisor: {relayAt: 1.5M}
+guide: {relayAt: 1.5M}
+# retired supervisor-session keys: an older config still loads, they are ignored
+supervisor: {loop: true, relayAt: 1.5M, skill: beekeeper:supervise, restartGrace: 30s}
 `
 	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -70,7 +72,7 @@ supervisor: {relayAt: 1.5M}
 		t.Fatal(err)
 	}
 	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
-		c.Watch.Interval.Duration != time.Minute || c.Supervisor.RelayAt != 1_500_000 {
+		c.Watch.Interval.Duration != time.Minute || c.Guide.RelayAt != 1_500_000 {
 		t.Errorf("config = %+v", c)
 	}
 	if n := c.Notify; len(n.Kinds) != 2 || n.Repeat.Duration != 30*time.Minute || n.Policy().Quiet == nil || n.Urgency["due"] != "critical" {
@@ -155,50 +157,71 @@ func TestLabs(t *testing.T) {
 
 func TestLoadRejects(t *testing.T) {
 	for name, raw := range map[string]string{
-		"browser as resource":        "resources: [browser]",
-		"path as resource":           "resources: [../x]",
-		"lab not a resource":         "resources: [kind-1]\nlabs: {kind-2: kind-2}",
-		"lab without cluster":        "resources: [kind-1]\nlabs: {kind-1: \"\"}",
-		"lab cluster twice":          "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
-		"nameless install":           "alerts: {installations: [{context: x}]}",
-		"unknown floor":              "alerts: {installations: [{name: x, floor: low}]}",
-		"unknown pageSeverity":       "alerts: {pageSeverity: urgent}",
-		"short ownerGrace":           "alerts: {ownerGrace: 10s}",
-		"discover without a team":    "alerts: {discover: {every: 1h}}",
-		"bad discover exclude":       "alerts: {team: t, discover: {exclude: ['[']}}",
-		"pagerduty without services": "alerts: {pagerduty: {context: example}}",
-		"flapping at once":           "alerts: {flap: {changes: 1}}",
-		"bad duration":               "grantTTL: soon",
-		"sink without a repo":        "sink: {workflow: refresh.yaml}",
-		"sink repo not owner/repo":   "sink: {repo: site, workflow: refresh.yaml}",
-		"sink without a workflow":    "sink: {repo: o/site}",
-		"sink of an unknown verb":    "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
-		"skill and file":             "supervisor: {skill: supervise, instructions: /x.md}",
-		"unknown worker profile":     "agents: {profile: lean}",
-		"profile name as a path":     "agents: {profiles: {../x: {tools: [Read]}}}",
-		"unknown role profile":       "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
-		"unknown notify kind":        "notify: {kinds: [due, alerts]}",
-		"machine notify kind":        "notify: {kinds: [due, oom-line]}",
-		"machine urgency":            "notify: {urgency: {oom-kill: critical}}",
-		"unknown urgency":            "notify: {urgency: {due: urgent}}",
-		"urgency of no kind":         "notify: {urgency: {sessions: low}}",
-		"bad quiet hours":            "notify: {quietHours: 22-7}",
-		"bad relayAt":                "supervisor: {relayAt: 400kb}",
-		"negative relayAt":           "supervisor: {relayAt: -1}",
-		"bad store glob":             "outbound: {storeDeny: [{vault: \"[\"}]}",
-		"bad outbound path":          "outbound: {paths: [\"[\"]}",
-		"age without match":          "secret: {ageIdentities: [{ref: op://V/i/f}]}",
-		"age bad recipient":          "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
-		"age without op ref":         "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
-		"age relative file":          "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
-		"age bad pathRegex":          "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
-		"nameless board step":        "board: {order: [{status: [backlog]}]}",
-		"search with fields":         "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
-		"omp key as value":           "omp: {providers: {spark: {apiKey: sk-planted}}}",
-		"omp key half ref":           "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
-		"omp key no ref":             "omp: {providers: {spark: {}}}",
-		"swap window under 5m":       "watch: {swapWindow: 2m}",
-		"negative swapPSIMax":        "capacity: {swapPSIMax: -1}",
+		"browser as resource":         "resources: [browser]",
+		"path as resource":            "resources: [../x]",
+		"lab not a resource":          "resources: [kind-1]\nlabs: {kind-2: kind-2}",
+		"lab without cluster":         "resources: [kind-1]\nlabs: {kind-1: \"\"}",
+		"lab cluster twice":           "resources: [kind-1, kind-2]\nlabs: {kind-1: kind, kind-2: kind}",
+		"nameless install":            "alerts: {installations: [{context: x}]}",
+		"unknown floor":               "alerts: {installations: [{name: x, floor: low}]}",
+		"unknown pageSeverity":        "alerts: {pageSeverity: urgent}",
+		"short ownerGrace":            "alerts: {ownerGrace: 10s}",
+		"discover without a team":     "alerts: {discover: {every: 1h}}",
+		"bad discover exclude":        "alerts: {team: t, discover: {exclude: ['[']}}",
+		"pagerduty without services":  "alerts: {pagerduty: {context: example}}",
+		"flapping at once":            "alerts: {flap: {changes: 1}}",
+		"bad duration":                "grantTTL: soon",
+		"sink without a repo":         "sink: {workflow: refresh.yaml}",
+		"sink repo not owner/repo":    "sink: {repo: site, workflow: refresh.yaml}",
+		"sink without a workflow":     "sink: {repo: o/site}",
+		"sink of an unknown verb":     "sink: {repo: o/site, workflow: refresh.yaml, verbs: [note.add]}",
+		"skill and file":              "guide: {skill: guide, instructions: /x.md}",
+		"unknown worker profile":      "agents: {profile: lean}",
+		"profile name as a path":      "agents: {profiles: {../x: {tools: [Read]}}}",
+		"unknown role profile":        "guide: {profile: lean}\nagents: {profiles: {slim: {tools: [Bash]}}}",
+		"unknown notify kind":         "notify: {kinds: [due, alerts]}",
+		"machine notify kind":         "notify: {kinds: [due, oom-line]}",
+		"machine urgency":             "notify: {urgency: {oom-kill: critical}}",
+		"unknown urgency":             "notify: {urgency: {due: urgent}}",
+		"urgency of no kind":          "notify: {urgency: {sessions: low}}",
+		"bad quiet hours":             "notify: {quietHours: 22-7}",
+		"bad relayAt":                 "guide: {relayAt: 400kb}",
+		"team files without a dir":    "supervisor: {ownership: {team: t, teamFiles: o/github}}",
+		"bad review pattern":          "supervisor: {ownership: {review: [\"o/[\"]}}",
+		"review without an owner":     "supervisor: {ownership: {review: [shared-configs]}}",
+		"never without an owner":      "supervisor: {ownership: {never: [tool]}}",
+		"never without a name":        "supervisor: {ownership: {never: [o/]}}",
+		"negative relayAt":            "guide: {relayAt: -1}",
+		"bad store glob":              "outbound: {storeDeny: [{vault: \"[\"}]}",
+		"bad outbound path":           "outbound: {paths: [\"[\"]}",
+		"age without match":           "secret: {ageIdentities: [{ref: op://V/i/f}]}",
+		"age bad recipient":           "secret: {ageIdentities: [{recipient: ssh-ed25519, ref: op://V/i/f}]}",
+		"age without op ref":          "secret: {ageIdentities: [{recipient: age1x, ref: ~/key.txt}]}",
+		"age relative file":           "secret: {ageIdentities: [{recipient: age1x, ref: \"file://key.txt\"}]}",
+		"age bad pathRegex":           "secret: {ageIdentities: [{pathRegex: \"[\", ref: op://V/i/f}]}",
+		"nameless board step":         "board: {order: [{status: [backlog]}]}",
+		"search with fields":          "board: {order: [{name: q, search: \"repo:o/r\", status: [backlog]}]}",
+		"omp key as value":            "omp: {providers: {spark: {apiKey: sk-planted}}}",
+		"omp key half ref":            "omp: {providers: {spark: {apiKey: op://Vault/item}}}",
+		"omp key no ref":              "omp: {providers: {spark: {}}}",
+		"swap window under 5m":        "watch: {swapWindow: 2m}",
+		"negative swapPSIMax":         "capacity: {swapPSIMax: -1}",
+		"negative capacity ceiling":   "capacity: {ceiling: -1}",
+		"negative provider ceiling":   "capacity: {providers: {claude: {ceiling: -1}}}",
+		"usage without command":       "capacity: {usage: {highPercent: 90}}",
+		"usage bands without command": "capacity: {usage: {fiveHour: [{upTo: 80, ceiling: 4}]}}",
+		"usage empty executable":      "capacity: {usage: {command: [\"  \"]}}",
+		"usage negative every":        "capacity: {usage: {command: [reader], every: -1m}}",
+		"usage negative timeout":      "capacity: {usage: {command: [reader], timeout: -1s}}",
+		"usage zero highPercent":      "capacity: {usage: {command: [reader], highPercent: 0}}",
+		"usage over-100 highPercent":  "capacity: {usage: {command: [reader], highPercent: 101}}",
+		"usage NaN highPercent":       "capacity: {usage: {command: [reader], highPercent: .nan}}",
+		"usage band zero upTo":        "capacity: {usage: {command: [reader], fiveHour: [{upTo: 0, ceiling: 4}]}}",
+		"usage band over-100 upTo":    "capacity: {usage: {command: [reader], fiveHour: [{upTo: 105, ceiling: 4}]}}",
+		"usage band unsorted":         "capacity: {usage: {command: [reader], fiveHour: [{upTo: 80, ceiling: 4}, {upTo: 80, ceiling: 2}]}}",
+		"usage band missing ceiling":  "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80}]}}",
+		"usage band negative ceiling": "capacity: {usage: {command: [reader], sevenDay: [{upTo: 80, ceiling: -1}]}}",
+		"paceCap negative ceiling":    "capacity: {usage: {command: [reader], paceCaps: [{overBy: 5, ceiling: -1}]}}",
 	} {
 		p := filepath.Join(t.TempDir(), "c.yaml")
 		if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
@@ -287,7 +310,7 @@ func TestSecretFileRoots(t *testing.T) {
 	for name, raw := range map[string]string{
 		"relative": "secret: {fileRoots: [creds]}",
 		"the root": "secret: {fileRoots: [/]}",
-		"empty":    "secret: {fileRoots: [\"\"]}",
+		emptyCase:  "secret: {fileRoots: [\"\"]}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "c.yaml")
@@ -317,6 +340,9 @@ func TestParseTokens(t *testing.T) {
 const (
 	backstage = "giantswarm/backstage"
 	portal    = "portal-tools"
+	// Test case names shared by the config tests.
+	emptyCase = "empty"
+	unsetCase = "unset"
 )
 
 func TestLanes(t *testing.T) {
@@ -408,7 +434,7 @@ func TestLoadReporter(t *testing.T) {
 		t.Errorf("plans: %+v, %v", c.Plans, err)
 	}
 	for _, raw := range []string{"reporter: {every: 1h}\n", "reporter: {every: 10s, brief: b.md}\n",
-		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n"} {
+		"reporter: {every: 1h, brief: b.md, tz: Mars/Olympus}\n", "reporter: {every: 1h, brief: b.md, reviews: [plans]}\n", "plans: {repositories: [plans]}\n", "merge: {admin: [owner]}\n"} {
 		if _, err := Load(write(raw)); err == nil {
 			t.Errorf("%q loads", raw)
 		}
@@ -416,7 +442,8 @@ func TestLoadReporter(t *testing.T) {
 }
 
 // devctl serves the owners of merge.devctlOwners, none by default; any
-// other owner's repository takes the plain squash merge.
+// other owner's repository takes the plain squash merge. merge.admin lists
+// the repositories merged with --admin after the approved desk review.
 func TestDevctlServes(t *testing.T) {
 	var c Config
 	if err := c.defaults(); err != nil {
@@ -425,10 +452,19 @@ func TestDevctlServes(t *testing.T) {
 	if c.Merge.DevctlServes("example/x") {
 		t.Error("devctl serves an owner by default")
 	}
+	if c.Merge.AdminMerge("example/x") {
+		t.Error("admin merge by default")
+	}
 	c.Merge.DevctlOwners = []string{"example"}
 	for repo, want := range map[string]bool{"example/beekeeper": true, "Example/x": true, "someone/notebook": false} {
 		if got := c.Merge.DevctlServes(repo); got != want {
 			t.Errorf("%s: %v, want %v", repo, got, want)
+		}
+	}
+	c.Merge.Admin = []string{"example/repo"}
+	for repo, want := range map[string]bool{"Example/Repo": true, "example/other": false, "someone/repo": false} {
+		if got := c.Merge.AdminMerge(repo); got != want {
+			t.Errorf("admin %s: %v, want %v", repo, got, want)
 		}
 	}
 }
@@ -480,7 +516,7 @@ func TestExampleConfig(t *testing.T) {
 			t.Errorf("threshold %d, want %d", got, want)
 		}
 	}
-	if c.Supervisor.Skill != "beekeeper:supervise" || c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
+	if c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
 		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
@@ -499,6 +535,9 @@ func TestExampleConfig(t *testing.T) {
 	}
 	if pd := c.Alerts.PagerDuty; !pd.Enabled() || pd.Server != "pd" || !slices.Equal(pd.Services, []string{"PABC123"}) || pd.Every.Duration != time.Minute {
 		t.Errorf("alerts.pagerduty %+v", pd)
+	}
+	if u := c.Capacity.Usage; !u.Enabled() || len(u.FiveHour) != 3 || len(u.SevenDay) != 2 || u.HighPercent != 95 {
+		t.Errorf("capacity.usage %+v", u)
 	}
 }
 
@@ -538,6 +577,25 @@ func TestThresholdsDefaultToFractions(t *testing.T) {
 	}
 	if want := []string{filepath.Join(home, ".local", "state", "beekeeper", "kube", "teleport.yaml")}; !slices.Equal(kc.Alerts.Kubeconfig, want) {
 		t.Errorf("alerts.kubeconfig = %q, want %q", kc.Alerts.Kubeconfig, want)
+	}
+}
+
+func TestSupervisorOwnership(t *testing.T) {
+	c, err := Load(writeTemp(t, "supervisor: {ownership: {review: [\"o/*-configs\"]}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without a team, no team files to read.
+	if o := c.Supervisor.Ownership; o.TeamFiles != "" || o.OwnerWait.Duration != 24*time.Hour {
+		t.Errorf("ownership without a team = %+v", o)
+	}
+	c, err = Load(writeTemp(t, "supervisor: {ownership: {team: team-a, ownerWait: 2h}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Supervisor.Ownership
+	if repo, dir := o.TeamFilesRepo(); o.TeamFiles != DefaultTeamFiles || repo != "giantswarm/github" || dir != "repositories" || o.OwnerWait.Duration != 2*time.Hour {
+		t.Errorf("ownership = %+v (%s, %s)", o, repo, dir)
 	}
 }
 
@@ -652,7 +710,7 @@ func TestIncompleteStoreRef(t *testing.T) {
 
 func TestProfileFor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.yaml")
-	raw := "agents:\n  profile: minimal\n  profiles:\n    lean: {tools: [Read, Grep], plugins: [beekeeper, base], mcpServers: [pro]}\nsupervisor: {profile: lean}\n"
+	raw := "agents:\n  profile: minimal\n  profiles:\n    lean: {tools: [Read, Grep], plugins: [beekeeper, base], mcpServers: [pro]}\nguide: {profile: lean}\n"
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -664,10 +722,10 @@ func TestProfileFor(t *testing.T) {
 		slices.Contains(p.Tools, "AskUserQuestion") || slices.Contains(p.Tools, "Agent") {
 		t.Errorf("built-in minimal = %+v %v", p, ok)
 	}
-	if p, ok := c.Agents.ProfileFor(c.Supervisor.Profile); !ok || !slices.Equal(p.Tools, []string{"Read", "Grep"}) || !slices.Equal(p.MCPServers, []string{"pro"}) {
+	if p, ok := c.Agents.ProfileFor(c.Guide.Profile); !ok || !slices.Equal(p.Tools, []string{"Read", "Grep"}) || !slices.Equal(p.MCPServers, []string{"pro"}) {
 		t.Errorf("desk profile lean = %+v %v", p, ok)
 	}
-	if _, ok := c.Agents.ProfileFor(c.Guide.Profile); ok {
+	if _, ok := c.Agents.ProfileFor(""); ok {
 		t.Error("a role without a profile resolved one")
 	}
 	c.Agents.Profiles[MinimalProfile] = Profile{Tools: []string{"Glob"}}
@@ -693,6 +751,513 @@ func TestAppsTemplateOf(t *testing.T) {
 	} {
 		if got := tc.apps.TemplateOf("portal"); got != tc.want {
 			t.Errorf("%+v.TemplateOf(portal) = %q, want %q", tc.apps, got, tc.want)
+		}
+	}
+}
+
+// A configured capacity.ceiling of 0 is kept; unset takes DefaultCeiling, and
+// retired floor keys are ignored.
+func TestCapacityZeroAndUnset(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		wantMax int
+	}{
+		{"omitted", "", DefaultCeiling},
+		{"empty map", "capacity: {}\n", DefaultCeiling},
+		{"null keys", "capacity: {floor: null, ceiling: null}\n", DefaultCeiling},
+		{"both zero", "capacity: {floor: 0, ceiling: 0}\n", 0},
+		{"ceiling zero alone", "capacity: {ceiling: 0}\n", 0},
+		{"ceiling three", "capacity: {ceiling: 3}\n", 3},
+		{"retired floor ignored when ceiling unset", "capacity: {floor: 5}\n", DefaultCeiling},
+		{"retired floor above ceiling ignored", "capacity: {floor: 5, ceiling: 3}\n", 3},
+	} {
+		c, err := Load(writeTemp(t, tc.raw))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if c.Capacity.Ceiling != tc.wantMax {
+			t.Errorf("%s: got ceiling %d; want %d", tc.name, c.Capacity.Ceiling, tc.wantMax)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	c, err := Set(p, []Setting{{"capacity.ceiling", "0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Capacity.Ceiling != 0 {
+		t.Errorf("Set returned ceiling %d; want 0", c.Capacity.Ceiling)
+	}
+	if loaded, err := Load(p); err != nil || loaded.Capacity.Ceiling != 0 {
+		t.Errorf("Load after Set = %+v, %v; want ceiling 0", loaded, err)
+	}
+}
+
+func TestCapacityUsageAndDerive(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `capacity:
+  usage:
+    command: ["~/bin/read-usage", "~/etc/usage.json", "--json"]
+    fiveHour:
+      - {upTo: 50, floor: 6, ceiling: 12}
+      - {upTo: 80, ceiling: 4}
+      - {upTo: 95, floor: 0, ceiling: 2}
+    sevenDay:
+      - {upTo: 70, floor: 5, ceiling: 10}
+      - {upTo: 90, floor: 2, ceiling: 3}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := c.Capacity.Usage
+	if !u.Enabled() || u.Command[0] != filepath.Join(home, "bin", "read-usage") ||
+		u.Command[1] != filepath.Join(home, "etc", "usage.json") || u.Command[2] != "--json" {
+		t.Fatalf("command = %q", u.Command)
+	}
+	if u.Every.Duration != DefaultUsageEvery || u.Timeout.Duration != DefaultUsageTimeout ||
+		u.ReportEvery.Duration != DefaultUsageReportEvery || u.HighPercent != DefaultUsageHighPercent || u.HighPercentSet() {
+		t.Errorf("defaults = every %s timeout %s reportEvery %s highPercent %g (set %v)",
+			u.Every, u.Timeout, u.ReportEvery, u.HighPercent, u.HighPercentSet())
+	}
+
+	num := func(v float64) *float64 { return &v }
+	for _, tc := range []struct {
+		name        string
+		five, seven *float64
+		wantMax     int
+		wantHigh    bool
+	}{
+		{"first 5h band, 7d unreported", num(20), nil, 12, false},
+		{"first 5h + first 7d takes min", num(20), num(40), 10, false},
+		{"boundary 50 enters second 5h band", num(50), num(40), 4, false},
+		{"second 7d band caps first 5h band", num(20), num(75), 3, false},
+		{"third 5h band yields ceiling 2", num(85), num(40), 2, false},
+		{"past last 7d band yields 0 without high", num(20), num(90), 0, false},
+		{"at highPercent triggers USAGE HIGH", num(95), num(40), 0, true},
+		{"above 100 triggers USAGE HIGH", num(102.5), num(40), 0, true},
+	} {
+		got, high := c.Capacity.Derive(tc.five, tc.seven)
+		if got.Ceiling != tc.wantMax || high != tc.wantHigh {
+			t.Errorf("%s: got (%d, high=%v), want (%d, high=%v)",
+				tc.name, got.Ceiling, high, tc.wantMax, tc.wantHigh)
+		}
+	}
+
+	// An explicit top-level ceiling (such as capacity.ceiling: 0) still caps the bands.
+	paused, err := Load(writeTemp(t, "capacity:\n  ceiling: 0\n  usage:\n    command: [reader]\n    fiveHour: [{upTo: 80, floor: 3, ceiling: 6}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, high := paused.Capacity.Derive(num(10), nil); got.Ceiling != 0 || high {
+		t.Errorf("explicit ceiling 0 with band: got (%d, high=%v), want (0, false)", got.Ceiling, high)
+	}
+
+	// Negative reportEvery turns periodic USAGE watch lines off without failing validation.
+	quiet, err := Load(writeTemp(t, "capacity: {usage: {command: [reader], reportEvery: -1m, highPercent: 98}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quiet.Capacity.Usage.ReportEvery.Duration >= 0 || !quiet.Capacity.Usage.HighPercentSet() || quiet.Capacity.Usage.HighPercent != 98 {
+		t.Errorf("quiet usage = %+v", quiet.Capacity.Usage)
+	}
+	if got, high := quiet.Capacity.Derive(num(96), nil); got.Ceiling != DefaultCeiling || high {
+		t.Errorf("no bands below custom highPercent 98: got (%d, high=%v)", got.Ceiling, high)
+	}
+	if got, high := quiet.Capacity.Derive(num(98), nil); got.Ceiling != 0 || !high {
+		t.Errorf("at custom highPercent 98: got (%d, high=%v)", got.Ceiling, high)
+	}
+}
+
+func TestCapacityProvidersAndChoices(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `capacity:
+  ceiling: 10
+  providers:
+    claude:
+      ceiling: 10
+      command: ["~/bin/claude-usage"]
+      staleAfter: 15m
+      fiveHourMax: 90
+      sevenDayMax: 99
+      paceMargin: 2
+      fiveHour:
+        - {upTo: 70, ceiling: 10}
+        - {upTo: 85, ceiling: 4}
+        - {upTo: 95, ceiling: 1}
+      sevenDay:
+        - {upTo: 85, ceiling: 10}
+        - {upTo: 95, ceiling: 3}
+      paceCaps:
+        - {overBy: 5, ceiling: 3}
+        - {overBy: 10, ceiling: 1}
+    agy:
+      ceiling: 2
+      fiveHourMax: 90
+      sevenDayMax: 99
+  choices:
+    - {harness: claude, model: claude-opus-4-7}
+    - {harness: agy, model: claude-opus-4-6-thinking}
+    - {harness: agy, model: gemini-3-1-pro-high, skipPace: true, sevenDayMax: 80}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		provClaude = "claude"
+		provAgy    = "agy"
+	)
+	if got := c.Capacity.ProviderNames(); !slices.Equal(got, []string{provClaude, provAgy}) {
+		t.Fatalf("ProviderNames = %v, want [claude agy]", got)
+	}
+	cl := c.Capacity.Providers[provClaude]
+	if cl.Command[0] != filepath.Join(home, "bin", "claude-usage") || cl.EffectiveStaleAfter() != 15*time.Minute {
+		t.Errorf("claude provider = %+v", cl)
+	}
+	agy := c.Capacity.Providers[provAgy]
+	if agy.Ceiling != 2 || !slices.Equal(agy.Command, DefaultAgyUsageCommand) {
+		t.Errorf("agy provider = %+v", agy)
+	}
+	if got := c.Capacity.Choices[0]; got.EffectiveProvider() != provClaude || got.EffectivePaceMargin(cl) != 2 {
+		t.Errorf("choice[0] = %+v", got)
+	}
+	if got := c.Capacity.Choices[1]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyClaudeBucket {
+		t.Errorf("choice[1] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
+	}
+	if got := c.Capacity.Choices[2]; got.EffectiveProvider() != provAgy || got.EffectiveBucket(agy) != DefaultAgyGeminiBucket || !got.SkipPace {
+		t.Errorf("choice[2] = %+v (bucket %q)", got, got.EffectiveBucket(agy))
+	}
+	if max7d, ok := c.Capacity.Choices[2].EffectiveWorkerSevenDayMax(); !ok || max7d != 80 {
+		t.Errorf("choice[2] worker sevenDayMax = %g, %v", max7d, ok)
+	}
+
+	num := func(v float64) *float64 { return &v }
+	// PaceCaps lower claude's ceiling when 7d is ahead of pace by >= 5% or >= 10%.
+	if dp, high := cl.DeriveWithPace(num(20), num(56), num(50)); dp.Ceiling != 3 || high {
+		t.Errorf("paceCap +6%%: got (%d, high=%v), want (3, false)", dp.Ceiling, high)
+	}
+	if dp, high := cl.DeriveWithPace(num(20), num(61), num(50)); dp.Ceiling != 1 || high {
+		t.Errorf("paceCap +11%%: got (%d, high=%v), want (1, false)", dp.Ceiling, high)
+	}
+	// fiveHourMax (90) yields 0 without high (< 95); at 95 high is true.
+	if dp, high := cl.DeriveWithPace(num(91), num(40), num(50)); dp.Ceiling != 0 || high {
+		t.Errorf("at fiveHourMax 91%%: got (%d, high=%v), want (0, false)", dp.Ceiling, high)
+	}
+	if dp, high := cl.DeriveWithPace(num(95), num(40), num(50)); dp.Ceiling != 0 || !high {
+		t.Errorf("at highPercent 95%%: got (%d, high=%v), want (0, true)", dp.Ceiling, high)
+	}
+
+	// A self-hosted provider fails closed: no subscription fields, no
+	// half-configured serving mode, no subscription choice on it, and its
+	// ceiling follows a ~/ serveModeCommand.
+	t.Run("self-hosted rejections", func(t *testing.T) {
+		for name, raw := range map[string]string{
+			"with a usage command":    "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      command: [r]\n",
+			"with a usage threshold":  "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      fiveHourMax: 90\n",
+			"with buckets":            "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      buckets: {m: b}\n",
+			"negative serve stale":    "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 2}\n      serveModeStaleAfter: -1m\n",
+			"empty mode name":         "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {\" \": 2}\n",
+			"negative mode ceiling":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: -1}\n",
+			"command without modes":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n",
+			"modes without command":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCeilings: {full: 2}\n",
+			"modes without switch":    "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeModes: {full: {sessions: 2}}\n",
+			"switch without reader":   "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeSwitchCommand: [s]\n      serveModeModes: {full: {sessions: 2}}\n",
+			"negative switch timeout": "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 2}\n      serveModeSwitchTimeout: -1m\n",
+			"serve mode on claude":    "capacity:\n  providers:\n    claude:\n      ceiling: 2\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 2}\n",
+			"modes on claude":         "capacity:\n  providers:\n    claude:\n      ceiling: 2\n      serveModeModes: {full: {sessions: 2}}\n",
+			"switch timeout on agy":   "capacity:\n  providers:\n    agy:\n      ceiling: 2\n      serveModeSwitchTimeout: 5m\n",
+			"claude choice on local":  "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: claude, model: m, provider: local-model}\n",
+			"claude as self-hosted":   "capacity:\n  providers:\n    claude: {kind: self-hosted, ceiling: 2}\n",
+			"agy as self-hosted":      "capacity:\n  providers:\n    agy: {kind: self-hosted, ceiling: 2}\n",
+			"codex as self-hosted":    "capacity:\n  providers:\n    codex: {kind: self-hosted, ceiling: 2}\n",
+			"agy choice on local":     "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: agy, model: m, provider: local-model}\n",
+			"codex choice on local":   "capacity:\n  providers:\n    local-model: {kind: self-hosted, ceiling: 2}\n  choices:\n    - {harness: codex, model: m, provider: local-model}\n",
+		} {
+			if _, err := Load(writeTemp(t, raw)); err == nil {
+				t.Errorf("%s: loaded invalid config", name)
+			}
+		}
+	})
+	t.Run("self-hosted defaults", func(t *testing.T) {
+		raw := "capacity:\n  ceiling: 10\n  providers:\n    local-model:\n      kind: self-hosted\n      serveModeCommand: [\"~/bin/read-serve-mode\"]\n      serveModeCeilings: {full: 3}\n"
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers["local-model"]
+		if p.Ceiling != 10 {
+			t.Errorf("self-hosted ceiling = %d, want the configured 10", p.Ceiling)
+		}
+		if p.ServeModeCommand[0] != filepath.Join(home, "bin", "read-serve-mode") {
+			t.Errorf("serveModeCommand = %v, want the home-expanded path", p.ServeModeCommand)
+		}
+		clRaw := "capacity:\n  providers:\n    local-model:\n      kind: self-hosted\n      ceiling: 5\n      serveModeCommand: [r]\n      serveModeCeilings: {full: 5, tiny: 1}\n"
+		cc, err := Load(writeTemp(t, clRaw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp := cc.Capacity.Providers["local-model"]
+		if got := cp.WithServeMode(ServeModeReading{Mode: "tiny"}); got.Ceiling != 1 {
+			t.Errorf("WithServeMode(tiny) = %d, want 1", got.Ceiling)
+		}
+		// An unknown mode keeps the configured ceiling.
+		if got := cp.WithServeMode(ServeModeReading{Mode: "other"}); got.Ceiling != 5 {
+			t.Errorf("WithServeMode(unknown) = %d, want 5", got.Ceiling)
+		}
+	})
+
+	for name, bad := range map[string]string{
+		"unknown provider in choice": "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: agy, model: m}\n",
+		"choices without providers":  "capacity:\n  choices:\n    - {harness: claude, model: m}\n",
+		"missing model in choice":    "capacity:\n  providers:\n    claude: {command: [r]}\n  choices:\n    - {harness: claude}\n",
+		"provider without command":   "capacity:\n  providers:\n    custom: {fiveHourMax: 90}\n",
+		"descending paceCaps":        "capacity:\n  providers:\n    claude:\n      command: [r]\n      paceCaps:\n        - {overBy: 10, ceiling: 2}\n        - {overBy: 5, ceiling: 1}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeTemp(t, bad)); err == nil {
+				t.Errorf("%s: loaded invalid config", name)
+			}
+		})
+	}
+}
+
+func TestReviewHeadroomConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+		bad   bool
+	}{
+		{"0", 0, false}, {"3", 3, false}, {"-1", 0, true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("capacity:\n  reviewHeadroom: "+tc.value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.reviewHeadroom") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Capacity.ReviewHeadroom != tc.want {
+				t.Fatalf("headroom %d, want %d", c.Capacity.ReviewHeadroom, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaudeUsageDefault(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {claude: {}}}\n", "capacity: {providers: {claude: {ceiling: 2}}}\n"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[ClaudeHarness]
+		if !slices.Equal(p.Command, DefaultClaudeUsageCommand) || !p.Enabled() || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("claude default: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {claude: {command: [custom-reader]}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Capacity.Providers[ClaudeHarness].Command; !slices.Equal(got, []string{"custom-reader"}) {
+		t.Fatal(got)
+	}
+	c, err = Load(writeTemp(t, "{}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[ClaudeHarness]; ok {
+		t.Fatal("created an unconfigured Claude provider")
+	}
+}
+
+// A provider with only thresholds and a ceiling must receive its default
+// command before validation, just like an empty provider entry.
+func TestClaudeUsageDefaultWithThresholds(t *testing.T) {
+	const raw = `capacity:
+  ceiling: 14
+  providers:
+    claude:
+      ceiling: 10
+      fiveHourMax: 90
+      sevenDayMax: 97
+    codex:
+      ceiling: 6
+      fiveHourMax: 92
+      sevenDayMax: 97
+  choices:
+    - {harness: claude, model: claude-opus-5-5}
+    - {harness: codex, model: gpt-6.1-sol}
+`
+	c, err := Load(writeTemp(t, raw))
+	if err != nil {
+		t.Fatalf("threshold-only provider must validate: %v", err)
+	}
+	claude := c.Capacity.Providers[ClaudeHarness]
+	if !claude.Enabled() || !slices.Equal(claude.Command, DefaultClaudeUsageCommand) {
+		t.Fatalf("threshold-only Claude provider did not use /usage default: %+v", claude)
+	}
+	if claude.Ceiling != 10 || claude.FiveHourMax != 90 || claude.SevenDayMax != 97 {
+		t.Fatalf("Claude thresholds were changed by defaulting: %+v", claude)
+	}
+	codex := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(codex.Command, DefaultCodexUsageCommand) || codex.Ceiling != 6 || codex.FiveHourMax != 92 || codex.SevenDayMax != 97 {
+		t.Fatalf("Codex defaults or thresholds: %+v", codex)
+	}
+	if c.Capacity.Ceiling != 14 || len(c.Capacity.Choices) != 2 ||
+		c.Capacity.Choices[0].Harness != ClaudeHarness || c.Capacity.Choices[0].Model != "claude-opus-5-5" ||
+		c.Capacity.Choices[1].Harness != CodexHarness || c.Capacity.Choices[1].Model != "gpt-6.1-sol" {
+		t.Fatalf("capacity choices or total bounds changed: %+v", c.Capacity)
+	}
+}
+
+func TestSupervisorFillRetryEvery(t *testing.T) {
+	for _, test := range []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"supervisor: {}", 5 * time.Minute},
+		{"supervisor: {fillRetryEvery: 2m}", 2 * time.Minute},
+	} {
+		c, err := Load(writeTemp(t, test.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Supervisor.FillRetryEvery.Duration; got != test.want {
+			t.Fatalf("fill retry %s, want %s", got, test.want)
+		}
+	}
+}
+
+// An explicit environment path must never select the default state when absent.
+func TestMissingEnvironmentConfig(t *testing.T) {
+	const missingCase = "missing"
+	for _, value := range []string{missingCase, emptyCase, unsetCase} {
+		t.Run(value, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("HOME", root)
+			t.Setenv("APPDATA", root)
+			t.Setenv("XDG_CONFIG_HOME", root)
+			t.Setenv("XDG_STATE_HOME", root)
+			missing := filepath.Join(root, "missing.yaml")
+			t.Setenv("BEEKEEPER_CONFIG", "")
+			switch value {
+			case missingCase:
+				t.Setenv("BEEKEEPER_CONFIG", missing)
+			case unsetCase:
+				if err := os.Unsetenv("BEEKEEPER_CONFIG"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path, err := Path("")
+			if value == missingCase {
+				if err == nil || !strings.Contains(err.Error(), missing) {
+					t.Fatalf("Path = %q, %v; want missing path error", path, err)
+				}
+				path = missing // Also check direct loads and a file removed after path resolution.
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if value == missingCase {
+				if err == nil || !strings.Contains(err.Error(), missing) || cfg != nil {
+					t.Fatalf("Load = %v, %v; want missing path error and no config", cfg, err)
+				}
+			} else if err != nil || cfg.StateDir != filepath.Join(root, "beekeeper") {
+				t.Fatalf("default Load = %v, %v", cfg, err)
+			}
+		})
+	}
+}
+
+// capacity.local.ceiling is the coordinator machine's own cap: unset means
+// none, 0 is honoured and a negative one is refused.
+func TestCapacityLocalCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		yaml  string
+		want  int
+		set   bool
+		bad   bool
+		label string
+	}{
+		{label: "unset", yaml: "capacity:\n  ceiling: 14\n"},
+		{label: "zero", yaml: "capacity:\n  local:\n    ceiling: 0\n", want: 0, set: true},
+		{label: "five", yaml: "capacity:\n  ceiling: 14\n  local:\n    ceiling: 5\n", want: 5, set: true},
+		{label: "negative", yaml: "capacity:\n  local:\n    ceiling: -1\n", bad: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			if tc.bad {
+				if err == nil || !strings.Contains(err.Error(), "capacity.local.ceiling") {
+					t.Fatalf("validation = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, ok := c.Capacity.Local.Limit(); n != tc.want || ok != tc.set {
+				t.Fatalf("local ceiling %d (set %v), want %d (set %v)", n, ok, tc.want, tc.set)
+			}
+		})
+	}
+}
+
+func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
+	for _, raw := range []string{"capacity: {providers: {codex: {ceiling: 2}}}", "capacity: {providers: {codex: {}}}"} {
+		c, err := Load(writeTemp(t, raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := c.Capacity.Providers[CodexHarness]
+		if !p.Enabled() || !slices.Equal(p.Command, DefaultCodexUsageCommand) || p.EffectiveEvery() != DefaultUsageEvery {
+			t.Fatalf("Codex default reader missing: %+v", p)
+		}
+	}
+	c, err := Load(writeTemp(t, "capacity: {providers: {codex: {ceiling: 2, command: [custom-reader]}}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Capacity.Providers[CodexHarness]
+	if !slices.Equal(p.Command, []string{"custom-reader"}) || p.Ceiling != 2 {
+		t.Fatalf("explicit Codex settings changed: %+v", p)
+	}
+	c, err = Load(writeTemp(t, "{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Capacity.Providers[CodexHarness]; ok {
+		t.Fatal("created an unconfigured Codex provider")
+	}
+}
+
+func TestWatchBatchInterval(t *testing.T) {
+	for _, value := range []string{"1m", "-1s"} {
+		c, err := parse("test.yaml", []byte("watch: {batchInterval: "+value+"}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := time.ParseDuration(value)
+		if c.Watch.BatchInterval.Duration != want {
+			t.Errorf("batch interval = %s, want %s", c.Watch.BatchInterval, want)
 		}
 	}
 }

@@ -19,6 +19,7 @@ const (
 	probeHolds = "true"
 	probeFails = "false"
 	prMerged7  = "pr-merged o/r#7"
+	bk228      = "BK 228"
 )
 
 func TestTimerConditionsProbeTheirReference(t *testing.T) {
@@ -75,6 +76,8 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 // once, and closes.
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.doctoring.Store(true) // the doctor is not under test; its goroutine outlives the watch
+	w.chores = true         // a running watch, not --once
 	merged := false
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if !strings.Contains(cmd, "repos/o/r/pulls/7") {
@@ -90,8 +93,8 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	}
 	t.Cleanup(func() { wakeOwner = wasWake })
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: "BK 228"}}}
-		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: "BK 228", What: "rebase on it"}}
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
+		st.Timers = []state.Timer{{ID: 1, Due: relayNow.Add(-time.Minute), When: prMerged7, Wake: bk228, What: "rebase on it"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -115,6 +118,68 @@ func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `TIMER: #1, pr-merged o/r#7 holds: waking "BK 228": rebase on it`) {
 		t.Fatalf("watch said %q", out.String())
+	}
+}
+
+// watch --once is a look: a due timer it finds is a line marked that --once
+// writes nothing, and its agent is not woken, its command not run and the
+// timer neither closed nor re-armed nor checked.
+func TestWatchOnceFiresNoTimer(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.chores = false // --once
+	fakeRead(t, func(cmd string) ([]byte, error) { return []byte("true\n"), nil })
+	var woke []string
+	wasWake := wakeOwner
+	wakeOwner = func(_ *app, _ context.Context, _ state.Party, q, msg, _ string) error {
+		woke = append(woke, q+": "+msg)
+		return nil
+	}
+	t.Cleanup(func() { wakeOwner = wasWake })
+	ran := filepath.Join(t.TempDir(), "ran")
+	past := relayNow.Add(-time.Minute)
+	timers := []state.Timer{
+		{ID: 1, Due: past, When: prMerged7, Wake: bk228, What: "rebase on it"},
+		{ID: 2, Due: past, Wake: bk228, What: "check again"},
+		{ID: 3, Due: past, Run: "touch " + ran, What: "resume"},
+		{ID: 4, Due: past, Wake: bk228, Repeat: "daily", What: "standup"},
+		{ID: 5, Due: past, Probe: probeFails, Checked: relayNow, Every: time.Hour, Until: relayNow, Expire: true, What: "moot"},
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Session: "s9", Name: bk228}}}
+		st.Timers = timers
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.pending(context.Background(), []*claude.Session{})
+	w.timerActs.Wait()
+	if len(woke) != 0 {
+		t.Fatalf("--once woke %q", woke)
+	}
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("--once ran a timer's command")
+	}
+	st, _ := w.store.Read()
+	if len(st.Timers) != len(timers) {
+		t.Fatalf("--once settled timers: %+v", st.Timers)
+	}
+	for i, x := range st.Timers {
+		if !x.Due.Equal(timers[i].Due) || !x.Checked.Equal(timers[i].Checked) {
+			t.Errorf("--once changed timer #%d: %+v", x.ID, x)
+		}
+	}
+	if evs, _ := w.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "timer.") }); len(evs) != 0 {
+		t.Errorf("--once logged %+v", evs)
+	}
+	for _, want := range []string{
+		`TIMER (--once writes nothing): #1, pr-merged o/r#7 holds: waking "BK 228": rebase on it`,
+		`TIMER (--once writes nothing): #2, due`,
+		`TIMER (--once writes nothing): #3, due`,
+		`TIMER EXPIRED (--once writes nothing): #5,`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("--once did not say %q in %q", want, out.String())
+		}
 	}
 }
 
@@ -188,7 +253,7 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 	if err != nil || tm.When != prMerged7 || !tm.Until.Equal(relayNow.Add(2*time.Hour).UTC()) {
 		t.Fatalf("%+v, %v", tm, err)
 	}
-	if s := timerWhen(relayNow, tm); s != "from 02:01 when pr-merged o/r#7, until 04:00 (then expires)" {
+	if s, z := timerWhen(relayNow, tm), relayNow.Format("MST"); s != "from 02:01 "+z+" when pr-merged o/r#7, until 04:00 "+z+" (then expires)" {
 		t.Errorf("when %q", s)
 	}
 }
@@ -238,7 +303,7 @@ func TestTimerAddRefusesARepeatThatCannotFire(t *testing.T) {
 	if err != nil || !tm.Due.Equal(relayNow.AddDate(0, 0, 3).UTC()) {
 		t.Fatalf("%+v, %v", tm, err)
 	}
-	if s := timerWhen(relayNow, tm); s != "at Sep 28 02:00, runs `true`, repeats weekdays" {
+	if s := timerWhen(relayNow, tm); s != "at Sep 28 02:00 "+relayNow.Format("MST")+", runs `true`, repeats weekdays" {
 		t.Errorf("when %q", s)
 	}
 }
@@ -271,5 +336,51 @@ func TestTimerNotHoldingForADayIsOneWatchLine(t *testing.T) {
 	}
 	if s := lastCheck(day, st.Timers[0]); !strings.HasPrefix(s, "not held since Sep 25 02:00; checked") {
 		t.Errorf("list -v %q", s)
+	}
+}
+
+// A timer that fires more than one tick past its time says how late it is
+// and what held it, its due time and its firing in one zone: a stop it was
+// held by, or no tick at all between its time and its firing.
+func TestTimerFiredLateSaysHowLateAndWhy(t *testing.T) {
+	z := relayNow.Format("MST")
+	due := relayNow.Add(-14 * time.Minute)
+	st := &state.State{
+		Stop: &state.Stop{At: due.Add(-time.Minute)},
+		Timers: []state.Timer{
+			{ID: 1, Due: due, Run: probeHolds, What: "overview"},
+			{ID: 2, Due: due, Wake: "a", What: "summary"},
+			{ID: 3, Due: relayNow.Add(-timerTick), Run: probeHolds, What: "on time"},
+		},
+	}
+	_, _, fires, changed := settleTimers(st, nil, relayNow)
+	if !changed || len(fires) != 2 || len(st.Timers) != 1 {
+		t.Fatalf("while stopped: fires %+v, open %+v", fires, st.Timers)
+	}
+	want := "due 01:46 " + z + ", fired 02:00 " + z + ", 14m late: " + timerHeldDown
+	if fires[0].reason != want || fires[0].late != "14m late: "+timerHeldDown {
+		t.Errorf("down: reason %q, want %q", fires[0].reason, want)
+	}
+	if fires[1].reason != "due 01:59 "+z || fires[1].late != "" {
+		t.Errorf("on time: reason %q, late %q", fires[1].reason, fires[1].late)
+	}
+	if held := st.Timers[0]; held.Held != "held by the beekeeper stop since 01:45 "+z {
+		t.Fatalf("the stop's hold was not recorded: %+v", held)
+	}
+	st.Stop = nil
+	lines, _, fires, _ := settleTimers(st, nil, relayNow.Add(10*time.Minute))
+	if len(fires) != 1 || !strings.Contains(fires[0].message(), "24m late: held by the beekeeper stop since 01:45 "+z) || !strings.Contains(lines[0], "fired 02:10 "+z) {
+		t.Fatalf("after the resume: fires %+v, lines %q", fires, lines)
+	}
+}
+
+// A fired timer's command runs with the timer's id, time and lateness, which
+// an agents start it runs reads.
+func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	due := time.Date(2026, 11, 2, 7, 30, 0, 0, time.UTC)
+	w.runTimer(context.Background(), timerFire{t: state.Timer{ID: 9, Due: due, Run: `echo "$BEEKEEPER_TIMER_ID $BEEKEEPER_TIMER_DUE $BEEKEEPER_TIMER_LATE"`}, late: "14m late: down"})
+	if b, _ := os.ReadFile(filepath.Join(w.store.Dir(), "timers", "9.log")); string(b) != "9 2026-11-02T07:30:00Z 14m late: down\n" {
+		t.Fatalf("the command read %q", b)
 	}
 }

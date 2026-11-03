@@ -312,7 +312,7 @@ func TestReportCheckWithoutConfig(t *testing.T) {
 		return []byte(`{"tool_name":"mcp__claude_ai_Slack__slack_send_message","tool_input":{"channel_id":"U1","message":` + strconv.Quote(msg) + `}}`)
 	}
 	athens, _ := time.LoadLocation("Europe/Athens")
-	a := &app{cfgPath: filepath.Join(t.TempDir(), "none.yaml"), zone: func() (*time.Location, error) { return athens, nil }}
+	a := &app{cfgPath: filepath.Join(t.TempDir(), "none.yaml"), now: time.Date(2026, 9, 25, 2, 30, 0, 0, athens), zone: func() (*time.Location, error) { return athens, nil }}
 	if out := string(a.reportCheck(event("**01:00–02:00 UTC**\nmerged #109"))); !strings.Contains(out, "not a link") || !strings.Contains(out, "EEST") {
 		t.Errorf("no config: %s", out)
 	}

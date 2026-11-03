@@ -71,3 +71,24 @@ func UpdateByRebase(ctx context.Context, run GH, repo string, n int) error {
 	_, err := run(ctx, "pr", "update-branch", strconv.Itoa(n), "--repo", repo, "--rebase")
 	return err
 }
+
+// MergeCommits are the commits of repo#n with more than one parent, oldest
+// first: a base merged into the branch, which a rebase merge would put on
+// the line's linear history. GitHub lists at most 250 commits of a pull
+// request; an error is GitHub not answering.
+func MergeCommits(ctx context.Context, run GH, repo string, n int) ([]string, error) {
+	commits, err := listAll[struct {
+		SHA     string     `json:"sha"`
+		Parents []struct{} `json:"parents"`
+	}](ctx, run, fmt.Sprintf("repos/%s/pulls/%d/commits?per_page=100", repo, n))
+	if err != nil {
+		return nil, err
+	}
+	var merges []string
+	for _, c := range commits {
+		if len(c.Parents) > 1 {
+			merges = append(merges, c.SHA)
+		}
+	}
+	return merges, nil
+}

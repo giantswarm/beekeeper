@@ -20,6 +20,7 @@ func (syncCapper) Available() bool                       { return true }
 func (syncCapper) Capped() bool                          { return false }
 func (syncCapper) Adopt(int, string, platform.Cap) error { return nil }
 func (syncCapper) CapSlot(platform.Cap) error            { return nil }
+func (syncCapper) Reap(string) ([]int, error)            { return nil, nil }
 func (syncCapper) Command(_ string, _ platform.Cap, argv []string) (*exec.Cmd, error) {
 	return exec.Command(argv[0], argv[1:]...), nil //nolint:gosec // the test's own command
 }

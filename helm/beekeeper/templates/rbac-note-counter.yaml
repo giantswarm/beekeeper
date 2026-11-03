@@ -1,0 +1,34 @@
+# In its own namespace beekeeper's ServiceAccount keeps the note counter, the
+# last note number handed out: that one ConfigMap and no other.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "beekeeper.name" . }}-note-counter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["beekeeper-note-counter"]
+    verbs: ["get", "update"]
+  # A create names no object to restrict to.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "beekeeper.name" . }}-note-counter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "beekeeper.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "beekeeper.name" . }}-note-counter
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "beekeeper.name" . }}
+    namespace: {{ .Release.Namespace }}

@@ -30,6 +30,9 @@ const (
 type leaseView struct {
 	lease.Holder
 	State string `json:"state"`
+	// LabConfigState is a held lab's configuration against its claim-time
+	// state (lease status).
+	LabConfigState *labConfigView `json:"labConfigState,omitempty"`
 }
 
 func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
@@ -60,19 +63,17 @@ configuration stands for its kind cluster: the list shows whether that
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
-While a supervisor runs, a free lease is not permission: a session claims
-only what the supervisor granted it, in the order the grants were given. The
-supervisor's ` + "`yours <resource>`" + ` in a message to the session (SendMessage, agents
-wake) records the grant itself; ` + "`beekeeper lease grant`" + ` records one without the
-word. Without a supervisor a free lease is claimed directly. A claim that is
-refused exits 3, naming the grant it lacks: gate the action on it (claim &&
-act), never run the action after a failed claim.
+A free lease is claimed directly: the supervisor is the supervisor loop, and
+no session's grant gates a claim. ` + "`beekeeper lease grant`" + ` queues a session for a
+held resource, so its claim can park on it. A claim that is refused exits 3:
+gate the action on it (claim && act), never run the action after a failed
+claim.
 
 Without a subcommand, lists the leases.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.leaseList() },
 	}
-	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(), a.leaseLabCmd(labUp), a.leaseLabCmd(labDown),
+	c.AddCommand(a.leaseClaimCmd(), a.leaseReleaseCmd(), a.leaseStatusCmd(), a.leaseListCmd(), a.leaseKubeconfigCmd(), a.leaseLabCmd(labUp), a.leaseLabCmd(labDown), a.leaseResumeCmd(),
 		a.leaseGrantCmd(), a.leaseRevokeCmd())
 	return c
 }
@@ -93,9 +94,69 @@ func heldMap(holders []lease.Holder) map[string]bool {
 	return m
 }
 
-// supervision reads st's supervisor with the configured restart grace.
-func (a *app) supervision(st *state.State, sessions []*claude.Session) supervision {
-	return readSupervision(st, sessions, a.now, a.cfg.Supervisor.RestartGrace.Duration)
+// servedNode says whether res names a node some self-hosted provider's
+// serving modes occupy: its claim is the constraint "needs node N
+// exclusively", and the claim's gate runs before the machine's model moves.
+func (a *app) servedNode(res string) bool {
+	for _, p := range a.liveCapacity().Providers {
+		for _, m := range p.ServeModeModes {
+			if slices.Contains(m.Nodes, res) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// claimGateOpen says whether the claim of res would pass the lease's gate
+// right now, read without holding the state's lock: the machine's model
+// drains and switches for a claim only once its gate stands, so a caller
+// queued behind an earlier grant or under an upgrade hold never takes the model down for a lease it will not get. The
+// claim's own pass repeats the gate under the lock; a caller that stands
+// open here and falls there is refused before any lease record is written.
+func (a *app) claimGateOpen(res string, me state.Party, sessions []*claude.Session) bool {
+	st, err := a.store.Read()
+	if err != nil {
+		return false
+	}
+	_, err = lease.Check(st, lease.Gate{
+		Resource: res,
+		Caller:   me,
+		Held:     false,
+		Now:      a.now,
+		TTL:      a.cfg.GrantTTL.Duration,
+	})
+	return err == nil
+}
+
+// serveModeWaitLine is the machine's line of a claim waiting behind the
+// constraint of a node another party holds: the drain the constraint asked
+// for, or the narrow mode it left the model in. waits says whether a
+// serving-mode constraint stands on the node at all.
+func (a *app) serveModeWaitLine(res string) (string, bool) {
+	k := a.liveCapacity()
+	held := slices.DeleteFunc(a.serveModeHeldNodes(), func(n string) bool { return n == a.serveModeSwitching })
+	for _, name := range k.ProviderNames() {
+		p := k.Providers[name]
+		if !p.HasServeModeSwitch() || len(p.ServeModeModes) == 0 {
+			continue
+		}
+		onNode := false
+		for _, m := range p.ServeModeModes {
+			if slices.Contains(m.Nodes, res) {
+				onNode = true
+			}
+		}
+		if !onNode || !slices.Contains(held, res) {
+			continue
+		}
+		r := a.serveMode(context.Background(), name, p)
+		if pnd, err := a.pendingServeMode(name); err == nil && pnd.Pending != "" && !strings.EqualFold(pnd.Pending, r.Mode) {
+			return fmt.Sprintf("%s: node %s waits behind the constraint already asked for (the model drains to %s)", name, res, pnd.Pending), true
+		}
+		return fmt.Sprintf("%s: node %s waits behind the constraint already asked for (the model runs %s)", name, res, r.Mode), true
+	}
+	return "", false
 }
 
 func (a *app) leaseClaimCmd() *cobra.Command {
@@ -189,6 +250,12 @@ model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 				return err
 			}
 			if a.cfg.LabCluster(res) != "" {
+				if err := a.resumeLab(cmd.Context(), res); err != nil {
+					return fmt.Errorf("%s is held by you, but its kind nodes could not be started (retry the claim): %w", res, err)
+				}
+				if lab := a.claimedLab(res); strings.Contains(lab, ", running)") {
+					msg = strings.Replace(msg, " (kind cluster "+a.cfg.LabCluster(res)+", not running)", lab, 1)
+				}
 				msg += a.claimKubeconfig(cmd.Context(), res)
 			}
 			_, err = fmt.Fprintln(a.out, msg)
@@ -210,43 +277,90 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		return "", err
 	}
 	lab := a.claimedLab(res)
+	var labCfg *lease.LabConfig
+	var labRaw []byte
+	var labNote string
+	if a.cfg.LabCluster(res) != "" {
+		if labCfg, labRaw, err = a.readLabConfig(res); err != nil {
+			labNote = fmt.Sprintf("\nagentlab.yaml not recorded (%v): the release compares nothing", err)
+		}
+	}
 	dir := lease.Dir(a.cfg.LeaseDir)
+	// A node a self-hosted mode occupies is a constraint. The claim's gate
+	// runs first, on a read-only pass: a caller that stands queued behind
+	// an earlier grant or under an upgrade hold, and a caller whose node another party holds, never lower the
+	// model's ceiling, never drain it and never take it down for a lease
+	// they will not get. Only with the gate standing does the model drain
+	// and the platform's own switch run; the claim's own pass re-checks
+	// the gate under the write lock. A switch that fails refuses the
+	// claim; the mode stands as the command reports it.
+	var modeLine string
+	var modeEvs []state.Event
+	if a.servedNode(res) {
+		// The node's constraint runs up to and past the lease's own gate:
+		// a holder of the node stands behind the drain its constraint
+		// asked for (prepare says the very refusal), and a caller queued
+		// behind an earlier grant or under an upgrade hold drains nothing — the gate open check reads the
+		// grants without the state's lock, so the model's reader and the
+		// platform's switch command never run under it. The claim's own
+		// pass repeats the gate and the holder check under the lock.
+		held, _ := dir.Get(res)
+		if held != nil && !held.Party().Is(me) {
+			// Another party holds the node: the claim waits behind its
+			// constraint, and prepare's own lines say so.
+			var werr error
+			modeLine, modeEvs, werr = a.prepareServeModeClaim(res)
+			if werr != nil {
+				return "", werr
+			}
+		} else if held == nil && a.claimGateOpen(res, me, sessions) {
+			var perr error
+			modeLine, modeEvs, perr = a.prepareServeModeClaim(res)
+			if perr != nil {
+				return "", perr
+			}
+		}
+	}
 	var msg string
-	var refusal error
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		delete(st.LabIdle, res)
 		holders, err := dir.List()
 		if err != nil {
 			return nil, err
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-		// What this claim saw of the supervisor's CLI is kept even
-		// when it is refused: the restart grace runs from it.
-		seen, evs := observeCLI(st, sessions, a.now)
-		refuse := func(err error) ([]state.Event, error) {
-			if !seen {
-				return nil, err
-			}
-			refusal = err
-			return evs, nil
-		}
+		var evs []state.Event
+		refuse := func(err error) ([]state.Event, error) { return nil, err }
 		if cur, _ := dir.Get(res); cur != nil {
 			if cur.Party().Is(me) {
+				// The holder's own retry: with the switch already run
+				// above, the claim completes; without one, the node was
+				// the caller's already.
+				if modeLine != "" {
+					msg = fmt.Sprintf("held by you since %s: %s is yours; %s", clock(a.now, cur.SinceTime()), res+lab, strings.TrimPrefix(modeLine, "; "))
+					return append(evs, modeEvs...), nil
+				}
 				msg = fmt.Sprintf("held by you since %s: %s was yours already", clock(a.now, cur.SinceTime()), res+lab)
 				return evs, nil
 			}
+			// Another party holds the node: its constraint stands, and
+			// the claim waits behind it — the drain's own refusal said
+			// so above, and a machine already in the narrow mode says it
+			// here, before the lease's own queue.
+			if a.servedNode(res) {
+				if why, waits := a.serveModeWaitLine(res); waits {
+					return refuse(&claimRefusal{res: res, why: why})
+				}
+			}
 			return refuse(a.claimHeld(st, me, sessions, *cur))
 		}
-		sv := a.supervision(st, sessions)
 		idx, err := lease.Check(st, lease.Gate{
-			Resource:     res,
-			Caller:       me,
-			Supervisor:   sv.sup,
-			RestartUntil: sv.until,
-			Gone:         sv.down(),
-			Held:         false,
-			Now:          a.now,
-			TTL:          a.cfg.GrantTTL.Duration,
+			Resource: res,
+			Caller:   me,
+			Held:     false,
+			Now:      a.now,
+			TTL:      a.cfg.GrantTTL.Duration,
 		})
 		if r := (*lease.Refusal)(nil); errors.As(err, &r) {
 			if r.Position > 0 {
@@ -259,6 +373,10 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		var unblock string
 		if idx >= 0 {
 			unblock = st.Grants[idx].UpgradeUnblock
+		}
+		change, err := dir.LabChangeOf(res)
+		if err != nil {
+			return nil, err
 		}
 		host, _ := os.Hostname()
 		cur, err := dir.Claim(res, lease.Holder{
@@ -275,6 +393,8 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 
 			UpgradeUnblock: unblock,
 			BudgetGiB:      budget,
+			LabConfig:      labCfg,
+			LabChange:      change,
 		})
 		if err != nil {
 			return nil, err
@@ -286,21 +406,41 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
 		msg = fmt.Sprintf("held by you since %s: claimed %s", clock(a.now, a.now), res+lab)
+		if labRaw != nil {
+			if err := dir.KeepLabConfig(res, labRaw); err != nil {
+				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)
+			}
+		}
+		if change != nil {
+			if err := dir.DropLabChange(res); err != nil {
+				return nil, err
+			}
+			msg += "\nagentlab.yaml was " + change.Text()
+		}
+		msg += labNote
 		if budget > 0 {
 			msg += fmt.Sprintf(" with a budget of %d GiB: use models within it, with keep_alive 0, and release it when done", budget)
-			return append(evs, event(me, verbLeaseClaim, "%s: %s (%d GiB)", res, purpose, budget)), nil
+			return append(append(evs, modeEvs...), event(me, verbLeaseClaim, "%s: %s (%d GiB)%s", res, purpose, budget, modeLine)), nil
 		}
 		if unblock != "" {
 			msg += " to unblock its upgrade: " + unblock
-			return append(evs, event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)", res, purpose, unblock)), nil
+			return append(append(evs, modeEvs...), event(me, verbLeaseClaim, "%s: %s (upgrade unblock: %s)%s", res, purpose, unblock, modeLine)), nil
 		}
-		return append(evs, event(me, verbLeaseClaim, "%s: %s", res, purpose)), nil
+		if modeLine != "" {
+			msg += modeLine
+			evs = append(evs, modeEvs...)
+		}
+		return append(evs, event(me, verbLeaseClaim, "%s: %s%s", res, purpose, modeLine)), nil
 	})
-	if err == nil {
-		err = refusal
-	}
 	return msg, err
 }
+
+// supervising says whether me acts with the supervisor's authority (the
+// grant queue, merge authorizations): a caller with no session, that is the
+// supervisor loop or a person (--as), never a session. caller() stamps the
+// configured person, team and host on every party, so the loop's own
+// --as calls are matched by that, not by equality with loopParty.
+func supervising(me state.Party) bool { return me.Session == "" && me.HostSession == "" }
 
 // claimBudget is the GiB a claim of res carries: set only on the model
 // server, within its maximum.
@@ -332,7 +472,7 @@ const claimWaitMax = 9 * time.Minute
 // grant to wait on.
 func (a *app) parkClaim(me state.Party, r *claimRefusal, purpose string) string {
 	if !r.queued {
-		return fmt.Sprintf("not parked: no grant of %s to you waits; ask the supervisor `need %s` first", r.res, r.res)
+		return fmt.Sprintf("not parked: no grant of %s to you waits; `beekeeper lease grant %s <you>` queues you first", r.res, r.res)
 	}
 	line, err := a.park(me, leaseParkOn(r.res), fmt.Sprintf("the lease %s: %s", r.res, oneLine(purpose)))
 	if err != nil {
@@ -401,7 +541,8 @@ func (a *app) heldBy(v leaseView) error {
 }
 
 func (a *app) leaseReleaseCmd() *cobra.Command {
-	var force bool
+	var force, restore bool
+	var keep string
 	c := &cobra.Command{
 		Use:   "release <resource>",
 		Short: "Release a resource you hold, or withdraw your queued grant of it (--force frees another holder's)",
@@ -409,12 +550,28 @@ func (a *app) leaseReleaseCmd() *cobra.Command {
 queued behind its holder or earlier grants, is withdrawn instead: your grant
 leaves its queue, your park on it (lease claim --park) ends, and the next
 grant moves up. --force frees the lease of another holder whose session is
-gone; it withdraws nothing.`,
+gone; it withdraws nothing.
+
+A lab's claim keeps its agentlab.yaml, and its release compares the lab's
+configuration with it. A change is refused, naming the keys that differ,
+until --restore puts the claim-time agentlab.yaml back (the released one is
+kept beside it as agentlab.yaml.released) or --keep-config "<why>" declares
+it; a declared change, and one a --force release found, is shown to the
+lab's next claim.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
+			}
+			keep = strings.TrimSpace(keep)
+			switch {
+			case cmd.Flags().Changed("keep-config") && keep == "":
+				return usageErr("--keep-config needs the reason: why the next holder gets the changed configuration")
+			case restore && keep != "":
+				return usageErr("--restore puts the claim-time agentlab.yaml back, --keep-config keeps the change: one of them")
+			case (restore || keep != "") && a.cfg.LabCluster(res) == "":
+				return usageErr("--restore and --keep-config settle a lab's agentlab.yaml: %s is not a lab", res)
 			}
 			if a.cfg.IsCentral(res) {
 				return a.releaseCentral(res, force)
@@ -444,6 +601,10 @@ gone; it withdraws nothing.`,
 				if !mine && !force {
 					return nil, refused("%s is held by %q, not by you, and no grant of it to you waits: only --force frees another holder's lease", res, cur.Name)
 				}
+				labLine, err := a.labRelease(dir, *cur, me, restore, keep, force)
+				if err != nil {
+					return nil, err
+				}
 				if err := dir.Release(res); err != nil {
 					return nil, err
 				}
@@ -453,19 +614,31 @@ gone; it withdraws nothing.`,
 				st.Released[res] = a.now.UTC()
 				msg = "released " + res
 				if !mine {
-					msg += fmt.Sprintf(" (held by %q: %s)", cur.Name, cur.Purpose)
+					msg += fmt.Sprintf(" (held by %q: %s)", cur.Name, cur.Purpose) + labLine
 					return []state.Event{event(me, "lease.force-release", "%s held by %s: %s", res, cur.Name, cur.Purpose)}, nil
 				}
+				msg += labLine
 				return []state.Event{event(me, "lease.release", "%s", res)}, nil
 			})
 			if err != nil {
 				return err
+			}
+			// A node a self-hosted mode occupies is a constraint: once it is
+			// free and no constraint needs it, the model switches back and
+			// its ceiling rises again. The release itself never waits on the
+			// switch: a failing switch back says so, the mode stands as the
+			// command reports it, and the watch retries the request.
+			if servedLine, servedEvs := a.finishServeModeRelease(res); servedLine != "" {
+				msg += servedLine
+				_ = a.store.Record(servedEvs...)
 			}
 			_, err = fmt.Fprintln(a.out, msg)
 			return err
 		},
 	}
 	c.Flags().BoolVar(&force, "force", false, "free a lease another session or person holds (its holder is gone)")
+	c.Flags().BoolVar(&restore, "restore", false, "a lab: put its claim-time agentlab.yaml back before the release")
+	c.Flags().StringVar(&keep, "keep-config", "", "a lab: release it with its changed agentlab.yaml, and say why; the next claim is told")
 	return c
 }
 
@@ -510,7 +683,10 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <resource>",
 		Short: "Say whether a resource is free (exit 0) or held (exit 3)",
-		Args:  cobra.ExactArgs(1),
+		Long: `Say whether a resource is free (exit 0) or held (exit 3). A held lab also
+says whether its agentlab.yaml is at its claim-time state, a free one the
+change its last release left for the next claim.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
@@ -519,12 +695,23 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 			if a.cfg.IsCentral(res) {
 				return a.statusCentral(res)
 			}
-			cur, err := lease.Dir(a.cfg.LeaseDir).Get(res)
+			dir := lease.Dir(a.cfg.LeaseDir)
+			cur, err := dir.Get(res)
 			if err != nil {
 				return err
 			}
 			if cur == nil {
-				_, err := fmt.Fprintln(a.out, "free")
+				var line string
+				if a.cfg.LabCluster(res) != "" {
+					change, err := dir.LabChangeOf(res)
+					if err != nil {
+						return err
+					}
+					if change != nil {
+						line = "; agentlab.yaml was " + change.Text()
+					}
+				}
+				_, err := fmt.Fprintln(a.out, "free"+line)
 				return err
 			}
 			sessions, _, err := a.sessions()
@@ -532,10 +719,18 @@ func (a *app) leaseStatusCmd() *cobra.Command {
 				return err
 			}
 			v := a.leaseView(sessions, *cur)
+			if a.cfg.LabCluster(res) != "" {
+				lc := labConfigOf(dir, *cur)
+				v.LabConfigState = &lc
+			}
 			if a.json {
 				_ = a.printJSON(v)
 			}
-			return a.heldBy(v)
+			err = a.heldBy(v)
+			if v.LabConfigState != nil {
+				err = refused("%s\n%s", err, v.LabConfigState.Text())
+			}
+			return err
 		},
 	}
 }
@@ -644,15 +839,6 @@ func (a *app) printLeases(l *leaseList) {
 	a.printLabs(l.labs)
 }
 
-// purposeText is a lease's purpose, with the upgrade unblock that admitted
-// its claim.
-func purposeText(h lease.Holder) string {
-	if h.UpgradeUnblock == "" {
-		return h.Purpose
-	}
-	return h.Purpose + " (upgrade unblock: " + h.UpgradeUnblock + ")"
-}
-
 // grantee is the session a grant goes to: a running one, else an agent on
 // the roster whose CLI does not run (its headless turn ended, its import
 // waits), whose grant waits for its next turn, with what says so.
@@ -677,13 +863,12 @@ func (a *app) leaseGrantCmd() *cobra.Command {
 	var first bool
 	c := &cobra.Command{
 		Use:   "grant <resource> <session>",
-		Short: "Grant a resource to a session, queued behind earlier grants (--first: ahead of them, as `yours <resource>`)",
-		Long: `Record the supervisor's grant of a resource to a session: the session may
-claim it once it is free and every earlier grant for it is claimed or
-expired. --first puts the grant at the head of the queue, as the
-supervisor's ` + "`yours <resource>`" + ` does: a waiting grant to the session moves
-there, the grants it passes keep their order behind it; while a supervisor
-is recorded, only it gives --first. A grant waits while the resource is
+		Short: "Queue a session for a resource, behind earlier grants (--first: ahead of them)",
+		Long: `Record a grant of a resource to a session: its claim of the held resource
+queues, and parks on it with --park, until the resource is free. --first
+puts the grant at the head of the queue: a waiting grant to the session
+moves there, the grants it passes keep their order behind it; only the
+supervisor loop or a person (--as) gives --first. A grant waits while the resource is
 held; once it is free the grant expires after grantTTL (default 30m). The
 session is a name, a unique part of one, a session id or a PID; a
 registered agent also by its roster name.
@@ -728,7 +913,7 @@ and the log. Such grants are claimed during the upgrade in their order.`,
 		},
 	}
 	c.Flags().StringVar(&unblock, "upgrade-unblock", "", "grant the claim that unblocks the upgrade holding the resource, and say why (supervisor only)")
-	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants, as the supervisor's `yours` does (supervisor only)")
+	c.Flags().BoolVar(&first, "first", false, "put the grant at the head of the resource's queue, ahead of the earlier grants (the supervisor loop or a person only)")
 	return c
 }
 
@@ -747,13 +932,13 @@ func (a *app) grant(me state.Party, res string, to *claude.Session, unblock stri
 		}
 		held := heldMap(holders)
 		lease.Prune(st, held, a.now, a.cfg.GrantTTL.Duration)
-		if sup := st.SupervisorRole().Holder; first && sup != nil && !me.Is(sup.Party) {
-			return nil, refused("only the supervisor %q puts a grant ahead of the queue: grant %s without --first, or ask it for `yours %s`", sup.Name, res, res)
+		if first && !supervising(me) {
+			return nil, refused("only the supervisor loop or a person puts a grant ahead of the queue: grant %s without --first", res)
 		}
 		var hold state.Hold
 		if unblock != "" {
-			if r := st.SupervisorRole(); r.Holder == nil || !r.Holder.Is(me) {
-				return nil, refused("only the supervisor grants an upgrade unblock")
+			if !supervising(me) {
+				return nil, refused("only the supervisor loop or a person grants an upgrade unblock")
 			}
 			var ok bool
 			if hold, ok = upgrade.Held(st, res, a.now); !ok {
@@ -831,10 +1016,10 @@ func (a *app) firstText(res string, held bool) string {
 func (a *app) leaseRevokeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "revoke <resource> <session>",
-		Short: "Withdraw a grant not claimed yet (the supervisor's, or the grantee's own)",
+		Short: "Withdraw a grant not claimed yet (any, as the supervisor loop or a person; else the caller's own)",
 		Long: `Withdraw the grants of a resource to the sessions whose name contains
-<session> (or whose session id it is), not claimed yet. While a supervisor is
-recorded, only it revokes another session's grant; a grantee withdraws its own
+<session> (or whose session id it is), not claimed yet. Only the supervisor
+loop or a person (--as) revokes another session's grant; a grantee withdraws its own
 with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lease
 (lease claim --park) is resumed by the watch with the words to ask again.`,
 		Args: cobra.ExactArgs(2),
@@ -853,8 +1038,8 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 					return g.Resource == res && (strings.Contains(strings.ToLower(g.To.Name), who) || g.To.Session == args[1])
 				}
 				for _, g := range st.Grants {
-					if hit(g) && !mayRevoke(st, me, g) {
-						return nil, refused("%s is granted to %q, not to you: only the supervisor %q revokes another session's grant", res, g.To.Name, st.SupervisorRole().Holder.Name)
+					if hit(g) && !supervising(me) && !g.To.Is(me) {
+						return nil, refused("%s is granted to %q, not to you: only the supervisor loop or a person revokes another session's grant", res, g.To.Name)
 					}
 				}
 				st.Grants = slices.DeleteFunc(st.Grants, func(g state.Grant) bool {
@@ -879,12 +1064,4 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
-}
-
-// mayRevoke says whether me may withdraw the grant g: its grantee may, and
-// the supervisor, a person (no session), or anyone while no supervisor is
-// recorded.
-func mayRevoke(st *state.State, me state.Party, g state.Grant) bool {
-	sup := st.SupervisorRole().Holder
-	return sup == nil || me.Session == "" || me.Is(sup.Party) || g.To.Is(me)
 }

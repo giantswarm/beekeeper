@@ -18,15 +18,16 @@ import (
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 const (
-	inProgress = "In Progress ⛏️"
-	blocked    = "Blocked / Waiting ⛔️"
-	upNext     = "Up Next ➡️"
-	backlog    = "Backlog 📦"
-	epic       = "Epic 🎯"
-	bug        = "Bug 🐞"
-	upNextEpic = "Up Next epic"
-	bugStep    = "bug"
-	typedNext  = "up next"
+	boardItemsQuery = "items(first:"
+	inProgress      = "In Progress ⛏️"
+	blocked         = "Blocked / Waiting ⛔️"
+	upNext          = "Up Next ➡️"
+	backlog         = "Backlog 📦"
+	epic            = "Epic 🎯"
+	bug             = "Bug 🐞"
+	upNextEpic      = "Up Next epic"
+	bugStep         = "bug"
+	typedNext       = "up next"
 	// backlogStep is the name of the order's Backlog step.
 	backlogStep = "Backlog"
 )
@@ -154,6 +155,64 @@ func TestRankAppliesTheOrderToAFixtureBoard(t *testing.T) {
 	}
 }
 
+func TestKindStepTakesAnItemWithoutAKindByItsLabel(t *testing.T) {
+	snap := snapshot(t)
+	it := func(n int, kind string, labels ...string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: backlog, Kind: kind, Labels: labels, Created: days(5), Updated: days(1)}
+	}
+	snap.Items = []Item{
+		it(1, ""),
+		it(2, "Feature ✨", "bug"),
+		it(3, "", "team/x", "kind/bug"),
+		it(4, "", "Bug"),
+		it(5, bug),
+		it(6, "", "bugfix"),
+	}
+	snap.Search = nil
+	var got []string
+	for _, c := range Rank(snap, deskBoard(), now) {
+		got = append(got, c.Ref+" "+c.Step+": "+c.Match)
+	}
+	want := []string{
+		"o/r#3 bug: kind Bug 🐞 by label kind/bug",
+		"o/r#4 bug: kind Bug 🐞 by label Bug",
+		"o/r#5 bug: kind Bug 🐞",
+		"o/r#1 Backlog: status Backlog 📦, created within 90 days",
+		"o/r#2 Backlog: status Backlog 📦, created within 90 days",
+		"o/r#6 Backlog: status Backlog 📦, created within 90 days",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rank:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestMatchNamesTheMatchersOfTheStep(t *testing.T) {
+	snap := snapshot(t)
+	var got []string
+	for _, c := range Rank(snap, deskBoard(), now) {
+		if slices.Contains([]string{"o/r#3", "o/r#40", "o/r#6", "o/r#11", "o/tools#1"}, c.Ref) {
+			got = append(got, c.Ref+": "+c.Match)
+		}
+	}
+	want := []string{
+		"o/r#3: status In Progress ⛏️",
+		"o/r#40: status In Progress ⛏️",
+		"o/r#6: status Blocked / Waiting ⛔️, blockers closed",
+		"o/r#11: kind Bug 🐞",
+		"o/tools#1: search",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("match:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	step := config.BoardStep{Name: "labelled", Labels: []string{"Urgent"}}
+	if m := matched(step, Item{Labels: []string{"team/x", "urgent"}}); m != "label urgent" {
+		t.Errorf("labels step: %q", m)
+	}
+	if m := matched(config.BoardStep{Name: "all"}, Item{}); m != "every item" {
+		t.Errorf("empty step: %q", m)
+	}
+}
+
 func TestPositionIsThePriorityWithinAStep(t *testing.T) {
 	// The board's items in position order: a rank that moves #12 above #10
 	// makes it the first Up Next item, still after every In Progress one.
@@ -185,9 +244,13 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 	at := func(d int) *time.Time { t := days(d); return &t }
 	j := func(total int, closed ...*time.Time) issueJSON {
 		var i issueJSON
-		i.Deps.TotalBlockedBy = total
+		i.BlockedBy.TotalCount = total
 		for _, c := range closed {
-			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
+			state := stateOpen
+			if c != nil {
+				state = stateClosed
+			}
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c, depRef: depRef{State: state}})
 		}
 		return i
 	}
@@ -313,7 +376,9 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 {"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"},{"id":"t2","name":"Y"}]}]}}}}}`
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
+	checkedQuery(f.t, q)
 	f.queries = append(f.queries, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
@@ -333,7 +398,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}
@@ -342,10 +407,10 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 			page = 1
 		}
 		return []byte(f.pages[page]), nil
-	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search(")):
+	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search(")):
 		return []byte(f.extrasBy(q)), nil
-	case strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search("):
-		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:50){nodes{...I projectItems(`) ||
+	case strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search("):
+		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:3){nodes{...I projectItems(`) ||
 			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
 			f.t.Errorf("extras query %s", q)
 		}
@@ -492,111 +557,57 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 }
 
 // labIssue7 is an issue of a personal account's repository, outside the
-// board's owner o; foreignRefusal refuses it when it has no item on the board.
-const (
-	labIssue7      = "teemow/lab#7"
-	foreignRefusal = "teemow/lab#7 is not on the board o/7 and is never added to it: its repository is outside o; an issue of teemow goes on a project of teemow's own"
-	homeRefusal    = foreignRefusal + ", and it is on no project of teemow: add it to one (`gh project item-add <number> --owner teemow --url https://github.com/teemow/lab/issues/7`), then `beekeeper board move teemow/lab#7 <status>` moves it there"
-)
+// board's owner o.
+const labIssue7 = "teemow/lab#7"
 
-// homeInProgress is the In Progress option of a user project, without
-// the board's emoji.
-const homeInProgress = "In Progress"
-
-// homeItem is an item of the issue on project number of owner, whose
-// Status field FU has the options u1 Backlog and u2 In Progress.
+// homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
-	st := "null"
+	st := jsonNull
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
-	return fmt.Sprintf(`{"id":%q,"project":{"id":%q},"status":%s,"home":{"number":%d,"owner":{"login":%q},
-"status":{"id":"FU","options":[{"id":"u1","name":"Backlog"},{"id":"u2","name":"In Progress"}]}}}`, id, project, st, number, owner)
+	return fmt.Sprintf(`{"id":%q,"project":{"id":%q,"number":%d,"owner":{"login":%q}},"status":%s}`, id, project, number, owner, st)
 }
 
-func TestMoveMovesAnIssueOnItsOwnersProject(t *testing.T) {
-	// The issue of a personal account's repository is on its owner's user
-	// project, not on the board: it moves there by that project's values,
-	// no Team set, nothing added to the board.
-	items := func(nodes ...string) string {
-		return `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`
-	}
-	f := &fakeGH{t: t, item: items(homeItem("U1", "Q", "TeeMow", 1, "Backlog"))}
-	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
-	mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
-	if err != nil || *mv != (Moved{Ref: labIssue7, From: "Backlog", To: homeInProgress, Board: "teemow/1"}) || !slices.Equal(f.mutations, []string{"U1=u2"}) {
-		t.Fatalf("Move on the owner's project = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	if !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
-		t.Errorf("acting on %q", f.repos)
-	}
-	// An item in the status already is not written; an unknown status is
-	// refused with the project's values.
-	f.mutations = nil
-	f.item = items(homeItem("U1", "Q", "teemow", 1, homeInProgress))
-	if mv, err := c.Move(context.Background(), labIssue7, "in progress"); err != nil || mv.From != mv.To || len(f.mutations) != 0 {
-		t.Errorf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	var r *Refusal
-	if _, err := c.Move(context.Background(), labIssue7, "done"); !errors.As(err, &r) || !strings.Contains(r.Reason, homeInProgress) {
-		t.Errorf("Move to an unknown status = %v", err)
-	}
-	// A project of another owner is none of the issue's own: refused with
-	// the recipe, nothing written.
-	f.mutations = nil
-	f.item = items(homeItem("U1", "Q", "someone", 1, "Backlog"))
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
-		t.Errorf("Move on another owner's project = %v; mutations %v", err, f.mutations)
-	}
-	// Two projects of the owner: ambiguous, refused with the item-edit recipe.
-	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U2", "R", "teemow", 2, ""))
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) ||
-		!strings.Contains(r.Reason, "teemow/1 (item U1), teemow/2 (item U2)") || !strings.Contains(r.Reason, "gh project item-edit --id") || len(f.mutations) != 0 {
-		t.Errorf("Move on two projects = %v; mutations %v", err, f.mutations)
-	}
-	// On the board as well, the board's item is the one that moves.
-	f.item = items(homeItem("U1", "Q", "teemow", 1, "Backlog"), `{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}`)
-	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || mv.Board != "" || !slices.Equal(f.mutations, []string{"I3=s3"}) {
-		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-}
-
-func TestMoveNeverAddsAnIssueOutsideTheOrganisation(t *testing.T) {
-	// The issue's projectItems name no item of the board: it is refused
-	// before anything is written, nothing added to the board.
-	f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`,
-		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
-	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
-	var r *Refusal
-	for _, ref := range []string{"https://github.com/teemow/lab/issues/7", labIssue7} {
-		if _, err := c.Move(context.Background(), ref, "backlog"); !errors.As(err, &r) || !strings.Contains(r.Reason, "is never added to it") || len(f.mutations) != 0 {
-			t.Errorf("Move(%s) = %v; mutations %v", ref, err, f.mutations)
+func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
+	for _, owner := range []string{"o", personalOwner} {
+		for _, nodes := range []string{"", homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "teemow", 2, "Backlog")} {
+			t.Run(owner+nodes, func(t *testing.T) {
+				f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + nodes + `]}}}}}`,
+					added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+				c := &Client{GH: f.run, Board: config.Board{Owner: owner, Project: 7, Team: "X"}}
+				mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{addIssue7, "I3=t1", "I3=s3"}) {
+					t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
+				}
+				if readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
+					t.Errorf("queries %q acting on %q", f.queries, f.repos)
+				}
+			})
 		}
 	}
-	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &r) || r.Reason != homeRefusal || len(f.mutations) != 0 {
-		t.Errorf("Move = %v; mutations %v", err, f.mutations)
+}
+
+func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
+	f := &fakeGH{t: t, item: issue7OffBoard,
+		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	var refused *Refusal
+	if _, err := c.Move(context.Background(), labIssue7, "unknown"); !errors.As(err, &refused) || len(f.mutations) != 0 {
+		t.Fatalf("unknown status: %v; mutations %v", err, f.mutations)
 	}
-	// Every call acts on the issue's repository, so the gh link picks the
-	// login that reaches it; the board's items are never read.
-	if readsItems(f.queries) || !slices.Equal(slices.Compact(slices.Clone(f.repos)), []string{labRepo}) {
-		t.Errorf("queries %q acting on %q", f.queries, f.repos)
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{addIssue7}) {
+		t.Fatalf("permission denied: %v; mutations %v", err, f.mutations)
 	}
-	// An item its projectItems name is the issue's own: it moves, nothing added.
+	f.mutations = nil
 	f.item = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}]}}}}}`
 	if mv, err := c.Move(context.Background(), labIssue7, "progress"); err != nil || *mv != (Moved{Ref: labIssue7, From: backlog, To: inProgress}) || !slices.Equal(f.mutations, []string{"I3=s3"}) {
-		t.Errorf("Move of an item on the board = %+v, %v; mutations %v", mv, err, f.mutations)
+		t.Fatalf("existing item: %+v, %v; mutations %v", mv, err, f.mutations)
 	}
-	// The board's owner is matched without case: its issue is added.
 	f.mutations = nil
-	f.item = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
-	if mv, err := c.Move(context.Background(), "O/r#7", "backlog"); err != nil || !mv.Added || !slices.Equal(f.mutations, []string{"add I7 to P", "I3=t1", "I3=s1"}) {
-		t.Errorf("Move of the owner's issue = %+v, %v; mutations %v", mv, err, f.mutations)
-	}
-	// Only an issue GitHub does not resolve is no issue, with its reason.
-	f.mutations = nil
-	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`
-	if _, err := c.Move(context.Background(), labIssue7, "backlog"); !errors.As(err, &r) || r.Reason != "teemow/lab#7 is no issue: Could not resolve to a Repository with the name 'teemow/lab'." || len(f.mutations) != 0 {
-		t.Errorf("Move of no issue = %v; mutations %v", err, f.mutations)
+	f.item = `{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository"}]}`
+	if _, err := c.Move(context.Background(), labIssue7, "progress"); !errors.As(err, &refused) || !strings.Contains(err.Error(), "is no issue: Could not resolve") || len(f.mutations) != 0 {
+		t.Fatalf("unresolved issue: %v; mutations %v", err, f.mutations)
 	}
 }
 
@@ -664,7 +675,6 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 		{Place{Before: "o/r#3"}, issue5, "o/r#3 is not on the board o/7"},
 		{Place{After: "https://github.com/o/r/issues/5"}, issue5, "o/r#5 cannot be placed against itself"},
 		{Place{Top: true}, "o/r#4", "o/r#4 is no issue: Could not resolve to an Issue with the number of 4."},
-		{Place{After: issue9}, labIssue7, foreignRefusal},
 	} {
 		f.mutations = nil
 		f.byIssue = map[string]string{"3": notOnBoard, "7": notOnBoard, "9": item9, "4": `{"data":{"repository":{"issue":null}},"errors":[{"message":"Could not resolve to an Issue with the number of 4."}]}`}
@@ -677,6 +687,36 @@ func TestRankAddsAMissingIssueAndRefusesWhatIsNotOnTheBoard(t *testing.T) {
 		if _, err := c.Rank(ctx, issue5, at); err == nil || !strings.Contains(err.Error(), "one of top, before and after") {
 			t.Errorf("Rank(%+v) = %v", at, err)
 		}
+	}
+}
+
+func TestRankAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
+	// An organisation's issue on a personal account's board, and the reverse:
+	// both are added as Move adds them, GitHub deciding whether they may be.
+	for _, tc := range []struct{ owner, ref, repo string }{
+		{personalOwner, "org/engine#7", "org/engine"},
+		{"o", labIssue7, labRepo},
+	} {
+		t.Run(tc.owner, func(t *testing.T) {
+			f := &fakeGH{t: t, item: issue7OffBoard, byIssue: map[string]string{"9": item9},
+				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
+			c := &Client{GH: f.run, Board: config.Board{Owner: tc.owner, Project: 7, Team: "X"}}
+			rk, err := c.Rank(context.Background(), tc.ref, Place{After: issue9})
+			if err != nil || *rk != (Ranked{Ref: tc.ref, Above: issue9, Added: true, Team: teamX}) ||
+				!slices.Equal(f.mutations, []string{addIssue7, "I3=t1", `I3 after "I9"`}) {
+				t.Fatalf("Rank = %+v, %v; mutations %v", rk, err, f.mutations)
+			}
+			if f.repos[0] != tc.repo {
+				t.Errorf("acting on %q, want %s first", f.repos, tc.repo)
+			}
+		})
+	}
+	// GitHub refusing the add is the refusal, nothing else written.
+	f := &fakeGH{t: t, item: issue7OffBoard, byIssue: map[string]string{"9": item9},
+		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
+	c := &Client{GH: f.run, Board: config.Board{Owner: personalOwner, Project: 7, Team: "X"}}
+	if _, err := c.Rank(context.Background(), "org/engine#7", Place{Top: true}); err == nil || !strings.Contains(err.Error(), "Resource not accessible by integration") || !slices.Equal(f.mutations, []string{addIssue7}) {
+		t.Errorf("Rank whose add GitHub refuses = %v; mutations %v", err, f.mutations)
 	}
 }
 
@@ -759,7 +799,233 @@ func TestClosesAsksInBatches(t *testing.T) {
 	}
 	// Each request's first ref closes o/r#1; a request holds closesBatch refs.
 	if len(queries) != 3 || strings.Count(queries[0], "repository(") != closesBatch || strings.Count(queries[2], "repository(") != 1 ||
-		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{"o/r#1"}) {
+		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{ref1}) {
 		t.Errorf("%d queries, closes %v", len(queries), got)
+	}
+}
+
+const (
+	personalOwner  = "personal"
+	engineIssue7   = "org/engine#7"
+	addIssue7      = "add I7 to P"
+	issue7OffBoard = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
+	teamX          = "X 🐝"
+	ref1           = "o/r#1"
+	ref2           = "o/r#2"
+	ref3           = "o/r#3"
+	ref4           = "o/r#4"
+)
+
+func TestStatusThenBoardOrderDecide(t *testing.T) {
+	// Every step has workScope: it is read and ignored, Status and board
+	// order alone decide.
+	o, err := ResolveOrder([]config.BoardStep{
+		{Name: inProgress, Status: []string{inProgress}, WorkScope: true},
+		{Name: upNext, Status: []string{upNext}, WorkScope: true},
+		{Name: backlogStep, Status: []string{backlog}, WorkScope: true},
+	}, statuses, []string{epic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := func(n int, status string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Created: days(5), Updated: days(1), Parent: "o/r#99"}
+	}
+	// The board's items in its position order, the statuses mixed.
+	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
+		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
+	}}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
+	var got []string
+	for _, c := range cands {
+		if c.Skip != "" {
+			t.Errorf("%s skipped: %s", c.Ref, c.Skip)
+		}
+		got = append(got, c.Ref)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("order %v, want %v (Status, then the board's order)", got, want)
+	}
+}
+
+func TestSnapshotParentReadsItemsAndSubIssues(t *testing.T) {
+	snap := &Snapshot{Items: []Item{
+		{Ref: ref1, Parent: issue9, SubIssues: []Item{{Ref: ref2}, {Ref: ref3, Parent: ref1}}},
+	}}
+	for ref, want := range map[string]string{ref1: issue9, "O/R#2": ref1, ref3: ref1, ref4: ""} {
+		if got := snap.Parent(ref); got != want {
+			t.Errorf("Parent(%s) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+func TestRankAnchorPlacesFollowUpIssueAfterOriginOnBoard(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	c.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(metaJSON), nil
+		case strings.Contains(q, "projectItems"):
+			if slices.Contains(args, "n=1") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"EPIC1","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=12") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB12","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[{"id":"IS12","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=13") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB13","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[]}}}}}`), nil
+			}
+			return []byte(`{"data":{"repository":{"issue":{"id":"NEW","body":"","projectItems":{"nodes":[]}}}}}`), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", q)
+	}
+
+	// 1. An issue filed from o/r#12 (on the board) anchors right after o/r#12.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#12"); err != nil || got != "o/r#12" {
+		t.Fatalf("RankAnchor(filed from o/r#12) = %q, %v; want o/r#12", got, err)
+	}
+
+	// 2. An issue filed from o/r#13 (a sub-issue not on the board under epic o/r#1)
+	// anchors right after its parent epic o/r#1 on the board.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#13"); err != nil || got != ref1 {
+		t.Fatalf("RankAnchor(filed from sub-issue o/r#13) = %q, %v; want %s", got, err, ref1)
+	}
+
+	// 3. A general issue with no origin on the board returns "".
+	if got, err := c.RankAnchor(ctx, "org/engine#52", ""); err != nil || got != "" {
+		t.Fatalf("RankAnchor(general issue) = %q, %v; want empty", got, err)
+	}
+}
+
+func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{GH: nil, Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
+
+	// 1. A foreign issue not on any board (or only in Backlog on another board)
+	// lands on the configured board in Backlog.
+	f := &fakeGH{t: t,
+		item:  `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + homeItem("U1", "Q", "other", 2, "Backlog") + `]}}}}}`,
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I70","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`,
+	}
+	c.GH = f.run
+	mv, err := c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, To: backlog, Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{addIssue7, "I70=t1", "I70=s1"}) {
+		t.Fatalf("Intake of unworked foreign issue = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+
+	// 2. An issue already being worked on another board (In Review) stays
+	// there and is not added to the configured board.
+	f = &fakeGH{t: t,
+		item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + homeItem("U1", "Q", "other", 2, "In Review") + `]}}}}}`,
+	}
+	c.GH = f.run
+	mv, err = c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, From: "In Review", To: "In Review", Board: "other/2", Kept: true}) ||
+		len(f.mutations) != 0 {
+		t.Fatalf("Intake of issue worked on another board = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+
+	// 3. An issue already on the configured board in In Progress keeps its
+	// Status instead of being moved back to Backlog.
+	f = &fakeGH{t: t,
+		item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[{"id":"I70","project":{"id":"P"},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"}}]}}}}}`,
+	}
+	c.GH = f.run
+	mv, err = c.Intake(ctx, engineIssue7, "backlog")
+	if err != nil || *mv != (Moved{Ref: engineIssue7, From: inProgress, To: inProgress, Kept: true}) ||
+		len(f.mutations) != 0 {
+		t.Fatalf("Intake of issue already in progress on configured board = %+v, %v; mutations %v", mv, err, f.mutations)
+	}
+}
+
+func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing.T) {
+	// GitHub omits another owner's project from issue.projectItems, so
+	// placing an item after a cross-owner anchor on a personal board probes
+	// addProjectV2ItemById to resolve the anchor's existing item ID.
+	f := &fakeGH{t: t,
+		byIssue: map[string]string{
+			"7": issue7OffBoard,
+			"9": `{"data":{"repository":{"issue":{"id":"ISSUE9","projectItems":{"nodes":[]}}}}}`,
+		},
+		added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I9","project":{"id":"P"},"status":{"name":"In Progress ⛏️"},"kind":null,"team":null}}}}`,
+	}
+	origRun := f.run
+	c := &Client{Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
+	c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[3], "addProjectV2ItemById") && slices.Contains(args, "c=I7") {
+			f.mutations = append(f.mutations, addIssue7)
+			return []byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"I71","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`), nil
+		}
+		return origRun(ctx, args...)
+	}
+	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: "org/engine#9"})
+	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
+		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+}
+
+// Every candidate source uses the current blocker list even when the summary
+// still describes the previous dependency state.
+func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
+			state, summary := stateClosed, 1
+			if open {
+				state, summary = "OPEN", 0
+			}
+			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
+			f := &fakeGH{t: t, pages: []string{
+				`{"data":{"repositoryOwner":{"projectV2":{"items":{"nodes":[` +
+					node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":1,"completed":0}`)) + "," +
+					node(upNext, "null", issue(4, deps)) + `]}}}}}`,
+			}, extras: `{"data":{"e0":{"issue":{"subIssues":{"nodes":[` + issue(20, deps) + `]}}},"s2":{"nodes":[` + issue(30, deps) + `]}}}`}
+			// This fixture's epic is at index 0 rather than fakeGH's index 1.
+			f.extrasBy = func(string) string { return f.extras }
+			b := readBoard()
+			snap, err := (&Client{GH: f.run, Board: b}).Read(context.Background(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]Candidate{}
+			for _, c := range Rank(snap, b, now) {
+				got[c.Ref] = c
+			}
+			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
+				c, ok := got[ref]
+				if !ok {
+					t.Fatalf("missing candidate %s: %+v", ref, got)
+				}
+				wantOpen := 0
+				if open {
+					wantOpen = 1
+				}
+				if c.Blockers != 1 || c.OpenBlockers != wantOpen || (c.Skip != "") != open {
+					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
+				}
+			}
+			if len(f.queries) != 3 {
+				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			}
+			for _, q := range f.queries {
+				if strings.Contains(q, "issueDependenciesSummary") {
+					t.Errorf("read requests stale summary: %s", q)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
+	var j issueJSON
+	j.BlockedBy.TotalCount = 2
+	closed := days(1)
+	j.BlockedBy.Nodes = []blockerNode{{ClosedAt: &closed, depRef: depRef{State: stateClosed}}}
+	it := j.item()
+	if it.Blockers != 2 || it.OpenBlockers != 1 || !it.BlockersClosed.IsZero() {
+		t.Fatalf("incomplete blockers: %+v", it)
 	}
 }

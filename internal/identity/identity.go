@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -22,7 +21,8 @@ import (
 type Caller struct {
 	// Email is the token's verified email: the person's key in every record.
 	Email string
-	// Team is the team of the first configured group the person is in.
+	// Team is the team of the most specific configured group the person is
+	// in (config.Serve.TeamGroups).
 	Team   string
 	Groups []string
 }
@@ -94,30 +94,16 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Caller, error) {
 		return Caller{}, refused("the token's email %s is not verified", claims.Email)
 	}
 	c := Caller{Email: strings.ToLower(claims.Email), Groups: claims.Groups}
-	if !slices.ContainsFunc(v.organization(), c.In) {
-		return Caller{}, refused("%s is not a member of %s: %s", c.Email, strings.Join(v.organization(), " or "), carries(c.Groups))
+	if org := v.cfg.OrganizationGroups(); !slices.ContainsFunc(org, c.In) {
+		return Caller{}, refused("%s is not a member of %s: %s", c.Email, strings.Join(org, " or "), carries(c.Groups))
 	}
-	groups := make([]string, 0, len(v.cfg.Teams))
-	for g := range v.cfg.Teams {
-		groups = append(groups, g)
-	}
-	sort.Strings(groups)
-	for _, g := range groups {
+	for _, g := range v.cfg.TeamGroups() {
 		if c.In(g) {
 			c.Team = v.cfg.Teams[g]
 			return c, nil
 		}
 	}
 	return Caller{}, refused("%s is in no team's group (serve.teams): %s", c.Email, carries(c.Groups))
-}
-
-// organization is every group that makes a caller a member.
-func (v *Verifier) organization() []string {
-	var out []string
-	if v.cfg.Organization != "" {
-		out = append(out, v.cfg.Organization)
-	}
-	return append(out, v.cfg.Organizations...)
 }
 
 // carries words the groups a refused token carries: group names are

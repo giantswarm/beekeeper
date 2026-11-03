@@ -102,6 +102,8 @@ func googleTranscript(t *testing.T, urls ...string) string {
 	for _, u := range urls {
 		lines = append(lines, resultLine(strconv.Quote("Clicked.\n\nTab Context:\n- Available tabs:\n  • tabId 7: \""+googleTitle+`" ("`+u+`")`)))
 	}
+	// The last page's draw check answered drawn; its result names no page.
+	lines = append(lines, drawUse(), strings.Replace(resultLine(strconv.Quote(drawOpen+Drawn)), `"tool_use_id":"t"`, `"tool_use_id":"d"`, 1))
 	path := filepath.Join(t.TempDir(), "t.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -209,7 +211,7 @@ func TestGoogleFlowFromTheTrailerOnly(t *testing.T) {
 // the tab's flow in the transcript and refuses the consent of a third
 // party's; text typed or set there is left to the classifier.
 func TestGoogleConsentDecision(t *testing.T) {
-	click := tabInput(leftClick, map[string]any{refKey: "ref_9", "action_summary": continueClick})
+	click := tabInput(leftClick, map[string]any{refKey: "ref_9", summaryKey: continueClick})
 	for name, tc := range map[string]struct {
 		tool     string
 		input    map[string]any

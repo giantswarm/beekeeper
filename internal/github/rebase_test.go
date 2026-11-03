@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,5 +68,34 @@ func TestUpdateByRebase(t *testing.T) {
 	}
 	if want := "pr update-branch 7 --repo o/r --rebase"; strings.Join(asked, " ") != want {
 		t.Errorf("asked %q, want %q", asked, want)
+	}
+}
+
+func TestMergeCommits(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		answer  string
+		err     error
+		want    []string
+		wantErr bool
+	}{
+		{"linear", `[{"sha":"a","parents":[{"sha":"m"}]},{"sha":"b","parents":[{"sha":"a"}]}]`, nil, nil, false},
+		{"a base merged in, across pages", `[{"sha":"a","parents":[{"sha":"m"}]}]` + "\n" + `[{"sha":"b","parents":[{"sha":"a"},{"sha":"m2"}]}]`, nil, []string{"b"}, false},
+		{"GitHub not answering", "", errors.New("gh api: exit status 1: connection reset"), nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var asked []string
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				asked = append(asked, args...)
+				return []byte(c.answer), c.err
+			}
+			got, err := MergeCommits(context.Background(), run, "o/r", 7)
+			if (err != nil) != c.wantErr || !slices.Equal(got, c.want) {
+				t.Fatalf("got %q, %v; want %q (error %v)", got, err, c.want, c.wantErr)
+			}
+			if want := "api --paginate repos/o/r/pulls/7/commits?per_page=100"; strings.Join(asked, " ") != want {
+				t.Errorf("asked %q, want %q", asked, want)
+			}
+		})
 	}
 }

@@ -102,12 +102,12 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -633,7 +633,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
-	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
@@ -650,6 +650,30 @@ func TestBrowseConsent(t *testing.T) {
 	if l := refused.lines("On the page click Authorize once.", "", nil, false); len(l) != 2 || !strings.HasSuffix(l[1], consentHint) || !strings.Contains(consentHint, "beekeeper app allow") ||
 		!strings.Contains(consentHint, "--permission") {
 		t.Errorf("lines of a grant refusal without a record = %q", l)
+	}
+}
+
+// A sign-in on the lab's identity provider at localhost, an
+// authorization-code flow to a CLI's loopback callback, runs with the lab's
+// rule and words and the front-tab and draw checks every turn has, and the
+// report says the lab sign-in was allowed.
+func TestBrowseLocalhostLabSignIn(t *testing.T) {
+	const steps = "Open https://localhost:32000/dex/auth?client_id=kubernetes&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback" +
+		"&response_type=code. Sign in as viewer@lab.local with the fixture password 'password' and press Login."
+	if !namesLoopback(steps) {
+		t.Fatalf("namesLoopback(%q) = false", steps)
+	}
+	if rules := browseRules("", nil, true); len(rules) != 1 || rules[0] != labRule {
+		t.Errorf("browseRules of the lab = %q", rules)
+	}
+	p := browsePrompt(steps, "", nil, true, nil)
+	for _, w := range []string{frontWords, drawWords, windowWords, labWords} {
+		if !strings.Contains(p, w) {
+			t.Errorf("browsePrompt of a localhost sign-in lacks %q", bounded(w, 60))
+		}
+	}
+	if l := (browseFindings{}).lines(steps, "", nil, true); len(l) != 1 || !strings.HasPrefix(l[0], "allowed lab sign-in: ") {
+		t.Errorf("lines of a localhost sign-in = %q", l)
 	}
 }
 
@@ -783,7 +807,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		!strings.Contains(p, "file_upload refuses every other path") || !strings.Contains(p, guard.UploadTargetScript) || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
-	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+windowWords+browseSteps+steps {
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
 		t.Error("a prompt without shared files names uploads")
 	}
 
@@ -1055,5 +1079,247 @@ func TestBrowseGoogleConsent(t *testing.T) {
 	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
 		!strings.HasPrefix(l[0], "allowed consent: example-portal (Google, callback portal.example.org, account person@example.com, "+googleDeclared+")") {
 		t.Errorf("lines = %q", l)
+	}
+}
+
+// A turn whose steps name a third-party consent on record, by its sign-in
+// host, runs with its auto mode rule, its prompt names the Continue on that
+// client's consent page and the device code on its device-code page for
+// the account, and the line below the report names the record.
+func TestBrowseThirdPartyConsent(t *testing.T) {
+	o := []guard.App{{Name: "openai-codex", OAuth: "auth.openai.com", ClientID: "app_EMoamEEZ73f0CkXaXp7hrann", Account: "person@example.com",
+		Declared: oauthDeclared, Word: personsWord, By: agentOne}}
+	if named := appsNamed(o, "Open https://example.org and sign in."); len(named) != 0 {
+		t.Errorf("appsNamed of other steps = %+v", named)
+	}
+	consents := appsNamed(o, "Open https://auth.openai.com/codex/device and enter the code.")
+	if len(consents) != 1 {
+		t.Fatalf("appsNamed = %+v", consents)
+	}
+	if rules := browseRules("", consents, false); len(rules) != 1 || rules[0] != oauthConsentRule(o[0]) ||
+		!strings.Contains(rules[0], "Third-Party OAuth Consent") || !strings.Contains(rules[0], "account person@example.com") ||
+		!strings.Contains(rules[0], "auth.openai.com/sign-in-with-chatgpt/codex/consent") ||
+		!strings.Contains(rules[0], "on its device-code page auth.openai.com/deviceauth/callback the device code typed") {
+		t.Errorf("browseRules = %q", rules)
+	}
+	if p := browsePrompt("steps", "", consents, false, nil); !strings.Contains(p, "consent to OpenAI's Codex sign-in with ChatGPT is on record as their own account person@example.com") ||
+		!strings.Contains(p, "On its device-code page (auth.openai.com/deviceauth/callback) type only the device code") ||
+		strings.Contains(p, "GitHub's page 'Authorize") {
+		t.Errorf("browsePrompt = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
+		!strings.HasPrefix(l[0], "allowed consent: openai-codex (OpenAI's Codex sign-in with ChatGPT, client app_EMoamEEZ73f0CkXaXp7hrann, account person@example.com, "+oauthDeclared+")") ||
+		!strings.Contains(l[0], "and the device code on auth.openai.com/deviceauth/callback") {
+		t.Errorf("lines = %q", l)
+	}
+}
+
+// A turn whose steps name a Slack app on record, by its app id or its
+// workspace, runs with its auto mode rule, its prompt names Reinstall, the
+// webhook channel to keep and Allow, and the line below the report names
+// the record.
+func TestBrowseSlackConsent(t *testing.T) {
+	s := []guard.App{{Name: "Swarmgeist", Slack: "gigantic.slack.com", SlackApp: "A08A95JBNH1", ClientID: "2171500629.8349188396579",
+		Channel: "team-bumblebee", Declared: slackDeclared, Word: personsWord, By: agentOne}}
+	if named := appsNamed(s, "Open https://api.slack.com/apps/A0OTHER123 and look."); len(named) != 0 {
+		t.Errorf("appsNamed of other steps = %+v", named)
+	}
+	consents := appsNamed(s, "Open https://api.slack.com/apps/A08A95JBNH1/install-on-team and reinstall the app.")
+	if len(consents) != 1 {
+		t.Fatalf("appsNamed = %+v", consents)
+	}
+	if rules := browseRules("", consents, false); len(rules) != 1 || rules[0] != slackConsentRule(s[0]) ||
+		!strings.Contains(rules[0], "Own Slack App Install") || !strings.Contains(rules[0], "keeping the webhook channel #team-bumblebee") {
+		t.Errorf("browseRules = %q", rules)
+	}
+	if p := browsePrompt("steps", "", consents, false, nil); !strings.Contains(p, "Slack app Swarmgeist (A08A95JBNH1) is on record for its install on gigantic.slack.com") ||
+		!strings.Contains(p, "choose exactly #team-bumblebee") || !strings.Contains(p, "then click Allow once") {
+		t.Errorf("browsePrompt = %q", p)
+	}
+	if l := (browseFindings{}).lines("steps", "", consents, false); len(l) != 1 ||
+		!strings.HasPrefix(l[0], "allowed consent: Swarmgeist (Slack, app A08A95JBNH1 on gigantic.slack.com, client 2171500629.8349188396579, keeping the webhook channel #team-bumblebee, "+slackDeclared+")") {
+		t.Errorf("lines = %q", l)
+	}
+}
+
+// A draw check that answered not drawn counts, and the turn fails naming
+// the window not drawn; a later check that drew, in a fresh tab, is the
+// recovery the line names, and the turn does not fail on it.
+func TestReadFindingsNotDrawn(t *testing.T) {
+	code, _ := json.Marshal(guard.DrawCheck)
+	use := func(id string) string {
+		return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"mcp__claude-in-chrome__javascript_tool",` +
+			`"input":{"action":"javascript_exec","tabId":1,"text":` + string(code) + `}}]}}`
+	}
+	answer := func(id, verdict string) string {
+		text, _ := json.Marshal("beekeeper draw check: " + verdict + ", visibility visible\n\nTab Context:\n- Executed on tabId: 1")
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":[{"type":"text","text":` + string(text) + `}]}]}}`
+	}
+	// notDrawn are the "not drawn:" lines of f.
+	notDrawn := func(f browseFindings) []string {
+		return slices.DeleteFunc(f.lines("", "", nil, false), func(l string) bool { return !strings.HasPrefix(l, "not drawn: ") })
+	}
+	write := func(lines ...string) browseFindings {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "t.jsonl")
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := readFindings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	stuck := write(use("a"), answer("a", guard.NotDrawn), use("b"), answer("b", guard.NotDrawn))
+	if stuck.NotDrawn != 2 || stuck.Drawn {
+		t.Fatalf("findings of two checks not drawn = %+v", stuck)
+	}
+	if err := stuck.drawErr(); err == nil || !strings.HasPrefix(err.Error(), guard.NotDrawnLine+": ") || !strings.Contains(err.Error(), "clicked nothing there") {
+		t.Errorf("drawErr = %v", err)
+	}
+	if l := notDrawn(stuck); len(l) != 1 || !strings.HasPrefix(l[0], "not drawn: 2 draw checks answered not drawn: the window was not on screen") ||
+		!strings.HasSuffix(l[0], "the turn clicked nothing on that page") {
+		t.Errorf("lines = %q", l)
+	}
+	recovered := write(use("a"), answer("a", guard.NotDrawn), use("b"), answer("b", guard.Drawn))
+	if recovered.NotDrawn != 1 || !recovered.Drawn || recovered.drawErr() != nil {
+		t.Errorf("findings of a recovered draw = %+v, %v", recovered, recovered.drawErr())
+	}
+	if l := notDrawn(recovered); len(l) != 1 || !strings.Contains(l[0], "recovered: a later check, in a fresh tab, answered drawn") {
+		t.Errorf("lines of a recovered draw = %q", l)
+	}
+	if drawn := write(use("a"), answer("a", guard.Drawn)); drawn.NotDrawn != 0 || drawn.drawErr() != nil || len(notDrawn(drawn)) != 0 {
+		t.Errorf("findings of a drawn page = %+v", drawn)
+	}
+}
+
+// A turn stopped at its timeout with a tab of its own open is resumed once
+// by a cleanup turn (the same session, the cleanup prompt), which closes it:
+// the command fails on the timeout, the lines say a cleanup ran and that the
+// turn closed its tab. A stopped turn with no tab open runs no cleanup.
+func TestBrowseCleansUpAfterTimeout(t *testing.T) {
+	// Leave room for shell startup under race instrumentation on a busy runner.
+	const turnTimeout = 3 * time.Second
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	argvFile, transcript, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "count")
+	// The fake claude counts its runs, records each run's arguments, appends
+	// that run's transcript under its session and, on its first run, waits
+	// past the turn's timeout.
+	script := "#!/bin/sh\nn=$(cat \"$BROWSE_COUNT\" 2>/dev/null || echo 0); n=$((n+1)); echo \"$n\" > \"$BROWSE_COUNT\"\n" +
+		": > \"$BROWSE_ARGV.$n\"\nid=; prev=\nfor a in \"$@\"; do\n  printf '%s\\0' \"$a\" >> \"$BROWSE_ARGV.$n\"\n" +
+		"  case \"$prev\" in --session-id|--resume) id=$a;; esac\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cat \"$BROWSE_TRANSCRIPT.$n\" >> \"$BROWSE_PROJECT/$id.jsonl\"\n" +
+		"if [ \"$n\" = 1 ]; then exec sleep 30; fi\necho cleaned up\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_ARGV", argvFile)
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_COUNT", count)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	group := `{"availableTabs":[{"tabId":5,"title":"Portal","url":"https://portal.example.test/"}],"tabGroupId":9}` +
+		"\n\nTab Context:\n- Available tabs:\n  • tabId 5: \"Portal\" (\"https://portal.example.test/\")"
+	writeFile(t, transcript+".1", chromeUse("t1", "tabs_context_mcp", `{"createIfEmpty":true}`)+chromeAnswer("t1", group))
+	writeFile(t, transcript+".2", chromeUse("t2", "tabs_close_mcp", `{"tabId":5}`)+
+		chromeAnswer("t2", "Closed tab 5. Group is now empty (auto-removed). \n\nTab Context:\n- Available tabs:\n"))
+	err := a.browse(t.Context(), "Open the portal.", bin, "", turnTimeout, "", nil, nil)
+	if !errors.Is(err, errTurnStopped) || strings.Contains(err.Error(), "left") {
+		t.Errorf("browse of a stopped turn = %v", err)
+	}
+	b, _ := os.ReadFile(count) //nolint:gosec // the test's own file
+	if strings.TrimSpace(string(b)) != "2" {
+		t.Fatalf("the fake claude ran %s times, want 2\n%s", b, out.String())
+	}
+	second, _ := os.ReadFile(argvFile + ".2") //nolint:gosec // the test's own file
+	args := strings.Split(strings.TrimSuffix(string(second), "\x00"), "\x00")
+	if !slices.Contains(args, resumeFlag) || args[len(args)-1] != cleanupWords {
+		t.Errorf("the cleanup ran with %q", args)
+	}
+	if s := out.String(); !strings.Contains(s, "timed out: the turn was stopped at its timeout") || !strings.Contains(s, "tabs closed: the turn closed all 1 tab it opened") {
+		t.Errorf("browse of a stopped turn printed %q", s)
+	}
+	// No tab open: no cleanup.
+	out.Reset()
+	if err := os.Remove(count); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, transcript+".1", chromeUse("t1", "list_connected_browsers", `{}`)+chromeAnswer("t1", oneBrowser))
+	if err := a.browse(t.Context(), "Open the portal.", bin, "", turnTimeout, "", nil, nil); !errors.Is(err, errTurnStopped) {
+		t.Errorf("browse of a stopped turn without tabs = %v", err)
+	}
+	if b, _ := os.ReadFile(count); strings.TrimSpace(string(b)) != "1" { //nolint:gosec // the test's own file
+		t.Errorf("the fake claude ran %s times without tabs, want 1", b)
+	}
+}
+
+// A path is printed only for a file written: none taken, or none saved with
+// the reason, prints no shot path; saved files print the line naming
+// beekeeper's record, then their paths.
+func TestShotLines(t *testing.T) {
+	if got := shotLines(nil, nil); !slices.Equal(got, []string{noShots}) {
+		t.Errorf("shotLines(none) = %q", got)
+	}
+	if got := shotLines(nil, errors.New("disk full")); !slices.Equal(got, []string{"screenshot: none saved: disk full"}) {
+		t.Errorf("shotLines(none, err) = %q", got)
+	}
+	if got := shotLines([]string{"/s/shot-1.jpg"}, errors.New("disk full")); !slices.Equal(got, []string{shotsSaved, "screenshot: /s/shot-1.jpg"}) {
+		t.Errorf("shotLines(one, err) = %q", got)
+	}
+}
+
+// A turn's report is printed as the turn wrote it, a finding that something
+// on the page was not saved included. A turn that took a screenshot and
+// reports it not saved prints beekeeper's record line, which says the turn
+// writes no file, and the saved shot's path; a turn that took none prints no
+// shot path.
+func TestBrowseReportsSavedShots(t *testing.T) {
+	a, out := stubApp(t)
+	bin := t.TempDir()
+	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
+	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
+		"mkdir -p \"$BROWSE_PROJECT\" && cp \"$BROWSE_TRANSCRIPT\" \"$BROWSE_PROJECT/$id.jsonl\"\ncat \"$BROWSE_REPORT\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a fake claude
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BROWSE_TRANSCRIPT", transcript)
+	t.Setenv("BROWSE_REPORT", reportFile)
+	t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+	const steps = "Open the demo page and take a screenshot."
+	const unsaved = "Opened the page and took a screenshot (not saved to disk). The page says deployed."
+	// What the page showed as not saved stays the turn's finding.
+	pageUnsaved := []string{
+		"The agent settings were not saved, as the screenshot shows.",
+		"The avatar image was not saved: the form shows an error.",
+		"Screenshot: the change was never persisted to the cluster.",
+	}
+	writeFile(t, reportFile, unsaved+"\n"+strings.Join(pageUnsaved, "\n")+"\n")
+
+	jpg := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
+	writeFile(t, transcript, chromeUse("t1", "computer", `{"action":"screenshot"}`)+
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Successfully captured screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"`+jpg+`"}}]}]}}`+"\n")
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse with a screenshot: %v\n%s", err, out.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 7 || got[0] != unsaved || !slices.Equal(got[1:4], pageUnsaved) || !strings.HasPrefix(got[4], "transcript: ") ||
+		got[5] != shotsSaved || !strings.HasPrefix(got[6], "screenshot: ") || !strings.HasSuffix(got[6], "shot-1.jpg") {
+		t.Fatalf("browse with a screenshot printed %q", got)
+	}
+	if b, err := os.ReadFile(strings.TrimPrefix(got[6], "screenshot: ")); err != nil || string(b) != "jpg-bytes" {
+		t.Errorf("the printed shot holds %q, %v", b, err)
+	}
+
+	out.Reset()
+	writeFile(t, transcript, chromeUse("t1", "navigate", `{"url":"https://example.test/"}`)+chromeAnswer("t1", "Navigated to https://example.test/"))
+	if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatalf("browse without a screenshot: %v\n%s", err, out.String())
+	}
+	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
+		t.Errorf("browse without a screenshot printed %q", got)
 	}
 }

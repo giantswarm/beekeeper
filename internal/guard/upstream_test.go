@@ -166,7 +166,7 @@ func TestUpstreamPassesReadsAndOurWrites(t *testing.T) {
 		{forkDir, "git push"},
 		{oursDir, "git push -u origin feat"},
 		{pinnedDir, prFill},
-		{offHubDir, "git push origin main"},
+		{offHubDir, "git push origin feat"},
 	} {
 		passed(t, decide(t, upstreamHook(nil), c.cwd, c.cmd, nil), c.cmd)
 	}

@@ -107,6 +107,7 @@ type (
 	plainNote         Note
 	plainTimer        Timer
 	plainRecord       Record
+	plainClaim        Claim
 	plainAlertOwner   AlertOwner
 	plainStart        Start
 	plainApp          App
@@ -126,10 +127,30 @@ type (
 	plainWorkerReport WorkerReport
 	plainUrgent       Urgent
 	plainRoleLine     RoleLine
+	plainPair         Pair
+	plainStop         Stop
+	plainHostPin      HostPin
 )
 
-func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
-func (v State) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainState(v), v.rest) }
+func (v *State) UnmarshalJSON(b []byte) error {
+	if err := decodeKeeping(b, (*plainState)(v), &v.rest); err != nil {
+		return err
+	}
+	for _, k := range retiredStateKeys {
+		delete(v.rest, k)
+	}
+	if len(v.rest) == 0 {
+		v.rest = nil
+	}
+	return nil
+}
+
+// retiredStateKeys are the members of the supervisor session's role that
+// older binaries wrote: the supervisor is the supervisor loop, so a state
+// read drops them and the next write leaves them out.
+var retiredStateKeys = []string{"supervisor", "relay", "relieved", "supervisorCLI", "supervisorRun", "relayDue"}
+
+func (v State) MarshalJSON() ([]byte, error) { return encodeKeeping(plainState(v), v.rest) }
 func (v *Supervisor) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainSupervisor)(v), &v.rest)
 }
@@ -166,16 +187,36 @@ func (v *Timer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*pl
 func (v Timer) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainTimer(v), v.rest) }
 func (v *Record) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
 func (v Record) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainRecord(v), v.rest) }
+func (v *Claim) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }
+func (v Claim) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainClaim(v), v.rest) }
 func (v *AlertOwner) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainAlertOwner)(v), &v.rest)
 }
 func (v AlertOwner) MarshalJSON() ([]byte, error) { return encodeKeeping(plainAlertOwner(v), v.rest) }
 func (v *Start) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainStart)(v), &v.rest) }
 func (v Start) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainStart(v), v.rest) }
-func (v *App) UnmarshalJSON(b []byte) error       { return decodeKeeping(b, (*plainApp)(v), &v.rest) }
-func (v App) MarshalJSON() ([]byte, error)        { return encodeKeeping(plainApp(v), v.rest) }
-func (v *AppRun) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainAppRun)(v), &v.rest) }
-func (v AppRun) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainAppRun(v), v.rest) }
+
+type plainExecutionRecord ExecutionRecord
+
+type plainExecutionMessage ExecutionMessage
+
+func (v *ExecutionMessage) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainExecutionMessage)(v), &v.rest)
+}
+func (v ExecutionMessage) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainExecutionMessage(v), v.rest)
+}
+
+func (v *ExecutionRecord) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainExecutionRecord)(v), &v.rest)
+}
+func (v ExecutionRecord) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainExecutionRecord(v), v.rest)
+}
+func (v *App) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainApp)(v), &v.rest) }
+func (v App) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainApp(v), v.rest) }
+func (v *AppRun) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainAppRun)(v), &v.rest) }
+func (v AppRun) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainAppRun(v), v.rest) }
 func (v *AppCreated) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainAppCreated)(v), &v.rest)
 }
@@ -220,3 +261,9 @@ func (v *RoleLine) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainRoleLine)(v), &v.rest)
 }
 func (v RoleLine) MarshalJSON() ([]byte, error) { return encodeKeeping(plainRoleLine(v), v.rest) }
+func (v *Pair) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainPair)(v), &v.rest) }
+func (v Pair) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPair(v), v.rest) }
+func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainStop)(v), &v.rest) }
+func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
+func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
+func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }

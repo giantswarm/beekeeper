@@ -120,6 +120,30 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	}
 }
 
+// An agentlab e2e proof builds nothing and waits on its lab, its model and
+// GitHub: the hook passes it unwrapped, so it takes no build slot, whatever
+// "test" its subcommand or a package script names; a build beside it in the
+// same call still is wrapped.
+func TestAgentlabProofTakesNoSlot(t *testing.T) {
+	for _, cmd := range []string{
+		"agentlab backstage-test",
+		"agentlab agents-test",
+		"cd ~/lab && agentlab --lab agentlab-1 backstage-test 2>&1 | tail -40",
+		"KUBECONFIG=~/lab/kubeconfig agentlab workspaces-test",
+		"cd ~/src/backstage && yarn test:e2e:agentlab",
+	} {
+		if d := decide(t, hook(), "/", cmd, nil); d != nil {
+			t.Errorf("%q: want pass-through, got %+v", cmd, d)
+		}
+	}
+	for _, cmd := range []string{"go test ./...", "agentlab backstage-test && go test ./..."} {
+		d := decide(t, hook(), "/", cmd, nil)
+		if d == nil || d.UpdatedInput["command"] != self+" run -- zsh -c "+ShellQuote(cmd) {
+			t.Errorf("%q: want wrapped, got %+v", cmd, d)
+		}
+	}
+}
+
 func TestHeavyClassification(t *testing.T) {
 	for _, tc := range []struct {
 		cmd   string
@@ -157,13 +181,31 @@ func TestHeavyClassification(t *testing.T) {
 		{"python3 - <<'EOF'\nprint('go test ./...')\nEOF", false},
 		{"cat > notes.md <<EOF\nmake build\nEOF", false},
 		{"echo 'bash -c \"make\"'", false},
+		// a build word inside any command's quoted argument or here-document
+		// is text, at whatever position of that text it stands
+		{`beekeeper timer add --probe 'gh pr checks 1 --repo o/r' "note mentioning go test"`, false},
+		{`beekeeper timer add 10m "rerun the suite (go test ./...) once the slot is free"`, false},
+		{`beekeeper sessions serve x o/r#1 --waits "CI; go test ./... locally"`, false},
+		{`beekeeper agents park --on o/r#1 "waits on go test ./... in CI"`, false},
+		{"beekeeper agents idle --done --report \"merged o/r#1\nmake lint passes\" --problem none", false},
+		{"gh pr create --repo o/r --title t --body \"$(cat <<'EOF'\nSummary\n\ngo test ./... passes\nEOF\n)\"", false},
+		{"git commit -m \"subject\n\nmake lint runs in CI\"", false},
+		{"cat <<'EOF' > f\nmake test\nEOF", false},
+		{`gh issue create --repo o/r --title t --body "go install from the tag; go build ./... works"`, false},
+		{`grep -E '^(build|test|go test|make lint):' Makefile`, false},
+		{`gh api repos/o/r/contents/src/commands/go-test.yaml --jq .content | grep '^test:'`, false},
+		{`graphify query "which make target runs go test; does go build use it"`, false},
+		{`beekeeper log x --json | python3 -c 'import sys; print("go test" in sys.stdin.read())'`, false},
+		{"true # go test", false},
+		{"cd x && go test ./...", true},
+		{`beekeeper timer add 10m "note" && go test ./...`, true},
 		// git's working-tree commands build nothing, whatever their branch or
 		// path names say
 		{`git -C "$S" checkout -q -- .`, false},
 		{"git -C /tmp/amp checkout -q --detach e82d26b", false},
 		{"git checkout -q -b fix-make-test origin/main", false},
 		{"git switch -c go-test-flake", false},
-		{"git worktree add -q ~/projects/worktrees/x/make-build -b make-build origin/main", false},
+		{"git worktree add -q ~/.local/state/klaus-lab/worktrees/x/make-build -b make-build origin/main", false},
 		{"cd ~/src/x && git fetch -q origin && git checkout -q -B build origin/main", false},
 		{`S=/tmp/amp; git -C "$S" checkout -q -- . && git -C ~/src/x worktree remove "$S"`, false},
 		// builds, tests and lints keep the slot
@@ -410,6 +452,11 @@ func TestHookGatesMerges(t *testing.T) {
 		{"bash <<'EOF'\nset -e\n  devctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n  " + g + "devctl pr merge o/r 7\nEOF", false},
 		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF", false},
 		{"eval devctl pr merge o/r 7", "eval " + g + "devctl pr merge o/r 7", false},
+		// The reserved words that start a command are command positions: if, while, until, ! and {.
+		{"if devctl pr merge o/r 7; then echo ok; fi", "if " + g + "devctl pr merge o/r 7; then echo ok; fi", false},
+		{"cd x && ! devctl pr wait o/r 7", "cd x && ! " + g + "devctl pr wait o/r 7", false},
+		{"until devctl pr wait o/r 7; do :; done", "until " + g + "devctl pr wait o/r 7; do :; done", false},
+		{"{ devctl pr merge o/r 7; } >| m.json", "{ " + g + "devctl pr merge o/r 7; } >| m.json", false},
 		// A real merge beside a quoted argument naming one: only the real one is gated.
 		{`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && devctl pr merge o/r 7`,
 			`gh pr comment 7 --repo o/r --body 'Next: x; devctl pr merge o/r 7' && ` + g + `devctl pr merge o/r 7`, false},
@@ -761,12 +808,19 @@ func TestHookGatesRealMerges(t *testing.T) {
 		var c struct {
 			Command string `json:"command"`
 			Merges  int    `json:"merges"`
+			Refused bool   `json:"refused"`
 		}
 		if err := json.Unmarshal([]byte(line), &c); err != nil {
 			t.Fatal(err)
 		}
 		n++
 		d := decide(t, h, t.TempDir(), c.Command, nil)
+		if c.Refused {
+			if d == nil || d.PermissionDecision != decisionDeny {
+				t.Errorf("unsafe raw merge passed: %s (%+v)", c.Command, d)
+			}
+			continue
+		}
 		if d == nil || d.PermissionDecision != decisionAllow {
 			t.Errorf("%q: not gated: %+v", c.Command, d)
 			continue

@@ -5,12 +5,15 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // A GitHub budget read that fails once in transit and then answers does not
@@ -40,6 +43,54 @@ func TestTheBudgetReadRetriesATransientFailure(t *testing.T) {
 			b, err := g.gateBudget()
 			if (err == nil) != c.ok || reads != c.reads || c.ok && b.Remaining != 5000 {
 				t.Fatalf("budget %+v, %v after %d reads, want ok %v after %d", b, err, reads, c.ok, c.reads)
+			}
+		})
+	}
+}
+
+// A GitHub budget read that fails in transit on every try is no refusal: the
+// merge exits 74 (unread), its line saying the read failed and the merge was
+// not judged. A budget GitHub refuses to tell (no login) still refuses (77).
+func TestABudgetUnreadInTransitExitsRetryableNotRefused(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		fail  error
+		code  int
+		reads int
+		says  []string
+	}{
+		{"every try times out in transit", errors.New(`Get "https://api.github.com/repos/giantswarm/devctl": dial tcp: lookup api.github.com: i/o timeout`),
+			ExitGateUnread, 1 + len(readBackoff), []string{"reading the GitHub budget failed in transit", "i/o timeout", "4 tries failed in transit", "was not judged"}},
+		{"gh without a token", errors.New("gh auth token: no oauth token found"),
+			ExitGateRefused, 1, []string{"the GitHub budget is unknown", "gh auth status"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := heldApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: os.Getpid(),
+				Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Budget = nil
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			hostDevctls(t, 0)
+			reads := 0
+			was := readBudget
+			t.Cleanup(func() { readBudget = was })
+			readBudget = func(*app, context.Context) (github.Budget, error) {
+				reads++
+				return github.Budget{}, c.fail
+			}
+			g := placedGate(a, 7, os.Getpid())
+			why, err := g.step()
+			if Code(err) != c.code || reads != c.reads {
+				t.Fatalf("%q, exit %d (%v) after %d reads, want %d after %d", why, Code(err), err, reads, c.code, c.reads)
+			}
+			d := lastEvent(t, g, "merge.refused")
+			for _, want := range c.says {
+				if !strings.Contains(d, want) {
+					t.Errorf("line %q does not say %q", d, want)
+				}
 			}
 		})
 	}

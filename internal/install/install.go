@@ -31,14 +31,26 @@ type Env struct {
 	// Exe is the absolute path of the binary the hooks and the standby
 	// service run.
 	Exe string
-	// Settings is Claude Code's user settings file, Config beekeeper's
-	// config file, StateDir its state directory (the manifest's).
-	Settings, Config, StateDir string
-	Setup                      platform.Setup
-	Spec                       platform.SetupSpec
+	// Settings is Claude Code's user settings file, AgyHooks agy's
+	// user hooks file (~/.gemini/config/hooks.json; empty when agy is
+	// not installed), AgySkills agy's user skills manifest
+	// (~/.gemini/config/skills.json; empty when agy is not installed),
+	// CodexHooks codex's user hooks file (~/.codex/hooks.json; empty
+	// when codex is not installed), CodexSkills codex's user skills
+	// directory (~/.codex/skills; empty when codex is not installed),
+	// Config beekeeper's config file, StateDir its state directory (the
+	// manifest's).
+	Settings, AgyHooks, AgySkills, CodexHooks, CodexSkills, Config, StateDir string
+	Setup                                                                    platform.Setup
+	Spec                                                                     platform.SetupSpec
 	// Run runs one service manager command.
 	Run func(ctx context.Context, argv []string) error
-	Out io.Writer
+	// BeforeRestart prepares a service for restart. A refusal skips only this
+	// service's restart and prints its reason, allowing the install to finish.
+	BeforeRestart func(context.Context, string) error
+	// RestartFailed revokes any prepared state when a restart command fails.
+	RestartFailed func(context.Context, string) error
+	Out           io.Writer
 	// DryRun prints every step and takes none.
 	DryRun bool
 }
@@ -54,6 +66,18 @@ func Install(ctx context.Context, e Env) error {
 	before := m.encode()
 	p := &plan{home: e.Spec.Home}
 	if err := e.planHooks(p, &m); err != nil {
+		return err
+	}
+	if err := e.planAgyHooks(p, &m); err != nil {
+		return err
+	}
+	if err := e.planAgySkills(p, &m); err != nil {
+		return err
+	}
+	if err := e.planCodexHooks(p, &m); err != nil {
+		return err
+	}
+	if err := e.planCodexSkills(p, &m); err != nil {
 		return err
 	}
 	e.planConfig(p, &m)
@@ -116,6 +140,18 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	}
 	unitsGone := len(removed) > 0
 	if err := e.planUnhooks(p, m, removed); err != nil {
+		return err
+	}
+	if err := e.planAgyUnhooks(p, m, removed); err != nil {
+		return err
+	}
+	if err := e.planAgyUnskills(p, m, removed, purge); err != nil {
+		return err
+	}
+	if err := e.planCodexUnhooks(p, m, removed); err != nil {
+		return err
+	}
+	if err := e.planCodexUnskills(p, m, removed, purge); err != nil {
 		return err
 	}
 	remove := func(path, why string, rm func(string) error) {
@@ -265,8 +301,31 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
 		if state == fileUpdated {
+			prepared, deferred := false, false
 			for _, argv := range e.Setup.Restart(path) {
-				p.command(ctx, e, argv)
+				if argv == nil {
+					continue
+				}
+				p.add("run", strings.Join(argv, " "), "", func() error {
+					if deferred {
+						return nil
+					}
+					if !prepared && e.BeforeRestart != nil {
+						if err := e.BeforeRestart(ctx, name); err != nil {
+							deferred = true
+							_, _ = fmt.Fprintf(e.Out, "due     %s restart deferred: %v\n", name, err)
+							return nil
+						}
+					}
+					prepared = true
+					if err := e.Run(ctx, argv); err != nil {
+						if e.RestartFailed != nil {
+							return errors.Join(err, e.RestartFailed(context.WithoutCancel(ctx), name))
+						}
+						return err
+					}
+					return nil
+				})
 			}
 		} else {
 			p.add("ok", name, "running", nil)
@@ -350,6 +409,31 @@ type Manifest struct {
 	// "hooks.PreToolUse"); SettingsCreated says it created the file.
 	SettingsKeys    []string `json:"settingsKeys,omitempty"`
 	SettingsCreated bool     `json:"settingsCreated,omitempty"`
+	// AgyHook is the entry install added under project.Name in AgyHooks;
+	// AgyHooksCreated says it created the file.
+	AgyHook         json.RawMessage `json:"agyHook,omitempty"`
+	AgyHooksCreated bool            `json:"agyHooksCreated,omitempty"`
+	// AgySkills is the entry install added under "entries" in AgySkills;
+	// AgySkillsDir is the directory of embedded skills it points at;
+	// AgySkillsEntries says install created the "entries" key, and
+	// AgySkillsCreated says it created the file.
+	AgySkills        json.RawMessage `json:"agySkills,omitempty"`
+	AgySkillsDir     string          `json:"agySkillsDir,omitempty"`
+	AgySkillsEntries bool            `json:"agySkillsEntries,omitempty"`
+	AgySkillsCreated bool            `json:"agySkillsCreated,omitempty"`
+	// CodexHook is the PreToolUse entry install added to CodexHooks;
+	// CodexHooksKeys are the keys install created ("hooks",
+	// "hooks.PreToolUse"); CodexHooksCreated says it created CodexHooks, and
+	// CodexWorkerHooksCreated says it created <stateDir>/codex/home/hooks.json.
+	CodexHook               json.RawMessage `json:"codexHook,omitempty"`
+	CodexHooksKeys          []string        `json:"codexHooksKeys,omitempty"`
+	CodexHooksCreated       bool            `json:"codexHooksCreated,omitempty"`
+	CodexWorkerHooksKeys    []string        `json:"codexWorkerHooksKeys,omitempty"`
+	CodexWorkerHooksCreated bool            `json:"codexWorkerHooksCreated,omitempty"`
+	// CodexSkillLinks are the skill symlinks install added under CodexSkills;
+	// CodexSkillsDir is the directory of embedded skills they point at.
+	CodexSkillLinks []string `json:"codexSkillLinks,omitempty"`
+	CodexSkillsDir  string   `json:"codexSkillsDir,omitempty"`
 }
 
 func readManifest(path string) (Manifest, error) {

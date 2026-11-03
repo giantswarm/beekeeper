@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -25,13 +27,23 @@ type poller struct {
 func (a *app) budgetCmd() *cobra.Command {
 	var gate bool
 	var floor int
+	var buckets []string
 	c := &cobra.Command{
 		Use:   "budget",
-		Short: "The GitHub REST and GraphQL budget every session draws from, and who is drawing",
-		Long: `Read the person's GitHub core budget from the rate-limit headers of a real,
+		Short: "The GitHub REST, GraphQL and search budget every session draws from, and who is drawing",
+		Long: `Read the stored gh login and the configured devctl App login explicitly,
+independent of the working directory or a gh link. Name both identities and
+their account logins, counters and reset times (JSON identities). Cache each
+identity separately; the top-level REST and GraphQL counters each select the
+lowest balance. Unreadable App provider metadata falls back to the stored gh
+login with a warning, retaining known unexpired App observations. Unreadable
+credentials or GitHub probes hold the gate, as does any refusal.
+
+Read each identity's GitHub core budget from the rate-limit headers of a real,
 conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
-and the GraphQL limit from a real rateLimit query (one point, read again
-after merge.budgetFresh), and list the gh and devctl processes on the
+and the GraphQL limit from a real rateLimit query (one point per identity, read again
+after merge.budgetFresh), the search and code-search limits from
+/rate_limit (free; a spent one names its reset), and list the gh and devctl processes on the
 machine with the session each runs under: the callers drawing on it. A
 GraphQL refusal shows even while its counter looks healthy (a secondary
 limit), with the time it ends when GitHub names one. The budget is shared
@@ -49,16 +61,31 @@ watch's GitHub timer checks start after them.
 --gate exits 3 when GitHub refuses GraphQL calls, the budget is under the
 floor (github.floor, default 2500), merges queued for the reset go first or
 a "github" hold is set:
-` + "`beekeeper budget --gate && gh …`" + `.`,
+` + "`beekeeper budget --gate && gh …`" + `. --bucket names the search
+bucket a step spends (code_search, search; repeatable or comma-separated):
+--gate then also exits 3 while that bucket is spent, naming its reset, and
+fails (exit 1) when the search limits cannot be read, as it does for an
+unread core budget:
+` + "`beekeeper budget --gate --bucket code_search && gh search code …`" + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if a.managedExecutionID() != "" {
+				return a.remoteGitHubBudget(cmd.Context(), workerBudgetRequest{Gate: gate, Buckets: buckets, JSON: a.json})
+			}
 			if floor > 0 {
 				a.cfg.GitHub.Floor = floor
 			}
-			b, err := readBudget(a, cmd.Context())
-			if err != nil {
+			if err := checkBuckets(gate, buckets); err != nil {
 				return err
 			}
+			b, err := readBudget(a, cmd.Context())
+			if err != nil {
+				if a.json {
+					_ = a.printJSON(b)
+				}
+				return err
+			}
+			b.Search = probeSearch(cmd.Context())
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -78,17 +105,38 @@ a "github" hold is set:
 				firstLine = fmt.Sprintf("merges first: %s, queued for the reset, go before the waits until they start, at %s at the latest (merge.resetFirst)",
 					merge.Keys(first), clock(a.now, merge.ResetFirstUntil(first, window)))
 			}
+			var loopSpend loopGraphQLSpend
+			_, _ = a.store.ReadFile(loopGraphQLFile, &loopSpend)
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
-					Floor   int            `json:"floor"`
-					Held    bool           `json:"held"`
-					Urgent  []state.Urgent `json:"urgent,omitempty"`
-					Gated   []gatedParty   `json:"gated,omitempty"`
-					Pollers []poller       `json:"pollers"`
-				}{b, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+					Loop    *loopGraphQLSpend `json:"loop,omitempty"`
+					Floor   int               `json:"floor"`
+					Held    bool              `json:"held"`
+					Urgent  []state.Urgent    `json:"urgent,omitempty"`
+					Gated   []gatedParty      `json:"gated,omitempty"`
+					Pollers []poller          `json:"pollers"`
+				}{b, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
+				for _, warning := range b.Warnings {
+					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
+				}
 				_, _ = fmt.Fprintln(a.out, budgetLine(a, b))
+				var identities []string
+				for id := range b.Identities {
+					identities = append(identities, id)
+				}
+				slices.Sort(identities)
+				for _, id := range identities {
+					profile := b.Identities[id]
+					_, _ = fmt.Fprintf(a.out, "identity %s (%s): %s\n", id, profile.Login, budgetLine(a, profile))
+				}
+				for _, l := range searchLines(a, b.Search) {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
+				if l := loopSpendLine(a, loopSpend); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
@@ -123,18 +171,142 @@ a "github" hold is set:
 			if gate && b.GraphQL.Blocks(a.now) {
 				return refused("GitHub refuses GraphQL calls: %s", graphqlText(a, b.GraphQL))
 			}
+			if gate && b.GraphQL != nil && b.GraphQL.Remaining < a.cfg.GitHub.Floor {
+				return refused("GraphQL identity %s budget %d is under the floor %d: wait for its reset at %s", b.GraphQL.Identity, b.GraphQL.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.GraphQL.Reset))
+			}
 			if gate && b.Remaining < a.cfg.GitHub.Floor {
 				return refused("GitHub budget %d is under the floor %d: wait for the reset at %s", b.Remaining, a.cfg.GitHub.Floor, clock(a.now, b.Reset))
 			}
 			if gate && firstLine != "" {
 				return refused("%s", firstLine)
 			}
+			if gate {
+				return gateBuckets(a, b.Search, buckets)
+			}
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&gate, "gate", false, "exit 3 when GraphQL is refused, under the floor or held")
 	c.Flags().IntVar(&floor, "floor", 0, "the floor for this call (default github.floor)")
+	c.Flags().StringSliceVar(&buckets, "bucket", nil, "with --gate, also exit 3 while this search bucket is spent (repeatable or comma-separated: "+strings.Join(searchBuckets, ", ")+")")
 	return c
+}
+
+// searchBuckets are the names --bucket takes, those of /rate_limit.
+var searchBuckets = []string{"code_search", "search"}
+
+// searchBucket is the named bucket of s: nil when GitHub sent none.
+func searchBucket(s *github.Searches, name string) *github.Limit {
+	if name == "code_search" {
+		return s.CodeSearch
+	}
+	return s.Search
+}
+
+func checkBuckets(gate bool, buckets []string) error {
+	if len(buckets) > 0 && !gate {
+		return usageErr("--bucket needs --gate")
+	}
+	for _, n := range buckets {
+		if !slices.Contains(searchBuckets, n) {
+			return usageErr("unknown --bucket %q (want %s)", n, strings.Join(searchBuckets, ", "))
+		}
+	}
+	return nil
+}
+
+// gateBuckets refuses while a named bucket is spent. Limits that could not
+// be read fail the gate as an unread core budget does: the step does not run.
+func gateBuckets(a *app, s *github.Searches, buckets []string) error {
+	if len(buckets) == 0 {
+		return nil
+	}
+	if s == nil || s.Err != "" {
+		why := "not read"
+		if s != nil {
+			why = s.Err
+		}
+		return fmt.Errorf("search limits unknown, the gate cannot judge --bucket: %s", why)
+	}
+	for _, n := range buckets {
+		l := searchBucket(s, n)
+		if l == nil {
+			return fmt.Errorf("GitHub sent no %s limit, the gate cannot judge it", n)
+		}
+		if l.Spent(a.now) {
+			return refused("GitHub %s bucket is spent, 0 of %d left: wait for the reset at %s (in %s)",
+				n, l.Limit, clock(a.now, l.Reset), dur(l.Reset.Sub(a.now)))
+		}
+	}
+	return nil
+}
+
+// probeSearch reads the search limits; a failure is their Err.
+func probeSearch(ctx context.Context) *github.Searches {
+	result := &github.Searches{}
+	minimum := func(old, next *github.Limit) *github.Limit {
+		if old == nil || next != nil && next.Remaining < old.Remaining {
+			return next
+		}
+		return old
+	}
+	for _, credential := range budgetCredentials(ctx) {
+		if credential.Err != nil {
+			return &github.Searches{Err: fmt.Sprintf("identity %s: %v", credential.Identity, credential.Err)}
+		}
+		s := github.ProbeSearch(ctx, &http.Client{Timeout: 20 * time.Second}, credential.Value)
+		if s.Err != "" {
+			return &github.Searches{Err: s.Err + " [identity " + credential.Identity + "]"}
+		}
+		result.Search, result.CodeSearch = minimum(result.Search, s.Search), minimum(result.CodeSearch, s.CodeSearch)
+	}
+	return result
+}
+
+func loopSpendLine(a *app, s loopGraphQLSpend) string {
+	if s.Spent == 0 && len(s.Steps) == 0 {
+		return ""
+	}
+	var steps []string
+	for step, points := range s.Steps {
+		steps = append(steps, fmt.Sprintf("%s %d", step, points))
+	}
+	slices.Sort(steps)
+	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, loopGraphQLLimit)
+	if len(steps) > 0 {
+		line += " (" + strings.Join(steps, ", ") + ")"
+	}
+	if !s.Reset.IsZero() {
+		line += ", resets " + clock(a.now, s.Reset)
+	}
+	return line
+}
+
+// searchLines are a row per search limit: its figures and reset, or that it
+// is spent and until when.
+func searchLines(a *app, s *github.Searches) []string {
+	if s == nil {
+		return nil
+	}
+	if s.Err != "" {
+		return []string{"search limits unknown (" + truncate(s.Err, 60) + ")"}
+	}
+	var out []string
+	for _, r := range []struct {
+		name string
+		l    *github.Limit
+	}{{"code search", s.CodeSearch}, {"search", s.Search}} {
+		if r.l == nil {
+			continue
+		}
+		reset := fmt.Sprintf("%s (in %s)", clock(a.now, r.l.Reset), dur(r.l.Reset.Sub(a.now)))
+		if r.l.Spent(a.now) {
+			out = append(out, fmt.Sprintf("%s: SPENT, 0 of %d left until %s", r.name, r.l.Limit, reset))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %d of %d left, resets %s", r.name, r.l.Remaining, r.l.Limit, reset))
+	}
+	return out
 }
 
 // gatedParty is one party's gated merges: those whose devctl runs and polls

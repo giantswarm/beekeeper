@@ -19,17 +19,28 @@ func (a *app) secretCaptureCmd() *cobra.Command {
 		Long: `capture stores a credential its issuer generates and prints once (a
 registry token's password, an API token created over an API, a cloud
 access key), which no caller could store without reading it. The producer
-runs in beekeeper's process with the caller's environment minus every
-variable that carries a secret (the vault's credentials, SOPS_AGE_KEY and
-the names secret.env lists), its stderr passed through. The value is its
+is one beekeeper allows, no configuration widens the list: az acr token
+credential generate, openssl genpkey and openssl rand, each with the
+options it lists alone: --debug, --verbose, -out, -engine, -provider and
+every other one are refused, so is every other command (sh -c among them).
+It runs
+in beekeeper's process from the path beekeeper resolves itself, never the
+caller's PATH: the first of /usr/bin, /bin and /usr/local/bin that holds
+it, refused unless root owns it and every directory above it, none
+writable by a group or other users. It runs in / with a clean
+environment: PATH=/usr/bin:/bin, HOME from the user database, and of the
+caller's variables only the locale (LANG, LANGUAGE, LC_*) and TZ minus the
+names secret.env lists; no loader, interpreter, proxy or secret variable
+reaches it. Its stderr is discarded, a log there may carry the value: a
+failure names its exit code alone. The value is its
 stdout without the line end, or with --jq <filter> the one string the
 filter picks from its JSON output; the value goes into the SOPS file's
 dotted path as set writes one (the creation rules of the nearest .sops.yaml,
 a Secret's value under stringData, --name and --namespace starting an
 absent file as that Secret).
 
-Every check runs before the producer does: the references, the path
-against the creation rule, the filter. A producer that exits non-zero or
+Every check runs before the producer does: the producer, the references,
+the path against the creation rule, the filter. A producer that exits non-zero or
 prints nothing on stdout, a filter that picks no single non-empty string,
 is refused in one line, nothing stored.
 
@@ -66,7 +77,7 @@ records the producer's command and the references, never the value:
 			if err != nil {
 				return err
 			}
-			opt := secret.CaptureOptions{Producer: args[1:], Env: secret.ProducerEnv(os.Environ(), a.cfg.Secret.Env), Stderr: cmd.ErrOrStderr(), JQ: jq}
+			opt := secret.CaptureOptions{Producer: args[1:], Env: secret.ProducerEnv(os.Environ(), a.cfg.Secret.Env), JQ: jq}
 			if registry != "" || username != "" {
 				if registry == "" || username == "" {
 					return usageErr("--dockerconfigjson and --username shape a registry's pull credential together")

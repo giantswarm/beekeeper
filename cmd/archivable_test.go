@@ -48,7 +48,7 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 func TestArchivable(t *testing.T) {
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
-	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
+	run := state.Party{Session: "run9", HostSession: runHost, Name: "Guide run 9"}
 	a, out := archiveApp(t, func(st *state.State) {
 		for _, p := range []state.Party{worker, busy, run} {
 			st.Starts = append(st.Starts, state.Start{Party: p})
@@ -165,14 +165,13 @@ func (noCLIMachine) Processes() (*proc.Table, error) {
 	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
 }
 
-// The doctor asks no session about its own archive while it may not: a
-// relieved run of the supervisor never (its role forbids it the call), a
-// finished worker that declined not for a day. Its own CLI is warmed only
-// for a finished worker that has not declined. A run that asked no steward
+// The doctor asks no session about its own archive while it declined, for
+// a day. Its own CLI is warmed for a finished worker and for a relieved run
+// of the supervisor, whose standing rule covers it. A run that asked no steward
 // counts no try and leaves the archive archiveAgain, so the doctor does not
 // ask again on every run.
 func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
-	run := state.Party{Session: "run9", HostSession: runHost, Name: "Supervisor run 9"}
+	run := state.Party{Session: "run9", HostSession: runHost, Name: "Guide run 9"}
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	for _, c := range []struct {
 		desc     string
@@ -180,14 +179,14 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 		declined bool
 		warmed   string // the host whose CLI the doctor would warm, "" for none
 	}{
-		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: finishedHost},
-		{desc: "a relieved run alone", agents: []state.Party{run}},
+		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: runHost},
+		{desc: "a relieved run alone", agents: []state.Party{run}, warmed: runHost},
 		{desc: "a finished worker that declined", agents: []state.Party{worker}, declined: true},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
 			a, _ := archiveApp(t, func(st *state.State) {
 				st.Starts = append(st.Starts, state.Start{Party: run}, state.Start{Party: worker})
-				st.Relieved = []state.Relief{{Party: run, Taken: time.Now()}}
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: run, Taken: time.Now()}}}
 				if c.declined {
 					st.Declines = []state.Decline{{Host: finishedHost, At: time.Now(), Why: "No."}}
 				}

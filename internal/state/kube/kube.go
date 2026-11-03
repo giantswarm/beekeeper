@@ -5,8 +5,9 @@
 // Each record kind of the state document is a kind of its own: the grants
 // and the release time of an installation are its Environment, a lane's
 // merges its MergeLane, a hold a Hold, a note a Note in the filer's team
-// namespace, an agent a RosterEntry in its team's namespace. Concurrency is
-// per object: an update writes the one object it changes, or the Notes it
+// namespace, an agent a RosterEntry in its team's namespace, the last note
+// number handed out the note counter, a ConfigMap of serve's own namespace.
+// Concurrency is per object: an update writes the one object it changes, or the Notes it
 // changes one by one, under the resourceVersion it read, so updates of
 // different installations never contend, and a lost race reruns the update
 // on what won it.
@@ -24,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"slices"
 	"sort"
@@ -31,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,8 +58,11 @@ type Store struct {
 	c client.Client
 	// timeout bounds each call against the API server.
 	timeout time.Duration
-	// attempts bounds the reruns of one Update after lost races.
-	attempts int
+	// retryFor bounds the reruns of one update after lost races: each waits
+	// a growing, jittered backoff, and past retryFor the update gives up.
+	retryFor time.Duration
+	// home is the namespace of the store's own objects: the note counter.
+	home string
 
 	// idMu guards lastID, the id of the last Event recorded or found: ids
 	// only grow, across restarts too (the first record reads the Events'
@@ -98,7 +104,20 @@ func Scheme() (*runtime.Scheme, error) {
 
 // New returns the store over c, whose scheme knows beekeeper's kinds.
 func New(c client.Client) *Store {
-	return &Store{c: c, timeout: 30 * time.Second, attempts: 5}
+	return &Store{c: c, timeout: 30 * time.Second, retryFor: 20 * time.Second, home: DefaultNamespace}
+}
+
+// DefaultNamespace is the namespace of the store's own objects unless
+// InNamespace names another: the chart's.
+const DefaultNamespace = "beekeeper"
+
+// InNamespace keeps the store's own objects (the note counter) in ns, serve's
+// namespace; an empty ns keeps DefaultNamespace.
+func (s *Store) InNamespace(ns string) *Store {
+	if ns != "" {
+		s.home = ns
+	}
+	return s
 }
 
 // NewForConfig returns the store over the API server cfg names.
@@ -142,48 +161,71 @@ func (s *Store) Peek() (*state.State, error) { return s.Read() }
 // written before it included. An update that changes more than one object
 // other than Notes, or anything without a home in the resources, is refused
 // with nothing written.
+//
+// A note number above the last one handed out (State.NextNote) advances the
+// note counter first, under the resourceVersion read: of two concurrent
+// note adds one reruns and takes the next number, and a closed note's
+// number, any team's, is never handed out again.
 func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	for range s.attempts {
+	return s.rerun(ctx, "the update", func() (bool, error) {
 		snap, err := s.load(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		st := snap.state()
 		events, err := fn(st)
 		if err != nil {
-			return err
+			return false, err
 		}
 		want, err := snap.apply(st)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if err := snap.closeNotes(want, events, func(at time.Time) (string, error) { return s.nextID(ctx, at) }); err != nil {
+			return false, err
 		}
 		if err := homeless(st, want.state()); err != nil {
-			return err
+			return false, err
 		}
+		pruned := snap.pruneClosed(want, time.Now())
 		changes := snap.diff(want)
+		// Persist a legacy snapshot's high-water mark before GC removes its
+		// highest Note, even if its counter and Events have disappeared.
+		issue := want.issued > snap.next() || (pruned && (snap.counter == nil || want.issued > snap.issued))
 		switch {
-		case len(changes) == 0:
-			if len(events) > 0 {
-				return fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
+		case len(changes) == 0 && len(events) > 0:
+			return false, fmt.Errorf("%d events without a changed object: %w", len(events), ErrLocal)
+		case len(changes) == 0 && !issue:
+			return false, nil
+		case (len(changes) > 1 || issue) && !allNotes(changes):
+			var names []string
+			if issue {
+				names = append(names, "the note counter")
 			}
-			return nil
-		case len(changes) > 1 && !allNotes(changes):
-			names := make([]string, len(changes))
-			for i, c := range changes {
-				names[i] = c.ref()
+			for _, c := range changes {
+				names = append(names, c.ref())
 			}
-			return fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
+			return false, fmt.Errorf("the update changes %s; the Kubernetes store writes one object per update, or several Notes", strings.Join(names, ", "))
+		}
+		if issue {
+			err := s.issue(ctx, snap.counter, want.issued)
+			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+				return true, nil // another writer took the number: the rerun takes the next
+			}
+			if err != nil {
+				return false, fmt.Errorf("the note counter: %w", err)
+			}
 		}
 		var written []client.Object
 		for _, c := range changes {
 			obj, err := s.write(ctx, c)
-			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || (c.delete && apierrors.IsNotFound(err)) {
 				break
 			}
 			if err != nil {
-				return errors.Join(err, s.record(ctx, written, events, false))
+				return false, errors.Join(err, s.record(ctx, written, events, false))
 			}
 			written = append(written, obj)
 		}
@@ -191,13 +233,72 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 			// a lost race: the rerun judges the notes written so far as
 			// the state it reads
 			if err := s.record(ctx, written, events, false); err != nil {
-				return err
+				return false, err
 			}
-			continue
+			return true, nil
 		}
-		return s.record(ctx, written, events, true)
+		return false, s.record(ctx, written, events, true)
+	})
+}
+
+// ErrContended is the refusal of an update that kept losing races to other
+// writers until the store's retry deadline: running it again later may win.
+var ErrContended = errors.New("other writers kept winning the race; try again")
+
+// The backoff between the reruns after lost races: it starts at minBackoff
+// and doubles up to maxBackoff, and each wait is drawn at random below it,
+// so writers that lost together spread out.
+const (
+	minBackoff = 10 * time.Millisecond
+	maxBackoff = time.Second
+)
+
+// rerun runs try until it reports no lost race, waiting a backoff after each
+// lost one, until s.retryFor has passed or ctx is done: then it returns
+// ErrContended, named by what.
+func (s *Store) rerun(ctx context.Context, what string, try func() (lost bool, err error)) error {
+	start := time.Now()
+	backoff := minBackoff
+	for races := 1; ; races++ {
+		lost, err := try()
+		if !lost || err != nil {
+			return err
+		}
+		wait := rand.N(backoff) //nolint:gosec // jitter, no secret
+		if time.Since(start)+wait > s.retryFor || !sleep(ctx, wait) {
+			return fmt.Errorf("%s lost %d races in %s: %w", what, races, time.Since(start).Round(time.Millisecond), ErrContended)
+		}
+		backoff = min(2*backoff, maxBackoff)
 	}
-	return fmt.Errorf("the update lost %d races in a row", s.attempts)
+}
+
+// sleep waits d, false when ctx is done first.
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// issue makes n the last note number handed out: the counter's create, or
+// its update under the resourceVersion read.
+func (s *Store) issue(ctx context.Context, counter *corev1.ConfigMap, n int) error {
+	if counter == nil {
+		return s.c.Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: s.home, Name: noteCounter, Labels: map[string]string{managedBy: beekeeper}},
+			Data:       map[string]string{issuedKey: strconv.Itoa(n)},
+		})
+	}
+	counter = counter.DeepCopy()
+	if counter.Data == nil {
+		counter.Data = map[string]string{}
+	}
+	counter.Data[issuedKey] = strconv.Itoa(n)
+	return s.c.Update(ctx, counter)
 }
 
 // allNotes says whether every change is a Note's: the one batch the store
@@ -378,26 +479,25 @@ func TeamNamespace(team string) string { return teamNamespace(team) }
 func (s *Store) holder(name string, change func(*v1alpha1.Environment) (bool, error), event state.Event) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	for range s.attempts {
+	return s.rerun(ctx, name+": the claim", func() (bool, error) {
 		env := &v1alpha1.Environment{}
 		if err := s.c.Get(ctx, client.ObjectKey{Name: name}, env); err != nil {
-			return environmentErr(name, err)
+			return false, environmentErr(name, err)
 		}
 		changed, err := change(env)
 		if err != nil || !changed {
-			return err
+			return false, err
 		}
 		env.Status.ObservedGeneration = env.Generation
 		err = s.c.Status().Update(ctx, env)
 		if apierrors.IsConflict(err) {
-			continue
+			return true, nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
-		return s.recordOn(ctx, env, event)
-	}
-	return fmt.Errorf("%s: the claim lost %d races in a row", name, s.attempts)
+		return false, s.recordOn(ctx, env, event)
+	})
 }
 
 func environmentErr(name string, err error) error {
@@ -423,8 +523,13 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 		return nil, err
 	}
 	var out []state.Event
+	type eventKey struct {
+		verb, detail string
+		second       int64
+	}
+	seen := map[eventKey]bool{}
 	for _, ev := range list.Items {
-		e := state.Event{At: ev.EventTime.Time, Verb: ev.Reason, Detail: ev.Message}
+		e := state.Event{At: ev.EventTime.Time, Verb: ev.Reason, Detail: eventDetail(&ev)}
 		if raw := ev.Annotations[byAnnotation]; raw != "" {
 			var p v1alpha1.Party
 			if err := json.Unmarshal([]byte(raw), &p); err == nil {
@@ -433,6 +538,23 @@ func (s *Store) Events(n int, keep func(state.Event) bool) ([]state.Event, error
 		}
 		if keep == nil || keep(e) {
 			out = append(out, e)
+			seen[eventKey{e.Verb, e.Detail, e.At.Unix()}] = true
+		}
+	}
+	// Closed Notes retain their audit line after Event TTL, including when
+	// writing the Event failed after the atomic status update.
+	notes := &v1alpha1.NoteList{}
+	if err := s.c.List(ctx, notes); err != nil {
+		return nil, err
+	}
+	for _, n := range notes.Items {
+		if c := n.Status.Closure; c != nil {
+			e := state.Event{At: c.At.Time, By: party(c.By), Verb: c.Verb, Detail: c.Detail}
+			k := eventKey{e.Verb, e.Detail, e.At.Unix()}
+			if !seen[k] && (keep == nil || keep(e)) {
+				out = append(out, e)
+				seen[k] = true
+			}
 		}
 	}
 	slices.SortStableFunc(out, func(a, b state.Event) int { return a.At.Compare(b.At) })
@@ -453,7 +575,7 @@ func FeedEvent(ev *corev1.Event) (feed.Event, error) {
 	actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
 	return feed.Event{
 		ID: eventID(ev), Kind: ev.Reason, Subject: ev.InvolvedObject.Kind + "/" + ev.InvolvedObject.Name,
-		Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, ev.Message),
+		Actor: actor, Time: ev.EventTime.UTC(), Line: feed.Line(ev.Reason, actor, eventDetail(ev)),
 	}, nil
 }
 
@@ -468,9 +590,10 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 		return nil, err
 	}
 	out := []feed.Event{}
+	seen := map[string]bool{}
 	for i := range list.Items {
 		ev := &list.Items[i]
-		if strings.HasPrefix(ev.Reason, "serve.") {
+		if strings.HasPrefix(ev.Reason, "serve.") || ev.Reason == "note.delivery" {
 			continue
 		}
 		fe, err := FeedEvent(ev)
@@ -478,6 +601,22 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 			return nil, err
 		}
 		out = append(out, fe)
+		seen[fe.ID] = true
+	}
+	notes := &v1alpha1.NoteList{}
+	if err := s.c.List(ctx, notes); err != nil {
+		return nil, err
+	}
+	for _, n := range notes.Items {
+		if c := n.Status.Closure; c != nil {
+			if seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			by := c.By
+			actor := feed.Party{Name: by.Name, Person: by.Person, Team: by.Team, Host: by.Host}
+			out = append(out, feed.Event{ID: c.ID, Kind: c.Verb, Subject: "Note/" + n.Name, Actor: actor, Time: c.At.UTC(), Line: feed.Line(c.Verb, actor, c.Detail)})
+		}
 	}
 	slices.SortFunc(out, func(a, b feed.Event) int { return strings.Compare(a.ID, b.ID) })
 	if n > 0 && len(out) > n {
@@ -527,11 +666,21 @@ const (
 	beekeeper    = "beekeeper"
 	byAnnotation = "beekeeper.giantswarm.io/by"
 	idAnnotation = "beekeeper.giantswarm.io/id"
+	// detailAnnotation holds an event's whole detail when it exceeds the
+	// message's messageMax bytes.
+	detailAnnotation = "beekeeper.giantswarm.io/detail"
+	// messageMax is the API server's limit on a dated Event's message.
+	messageMax = 1024
+	ellipsis   = "…"
 	// noteDefaulted is the state of a Note closed by its default and kept
 	// answerable (state.State's Defaulted).
 	noteDefaulted = "defaulted"
 	// noteOpen is the state of a Note open for its answer.
 	noteOpen = "open"
+	// noteCounter is the ConfigMap of the last note number handed out,
+	// under issuedKey.
+	noteCounter = "beekeeper-note-counter"
+	issuedKey   = "issued"
 )
 
 // noteRef is the note number an event's detail names first (#12).
@@ -588,14 +737,19 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 	if at.IsZero() {
 		at = time.Now()
 	}
-	id, err := s.nextID(ctx, at)
-	if err != nil {
-		return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+	var id string
+	if note, ok := obj.(*v1alpha1.Note); ok && note.Status.Closure != nil && note.Status.Closure.Verb == e.Verb && note.Status.Closure.Detail == e.Detail {
+		id = note.Status.Closure.ID
+	} else {
+		id, err = s.nextID(ctx, at)
+		if err != nil {
+			return fmt.Errorf("recording %s on %s: the feed id: %w", e.Verb, obj.GetName(), err)
+		}
 	}
 	ev := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   ns,
-			Name:        fmt.Sprintf("%s.%x", obj.GetName(), at.UnixNano()),
+			Name:        fmt.Sprintf("%s.%s", obj.GetName(), id),
 			Labels:      map[string]string{managedBy: beekeeper},
 			Annotations: map[string]string{byAnnotation: string(by), idAnnotation: id},
 		},
@@ -608,12 +762,15 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 			ResourceVersion: obj.GetResourceVersion(),
 		},
 		Reason:              e.Verb,
-		Message:             e.Detail,
+		Message:             clipMessage(e.Detail),
 		Type:                corev1.EventTypeNormal,
 		EventTime:           metav1.MicroTime{Time: at},
 		ReportingController: "beekeeper.giantswarm.io/serve",
 		ReportingInstance:   e.By.Host,
 		Action:              e.Verb,
+	}
+	if ev.Message != e.Detail {
+		ev.Annotations[detailAnnotation] = e.Detail
 	}
 	if ev.ReportingInstance == "" {
 		ev.ReportingInstance = beekeeper
@@ -624,6 +781,30 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 	return nil
 }
 
+// clipMessage is detail within the API server's limit on an Event's
+// message, messageMax bytes: whole when it fits, else cut at a character
+// boundary and ended by an ellipsis. The whole detail is then the Event's
+// detailAnnotation (eventDetail).
+func clipMessage(detail string) string {
+	if len(detail) <= messageMax {
+		return detail
+	}
+	cut := messageMax - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return detail[:cut] + ellipsis
+}
+
+// eventDetail is the detail ev was recorded with: its detailAnnotation when
+// the message was clipped, else the message.
+func eventDetail(ev *corev1.Event) string {
+	if d, ok := ev.Annotations[detailAnnotation]; ok {
+		return d
+	}
+	return ev.Message
+}
+
 // snapshot is every object of the shared state as one read saw it.
 type snapshot struct {
 	envs   map[string]*v1alpha1.Environment
@@ -631,6 +812,10 @@ type snapshot struct {
 	holds  map[string]*v1alpha1.Hold
 	notes  map[string]*v1alpha1.Note
 	roster map[string]*v1alpha1.RosterEntry
+	// counter is the note counter, nil before the first number it handed
+	// out; issued is the last number handed out.
+	counter *corev1.ConfigMap
+	issued  int
 }
 
 func (s *Store) load(ctx context.Context) (*snapshot, error) {
@@ -664,14 +849,54 @@ func (s *Store) load(ctx context.Context) (*snapshot, error) {
 	for i := range roster.Items {
 		snap.roster[key(&roster.Items[i])] = &roster.Items[i]
 	}
-	return snap, nil
+	return snap, s.loadCounter(ctx, snap)
+}
+
+// loadCounter reads the note counter. Before its first number the Notes'
+// Events stand in for it: a number whose note closed since stays handed out.
+func (s *Store) loadCounter(ctx context.Context, snap *snapshot) error {
+	counter := &corev1.ConfigMap{}
+	err := s.c.Get(ctx, client.ObjectKey{Namespace: s.home, Name: noteCounter}, counter)
+	if err == nil {
+		snap.counter = counter
+		if snap.issued, err = strconv.Atoi(counter.Data[issuedKey]); err != nil {
+			return fmt.Errorf("the note counter %s/%s: %s: %w", s.home, noteCounter, issuedKey, err)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("the note counter %s/%s: %w", s.home, noteCounter, err)
+	}
+	events := &corev1.EventList{}
+	if err := s.c.List(ctx, events, client.MatchingLabels{managedBy: beekeeper}); err != nil {
+		return err
+	}
+	for _, ev := range events.Items {
+		if m := noteName.FindStringSubmatch(ev.InvolvedObject.Name); ev.InvolvedObject.Kind == "Note" && m != nil {
+			id, _ := strconv.Atoi(m[1])
+			snap.issued = max(snap.issued, id)
+		}
+	}
+	return nil
+}
+
+var noteName = regexp.MustCompile(`^note-(\d+)$`)
+
+// next is the last note number handed out: the counter's, or a higher
+// note's of the snapshot.
+func (snap *snapshot) next() int {
+	n := snap.issued
+	for _, note := range snap.notes {
+		n = max(n, note.Spec.ID)
+	}
+	return n
 }
 
 func key(o client.Object) string { return o.GetNamespace() + "/" + o.GetName() }
 
 // state renders the snapshot as the state document, in a canonical order.
 func (snap *snapshot) state() *state.State {
-	st := &state.State{}
+	st := &state.State{NextNote: snap.next()}
 	for _, name := range sortedKeys(snap.envs) {
 		env := snap.envs[name]
 		for _, g := range env.Status.Queue {
@@ -704,24 +929,51 @@ func (snap *snapshot) state() *state.State {
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
-		note := state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
-			Default: n.Spec.Default, By: party(n.Status.By), At: n.Status.At.Time, Fired: timeOf(n.Status.Fired),
-			Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
-			Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: n.Status.Posted}
+		if n.Status.State == noteClosed || n.Status.State == noteAnswered {
+			continue
+		}
+		note := noteOf(n)
 		if n.Status.State == noteDefaulted {
 			st.Defaulted = append(st.Defaulted, note)
 		} else {
 			st.Notes = append(st.Notes, note)
 		}
-		st.NextNote = max(st.NextNote, n.Spec.ID)
 	}
 	for _, k := range sortedKeys(snap.roster) {
-		r := snap.roster[k]
-		st.Agents = append(st.Agents, state.Agent{Party: party(r.Spec.Party), Registered: r.Spec.Registered.Time,
-			Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended", Conversation: r.Status.Conversation})
+		st.Agents = append(st.Agents, agentOf(snap.roster[k]))
 	}
 	canonical(st)
 	return st
+}
+
+func noteOf(n *v1alpha1.Note) state.Note {
+	status := initialNoteStatus(n)
+	return state.Note{ID: n.Spec.ID, For: n.Spec.For, Text: n.Spec.Text, Due: timeOf(n.Spec.Due),
+		Default: n.Spec.Default, By: party(status.By), At: status.At.Time, Fired: timeOf(status.Fired),
+		Kind: n.Spec.Kind, Until: n.Spec.Until, Refs: n.Spec.Refs,
+		Question: n.Spec.Question, StatusQuo: n.Spec.StatusQuo, Options: n.Spec.Options, Recommend: n.Spec.Recommend, Posted: status.Posted}
+}
+
+// initialNoteStatus recovers a create whose second (status) write failed.
+// Older Notes lack spec provenance: keep them visible with their namespace's
+// team and creation time, without inventing a person who may withdraw them.
+func initialNoteStatus(n *v1alpha1.Note) v1alpha1.NoteStatus {
+	status := n.Status
+	if status.State != "" {
+		return status
+	}
+	status.State = noteOpen
+	if n.Spec.Filer != nil {
+		status.By = *n.Spec.Filer
+	} else if status.By.Team == "" {
+		status.By.Team = strings.TrimPrefix(n.Namespace, "beekeeper-")
+	}
+	if n.Spec.FiledAt != nil {
+		status.At = *n.Spec.FiledAt
+	} else if status.At.IsZero() {
+		status.At = n.CreationTimestamp
+	}
+	return status
 }
 
 // canonical orders the document the way state renders it: grants and
@@ -744,7 +996,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 	want := &snapshot{
 		envs: map[string]*v1alpha1.Environment{}, lanes: map[string]*v1alpha1.MergeLane{},
 		holds: map[string]*v1alpha1.Hold{}, notes: map[string]*v1alpha1.Note{},
-		roster: map[string]*v1alpha1.RosterEntry{},
+		roster:  map[string]*v1alpha1.RosterEntry{},
+		counter: snap.counter, issued: max(snap.next(), st.NextNote),
 	}
 	for name, env := range snap.envs {
 		env = env.DeepCopy()
@@ -833,6 +1086,15 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		}
 		if cur, ok := snap.notes[k]; ok {
 			note = cur.DeepCopy()
+			if cur.Status.State == "" && i < defaulted && equal(n, noteOf(cur)) {
+				// Reading an unfinished create must not make an unrelated
+				// update repair it or contend with its creator.
+				want.notes[k] = note
+				continue
+			}
+		} else {
+			filer := apiParty(n.By)
+			note.Spec.Filer, note.Spec.FiledAt = &filer, apiTime(n.At)
 		}
 		note.Spec.ID, note.Spec.For, note.Spec.Text, note.Spec.Due = n.ID, n.For, n.Text, apiTime(n.Due)
 		note.Spec.Default, note.Spec.Kind, note.Spec.Until, note.Spec.Refs = n.Default, n.Kind, n.Until, n.Refs
@@ -845,6 +1107,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			note.Status.State = noteOpen
 		}
 		want.notes[k] = note
+		want.issued = max(want.issued, n.ID)
 	}
 
 	for _, a := range st.Agents {
@@ -856,7 +1119,8 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		if _, dup := want.roster[k]; dup {
 			return nil, fmt.Errorf("two agents %s on %s", a.Name, a.Host)
 		}
-		if cur, ok := snap.roster[k]; ok {
+		cur, ok := snap.roster[k]
+		if ok {
 			r = cur.DeepCopy()
 		}
 		r.Spec.Address, r.Spec.Party, r.Spec.Registered = "local:"+a.Host+"/"+a.Name, apiParty(a.Party), metav1.Time{Time: a.Registered}
@@ -868,6 +1132,11 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 			r.Status.State = "busy"
 		default:
 			r.Status.State = "idle"
+		}
+		if ok && equal(agentOf(cur), agentOf(r)) {
+			// The agent is unchanged: an entry whose status a concurrent
+			// create has not written yet stays the creator's to write.
+			r = cur
 		}
 		want.roster[k] = r
 	}
@@ -885,7 +1154,7 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 func homeless(had, kept *state.State) error {
 	had = clone(had)
 	canonical(had)
-	// The next note number follows from the notes present.
+	// The note counter only grows: a number lowered keeps the counter's.
 	had.NextNote = kept.NextNote
 	a, err := members(had)
 	if err != nil {
@@ -997,7 +1266,13 @@ func (s *Store) write(ctx context.Context, c change) (client.Object, error) {
 		}
 		restoreStatus(c.obj, status)
 		setObserved(c.obj)
-		return c.obj, s.c.Status().Update(ctx, c.obj)
+		err := s.c.Status().Update(ctx, c.obj)
+		if err != nil {
+			if _, ok := c.obj.(*v1alpha1.Note); ok {
+				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; it remains open and listed: %w", key(c.obj), err)
+			}
+		}
+		return c.obj, err
 	}
 	if c.spec {
 		status := statusCopy(c.obj)
@@ -1142,6 +1417,12 @@ func objOrNil[T any, P interface {
 }
 
 // equal compares as the API server stores: JSON, times to the second.
+// agentOf is the roster entry's agent as the state document carries it.
+func agentOf(r *v1alpha1.RosterEntry) state.Agent {
+	return state.Agent{Party: party(r.Spec.Party), Registered: r.Spec.Registered.Time,
+		Task: r.Status.Task, IdleSince: timeOf(r.Status.IdleSince), Done: r.Status.State == "ended", Conversation: r.Status.Conversation}
+}
+
 func equal(a, b any) bool {
 	ra, _ := json.Marshal(a)
 	rb, _ := json.Marshal(b)

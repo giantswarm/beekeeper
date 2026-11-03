@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,5 +173,83 @@ func TestAlertTargetsAddTheDiscoveredInstallations(t *testing.T) {
 	cfg.Alerts.Discover.Every.Duration = 0
 	if got := a.alertTargetsIn(contexts); len(got) != 1 {
 		t.Errorf("discovery off: targets = %+v", got)
+	}
+}
+
+// The snapshot names the installations without a kube context in one line
+// and keeps an unreachable one's own line with its cause.
+func TestSnapshotLinesWithoutContext(t *testing.T) {
+	targets := []alerts.Target{{Name: gazelle}, {Name: "far-one"}, {Name: mcName}, {Name: "far-two"}}
+	answers := []alerts.Answer{
+		{OK: true},
+		{Why: `error: context "teleport.giantswarm.io-far-one" does not exist`, NoContext: true},
+		{Why: "error: connection refused (3 attempts)"},
+		{Why: "no kube context for far-two", NoContext: true},
+	}
+	now := time.Date(2026, 10, 21, 23, 22, 0, 0, time.UTC)
+	want := []string{
+		gazelle + " at 23:22Z: 0 active",
+		mcName + " unreachable: error: connection refused (3 attempts)",
+		"2 installations without a kube context, not read: far-one, far-two",
+	}
+	if got := snapshotLines(alerts.Rules{}, targets, answers, now); !slices.Equal(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+// Namespace groups must stay distinct, and JSON must retain labels that the
+// text's grouping columns do not name.
+func TestAlertSnapshotLabels(t *testing.T) {
+	const (
+		ignored    = "Heartbeat"
+		namespaceA = "snapshot-a"
+		namespaceB = "snapshot-b"
+	)
+	labels := map[string]string{labelAlertname: "ManagementClusterJobFailed", "namespace": namespaceA, labelSeverity: "notify", labelTeam: "snapshot-team", "route": "jobs", "job_name": "failed-job"}
+	other := map[string]string{}
+	for k, v := range labels {
+		other[k] = v
+	}
+	other["namespace"] = namespaceB
+	hidden := alerts.Raw{Fingerprint: "hidden", Labels: map[string]string{labelAlertname: ignored}}
+	silenced := alerts.Raw{Fingerprint: "silenced", Labels: labels}
+	silenced.Status.SilencedBy = []string{"silence"}
+	targets := []alerts.Target{{Name: lab}, {Name: "snapshot-down"}, {Name: "no-context"}}
+	answers := []alerts.Answer{
+		{OK: true, Alerts: []alerts.Raw{{Fingerprint: namespaceA, Labels: labels}, {Fingerprint: namespaceB, Labels: other}, hidden, silenced}},
+		{Why: "read failed"}, {NoContext: true, Why: "context missing"},
+	}
+	result := makeAlertSnapshot(alerts.Rules{Ignore: []string{ignored}}, targets, answers, time.Now())
+	text := strings.Join(result.Lines, "\n")
+	for _, ns := range []string{namespaceA, namespaceB} {
+		if !strings.Contains(text, "namespace="+ns) {
+			t.Errorf("missing namespace %s: %s", ns, text)
+		}
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got alertSnapshotResult
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Installations) != 3 {
+		t.Fatalf("installations: %s", b)
+	}
+	live := got.Installations[0]
+	if !live.Reachable || len(live.Alerts) != 2 {
+		t.Fatalf("visible alerts: %s", b)
+	}
+	if !reflect.DeepEqual(live.Alerts[0].Labels, labels) || !reflect.DeepEqual(live.Alerts[1].Labels, other) {
+		t.Fatalf("labels lost: %s", b)
+	}
+	if got.Installations[1].Reachable || got.Installations[1].Why != "read failed" || !got.Installations[2].NoContext {
+		t.Fatalf("read failures lost: %s", b)
+	}
+	// A floor still filters structured output just as it filters text.
+	floor := makeAlertSnapshot(alerts.Rules{Ignore: []string{ignored}, Floors: map[string]string{lab: "page"}}, targets[:1], answers[:1], time.Now())
+	if len(floor.Installations[0].Alerts) != 0 {
+		t.Fatalf("below-floor alerts: %+v", floor)
 	}
 }

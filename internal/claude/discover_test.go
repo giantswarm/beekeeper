@@ -198,6 +198,10 @@ func TestDiscoverTakesTheSessionFromTheRecord(t *testing.T) {
 	if d == nil || d.ID != "ffffffff-0000-4000-8000-000000000007" || d.Name != desktopName || d.Key() != desktopHost {
 		t.Fatalf("desktop session = %+v", d)
 	}
+	// It takes messages under the record's name, not the title.
+	if d.Address() != "test: renamed" {
+		t.Errorf("address %q, want the record's name", d.Address())
+	}
 }
 
 // claudeProcess is a claude process with the arguments args, separated by "|".

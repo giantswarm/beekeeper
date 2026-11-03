@@ -71,8 +71,8 @@ func Navigation(apps []App, rawURL string) Decision {
 	if m == nil {
 		return Decision{}
 	}
-	if a := permissionRecord(apps, m[1], m[2]); a != nil {
-		return Decision{Allow, "beekeeper allows it: the permissions page of " + changeWords(a)}
+	if recs := permissionRecords(apps, m[1], m[2]); len(recs) > 0 {
+		return Decision{Allow, "beekeeper allows it: the permissions page of " + changeWords(recs[0])}
 	}
 	return Decision{Deny, otherPermissionsPage(m[1], m[2])}
 }
@@ -82,15 +82,19 @@ func Navigation(apps []App, rawURL string) Decision {
 // installation's; no decision for any other page of github.com.
 func permissionClick(apps []App, u *url.URL, title, words string) Decision {
 	if m := permissionsPath.FindStringSubmatch(u.Path); m != nil {
-		a := permissionRecord(apps, m[1], m[2])
-		if a == nil {
+		recs := permissionRecords(apps, m[1], m[2])
+		if len(recs) == 0 {
 			return Decision{Deny, otherPermissionsPage(m[1], m[2])}
 		}
-		if savesChanges(words) || namesChange(a, words) {
-			return Decision{Allow, "beekeeper allows the call: the permissions page of " + changeWords(a)}
+		changes := make([]string, 0, len(recs))
+		for _, a := range recs {
+			if savesChanges(words) || namesChange(a, words) {
+				return Decision{Allow, "beekeeper allows the call: the permissions page of " + changeWords(a)}
+			}
+			changes = append(changes, a.Permission)
 		}
-		return Decision{Deny, fmt.Sprintf("Refused: on the permissions page of the person's own App %s the call %q is neither the one permission change "+
-			"on record (%s) nor Save changes; every other change there stays refused.", a.Name, short(words), a.Permission)}
+		return Decision{Deny, fmt.Sprintf("Refused: on the permissions page of the person's own App %s the call %q is neither a permission change "+
+			"on record (%s) nor Save changes; every other change there stays refused.", recs[0].Name, short(words), strings.Join(changes, "; "))}
 	}
 	if m := installationPath.FindStringSubmatch(u.Path); m != nil && reviewWords.MatchString(words) {
 		for i := range apps {
@@ -102,15 +106,17 @@ func permissionClick(apps []App, u *url.URL, title, words string) Decision {
 	return Decision{}
 }
 
-// permissionRecord is the App on record for a permission change whose
-// permissions page under org's settings slug names, nil for none.
-func permissionRecord(apps []App, org, slug string) *App {
+// permissionRecords are the records of permission changes of the App
+// whose permissions page under org's settings slug names, none for an App
+// on no such record.
+func permissionRecords(apps []App, org, slug string) []*App {
+	var out []*App
 	for i := range apps {
 		if a := &apps[i]; a.Permission != "" && strings.EqualFold(a.Org, org) && strings.EqualFold(AppSlug(a.Name), slug) {
-			return a
+			out = append(out, a)
 		}
 	}
-	return nil
+	return out
 }
 
 // changeWords name the record of a permission change: the App, where it is
@@ -165,4 +171,88 @@ func squash(s string) string {
 // for an empty sub.
 func containsFold(s, sub string) bool {
 	return sub != "" && strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+// permissionDisclosure requires both a UI-only description and a page read
+// identifying the actual ref as that disclosure's button or tab. A summary
+// alone cannot turn a denied grant into an allowed click.
+var permissionDisclosureWords = regexp.MustCompile(`(?i)^(expand|expands|collapse|collapses|switch to|switches to) (?:the )?((?:organization|repository|account) permissions) (section|tab)\.?$`)
+
+var permissionControl = regexp.MustCompile(`(?i)^\s*(?:-\s*)?(?:(button|tab) "((?:organization|repository|account) permissions)" \[(ref_\d+)\]|(ref_\d+): (button|tab) "((?:organization|repository|account) permissions)")(?:\s.*)?$`)
+
+func permissionDisclosure(page Page, words, target, ref string) bool {
+	u, err := url.Parse(page.URL)
+	if err != nil || !strings.EqualFold(u.Hostname(), githubHost) || !permissionsPath.MatchString(u.Path) {
+		return false
+	}
+	step := permissionDisclosureWords.FindStringSubmatch(strings.TrimSpace(words))
+	control := permissionControl.FindStringSubmatch(target)
+	if step == nil || control == nil || control[3]+control[4] != ref {
+		return false
+	}
+	role, label := control[1]+control[5], control[2]+control[6]
+	switching := strings.HasPrefix(strings.ToLower(step[1]), "switch")
+	return strings.EqualFold(label, step[2]) &&
+		((switching && strings.EqualFold(step[3], "tab") && strings.EqualFold(role, "tab")) ||
+			(!switching && strings.EqualFold(step[3], "section") && strings.EqualFold(role, "button")))
+}
+
+// permissionRef returns the last page read's line for ref, only on the
+// clicked tab at its current URL. A navigation, input or other page-changing
+// call invalidates the evidence even when its result has not arrived yet.
+// This uses the same ref-line format as the subscription guard, scoped to
+// a matched Chrome read_page/find call rather than unrelated tool output.
+func permissionRef(transcript, tab, rawURL, ref string) string {
+	if tab == "" || ref == "" {
+		return ""
+	}
+	var target string
+	var revision int
+	type readCall struct {
+		chromeAction
+		revision int
+	}
+	calls := map[string]readCall{}
+	scanLines(transcript, func(line []byte) {
+		for _, c := range toolCalls(line) {
+			if !isBrowserTool(c.name) {
+				continue
+			}
+			if changesPage(c.name, c.input, tab) {
+				revision++
+				target = ""
+			}
+			calls[c.id] = readCall{c.chromeAction, revision}
+		}
+		for _, r := range resultGroups(line) {
+			c, ok := calls[r.id]
+			if !ok || c.revision != revision || tabOf(c.input[tabKey]) != tab || (chromeTool(c.name) != chromeReadPage && chromeTool(c.name) != chromeFind) {
+				continue
+			}
+			target = ""
+			text := strings.Join(r.texts, "\n")
+			at := contextLine.FindAllStringIndex(text, -1)
+			if len(at) == 0 {
+				continue
+			}
+			cut := at[len(at)-1][0]
+			matched := false
+			for _, m := range trailerTab.FindAllStringSubmatch(text[cut:], -1) {
+				if m[1] == tab && m[3] == rawURL {
+					matched = true
+				}
+			}
+			if !matched {
+				continue
+			}
+			for l := range strings.SplitSeq(text[:cut], "\n") {
+				for _, found := range refPattern.FindAllString(l, -1) {
+					if found == ref {
+						target = l
+					}
+				}
+			}
+		}
+	})
+	return target
 }

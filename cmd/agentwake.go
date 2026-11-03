@@ -15,7 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
@@ -33,12 +35,32 @@ func (a *app) agentWakeCmd() *cobra.Command {
 route, whose cap pauses a session's messages to local_ ids after ten sends
 since its person last typed in it.
 
-An omp agent (agents start --harness omp) gets the message in its inbox,
-at its next tool round or as its next turn; one whose process ended is
-refused: nothing resumes it.
+A session off the roster is reached the same way: a role's holder by its
+name or ids, or any session by its own id (a
+CLI session id, a desktop local_ id, an omp_/agy_/codex_ id). This is how
+the outcome of a gated wait or a settled park reaches a waiter that never
+registered. A session that no longer exists (no transcript to resume, no
+harness process reading its inbox) is refused as gone.
+
+An SSH execution receives a durable ordered envelope. Success requires a
+harness acceptance event containing its message ID. A pending or uncertain
+delivery exits nonzero; agents messages shows its receipt and agents hosts
+sync reconciles it without creating another process. Reuse --request-id for
+an identical retry; use a new ID for another identical message.
+
+An omp agent (agents start --harness omp) or an agy agent (agents start
+--harness agy) gets the message in its inbox, at its next tool round / model
+call or as its next turn; one whose process ended is refused: nothing resumes
+it.
 
 A session whose CLI runs gets the message by name, as SendMessage by name
 does: it queues and runs at the session's next tool call or as its next turn.
+A background session (agents start --mode background, or, while agents.mode
+is background, a session without a desktop one that claude agents --json
+--all lists as a background session; never one run in a terminal) whose
+CLI does not run is continued by "claude --bg --resume <id> <message>", with none of
+the caller's CLAUDE* variables, and keeps its Remote Control, mode, name
+and model; no desktop route, no claude:// link and no reopen unit.
 A session whose import is pending (agents shows it importing) is refused: a
 headless turn would run beside the CLI the import warms.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
@@ -92,34 +114,43 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
-	i, err := findAgent(st, q)
+	if err := a.refuseStopped(st, "waking "+q); err != nil {
+		return err
+	}
+	ag, rostered, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
 	}
-	ag := st.Agents[i]
-	if st.Supervisor != nil && st.Supervisor.Is(by) {
-		// The supervisor's `yours <resource>` is the grant, as in a
-		// SendMessage; the record follows the word.
-		if named := guard.Yours(msg, a.cfg.Leasable()); len(named) > 0 {
-			sessions, _, err := a.sessions()
-			if err != nil {
-				return err
+	// Reserve the local entry before delivering a wake so retirement cannot
+	// race a turn's startup. A failed delivery restores the previous age.
+	if rostered && ag.Execution == nil {
+		err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			for i := range st.Agents {
+				if st.Agents[i].Is(ag.Party) {
+					st.Agents[i].ActivityAt = a.now.UTC()
+					return nil, nil
+				}
 			}
-			if _, err := fmt.Fprintln(a.out, "wake: "+a.yoursGrants(sessions, st.Supervisor.Party, ag.Name, named)); err != nil {
-				return err
-			}
-		}
-		// A wake carrying the next task to an agent that reported its
-		// last idle restores its task record, as a SendMessage does.
-		line, err := a.retaskAgent(by, rosterIndex(ag.Party), msg)
+			return nil, refused("%s left the roster before its wake", ag.Name)
+		})
 		if err != nil {
 			return err
 		}
-		if line != "" {
-			if _, err := fmt.Fprintln(a.out, "wake: "+line); err != nil {
-				return err
+		defer func() {
+			if err != nil {
+				_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+					for i := range st.Agents {
+						if st.Agents[i].Is(ag.Party) && st.Agents[i].ActivityAt.Equal(a.now) {
+							st.Agents[i].ActivityAt = ag.ActivityAt
+						}
+					}
+					return nil, nil
+				})
 			}
-		}
+		}()
+	}
+	if ag.Execution != nil {
+		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
 	}
 	if ag.Undelivered != "" {
 		// A delivered turn is the task's start agents start did not make.
@@ -129,9 +160,16 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 			}
 		}()
 	}
-	if id, ok := strings.CutPrefix(ag.HostSession, omp.HostPrefix); ok {
-		return a.wakeOmp(by, ag, id, msg)
+	if h, id, ok := harnessForHost(ag.HostSession); ok {
+		return h.Wake(a, by, ag, id, msg)
 	}
+	// A stop of the parked background session in flight ends before the
+	// wake looks whether its CLI runs (stopParkedSession).
+	release, err := a.lockForWake(ctx, st, ag.Party)
+	if err != nil {
+		return err
+	}
+	defer release()
 	sessions, _, err := a.sessions()
 	if err != nil {
 		return err
@@ -157,6 +195,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
 		return refused("%s: its wake turn %s is starting and not yet reachable by name: send again in a minute", ag.Name, u)
+	}
+	if a.backgroundAgent(ctx, st, ag.Party) {
+		return a.wakeBackground(ctx, by, w, msg)
 	}
 	if ag.Import.Pending(a.now) {
 		return a.importRefusal(by, ag)
@@ -373,7 +414,53 @@ func (a *app) wakeOmp(by state.Party, ag state.Agent, id, msg string) error {
 func (a *app) sendOmp(name, id, msg string) error {
 	err := omp.Send(omp.InboxPath(a.cfg.StateDir, id), msg)
 	if errors.Is(err, omp.ErrNotRunning) {
-		return refused("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+		return goneRefusal("%s: its omp agent no longer runs (%s ended): start it again with agents start --harness omp", name, ompUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
+}
+
+// wakeAgy writes msg to the inbox of the agy agent ag, started under id.
+func (a *app) wakeAgy(by state.Party, ag state.Agent, id, msg string) error {
+	if err := a.sendAgy(ag.Name, id, msg); err != nil {
+		return err
+	}
+	_ = a.store.Record(event(by, "agents.wake", "%s: written to its agy inbox", ag.Name))
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (agy): written to its inbox, it runs the message before its next model call or as its next turn\n", ag.Name)
+	return err
+}
+
+// sendAgy writes msg to the inbox of the agy agent name, started under id;
+// one whose process ended is refused.
+func (a *app) sendAgy(name, id, msg string) error {
+	err := agy.Send(agy.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, agy.ErrNotRunning) {
+		return goneRefusal("%s: its agy agent no longer runs (%s ended): start it again with agents start --harness agy", name, agyUnit(id))
+	}
+	if err != nil {
+		return fmt.Errorf("messaging %s: %w", name, err)
+	}
+	return nil
+}
+
+// wakeCodex writes msg to the inbox of the codex agent ag, started under id.
+func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
+	if err := a.sendCodex(ag.Name, id, msg); err != nil {
+		return err
+	}
+	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
+	return err
+}
+
+// sendCodex writes msg to the inbox of the codex agent name, started under id;
+// one whose unit ended is refused.
+func (a *app) sendCodex(name, id, msg string) error {
+	err := codex.Send(codex.InboxPath(a.cfg.StateDir, id), msg)
+	if errors.Is(err, codex.ErrNotRunning) {
+		return goneRefusal("%s: its codex agent no longer runs (%s ended): start it again with agents start --harness codex", name, codexUnit(id))
 	}
 	if err != nil {
 		return fmt.Errorf("messaging %s: %w", name, err)
@@ -418,11 +505,11 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 		}
 	}
 	if w.id == "" {
-		return wakeTarget{}, refused("%s has no session id to resume", ag.Name)
+		return wakeTarget{}, goneRefusal("%s has no session id to resume", ag.Name)
 	}
 	transcript := transcriptOf(cfg, w.id)
 	if transcript == "" {
-		return wakeTarget{}, refused("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
+		return wakeTarget{}, goneRefusal("%s: session %s has no transcript under %s to resume", ag.Name, w.id, cfg.Claude.ProjectsDir)
 	}
 	if w.dir == "" {
 		w.dir, _ = claude.TranscriptCwd(transcript)
@@ -462,15 +549,15 @@ func wakeLive(sessions []*claude.Session, p state.Party, id string) (*claude.Ses
 func uniqueName(sessions []*claude.Session, s *claude.Session) (string, error) {
 	var pids []string
 	for _, o := range sessions {
-		if strings.EqualFold(o.Name, s.Name) {
+		if strings.EqualFold(o.Address(), s.Address()) {
 			pids = append(pids, fmt.Sprint(o.PID))
 		}
 	}
 	if len(pids) > 1 {
 		return "", refused("%d running CLIs are named %q (PIDs %s): a message by name reaches neither for sure; stop the one that should not run",
-			len(pids), s.Name, strings.Join(pids, ", "))
+			len(pids), s.Address(), strings.Join(pids, ", "))
 	}
-	return s.Name, nil
+	return s.Address(), nil
 }
 
 // resumeFlag continues a session in a new CLI.
@@ -590,17 +677,23 @@ func printsTurn(p *proc.Process) bool {
 	return p.Comm == claudeComm && (slices.Contains(p.Args, "-p") || slices.Contains(p.Args, "--print"))
 }
 
-// roleTarget is the PreToolUse hook's lookup for a message to a role (the
-// supervisor, the guide): relayAddress of its record now. A relay moves the
-// role, so a brief names the role, never the holder.
+// errSupervisorMessage refuses a message to "the supervisor": the
+// supervisor is the supervisor loop, which no session holds and no message
+// reaches.
+var errSupervisorMessage = errors.New("the supervisor is the supervisor loop, a service no session holds, so no message reaches it: report with `beekeeper agents idle --done --report`, wait with `beekeeper agents park --on`, ask with `beekeeper note add`")
+
+// roleTarget is the PreToolUse hook's lookup for a message to a role: the
+// guide's relayAddress of its record now (a relay moves the role, so a
+// brief names the role, never the holder), and a refusal for the
+// supervisor (errSupervisorMessage).
 func (a *app) roleTarget(name string) (string, error) {
+	if name != guard.RoleGuide {
+		return "", errSupervisorMessage
+	}
 	if err := a.loadConfig(); err != nil {
 		return "", fmt.Errorf("beekeeper's configuration does not load, so the %s is unknown: %w", name, err)
 	}
-	rl := supervisorRole
-	if name == guard.RoleGuide {
-		rl = guideRole
-	}
+	rl := guideRole
 	store, err := state.Open(a.cfg.StateDir)
 	if err != nil {
 		return "", err
@@ -644,8 +737,7 @@ func (a *app) heldRole(name string) string {
 
 // holderRole names the role whose holder name addresses: the holder's
 // recorded name or session id, or the name of its roster entry, which keeps
-// the run name ("Supervisor run 82") after the holder takes its desktop
-// title; "" when name addresses no holder.
+// the run name ("Guide run 82") after the holder takes its desktop title; "" when name addresses no holder.
 func holderRole(st *state.State, name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -771,7 +863,7 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 	own, live := claude.Live(sessions, ag.Party)
 	var others []string
 	for _, s := range sessions {
-		if strings.EqualFold(s.Name, name) && s != own {
+		if strings.EqualFold(s.Address(), name) && s != own {
 			others = append(others, s.ID)
 		}
 	}
@@ -789,6 +881,9 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 	}
 	return socketAddress + path, nil
 }
+
+// socketAddress starts a SendMessage target that is a CLI's peer socket.
+const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
 // says that the roster agent of that name (or session id) runs no CLI and
@@ -817,7 +912,7 @@ func (a *app) absentPeer(name string) string {
 // sessions.
 func absentAgent(st *state.State, sessions []*claude.Session, name string, now time.Time) string {
 	for _, s := range sessions {
-		if strings.EqualFold(s.Name, name) || s.ID == name {
+		if strings.EqualFold(s.Name, name) || strings.EqualFold(s.Address(), name) || s.ID == name {
 			return ""
 		}
 	}

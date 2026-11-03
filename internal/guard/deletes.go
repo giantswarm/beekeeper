@@ -97,6 +97,9 @@ func runsShell(words []string) bool {
 type deleteState struct {
 	nounset  bool
 	assigned map[string]string
+	// env gives a variable the command line does not assign its value
+	// (the session's environment); nil, every such variable is unknown.
+	env func(string) string
 }
 
 // check returns why the simple command (its words as written) deletes more
@@ -190,7 +193,7 @@ func deleteTargets(name string, args []string) []string {
 			if i+1 < len(args) {
 				next = path.Base(strings.Join(shellWords(args[i+1]), ""))
 			}
-			if a == "-delete" || (a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir") &&
+			if a == "-delete" || (a == findExecFlag || a == findExecDirFlag || a == findOKFlag || a == findOKDirFlag) &&
 				(next == rmCmd || next == shredCmd || next == unlinkCmd) {
 				deletes = true
 			}
@@ -367,19 +370,40 @@ func (st *deleteState) expansion(token string, at int) expansion {
 	case st.nounset:
 		if v, ok := st.assigned[name]; ok {
 			e.value = v
+		} else if v := st.environ(name); v != "" {
+			e.value = v
 		}
 	default:
 		e.value, e.maybeEmpty = st.assigned[name], true
+		if _, ok := st.assigned[name]; !ok {
+			if v := st.environ(name); v != "" {
+				e.value, e.maybeEmpty = v, false
+			}
+		}
 	}
 	return e
+}
+
+// environ is the variable's value in st.env, "" without one.
+func (st *deleteState) environ(name string) string {
+	if st.env == nil {
+		return ""
+	}
+	return st.env(name)
 }
 
 // expansionEnd returns the end of the expansion starting at word[i] ($name,
 // $1, ${…}, $(…), `…`), i+1 when a lone $.
 func expansionEnd(word string, i int) int {
 	if word[i] == '`' {
-		if j := strings.IndexByte(word[i+1:], '`'); j >= 0 {
-			return i + j + 2
+		for j := i + 1; j < len(word); j++ {
+			if word[j] == '\\' && j+1 < len(word) && (word[j+1] == '`' || word[j+1] == '\\' || word[j+1] == '$') {
+				j++
+				continue
+			}
+			if word[j] == '`' {
+				return j + 1
+			}
 		}
 		return len(word)
 	}

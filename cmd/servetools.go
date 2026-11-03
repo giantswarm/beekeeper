@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -32,7 +34,16 @@ const (
 	paramTarget      = "target"
 	paramNote        = "note"
 	paramRefs        = "refs"
+	paramDefault     = "default"
+	paramChecked     = "checked"
+	paramDue         = "due"
+	paramWhy         = "why"
+	paramStatusQuo   = "status_quo"
+	paramOptions     = "options"
+	paramRecommend   = "recommend"
+	paramFoldInto    = "fold_into"
 	paramFor         = "for"
+	paramAfter       = "after"
 	paramKind        = "kind"
 	paramText        = "text"
 	paramMessage     = "message"
@@ -43,71 +54,124 @@ const (
 	keyMailbox       = "mailbox"
 	keyNotes         = "notes"
 	lanesName        = "lanes"
+	// The roster tools, which act as the calling agent itself.
+	nameAgentsRegister = "agents_register"
+	nameAgentsLeave    = "agents_leave"
 )
 
-// The options every tool takes: who the calling agent is and where it runs.
-func callerOptions() []mcp.ToolOption {
-	return []mcp.ToolOption{
-		mcp.WithString(paramAgent, mcp.Description("the calling agent's name (default: the person's email)")),
-		mcp.WithString(paramHost, mcp.Description("the machine or installation the agent runs on")),
+// callerOptions are the arguments every tool takes: who the calling agent is
+// and where it runs. One person's agents share the person's token, so only
+// these tell them apart.
+func callerOptions(required bool) []mcp.ToolOption {
+	agent := []mcp.PropertyOption{mcp.Description("the calling agent's name (default: your email)")}
+	host := []mcp.PropertyOption{mcp.Description("the machine or installation it runs on")}
+	if required {
+		agent = []mcp.PropertyOption{mcp.Required(), mcp.Description("the calling agent's name")}
+		host = append(host, mcp.Required())
 	}
+	return []mcp.ToolOption{mcp.WithString(paramAgent, agent...), mcp.WithString(paramHost, host...)}
 }
 
-func newTool(name, desc string, readOnly bool, opts ...mcp.ToolOption) mcp.Tool {
-	opts = append([]mcp.ToolOption{mcp.WithDescription(desc), mcp.WithReadOnlyHintAnnotation(readOnly)}, opts...)
-	return mcp.NewTool(name, append(opts, callerOptions()...)...)
+// hints are a tool's annotations; every tool states all four.
+type hints struct {
+	readOnly, destructive, idempotent, openWorld bool
+	// identified: the tool needs agent and host, it acts on the agent itself.
+	identified bool
+}
+
+var (
+	// hintRead changes nothing in the shared state.
+	hintRead = hints{readOnly: true, idempotent: true}
+	// hintAdd adds or updates the caller's own record; again changes nothing.
+	hintAdd = hints{idempotent: true}
+	// hintRemove takes a record away, another's too where the role allows;
+	// again changes nothing.
+	hintRemove = hints{destructive: true, idempotent: true}
+)
+
+// newTool declares a tool: summary is its description's first line, all
+// muster's discovery shows; details follow it.
+func newTool(name, summary, details string, h hints, opts ...mcp.ToolOption) mcp.Tool {
+	opts = append([]mcp.ToolOption{
+		tooldesc.Describe(summary, details),
+		mcp.WithReadOnlyHintAnnotation(h.readOnly),
+		mcp.WithDestructiveHintAnnotation(h.destructive),
+		mcp.WithIdempotentHintAnnotation(h.idempotent),
+		mcp.WithOpenWorldHintAnnotation(h.openWorld),
+	}, opts...)
+	return mcp.NewTool(name, append(opts, callerOptions(h.identified)...)...)
 }
 
 func (s *server) tools() []serveTool {
 	return []serveTool{
-		{newTool("lease_list", "The installations: who holds each, since when and what for, and which are free.", true), toolLeaseList},
-		{newTool("lease_claim", "Claim an installation; refused while another holds it or it upgrades.", false,
+		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintRead), toolLeaseList},
+		{newTool("lease_claim", "Claim a shared installation for the calling agent.",
+			"Refused while another holds it or while it upgrades.", hintAdd,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
-		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", false,
+		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
-		{newTool("hold_list", "The holds: merges into a repository or lane, or all GitHub work, held until lifted.", true), toolHoldList},
-		{newTool("hold_set", "Hold a target: owner/repo, lane:<name>, merges or github.", false,
+		{newTool("hold_list", "List the holds on merges into a repository or lane, or on every merge, until lifted.", "", hintRead), toolHoldList},
+		{newTool("hold_set", "Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.",
+			"", hintRemove,
 			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
 			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why")),
 			mcp.WithString("until", mcp.Description("when it ends by itself: a time (15:30) or a duration (2h)")),
 			mcp.WithString("except", mcp.Description("the one owner/repo or owner/repo#n the hold lets through"))), toolHoldSet},
-		{newTool("hold_lift", "Lift a hold: your own, or as its setter's team's supervisor role.", false,
+		{newTool("hold_lift", "Lift a hold: your own, or as its setter's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("the held target"))), toolHoldLift},
-		{newTool("lanes", "The merge lanes: the running merge, the settling one and the queue.", true), toolLanes},
-		{newTool("lane_queue", "Queue a pull request's merge at the end of its lane.", false, prOptions()...), toolLaneQueue},
-		{newTool("lane_settle", "Register a merge run outside the gate as its lane's head, running or merged.", false,
-			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles")))...), toolLaneSettle},
-		{newTool("lane_turn", "Whether a queued merge is its lane's next, and what is ahead of it.", true, prOptions()...), toolLaneTurn},
-		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up. Its person's, or the team's supervisor role's.", false,
+		{newTool("lanes", "List the merge lanes: each lane's running merge, settling merge and queue.", "", hintRead), toolLanes},
+		{newTool("lane_queue", "Queue a pull request's merge at the end of its repository's merge lane.",
+			fmt.Sprintf("Queue it again while it waits: a waiting place not queued again for merge.queueTTL (default %s) holds up nobody.", shortDur(config.DefaultQueueTTL)), hintAdd,
+			prOptions()...), toolLaneQueue},
+		{newTool("lane_settle", "Record a merge run outside the gate as its lane's head: running, or settling once merged.",
+			"", hintAdd,
+			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles until its release rolled")))...), toolLaneSettle},
+		{newTool("lane_turn", "Tell whether a queued merge is its lane's next, and which merges are ahead of it.",
+			"It does not keep the place: lane_queue does.", hintRead, prOptions()...), toolLaneTurn},
+		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up.",
+			"", hintRemove,
 			append(prOptions(), mcp.WithString(paramReason, mcp.Description("why it leaves: rolled, nothing merged, refused")))...), toolLaneLeave},
-		{newTool("note_add", "File a note: a decision for a person or a team, put to them in Slack, or a sign-in.", false,
+		{newTool("note_add", "File a decision for a person or a team, put to them in Slack: its question, due time, default and thread.", "", hints{openWorld: true},
 			mcp.WithString(paramText, mcp.Required(), mcp.Description("the question (one line, at most 150 characters)")),
-			mcp.WithString(paramFor, mcp.Description("who decides: a person's name or email, or team:<name>")),
-			mcp.WithString(paramKind, mcp.Description("decision (the default) or login")),
-			mcp.WithString("due", mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
-			mcp.WithString("default", mcp.Description("the action if nobody answers by the due time")),
-			mcp.WithString("status_quo", mcp.Description("what is true now")),
-			mcp.WithString("why", mcp.Description("why it needs the person")),
-			mcp.WithArray("options", mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
-			mcp.WithNumber("recommend", mcp.Description("the option recommended, 1-based")),
-			mcp.WithString("checked", mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
-			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n"))), toolNoteAdd},
-		{newTool("note_list", "The open notes: decisions and sign-ins.", true), toolNoteList},
-		{newTool("note_answer", "Answer a decision, word for word, and close it: as the person it is for, or a member of the team it is for.", false,
+			mcp.WithString(paramFor, mcp.Required(), mcp.Description("who decides: a person's name or email, or team:<name>")),
+			mcp.WithString(paramKind, mcp.Description("decision, the default and the only kind this tool files")),
+			mcp.WithString(paramDue, mcp.Description("when it is due: a time (22:55) or a duration (3h)")),
+			mcp.WithString(paramDefault, mcp.Description("the action if nobody answers by the due time")),
+			mcp.WithString(paramStatusQuo, mcp.Description("what is true now")),
+			mcp.WithString(paramWhy, mcp.Description("why it needs the person")),
+			mcp.WithArray(paramOptions, mcp.WithStringItems(), mcp.Description(`"<choice>: <consequence>" each, at most 10, labels at most 75 characters`)),
+			mcp.WithNumber(paramRecommend, mcp.Description("the option recommended, 1-based")),
+			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
+			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
+			mcp.WithNumber(paramFoldInto, mcp.Description("an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned"))), toolNoteAdd},
+		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintRead), toolNoteList},
+		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
+			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
-			mcp.WithString(paramText, mcp.Description("the answer in the person's own words")),
+			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
-		{newTool("note_done", "Close a note without an answer: its decision is withdrawn. Its filer's, or the filer's team's supervisor role's.", false,
+		{newTool(toolAnswerVerifyName, "Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.",
+			fmt.Sprintf("Verified: through an authenticated channel (central, slack), at most %s old and, with head, naming that commit; for the answering person, their team or its supervisor role.", shortDur(answerFresh)), hintRead,
+			mcp.WithNumber(paramNote, mcp.Description("the note's number")),
+			mcp.WithString(paramAbout, mcp.Description("the issue or pull request, owner/repo#n")),
+			mcp.WithString(paramHead, mcp.Description("the commit its question or words must name"))), toolAnswerVerify},
+		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
+			"", hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
-		{newTool("agents_register", "Register the calling agent on its team's roster, idle unless it holds an open task; a machine publishing its agents names each one's task and whether it is done.", false,
+		{newTool(nameAgentsRegister, "Register the calling agent on its team's roster: idle, or busy with its task.",
+			"A machine publishing its agents passes each one's task and whether it is done; an agent registering itself passes neither and keeps its task.",
+			hints{idempotent: true, identified: true},
 			mcp.WithString(paramTask, mcp.Description("the agent's task (a machine's agent): empty is idle")),
 			mcp.WithBoolean(paramDone, mcp.Description("the agent reported its work finished: ended on the roster"))), toolAgentsRegister},
-		{newTool("agents_leave", "Take the calling agent off the roster: its machine no longer runs it.", false), toolAgentsLeave},
-		{newTool("list_agents", "The agent roster as you may read it: your own local agents, your team's that work on a shared installation (hold a lease), and every remote agent.", true,
+		{newTool(nameAgentsLeave, "Take the calling agent off the roster: its machine no longer runs it.", "",
+			hints{destructive: true, idempotent: true, identified: true}), toolAgentsLeave},
+		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
-		{newTool("snapshot", "Everything at once: leases, holds, lanes, notes and the roster.", true), toolSnapshot},
+		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintRead), toolSnapshot},
+		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "After an id, every event above it the instance still holds; gap set when it no longer holds that event, so events right after it may have aged out.", hintRead,
+			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one, all of them the instance still holds"))), toolReadFeed},
 	}
 }
 
@@ -675,19 +739,22 @@ func toolNoteAdd(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	args := []string{"add", text}
-	for _, f := range [][2]string{{"for", "for"}, {"kind", "kind"}, {"due", "due"}, {"default", "default"}, {"status_quo", "status-quo"}, {"why", "why"}, {"checked", "checked"}} {
+	for _, f := range [][2]string{{"for", "for"}, {"kind", "kind"}, {paramDue, "due"}, {paramDefault, "default"}, {paramStatusQuo, "status-quo"}, {paramWhy, "why"}, {paramChecked, "checked"}} {
 		if v := req.GetString(f[0], ""); v != "" {
 			args = append(args, "--"+f[1], v)
 		}
 	}
-	for _, o := range req.GetStringSlice("options", nil) {
+	for _, o := range req.GetStringSlice(paramOptions, nil) {
 		args = append(args, "--option", o)
 	}
 	for _, r := range req.GetStringSlice(paramRefs, nil) {
 		args = append(args, "--ref", r)
 	}
-	if r := req.GetInt("recommend", 0); r != 0 {
+	if r := req.GetInt(paramRecommend, 0); r != 0 {
 		args = append(args, "--recommend", strconv.Itoa(r))
+	}
+	if f := req.GetInt(paramFoldInto, 0); f != 0 {
+		args = append(args, "--fold-into", strconv.Itoa(f))
 	}
 	if err := c.verb(c.app.noteCmd(), args...); err != nil {
 		return nil, err
@@ -713,12 +780,15 @@ func (c *call) note(id int) (*state.Note, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Two teams' notes of one number (numbered before the shared note
+	// counter): the caller's team's is the one meant, as note done's.
+	var found *state.Note
 	for _, n := range st.Notes {
-		if n.ID == id {
-			return &n, nil
+		if n.ID == id && (found == nil || n.By.Team == c.me.Team) {
+			found = &n
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 func toolNoteList(c *call, _ mcp.CallToolRequest) (any, error) {
@@ -751,7 +821,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	n, _ := answerable(st, id, c.app.now)
 	if n != nil {
 		c.concern = kube.NoteObject(n.By.Team, id)
-		if !decidesNote(c.s.cfg.Serve, n, c.who) {
+		decides, err := c.s.decides(c.ctx, n, c.who)
+		if err != nil {
+			return nil, fmt.Errorf("note #%d is for %s, and who answers it could not be checked: %w", id, n.For, err)
+		}
+		if !decides {
 			return nil, refused("note #%d is for %s: only its addressee answers it", id, cmp.Or(n.For, "nobody named"))
 		}
 	}
@@ -767,7 +841,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	answer, _ := answerText(n, choice, text) // the verb took it
 	c.s.closeDecision(c.ctx, n, outcomeAnswered, answer)
-	return map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}, nil
+	res := map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}
+	if shown, err := c.app.localNote(id); err == nil && shown != nil && shown.Delivery != nil {
+		res["delivery"] = shown.Delivery
+	}
+	return res, nil
 }
 
 func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
@@ -923,6 +1001,26 @@ type snapshotView struct {
 	Lanes  []centralLane    `json:"lanes"`
 	Notes  []state.Note     `json:"notes"`
 	Agents []addressedAgent `json:"agents"`
+}
+
+// toolReadFeed is beekeeper://feed as a tool: muster's get_resource reads
+// no resource of a server its callers reach with their own token, its
+// call_tool does.
+func toolReadFeed(c *call, req mcp.CallToolRequest) (any, error) {
+	f, err := c.s.feed(c.who, req.GetString(paramAfter, ""))
+	if err != nil {
+		return nil, err
+	}
+	if f.Gap {
+		_, _ = fmt.Fprintln(c.out, "gap: the events right after the one asked after may have aged out")
+	}
+	for _, ev := range f.Events {
+		_, _ = fmt.Fprintf(c.out, "%s %s\n", ev.ID, ev.Line)
+	}
+	if len(f.Events) == 0 {
+		_, _ = fmt.Fprintln(c.out, "no event")
+	}
+	return f, nil
 }
 
 func toolSnapshot(c *call, _ mcp.CallToolRequest) (any, error) {

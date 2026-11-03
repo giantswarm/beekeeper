@@ -126,7 +126,7 @@ func TestBrokerLogsASecretCallThatRanNoProcess(t *testing.T) {
 	}
 	evs := secretEvents(t, a)
 	args := dbRef + " x.sops.yaml#k --name=x: failed: "
-	if len(evs) != 2 || evs[0].Verb != "secret.copy" || evs[1].Verb != "secret.copy" ||
+	if len(evs) != 2 || evs[0].Verb != copyVerb || evs[1].Verb != copyVerb ||
 		!strings.HasPrefix(evs[0].Detail, args+refusal.Error()+" (") ||
 		!strings.HasPrefix(evs[1].Detail, args+"ended on the broker's deadline of 20ms (") {
 		t.Errorf("the broker's log = %+v", evs)

@@ -14,12 +14,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// agentFields keeps the roster fields without Agent's state-preserving JSON
+// methods: promoting its marshaler would hide every field added by the view.
+type agentFields state.Agent
+
 type agentView struct {
-	state.Agent
+	agentFields
 	// Reachable: "live" (the CLI runs), "live, first turn running" or
 	// "live, wake turn running" (a headless turn of agents start or agents
 	// wake is its CLI), "waiting <t> left" (a bounded wait keeps it
@@ -105,16 +110,26 @@ or "wake turn running".`,
 		RunE: func(*cobra.Command, []string) error { return a.agentList(full) },
 	}
 	fullFlag(c, &full)
-	var name string
+	var name, harness string
 	register := &cobra.Command{
 		Use:   "register",
 		Short: "Register the calling session as an idle agent",
 		Long: `Register the calling session as an idle agent, named by its title unless
 --name overrides it. A caller whose parent chain passes two claude session
 CLIs, a claude started inside another session, is refused with the name of
-that parent session, whose ids it inherits and whose entry stays as it is.`,
+that parent session, whose ids it inherits and whose entry stays as it is.
+
+--harness names the harness a session runs on when it is not Claude Code
+(omp, agy, codex) and agents start did not start it: beekeeper has no
+message route to such a session, so agents resume and the watch never wake
+it headless, which would start a second, unrelated Claude Code session; it
+leaves its own park with agents resume, no agent named.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
+			h, ok := harnessByName(harness)
+			if !ok {
+				return usageErr("--harness %s is not a harness beekeeper knows: claude, omp, agy or codex", harness)
+			}
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -143,6 +158,14 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 				if err != nil {
 					return nil, err
 				}
+				for i := range st.Agents {
+					if st.Agents[i].Is(me) {
+						st.Agents[i].ActivityAt = a.now.UTC()
+						if harness != "" {
+							st.Agents[i].Harness = h.Name()
+						}
+					}
+				}
 				if os.Getenv(sandbox.Runtime) == "" {
 					// outside the sandbox, this shell's PATH is the agent's own
 					_ = recordGH(st, me, guard.Resolve("gh", os.Getenv("PATH")), a.now.UTC())
@@ -165,6 +188,9 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 			for _, r := range reg.replaced {
 				_, _ = fmt.Fprintf(a.out, "register: replaces the entry of session %s, which no longer runs\n", r.Session)
 			}
+			if h.Name() != "" {
+				_, _ = fmt.Fprintf(a.out, "register: %s runs on %s, which beekeeper has no message route to: nobody wakes it, it ends its own park with `beekeeper agents resume`\n", me.Name, h.Name())
+			}
 			if reg.own {
 				_, err = fmt.Fprintf(a.out, "register: %s busy with %q since %s: work it, then `beekeeper agents idle`\n",
 					me.Name, reg.task, clock(a.now, reg.assignedAt))
@@ -180,6 +206,7 @@ that parent session, whose ids it inherits and whose entry stays as it is.`,
 		},
 	}
 	register.Flags().StringVar(&name, "name", "", "the name to register under (default: the session's title)")
+	register.Flags().StringVar(&harness, "harness", "", "the harness the session runs on when it is not Claude Code: omp, agy or codex")
 	assign := &cobra.Command{
 		Use:   "assign <agent> <task>",
 		Short: "Record the task handed to an agent",
@@ -233,7 +260,14 @@ broken function, workaround, follow-up or problem the task met, with its
 evidence and owning repository, or --problem none. beekeeper delivers both
 itself: the supervisor's watch prints the report once (WORKER REPORT) and
 each finding as a line of its own (PROBLEM FOUND), for the supervisor to
-file; the log keeps them (agents.report, agents.problem).`,
+file; a finding filed already names its issue's URL. The log keeps them
+(agents.report, agents.problem). Use agents problem "<finding>" to report a
+finding mid-task. Repeated findings are logged and delivered once per
+worker assignment, including those repeated here.
+
+--as <name> reports for the registered agent of that name, whatever
+session registered it, as agents park does; an independent reviewer's
+completion is refused under --as.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			found, err := problemsFound(problems, finished)
@@ -248,6 +282,9 @@ file; the log keeps them (agents.report, agents.problem).`,
 				report = string(b)
 			}
 			report = strings.TrimSpace(report)
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "report", executionReport{Finished: finished, Text: report, Problems: problems})
+			}
 			if finished && report == "" {
 				return refused("the final report is missing: --report \"<PR links, releases, the live proof, what is still open>\" (or --report - from stdin); beekeeper delivers it to the supervisor")
 			}
@@ -256,11 +293,21 @@ file; the log keeps them (agents.report, agents.problem).`,
 				return err
 			}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
+				i := a.callerAgent(st, me)
 				if i < 0 {
 					return nil, refused("this session is not registered: `beekeeper agents register` first")
 				}
 				ag := &st.Agents[i]
+				if m := post.Unlinked(strings.Join(append([]string{report}, found...), "\n"), agentHere(st, ag)); len(m) > 0 {
+					return nil, refused("report refused, it lacks: %s", strings.Join(m, "; "))
+				}
+				if slices.ContainsFunc(st.DeskReviews, func(round state.DeskReview) bool { return sameReviewSession(round.Reviewer, ag.Party) }) && !sameReviewSession(me, ag.Party) {
+					return nil, refused("independent review completion requires its assigned session, not --as")
+				}
+				if err := a.captureExecutionReviewReport(cmd.Context(), st, me, report, a.now, finished); err != nil {
+					return nil, err
+				}
+				found = freshWorkerProblems(ag, found)
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
@@ -275,7 +322,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 					}
 				}
 				if report != "" || len(found) > 0 {
-					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: ag.Party, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
 				}
 				if report != "" {
 					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
@@ -288,6 +335,7 @@ file; the log keeps them (agents.report, agents.problem).`,
 			if err != nil {
 				return err
 			}
+			a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if report != "" || len(found) > 0 {
 				if _, err := fmt.Fprintf(a.out, "register: the report and %d problem(s) found go to the supervisor's watch\n", len(found)); err != nil {
 					return err
@@ -306,15 +354,17 @@ file; the log keeps them (agents.report, agents.problem).`,
 	}
 	idle.Flags().BoolVar(&finished, "done", false, "the work is finished: the doctor removes and archives the agent once idle")
 	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
-	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository; "none" when there was none (required with --done)`)
+	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed; "none" when there was none (required with --done)`)
 	var keepDesktop bool
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
-		Short: "Take an agent off the roster and archive the desktop session beekeeper started for it",
+		Short: "Take an agent off the roster and archive or stop the session beekeeper started for it",
 		Long: `Takes an agent off the roster. When beekeeper started the agent's session,
 its desktop session is archived too (the desktop's Archived list brings it
-back), unless it runs a turn or holds the supervisor's or the guide's role: an idle desktop CLI of a session beekeeper started is asked to
-archive it. A session its person started is never archived.`,
+back), unless it runs a turn or holds the guide's role: an idle desktop CLI of a session beekeeper started is asked to
+archive it. A background session beekeeper started is stopped (claude stop;
+claude attach brings it back), unless it runs a turn. A session its person
+started is never archived nor stopped.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -322,23 +372,54 @@ archive it. A session its person started is never archived.`,
 				return err
 			}
 			var gone state.Party
+			var worktreeDir, reviewHead string
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				i, err := findAgent(st, args[0])
 				if err != nil {
 					return nil, err
 				}
 				gone = st.Agents[i].Party
+				if st.Agents[i].Park != nil {
+					worktreeDir = st.Agents[i].Park.Worktree
+					reviewHead = st.Agents[i].Park.ReviewHead
+				}
+				if worktreeDir == "" {
+					if k := st.StartIndex(gone); k >= 0 {
+						worktreeDir = st.Starts[k].Dir
+					}
+				}
+				if st.Agents[i].Execution != nil {
+					if executionReserved(st, st.Agents[i]) {
+						return nil, refused("SSH execution must have confirmed termination before removal")
+					}
+					keepDesktop = true
+				}
 				removeAgent(st, i)
 				return []state.Event{event(me, "agents.remove", "%s", gone.Name)}, nil
 			})
 			if err != nil {
 				return err
 			}
+			lines, err := a.stopWorktreeOrphans(me, false)
+			if err != nil {
+				return err
+			}
+			for _, line := range lines {
+				if _, err := fmt.Fprintln(a.out, line); err != nil {
+					return err
+				}
+			}
+			defer a.cleanRemovedWorktree(cmd.Context(), worktreeDir, reviewHead)
 			if _, err := fmt.Fprintf(a.out, "removed %s\n", gone.Name); err != nil || keepDesktop {
 				return err
 			}
 			st, err := a.store.Read()
 			if err != nil {
+				return err
+			}
+			if line, ok := a.stopBackgroundStart(cmd.Context(), st, gone); ok {
+				_ = a.store.Record(event(me, "agents.archive", "%s: %s", gone.Name, line))
+				_, err = fmt.Fprintf(a.out, "%s: %s\n", gone.Name, line)
 				return err
 			}
 			outcomes := a.archiveDesktops(cmd.Context(), st, []state.Party{gone}, "beekeeper agents remove "+gone.Name)
@@ -354,7 +435,8 @@ archive it. A session its person started is never archived.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
-	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, remove, list)
+	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
+	c.AddCommand(a.executionHostCmds()...)
 	return c
 }
 
@@ -375,21 +457,38 @@ type registration struct {
 // sessions that no longer run, and is refused a name the entry of a running
 // session holds. An open task of a dropped entry is never lost: the new
 // entry takes it over with its assignment time, and two dropped entries with
-// open tasks are refused, since one entry holds one task.
+// open tasks are refused, since one entry holds one task. A park the session
+// took off the roster ends, as a new task ends an agent's: the roster
+// entry's own task and park, if any, are what it waits on now.
 func registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
 	var reg registration
-	var holder, lastTask string
+	var holder, lastTask, harness, model string
 	var keep *state.Keep
+	var reportedProblems, ownProblems *state.WorkerProblems
+	var ownAssignedAt time.Time
 	for _, x := range st.Agents {
 		own := x.Is(me)
 		if !own && !strings.EqualFold(x.Name, me.Name) {
 			continue
+		}
+		if own {
+			ownProblems = x.ReportedProblems
+			ownAssignedAt = x.AssignedAt
+		}
+		if x.Execution != nil {
+			return registration{}, refused("name belongs to a managed SSH execution; inspect or stop it before replacement")
 		}
 		if x.LastTask != "" && (own || lastTask == "") {
 			lastTask = x.LastTask
 		}
 		if x.Keep != nil && (own || keep == nil) {
 			keep = x.Keep
+		}
+		if x.Harness != "" && (own || harness == "") {
+			harness = x.Harness
+		}
+		if x.Model != "" && (own || model == "") {
+			model = x.Model
 		}
 		if !own {
 			if live(x.Party) {
@@ -405,9 +504,16 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 				holder, x.Session, reg.task, x.Task)
 		}
 		reg.task, reg.assignedAt, reg.park, reg.own, holder = x.Task, x.AssignedAt, x.Park, own, x.Session
+		reportedProblems = x.ReportedProblems
+	}
+	if reg.task == "" {
+		// Idle registration keeps the last assignment's finding receipts valid.
+		reg.assignedAt = ownAssignedAt
+		reportedProblems = ownProblems
 	}
 	st.Agents = slices.DeleteFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) || strings.EqualFold(x.Name, me.Name) })
-	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep})
+	st.Parks = slices.DeleteFunc(st.Parks, func(p state.Park) bool { return p.By.Is(me) })
+	st.Agents = append(st.Agents, state.Agent{Party: me, Registered: now, IdleSince: now, Task: reg.task, AssignedAt: reg.assignedAt, Park: reg.park, LastTask: lastTask, Keep: keep, Harness: harness, Model: model, ReportedProblems: reportedProblems})
 	return reg, nil
 }
 
@@ -416,6 +522,10 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 // removeAgent takes the agent at i off the roster; its session no longer
 // waits on anyone.
 func removeAgent(st *state.State, i int) {
+	ag := st.Agents[i]
+	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
+		st.EndedWorkers = append(st.EndedWorkers, state.Start{Party: ag.Party, At: ag.Registered})
+	}
 	for j := range st.Records {
 		if st.Records[j].Session.Is(st.Agents[i].Party) {
 			st.Records[j].Waits = ""
@@ -429,6 +539,19 @@ func reportIdle(ag *state.Agent, now time.Time) {
 	if ag.Task != "" {
 		ag.LastTask, ag.Task, ag.IdleSince = ag.Task, "", now.UTC()
 	}
+}
+
+func agentHere(st *state.State, ag *state.Agent) string {
+	if r := post.SingleRepo(ag.Task + " " + ag.LastTask); r != "" {
+		return r
+	}
+	var issues []string
+	for _, r := range st.Records {
+		if r.Session.Is(ag.Party) {
+			issues = append(issues, r.Issue)
+		}
+	}
+	return post.SingleRepo(strings.Join(issues, " "))
 }
 
 // endNotes stamps the open notes worker filed with the end of its task
@@ -451,7 +574,7 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 	var found []string
 	none := false
 	for _, l := range lines {
-		l = strings.Join(strings.Fields(l), " ")
+		l = oneLine(l)
 		switch {
 		case l == "":
 			return nil, refused("an empty --problem: one line per finding, or --problem none")
@@ -514,9 +637,22 @@ func findParty(parties []state.Party, q, one, many string) (int, error) {
 func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentView {
 	out := make([]agentView, 0, len(st.Agents))
 	t, _ := plat.Machine.Processes() // unreadable: no headless turn is named
-	desktop := t != nil && !plat.Opener.Running(t).IsZero()
+	desktop := a.desktopMode() && t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
-		v := agentView{Agent: ag, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		v := agentView{agentFields: agentFields(ag), Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		if ag.Execution != nil {
+			v.Reachable = "SSH reachability unknown; process unknown"
+			if r, _ := executionRecord(st, *ag.Execution); r != nil {
+				reach := r.Observation.Reachability
+				if r.Observation.ReachabilityAt.IsZero() || a.now.Sub(r.Observation.ReachabilityAt) > time.Minute {
+					reach = "unknown (stale)"
+				}
+				v.Reachable = "SSH " + reach + "; process " + r.Observation.ProcessState
+			}
+			v.Browser = "-"
+			out = append(out, v)
+			continue
+		}
 		if w := ag.Import; w.Pending(a.now) {
 			v.Reachable = "importing, until " + clock(a.now, w.Until)
 		}
@@ -524,7 +660,7 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 			v.Reachable = "task not delivered: " + ag.Undelivered
 		}
 		if s, ok := claude.Live(sessions, ag.Party); ok {
-			v.Reachable, v.Model = "live", s.Model
+			v.Reachable, v.Model = "live", cmp.Or(s.Model, ag.Model)
 			for _, c := range s.Commands {
 				if c.Remaining > 0 {
 					v.Reachable = "waiting, " + dur(c.Remaining) + " left"
@@ -534,7 +670,10 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 				v.Reachable, v.HeadlessTurn = "live, "+turn+" running", true
 			}
 		}
-		if desktop && started(st, ag.Party) && !a.hasRow(ag.Session) {
+		if last, gone := goneAgent(a.cfg, st, sessions, ag, a.cfg.Agents.StaleAfter.Duration, a.now); gone {
+			v.Reachable = goneActivityPrefix + last.UTC().Format(time.RFC3339)
+		}
+		if desktop && desktopStarted(st, ag.Party) && !a.hasRow(ag.Session) {
 			v.NoRow = true
 			v.Reachable += ", no desktop row"
 		}
@@ -550,6 +689,9 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Agent {
 	var out []state.Agent
 	for _, ag := range agents {
+		if ag.Execution != nil {
+			continue
+		}
 		if _, live := claude.Live(sessions, ag.Party); ag.Task != "" && !live {
 			out = append(out, ag)
 		}
@@ -561,8 +703,12 @@ func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Age
 const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live state of your task and continue it."
 
 // resumeHint is how a stopped agent comes back: a desktop session by
-// opening its row, a background one by claude --bg --resume.
+// opening its row, a background one by claude --bg --resume, and another
+// harness through agents wake.
 func resumeHint(ag state.Agent) string {
+	if _, _, ok := harnessForHost(ag.HostSession); ok || ag.Harness != "" && ag.Harness != claudeComm {
+		return fmt.Sprintf("beekeeper agents wake %q %q", ag.Name, resumeMessage)
+	}
 	if ag.HostSession != "" {
 		return "open " + continueURL(ag.HostSession)
 	}

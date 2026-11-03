@@ -110,8 +110,8 @@ func fixtureData() *Data {
 	return &Data{
 		At: testAt,
 		Status: Status{
-			Supervisor: tSup, SupervisorLive: true,
-			LeaseCount: 1, HoldCount: 1, Due: 2,
+			SupervisorLoop: true,
+			LeaseCount:     1, HoldCount: 1, Due: 2,
 		},
 		Machine: Machine{
 			Load: [3]float64{1.5, 1, 0.5}, PSIFull60: 2.5,
@@ -310,7 +310,7 @@ func TestSelectionClampsWhenDataShrinks(t *testing.T) {
 func TestQuitKeys(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{
 		keyText("q"),
-		tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl},
+		{Code: 'c', Mod: tea.ModCtrl},
 	} {
 		m := newTestModel(t, &fakeSource{data: fixtureData()})
 		_, quit := m.Update(key)
@@ -567,8 +567,8 @@ func TestMessageFromThePane(t *testing.T) {
 	// Every key is the message's now: q, j and G are letters, not
 	// commands.
 	for _, k := range []tea.KeyPressMsg{
-		keyText("q"), tea.KeyPressMsg{Code: tea.KeySpace, Text: " "},
-		keyText("jGx"), tea.KeyPressMsg{Code: tea.KeyBackspace},
+		keyText("q"), {Code: tea.KeySpace, Text: " "},
+		keyText("jGx"), {Code: tea.KeyBackspace},
 	} {
 		m.key(k)
 	}

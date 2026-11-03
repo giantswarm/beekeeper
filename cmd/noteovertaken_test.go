@@ -41,7 +41,7 @@ func overtakingWatch(t *testing.T, refs map[string]string) (*watcher, *bytes.Buf
 		for _, r := range rs {
 			if s, ok := refs[refName(r)]; ok {
 				at, closer, _ := strings.Cut(s, " by ")
-				m[r] = github.RefState{State: at, Closer: closer}
+				m[r] = github.RefState{Kind: github.RefPullRequest, State: at, Closer: closer}
 			}
 		}
 		return m, nil
@@ -140,7 +140,7 @@ func TestWorkerNoteIsKeptWhileItsTaskRunsAndOvertakenOnceDone(t *testing.T) {
 	// The worker ends its task with the issues closed: they settle its
 	// notes, its next task notwithstanding.
 	for _, args := range [][]string{
-		{verbIdle, flagDone, flagReport, "merged o/r#2", flagProblem, noProblems},
+		{verbIdle, flagDone, flagReport, "merged https://github.com/o/r/pull/2", flagProblem, noProblems},
 		{"assign", agentOne, "another task"},
 	} {
 		c := w.agentsCmd()
@@ -287,7 +287,7 @@ func desktopRecord(t *testing.T, dir, host, cli string, archived bool) {
 }
 
 // archivedNotes are notes filed by sessions of the desktop records under
-// dir: an archived worker, a stopped one and an archived supervisor run.
+// dir: an archived worker, a stopped one and an archived guide run.
 func archivedNotes(t *testing.T, dir string) []state.Note {
 	t.Helper()
 	desktopRecord(t, dir, hostArc, "cli-archived", true)

@@ -112,7 +112,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 	t.Run("the installed binary follows on", func(t *testing.T) {
 		g, base, pid, stderr := launchedMerge(t, script)
 		stubGitHub(t, "", "")
-		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false)
+		run := followChild(base, pid, 0, &fakeBinary{replaced: true}, nil, time.Time{}, false, nil)
 		if !run.replaced || run.offset != int64(len(devctlFirstLine)) {
 			t.Fatalf("replaced %v at offset %d, want %d", run.replaced, run.offset, len(devctlFirstLine))
 		}
@@ -220,7 +220,7 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 			self := filepath.Join(dir, "bin", "beekeeper")
 			copyTestBinary(t, self)
 			gate := exec.Command(self, append([]string{gateCmdName, "--"}, mergeArgv(scratchRepo)...)...) //nolint:gosec // this test binary's copy
-			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(dir, "none.yaml"), "XDG_STATE_HOME="+stateHome,
+			gate.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(dir, "config.yaml")), "XDG_STATE_HOME="+stateHome,
 				"CLAUDE_CODE_SESSION_ID=", "CLAUDE_CODE_HOST_SESSION_ID=", fmt.Sprintf("%s=%d:0", gateRunningEnv, pid))
 			var stdout strings.Builder
 			gate.Stdout = &stdout
@@ -254,7 +254,11 @@ func TestAGateReplacedMidMergeExitsWithDevctlsCode(t *testing.T) {
 				t.Fatal(err)
 			}
 			select {
-			case <-exited:
+			case err := <-exited:
+				var exit *exec.ExitError
+				if err != nil && !errors.As(err, &exit) {
+					t.Fatalf("waiting for the gate: %v\n%s", err, stderr)
+				}
 			case <-time.After(30 * time.Second):
 				t.Fatalf("the gate did not end\n%s", stderr)
 			}

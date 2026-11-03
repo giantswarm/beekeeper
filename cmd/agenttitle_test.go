@@ -169,9 +169,9 @@ func TestPickSteward(t *testing.T) {
 			st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "a"}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
-		{desc: "a relieved supervisor", st: func() *state.State {
+		{desc: "a relieved guide", st: func() *state.State {
 			st := started("a")
-			st.Relieved = []state.Relief{{Party: state.Party{Session: "a"}}}
+			st.Guide = &state.Role{Relieved: []state.Relief{{Party: state.Party{Session: "a"}}}}
 			return st
 		}(), sessions: []*claude.Session{session(1, "a", quiet)}},
 		{desc: "a headless CLI", st: started("a"), sessions: []*claude.Session{session(1, "a", quiet)}, table: func(t *proc.Table) {
@@ -223,11 +223,11 @@ func TestArchiveDesktopKeeps(t *testing.T) {
 	if got := archive(&state.State{}, ag); !strings.Contains(got, "did not start it") {
 		t.Errorf("not started: %q", got)
 	}
-	st := &state.State{Starts: []state.Start{{Party: ag}}, Supervisor: &state.Supervisor{Party: ag}}
+	st := &state.State{Starts: []state.Start{{Party: ag}}, Guide: &state.Role{Holder: &state.Supervisor{Party: ag}}}
 	if got := archive(st, ag); !strings.Contains(got, "role") {
-		t.Errorf("supervisor: %q", got)
+		t.Errorf("guide: %q", got)
 	}
-	run := state.Party{Session: "r", Name: "Supervisor run 7"}
+	run := state.Party{Session: "r", Name: "Guide run 7"}
 	if got := archive(&state.State{Starts: []state.Start{{Party: run}}}, run); !strings.Contains(got, "role") {
 		t.Errorf("a role's run, its relief forgotten: %q", got)
 	}
@@ -427,6 +427,19 @@ func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
 			if c.headless {
 				plat.Machine = headlessMachine{Machine: plat.Machine, id: rotationLogin}
 			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Archives = []state.Archive{{Party: state.Party{Session: rotationLogin, HostSession: host}, Host: host, Since: time.Now()}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			warmed := func() time.Time {
+				st, err := a.store.Read()
+				if err != nil || len(st.Archives) != 1 {
+					t.Fatalf("archives %v, %v", st, err)
+				}
+				return st.Archives[0].Warmed
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			s, err := a.warmSteward(ctx, host)
@@ -437,10 +450,17 @@ func TestWarmStewardWarmsNoTwinOfAHeadlessTurn(t *testing.T) {
 				if !strings.Contains(fmt.Sprint(err), "its headless wake turn runs") {
 					t.Errorf("err %v", err)
 				}
+				if !warmed().IsZero() {
+					t.Error("the archive owed records a warm that never was")
+				}
 				return
 			}
 			if err != nil || s.host != host || len(o.opened) == 0 || o.opened[0] != continueURL(host) {
 				t.Errorf("steward %+v, err %v, opened %v", s, err, o.opened)
+			}
+			// The watch leaves the warmed CLI to its archive call.
+			if warmed().IsZero() {
+				t.Error("the archive owed does not record the warm: the watch would stop the CLI as revived")
 			}
 		})
 	}

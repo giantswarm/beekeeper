@@ -39,6 +39,10 @@ const (
 	onDoneFlag = "--on-done"
 )
 
+// PairFlag is the gate's flag on devctl pr merge naming the merge it lands
+// with, owner/repo#n; the gate takes it off before devctl runs.
+const PairFlag = "--pair"
+
 var (
 	repoArg = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 	numArg  = regexp.MustCompile(`^\d+$`)
@@ -96,6 +100,34 @@ func StripDetach(argv []string) (out, stripped []string) {
 	return out, stripped
 }
 
+// StripPair takes devctl pr merge's --pair <owner/repo#n> (either form) off
+// argv, the gate's own flag: pair is its value, set says the flag was there
+// (an empty value too). argv of any other command comes back as it is.
+func StripPair(argv []string) (out []string, pair string, set bool) {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return argv, "", false
+	}
+	out = slices.Clip(argv[:i+1])
+	for j := i + 1; j < len(argv); j++ {
+		switch a := argv[j]; {
+		case a == "--":
+			return append(out, argv[j:]...), pair, set
+		case strings.HasPrefix(a, PairFlag+"="):
+			pair, set = strings.TrimPrefix(a, PairFlag+"="), true
+		case a == PairFlag:
+			set = true
+			if j+1 < len(argv) {
+				j++
+				pair = argv[j]
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, pair, set
+}
+
 // noReleaseWaitFlag ends devctl pr merge at the merge.
 const noReleaseWaitFlag = "--no-release-wait"
 
@@ -114,7 +146,19 @@ const rebaseFlag = "--rebase"
 
 // Rebase says whether a devctl pr merge argument vector is a rebase merge:
 // --rebase (or --rebase=true) among its flags, before any --.
-func Rebase(argv []string) bool {
+func Rebase(argv []string) bool { return mergeFlag(argv, rebaseFlag) }
+
+// updateBranchFlag has devctl pr merge bring a head behind its base up to it.
+const updateBranchFlag = "--update-branch"
+
+// UpdatesBranch says whether a devctl pr merge argument vector updates a
+// head behind its base: --update-branch (or --update-branch=true) among its
+// flags, before any --.
+func UpdatesBranch(argv []string) bool { return mergeFlag(argv, updateBranchFlag) }
+
+// mergeFlag says whether the boolean flag is set among the flags of a devctl
+// pr merge argument vector, before any --.
+func mergeFlag(argv []string, flag string) bool {
 	i := slices.Index(argv, "merge")
 	if i < 1 || argv[i-1] != "pr" {
 		return false
@@ -123,7 +167,7 @@ func Rebase(argv []string) bool {
 		switch a {
 		case "--":
 			return false
-		case rebaseFlag, rebaseFlag + "=true":
+		case flag, flag + "=true":
 			return true
 		}
 	}
@@ -201,20 +245,45 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// stateFailed is devctl release promote's repository state for a failed read
+// or dispatch.
+const stateFailed = "failed"
+
 // ParsePromoteCandidate reads the candidate of devctl release promote
 // --dry-run's JSON document for one repository: the release candidate a
 // promotion would dispatch now, "" when there is none. ok is false when the
-// document names no single repository.
+// document names no single repository or its read failed (state "failed").
 func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 	var doc struct {
 		Repositories []struct {
 			Candidate string `json:"candidate"`
+			State     string `json:"state"`
 		} `json:"repositories"`
 	}
-	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 || doc.Repositories[0].State == stateFailed {
 		return "", false
 	}
 	return doc.Repositories[0].Candidate, true
+}
+
+// PromoteFailure is the failure diagnostic of devctl release promote's JSON
+// document: the failed repository's message, or the envelope's reason when
+// there is none. "" when the document names neither.
+func PromoteFailure(raw []byte) string {
+	var doc struct {
+		Reason       string `json:"reason"`
+		Repositories []struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	if len(doc.Repositories) == 1 && doc.Repositories[0].State == stateFailed && doc.Repositories[0].Message != "" {
+		return doc.Repositories[0].Message
+	}
+	return doc.Reason
 }
 
 // owned are the subcommands of devctl that block until an outcome, which
@@ -274,13 +343,30 @@ type Outcome struct {
 	// State is a promotion's state in devctl release promote's document
 	// (dispatched, nothing_to_promote, not_built, …), empty for a merge.
 	State string
+	// MergedAt is when GitHub reports the pull request merged, zero unless
+	// GitHub judged the run (Judged).
+	MergedAt time.Time
 }
 
 // Judged is the outcome of a run that ended without its document or by a
 // signal (exit 128+n): GitHub's state of the pull request decides whether it
 // merged, never the exit code, and a merge's release is unconfirmed.
 func Judged(p github.Pull) Outcome {
-	return Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	o := Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	if o.Merged {
+		o.MergedAt = p.MergedAt.UTC()
+	}
+	return o
+}
+
+// SettlesFrom is when a merge recorded at now settles its lane from: GitHub's
+// merge time when the run was recorded after it (a hung merge dropped or
+// recorded late), now otherwise.
+func (o Outcome) SettlesFrom(now time.Time) time.Time {
+	if o.Merged && !o.MergedAt.IsZero() && o.MergedAt.Before(now) {
+		return o.MergedAt
+	}
+	return now
 }
 
 // NeedsJudging says whether a run's outcome is GitHub's to decide: devctl
@@ -315,6 +401,8 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 			o.NoRelease = true
 		case "ci_failed":
 			o.Release, o.ReleaseFailed = doc.Release.Tag, true
+		case "unconfirmed":
+			o.Unconfirmed = true
 		}
 	}
 	return o, true
@@ -340,6 +428,8 @@ func ParseReleaseWait(raw []byte) (o Outcome, reason string, ok bool) {
 		o.Release = doc.Tag
 	case "ci_failed", "status_failed":
 		o.Release, o.ReleaseFailed = doc.Tag, true
+	case "no_release":
+		o.NoRelease = true
 	default:
 		o.Unconfirmed = true
 	}
@@ -366,8 +456,14 @@ func MergeCommit(raw []byte) string {
 // the latest release and runs, and only from the release on does every new
 // run of it refuse until it is updated.
 func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.Lane) (state.Hold, bool) {
+	return BlockingFor(st, now, "", repo, pr, lane)
+}
+
+// BlockingFor is Blocking for a merge or promote session runs: a hold that
+// admits session (hold set --except-session) lets it through.
+func BlockingFor(st *state.State, now time.Time, session, repo string, pr int, lane config.Lane) (state.Hold, bool) {
 	for _, h := range st.Holds {
-		if !h.Active(now) || h.Excepts(repo, pr) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
+		if !h.Active(now) || h.Excepts(repo, pr) || h.Admits(session) || h.Tool != "" && !ToolReleased(h) || pr == 0 && h.Target == repo && h.AwaitsOwnRelease() {
 			continue
 		}
 		switch h.Target {
@@ -384,7 +480,7 @@ func Blocking(st *state.State, now time.Time, repo string, pr int, lane config.L
 // keeps its turn for after the hold.
 func Unheld(st *state.State, now time.Time, lane config.Lane, present func(state.Merge) bool) func(state.Merge) bool {
 	return func(m state.Merge) bool {
-		_, held := Blocking(st, now, m.Repo, m.PR, lane)
+		_, held := BlockingFor(st, now, m.By.Name, m.Repo, m.PR, lane)
 		return !held && present(m)
 	}
 }
@@ -394,7 +490,7 @@ func Unheld(st *state.State, now time.Time, lane config.Lane, present func(state
 // pull request through (--except owner/repo#n), an order that pull request
 // goes first in. A hold without such an exception stops new merges only.
 func Preempts(st *state.State, now time.Time, m state.Merge, lane config.Lane) (state.Hold, bool) {
-	h, held := Blocking(st, now, m.Repo, m.PR, lane)
+	h, held := BlockingFor(st, now, m.By.Name, m.Repo, m.PR, lane)
 	if !held || !h.At.After(m.Started) || !strings.Contains(h.Except, "#") {
 		return state.Hold{}, false
 	}
@@ -484,7 +580,7 @@ type Lane struct {
 }
 
 // Queue returns the lane's running and settling merges and the waiting
-// ones in turn order: a settled outside merge first, then in join order.
+// ones in turn order: a settled outside merge first, then by join order.
 func Queue(st *state.State, lane string) Lane {
 	q := Lane{Name: lane, Waiting: []state.Merge{}}
 	for i := range st.Merges {
@@ -629,6 +725,31 @@ func ServerError(doc []byte) bool {
 		Reason   string `json:"reason"`
 	}
 	return json.Unmarshal(doc, &d) == nil && d.ExitCode == 7 && serverError.MatchString(d.Reason)
+}
+
+// NoRunsHint is what to do about a head whose workflows never ran
+// (NoRuns): GitHub started none for its commit, which the base-merge commit
+// of --update-branch can be, and no wait makes them start.
+const NoRunsHint = "the head has no GitHub Actions run: GitHub started no workflow for its commit (the base-merge commit of --update-branch can get none), and no wait starts them; push an empty commit to the branch (git commit --allow-empty) or close and reopen the pull request, wait for its checks, then run the same merge again"
+
+// NoRuns says whether devctl's document ended its wait on checks that never
+// reported (exit 4: required_missing or no_checks) while the head carries no
+// GitHub Actions run, a check run of a workflow: the head's workflows never
+// started, which a retrigger fixes and another wait does not (NoRunsHint).
+func NoRuns(doc []byte) bool {
+	type check struct {
+		Source   string `json:"source"`
+		Workflow string `json:"workflow"`
+	}
+	var d struct {
+		ExitCode int     `json:"exitCode"`
+		Verdict  string  `json:"verdict"`
+		Checks   []check `json:"checks"`
+	}
+	if json.Unmarshal(doc, &d) != nil || d.ExitCode != 4 || (d.Verdict != "required_missing" && d.Verdict != "no_checks") {
+		return false
+	}
+	return !slices.ContainsFunc(d.Checks, func(c check) bool { return c.Source == "check_run" && c.Workflow != "" })
 }
 
 // Present says whether a waiting merge holds its place against the arrived

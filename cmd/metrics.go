@@ -13,8 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/runrecord"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -105,13 +105,7 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 		wg.Go(func() {
 			defer func() { <-sem }()
 			m := &metrics{}
-			if s.Harness == omp.Harness {
-				// omp prices its replies itself.
-				work[i], m.Activity = omp.ReadTranscript(s.Transcript, a.now)
-			} else {
-				work[i], m.Activity = a.readTranscript(s.Transcript)
-				m.Price(a.cfg.Metrics)
-			}
+			work[i], m.Activity = harnessForSession(s).ReadTranscript(a, s, a.now)
 			if !s.LastActive.IsZero() {
 				m.Idle = a.now.Sub(s.LastActive).Round(time.Second)
 			}
@@ -149,7 +143,11 @@ func (a *app) sessionMetrics(sessions []*claude.Session, t *proc.Table, holders 
 	for _, e := range events {
 		switch e.Verb {
 		case guard.VerbStart:
-			open[guard.RunScope(e.Detail)] = e
+			// A remote build has no local scope to watch: only a local
+			// run.start opens one.
+			if !runrecord.Remote(e.Detail) {
+				open[guard.RunScope(e.Detail)] = e
+			}
 			continue
 		case guard.VerbEnd:
 			delete(open, guard.RunScope(e.Detail))

@@ -10,14 +10,18 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/central"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -96,24 +100,46 @@ func Main() int {
 }
 
 type app struct {
-	cfgPath string
-	as      string
-	json    bool
+	selectionKind      string
+	selectionAuthor    string
+	executionTransport func(execution.Host) execution.Transport
+	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
+	executionRuntime   func() (*execution.Server, error)
+	executionUpdate    func(context.Context, execution.Host, string) (execution.HostUpdate, error)
+	executionRequestID string
+	cfgPath            string
+	// loadedCfg is the configuration file loadConfig read; liveCapacity
+	// reloads Capacity from cfgPath or loadedCfg without mutating cfg.
+	loadedCfg string
+	as        string
+	json      bool
 	// hook says a hook runs, for a session whose environment it keeps.
 	hook bool
 
 	cfg   *config.Config
 	store state.Store
 	now   time.Time
-	out   io.Writer
+	// loopNow advances the long-running supervisor clock without mutating now
+	// while actions from earlier passes still use the app.
+	loopNow *atomic.Pointer[time.Time]
+	out     io.Writer
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
+	// labDocker replaces Docker calls in lifecycle tests.
+	labDocker func(context.Context, ...string) ([]byte, error)
+	// labDirs maps the labs agentlab knows to their directories; nil asks
+	// agentlab list.
+	labDirs func() (map[string]string, error)
 	// zone reads the machine's time zone; nil is machine.Zone.
 	zone func() (*time.Location, error)
 	// central is an app of beekeeper serve: its notes' filers run on other
-	// machines and learn of an outcome from its feed.
+	// machines and learn of an outcome from their person's mailbox.
 	central bool
+	// mailFiler queues a line for a note's filer in its person's mailbox,
+	// addressed to the filing agent (a central app's tellFiler); nil tells
+	// nobody.
+	mailFiler func(ctx context.Context, n *state.Note, line string) error
 	// centralClient calls the central instance (hub); nil until first used.
 	centralClient *central.Client
 	// guideDues are the guide's relay dues its guide watch said; nil in a
@@ -125,6 +151,30 @@ type app struct {
 	// origin reads a requester's working directory and the keys' variables
 	// of its environment; nil is sandbox.Origin on /proc.
 	origin func(pid int, keys []string) (string, []string, error)
+	// ompModelList lists omp's model selectors (provider/id) in tests; nil:
+	// omp models.
+	ompModelList func(ctx context.Context) ([]string, error)
+	// readUsage runs capacity.usage.command; nil is runUsageCommand.
+	readUsage func(ctx context.Context, command []string, timeout time.Duration) (usageReading, error)
+	// readServeMode runs a self-hosted provider's serveModeCommand; nil runs
+	// the command itself.
+	readServeMode func(ctx context.Context, command []string, stale time.Duration) (config.ServeModeReading, error)
+	// serveModeEnv reaches the configured serving-mode reader and switcher.
+	serveModeEnv []string
+	// switchServeModeRun runs a self-hosted provider's
+	// serveModeSwitchCommand; nil runs the command itself.
+	switchServeModeRun func(ctx context.Context, command []string, mode string) (string, error)
+	// serveModeSwitching names the node whose claim or release runs a
+	// serving-mode switch right now: while that switch runs, the node
+	// counts not held — its record stands for the switch's own party.
+	serveModeSwitching string
+	// serveModeSwitchHeld lets a test watch the machine's switch lock:
+	// called while the lock stands, it reports what it sees.
+	serveModeSwitchHeld func(name string)
+	// serveModeSwitchingTo names, per provider, the mode a switch running
+	// in this process runs into: status and the watch say it while the
+	// command holds the machine's lock.
+	serveModeSwitchingTo map[string]string
 }
 
 // requesterOrigin is a brokered request's working directory and the keys'
@@ -149,11 +199,12 @@ machine's memory, swap, disk and OOM kills, reads the GitHub budget all
 sessions draw from, and holds the shared resources one session at a time:
 kind labs, installations, the browser, merges into a repository.
 
-Its state (the supervisor, grants, holds, registered agents, notes, timers,
-session records) lives on disk and survives restarts: a supervisor's
-successor starts from beekeeper handover --prompt instead of a prose brief.
+Its state (the guide, grants, holds, registered agents, notes, timers,
+session records) lives on disk and survives restarts: beekeeper handover
+shows it, and a guide's successor starts from beekeeper guide handover
+--prompt instead of a prose brief. The supervisor is the supervisor loop.
 
-Exit codes: 0 done, 1 error, 2 usage, 3 refused, 4 relieved (supervisor
+Exit codes: 0 done, 1 error, 2 usage, 3 refused, 4 relieved (guide
 status after a relay), 69 the central instance unreachable (a central verb,
 with central configured), 125 a newer release (self-update --check).`,
 		SilenceUsage:  true,
@@ -161,6 +212,9 @@ with central configured), 125 a newer release (self-update --check).`,
 		Version:       project.VersionLine(),
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if err := a.load(); err != nil {
+				return err
+			}
+			if err := a.checkExecutionCommand(cmd); err != nil {
 				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), firstRunTimeout)
@@ -174,32 +228,35 @@ with central configured), 125 a newer release (self-update --check).`,
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	pf := root.PersistentFlags()
 	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
-	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
+	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session; agents park, idle and desktop act as the registered agent of this name")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
+	pf.StringVar(&a.executionRequestID, "request-id", "", "idempotency key for a managed remote note, park or report retry")
 
 	root.AddGroup(
 		&cobra.Group{ID: "watching", Title: "Watching:"},
 		&cobra.Group{ID: "sharing", Title: "Sharing:"},
-		&cobra.Group{ID: supervisorRole.ing, Title: "Supervising:"},
+		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.priorityCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.stopCmd(), a.resumeCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.runCmd(), a.hookCmd(), a.freeCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	hook := a.hookCmd()
+	hook.AddCommand(a.preInvocationCmd())
+	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}
-	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd())
+	root.AddCommand(a.installCmd(), a.uninstallCmd(), a.selfUpdateCmd(), a.versionCmd(), a.configCmd(), a.mergeChildCmd(), a.followRunCmd(), a.squashMergeCmd(), a.centralCmd(), a.agyRunCmd(), a.codexRunCmd())
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return &exitError{code: ExitUsage, msg: err.Error()}
 	})
@@ -243,6 +300,13 @@ func (a *app) load() error {
 // caller is who runs this command: the Claude Code session it runs in, or
 // the --as name, with the configured person, team and host.
 func (a *app) caller() (state.Party, error) {
+	if a.managedExecutionID() != "" {
+		_, j, err := a.executionCaller()
+		if err != nil {
+			return state.Party{}, err
+		}
+		return state.Party{Session: j.Handle.ConversationID, Name: j.Request.Name, Host: string(j.Handle.Ref.Host), Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team}, nil
+	}
 	p, err := a.callerSession()
 	p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
 	return p, err
@@ -257,7 +321,7 @@ func (a *app) callerSession() (state.Party, error) {
 		return state.Party{Name: a.as}, nil
 	}
 	p := envParty(os.Getenv)
-	if os.Getenv(omp.EnvAgent) != "" {
+	if os.Getenv(omp.EnvAgent) != "" || os.Getenv(agy.EnvAgent) != "" || os.Getenv(codex.EnvAgent) != "" {
 		return p, nil
 	}
 	if p.Session == "" {
@@ -279,12 +343,18 @@ func (a *app) callerSession() (state.Party, error) {
 	return p, nil
 }
 
-// envParty is the session an environment names, read with get: an omp agent
-// beekeeper started is its roster entry, whatever session variables its tool
-// shell carries; else the Claude Code session's ids and name.
+// envParty is the session an environment names, read with get: an omp, agy or
+// codex agent beekeeper started is its roster entry, whatever session
+// variables its tool shell carries; else the Claude Code session's ids and name.
 func envParty(get func(string) string) state.Party {
 	if id := get(omp.EnvAgent); id != "" {
 		return state.Party{HostSession: omp.HostPrefix + id, Name: get(omp.EnvName)}
+	}
+	if id := get(agy.EnvAgent); id != "" {
+		return state.Party{HostSession: agy.HostPrefix + id, Name: get(agy.EnvName)}
+	}
+	if id := get(codex.EnvAgent); id != "" {
+		return state.Party{HostSession: codex.HostPrefix + id, Name: get(codex.EnvName)}
 	}
 	return state.Party{
 		Session:     get("CLAUDE_CODE_SESSION_ID"),
@@ -299,13 +369,16 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.timeNow()), t, nil
 }
 
-// discover returns the running sessions of every harness: Claude Code's,
-// then omp's.
+// discover returns the running sessions of every harness.
 func discover(cfg *config.Config, t *proc.Table, now time.Time) []*claude.Session {
-	return append(claude.Discover(cfg, t, now), omp.Discover(cfg.Omp.SessionsDir, t, now)...)
+	var out []*claude.Session
+	for _, h := range harnesses {
+		out = append(out, h.Discover(cfg, t, now)...)
+	}
+	return out
 }
 
 func (a *app) printJSON(v any) error {
@@ -350,6 +423,16 @@ func clock(now, t time.Time) string {
 		return t.Format("15:04")
 	}
 	return t.Format("Jan 2 15:04")
+}
+
+// clockZone is clock with the local zone's name: "08:30 CET". A timer's
+// due time and the time it fired or started are read side by side, so
+// both carry the zone they are in.
+func clockZone(now, t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return clock(now, t) + " " + t.Local().Format("MST")
 }
 
 // untilTime parses "15:30" (the next such local time) or a duration ("2h").
@@ -433,4 +516,23 @@ func (a *app) versionCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// timeNow returns the supervisor clock, or the command's fixed observation time.
+func (a *app) timeNow() time.Time {
+	if a.loopNow != nil {
+		if now := a.loopNow.Load(); now != nil {
+			return *now
+		}
+	}
+	return a.now
+}
+
+// snapshotAtNow gives helpers that use a command's fixed time an observation
+// that stays stable while subsequent supervisor passes advance their clock.
+func (a *app) snapshotAtNow() *app {
+	snapshot := *a
+	snapshot.now = a.timeNow()
+	snapshot.loopNow = nil
+	return &snapshot
 }

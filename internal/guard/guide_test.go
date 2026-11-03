@@ -36,7 +36,7 @@ var guideCalls = map[string]map[string]any{
 	"gh review":       bashCall("gh pr review 7 --repo o/r --approve"),
 	"browser click":   toolEvent(browserTools+"computer", map[string]any{"action": "left_click", "coordinate": []any{1, 2}}),
 	"browser type":    computerCall("type"),
-	"browser form":    toolEvent(browserTools+"form_input", map[string]any{"ref": "r1", "value": "x"}),
+	"browser form":    toolEvent(browserTools+"form_input", map[string]any{refKey: "r1", "value": "x"}),
 	"browser js":      toolEvent(browserTools+"javascript_tool", map[string]any{}),
 	"connector merge": toolEvent("mcp__github__merge_pull_request", map[string]any{"pullNumber": 7}),
 	"connector review": toolEvent("mcp__claude_ai_GitHub_MCP__pull_request_review_write",
@@ -83,6 +83,11 @@ func TestGuideIsRefusedWork(t *testing.T) {
 		d := decideEvent(t, h, withSession(ev, guideSession))
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Hand it to the supervisor in one line") {
 			t.Errorf("%s in the guide's session: want the delegation refusal, got %+v", name, d)
+		}
+		// https://github.com/giantswarm/beekeeper/issues/1776: the supervisor
+		// is the loop, which no SendMessage reaches; the hint names the board.
+		if d != nil && (strings.Contains(d.Reason, SendMessageTool) || !strings.Contains(d.Reason, "beekeeper board move")) {
+			t.Errorf("%s in the guide's session: want the board route, not %s: %s", name, SendMessageTool, d.Reason)
 		}
 	}
 }

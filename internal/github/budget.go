@@ -1,12 +1,13 @@
 // Package github reads the person's GitHub budget: the hourly REST core
 // limit and the GraphQL limit every session, every gh call and the person's
-// own developer portal login draw from.
+// own developer portal login draw from, and the per-minute search limits.
 //
-// The budget is read from the X-RateLimit headers of a real request, never
-// from /rate_limit: that endpoint is exempt and reported a full budget while
-// real requests were already refused. The REST request is conditional (the
-// ETag of the last answer), so a 304 costs nothing; the GraphQL one is a
-// rateLimit query, one point.
+// The core budget is read from the X-RateLimit headers of a real request,
+// never from /rate_limit: that endpoint is exempt and reported a full budget
+// while real requests were already refused. The REST request is conditional
+// (the ETag of the last answer), so a 304 costs nothing; the GraphQL one is a
+// rateLimit query, one point. The search limits are read from /rate_limit:
+// a real search would spend one of the few requests a minute they allow.
 package github
 
 import (
@@ -33,20 +34,53 @@ func apiURL() string {
 // Budget is the core rate limit as GitHub reported it, and the GraphQL
 // limit beside it.
 type Budget struct {
-	Resource  string    `json:"resource"`
+	Warnings   []string           `json:"warnings,omitempty"`
+	Identity   string             `json:"identity,omitempty"`
+	Login      string             `json:"login,omitempty"`
+	Identities map[string]Budget  `json:"identities,omitempty"`
+	Windows    map[string]GraphQL `json:"windows,omitempty"`
+	Resource   string             `json:"resource"`
+	Limit      int                `json:"limit"`
+	Remaining  int                `json:"remaining"`
+	Used       int                `json:"used"`
+	Reset      time.Time          `json:"reset"`
+	// GraphQL is the GraphQL limit; nil when it was not read.
+	GraphQL *GraphQL `json:"graphql,omitempty"`
+	// Search is the search limits; nil when they were not read.
+	Search *Searches `json:"search,omitempty"`
+}
+
+// Limit is one rate-limit bucket as GitHub reported it.
+type Limit struct {
 	Limit     int       `json:"limit"`
 	Remaining int       `json:"remaining"`
 	Used      int       `json:"used"`
 	Reset     time.Time `json:"reset"`
-	// GraphQL is the GraphQL limit; nil when it was not read.
-	GraphQL *GraphQL `json:"graphql,omitempty"`
+}
+
+// Spent says the bucket refuses requests at now: nothing remains and its
+// reset has not come.
+func (l *Limit) Spent(now time.Time) bool {
+	return l != nil && l.Limit > 0 && l.Remaining == 0 && now.Before(l.Reset)
+}
+
+// Searches is the search limits: Search for issue, pull request, repository
+// and commit searches, CodeSearch for code searches.
+type Searches struct {
+	Search     *Limit `json:"search,omitempty"`
+	CodeSearch *Limit `json:"code_search,omitempty"`
+	// Err is why the limits could not be read.
+	Err string `json:"error,omitempty"`
 }
 
 // GraphQL is the GraphQL limit as GitHub reported it for a real query.
 type GraphQL struct {
-	Limit     int `json:"limit"`
-	Remaining int `json:"remaining"`
-	Used      int `json:"used"`
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Login     string   `json:"login,omitempty"`
+	Limit     int      `json:"limit"`
+	Remaining int      `json:"remaining"`
+	Used      int      `json:"used"`
 	// Reset is when the refusal ends: the hourly reset of a spent limit,
 	// Retry-After of a secondary one; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
@@ -63,12 +97,14 @@ type GraphQL struct {
 // Blocks says the refusal still holds at now: a refusal without a reset
 // holds until a reading says otherwise.
 func (g *GraphQL) Blocks(now time.Time) bool {
-	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
+	return g != nil && (len(g.BlockedBy) > 0 || g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset)))
 }
 
 // Token returns the token of the gh CLI's login.
 func Token(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output()
+	c := exec.CommandContext(ctx, "gh", "auth", "token")
+	c.Env = ghEnv(os.Environ(), Repo(ctx))
+	out, err := c.Output()
 	if err != nil {
 		return "", fmt.Errorf("gh auth token: %w (log in with `gh auth login`)", err)
 	}
@@ -131,7 +167,7 @@ func parse(h http.Header) (Budget, error) {
 }
 
 // rateLimitQuery asks GraphQL for its own limit, the cheapest real query.
-const rateLimitQuery = `{"query":"{ rateLimit { limit remaining used resetAt } }"}`
+const rateLimitQuery = `{"query":"{ viewer { login } rateLimit { limit remaining used resetAt } }"}`
 
 // ProbeGraphQL reads the GraphQL limit with a real query, so a refusal shows
 // even while the counter looks healthy: a secondary limit refuses with
@@ -150,6 +186,9 @@ func ProbeGraphQL(ctx context.Context, client *http.Client, token string, now ti
 	defer func() { _ = resp.Body.Close() }()
 	var body struct {
 		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
 			RateLimit *struct {
 				Limit     int       `json:"limit"`
 				Remaining int       `json:"remaining"`
@@ -171,6 +210,7 @@ func ProbeGraphQL(ctx context.Context, client *http.Client, token string, now ti
 	if rl := body.Data.RateLimit; rl != nil {
 		g = GraphQL{Limit: rl.Limit, Remaining: rl.Remaining, Used: rl.Used, Reset: rl.ResetAt}
 	}
+	g.Login = body.Data.Viewer.Login
 	refusal := body.Message
 	for _, e := range body.Errors {
 		if e.Type == "RATE_LIMITED" || strings.Contains(strings.ToLower(e.Message), "rate limit") {
@@ -198,4 +238,50 @@ func ProbeGraphQL(ctx context.Context, client *http.Client, token string, now ti
 		g.Secondary, g.Reset = true, time.Time{}
 	}
 	return g
+}
+
+// ProbeSearch reads the search and code-search limits from /rate_limit,
+// which costs no request of any limit.
+func ProbeSearch(ctx context.Context, client *http.Client, token string) Searches {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL()+"/rate_limit", nil)
+	if err != nil {
+		return Searches{Err: err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := client.Do(req)
+	if err != nil {
+		return Searches{Err: err.Error()}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return Searches{Err: fmt.Sprintf("GitHub answered %s for /rate_limit", resp.Status)}
+	}
+	type bucket struct {
+		Limit     int   `json:"limit"`
+		Remaining int   `json:"remaining"`
+		Used      int   `json:"used"`
+		Reset     int64 `json:"reset"`
+	}
+	var body struct {
+		Resources struct {
+			Search     *bucket `json:"search"`
+			CodeSearch *bucket `json:"code_search"`
+		} `json:"resources"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return Searches{Err: "reading /rate_limit: " + err.Error()}
+	}
+	limit := func(b *bucket) *Limit {
+		if b == nil {
+			return nil
+		}
+		return &Limit{Limit: b.Limit, Remaining: b.Remaining, Used: b.Used, Reset: time.Unix(b.Reset, 0)}
+	}
+	s := Searches{Search: limit(body.Resources.Search), CodeSearch: limit(body.Resources.CodeSearch)}
+	if s.Search == nil && s.CodeSearch == nil {
+		return Searches{Err: "GitHub sent no search limits"}
+	}
+	return s
 }

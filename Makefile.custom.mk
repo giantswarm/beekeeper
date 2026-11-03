@@ -46,3 +46,7 @@ helm-unittest-install: ## Install the pinned helm-unittest plugin from its relea
 helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest suites (what CI's chart-test job runs).
 	helm lint helm/beekeeper
 	helm unittest helm/beekeeper
+
+.PHONY: tools-doc
+tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
+	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/

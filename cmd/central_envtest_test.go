@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,7 +60,10 @@ func (p *person) run(args ...string) (string, int) {
 	if err := a.load(); err != nil {
 		p.t.Fatal(err)
 	}
-	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd}[args[0]]()
+	if i := slices.Index(args, "--json"); i > 0 {
+		a.json, args = true, slices.Delete(slices.Clone(args), i, i+1)
+	}
+	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, "guide": a.guideCmd, agentsName: a.agentsCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -90,7 +94,7 @@ func TestCentralEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")
 	anaToken := e.token(t, anaEmail, teamGroup)
-	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, anaLaptop, anaAgent)
 	pia := newPerson(t, m, e.token(t, piaEmail, "giantswarm:team-planeteers"), piaEmail, piaTeam, "pia-laptop", "pia-agent")
 
 	if out, code := ana.run("lease", "claim", graveler, "-p", "e2e for #123"); code != 0 || !strings.Contains(out, "claimed "+graveler) {
@@ -221,7 +225,7 @@ func (p *person) gate(pr int) *gateRun {
 func TestCentralLanesEnvtest(t *testing.T) {
 	e := newServeEnv(t)
 	m := centraltest.New(t, e.url, "beekeeper")
-	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, "ana-laptop", anaAgent)
+	ana := newPerson(t, m, e.token(t, anaEmail, teamGroup), anaEmail, ourTeam, anaLaptop, anaAgent)
 	pia := newPerson(t, m, e.token(t, piaEmail, "giantswarm:team-planeteers"), piaEmail, piaTeam, "pia-laptop", "pia-agent")
 
 	first, second := ana.gate(1), pia.gate(2)

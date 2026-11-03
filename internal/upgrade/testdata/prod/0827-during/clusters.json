@@ -14,7 +14,8 @@
         },
         "annotations": {
           "giantswarm.io/cluster-upgrading": "false",
-          "giantswarm.io/last-known-cluster-upgrade-version": "35.1.0"
+          "giantswarm.io/last-known-cluster-upgrade-version": "35.1.0",
+          "giantswarm.io/last-known-cluster-upgrade-timestamp": "2026-08-12T09:14:03Z"
         }
       },
       "spec": {},
@@ -40,7 +41,8 @@
         "annotations": {
           "giantswarm.io/cluster-upgrading": "true",
           "giantswarm.io/last-known-cluster-upgrade-version": "35.1.1",
-          "giantswarm.io/upgrade-start-time": "2026-09-25T08:21:29Z"
+          "giantswarm.io/upgrade-start-time": "2026-09-25T08:21:29Z",
+          "giantswarm.io/last-known-cluster-upgrade-timestamp": "2026-08-12T09:14:03Z"
         }
       },
       "spec": {},

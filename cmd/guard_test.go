@@ -14,14 +14,17 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/claim/claimtest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/testenv"
 )
 
 // The test binary doubles as beekeeper (BEEKEEPER_TEST_MAIN=1), so the hook's
@@ -34,12 +37,41 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does an execution host wait for the release the test binary was
+	// built as: the coordinator is a development build, and a test of the
+	// host updates names its own release.
+	coordinatorVersion = func() string { return "dev" }
+	// Nor does an answer read where it runs: the person types it at
+	// their terminal; a test that wants a session stubs its own.
+	answerSeat = func(*app) (string, bool) { return "", true }
+	// Nor does a claim: every issue's thread is an empty one of its own; a
+	// test of the claims keeps its own.
+	claimGH = claimtest.New().GH
+	// Nor does a worker's note read its threads: every one is open, of no
+	// epic; a test of the supersede check stubs its own.
+	noteThreads = func(_ context.Context, rs []github.PR) (map[github.PR]github.Thread, error) {
+		m := make(map[github.PR]github.Thread, len(rs))
+		for _, r := range rs {
+			m[r] = github.Thread{State: github.Open}
+		}
+		return m, nil
+	}
+	// Nor does a browse move a window of the desktop's compositor; a test
+	// that places one stubs its own hyprctl.
+	hyprRunning = func() bool { return false }
+	// Nor does a browse or a link read the machine's screen locker: the
+	// screen is unlocked; a test that wants it locked stubs its own.
+	screenLocker = func() string { return "" }
+	// Nor does a gated merge read its reviews: nothing holds it; a test
+	// that wants a reviewer stubs its own.
+	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}
 	// Nor its worktrees: the trim finds none; a test that wants a run
 	// gives it a machine.
 	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
+	liveDisk = func(*app) (diskMachine, error) { return diskMachine{}, errors.New("no disk machine in a test") }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
@@ -50,6 +82,13 @@ func TestMain(m *testing.M) {
 	machineCache := gocache.Dir()
 	goCacheDir = func() string {
 		if d := gocache.Dir(); d != machineCache {
+			return d
+		}
+		return ""
+	}
+	machineModCache := gocache.ModDir()
+	goModCacheDir = func() string {
+		if d := gocache.ModDir(); d != machineModCache {
 			return d
 		}
 		return ""
@@ -95,7 +134,60 @@ func TestMain(m *testing.M) {
 	// No test asks the machine's Claude Code for its plugins; one that
 	// wants a list sets it.
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return nil, nil }
-	os.Exit(m.Run())
+	testenv.Setup()
+	os.Exit(runIsolated(m))
+}
+
+// isolatedRoot is the scratch directory runIsolated points the
+// configuration and state at for the whole test binary.
+var isolatedRoot string
+
+// runIsolated runs the tests with no path to the machine's own
+// configuration or state: $BEEKEEPER_CONFIG names a file in a scratch
+// directory, and $XDG_CONFIG_HOME and $XDG_STATE_HOME are scratch
+// directories, so a test that sets none of them reads and writes there. A
+// test that wants its own sets them with t.Setenv. The binary run as
+// beekeeper by a test inherits the test's environment, so this runs only on
+// the m.Run path.
+func runIsolated(m *testing.M) int {
+	root, err := os.MkdirTemp("", "beekeeper-cmd-test-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	isolatedRoot = root
+	if err := os.MkdirAll(filepath.Join(root, "config", "beekeeper"), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config", "beekeeper", "config.yaml"), nil, 0o600); err != nil {
+		panic(err)
+	}
+	for k, v := range map[string]string{
+		"BEEKEEPER_CONFIG": filepath.Join(root, "config", "beekeeper", "config.yaml"),
+		"XDG_CONFIG_HOME":  filepath.Join(root, "config"),
+		"XDG_STATE_HOME":   filepath.Join(root, "state"),
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
+	}
+	return m.Run()
+}
+
+func TestATestWithoutItsOwnPathsUsesScratchOnes(t *testing.T) {
+	path, err := config.Path("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"config": path, "state": cfg.StateDir} {
+		if rel, err := filepath.Rel(isolatedRoot, p); err != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("%s path %s is outside the scratch directory %s", name, p, isolatedRoot)
+		}
+	}
 }
 
 // testWakesEnv names the file a test binary run as beekeeper records its
@@ -147,7 +239,7 @@ func capped(t *testing.T) (state string, env []string) {
 		_ = os.Unsetenv(k)
 	}
 	state = t.TempDir()
-	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+filepath.Join(state, "none.yaml"),
+	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(state, "config.yaml")),
 		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
@@ -245,22 +337,59 @@ func holdSlots(t *testing.T, state string) {
 	}
 }
 
-// The exit-75 message states the wait applied and where it came from; only
-// a foreground run is advised to run in the background.
+// The exit-75 message states the wait applied and where it came from and
+// names the command as not run; only a foreground run is advised to run in
+// the background.
 func TestRunExits75WhenEverySlotIsHeld(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- true")
-	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: {\"pid\":1,\"cmd\":\"go test holder-2\"}") ||
+	_, errOut, rc := zsh(t, env, self+" run --wait 1s -- go build ./...")
+	if rc != guard.ExitBusy || !strings.Contains(errOut, "slot 2: pid 1: go test holder-2\n") ||
 		!strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (--wait) waiting for") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: go build ./... — the machine is busy") ||
 		!strings.Contains(errOut, "run_in_background (the wait is then 60m)") {
 		t.Errorf("foreground: rc %d, stderr %q", rc, errOut)
 	}
-	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- true")
+	_, errOut, rc = zsh(t, append(env, "MEMCAP_WAIT=1s"), "export MEMCAP_BACKGROUND=1; "+self+" run -- go build ./...")
 	if rc != guard.ExitBusy || !strings.Contains(errOut, guard.LogPrefix+"gave up after 1s (MEMCAP_WAIT) waiting for") ||
+		!strings.Contains(errOut, guard.LogPrefix+"not run: go build ./... — the machine is busy") ||
 		strings.Contains(errOut, "run_in_background") {
 		t.Errorf("background: rc %d, stderr %q", rc, errOut)
+	}
+}
+
+// A command that builds nothing runs at once with every slot held, without
+// a wait or a cap; declaring a class puts it back in the queue.
+func TestRunOfACommandThatBuildsNothingSkipsTheQueue(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	for _, command := range []string{"/usr/bin/true", "echo built nothing", "go version"} {
+		_, errOut, rc := zsh(t, env, self+" run --wait 5s -- "+command)
+		if rc != 0 || errOut != "" {
+			t.Errorf("%s with every slot held: rc %d, stderr %q", command, rc, errOut)
+		}
+	}
+	if _, errOut, rc := zsh(t, env, self+" run --wait 1s --class build -- true"); rc != guard.ExitBusy {
+		t.Errorf("true declared a build with every slot held: rc %d, stderr %q", rc, errOut)
+	}
+}
+
+// A benchmark or a lab proof takes no build slot: with every slot held it
+// runs at once, beside them; an unknown class is a usage error.
+func TestRunOfABenchmarkRunsBesideHeldSlots(t *testing.T) {
+	state, env := capped(t)
+	holdSlots(t, state)
+	self, _ := os.Executable()
+	for _, class := range []string{guard.ClassBenchmark, guard.ClassLab} {
+		_, errOut, rc := zsh(t, env, self+" run --wait 1s --class "+class+" -- true")
+		if rc != 0 || strings.Contains(errOut, "waiting up to") {
+			t.Errorf("%s with every slot held: rc %d, stderr %q", class, rc, errOut)
+		}
+	}
+	if _, errOut, rc := zsh(t, env, self+" run --class long -- true"); rc == 0 || !strings.Contains(errOut, "build, benchmark, lab") {
+		t.Errorf("an unknown class: rc %d, stderr %q", rc, errOut)
 	}
 }
 
@@ -274,12 +403,12 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 	self, _ := os.Executable()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "build.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run --class build -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
 		t.Fatal(err)
 	}
 	for shape, cmd := range map[string]string{
-		"direct": self + " run -- true",
-		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run -- true",
+		"direct": self + " run --class build -- true",
+		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
 		"script": script,
 	} {
 		_, errOut, rc := zsh(t, env, "timeout 3 "+testShell+" -c "+guard.ShellQuote(rewriteCall(t, cmd, true)))
@@ -326,6 +455,12 @@ func TestRunNamesTheCapsVictim(t *testing.T) {
 }
 
 func TestRunRecordsItsStartAndEnd(t *testing.T) {
+	// The fixture supplies its own identity; the caller must not override it
+	// while the hook rewrites or runs the command.
+	t.Setenv("ZDOTDIR", t.TempDir())
+	for _, name := range callerEnv {
+		t.Setenv(name, "")
+	}
 	dir, env := capped(t)
 	if _, errOut, rc := zsh(t, env, rewrite(t, `echo  built;  if false; then go test ./...; fi`)); rc != 0 {
 		t.Fatalf("rc %d, stderr %q", rc, errOut)
@@ -416,4 +551,202 @@ func TestRunTakesTheEnvSlots(t *testing.T) {
 	if rc != 0 || !strings.Contains(out, `"pid":`) {
 		t.Errorf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
+}
+
+// `beekeeper hook pretooluse --format agy` reads agy's PreToolUse JSON and
+// answers in agy's hook contract (`decision`: allow|deny|ask, `reason`,
+// `overwrite.CommandLine`), including explicit `{"decision":"ask"}` when a
+// call is out of guard.roots scope.
+func TestHookPreToolUseFormatAgy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	inRoot := filepath.Join(dir, "in-scope")
+	outRoot := filepath.Join(dir, "out-of-scope")
+	for _, d := range []string{inRoot, outRoot} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgYAML := "stateDir: " + filepath.Join(dir, "state") + "\nhooks:\n  scope:\n    dirs:\n      - " + inRoot + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const cmdLineField = "CommandLine"
+	runAgy := func(t *testing.T, ws string, args map[string]any) map[string]any {
+		t.Helper()
+		payload := map[string]any{
+			"conversationId": "conv-1",
+			"workspacePaths": []string{ws},
+			"toolCall": map[string]any{
+				"na" + "me": "run_command",
+				"args":      args,
+			},
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		c := New()
+		c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse", "--format=agy"})
+		c.SetIn(strings.NewReader(string(raw)))
+		c.SetOut(&out)
+		c.SetErr(&out)
+		if err := c.Execute(); err != nil {
+			t.Fatalf("execute: %v (out: %s)", err, out.String())
+		}
+		var res map[string]any
+		if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
+			t.Fatalf("unmarshal %q: %v", out.String(), err)
+		}
+		return res
+	}
+	wantAsk := "a" + "sk"
+
+	// Out of scope -> explicit {"decision":"ask"}.
+	res := runAgy(t, outRoot, map[string]any{cmdLineField: "git push origin main"})
+	if res["decision"] != wantAsk {
+		t.Errorf("out-of-scope call: got %v, want decision=ask", res)
+	}
+
+	// In scope, refused push to main -> {"decision":"deny","reason":...}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "git push origin main"})
+	if res["decision"] != "deny" || !strings.Contains(res["reason"].(string), "main") {
+		t.Errorf("push to main: got %v, want deny naming main", res)
+	}
+
+	// In scope, build command -> {"decision":"allow","overwrite":{"CommandLine":...}}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "go test ./...", "IsDaemon": true})
+	ov, _ := res["overwrite"].(map[string]any)
+	cmdLine, _ := ov[cmdLineField].(string)
+	if res["decision"] != "allow" || !strings.Contains(cmdLine, "run --") || !strings.HasPrefix(cmdLine, "export "+guard.BackgroundEnv+"=1; ") {
+		t.Errorf("build rewrite: got %v", res)
+	}
+
+	// In scope, ordinary command -> {"decision":"ask"}.
+	res = runAgy(t, inRoot, map[string]any{cmdLineField: "git status"})
+	if res["decision"] != wantAsk {
+		t.Errorf("ordinary command: got %v, want decision=ask", res)
+	}
+}
+
+// `beekeeper hook pretooluse --format codex` reads Codex PreToolUse JSON and
+// answers in Codex's hook contract (`hookSpecificOutput`), failing closed on
+// malformed input or config errors even when hooks.scope.dirs is set.
+func TestHookPreToolUseFormatCodex(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	inRoot := filepath.Join(dir, "in-scope")
+	outRoot := filepath.Join(dir, "out-of-scope")
+	for _, d := range []string{inRoot, outRoot} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgYAML := "stateDir: " + filepath.Join(dir, "state") + "\nhooks:\n  scope:\n    dirs:\n      - " + inRoot + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	hookSub := "ho" + "ok"
+	wantDeny := "de" + "ny"
+	runCodexRaw := func(t *testing.T, configPath, stdin string) map[string]any {
+		t.Helper()
+		var out strings.Builder
+		c := New()
+		c.SetArgs([]string{"--" + configFlag, configPath, hookSub, "pretooluse", "--format=codex"})
+		c.SetIn(strings.NewReader(stdin))
+		c.SetOut(&out)
+		c.SetErr(&out)
+		if err := c.Execute(); err != nil {
+			t.Fatalf("execute: %v (out: %s)", err, out.String())
+		}
+		var res map[string]any
+		if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
+			t.Fatalf("unmarshal %q: %v", out.String(), err)
+		}
+		return res
+	}
+	runCodex := func(t *testing.T, cwd, tool string, input map[string]any) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{
+			"session_" + "id":      "sess-1",
+			"cwd":                  cwd,
+			"hook_event_" + "name": "PreToolUse",
+			"tool_" + "name":       tool,
+			"tool_" + "input":      input,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runCodexRaw(t, cfgPath, string(raw))
+	}
+
+	// Malformed JSON fails closed even when hooks.scope.dirs is configured.
+	badRes := runCodexRaw(t, cfgPath, "{not json")
+	badSpec, _ := badRes["hookSpecificOutput"].(map[string]any)
+	if badSpec["permissionDecision"] != wantDeny {
+		t.Errorf("malformed JSON: got %v, want deny", badRes)
+	}
+
+	// Broken config fails closed.
+	brokenCfg := filepath.Join(dir, "broken.yaml")
+	if err := os.WriteFile(brokenCfg, []byte("invalid: [yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validRaw := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"git status"}}`
+	brokenRes := runCodexRaw(t, brokenCfg, validRaw)
+	brokenSpec, _ := brokenRes["hookSpecificOutput"].(map[string]any)
+	if brokenSpec["permissionDecision"] != wantDeny {
+		t.Errorf("broken config: got %v, want deny", brokenRes)
+	}
+
+	// Out of scope -> {} (pass).
+	outRes := runCodex(t, outRoot, "Bash", map[string]any{hookTypeCommand: "git push origin master"})
+	if len(outRes) != 0 {
+		t.Errorf("out-of-scope call: got %v, want {}", outRes)
+	}
+
+	// In scope, refused push to master -> permissionDecision: deny.
+	denyRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "git push origin master"})
+	denySpec, _ := denyRes["hookSpecificOutput"].(map[string]any)
+	if denySpec["permissionDecision"] != wantDeny || !strings.Contains(denySpec["permissionDecisionReason"].(string), "master") {
+		t.Errorf("push to master: got %v, want deny naming master", denyRes)
+	}
+
+	// In scope, build command -> permissionDecision: allow with updatedInput.command.
+	buildRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "go build ./..."})
+	buildSpec, _ := buildRes["hookSpecificOutput"].(map[string]any)
+	updated, _ := buildSpec["updatedInput"].(map[string]any)
+	rewritten, _ := updated[hookTypeCommand].(string)
+	if buildSpec["permissionDecision"] != appAllow || !strings.Contains(rewritten, "run --") {
+		t.Errorf("build rewrite: got %v", buildRes)
+	}
+
+	// In scope, ordinary command -> {}.
+	okRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "git status"})
+	if len(okRes) != 0 {
+		t.Errorf("ordinary command: got %v, want {}", okRes)
+	}
+
+	// exec_command with workdir resolves relative --body-file against workdir (and enters scope via workdir).
+	if err := os.WriteFile(filepath.Join(inRoot, "PR_BODY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wdRes := runCodex(t, outRoot, "exec_command", map[string]any{
+		"cmd":     `gh pr create --repo giantswarm/beekeeper --title "fix: workdir" --body-file PR_BODY.md`,
+		"workdir": inRoot,
+	})
+	if len(wdRes) != 0 {
+		t.Errorf("exec_command with workdir and valid PR_BODY.md: got %v, want {}", wdRes)
+	}
+}
+
+// emptyTestConfig creates the file an isolated command explicitly selects.
+func emptyTestConfig(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

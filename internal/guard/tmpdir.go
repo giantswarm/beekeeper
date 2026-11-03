@@ -2,8 +2,8 @@ package guard
 
 import (
 	"os"
-	"path/filepath"
-	"time"
+
+	worktreefs "github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // TmpEnv are the temporary directory variables a run points off tmpfs:
@@ -11,17 +11,13 @@ import (
 // and TMPDIR, every other tool's and a test's (t.TempDir).
 var TmpEnv = []string{"GOTMPDIR", "TMPDIR"}
 
-// staleTmp is the age at which a run's temporary directory is a leftover
-// of a run that never cleaned up (killed, its machine rebooted).
-const staleTmp = 24 * time.Hour
-
 // runTmp makes the run's own temporary directory under base and returns
 // the variables of TmpEnv that point into it and the cleanup that removes
 // it after the command. A caller's variable that names a directory off
 // tmpfs wins, so a nested run keeps its outer run's directory; with every
-// variable the caller's, no directory is made. Leftovers older than
-// staleTmp are removed first. A directory that cannot be made costs one
-// line and the command runs with the caller's environment.
+// variable the caller's, no directory is made. The disk step reclaims
+// unused leftovers. A directory that cannot be made costs one line and
+// the command runs with the caller's environment.
 func runTmp(base string, logf func(string, ...any)) (env []string, cleanup func()) {
 	cleanup = func() {}
 	var unset []string
@@ -37,7 +33,7 @@ func runTmp(base string, logf func(string, ...any)) (env []string, cleanup func(
 		logf("temporary files stay in tmpfs: %v", err)
 		return nil, cleanup
 	}
-	pruneTmp(base, time.Now().Add(-staleTmp))
+
 	dir, err := os.MkdirTemp(base, "")
 	if err != nil {
 		logf("temporary files stay in tmpfs: %v", err)
@@ -46,18 +42,9 @@ func runTmp(base string, logf func(string, ...any)) (env []string, cleanup func(
 	for _, k := range unset {
 		env = append(env, k+"="+dir)
 	}
-	return env, func() { _ = os.RemoveAll(dir) }
-}
-
-// pruneTmp removes the entries of base last changed before cutoff.
-func pruneTmp(base string, cutoff time.Time) {
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(filepath.Join(base, e.Name()))
+	return env, func() {
+		if err := worktreefs.RemoveAll(dir); err != nil {
+			logf("temporary directory cleanup failed: %v", err)
 		}
 	}
 }

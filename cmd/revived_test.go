@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -106,6 +107,52 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	}
 }
 
+// The CLI of a handed-over session that the doctor warmed to archive its
+// own desktop session runs on for archiveWarmGrace: the watch neither stops
+// it as revived nor says SAME TITLE beside its follow-up, so its archive
+// call runs. Past the grace it is stopped like any revived CLI.
+func TestTheWatchLeavesACLIWarmedForItsArchive(t *testing.T) {
+	const name = "BS 2867 provider connect prompt"
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = time.Now()
+	useLauncher(t, &stopLauncher{})
+	ended := useEndRevived(t)
+
+	old := state.Party{Session: "6d5d9d3c-old", HostSession: "local_6d5d9d3c-old", Name: name}
+	next := state.Party{Session: "a1b2c3d4-new", HostSession: "local_a1b2c3d4-new", Name: name}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+		st.Agents = []state.Agent{{Party: next, Task: "connect prompt"}}
+		oweArchive(st, old, "handed over to session "+next.Session, w.now)
+		st.Archives[0].Warmed = w.now.Add(-time.Minute)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldCLI := &claude.Session{PID: 4711, ID: old.Session, HostID: old.HostSession, Name: name}
+	nextCLI := &claude.Session{PID: 2, ID: next.Session, HostID: next.HostSession, Name: name}
+
+	left := w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
+	if len(*ended) != 0 {
+		t.Fatalf("stopped %v, a CLI warmed for its archive", *ended)
+	}
+	if len(left) != 1 || left[0] != nextCLI {
+		t.Errorf("left %v, want only the follow-up answering to the name", left)
+	}
+	if d := sameTitles(left); len(d) != 0 {
+		t.Errorf("a shared title is left: %v", d)
+	}
+	if s := out.String(); strings.Contains(s, "REVIVED") {
+		t.Errorf("output:\n%s", s)
+	}
+
+	w.now = w.now.Add(archiveWarmGrace)
+	w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
+	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {
+		t.Errorf("stopped %v past the grace, want the warmed CLI %d", *ended, oldCLI.PID)
+	}
+}
+
 // A relieved supervisor run whose CLI the desktop keeps or revives is
 // stopped once reliefGrace has passed since its successor took the relay
 // and it runs no tool command; the holder never is.
@@ -118,7 +165,7 @@ func TestTheWatchStopsARelievedRunPastItsGrace(t *testing.T) {
 	succ := state.Party{Session: "sup-82", HostSession: "local_sup-82", Name: "Supervisor run 82"}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts = []state.Start{{Party: out, At: taken.Add(-time.Hour)}, {Party: succ, At: taken.Add(-time.Minute)}}
-		supervisorRole.set(st, state.Role{
+		guideRole.set(st, state.Role{
 			Holder:   &state.Supervisor{Party: succ, Since: taken},
 			Relay:    &state.Relay{From: out, To: succ, At: taken.Add(-time.Minute), Expires: taken.Add(time.Hour), Taken: taken},
 			Relieved: []state.Relief{{Party: out, By: succ, At: taken.Add(-time.Minute), Taken: taken}},
@@ -145,5 +192,53 @@ func TestTheWatchStopsARelievedRunPastItsGrace(t *testing.T) {
 	w.stopRevived(t.Context(), []*claude.Session{outCLI, succCLI})
 	if len(*ended) != 1 || (*ended)[0] != outCLI.PID {
 		t.Errorf("stopped %v, want only the relieved run %d", *ended, outCLI.PID)
+	}
+}
+
+// Once the warmed CLI of a handed-over session archived its desktop session,
+// the doctor owes it nothing and the warm's mark is gone: the watch stops the
+// CLI as done, logged as agents.archive, never REVIVED, and owes no archive.
+func TestTheWatchStopsAnArchivedSessionsCLIQuietly(t *testing.T) {
+	const name = "WS 38113 backstage workspaces"
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = time.Now()
+	useLauncher(t, &stopLauncher{})
+	ended := useEndRevived(t)
+	old := state.Party{Session: "16140721-old", HostSession: "local_16140721-old", Name: name}
+	next := state.Party{Session: "52b403dd-new", HostSession: "local_52b403dd-new", Name: name}
+	orig := desktopArchived
+	t.Cleanup(func() { desktopArchived = orig })
+	desktopArchived = func(_ *config.Config, host string) bool { return host == old.HostSession }
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: old, At: w.now.Add(-3 * time.Hour)}, {Party: next, At: w.now.Add(-time.Minute)}}
+		st.Agents = []state.Agent{{Party: next, Task: "workspaces"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldCLI := &claude.Session{PID: 377302, ID: old.Session, HostID: old.HostSession, Name: name}
+	nextCLI := &claude.Session{PID: 2, ID: next.Session, HostID: next.HostSession, Name: name}
+
+	left := w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI})
+	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {
+		t.Fatalf("stopped %v, want the archived session's CLI %d", *ended, oldCLI.PID)
+	}
+	if len(left) != 1 || left[0] != nextCLI {
+		t.Errorf("left %v, want only the follow-up", left)
+	}
+	if s := out.String(); strings.Contains(s, "REVIVED") {
+		t.Errorf("output:\n%s", s)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Archives) != 0 {
+		t.Errorf("archives %+v, want none owed for an archived session", st.Archives)
+	}
+	revived, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.revived" })
+	archive, _ := w.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
+	if len(revived) != 0 || len(archive) != 1 || !strings.Contains(archive[0].Detail, "is archived") {
+		t.Errorf("agents.revived %v, agents.archive %v", revived, archive)
 	}
 }

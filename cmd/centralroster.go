@@ -67,7 +67,7 @@ func (w *watcher) syncRoster(ctx context.Context) {
 			continue
 		}
 		calls++
-		if call(name, "agents_register", map[string]any{paramTask: p.Task, paramDone: p.Done}) {
+		if call(name, nameAgentsRegister, map[string]any{paramTask: p.Task, paramDone: p.Done}) {
 			pub[name] = p
 		}
 	}
@@ -76,7 +76,7 @@ func (w *watcher) syncRoster(ctx context.Context) {
 			continue
 		}
 		calls++
-		if call(name, "agents_leave", map[string]any{}) {
+		if call(name, nameAgentsLeave, map[string]any{}) {
 			delete(pub, name)
 		}
 	}

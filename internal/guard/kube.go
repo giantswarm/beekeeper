@@ -184,8 +184,8 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string, at string) string {
 	local := *env
 	k := 0
-	if k < len(words) && (words[k] == exportCmd || words[k] == "unset") {
-		if words[k] == "unset" {
+	if k < len(words) && (words[k] == exportCmd || words[k] == unsetCmd) {
+		if words[k] == unsetCmd {
 			for _, w := range words[k+1:] {
 				switch w {
 				case envKubeconfig:
@@ -287,7 +287,7 @@ func kubeArgs(args []string, values map[string]bool) ([]string, map[string]strin
 
 func dryRun(flags map[string]string) bool {
 	v, ok := flags[flagDryRun]
-	return ok && v != "none" && v != "false"
+	return ok && v != "none" && v != falseWord
 }
 
 func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {

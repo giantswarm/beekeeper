@@ -216,8 +216,13 @@ func child(n *yaml.Node, k string) *yaml.Node {
 	return nil
 }
 
-// set puts a string at a dotted path, creating the mappings on the way.
+// set puts a string at a dotted path, creating the mappings on the way; a
+// path through a string leaf sets one key of the YAML document it holds
+// ([leafDoc.set]).
 func (d *document) set(path, value string) error {
+	if l, ok := d.inLeaf(splitPath(path)); ok {
+		return l.set(value)
+	}
 	if n := d.node(path); n != nil && n.Kind != yaml.ScalarNode {
 		return fmt.Errorf("%q holds a %s, not a value", path, kindName(n.Kind))
 	}

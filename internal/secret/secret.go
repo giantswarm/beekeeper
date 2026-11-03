@@ -71,8 +71,7 @@ type Ops struct {
 	// file's installation ([AgeInstallationItem]) is looked up in Vault and
 	// each of them.
 	AgeVaults []string
-	// Store is the person's own credential store a store:// age identity
-	// is read from.
+	// Store is the person's own credential store for sources and age identities.
 	Store Store
 	// Index is the value scanner's index reveal checks a value against, its
 	// indexed secrets and token patterns; nil checks the patterns alone.
@@ -84,6 +83,12 @@ type Ops struct {
 	// FileRoots are the directories a file:// reference's plain file must
 	// lie under; empty refuses every such reference.
 	FileRoots []string
+	// Produce lets a cmd:// reference run its producer: copy's, whose
+	// value is stored; every other operation refuses one.
+	Produce bool
+	// SecretEnv are the globs of the environment variables a producer
+	// runs without (secret.env), besides the vault's and sops' own.
+	SecretEnv []string
 }
 
 // opTimeout bounds one read of the shared vault: op that answers nothing
@@ -121,12 +126,17 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 // vault (with #<KEY> one KEY=VALUE line of an env-style field), a key of a Kubernetes Secret as a source (k8s://<context>/
 // <namespace>/<name>/<key>, Path then one value inside the document the
 // key holds), one value of a plain file on the host as a source
-// (file://<absolute path>#<path>, the file in Plain), a SOPS file, or one
-// path in a SOPS file (file#a.b.c, sops:// in front optional).
+// (file://<absolute path>#<path>, the file in Plain), a value an allowed
+// producer generates as a source (cmd://<command>#<path>, its words in
+// Cmd), a credential-store entry (store://<entry>[#<field>], its entry
+// in Store and attribute in Path), a SOPS file, or one path in a SOPS file (file#a.b.c, sops:// in
+// front optional).
 type Ref struct {
 	Op    string
+	Store string
 	Kube  KubeTarget
 	Plain string
+	Cmd   string
 	File  string
 	Path  string
 }
@@ -143,11 +153,17 @@ func ParseRef(s string) (Ref, error) {
 		}
 		return Ref{Op: s}, nil
 	}
+	if strings.HasPrefix(s, StoreRef) {
+		return parseStoreRef(s)
+	}
 	if strings.HasPrefix(s, K8sRef) {
 		return parseKubeRef(s)
 	}
 	if strings.HasPrefix(s, FileRef) {
 		return parsePlainRef(s)
+	}
+	if strings.HasPrefix(s, CmdRef) {
+		return parseCmdRef(s)
 	}
 	s = strings.TrimPrefix(s, guard.SOPSRef)
 	file, path, _ := strings.Cut(s, "#")
@@ -169,6 +185,8 @@ func slicesHasEmpty(ss []string) bool {
 // String is the reference as a log and an answer name it.
 func (r Ref) String() string {
 	switch {
+	case r.Store != "":
+		return StoreRef + r.Store + storeFieldSuffix(r.Path)
 	case r.Op != "":
 		return r.Op
 	case r.IsKube() && r.Path != "":
@@ -177,6 +195,10 @@ func (r Ref) String() string {
 		return K8sRef + r.Kube.String()
 	case r.Plain != "":
 		return FileRef + r.Plain + "#" + r.Path
+	case r.Cmd != "" && r.Path != "":
+		return CmdRef + r.Cmd + "#" + r.Path
+	case r.Cmd != "":
+		return CmdRef + r.Cmd
 	case r.Path != "":
 		return r.File + "#" + r.Path
 	}
@@ -187,8 +209,8 @@ func (r Ref) String() string {
 func (r Ref) IsKube() bool { return r.Kube != (KubeTarget{}) }
 
 // IsSource is whether the reference names a value beekeeper only reads: a
-// key of a Kubernetes Secret or a plain file.
-func (r Ref) IsSource() bool { return r.IsKube() || r.Plain != "" }
+// key of a Kubernetes Secret, a plain file, a credential-store entry or a producer's output.
+func (r Ref) IsSource() bool { return r.IsKube() || r.Plain != "" || r.Cmd != "" || r.Store != "" }
 
 // Single is whether the reference names one value.
 func (r Ref) Single() bool { return r.Op != "" || r.IsSource() || r.Path != "" }
@@ -258,6 +280,13 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		}
 		return map[string]string{r.Op: v}, nil
 	}
+	if r.Store != "" {
+		v, err := o.readStore(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{r.String(): v}, nil
+	}
 	if r.IsKube() {
 		v, err := o.readKube(ctx, r)
 		if err != nil {
@@ -265,8 +294,14 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 		}
 		return map[string]string{r.String(): v}, nil
 	}
-	if r.Plain != "" {
-		v, err := o.readPlain(r)
+	if r.Plain != "" || r.Cmd != "" {
+		var v string
+		var err error
+		if r.Cmd != "" {
+			v, err = o.readCmd(ctx, r)
+		} else {
+			v, err = o.readPlain(r)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -281,7 +316,9 @@ func (o *Ops) values(ctx context.Context, r Ref) (map[string]string, error) {
 	}
 	v, ok := doc.get(r.Path)
 	if !ok {
-		return nil, fmt.Errorf("%s: no value at %s", r.File, r.Path)
+		if v, err = doc.leafValue(r.Path); err != nil {
+			return nil, fmt.Errorf("%s: %w", r.File, err)
+		}
 	}
 	return map[string]string{r.String(): v}, nil
 }
@@ -308,7 +345,7 @@ func (o *Ops) readOp(ctx context.Context, ref string) (string, error) {
 // value reads the one value a single reference names.
 func (o *Ops) value(ctx context.Context, r Ref) (string, error) {
 	if !r.Single() {
-		return "", fmt.Errorf("%s: name one value (file#path, op://…, k8s://… or file://…#path), not a whole file", r)
+		return "", fmt.Errorf("%s: name one value (file#path, op://…, k8s://…, file://…#path or cmd://…), not a whole file", r)
 	}
 	vs, err := o.values(ctx, r)
 	if err != nil {

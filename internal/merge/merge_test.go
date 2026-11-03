@@ -112,6 +112,36 @@ func TestStripDetach(t *testing.T) {
 	}
 }
 
+// pairRef is the sibling the StripPair cases name.
+const pairRef = "o/s#3"
+
+func TestStripPair(t *testing.T) {
+	prMerge := func(args ...string) []string { return append([]string{Tool, "pr", "merge"}, args...) }
+	for _, c := range []struct {
+		name string
+		argv []string
+		want []string
+		pair string
+		set  bool
+	}{
+		{"separate", prMerge(backstage, "12", PairFlag, pairRef, "--update-branch"), prMerge(backstage, "12", "--update-branch"), pairRef, true},
+		{"joined, first", prMerge(PairFlag+"=o/s#3", backstage, "12"), prMerge(backstage, "12"), pairRef, true},
+		{"no value", prMerge(backstage, "12", PairFlag), prMerge(backstage, "12"), "", true},
+		{"none", prMerge(backstage, "12"), prMerge(backstage, "12"), "", false},
+		{"after --", prMerge(backstage, "12", "--", PairFlag, pairRef), prMerge(backstage, "12", "--", PairFlag, pairRef), "", false},
+		{"other command", []string{Tool, "pr", waitVerb, backstage, "12", PairFlag, pairRef}, []string{Tool, "pr", waitVerb, backstage, "12", PairFlag, pairRef}, "", false},
+	} {
+		in := slices.Clone(c.argv)
+		got, pair, set := StripPair(c.argv)
+		if !slices.Equal(got, c.want) || pair != c.pair || set != c.set {
+			t.Errorf("%s: got %q, pair %q %v", c.name, got, pair, set)
+		}
+		if !slices.Equal(c.argv, in) {
+			t.Errorf("%s: the caller's argv changed to %q", c.name, c.argv)
+		}
+	}
+}
+
 func TestParseDocument(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -682,9 +712,24 @@ func TestParsePromoteCandidate(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", raw, c, ok, want)
 		}
 	}
-	for _, raw := range []string{"not json", `{"repositories":[]}`, `{"repositories":[{},{}]}`} {
+	for _, raw := range []string{
+		"not json",
+		`{"repositories":[]}`,
+		`{"repositories":[{},{}]}`,
+		`{"repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`,
+		`{"repositories":[{"repository":"o/r","candidate":"v0.49.1-rc.2","state":"failed","message":"reading the commit status of v0.49.1-rc.2: dial tcp: connection refused"}]}`,
+	} {
 		if _, ok := ParsePromoteCandidate([]byte(raw)); ok {
 			t.Errorf("%s parsed", raw)
+		}
+	}
+	for raw, want := range map[string]string{
+		`{"reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`: "reading the repository: dial tcp: connection refused",
+		`{"reason":"unknown flag: --bad","repositories":[]}`: "unknown flag: --bad",
+		"{": "",
+	} {
+		if got := PromoteFailure([]byte(raw)); got != want {
+			t.Errorf("%s: PromoteFailure = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -770,6 +815,7 @@ func TestParseReleaseWait(t *testing.T) {
 		{"tag pipeline failed", `{"verdict":"ci_failed","reason":"push failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "push failed", true},
 		{"a status failed", `{"verdict":"status_failed","reason":"ci/x failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "ci/x failed", true},
 		{"timed out", `{"verdict":"timeout","reason":"30m","tag":"v1.4.0"}`, Outcome{Merged: true, Unconfirmed: true}, "30m", true},
+		{"no release", `{"verdict":"no_release","reason":"no version bump"}`, Outcome{Merged: true, NoRelease: true}, "no version bump", true},
 		{"no document", ``, Outcome{}, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -778,5 +824,44 @@ func TestParseReleaseWait(t *testing.T) {
 				t.Errorf("got %+v, %q, %v; want %+v, %q, %v", got, reason, ok, c.want, c.wantReason, c.ok)
 			}
 		})
+	}
+}
+
+// BlockingFor lets the session a hold admits through, its merges and its
+// promote, and holds every other session's.
+func TestBlockingForAdmitsTheHoldsSession(t *testing.T) {
+	now := time.Now()
+	st := &state.State{Holds: []state.Hold{{Target: LanePrefix + serving, Reason: "promoting", ExceptSession: "BK 0.156 promoter"}}}
+	lane := config.Lane{Name: serving}
+	for _, pr := range []int{0, 7} {
+		if _, ok := BlockingFor(st, now, "bk 0.156 promoter", "giantswarm/model-manager", pr, lane); ok {
+			t.Errorf("#%d: the admitted session is held", pr)
+		}
+		for _, s := range []string{"", "another worker"} {
+			if h, ok := BlockingFor(st, now, s, "giantswarm/model-manager", pr, lane); !ok || h.ExceptSession != "BK 0.156 promoter" {
+				t.Errorf("#%d: session %q is not held", pr, s)
+			}
+		}
+	}
+}
+
+// A merge GitHub judged settles from its merge time when it is recorded
+// after it; any other outcome, or a merge time after the record (clock
+// skew), settles from the record time.
+func TestSettlesFrom(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		out  Outcome
+		want time.Time
+	}{
+		{"merged before the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(-time.Hour)}), now.Add(-time.Hour)},
+		{"merged after the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(time.Second)}), now},
+		{"not merged", Judged(github.Pull{State: github.Closed, MergedAt: now.Add(-time.Hour)}), now},
+		{"devctl's document", Outcome{Merged: true, Release: "v1.0.0"}, now},
+	} {
+		if got := c.out.SettlesFrom(now); !got.Equal(c.want) {
+			t.Errorf("%s: settles from %s, want %s", c.name, got, c.want)
+		}
 	}
 }

@@ -10,37 +10,37 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const captureOp = "capture"
 
-// fakeProducer is a credential generator that prints a token's JSON, the
-// password once, and a line on stderr; with fail it exits 2 instead.
-func fakeProducer(t *testing.T, fail bool) string {
+// fakeProducer puts an az where producers resolve that prints a token's JSON, the password
+// once, and the password on stderr too (as --debug would); called with
+// --password2 it exits 2 instead. It answers the allowed argv that runs it.
+func fakeProducer(t *testing.T) []string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "generate")
-	code := 0
-	if fail {
-		code = 2
-	}
-	script := fmt.Sprintf("#!/bin/sh\necho 'generating' >&2\nprintf '{\"passwords\":[{\"value\":\"%s\"}]}\\n'\nexit %d\n", secretValue, code)
-	if err := os.WriteFile(p, []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
+	dir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\necho 'response: %s' >&2\ncase \" $* \" in *' --password2 '*) exit 2;; esac\nprintf '{\"passwords\":[{\"value\":\"%s\"}]}\\n'\n", secretValue, secretValue)
+	if err := os.WriteFile(filepath.Join(dir, "az"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable the test runs
 		t.Fatal(err)
 	}
-	return p
+	t.Cleanup(secret.UseProducersIn(dir))
+	return append(strings.Fields("az acr token credential generate"), nameFlag, "pull-token")
 }
 
 func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	a, tools, repo := secretApp(t)
-	prod := fakeProducer(t, false)
+	prod := fakeProducer(t)
+	producing := func(args ...string) []string { return append(append(args, "--"), prod...) }
 	file := filepath.Join(repo, "pull.sops.yaml")
-	out, err := runSecret(a, captureOp, file, "--dockerconfigjson", "registry.example.io", "--username", "pull-token",
-		nameFlag, "pull", namespaceFlag, "flux-system", vaultFlag, "op://Shared/pull/password", "--jq", ".passwords[0].value", "--", prod, "--password1")
+	out, err := runSecret(a, append(producing(captureOp, file, dockerFlag, testRegistry, usernameFlag, "pull-token",
+		nameFlag, "pull", namespaceFlag, "flux-system", vaultFlag, "op://Shared/pull/password", "--jq", ".passwords[0].value"), "--password1")...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out, "generating\nwrote op://Shared/pull/password and "+file+"#stringData..dockerconfigjson: ") ||
+	if !strings.HasPrefix(out, "wrote op://Shared/pull/password and "+file+"#stringData..dockerconfigjson: ") ||
 		!strings.Contains(out, " bytes as the dockerconfigjson of registry.example.io, hmac:") {
 		t.Errorf("capture answers %q", out)
 	}
@@ -50,7 +50,7 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	}
 	// the whole output into a path, as JSON
 	a.out, a.json = &bytes.Buffer{}, true
-	out, err = runSecret(a, captureOp, file+"#stringData.raw", "--", prod)
+	out, err = runSecret(a, producing(captureOp, file+"#stringData.raw")...)
 	if err != nil || !strings.Contains(out, `"key": "`+file+`#stringData.raw"`) {
 		t.Errorf("capture --json = %q, %v", out, err)
 	}
@@ -60,10 +60,12 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 		args []string
 		code int
 	}{
-		{[]string{captureOp, file + "#stringData.x", "--", fakeProducer(t, true)}, ExitRefused},
-		{[]string{captureOp, file + "#stringData.x", "--jq", ".passwords", "--", prod}, ExitRefused},
-		{[]string{captureOp, file, "--dockerconfigjson", "registry.example.io", "--", prod}, ExitUsage},
-		{[]string{captureOp, file + "#stringData.x", prod}, ExitUsage},
+		{append(producing(captureOp, file+"#stringData.x"), "--password2"), ExitRefused},
+		{producing(captureOp, file+"#stringData.x", "--jq", ".passwords"), ExitRefused},
+		{[]string{captureOp, file + "#stringData.x", "--", "sh", "-c", strings.Join(prod, " ")}, ExitRefused},
+		{append(producing(captureOp, file+"#stringData.x"), "--debug"), ExitRefused},
+		{producing(captureOp, file, dockerFlag, testRegistry), ExitUsage},
+		{append([]string{captureOp, file + "#stringData.x"}, prod...), ExitUsage},
 	} {
 		a.out = &bytes.Buffer{}
 		out, err := runSecret(a, c.args...)
@@ -76,16 +78,16 @@ func TestSecretCaptureAnswersAndLogsNoValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 4 {
-		t.Errorf("%d capture events, want 4", len(evs))
+	if len(evs) != 6 {
+		t.Errorf("%d capture events, want 6", len(evs))
 	}
 	for _, e := range evs {
 		noSecret(t, "the log", e.Detail)
-		if !strings.Contains(e.Detail, " from "+prod) && !strings.Contains(e.Detail, "/generate") {
+		if !strings.Contains(e.Detail, " from "+prod[0]) && !strings.Contains(e.Detail, " from sh -c") {
 			t.Errorf("the log names no producer: %s", e.Detail)
 		}
 	}
-	if !strings.Contains(evs[0].Detail, " from "+prod+" --password1: ") {
+	if !strings.Contains(evs[0].Detail, " from "+strings.Join(prod, " ")+" --password1: ") {
 		t.Errorf("the log = %s", evs[0].Detail)
 	}
 }
@@ -98,7 +100,7 @@ func TestSecretCaptureHelp(t *testing.T) {
 	}
 	a.out = &bytes.Buffer{}
 	out, err = runSecret(a, captureOp, "--help")
-	for _, want := range []string{"--jq", "--dockerconfigjson", "--username", vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env"} {
+	for _, want := range []string{"--jq", dockerFlag, usernameFlag, vaultFlag, "--encode", "kubernetes.io/dockerconfigjson", "secret.env", "openssl genpkey", "never the\ncaller's PATH", "clean\nenvironment", "stderr is discarded"} {
 		if err != nil || !strings.Contains(out, want) {
 			t.Errorf("capture --help lacks %q: %v", want, err)
 		}

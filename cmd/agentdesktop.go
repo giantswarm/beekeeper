@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -39,15 +40,36 @@ the agent.`,
 			if err != nil && len(args) == 0 {
 				return err
 			}
+			find := func(st *state.State) (int, error) {
+				i := a.callerAgent(st, me)
+				if len(args) > 0 {
+					return findAgent(st, args[0])
+				} else if i < 0 {
+					return i, refused("this session is not registered: `beekeeper agents register` first")
+				}
+				return i, nil
+			}
+			// a background session has no desktop turn; the look at the
+			// claude daemon runs before the state's lock is taken
+			if st, err := a.store.Read(); err == nil {
+				if err := a.refuseStopped(st, "a desktop turn"); err != nil {
+					return err
+				}
+				if i, err := find(st); err == nil && st.Agents[i].Execution != nil {
+					return refused("managed SSH executions have no desktop turn")
+				}
+				if i, err := find(st); err == nil && a.backgroundAgent(cmd.Context(), st, st.Agents[i].Party) {
+					return refused("%s runs as a background session (agents.mode background): it has no desktop turn, Remote Control and claude attach show it", st.Agents[i].Name)
+				}
+				if i, err := find(st); err == nil && !a.desktopMode() && !strings.HasPrefix(st.Agents[i].HostSession, "local_") {
+					return refused("%s has no desktop turn under agents.mode %s", st.Agents[i].Name, a.cfg.Agents.Mode)
+				}
+			}
 			var ag state.Agent
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(me) })
-				if len(args) > 0 {
-					if i, err = findAgent(st, args[0]); err != nil {
-						return nil, err
-					}
-				} else if i < 0 {
-					return nil, refused("this session is not registered: `beekeeper agents register` first")
+				i, err := find(st)
+				if err != nil {
+					return nil, err
 				}
 				st.Agents[i].DesktopTurn = a.now.UTC()
 				ag = st.Agents[i]
@@ -229,6 +251,9 @@ func importStatus(ag state.Agent, now time.Time) string {
 // noCLI says that ag runs no CLI, whether an import is pending, and how it
 // gets one when none is.
 func noCLI(ag state.Agent, now time.Time) string {
+	if ag.Execution != nil {
+		return fmt.Sprintf("no local CLI of %q runs (managed SSH execution): `beekeeper agents wake %q \"<message>\"` delivers to its execution host", ag.Name, ag.Name)
+	}
 	s := fmt.Sprintf("no CLI of %q runs; %s", ag.Name, importStatus(ag, now))
 	if !ag.Import.Pending(now) {
 		s += fmt.Sprintf(": `beekeeper agents desktop %q` shows it in the desktop, `beekeeper agents wake %q \"<message>\"` resumes it headless", ag.Name, ag.Name)

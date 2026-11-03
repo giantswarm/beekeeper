@@ -83,7 +83,7 @@ func TestReadsOnFirstWriteOnly(t *testing.T) {
 	root := t.TempDir()
 	project := repoWith(t, filepath.Join(root, "project"), map[string]string{claudeMD: projectRules})
 	other := repoWith(t, filepath.Join(root, "other"), map[string]string{
-		"AGENTS.md":                   "Use conventional commits.\nRead `docs/style.md` first.\nSee @docs/imported.md\nMail me@example.com, ping @giantswarm/team.",
+		agentsMD:                      "Use conventional commits.\nRead `docs/style.md` first.\nSee @docs/imported.md\nMail me@example.com, ping @giantswarm/team.",
 		"docs/style.md":               "style guide",
 		"docs/imported.md":            "imported text",
 		".claude/rules/go.md":         "go rule",
@@ -198,7 +198,7 @@ func TestReadsBounded(t *testing.T) {
 		".claude/rules/a.md":  "rule a",
 		".claude/rules/b.md":  "rule b",
 		"docs/secret-plan.md": "hidden",
-		"AGENTS.md":           "You must read `docs/secret-plan.md` and [the link](../outside.md).",
+		agentsMD:              "You must read `docs/secret-plan.md` and [the link](../outside.md).",
 	})
 	if err := os.WriteFile(filepath.Join(root, "outside.md"), []byte("outside the repository"), 0o600); err != nil {
 		t.Fatal(err)

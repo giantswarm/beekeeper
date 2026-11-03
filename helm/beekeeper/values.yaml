@@ -21,7 +21,11 @@ serve:
   # token carries.
   organizations: []  # @schema item: string
   # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
-  # notes and agents (teamNamespaces.create).
+  # notes and agents (teamNamespaces.create). A caller in several is the team
+  # of its most specific: a team's own group before an organization-wide one
+  # (organization, organizations). A team's decisions are answered by its own
+  # groups' members; by an organization-wide group's only for a team without
+  # one.
   teams: {}  # @schema additionalProperties: true
   # Team -> the Dex group of its supervisor role (may release the team's
   # leases and lift its holds).
@@ -36,6 +40,12 @@ serve:
   people: {}  # @schema additionalProperties: true
   # Team -> the Slack channel ID its decisions (--for team:<name>) go to.
   channels: {}  # @schema additionalProperties: true
+  # Team -> the handle of its Slack user group (team-bumblebee for
+  # @team-bumblebee), for a team whose Dex group others share (an
+  # organization-wide group): only the group's members answer its decisions,
+  # as klaus-gateway finds them by email. A team without an entry is its Dex
+  # group's (teams).
+  groups: {}  # @schema additionalProperties: true
   # klaus-gateway, which puts decisions to their addressee in Slack.
   gateway:
     # Its base URL; empty keeps decisions in beekeeper and mounts no token.

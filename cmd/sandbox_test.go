@@ -32,6 +32,7 @@ func (r *recordingCapper) CapSlot(c platform.Cap) error {
 	return nil
 }
 func (*recordingCapper) Command(string, platform.Cap, []string) (*exec.Cmd, error) { return nil, nil }
+func (*recordingCapper) Reap(string) ([]int, error)                                { return nil, nil }
 func (r *recordingCapper) Adopt(pid int, _ string, _ platform.Cap) error {
 	r.adopts = append(r.adopts, pid)
 	return nil
@@ -90,6 +91,19 @@ func TestBrokeredSecretArgs(t *testing.T) {
 	}
 	if err := brokeredSecretArgs(consumer, true, false); err == nil {
 		t.Errorf("%q in the sandbox: want a refusal", consumer)
+	}
+	// a producer runs on the host like a consumer
+	producer := []string{copyOp, "cmd://az acr token credential generate --name x#passwords.0.value", "pull.sops.yaml", "--dockerconfigjson", "r.io", "--username", "x"}
+	if err := brokeredSecretArgs(producer, true, false); err == nil || !strings.Contains(err.Error(), "cmd://") {
+		t.Errorf("%q in the sandbox: %v, want a refusal", producer, err)
+	}
+	// ssh to a host runs on the host like a consumer
+	remote := []string{copyOp, "--mode=0600", "op://Shared/x/y", "ssh://host.example/etc/example/token"}
+	if err := brokeredSecretArgs(remote, false, true); err != nil {
+		t.Errorf("%q outside the sandbox: %v", remote, err)
+	}
+	if err := brokeredSecretArgs(remote, true, false); err == nil || !strings.Contains(err.Error(), "ssh://") {
+		t.Errorf("%q in the sandbox: %v, want a refusal", remote, err)
 	}
 	// import reads the person's own vault: brokered in session mode only
 	imp := []string{"import", "--recipient=age1x", "op://Private/x/y"}

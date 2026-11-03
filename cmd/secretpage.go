@@ -531,8 +531,8 @@ func blindPrompt(steps, deploy string, consents []guard.App, lab bool, match str
 	p := browsePrompt(steps, deploy, consents, lab, nil)
 	// browse's own words before the deploy (its screenshots, its scripts)
 	// give way to the blind ones
-	rest := strings.TrimPrefix(p, browsePreamble+connectionWords+frontWords+windowWords)
-	p = blindPreamble + connectionWords
+	rest := strings.TrimPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords)
+	p = blindPreamble + connectionWords + drawWords + leaveWords
 	if match != "" {
 		p += "beekeeper's reader script, the one script you run (javascript_tool, verbatim; its result reaches you masked): " +
 			guard.ReaderScript(match) + " "

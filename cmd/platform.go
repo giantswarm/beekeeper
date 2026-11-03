@@ -10,6 +10,11 @@ import (
 // configures it.
 var plat = platform.Current(platform.Options{DesktopApp: config.DefaultDesktopApp})
 
+// testMachine is a test's machine: loadConfig rebuilds plat when a
+// configuration loads, and a test that holds the machine's guards in hand
+// keeps its machine across that reload. nil outside the tests that set it.
+var testMachine platform.Machine
+
 // The sections snapshot and watch read through a platform part that a build
 // can lack; such a section prints one platform.Unavailable line instead.
 const (

@@ -36,13 +36,17 @@ var screenLockers = []string{"hyprlock", "swaylock", "gtklock", "waylock"}
 
 // ScreenLocked reports whether a screen locker runs: nobody reads or types
 // in the desktop's window, whatever the compositor names as focused.
-func ScreenLocked(t *proc.Table) bool {
+func ScreenLocked(t *proc.Table) bool { return ScreenLocker(t) != "" }
+
+// ScreenLocker names the screen locker that runs, "" when none does: under
+// it the compositor draws no window but the lock's.
+func ScreenLocker(t *proc.Table) string {
 	for _, p := range t.ByPID {
 		if slices.Contains(screenLockers, p.Comm) {
-			return true
+			return p.Comm
 		}
 	}
-	return false
+	return ""
 }
 
 // activeIsDesktop reports whether hyprctl's activewindow JSON names the

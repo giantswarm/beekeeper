@@ -74,6 +74,7 @@ func TestConsent(t *testing.T) {
 		"the portal":                         {Page{URL: "https://portal.example.org/agents", Title: "Agents"}, recorded, "", ""},
 		"lab Dex sign-in":                    {Page{URL: labDexPage, Title: "Log in to agentlab"}, recorded, Allow, "dex.127.0.0.1.nip.io is the lab's own identity provider on a loopback host"},
 		"lab Dex approval on localhost":      {Page{URL: "https://localhost:32000/dex/approval?req=abc", Title: grantAccess}, nil, Allow, "localhost:32000 is the lab's own identity provider"},
+		"lab Dex email login on localhost":   {Page{URL: "https://localhost:32003/dex/auth/local/login?back=&state=abc", Title: "Dex Lab"}, nil, Allow, "localhost:32003 is the lab's own identity provider"},
 		"lab portal sign-in":                 {Page{URL: "https://" + ownCallback + "/connect/github", Title: "Connect"}, nil, Allow, "loopback host"},
 		"second lab's authorize page":        {Page{URL: lab2AuthorizePage, Title: "Authorize agentlab"}, nil, Allow, "github-bearer.lab2.127.0.0.2.nip.io is the lab's own identity provider on a loopback host"},
 		"a consent on a non-loopback nip.io": {Page{URL: "https://dex.10.0.0.2.nip.io/dex/approval?req=abc", Title: grantAccess}, recorded, Deny, "on dex.10.0.0.2.nip.io, neither the consent page of an App on record"},
@@ -142,6 +143,9 @@ func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 		`{"type":"user","message":{"content":"plain text"}}`,
 		"no json here",
 		resultLine(`[{"type":"text","text":` + strconv.Quote("Successfully captured screenshot "+ctx(page)) + `},{"type":"image"}]`),
+		// The page's draw check answered drawn.
+		drawUse(),
+		strings.Replace(resultLine(`[{"type":"text","text":`+strconv.Quote(drawOpen+Drawn+", visibility visible"+ctx(page))+`}]`), `"tool_use_id":"t"`, `"tool_use_id":"d"`, 1),
 	}
 	if asJSON {
 		lines = append(lines, resultLine(strconv.Quote(`{"availableTabs":[{"tabId":7,"title":`+strconv.Quote(page.Title)+`,"url":`+strconv.Quote(page.URL)+`}],"selectedTabId":7}`)))
@@ -151,6 +155,12 @@ func transcriptWith(t *testing.T, page Page, asJSON bool) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// drawUse is the transcript line of a DrawCheck call on tab 7, id "d".
+func drawUse() string {
+	in, _ := json.Marshal(script(DrawCheck))
+	return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d","name":"mcp__claude-in-chrome__javascript_tool","input":` + string(in) + `}]}}`
 }
 
 // The Chrome calls the decision is tested with: a click on tab 7, a
@@ -186,7 +196,7 @@ func TestConsentDecision(t *testing.T) {
 	other := transcriptWith(t, Page{URL: redactedPage, Title: otherTitle}, false)
 	plain := transcriptWith(t, Page{URL: applicationsPage, Title: applicationsTitle}, false)
 	lan := transcriptWith(t, Page{URL: lanConsentPage, Title: grantAccess}, false)
-	click := tabInput(leftClick, map[string]any{"ref": "ref_45", "action_summary": clicksAuthorize})
+	click := tabInput(leftClick, map[string]any{"ref": "ref_45", summaryKey: clicksAuthorize})
 	screenshot := tabInput("screenshot", nil)
 	batch := map[string]any{"actions": []any{batchAction(chromeComputer, screenshot), batchAction(chromeComputer, tabInput(leftClick, nil))}}
 	reads := map[string]any{"actions": []any{batchAction("find", map[string]any{"query": clicksAuthorize, tabKey: json.Number(tab7)})}}

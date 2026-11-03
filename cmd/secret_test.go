@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,22 +26,28 @@ import (
 )
 
 const (
-	secretValue   = "planted-Secret-Value-9d41b7"
-	dbRef         = "op://Shared/db/password"
-	jsonFlag      = "--json"
-	copyOp        = "copy"
-	compareOp     = "compare"
-	fingerprintOp = "fingerprint"
-	sopsA         = "a.sops.yaml"
-	sopsB         = "b.sops.yaml"
-	generateFlag  = "--generate"
-	literalFlag   = "--literal"
-	vaultFlag     = "--vault"
-	newKey        = "stringData.x"
-	ghSecret      = "secret"
-	setOp         = "set"
-	nameFlag      = "--name"
-	namespaceFlag = "--namespace"
+	storeReadCommand = "read-entry"
+	noBrokerStoreRef = "store://service#username"
+	secretValue      = "planted-Secret-Value-9d41b7"
+	dbRef            = "op://Shared/db/password"
+	jsonFlag         = "--json"
+	copyOp           = "copy"
+	dockerFlag       = "--dockerconfigjson"
+	usernameFlag     = "--username"
+	copyVerb         = "secret.copy"
+	testRegistry     = "registry.example.io"
+	compareOp        = "compare"
+	fingerprintOp    = "fingerprint"
+	sopsA            = "a.sops.yaml"
+	sopsB            = "b.sops.yaml"
+	generateFlag     = "--generate"
+	literalFlag      = "--literal"
+	vaultFlag        = "--vault"
+	newKey           = "stringData.x"
+	ghSecret         = "secret"
+	setOp            = "set"
+	nameFlag         = "--name"
+	namespaceFlag    = "--namespace"
 )
 
 // secretApp is an app over a scratch repository with one encrypted Secret
@@ -633,6 +640,37 @@ func TestSecretSetRefusesACredentialShapedLiteral(t *testing.T) {
 	}
 }
 
+func TestSecretCopyIntoADockerConfigJSONSecret(t *testing.T) {
+	a, _, repo := secretApp(t)
+	file := filepath.Join(repo, "pull-secret.enc.yaml")
+	docker := []string{dockerFlag, testRegistry, usernameFlag, "pull"}
+	out, err := runSecret(a, append([]string{copyOp, dbRef, file, nameFlag, "pull", namespaceFlag, "flux-giantswarm"}, docker...)...)
+	if err != nil || !strings.HasPrefix(out, "wrote "+file+": stringData..dockerconfigjson for "+testRegistry+", ") {
+		t.Fatalf("copy --dockerconfigjson = %q, %v", out, err)
+	}
+	noSecret(t, "copy", out)
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, "as the dockerconfigjson of "+testRegistry) {
+		t.Fatalf("the copy logged %+v, %v", evs, err)
+	}
+	for _, args := range [][]string{
+		append([]string{copyOp, dbRef, file + "#stringData.x"}, docker...),
+		append([]string{copyOp, dbRef, toSecretOpt, "kind-agentlab/ns/s/k"}, docker...),
+		append(append([]string{copyOp, dbRef}, docker...), "--", "cat"),
+		{copyOp, dbRef, file, dockerFlag, testRegistry},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	// only an allowed producer is a source
+	a.out = &bytes.Buffer{}
+	if _, err := runSecret(a, copyOp, "cmd://sh -c true", file+"#stringData.x"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "producers") {
+		t.Errorf("copy from sh = %v, want a refusal naming the producers", err)
+	}
+}
+
 func TestSecretCopyValuesIntoANewSecret(t *testing.T) {
 	a, tools, repo := secretApp(t)
 	tools.Vault["op://Shared/db/user"] = "planted-user-21"
@@ -821,4 +859,162 @@ func TestSecretImportForTakesTheRecipientFromTheSOPSFile(t *testing.T) {
 	if _, err := runSecret(a, importOp, src, otherSrc, "--for", dir); Code(err) != ExitUsage {
 		t.Errorf("import --for with a destination = %v, want a usage error", err)
 	}
+}
+
+// TestSecretCopyToARemoteFile writes a value into a file on a host over
+// ssh: the value on ssh's stdin alone, never on its command line, in the
+// answer or in the log, the answer's fingerprint the source's; the flags
+// of a remote file go with an ssh:// target alone, and a failing ssh is
+// refused without the value.
+func TestSecretCopyToARemoteFile(t *testing.T) {
+	a, tools, _ := secretApp(t)
+	var argv []string
+	var stdin string
+	var fail error
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name != "ssh" {
+			return tools.Run(ctx, dir, env, in, name, args...)
+		}
+		b, _ := io.ReadAll(in)
+		argv, stdin = append([]string{name}, args...), string(b)
+		return nil, fail
+	}
+	const target = "ssh://host.example/etc/example/token"
+	out, err := runSecret(a, copyOp, dbRef, target, "--mode", "0640", "--owner", "app:app", "--sudo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdin != secretValue {
+		t.Errorf("ssh's stdin %q, want the value", stdin)
+	}
+	if strings.Contains(strings.Join(argv, " "), secretValue) || len(argv) == 0 || !strings.HasPrefix(argv[len(argv)-1], "sudo -n sh -c ") {
+		t.Errorf("ssh's command line %q", argv)
+	}
+	a.out = &bytes.Buffer{}
+	fp, err := runSecret(a, fingerprintOp, dbRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("wrote %s: %d bytes, mode 0640, owner app:app, value %d bytes, fingerprint %s\n", target, len(secretValue), len(secretValue), strings.Fields(fp)[1])
+	if out != want {
+		t.Errorf("copy answers %q, want %q", out, want)
+	}
+	for _, args := range [][]string{
+		{copyOp, dbRef, "x.sops.yaml#a", "--mode", "0600"},
+		{copyOp, dbRef, "--sudo", "--", "gh", ghSecret, setOp, "X"},
+		{copyOp, dbRef, target, toSecretOpt, "kind-agentlab/ns/n/k"},
+		{copyOp, dbRef, target, nameFlag, "x"},
+		{copyOp, dbRef, target, "--mode", "0999"},
+		{copyOp, dbRef, "ssh://host.example/etc/../shadow"},
+		{copyOp, dbRef, "ssh://-oProxyCommand=x/etc/example/token"},
+	} {
+		a.out = &bytes.Buffer{}
+		if _, err := runSecret(a, args...); Code(err) != ExitUsage {
+			t.Errorf("secret %s = %v, want a usage error", strings.Join(args, " "), err)
+		}
+	}
+	argv, fail = nil, fmt.Errorf("ssh: exit 1 (sudo: a password is required %s)", secretValue)
+	a.out = &bytes.Buffer{}
+	out, err = runSecret(a, copyOp, dbRef, target)
+	if Code(err) != ExitRefused || argv == nil {
+		t.Errorf("a failing ssh = %v, want refused after ssh ran", err)
+	}
+	noSecret(t, "a failure", fmt.Sprint(out, err))
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "secret.copy" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 || !strings.Contains(evs[0].Detail, target) {
+		t.Errorf("logged %+v", evs)
+	}
+	for _, e := range evs {
+		noSecret(t, "the log", e.Detail)
+	}
+}
+
+func TestStoreSourceCopyAnswersAndLogsNoValue(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	a.cfg.Secret.Store.Read = []string{storeReadCommand}
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == storeReadCommand {
+			if args[len(args)-1] == "absent-store-entry" {
+				return []byte(secretValue), fmt.Errorf("diagnostic: %s", secretValue)
+			}
+			return []byte(secretValue + "\n"), nil
+		}
+		return tools.Run(ctx, dir, env, in, name, args...)
+	}
+	// Exercise the same copy handler the broker's protected child executes.
+	for _, source := range []string{"store://service#password", "store://absent-store-entry#custom"} {
+		a.out = &bytes.Buffer{}
+		c := a.secretCopyCmd()
+		c.SetArgs([]string{source, filepath.Join(repo, "db.sops.yaml") + "#data.password"})
+		c.SetOut(a.out)
+		c.SetErr(a.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		err := c.ExecuteContext(context.Background())
+		if strings.Contains(source, "absent-store-entry") != (err != nil) {
+			t.Fatalf("unexpected copy result: %v", err)
+		}
+		noSecret(t, "store copy stdout and stderr", fmt.Sprint(a.out, err))
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+	if err != nil || len(evs) != 2 {
+		t.Fatalf("copy events: %d, %v", len(evs), err)
+	}
+	noSecret(t, "store copy logs", fmt.Sprint(evs))
+}
+
+// No broker serves this scratch state, as on a host without systemd.
+func TestStoreSourceWorksWithoutBroker(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	t.Setenv(sandbox.Env, "")
+	t.Setenv(sandbox.Brokered, "")
+	a.cfg.Secret.Session = false
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	a.cfg.Secret.Store.Read = []string{storeReadCommand}
+	reads := 0
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == storeReadCommand {
+			reads++
+			return []byte(secretValue + "\n"), nil
+		}
+		return tools.Run(ctx, dir, env, in, name, args...)
+	}
+	for _, args := range [][]string{
+		{fingerprintOp, noBrokerStoreRef},
+		{compareOp, noBrokerStoreRef, noBrokerStoreRef},
+		{copyOp, noBrokerStoreRef, filepath.Join(repo, "db.sops.yaml") + "#data.password"},
+	} {
+		a.out = &bytes.Buffer{}
+		out, err := runSecret(a, args...)
+		if err != nil {
+			t.Fatalf("no-broker %s: %v", args[0], err)
+		}
+		noSecret(t, "no-broker response", out)
+	}
+	if reads != 4 {
+		t.Fatalf("read count %d, want 4", reads)
+	}
+	a.cfg.Secret.Store.Read = nil
+	a.out = &bytes.Buffer{}
+	out, err := runSecret(a, fingerprintOp, noBrokerStoreRef)
+	if err == nil || !strings.Contains(err.Error(), "secret.store.read") {
+		t.Fatalf("unconfigured source: %v", err)
+	}
+	noSecret(t, "unconfigured response", fmt.Sprint(out, err))
+}
+
+func TestStoreSourceConsumerArgumentDoesNotRequireBroker(t *testing.T) {
+	a, _, repo := secretApp(t)
+	t.Setenv(sandbox.Env, "")
+	t.Setenv(sandbox.Brokered, "")
+	a.cfg.Secret.Session = true
+	a.cfg.Secret.Vault, a.cfg.Secret.TokenFile = "", ""
+	out, err := runSecret(a, copyOp, filepath.Join(repo, "db.sops.yaml")+"#data.password", "--", "sh", "-c", "cat >&2", "--secret=route-test=-", "store://consumer-argument")
+	if err != nil {
+		t.Fatalf("consumer argument wrongly required a broker: %v", err)
+	}
+	noSecret(t, "consumer response", out)
 }

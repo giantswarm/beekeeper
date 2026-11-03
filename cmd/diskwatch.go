@@ -55,10 +55,15 @@ type diskWatch struct {
 // sampleDisk says LOW DISK under watch.diskMinMiB, DISK NEARLY FULL under
 // watch.diskCriticalMiB, and DISK FILLING while / would run full within
 // watch.diskFillWithin at the rate its free space fell over the last
-// diskWindow, with the commands and sessions that wrote most.
+// diskWindow, with the commands and sessions that wrote most. Only the
+// free space under the floor is the emergency that holds starts (the
+// reading's Low); the fill prediction triggers an early disk step and
+// nothing else: a rate is a forecast, and it is wrong whenever it does
+// not last.
 func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owners map[int]string) {
 	th := w.cfg.Watch
-	w.check("disk", d.FreeMiB < th.DiskMin(d.TotalMiB), "LOW DISK: / %d GiB free", d.FreeMiB/1024)
+	low := d.FreeMiB < th.DiskMin(d.TotalMiB)
+	w.check("disk", low, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
 	w.check("diskfull", d.FreeMiB < th.DiskCritical(d.TotalMiB), "DISK NEARLY FULL: / %d GiB free of %d GiB", d.FreeMiB/1024, d.TotalMiB/1024)
 
 	w.disk.rebase(now, d.FreeMiB, t)
@@ -70,6 +75,8 @@ func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 			perMin/1024, d.FreeMiB/1024, int(float64(d.FreeMiB)/perMin), w.disk.writersLine(now, d.FreeMiB, t, owners))
 	}
 	w.check("diskfill", filling, "%s", line)
+	w.publishDisk(watchDiskReading{Low: low, Filling: filling, Writers: w.disk.writersLine(now, d.FreeMiB, t, owners), FreeMiB: d.FreeMiB, MinMiB: th.DiskMin(d.TotalMiB)})
+	w.diskPrune(now, low || filling)
 }
 
 // fillRate records free and returns how many MiB a minute / lost over the

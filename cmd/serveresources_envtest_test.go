@@ -29,9 +29,10 @@ const (
 	keyRole      = "role"
 	purposeProof = "proof"
 	// piaTeam is the other team; laptop, boAgent and sessionID the
-	// tests' other agents' host and names.
+	// tests' other agents' host and names; anaLaptop ana's host.
 	piaTeam   = "planeteers"
 	laptop    = "laptop"
+	anaLaptop = "ana-laptop"
 	boAgent   = "bo-agent"
 	sessionID = "sess-1"
 )
@@ -223,6 +224,15 @@ func TestEnvtestServeFeed(t *testing.T) {
 		t.Errorf("the claim's event %+v", claim)
 	}
 
+	// read_feed is the feed as a tool, after an id the events above it.
+	got := e.expect(t, ana, nameReadFeed, map[string]any{paramAfter: claim.ID}, false, "lease.release (ana-agent): graveler")
+	if evs, _ := got["events"].([]any); len(evs) != 1 || got["schema"] != feed.Schema {
+		t.Errorf("read_feed after the claim: %v", got)
+	}
+	if got := e.expect(t, ana, nameReadFeed, map[string]any{}, false, "lease.claim (ana-agent): graveler"); len(got["events"].([]any)) != 2 {
+		t.Errorf("read_feed: %v", got)
+	}
+
 	// A restart: a fresh store's ids continue above the kept Events', even
 	// for an event dated before them.
 	fresh, err := kube.NewForConfig(e.rc)
@@ -294,7 +304,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, ana, "agents_register", map[string]any{paramAgent: anaAgent, paramHost: lab}, false, "register: ana-agent idle")
 
 	// ana's agent on her laptop messages her agent on the lab.
-	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: "ana-laptop", paramHost: laptop}, false, "delivery")
+	sent := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello"), paramAgent: anaLaptop, paramHost: laptop}, false, "delivery")
 	again := e.expect(t, ana, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("m1", "hello")}, false, "not queued again")
 	if again["duplicate"] != true || again["id"] != sent["id"] {
 		t.Errorf("the resend %v of %v", again, sent)
@@ -307,7 +317,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, bo, "send_message", map[string]any{"to": anaAddress, paramMessage: a2a("b1", "x")}, true, "not on the roster")
 
 	e.expect(t, bo, "receive_messages", map[string]any{paramFor: anaEmail}, true, "you read and ack only your own")
-	e.expect(t, bo, "ack_messages", map[string]any{paramFor: anaEmail, "ids": []any{sent["id"]}}, true, "you read and ack only your own")
+	e.expect(t, bo, "ack_messages", map[string]any{paramFor: anaEmail, paramIDs: []any{sent["id"]}}, true, "you read and ack only your own")
 	got := e.expect(t, ana, "receive_messages", map[string]any{}, false, "message from ana@example.com: m1")
 	msgs := got["messages"].([]any)
 	if len(msgs) != 2 {
@@ -315,11 +325,11 @@ func TestEnvtestServeMessages(t *testing.T) {
 	}
 	first := msgs[0].(map[string]any)
 	env := first["envelope"].(map[string]any)
-	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != "ana-laptop" || from["host"] != laptop ||
+	if from := env["from"].(map[string]any); from["person"] != anaEmail || from["agent"] != anaLaptop || from["host"] != laptop ||
 		env["to"] != anaAddress || env[paramMessage].(map[string]any)["messageId"] != "m1" {
 		t.Errorf("the envelope %v", env)
 	}
-	e.expect(t, ana, "ack_messages", map[string]any{"ids": []any{first["id"]}}, false, "acked 1 of 1")
+	e.expect(t, ana, "ack_messages", map[string]any{paramIDs: []any{first["id"]}}, false, "acked 1 of 1")
 	e.expect(t, ana, "receive_messages", map[string]any{}, false, "m2")
 
 	// The cap: 49 more fill ana's mailbox to 50, the next is refused.

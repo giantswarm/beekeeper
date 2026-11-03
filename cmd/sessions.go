@@ -34,23 +34,27 @@ type sessionView struct {
 
 // view is everything the session-level commands show.
 type view struct {
-	Sessions   []*sessionView   `json:"sessions"`
-	Totals     *metricsTotals   `json:"totals,omitempty"`
-	Overlaps   []claude.Overlap `json:"overlaps,omitempty"`
-	Supervisor *supervisorView  `json:"supervisor,omitempty"`
-	Leases     []leaseView      `json:"leases,omitempty"`
-	raw        []*claude.Session
-	st         *state.State
+	Sessions []*sessionView   `json:"sessions"`
+	Totals   *metricsTotals   `json:"totals,omitempty"`
+	Overlaps []claude.Overlap `json:"overlaps,omitempty"`
+	// SupervisorLoop is the PID of the running supervisor loop, 0 when it
+	// does not run.
+	SupervisorLoop int         `json:"supervisorLoopPID,omitempty"`
+	Leases         []leaseView `json:"leases,omitempty"`
+	raw            []*claude.Session
+	st             *state.State
 }
 
-type supervisorView struct {
+// roleView is a relayed role's holder (the guide's) as the commands show
+// it.
+type roleView struct {
 	state.Supervisor
 	Live bool `json:"live"`
 	// CLIGone is set while its CLI is gone, RestartUntil while it may still
-	// come back as a restart; the grant rule holds either way.
+	// come back as a restart.
 	CLIGone      time.Time `json:"cliGone,omitzero"`
 	RestartUntil time.Time `json:"restartUntil,omitzero"`
-	// Relay is the supervisor's last relay; Relieved says it relieved the caller.
+	// Relay is the role's last relay; Relieved says it relieved the caller.
 	Relay    *state.Relay `json:"relay,omitempty"`
 	Relieved bool         `json:"relieved,omitempty"`
 	// Run is the role's run the holder is: "<Role> run <Run>".
@@ -61,27 +65,21 @@ type supervisorView struct {
 	RelayAt int64 `json:"relayAt"`
 }
 
-// viewSupervisor is the recorded supervisor as sv reads it, with its
-// session's context; nil when none is recorded.
-func (a *app) viewSupervisor(st *state.State, sessions []*claude.Session, sv supervision) *supervisorView {
-	return a.viewRole(supervisorRole, st.SupervisorRole(), sessions, sv)
-}
-
 // viewRole is rl's recorded holder r as sv reads it, with its session's
 // context; nil when none is recorded.
-func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) *supervisorView {
+func (a *app) viewRole(rl role, r state.Role, sessions []*claude.Session, sv supervision) *roleView {
 	if r.Holder == nil {
 		return nil
 	}
-	return &supervisorView{
+	return &roleView{
 		Supervisor: *r.Holder, Live: sv.live, CLIGone: sv.gone, RestartUntil: sv.until, Relay: r.Relay,
 		Context: sessionContext(sessions, r.Holder.Party), RelayAt: int64(rl.cfg(a.cfg).RelayAt), Run: r.Run,
 	}
 }
 
-// contextText says how far the supervisor's context is towards relayAt,
+// contextText says how far the holder's context is towards relayAt,
 // "" when it is not known.
-func (v *supervisorView) contextText() string {
+func (v *roleView) contextText() string {
 	if v.Context == 0 {
 		return ""
 	}
@@ -104,7 +102,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		return nil, err
 	}
 	v := &view{raw: raw, st: st}
-	v.Supervisor = a.viewSupervisor(st, raw, a.supervision(st, raw))
+	v.SupervisorLoop = a.loopPID()
 	for _, h := range holders {
 		v.Leases = append(v.Leases, a.leaseView(raw, h))
 	}
@@ -139,7 +137,6 @@ func (a *app) collect(withWork bool) (*view, error) {
 	slices.SortFunc(v.Sessions, func(x, y *sessionView) int { return y.LastActive.Compare(x.LastActive) })
 	if withWork {
 		v.Overlaps = claude.Overlaps(raw, work, claude.OverlapOptions{
-			Skip:        func(s *claude.Session) bool { return st.Supervisor != nil && st.Supervisor.Is(s.Party()) },
 			Ignore:      a.cfg.Overlaps.Ignore,
 			ActiveSince: a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration),
 		})
@@ -169,8 +166,10 @@ func (a *app) sessionsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "sessions",
 		Short: "List the running sessions: what each is on, what it runs, what it holds",
-		Long: `List the running sessions, Claude Code's and omp's (oh-my-pi, marked
-"omp busy" or "omp idle"), most recently active first: the
+		Long: `List the running sessions across Claude Code, omp (oh-my-pi), agy
+(Antigravity) and codex, most recently active first. Non-Claude sessions
+are marked with their harness and state (for example, "omp busy" or
+"omp idle"). Each session shows the
 issue its record serves and the issues or pull requests its latest turns
 acted on (named in its gh and devctl commands and GitHub tool calls, or
 created; a ref it only quoted or read is no act), else the repository it
@@ -197,7 +196,8 @@ unknown".
 Overlaps name the issues, pull requests and repositories more than one
 session acts on now. --json keeps the refs a session only mentioned in
 its work's "mentioned". --all adds the sessions of the last 24 hours that run no
-CLI (paused or closed, not archived) and the omp sessions no process runs:
+Claude Code CLI (paused or closed, not archived) and the omp, agy and codex
+sessions no process runs:
 a message to them does not arrive.
 
 The session records (sessions serve) follow the table: which session serves
@@ -223,8 +223,11 @@ moving is no change), or one "no change" line. --full prints everything.`,
 			var paused []*claude.Record
 			var ended []*claude.Session
 			if all {
-				paused = claude.StoppedRecords(a.cfg, v.raw, a.now.Add(-24*time.Hour))
-				ended = omp.Ended(a.cfg.Omp.SessionsDir, v.raw, a.now.Add(-24*time.Hour))
+				since := a.now.Add(-24 * time.Hour)
+				paused = claude.StoppedRecords(a.cfg, v.raw, since)
+				for _, h := range harnesses {
+					ended = append(ended, h.Ended(a.cfg, v.raw, since)...)
+				}
 			}
 			if a.json {
 				return a.printJSON(struct {
@@ -249,7 +252,7 @@ moving is no change), or one "no change" line. --full prints everything.`,
 							ago(a.now, time.UnixMilli(r.LastActivityAt)), r.Aside())
 					}
 					for _, e := range ended {
-						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\tomp\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive))
+						_, _ = fmt.Fprintf(w, "  %s\t%s\tactive %s ago\t%s\n", truncate(e.Name, 50), e.Cwd, ago(a.now, e.LastActive), cmp.Or(e.Harness, omp.Harness))
 					}
 					_ = w.Flush()
 				}
@@ -260,7 +263,7 @@ moving is no change), or one "no change" line. --full prints everything.`,
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			for _, e := range ended {
-				l := fmt.Sprintf("ended omp %q %s", e.Name, e.Cwd)
+				l := fmt.Sprintf("ended %s %q %s", cmp.Or(e.Harness, omp.Harness), e.Name, e.Cwd)
 				facts = append(facts, fact{Key: l, Sig: l, Line: l})
 			}
 			return a.delta("sessions", full, facts, printFull)
@@ -293,7 +296,7 @@ registered agent whose CLI does not run is recorded too, and the line says
 so. The record stores the roster name of a registered agent, the session's
 own name otherwise.
 
-A worker (a registered agent holding no supervisor or guide role) records
+A worker (a registered agent holding no guide role) records
 only its own session: a serve naming another session is refused. --clear
 removes the calling session's own record; agents idle --done clears it too.`,
 		Args: func(c *cobra.Command, args []string) error {
@@ -302,7 +305,8 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			}
 			return cobra.ExactArgs(2)(c, args)
 		},
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			if clearOwn {
 				return a.clearRecord()
 			}
@@ -334,6 +338,7 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if err != nil {
 				return err
 			}
+			a.warnClaimedElsewhere(cmd.Context(), cmd.ErrOrStderr(), r.Issue)
 			line := fmt.Sprintf("%q %s", r.Session.Name, recordText(r))
 			if absent != "" {
 				line += "; " + absent
@@ -395,7 +400,8 @@ func (a *app) unserveCmd() *cobra.Command {
 unique part of one or a session id; an issue, owner/repo#n, removes the one
 record serving it (a board next --claim given back).`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -592,6 +598,18 @@ func servedBy(st *state.State, p state.Party) state.Party {
 		p.Name = st.Agents[i].Name
 	}
 	return p
+}
+
+// rosterRole is the role st says me holds ("the guide", "the worker"), ""
+// when it says none.
+func rosterRole(st *state.State, me state.Party) string {
+	switch {
+	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
+		return "the guide"
+	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
+		return workerRole
+	}
+	return ""
 }
 
 // recordText says what a record's session serves.
@@ -818,16 +836,11 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
 	}
-	read := claude.Tail
-	switch {
-	case s.Harness == omp.Harness && tools:
-		read = omp.Follow
-	case s.Harness == omp.Harness:
-		read = omp.Tail
-	case tools:
-		read = claude.Follow
+	h := harnessForSession(s)
+	if tools {
+		return h.Follow(s.Transcript, n)
 	}
-	return read(s.Transcript, n)
+	return h.Tail(s.Transcript, n)
 }
 
 func (a *app) tailCmd() *cobra.Command {

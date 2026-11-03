@@ -17,12 +17,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"github.com/giantswarm/beekeeper/internal/secret"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -254,16 +257,17 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					return err
 				}
 			}
+			// Consume inherited vault descriptors before egress starts any child.
+			keeper, err := a.keepVault(ctx)
+			if err != nil {
+				return err
+			}
 			serveEgress, err := a.listenEgress(ctx)
 			if err != nil {
 				return err
 			}
 			egress := make(chan error, 1)
 			go func() { egress <- serveEgress() }()
-			keeper, err := a.keepVault(ctx)
-			if err != nil {
-				return err
-			}
 			secretCall := func(env []string) sandbox.Handler {
 				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv(a.cfg.Secret.Session)))
 			}
@@ -361,7 +365,7 @@ const importOp = "import"
 
 // callerEnv are the variables that name the calling session, the only part
 // of its environment a brokered call takes over.
-var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName}
+var callerEnv = []string{"CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME", "CLAUDE_CONFIG_DIR", omp.EnvAgent, omp.EnvName, agy.EnvAgent, agy.EnvName, codex.EnvAgent, codex.EnvName}
 
 // brokeredCallTimeout bounds a brokered call: op answers within a minute, a
 // rotation writes several files.
@@ -381,6 +385,12 @@ func brokeredSecretArgs(args []string, inSandbox, session bool) error {
 	for _, a := range args[1:] {
 		if a == "--" && inSandbox {
 			return errors.New("a consumer or producer runs on the host only: copy, set or capture with -- is not brokered")
+		}
+		if strings.HasPrefix(a, secret.CmdRef) && inSandbox {
+			return errors.New("a producer runs on the host only: copy from cmd:// is not brokered")
+		}
+		if secret.IsSSH(a) && inSandbox {
+			return errors.New("ssh runs on the host only: copy to ssh:// is not brokered")
 		}
 	}
 	return brokeredFlags(args[1:])

@@ -6,21 +6,25 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // graphqlRefusedText is GitHub's refusal of a GraphQL call while its
 // counter still shows headroom.
 const graphqlRefusedText = "API rate limit already exceeded for user ID 1."
+const budgetGraphQLPath = "/graphql"
 
 // refusingGitHub stands in for gh's login and for GitHub: REST answers with
 // headroom, GraphQL refuses while refuse is set. It counts the GraphQL
@@ -38,7 +42,7 @@ func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 		h.Set("X-RateLimit-Limit", "5000")
 		h.Set("X-RateLimit-Remaining", "4800")
 		h.Set("X-RateLimit-Reset", "1791258912")
-		if r.URL.Path != "/graphql" {
+		if r.URL.Path != budgetGraphQLPath {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
@@ -57,6 +61,11 @@ func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 
 func budgetApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
+	previous := budgetCredentials
+	t.Cleanup(func() { budgetCredentials = previous })
+	budgetCredentials = func(context.Context) []github.BudgetCredential {
+		return []github.BudgetCredential{{Identity: "gh", Value: "tok"}}
+	}
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +83,7 @@ func TestBudgetGateRefusesWhileGraphQLIsRefused(t *testing.T) {
 	refusingGitHub(t, &refuse)
 	a, out := budgetApp(t)
 	c := a.budgetCmd()
-	c.SetArgs([]string{"--gate"})
+	c.SetArgs([]string{gateFlag})
 	c.SetOut(out)
 	c.SetErr(out)
 	err := c.Execute()
@@ -183,5 +192,146 @@ func TestWatchSaysAGraphQLRefusalOnce(t *testing.T) {
 	w.budget(context.Background(), time.Now())
 	if !strings.Contains(out.String(), "ENDED GRAPHQL REFUSED") {
 		t.Errorf("the refusal's end was not said:\n%s", out)
+	}
+}
+
+// searchGitHub stands in for gh's login and for GitHub: REST and GraphQL
+// answer with headroom, /rate_limit with code search left codeLeft of 10,
+// or with a 502 while codeLeft is negative.
+func searchGitHub(t *testing.T, codeLeft int, reset time.Time) {
+	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho tok\n"), 0o700); err != nil { //nolint:gosec // a fake gh
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-RateLimit-Limit", "5000")
+		h.Set("X-RateLimit-Remaining", "4800")
+		h.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+		switch r.URL.Path {
+		case budgetGraphQLPath:
+			_, _ = fmt.Fprintf(w, `{"data":{"rateLimit":{"limit":5000,"remaining":4960,"used":40,"resetAt":%q}}}`, reset.UTC().Format(time.RFC3339))
+		case "/rate_limit":
+			if codeLeft < 0 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"resources":{"search":{"limit":30,"remaining":30,"used":0,"reset":%[1]d},"code_search":{"limit":10,"remaining":%[2]d,"used":%[3]d,"reset":%[1]d}}}`,
+				reset.Unix(), codeLeft, 10-codeLeft)
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+}
+
+// budget prints a row per search limit with its reset, and says a spent
+// code-search limit is spent until its reset.
+func TestBudgetShowsTheSearchLimits(t *testing.T) {
+	for name, tc := range map[string]struct {
+		codeLeft int
+		want     string
+	}{
+		"headroom": {7, "code search: 7 of 10 left, resets "},
+		"spent":    {0, "code search: SPENT, 0 of 10 left until "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, out := budgetApp(t)
+			reset := a.now.Add(40 * time.Second)
+			searchGitHub(t, tc.codeLeft, reset)
+			c := a.budgetCmd()
+			c.SetArgs(nil)
+			c.SetOut(out)
+			c.SetErr(out)
+			if err := c.Execute(); err != nil {
+				t.Fatalf("budget = %v", err)
+			}
+			for _, want := range []string{tc.want + clock(a.now, reset), "search: 30 of 30 left, resets " + clock(a.now, reset)} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("budget printed %q, want %q", out.String(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
+	a, out := budgetApp(t)
+	reset := a.now.Add(40 * time.Minute)
+	searchGitHub(t, 7, reset)
+	if err := a.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{
+		Reset:     reset,
+		Remaining: 4920,
+		Spent:     42,
+		Steps:     map[string]int{loopBoard: 39, loopPullStep: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.budgetCmd()
+	c.SetArgs(nil)
+	c.SetOut(out)
+	c.SetErr(out)
+	if err := c.Execute(); err != nil {
+		t.Fatalf("budget = %v", err)
+	}
+	want := "loop GraphQL spend: 42 of 1500 (board 39, pull 3), resets " + clock(a.now, reset)
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("budget printed %q, want %q", out.String(), want)
+	}
+}
+
+const (
+	gateFlag       = "--gate"
+	codeSearchFlag = "--bucket code_search"
+)
+
+// budget --gate --bucket refuses while a named search bucket is spent,
+// naming its reset; passes while it has headroom or another bucket is
+// spent; fails, never passing, while the search limits cannot be read. A
+// gate naming no bucket ignores the search limits as before.
+func TestBudgetGateBucket(t *testing.T) {
+	for name, tc := range map[string]struct {
+		codeLeft int
+		args     string
+		code     int
+		says     string
+	}{
+		"spent code search refuses":    {0, gateFlag + " " + codeSearchFlag, ExitRefused, "GitHub code_search bucket is spent, 0 of 10 left: wait for the reset at "},
+		"spent among a comma list":     {0, gateFlag + " --bucket search,code_search", ExitRefused, "GitHub code_search bucket is spent"},
+		"code search with headroom":    {3, gateFlag + " " + codeSearchFlag, 0, ""},
+		"another bucket spent":         {0, gateFlag + " --bucket search", 0, ""},
+		"no bucket named":              {0, gateFlag, 0, ""},
+		"no bucket named, probe fails": {-1, gateFlag, 0, ""},
+		"repeated bucket flag":         {0, gateFlag + " --bucket search " + codeSearchFlag, ExitRefused, "GitHub code_search bucket is spent"},
+		"probe fails":                  {-1, gateFlag + " " + codeSearchFlag, ExitError, "search limits unknown, the gate cannot judge --bucket: GitHub answered 502 Bad Gateway for /rate_limit"},
+		"bucket without gate":          {3, codeSearchFlag, ExitUsage, "--bucket needs --gate"},
+		"unknown bucket":               {3, gateFlag + " --bucket core", ExitUsage, `unknown --bucket "core"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, out := budgetApp(t)
+			reset := a.now.Add(40 * time.Second)
+			searchGitHub(t, tc.codeLeft, reset)
+			c := a.budgetCmd()
+			c.SetArgs(strings.Fields(tc.args))
+			c.SetOut(out)
+			c.SetErr(out)
+			c.SetContext(t.Context())
+			err := c.Execute()
+			if tc.code == 0 {
+				if err != nil {
+					t.Fatalf("budget %s = %v, want it to pass", tc.args, err)
+				}
+				return
+			}
+			if Code(err) != tc.code || !strings.Contains(err.Error(), tc.says) {
+				t.Fatalf("budget %s = %v (exit %d), want exit %d saying %q", tc.args, err, Code(err), tc.code, tc.says)
+			}
+			if tc.code == ExitRefused && !strings.Contains(err.Error(), clock(a.now, reset)) {
+				t.Errorf("refusal %q does not name the reset %s", err, clock(a.now, reset))
+			}
+		})
 	}
 }

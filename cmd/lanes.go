@@ -28,6 +28,17 @@ type laneView struct {
 	// Stall is set when the lane's first arrived merge has waited longer
 	// than merge.stallAfter behind places whose merges are not in the gate.
 	Stall *merge.Stall `json:"stall,omitempty"`
+	// Pairs say, by key, what each of the lane's paired merges lands with
+	// (the gate's --pair): its sibling and where that is.
+	Pairs map[string]string `json:"pairs,omitempty"`
+}
+
+// paired is the pair line of the merge key, ", lands with …", "" when none.
+func (v laneView) paired(key string) string {
+	if t := v.Pairs[key]; t != "" {
+		return ", " + t
+	}
+	return ""
 }
 
 func (a *app) lanesCmd() *cobra.Command {
@@ -339,12 +350,21 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 func (a *app) laneViews(st *state.State) []laneView {
 	var out []laneView
 	seen := map[string]bool{}
+	pairs := pairLines(st)
 	add := func(name, installation string) {
 		if seen[name] {
 			return
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		for _, m := range st.Merges {
+			if t := pairs[m.Key()]; m.Lane == name && t != "" {
+				if v.Pairs == nil {
+					v.Pairs = map[string]string{}
+				}
+				v.Pairs[m.Key()] = t
+			}
+		}
 		if s, ok := v.Stalled(a.now, a.cfg.Merge.StallAfter.Duration, a.present, proc.Alive, arrived); ok {
 			v.Stall = &s
 		}
@@ -439,7 +459,7 @@ func (a *app) printLanes(views []laneView) {
 		status := "free"
 		switch {
 		case v.Running != nil:
-			status = fmt.Sprintf("running %s by %s since %s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started))
+			status = fmt.Sprintf("running %s by %s since %s%s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started), v.paired(v.Running.Key()))
 		case v.Settling != nil:
 			status = a.settlingText(*v.Settling)
 		}
@@ -483,7 +503,7 @@ func (a *app) printLanes(views []laneView) {
 			default:
 				how = "not arrived, queued"
 			}
-			p("%s %d. %s by %s, %s since %s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined))
+			p("%s %d. %s by %s, %s since %s%s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined), v.paired(m.Key()))
 		}
 		for _, f := range v.Failed {
 			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),
@@ -561,6 +581,12 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 // (cutOwed), which the watch hands over from GitHub's answer. It returns
 // what it recorded, the cut runs and the lost merges.
 func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []state.Merge) {
+	return a.recordGateExits(ctx, false)
+}
+
+// recordGateExits also settles unreadable exits immediately when a worker
+// has just been stopped. Ordinary watch recovery retains its lost-run event.
+func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded, cut []string, lost []state.Merge) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, nil, nil
@@ -580,7 +606,8 @@ func (a *app) recordGone(ctx context.Context) (recorded, cut []string, lost []st
 		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
 		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
-			if r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1); r.unanswered != nil {
+			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
+			if r.unanswered != nil && !workerStopped {
 				continue
 			}
 		}
@@ -790,4 +817,14 @@ func (a *app) pullText(p github.Pull) string {
 		return "closed without a merge"
 	}
 	return "merged at " + clock(a.now, p.MergedAt)
+}
+
+// recordStoppedGates reconciles exits before a worker stop returns, rather
+// than leaving a dead run in Running until the watch's hung-run threshold.
+// Independently running gate runners remain owned by the gate and are not
+// signalled. An unreadable outcome enters Settling under the usual rules.
+func (a *app) recordStoppedGates(ctx context.Context) {
+	if a.store != nil {
+		a.recordGateExits(ctx, true)
+	}
 }

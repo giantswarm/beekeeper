@@ -59,6 +59,14 @@ var (
 	pullRebase    = func(ctx context.Context, repo string, n int) (github.Rebase, error) {
 		return github.ReadRebase(ctx, github.RunGH, repo, n)
 	}
+	pullMergeCommits = func(ctx context.Context, repo string, n int) ([]string, error) {
+		return github.MergeCommits(ctx, github.RunGH, repo, n)
+	}
+	// reviewGuard is the pull request's review read (github.ReviewGuard).
+	reviewGuard = func(ctx context.Context, repo string, n int) (string, error) {
+		why, _, err := github.ReviewGuard(ctx, github.RunGH, repo, n)
+		return why, err
+	}
 	updateRebase = func(ctx context.Context, repo string, n int) error {
 		return github.UpdateByRebase(ctx, github.RunGH, repo, n)
 	}
@@ -164,15 +172,16 @@ func (g *gateRun) mergeFiles() (string, error) {
 
 // mergeBase is the base of a merge's files in the state directory: devctl's
 // document (.json) and stderr (.log), its exit code (.rc), its runner's pid
-// (.pid), the command it runs (.spec), the file its output is kept in
-// (.kept) and, for a wait, the gate's mark that it left the run to run on
+// (.pid), the command it runs (.spec), what gate runs shows of it (.run),
+// the file its output is kept in (.kept), who stopped it with gate stop
+// (.stopped) and, for a wait, the gate's mark that it left the run to run on
 // (.left). Not the caller's pipes, which close with the caller's session.
 func mergeBase(stateDir, repo string, pr int) string {
 	return filepath.Join(stateDir, "merges", fmt.Sprintf("%s-%d", strings.ReplaceAll(repo, "/", "_"), pr))
 }
 
 // mergeExts are the extensions of a merge's files.
-var mergeExts = []string{".json", ".log", ".rc", ".pid", ".spec", ".kept", leftExt}
+var mergeExts = []string{".json", ".log", ".rc", ".pid", ".spec", runInfoExt, ".kept", stoppedExt, leftExt}
 
 // removeMergeFiles removes a merge's files.
 func removeMergeFiles(base string) {
@@ -258,6 +267,12 @@ type childSpec struct {
 	HandCut string      `json:"handCut,omitempty"`
 	// WithCaller is set for a wait, never for a merge or a queued merge's run.
 	WithCaller bool `json:"withCaller,omitempty"`
+	// BusyBudget, set for a merge with --update-branch, is how long from its
+	// first run merge-child runs devctl again after a run ends on a busy base
+	// (merge.BusyBase), BusyPauses its pauses before them (merge.BusyNext);
+	// zero: once.
+	BusyBudget time.Duration   `json:"busyBudget,omitempty"`
+	BusyPauses []time.Duration `json:"busyPauses,omitempty"`
 }
 
 // childRun is how a detached run ended for its gate: devctl's document and
@@ -313,7 +328,7 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
-	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller)
+	return followChild(base, pid, 0, nil, nil, leave, spec.WithCaller, nil)
 }
 
 // followChild follows the devctl that merge-child pid runs outside its
@@ -340,12 +355,16 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 // document it takes off the stdout (held), for the gate to decide. leave,
 // when set, is when the follow returns with left set while the run goes on
 // (the gate's tool limit), its files in place for its merge-child and the
-// watch.
-func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool) (r childRun) {
+// watch. sig, when given, hears the signals from before devctl started
+// (gateRun.followSignals); else the follow hears them from its start on.
+func followChild(base string, pid int, offset int64, bin binary, hold func(doc []byte) bool, leave time.Time, withCaller bool, sig <-chan os.Signal) (r childRun) {
 	r.rc = guard.ExitNotFound
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sig)
+	if sig == nil {
+		own := make(chan os.Signal, 1)
+		signal.Notify(own, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(own)
+		sig = own
+	}
 	log, err := os.Open(base + ".log") //nolint:gosec // the gate's own file under the state directory
 	if err == nil {
 		defer func() { _ = log.Close() }()
@@ -603,11 +622,24 @@ func (a *app) mergeChildRun(ctx context.Context, base string, bin binary) error 
 			_, _ = fmt.Fprintf(os.Stderr, "%sthe new binary does not start (%v): handing the outcome over under %s\n", GatePrefix, err, project.Version())
 		}
 	}
+	a.recordLeft(ctx, r)
 	a.tellOwner(ctx, r)
 	if filepath.Base(filepath.Dir(r.base)) == ownedRuns && !proc.Alive(r.spec.Gate) {
 		removeMergeFiles(r.base) // a gate gone leaves a wait's or queued merge's files to its run
 	}
 	return exitCode(unitExit(r.rc))
+}
+
+// recordLeft records the finished run of a gate that left it to run on
+// (its tool limit, its caller's timeout) and is gone, before its owner hears
+// the outcome: its lane lists it no longer running the moment its devctl
+// ended. A gate still running records the run itself; the watch's
+// recordGone stays the backstop for a merge-child that died before this.
+func (a *app) recordLeft(ctx context.Context, r childResult) {
+	if proc.Alive(r.spec.Gate) || a.loadRun(r) != nil {
+		return
+	}
+	a.recordGone(ctx)
 }
 
 // mergeDoneEnv carries a finished command's outcome across merge-child's
@@ -630,6 +662,8 @@ type childDone struct {
 	Last    string      `json:"last,omitempty"`
 	Kept    string      `json:"kept,omitempty"`
 	Stop    int         `json:"stop,omitempty"`
+	// StoppedBy is childResult's stoppedBy.
+	StoppedBy state.Party `json:"stoppedBy,omitzero"`
 	// CallerGone is childResult's callerGone.
 	CallerGone bool `json:"callerGone,omitempty"`
 }
@@ -637,13 +671,13 @@ type childDone struct {
 // done is r for the re-executed merge-child.
 func (r childResult) done() childDone {
 	return childDone{Argv: r.spec.Argv, Command: r.spec.Command, Owner: r.spec.Owner, Gate: r.spec.Gate, Config: r.spec.Config,
-		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept, Stop: int(r.stop), CallerGone: r.callerGone}
+		HandCut: r.spec.HandCut, Base: r.base, RC: r.rc, Doc: r.doc, Last: r.last, Kept: r.kept, Stop: int(r.stop), StoppedBy: r.stoppedBy, CallerGone: r.callerGone}
 }
 
 // result is the outcome d carries, as mergeChild returns it.
 func (d childDone) result() childResult {
 	return childResult{spec: childSpec{Argv: d.Argv, Command: d.Command, Owner: d.Owner, Gate: d.Gate, Config: d.Config, HandCut: d.HandCut},
-		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept, stop: syscall.Signal(d.Stop), callerGone: d.CallerGone}
+		base: d.Base, rc: d.RC, doc: d.Doc, last: d.Last, kept: d.Kept, stop: syscall.Signal(d.Stop), stoppedBy: d.StoppedBy, callerGone: d.CallerGone}
 }
 
 // command names the command merge-child ran, the devctl command Argv stands
@@ -679,14 +713,14 @@ func doneResult(base string) (childResult, bool) {
 // session and the event log; the unit fails only where a person must act:
 // devctl's authentication (8), a kill or merge-child itself failing. devctl's
 // verdicts (0-7, 9: a merge, a red or unfinished pull request, a refusal, a
-// mistyped flag), the gate's own (76 queued, 77 refused, of a queued merge's
-// gate) and a stop as asked (SIGTERM) are the calling session's to act on and
-// end the unit successfully.
+// mistyped flag), the gate's own (76 queued, 77 refused, 74 unread, of a
+// queued merge's gate) and a stop as asked (SIGTERM) are the calling
+// session's to act on and end the unit successfully.
 func unitExit(rc int) int {
 	switch {
 	case rc == devctlAuth:
 		return rc
-	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == 128+int(syscall.SIGTERM):
+	case rc >= 0 && rc <= devctlUnconfirmed, rc == ExitGateQueued, rc == ExitGateRefused, rc == ExitGateUnread, rc == 128+int(syscall.SIGTERM):
 		return 0
 	}
 	return rc
@@ -710,6 +744,9 @@ type childResult struct {
 	doc        []byte
 	last, kept string
 	stop       syscall.Signal
+	// stoppedBy is who stopped the run with gate stop (stoppedExt), zero
+	// when nobody did.
+	stoppedBy state.Party
 	// infra are the red checks that died on a transient infrastructure
 	// failure, which the outcome names as such.
 	infra []merge.Infra
@@ -720,14 +757,17 @@ type childResult struct {
 }
 
 // mergeChild runs base.spec's command with its stdout in base.json and its
-// stderr in base.log, records its own pid in base.pid before it starts it,
-// the file keepOutput kept its output in in base.kept and the command's exit
+// stderr in base.log, records its own pid in base.pid and what gate runs
+// shows of it in base.run before it starts it, the file keepOutput kept its output in in base.kept and the command's exit
 // code (128+n for a signal) in base.rc last. SIGINT is passed on; SIGTERM
 // and SIGHUP too, as they come from the service manager or a person, never
 // from the gate's caller; the first one is the run's stop. A wait
 // (spec.WithCaller) ends with its caller: once its gate is gone without the
 // left mark (leftExt) and no other run follows it (followerGlob), devctl is
-// sent SIGTERM and the run is callerGone. Re-executed by a replaced merge-child whose
+// sent SIGTERM and the run is callerGone. A merge's run that ends on a busy
+// base (merge.BusyBase) runs again after a pause within spec.BusyBudget, its
+// stdout replaced and its stderr appended, the exit code the last run's.
+// Re-executed by a replaced merge-child whose
 // command ended, it returns that outcome (doneResult) and runs nothing.
 func mergeChild(base string) childResult {
 	if r, ok := doneResult(base); ok {
@@ -753,54 +793,62 @@ func mergeChild(base string) childResult {
 		return r
 	}
 	defer func() { _ = errs.Close() }()
-	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
-	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
+	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC()})
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
 		return r
 	}
-	rc := guard.ExitNotFound
 	var stop atomic.Value
 	var gone atomic.Bool
-	if err := c.Start(); err == nil {
-		go func() {
-			for s := range sig {
-				if n, ok := s.(syscall.Signal); ok {
-					stop.CompareAndSwap(nil, n)
-				}
-				_ = c.Process.Signal(s)
+	var current atomic.Pointer[os.Process]
+	stopCh := make(chan struct{})
+	go func() {
+		for s := range sig {
+			if n, ok := s.(syscall.Signal); ok && stop.CompareAndSwap(nil, n) {
+				close(stopCh)
 			}
-		}()
-		ended := make(chan struct{})
-		if spec.WithCaller && spec.Gate > 0 {
-			go func() {
-				for {
-					select {
-					case <-ended:
-						return
-					case <-time.After(followPoll):
-					}
-					if callerGone(base, spec.Gate) {
-						gone.Store(true)
-						_ = c.Process.Signal(syscall.SIGTERM)
-						return
-					}
-				}
-			}()
+			if p := current.Load(); p != nil {
+				_ = p.Signal(s)
+			}
 		}
-		_ = c.Wait()
-		close(ended)
-		rc = c.ProcessState.ExitCode()
-		if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			rc = 128 + int(ws.Signal())
+	}()
+	rc := runSpec(base, spec, out, errs, &current, &stop, &gone)
+	start := time.Now()
+	for run := 1; stop.Load() == nil && !gone.Load(); run++ {
+		doc, _ := os.ReadFile(base + ".json") //nolint:gosec // as above
+		if rc != 3 || !merge.BusyBase(doc) {
+			break
 		}
-	} else {
-		_, _ = fmt.Fprintln(errs, err)
+		pause, ok := merge.BusyNext(spec.BusyPauses, run, start, time.Now(), spec.BusyBudget)
+		if !ok {
+			if spec.BusyBudget > 0 {
+				_, _ = fmt.Fprintf(errs, "%s%s: %d devctl runs in %s, merge.busyBudget %s; nothing merged\n",
+					GatePrefix, busySpent, run, time.Since(start).Round(time.Second), spec.BusyBudget)
+			}
+			break
+		}
+		_, _ = fmt.Fprintf(errs, "%sthe base moved during every wait of devctl run %d (%s of the busy-base budget %s spent): the merge keeps its lane place, and devctl runs again in %s, updating the branch once its checks are green\n",
+			GatePrefix, run, time.Since(start).Round(time.Second), spec.BusyBudget, pause)
+		select {
+		case <-time.After(pause):
+		case <-stopCh:
+		}
+		if stop.Load() != nil {
+			break
+		}
+		if _, err := out.Seek(0, io.SeekStart); err != nil || out.Truncate(0) != nil {
+			break
+		}
+		if rc = runSpec(base, spec, out, errs, &current, &stop, &gone); rc == 0 {
+			_, _ = fmt.Fprintf(errs, "%sdevctl run %d landed the merge on the busy base, %s of the busy-base budget %s spent\n",
+				GatePrefix, run+1, time.Since(start).Round(time.Second), spec.BusyBudget)
+		}
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)
+	r.stoppedBy = readStopped(base)
 	// A gate gone without the left mark while followers kept the run going
 	// ended with its caller all the same: nobody waits for this outcome.
 	r.callerGone = gone.Load() || spec.WithCaller && spec.Gate > 0 && !proc.Alive(spec.Gate) && !leftToRunOn(base)
@@ -817,4 +865,53 @@ func mergeChild(base string) childResult {
 		writeResult(base, runResult{RC: rc, Doc: string(r.doc), Kept: r.kept})
 	}
 	return r
+}
+
+// busySpent opens merge-child's last line when a busy base's runs spent
+// merge.busyBudget, which the run's reason carries on (runReason).
+const busySpent = "busy-base budget spent"
+
+// runSpec runs spec's command once with its stdout to out and its stderr to
+// errs, the process in current for the signals merge-child passes on (one
+// that came before it started, the run's stop, reaches it once it has), and
+// returns its exit code (128+n for a signal). A wait (spec.WithCaller) ends
+// with its caller: once its gate is gone without the left mark (leftExt)
+// and no other run follows it (followerGlob), the command is sent SIGTERM
+// and gone set.
+func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
+	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
+	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
+	if err := c.Start(); err != nil {
+		_, _ = fmt.Fprintln(errs, err)
+		return guard.ExitNotFound
+	}
+	current.Store(c.Process)
+	defer current.Store(nil)
+	if s, ok := stop.Load().(syscall.Signal); ok {
+		_ = c.Process.Signal(s)
+	}
+	ended := make(chan struct{})
+	if spec.WithCaller && spec.Gate > 0 {
+		go func() {
+			for {
+				select {
+				case <-ended:
+					return
+				case <-time.After(followPoll):
+				}
+				if callerGone(base, spec.Gate) {
+					gone.Store(true)
+					_ = c.Process.Signal(syscall.SIGTERM)
+					return
+				}
+			}
+		}()
+	}
+	_ = c.Wait()
+	close(ended)
+	rc := c.ProcessState.ExitCode()
+	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		rc = 128 + int(ws.Signal())
+	}
+	return rc
 }

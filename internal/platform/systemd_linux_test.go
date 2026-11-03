@@ -3,13 +3,18 @@
 package platform
 
 import (
+	"fmt"
 	"math"
+	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
@@ -169,5 +174,47 @@ func TestRunArgsQuiet(t *testing.T) {
 	}
 	if got := runArgs(merge, false); !slices.Equal(got, want("143 SIGTERM")) {
 		t.Errorf("unset: systemd-run %q, want %q", got, want("143 SIGTERM"))
+	}
+}
+
+// A command that exits and leaves a background child in its scope keeps
+// the scope, and its slot's slice, busy; Reap stops the scope with the
+// child and names it, and finds nothing once the scope has ended.
+func TestReapStopsWhatTheCommandLeftInItsScope(t *testing.T) {
+	if !userSystemd() {
+		t.Skip("no user service manager")
+	}
+	c := systemdCapper{}
+	name := fmt.Sprintf("memcap-test-%d-%06d", os.Getpid(), time.Now().Nanosecond()%1000000)
+	cmd, _ := c.Command(name, Cap{Max: "64M", Swap: "0", Slice: "memcap-slot9_test.slice"},
+		[]string{"sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!"})
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("systemd-run: %v", err)
+	}
+	child, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("the command's output %q: %v", out, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
+	if machine.FindMemcapScope(name+".scope") == "" {
+		t.Fatalf("%s.scope ended with its command: want it held by the child %d", name, child)
+	}
+	left, err := c.Reap(name)
+	if err != nil || !slices.Equal(left, []int{child}) {
+		t.Fatalf("Reap = %v, %v; want [%d]", left, err, child)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(child, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if syscall.Kill(child, 0) == nil {
+		t.Errorf("the child %d runs on after the scope's stop", child)
+	}
+	if p := machine.FindMemcapScope(name + ".scope"); p != "" {
+		t.Errorf("%s.scope at %s after the stop", name, p)
+	}
+	if left, err := c.Reap(name); left != nil || err != nil {
+		t.Errorf("a second Reap = %v, %v; want nothing", left, err)
 	}
 }

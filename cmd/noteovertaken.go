@@ -69,7 +69,7 @@ func overtakable(n state.Note, asking int) bool {
 // notes of st are linked to.
 func overtakeRefs(st *state.State) []github.PR {
 	var out []github.PR
-	asking := st.GuideRole().Asking
+	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
 		if !overtakable(n, asking) {
 			continue
@@ -86,7 +86,7 @@ func overtakeRefs(st *state.State) []github.PR {
 // sessionLinked reports whether an overtakable note of st is linked to its
 // filing session: it has no refs.
 func sessionLinked(st *state.State) bool {
-	asking := st.GuideRole().Asking
+	asking := st.GuideRole().LocalAsking()
 	return slices.ContainsFunc(st.Notes, func(n state.Note) bool { return overtakable(n, asking) && len(n.Refs) == 0 })
 }
 
@@ -150,7 +150,7 @@ func runningWorker(st *state.State, n state.Note) *state.Agent {
 // archived says the asker is gone, not that the question is settled
 // (findOrphaned).
 func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over, kept []overtake) {
-	asking := st.GuideRole().Asking
+	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
 		if !overtakable(n, asking) || len(n.Refs) == 0 {
 			continue
@@ -181,7 +181,7 @@ func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over,
 // notes: the role owns them.
 func findOrphaned(st *state.State, archived map[string]bool) []overtake {
 	var out []overtake
-	asking := st.GuideRole().Asking
+	asking := st.GuideRole().LocalAsking()
 	for _, n := range st.Notes {
 		by := n.By
 		if overtakable(n, asking) && len(n.Refs) == 0 && (archived[by.HostSession] || archived[by.Session]) && !roleRun(st, by) {

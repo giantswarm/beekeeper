@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/central/centraltest"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -44,6 +46,8 @@ type fakeGateway struct {
 	opened []conversation
 	said   []string
 	gone   map[string]bool
+	// groups maps a Slack user group's handle to its members' emails.
+	groups map[string][]string
 }
 
 func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +56,14 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.tokens = append(g.tokens, r.Header.Get("Authorization"))
 	body, _ := io.ReadAll(r.Body)
 	switch {
+	case strings.HasPrefix(r.URL.Path, "/groups/") && r.Method == http.MethodGet:
+		handle, email, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/groups/"), "/members/")
+		members, ok := g.groups[handle]
+		if !ok {
+			http.Error(w, "no group @"+handle+" in the workspace", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"member": slices.Contains(members, email)})
 	case r.URL.Path == "/decisions" && g.refuses:
 		http.Error(w, "person: no Slack user has this email", http.StatusUnprocessableEntity)
 	case r.URL.Path == "/decisions":
@@ -112,9 +124,10 @@ func (g *fakeGateway) seen() ([]decision, []string) {
 	return append([]decision{}, g.posted...), append([]string{}, g.closed...)
 }
 
-func TestEnvtestServeDecisions(t *testing.T) {
-	e := newServeEnv(t)
-	gw := &fakeGateway{}
+// decisionsVia puts e's decisions to people through gw: bo is a person of
+// serve.people, our team's channel teamChannel.
+func decisionsVia(t *testing.T, e *serveEnv, gw *fakeGateway) {
+	t.Helper()
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	tokenFile := filepath.Join(t.TempDir(), "token")
@@ -125,6 +138,12 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	e.srv.cfg.Serve.Channels = map[string]string{ourTeam: teamChannel}
 	e.srv.cfg.Serve.Gateway = config.Gateway{URL: srv.URL, TokenFile: tokenFile, AnswerTool: "x_beekeeper_note_answer"}
 	e.srv.gw = newGateway(e.srv.cfg.Serve.Gateway)
+}
+
+func TestEnvtestServeDecisions(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
 	f := stubAnswerGH(t, &answerGH{})
 
 	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
@@ -138,6 +157,28 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		return int(id)
 	}
 	ask := func(forWho, due string) int { return askText(museLane, forWho, due) }
+	// heard is what the filing agent was told since the last call, through
+	// its person's mailbox, each acked.
+	heard := func() []string {
+		t.Helper()
+		msgs, _ := e.expect(t, ana, "receive_messages", map[string]any{}, false, "")["messages"].([]any)
+		var lines []string
+		var ids []any
+		for _, m := range msgs {
+			d, _ := m.(map[string]any)
+			raw, _ := json.Marshal(d["envelope"])
+			var env mailEnvelope
+			if err := json.Unmarshal(raw, &env); err != nil || env.To != localPrefix+lab+"/"+anaAgent || env.From.Person != serveParty.Name {
+				t.Fatalf("delivery %+v: %v", d, err)
+			}
+			lines = append(lines, env.Message.text())
+			ids = append(ids, d["id"])
+		}
+		if len(ids) > 0 {
+			e.expect(t, ana, "ack_messages", map[string]any{paramIDs: ids}, false, "")
+		}
+		return lines
+	}
 
 	// A person's decision: posted as a direct message, answered by a click.
 	n := ask("bo", "3h")
@@ -160,12 +201,23 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if _, closed := gw.seen(); len(closed) != 1 || closed[0] != "d1 answered: own — until Friday" {
 		t.Fatalf("closed %q", closed)
 	}
+	// The Note is gone; its answer.recorded Event keeps who answered, the
+	// verified email, and the filer's line names it.
+	if st, _ := e.store.Read(); slices.ContainsFunc(st.Notes, func(o state.Note) bool { return o.ID == n }) {
+		t.Fatalf("note #%d still open: %+v", n, st.Notes)
+	}
 	evs, err := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == answerRecorded })
-	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "bo" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
+	if err != nil || len(evs) != 1 || evs[0].By.Person != boEmail || !strings.HasPrefix(evs[0].Detail, privateThread+` answered by "`+boEmail+`" via slack, note #`) || !strings.HasSuffix(evs[0].Detail, ": own — until Friday") {
 		t.Fatalf("answer.recorded %+v %v", evs, err)
+	}
+	if an, ok := parseAnswered(evs[0]); !ok || an.For != boEmail || an.ID != n {
+		t.Fatalf("answer.recorded read back %+v", an)
 	}
 	if len(f.comments) != 0 {
 		t.Fatalf("posted on GitHub: %q", f.comments)
+	}
+	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by %s: own — until Friday (on %s)", n, boEmail, privateThread) {
+		t.Fatalf("the filer heard %q", got)
 	}
 
 	// A team's decision: posted to its channel, any member answers.
@@ -176,20 +228,33 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	}
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramText: portalLane}, true, "only its addressee")
 	e.expect(t, kim, "note_answer", map[string]any{paramNote: n, paramText: "portal, after the release"}, false, "answered and closed")
+	if got := heard(); len(got) != 1 || got[0] != fmt.Sprintf("NOTE ANSWERED #%d by kim@example.com: portal, after the release (on %s)", n, privateThread) {
+		t.Fatalf("the filer heard %q", got)
+	}
 
 	// Withdrawn by its filer; two defaulted at their due time in one
 	// update, then the first answered.
 	n = ask("bo", "3h")
 	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
 	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
+	withdrawn := n
+	if got := heard(); len(got) != 0 {
+		t.Fatalf("the filer heard of its own withdrawal: %q", got)
+	}
 	n = ask("bo", "1h")
-	askText(whichLane, "bo", "1h") // the same question would fold into n
+	n2 := askText(whichLane, "bo", "1h") // the same question would fold into n
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
+	}
+	if got := heard(); len(got) != 2 || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n, ownLane)) || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n2, ownLane)) {
+		t.Fatalf("the filer heard %q", got)
 	}
 	// An answer after the default replaces it; a second one finds it closed.
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 1}, false, "the answer replaces")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2}, true, "not open")
+	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by %s: portal (replaces the default applied: %s)", n, boEmail, ownLane)) {
+		t.Fatalf("the filer heard %q", got)
+	}
 	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+ownLane || closed[5] != "d4 answered: portal" {
 		t.Fatalf("closed %q", closed)
 	}
@@ -216,4 +281,85 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if st, _ := e.store.Read(); len(st.Notes) != 0 {
 		t.Fatalf("open notes %+v", st.Notes)
 	}
+
+	// Every note closed: the next decision takes a number never handed out,
+	// and a late answer or withdrawal of a closed one is refused and leaves
+	// it alone.
+	gw.mu.Lock()
+	gw.refuses = false
+	gw.mu.Unlock()
+	if next := ask("bo", "3h"); next <= n2+1 {
+		t.Fatalf("a new decision after #%d closed is #%d", n2+1, next)
+	}
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: withdrawn, paramChoice: 1}, true, "not open")
+	e.expect(t, ana, "note_done", map[string]any{paramNote: withdrawn}, true, "not open")
+	if st, _ := e.store.Read(); len(st.Notes) != 1 {
+		t.Fatalf("open notes %+v", st.Notes)
+	}
+}
+
+// A decision a person's machine files with note add goes to the central
+// instance through muster as the person: put to its addressee, answered
+// there, its answer queued for the filing agent on its machine.
+func TestEnvtestCentralNoteAdd(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{}
+	decisionsVia(t, e, gw)
+	stubAnswerGH(t, &answerGH{})
+	m := centraltest.New(t, e.url, "beekeeper")
+	anaToken := e.token(t, anaEmail, teamGroup)
+	ana := newPerson(t, m, anaToken, anaEmail, ourTeam, anaLaptop, anaAgent)
+
+	out, code := ana.run("note", "add", "--for", "bo", "--due", "3h", "--default", ownLane, "--status-quo", noMuseLane,
+		"--why", "only its owners pick its lane", "--option", "portal: it rolls with backstage", "--option", "own: a lane of its own",
+		"--recommend", "2", "--ref", privateThread, museLane)
+	if code != 0 || !strings.HasPrefix(out, "note #") || !strings.Contains(out, "(central lab") {
+		t.Fatalf("ana's note add: exit %d: %s", code, out)
+	}
+	n, _ := strconv.Atoi(strings.TrimPrefix(strings.Fields(out)[1], "#"))
+	posted, _ := gw.seen()
+	if len(posted) != 1 || posted[0].Person != boEmail || posted[0].Question != museLane || posted[0].Note != strconv.Itoa(n) ||
+		posted[0].AskedBy != anaEmail+"/"+anaAgent+" on ana-laptop" || len(posted[0].Options) != 2 || posted[0].Recommend != 2 {
+		t.Fatalf("posted %+v", posted)
+	}
+	if local, _ := state.Open(ana.state); local != nil {
+		if st, _ := local.Read(); len(st.Notes) != 0 {
+			t.Errorf("ana's machine keeps %+v: the decision is the central instance's", st.Notes)
+		}
+	}
+
+	bo := e.as(t, e.token(t, boEmail, "giantswarm:team-planeteers"))
+	e.expect(t, bo, "note_answer", map[string]any{paramNote: n, paramChoice: 2, paramVia: viaSlack}, false, "answered and closed")
+	msgs, _ := e.expect(t, e.as(t, anaToken), "receive_messages", map[string]any{}, false, "")["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("ana's mailbox %+v, want the answer", msgs)
+	}
+	raw, _ := json.Marshal(msgs[0].(map[string]any)["envelope"])
+	var env mailEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil || env.To != localPrefix+"ana-laptop/"+anaAgent ||
+		env.Message.text() != fmt.Sprintf("NOTE ANSWERED #%d by %s: own (on %s)", n, boEmail, privateThread) {
+		t.Fatalf("ana's delivery %+v: %v", env, err)
+	}
+}
+
+// A team whose Dex group others share names its Slack group: only the
+// group's members answer its decisions, a holder of the Dex group alone is
+// refused, and a group Slack does not know refuses everyone.
+func TestEnvtestServeDecisionsTeamGroup(t *testing.T) {
+	e := newServeEnv(t)
+	gw := &fakeGateway{groups: map[string][]string{"team-" + ourTeam: {"ana@example.com"}}}
+	decisionsVia(t, e, gw)
+	stubAnswerGH(t, &answerGH{})
+	e.srv.cfg.Serve.Groups = map[string]string{ourTeam: "team-" + ourTeam}
+
+	ana := e.as(t, e.token(t, "ana@example.com", teamGroup))
+	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
+	args := decisionFor(museLane, "team:"+ourTeam)
+	n, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
+	e.expect(t, kim, "note_answer", map[string]any{paramNote: int(n), paramText: portalLane}, true, "only its addressee")
+	e.expect(t, ana, "note_answer", map[string]any{paramNote: int(n), paramText: ownLane}, false, "answered and closed")
+
+	e.srv.cfg.Serve.Groups[ourTeam] = "team-gone"
+	n, _ = e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
+	e.expect(t, ana, "note_answer", map[string]any{paramNote: int(n), paramText: ownLane}, true, "could not be checked")
 }

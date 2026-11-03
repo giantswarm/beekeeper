@@ -10,6 +10,7 @@
 package guard
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +34,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/gocache"
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/runrecord"
 )
 
 // Exit codes Run returns besides the command's own.
@@ -68,13 +72,17 @@ const (
 // plat caps the runs and reads the machine.
 var plat = platform.Current(platform.Options{})
 
-// The event log verbs of a capped run. Their detail is
-// "<scope> <facts>: <command>": the scope's unit name exactly as the kernel
-// prints it in an OOM kill's memcg path, then the slot and the cap (start) or
-// the exit code, the duration and the cap's victims (end), then CommandHead.
+// The event log verbs of a run, formatted by the runrecord package, which
+// internal/remotebuild shares (guard imports it, so the shape lives in a
+// leaf of its own). A local run's id is its scope's unit name exactly as the
+// kernel prints it in an OOM kill's memcg path; a remote one's names the
+// builder pod. The facts are the slot and the cap, or the repository, HEAD
+// and cache (start), or the exit code, the duration and the cap's victims or
+// the failure's tail (end); a remote fallback names its reason.
 const (
-	VerbStart = "run.start"
-	VerbEnd   = "run.end"
+	VerbStart    = runrecord.Start
+	VerbEnd      = runrecord.End
+	VerbFallback = runrecord.Fallback
 )
 
 // A capped run's scope is <ScopePrefix><pid>-<n>.scope in memcap.slice. A
@@ -84,6 +92,75 @@ const (
 	ScopePrefix     = "memcap-"
 	TestScopePrefix = "memcap-test-"
 )
+
+// The classes of a run (Options.Class). A build, test or lint takes a build
+// slot. A benchmark and a lab proof are long by design and wait on their
+// model or their lab, not on the cores: they take no slot, only their own
+// cap in memcap.slice once the memory for it is there, so builds run beside
+// them and memory stays the bound.
+const (
+	ClassBuild     = "build"
+	ClassBenchmark = "benchmark"
+	ClassLab       = "lab"
+)
+
+// Classes are the classes a run may declare, the default first.
+var Classes = []string{ClassBuild, ClassBenchmark, ClassLab}
+
+// ParseClass checks a declared class; "" is ClassBuild.
+func ParseClass(s string) (string, error) {
+	if s == "" {
+		return ClassBuild, nil
+	}
+	if !slices.Contains(Classes, s) {
+		return "", fmt.Errorf("invalid class %q: want one of %s", s, strings.Join(Classes, ", "))
+	}
+	return s, nil
+}
+
+// labCommand is a lab command at a command position: agentlab, which waits
+// on its cluster and builds nothing.
+var labCommand = regexp.MustCompile(`(?m)` + pos + `(agentlab)\b`)
+
+// DefaultClass is the class of a run that declares none: ClassLab for a lab
+// command (agentlab) that runs no build, ClassBuild for the rest.
+func DefaultClass(argv []string) string {
+	cmd := shellCommand(argv)
+	if commandMatch(labCommand, cmd, notHelp) != nil && !isHeavy(cmd) {
+		return ClassLab
+	}
+	return ClassBuild
+}
+
+// noopCommands build nothing whatever their arguments.
+var noopCommands = strings.Fields("true false echo printf")
+
+// BuildsNothing reports whether argv cannot build: one simple command, with
+// no operator, redirection or substitution, that is a no-op (true, false,
+// echo, printf) or only prints its help or version (helpOnly). Such a run
+// needs neither a build slot nor a cap.
+func BuildsNothing(argv []string) bool {
+	cmd := strings.TrimSpace(shellCommand(argv))
+	if cmd == "" || strings.ContainsAny(cmd, ";&|<>()`$\n") {
+		return false
+	}
+	words := invocation(cmd)
+	if len(words) == 0 {
+		return false
+	}
+	return slices.Contains(noopCommands, filepath.Base(words[0])) || helpOnly(cmd, 0)
+}
+
+// Exec replaces this process with argv, uncapped and slotless, for a
+// command that builds nothing (BuildsNothing); it returns only when argv
+// cannot run.
+func Exec(argv []string, stderr io.Writer) int {
+	return execve(argv, func(format string, a ...any) { _, _ = fmt.Fprintf(stderr, LogPrefix+format+"\n", a...) })
+}
+
+// MemcapSlice is the slice every capped run sits under; a run that takes no
+// slot sits in it directly, under its own cap.
+const MemcapSlice = "memcap.slice"
 
 // SlotSlice is the slice of the run's slot n under memcap.slice (systemd
 // nests a slice by the dashes in its name, so the rest has none), named by
@@ -127,10 +204,7 @@ func CommandHead(argv []string) string { return commandHead(argv, 100) }
 // holds the slot ("… go test …"), never with what runs before it (a cd, an
 // assignment, a git checkout).
 func commandHead(argv []string, n int) string {
-	cmd := strings.Join(argv, " ")
-	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", "bash", "zsh"}, filepath.Base(argv[0])) {
-		cmd = argv[2]
-	}
+	cmd := shellCommand(argv)
 	s := oneLine(cmd)
 	if len([]rune(s)) <= n {
 		return s
@@ -144,11 +218,22 @@ func commandHead(argv []string, n int) string {
 	return s
 }
 
+// shellCommand is the command argv runs: a shell's -c script rather than the
+// shell (the hook wraps every build in zsh -c), else argv joined.
+func shellCommand(argv []string) string {
+	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, "zsh"}, filepath.Base(argv[0])) {
+		return argv[2]
+	}
+	return strings.Join(argv, " ")
+}
+
 // oneLine is s with every run of whitespace a single space.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
+	// StopWith is a verified managed execution service, never a CLI flag.
+	StopWith string
 	// Max is the scope's MemoryMax, a systemd size ("12G").
 	Max string
 	// Swap is the scope's MemorySwapMax; "0": a build does not swap.
@@ -186,11 +271,40 @@ type Options struct {
 	// take RAM; "" leaves the caller's. The run removes it after the
 	// command.
 	TmpDir string
+	// BuildLock coordinates all build caches, even when GOCACHE is off.
+	BuildLock string
+	// Repo and Head name what the command builds (owner/repo and the HEAD
+	// commit); "" where none is known. run.start states them, local and
+	// remote alike, so `run stats` can count runs per repository.
+	Repo string
+	Head string
+	// Class is the run's class (ClassBuild, …); "" is ClassBuild. Only a
+	// build takes a slot.
+	Class string
+	// Tail keeps the run's output tail for the failure record; nil keeps
+	// nothing (run.tail 0, or a run that execs uncapped).
+	Tail *Tail
+	// TailDir is the directory of the kept tails (<stateDir>/run-tails);
+	// required with Tail.
+	TailDir string
+	// Redact masks a kept tail, the same masking beekeeper applies to
+	// command output reaching the model (guard.Index.Redact); nil masks the
+	// token patterns alone. It runs on the kept tail only, never on the
+	// stream to the terminal.
+	Redact func(string) string
 }
 
-// cap is the run's cap in the slice of slot n.
+// slotless reports whether the run's class takes no build slot.
+func (o Options) slotless() bool { return o.Class != "" && o.Class != ClassBuild }
+
+// cap is the run's cap in the slice of slot n; slot 0, a slotless run's, is
+// memcap.slice itself.
 func (o Options) cap(n int) platform.Cap {
-	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: o.SlotSlice(n), CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight}
+	slice := MemcapSlice
+	if n > 0 {
+		slice = o.SlotSlice(n)
+	}
+	return platform.Cap{Max: o.Max, Swap: o.Swap, Slice: slice, CPUQuota: o.CPUQuota, CPUWeight: o.CPUWeight, StopWith: o.StopWith}
 }
 
 func (o Options) record(verb, detail string) {
@@ -304,9 +418,17 @@ func Run(o Options, argv []string) int {
 		return 1
 	}
 
-	lock, slot := waitForSlot(o, needKiB, sessionID(), argv, logf)
-	shared := lock == nil
+	var lock *flock.Flock
+	slot := 0
+	if !o.slotless() {
+		lock, slot = waitForSlot(o, needKiB, sessionID(), argv, logf)
+	}
+	shared := lock == nil && slot > 0
 	switch {
+	case o.slotless():
+		if !waitForMemory(o, needKiB, argv, logf) {
+			return ExitBusy
+		}
 	case slot == 0:
 		return ExitBusy
 	case shared:
@@ -321,15 +443,27 @@ func Run(o Options, argv []string) int {
 		}
 	}
 
-	if o.GoCache != "" {
-		release, ok := holdGoCache(o, logf)
-		if !ok {
+	if o.BuildLock != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), o.Wait)
+		defer cancel()
+		release, err := gocache.Use(ctx, o.BuildLock)
+		if err != nil {
+			logf("build caches busy: %v", err)
 			return ExitBusy
 		}
 		defer release()
 	}
 	env, cleanup := runTmp(o.TmpDir, logf)
 	defer cleanup()
+	env = append(env, cpuEnv(o)...)
+	if o.GoCache != "" {
+		release, ok := holdGoCache(o, logf)
+		if !ok {
+			return ExitBusy
+		}
+		defer release()
+		env = append(env, gocache.HeldEnv+"="+o.GoCache)
+	}
 
 	prefix := ScopePrefix
 	if o.Test {
@@ -337,27 +471,107 @@ func Run(o Options, argv []string) int {
 	}
 	unit := fmt.Sprintf("%s%d-%06d", prefix, os.Getpid(), time.Now().Nanosecond()%1000000)
 	head := CommandHead(argv)
-	how := "slot"
-	if shared {
-		how = "shared slot"
+	how := fmt.Sprintf("slot %d", slot)
+	switch {
+	case o.slotless():
+		how = o.Class + ", no slot,"
+	case shared:
+		how = "shared " + how
 	}
-	o.record(VerbStart, fmt.Sprintf("%s.scope %s %d max %s: %s", unit, how, slot, o.Max, head))
+	o.record(VerbStart, fmt.Sprintf("%s.scope%s %s max %s: %s", unit, runrecord.Facts(o.Repo, o.Head), how, o.Max, head))
 	start := time.Now()
-	rc := scope(capper, unit, o, slot, argv, env, logf)
+	rc, drain := scope(capper, unit, o, slot, argv, env, logf)
 	end := fmt.Sprintf("%s.scope exit %d after %s", unit, rc, time.Since(start).Round(time.Second))
+	if left := reap(capper, unit, slot, logf); left != "" {
+		end += ", " + left
+	}
+	// The output's copy into the terminal and the tail ring ends once the
+	// pipes close; reap stopped what in the scope still held them, so this
+	// returns at once, and only then is the tail complete for the record.
+	drain()
 	if rc != 0 {
 		if kills := victims(unit, start, rc); len(kills) > 0 {
 			what, advice, detail := killReport(o, unit, slot, shared, kills)
 			logf("%s (exit %d) — %s", what, rc, advice)
 			end += ", " + detail
 		}
+		if at := o.keepTail(unit, head, rc, logf); at != "" {
+			end += ", tail " + at
+		}
 	}
 	o.record(VerbEnd, end+": "+head)
 	return rc
 }
 
+// keepTail keeps the failed run's output tail in <TailDir>/<unit>.log,
+// masked by o.Redact, and prints the masked tail to the run's stderr under
+// the prefix, so the failing test's name sits at the end of the tool output
+// instead of being truncated out of it. It names the path it kept; a tail
+// that cannot be written costs one line and changes no exit code. The tail
+// keeps nothing (run.tail negative, a run with no state directory): "".
+func (o Options) keepTail(unit, head string, rc int, logf func(string, ...any)) string {
+	if o.Tail == nil || o.TailDir == "" {
+		return ""
+	}
+	at, masked, err := KeepTail(o.TailDir, unit, head, rc, o.Tail, o.Redact)
+	if err != nil {
+		logf("the failure tail is not kept: %v", err)
+		return ""
+	}
+	if masked == "" {
+		return at
+	}
+	_, _ = fmt.Fprintf(o.Stderr, "%sthe failed command's tail (exit %d), kept in %s for `beekeeper run tail`:\n", LogPrefix, rc, at)
+	_, _ = io.WriteString(o.Stderr, masked)
+	if !strings.HasSuffix(masked, "\n") {
+		_, _ = fmt.Fprint(o.Stderr, "\n")
+	}
+	return at
+}
+
+// KeepFailureTail is keepTail for the remote builder's failed run: name,
+// command head and exit come from the caller; the tail, its masking and its
+// directory are the options'. It answers the path it kept.
+func (o Options) KeepFailureTail(name, head string, rc int) string {
+	return o.keepTail(name, head, rc, func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) })
+}
+
+// waitForMemory waits, within o.Wait, until MemAvailable covers the cap of a
+// run that takes no slot: one line when the wait starts, one when it ends.
+// It reports whether the memory came; when it did not, the log names the
+// command as not run.
+func waitForMemory(o Options, needKiB int64, argv []string, logf func(string, ...any)) bool {
+	deadline := time.Now().Add(o.Wait)
+	t0 := time.Now()
+	waited := false
+	for {
+		m, err := plat.Machine.Mem()
+		if err != nil || int64(m.AvailableMiB)<<10 >= needKiB {
+			break
+		}
+		reason := fmt.Sprintf("memory: %d MiB available, the %s run's cap needs %d", m.AvailableMiB, o.Class, needKiB>>10)
+		now := time.Now()
+		if !now.Before(deadline) {
+			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			logf("not run: %s — the machine is short of memory; try again later — do not poll", CommandHead(argv))
+			return false
+		}
+		if !waited {
+			logf("waiting up to %s for %s", o.waitText(), reason)
+			waited = true
+		}
+		time.Sleep(min(deadline.Sub(now), slotPoll))
+	}
+	if waited {
+		logf("memory for the %s cap after %ds", o.Max, int(time.Since(t0).Seconds()))
+	}
+	logf("a %s run takes no build slot: its own %s cap in %s, builds run beside it", o.Class, o.Max, MemcapSlice)
+	return true
+}
+
 // holdGoCache takes the Go build cache's use lock shared for the command,
-// waiting up to o.Wait for a trim under way; false when the wait ran out. A
+// waiting up to o.Wait for a trim or a clear under way; false when the wait
+// ran out. A
 // lock that cannot be taken at all (the cache unwritable) leaves the
 // command to run without it, which the line says.
 func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool) {
@@ -367,14 +581,14 @@ func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool)
 	release, err := gocache.Use(ctx, o.GoCache)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		logf("the Go build cache %s stayed under a trim for %s; nothing ran", o.GoCache, o.waitText())
+		logf("the Go build cache %s stayed under a trim or a clear for %s; nothing ran", o.GoCache, o.waitText())
 		return nil, false
 	case err != nil:
 		logf("running without the Go build cache's use lock: %v", err)
 		return func() {}, true
 	}
 	if d := time.Since(t0); d >= time.Second {
-		logf("the Go build cache's trim ended after %ds", int(d.Seconds()))
+		logf("the Go build cache's trim or clear ended after %ds", int(d.Seconds()))
 	}
 	return release, true
 }
@@ -383,7 +597,7 @@ func holdGoCache(o Options, logf func(string, ...any)) (release func(), ok bool)
 // until MemAvailable covers the cap, both within o.Wait: one line when the
 // wait starts, one when it ends. A slot the session holds, before or during
 // the wait, is shared at once: the slot without a lock. No slot within the
-// wait: 0.
+// wait: 0, and the log names the command as not run.
 func waitForSlot(o Options, needKiB int64, session string, argv []string, logf func(string, ...any)) (*flock.Flock, int) {
 	deadline := time.Now().Add(o.Wait)
 	t0 := time.Now()
@@ -425,10 +639,11 @@ func waitForSlot(o Options, needKiB int64, session string, argv []string, logf f
 		now := time.Now()
 		if !now.Before(deadline) {
 			logf("gave up after %s waiting for %s", o.waitText(), reason)
+			notRun := fmt.Sprintf("not run: %s — the machine is busy", CommandHead(argv))
 			if o.Background {
-				logf("the machine is busy; try again later — do not poll")
+				logf("%s; try again later — do not poll", notRun)
 			} else {
-				logf("the machine is busy; run this command with run_in_background (the wait is then %s) or try again later — do not poll", BackgroundWait)
+				logf("%s; run this command with run_in_background (the wait is then %s) or try again later — do not poll", notRun, BackgroundWait)
 			}
 			if lock != nil {
 				_ = os.Remove(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder"))
@@ -471,15 +686,65 @@ func acquire(o Options) (lock *flock.Flock, slot int, occupied string) {
 	return nil, 0, b.String()
 }
 
-// holders lists the held slots' records, one indented line each.
+// holders lists the held slots' holders, one indented line each
+// (HolderText).
 func holders(o Options) string {
 	var b strings.Builder
+	now := time.Now()
 	for _, s := range machine.ReadSlots(o.SlotDir, o.Slots) {
 		if !s.Free {
-			fmt.Fprintf(&b, "  slot %d: %s\n", s.N, s.Holder)
+			fmt.Fprintf(&b, "  slot %d: %s\n", s.N, HolderText(s.Holder, now))
 		}
 	}
 	return b.String()
+}
+
+// Holder is a slot's holder record as read: who holds it, since when and
+// with what.
+type Holder struct {
+	PID     int
+	Session string
+	// Name is the holding session's name, "" when its run had none.
+	Name string
+	Cmd  string
+	// Since is when the slot was taken, zero when the record has none.
+	Since time.Time
+}
+
+// ParseHolder reads a slot's raw holder record (memcap's JSON line); false
+// when it is none.
+func ParseHolder(raw string) (Holder, bool) {
+	var h holderRecord
+	if json.Unmarshal([]byte(raw), &h) != nil {
+		return Holder{}, false
+	}
+	since, _ := time.Parse(time.RFC3339, h.Since)
+	return Holder{PID: h.PID, Session: h.Session, Name: h.Name, Cmd: h.Cmd, Since: since}, true
+}
+
+// Who names the holder: its session's name, else its session id, and its
+// process.
+func (h Holder) Who() string {
+	who := cmp.Or(h.Name, h.Session)
+	if who == "" {
+		return fmt.Sprintf("pid %d", h.PID)
+	}
+	return fmt.Sprintf("%s (pid %d)", who, h.PID)
+}
+
+// HolderText states a slot's holder for a waiter's line: who holds it, since
+// when and for how long by now, and the command; a record it cannot read as
+// it is.
+func HolderText(raw string, now time.Time) string {
+	h, ok := ParseHolder(raw)
+	if !ok {
+		return raw
+	}
+	s := h.Who()
+	if !h.Since.IsZero() {
+		s += fmt.Sprintf(" since %s (%s)", h.Since.UTC().Format("15:04Z"), now.Sub(h.Since).Round(time.Second))
+	}
+	return s + ": " + h.Cmd
 }
 
 // sessionSlot is the slot a run of the session holds, 0 for none or no
@@ -513,6 +778,9 @@ type holderRecord struct {
 	Cmd     string `json:"cmd"`
 	Max     string `json:"max"`
 	Since   string `json:"since"`
+	// Name is the session's name ($CLAUDE_CODE_SESSION_NAME), beekeeper's
+	// addition; memcap's readers skip it.
+	Name string `json:"name,omitempty"`
 }
 
 func writeHolder(o Options, slot int, argv []string) {
@@ -526,16 +794,37 @@ func writeHolder(o Options, slot int, argv []string) {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
-		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z")})
+		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME")})
 }
 
+// drainWait bounds the wait for the last bytes of a run's output after the
+// scope was reaped: a process the reap cannot stop (none on a capped run,
+// whose scope holds every one of the command's processes) would otherwise
+// hold the run, its slot and its record open forever. A tail cut this way
+// lost its last bytes to a stray process, not to a truncation.
+const drainWait = 10 * time.Second
+
 // scope runs argv in the capped scope unit, in the slot's slice, with env
-// over this process's environment.
-func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) int {
+// over this process's environment. It answers the exit code and the drain
+// that ends the output's copy into the terminal and the tail ring; the
+// drain must run after the scope's reap, which stops what still holds the
+// pipes open.
+//
+// With a tail the output runs through pipes beekeeper owns, not through
+// os/exec's: exec's Wait waits for its own copy goroutines to see EOF, and
+// a command that leaves a long-lived child behind (a test's envtest
+// kube-apiserver) inherits the pipe ends, so the wait would outlive the
+// command, hold the slot, and delay the tail and the end event for as long
+// as that child runs. Here Wait returns when the process exits, reap kills
+// what is left in the scope and with it the last holders of the pipes, and
+// only then does the drain join the copy: the tail is complete when the
+// record is written.
+func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) (int, func()) {
+	noop := func() {}
 	c, err := capper.Command(unit, o.cap(slot), argv)
 	if err != nil {
 		logf("%v", err)
-		return ExitNotFound
+		return ExitNotFound, noop
 	}
 	if len(env) > 0 {
 		if c.Env == nil {
@@ -543,29 +832,135 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 		}
 		c.Env = append(c.Env, env...)
 	}
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Stdin = os.Stdin
+	var outR, errR, outW, errW *os.File
+	if o.Tail != nil {
+		if outR, outW, err = os.Pipe(); err != nil {
+			logf("stdout pipe: %v", err)
+			return ExitNotFound, noop
+		}
+		if errR, errW, err = os.Pipe(); err != nil {
+			_ = outR.Close()
+			_ = outW.Close()
+			logf("stderr pipe: %v", err)
+			return ExitNotFound, noop
+		}
+		// The child gets the write ends; beekeeper keeps the read ends and
+		// closes its own copies of the write ends at the start, so EOF
+		// comes with the last process holding them.
+		c.Stdout, c.Stderr = outW, errW
+	} else {
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
 	if err := c.Start(); err != nil {
+		if o.Tail != nil {
+			_ = outR.Close()
+			_ = errR.Close()
+			_ = outW.Close()
+			_ = errW.Close()
+		}
 		logf("%v", err)
-		return ExitNotFound
+		return ExitNotFound, noop
 	}
 	go func() {
 		for s := range sig {
 			_ = c.Process.Signal(s)
 		}
 	}()
+	drain := noop
+	if o.Tail != nil {
+		var copies sync.WaitGroup
+		copies.Add(2)
+		go func() { defer copies.Done(); teeLoop(outR, os.Stdout, o.Tail) }()
+		go func() { defer copies.Done(); teeLoop(errR, os.Stderr, o.Tail) }()
+		_ = outW.Close()
+		_ = errW.Close()
+		drain = func() {
+			done := make(chan struct{})
+			go func() { copies.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(drainWait):
+				logf("the last %s of the command's output waited on a process the scope's reap did not stop", drainWait)
+			}
+			_ = outR.Close()
+			_ = errR.Close()
+		}
+	}
 	err = c.Wait()
 	var ee *exec.ExitError
 	if err != nil && !errors.As(err, &ee) {
 		logf("%v", err)
-		return 1
+		return 1, drain
 	}
 	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return 128 + int(ws.Signal())
+		return 128 + int(ws.Signal()), drain
 	}
-	return c.ProcessState.ExitCode()
+	return c.ProcessState.ExitCode(), drain
+}
+
+// teeLoop copies a run's stream to the terminal and into the tail ring
+// until the pipe closes; a short write to the terminal ends the copy, the
+// run keeps going regardless.
+func teeLoop(r *os.File, w io.Writer, t *Tail) {
+	_, _ = io.Copy(teeWriter{w, t}, r)
+	_ = r.Close()
+}
+
+// reap stops the run's scope once the command has exited and left
+// processes in it (a test's kube-apiserver): a scope that runs on keeps the
+// slot's slice busy, and no run takes the slot while it does. It runs
+// before the slot is released. Its result is the end event's detail, ""
+// when the scope ended with its command.
+func reap(capper platform.Capper, unit string, slot int, logf func(string, ...any)) string {
+	// The processes' names, read while they run.
+	var t *proc.Table
+	if s := plat.Machine.MemcapScope(unit + ".scope"); s != nil && len(plat.Machine.ScopePIDs(s.Path)) > 0 {
+		t, _ = plat.Machine.Processes()
+	}
+	left, err := capper.Reap(unit)
+	if len(left) == 0 {
+		if err != nil {
+			logf("stopping %s.scope: %v", unit, err)
+		}
+		return ""
+	}
+	procs := ProcList(left, t)
+	held := fmt.Sprintf("slot %d", slot)
+	if slot == 0 {
+		held = "their memory"
+	}
+	if err != nil {
+		logf("the command exited and left %s in %s.scope; stopping it failed: %v — %s stays busy until they end or the watch stops the scope",
+			procs, unit, err, held)
+		return "left " + procs + ", stop failed"
+	}
+	logf("the command exited and left %s in %s.scope: stopped them, they hold %s no longer", procs, unit, held)
+	return "stopped what it left: " + procs
+}
+
+// maxProcs is how many processes ProcList names before it counts the rest.
+const maxProcs = 5
+
+// ProcList names the processes, "4711 (kube-apiserver), 4712 (etcd)" by the
+// table t (nil: their ids only), at most maxProcs of them and the count of
+// the rest.
+func ProcList(pids []int, t *proc.Table) string {
+	var v []string
+	for _, pid := range pids[:min(len(pids), maxProcs)] {
+		if p := t.Process(pid); p != nil {
+			v = append(v, fmt.Sprintf("%d (%s)", pid, p.Comm))
+		} else {
+			v = append(v, strconv.Itoa(pid))
+		}
+	}
+	if len(pids) > maxProcs {
+		v = append(v, fmt.Sprintf("%d more", len(pids)-maxProcs))
+	}
+	return strings.Join(v, ", ")
 }
 
 // killReport is what the kernel killed in the run's scope, the advice that

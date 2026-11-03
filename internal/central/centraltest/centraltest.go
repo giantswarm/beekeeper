@@ -168,21 +168,32 @@ func (m *Muster) Down(down bool) { m.down.Store(down) }
 // Close stops muster itself.
 func (m *Muster) Close() { m.srv.Close() }
 
-func forward(ctx context.Context, url, token, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+// dial is an initialized client of the backend at url as token's person.
+func dial(ctx context.Context, url, token string) (*client.Client, error) {
 	c, err := client.NewStreamableHttpClient(url, transport.WithHTTPHeaders(map[string]string{"Authorization": "Bearer " + token}))
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = c.Close() }()
 	if err := c.Start(ctx); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	init := mcp.InitializeRequest{}
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: "muster", Version: "test"}
 	if _, err := c.Initialize(ctx, init); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
+	return c, nil
+}
+
+func forward(ctx context.Context, url, token, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	c, err := dial(ctx, url, token)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = c.Close() }()
 	req := mcp.CallToolRequest{}
 	req.Params.Name, req.Params.Arguments = tool, args
 	return c.CallTool(ctx, req)

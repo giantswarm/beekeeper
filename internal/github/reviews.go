@@ -19,6 +19,9 @@ const (
 	FeedbackComment       = "comment"
 )
 
+// changesRequested is the state of a review that requests changes.
+const changesRequested = "CHANGES_REQUESTED"
+
 // maxNamedFeedback bounds the items the refusal's reason names; the
 // document lists all of them.
 const maxNamedFeedback = 5
@@ -86,18 +89,23 @@ type feedback struct {
 // conversation comments and the head commit's date afresh and returns the
 // feedback that holds the merge, never nil once read.
 func (s Squash) unansweredReviews(ctx context.Context, head, author, caller string) ([]UnansweredReview, error) {
+	return unansweredReviews(ctx, s.GH, s.Repo, s.Number, head, author, caller)
+}
+
+// unansweredReviews is the feedback on repo#n's head that holds its merge.
+func unansweredReviews(ctx context.Context, gh GH, repo string, n int, head, author, caller string) ([]UnansweredReview, error) {
 	f := feedback{headSHA: head}
 	var err error
-	if f.reviews, err = listAll[ghReview](ctx, s.GH, fmt.Sprintf("repos/%s/pulls/%d/reviews", s.Repo, s.Number)); err != nil {
+	if f.reviews, err = listAll[ghReview](ctx, gh, fmt.Sprintf("repos/%s/pulls/%d/reviews", repo, n)); err != nil {
 		return nil, err
 	}
-	if f.reviewComments, err = listAll[ghComment](ctx, s.GH, fmt.Sprintf("repos/%s/pulls/%d/comments", s.Repo, s.Number)); err != nil {
+	if f.reviewComments, err = listAll[ghComment](ctx, gh, fmt.Sprintf("repos/%s/pulls/%d/comments", repo, n)); err != nil {
 		return nil, err
 	}
-	if f.comments, err = listAll[ghComment](ctx, s.GH, fmt.Sprintf("repos/%s/issues/%d/comments", s.Repo, s.Number)); err != nil {
+	if f.comments, err = listAll[ghComment](ctx, gh, fmt.Sprintf("repos/%s/issues/%d/comments", repo, n)); err != nil {
 		return nil, err
 	}
-	out, err := s.GH(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", s.Repo, head), "--jq", ".commit.committer.date")
+	out, err := gh(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", repo, head), "--jq", ".commit.committer.date")
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +113,37 @@ func (s Squash) unansweredReviews(ctx context.Context, head, author, caller stri
 		return nil, fmt.Errorf("the head %s's committer date: %w", short(head), err)
 	}
 	return f.unanswered(author, caller), nil
+}
+
+// ReviewGuard reads repo#n's reviews and comments afresh, as the gh login,
+// and returns the refusal's reason while a reviewer's feedback holds the
+// merge, "" with the empty list when nothing does: the gate's own read
+// before devctl pr merge runs, whose guard drops a request for changes once
+// a commit or a reply is newer.
+func ReviewGuard(ctx context.Context, gh GH, repo string, n int) (string, []UnansweredReview, error) {
+	me, err := gh(ctx, "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", nil, err
+	}
+	out, err := gh(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d", repo, n))
+	if err != nil {
+		return "", nil, err
+	}
+	var p struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+		User ghUser `json:"user"`
+	}
+	if err := json.Unmarshal(out, &p); err != nil || p.Head.SHA == "" {
+		return "", nil, fmt.Errorf("gh api repos/%s/pulls/%d: no head (%v)", repo, n, err)
+	}
+	caller := strings.TrimSpace(string(me))
+	open, err := unansweredReviews(ctx, gh, repo, n, p.Head.SHA, p.User.Login, caller)
+	if err != nil || len(open) == 0 {
+		return "", open, err
+	}
+	return reviewRefusal(open, answerers(p.User.Login, p.User.automation(), caller)), open, nil
 }
 
 // listAll reads every page of a GitHub list endpoint; gh --paginate prints
@@ -127,13 +166,16 @@ func listAll[T any](ctx context.Context, gh GH, path string) ([]T, error) {
 	}
 }
 
-// unanswered is the feedback that holds the merge, oldest first, by devctl
-// pr merge's rule: its author is a person other than the pull request's
-// author and the caller; it is newer than the head (on the head commit, or
-// written after the head commit's date); it is a COMMENTED or
-// CHANGES_REQUESTED review or a comment. Anything the author or the caller
-// wrote on the pull request after it answers it, and so does an APPROVED
-// review of the same reviewer no older than it.
+// unanswered is the feedback that holds the merge, oldest first. A
+// reviewer's request for changes holds it while it is their latest verdict:
+// newer commits and replies leave it standing, only their later approval
+// or its dismissal (GitHub then reports it DISMISSED) clears it. The rest
+// follows devctl pr merge's rule: its author is a person other than the
+// pull request's author and the caller; it is newer than the head (on the
+// head commit, or written after the head commit's date); it is a COMMENTED
+// review or a comment. Anything the author or the caller wrote on the pull
+// request after it answers it, and so does an APPROVED review of the same
+// reviewer no older than it.
 func (f feedback) unanswered(author, caller string) []UnansweredReview {
 	answerer := func(u ghUser) bool {
 		return strings.EqualFold(u.Login, author) || strings.EqualFold(u.Login, caller)
@@ -147,6 +189,9 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		}
 	}
 	approved := map[string]time.Time{}
+	// verdict is each reviewer's latest review that decides: APPROVED,
+	// CHANGES_REQUESTED or DISMISSED, as GitHub's own review state counts.
+	verdict := map[string]ghReview{}
 
 	var items []UnansweredReview
 	for _, r := range f.reviews {
@@ -154,12 +199,19 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		if !reviewer(r.User) {
 			continue
 		}
+		login := strings.ToLower(r.User.Login)
+		switch r.State {
+		case "APPROVED", changesRequested, "DISMISSED":
+			if v, ok := verdict[login]; !ok || !r.SubmittedAt.Before(v.SubmittedAt) {
+				verdict[login] = r
+			}
+		}
 		switch r.State {
 		case "APPROVED":
-			if login := strings.ToLower(r.User.Login); r.SubmittedAt.After(approved[login]) {
+			if r.SubmittedAt.After(approved[login]) {
 				approved[login] = r.SubmittedAt
 			}
-		case "COMMENTED", "CHANGES_REQUESTED":
+		case "COMMENTED":
 			if r.CommitID == f.headSHA || r.SubmittedAt.After(f.headAt) {
 				items = append(items, UnansweredReview{Kind: FeedbackReview, Login: r.User.Login, State: r.State, At: r.SubmittedAt, URL: r.HTMLURL})
 			}
@@ -188,6 +240,11 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		}
 		open = append(open, item)
 	}
+	for _, r := range verdict {
+		if r.State == changesRequested {
+			open = append(open, UnansweredReview{Kind: FeedbackReview, Login: r.User.Login, State: r.State, At: r.SubmittedAt, URL: r.HTMLURL})
+		}
+	}
 	slices.SortStableFunc(open, func(a, b UnansweredReview) int { return a.At.Compare(b.At) })
 	return open
 }
@@ -201,22 +258,43 @@ func answerers(author string, bot bool, caller string) string {
 	return author + " or " + caller
 }
 
-// reviewRefusal is the reason of the review refusal (exit 5), devctl pr
-// merge's words: how many items wait, the first few by kind, reviewer and
-// link, and what clears them.
+// reviewRefusal is the reason of the review refusal (exit 5): a reviewer's
+// standing request for changes first, then devctl pr merge's words for the
+// unanswered feedback: how many items wait, the first few by kind, reviewer
+// and link, and what clears them.
 func reviewRefusal(open []UnansweredReview, answerers string) string {
-	var named []string
-	for _, item := range open[:min(len(open), maxNamedFeedback)] {
+	var changes, rest []UnansweredReview
+	for _, item := range open {
+		if item.State == changesRequested {
+			changes = append(changes, item)
+		} else {
+			rest = append(rest, item)
+		}
+	}
+	var parts []string
+	if len(changes) > 0 {
+		parts = append(parts, fmt.Sprintf("changes requested: %s; a new commit or a reply leaves it standing, only the reviewer's approval or the review's dismissal clears it",
+			named(changes)))
+	}
+	if len(rest) > 0 {
+		parts = append(parts, fmt.Sprintf("unanswered review: %d item(s) newer than the head wait for an answer: %s; a reply from %s on the pull request, a new commit or the reviewer's approval clears them",
+			len(rest), named(rest), answerers))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// named lists the first few items by kind, reviewer and link.
+func named(items []UnansweredReview) string {
+	var out []string
+	for _, item := range items[:min(len(items), maxNamedFeedback)] {
 		what := strings.ReplaceAll(item.Kind, "_", " ")
 		if item.State != "" {
 			what += " " + item.State
 		}
-		named = append(named, fmt.Sprintf("%s by %s %s", what, item.Login, item.URL))
+		out = append(out, fmt.Sprintf("%s by %s %s", what, item.Login, item.URL))
 	}
-	more := ""
-	if len(open) > maxNamedFeedback {
-		more = fmt.Sprintf(" and %d more", len(open)-maxNamedFeedback)
+	if len(items) > maxNamedFeedback {
+		out = append(out, fmt.Sprintf("and %d more", len(items)-maxNamedFeedback))
 	}
-	return fmt.Sprintf("unanswered review: %d item(s) newer than the head wait for an answer: %s%s; a reply from %s on the pull request, a new commit or the reviewer's approval clears them",
-		len(open), strings.Join(named, ", "), more, answerers)
+	return strings.Join(out, ", ")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/secret"
 )
 
 func (a *app) installCmd() *cobra.Command {
@@ -25,11 +26,17 @@ func (a *app) installCmd() *cobra.Command {
 binary it runs from (or --binary):
 
   - the PreToolUse and PermissionRequest hooks in Claude Code's user
-    settings ($CLAUDE_CONFIG_DIR, else ~/.claude/settings.json), merged
-    into what is there;
+    settings ($CLAUDE_CONFIG_DIR, else ~/.claude/settings.json), and when
+    agy is installed the PreInvocation and PreToolUse hooks under
+    "beekeeper" in ~/.gemini/config/hooks.json and the embedded skills in
+    <stateDir>/skills registered under "entries" in
+    ~/.gemini/config/skills.json, merged into what is there;
   - the standby service (beekeeper watch --standby, with --notify when
     watch.notify is true; off by default): a systemd user unit on Linux, a
     launch agent on macOS, enabled and started;
+  - with supervisor.loop: true, the persistent supervisor loop user service
+    (beekeeper supervisor loop), enabled and started; it re-executes a
+    replaced binary at its next quiet pass, after timer actions finish;
   - with systemd, the agent sandbox's broker (beekeeper sandbox broker):
     beekeeper-sandbox.service, enabled and started;
   - with systemd and teleport.proxy set, the Teleport login's keeper:
@@ -59,7 +66,8 @@ this path restart on the installed one once, each at its next quiet
 moment: a watch after its current poll, once every run it started ended,
 a reopen during its wait for the person. Each is named (restart). The
 broker that runs the binary replaced at this path is restarted onto it,
-its vault session dropped, unless it serves calls: then the restart still
+its vault session preserved in memory with its original expiry. An unavailable
+handover refuses the restart. If it serves calls, the restart still
 due is named (due), as self-update does. What it wrote is
 recorded in install.json in the state directory, for uninstall.
 Without a service manager (Linux without systemd) it writes the hooks and
@@ -80,7 +88,7 @@ the config and says the service is not available.`,
 					return err
 				}
 				if fi, err := os.Stat(e.Exe); err == nil {
-					restartBrokerOn(cmd.Context(), e.Out, e.Exe, fi.ModTime(), t, e.DryRun)
+					restartBrokerOn(cmd.Context(), e.Out, e.Exe, fi.ModTime(), t, e.DryRun, a.cfg.Secret.Session)
 				}
 			}
 			if binary == "" && !e.DryRun {
@@ -148,6 +156,12 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 		claudeDir = filepath.Join(e.Spec.Home, ".claude")
 	}
 	e.Settings = filepath.Join(claudeDir, "settings.json")
+	agyInstalled := hasAgy()
+	e.AgyHooks = agyHooksPath(e.Spec.Home, agyInstalled)
+	e.AgySkills = agySkillsPath(e.Spec.Home, agyInstalled)
+	codexInstalled := hasCodex()
+	e.CodexHooks = codexHooksPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
+	e.CodexSkills = codexSkillsPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.StateDir = a.cfg.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
@@ -161,11 +175,105 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	if a.cfg.Teleport.Enabled() {
 		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
 	}
+	e.Spec.ToolPath = os.Getenv("PATH")
+	if e.Spec.ConfigPath, err = filepath.Abs(e.Config); err != nil {
+		return err
+	}
 	e.Spec.Notify = a.cfg.Watch.Notify
 	e.Setup = plat.Setup
 	e.Run = runCommand
+	e.BeforeRestart = func(ctx context.Context, unit string) error {
+		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
+			if err := prepareBrokerHandover(ctx); err != nil {
+				return brokerHandoverRefusal(err)
+			}
+		}
+		return nil
+	}
+	e.RestartFailed = func(ctx context.Context, unit string) error {
+		if unit == secret.BrokerUnit && a.cfg.Secret.Session {
+			return revokeBrokerHandover(ctx)
+		}
+		return nil
+	}
 	e.Out = a.out
 	return nil
+}
+
+// hasAgy reports whether the agy CLI is installed on PATH.
+func hasAgy() bool {
+	_, err := exec.LookPath("agy")
+	return err == nil
+}
+
+// agyHooksPath returns ~/.gemini/config/hooks.json when agy is installed or
+// the hooks file already exists, "" otherwise.
+func agyHooksPath(home string, agyInstalled bool) string {
+	return agyConfigPath(home, "hooks.json", agyInstalled)
+}
+
+// agySkillsPath returns ~/.gemini/config/skills.json when agy is installed or
+// the skills manifest already exists, "" otherwise.
+func agySkillsPath(home string, agyInstalled bool) string {
+	return agyConfigPath(home, "skills.json", agyInstalled)
+}
+
+func agyConfigPath(home, name string, agyInstalled bool) string {
+	if home == "" {
+		return ""
+	}
+	p := filepath.Join(home, ".gemini", "config", name)
+	if _, err := os.Lstat(p); err == nil || agyInstalled {
+		return p
+	}
+	return ""
+}
+
+// hasCodex reports whether the codex CLI is installed on PATH.
+func hasCodex() bool {
+	_, err := exec.LookPath("codex")
+	return err == nil
+}
+
+// userCodexDir derives the user's Codex home directory from cfg (ConfigFile or
+// AuthFile, matching codex.EnsureHome), falling back to ~/.codex when unset.
+func userCodexDir(home string, cfg ...config.Codex) string {
+	for _, c := range cfg {
+		if c.ConfigFile != "" {
+			return filepath.Dir(filepath.Clean(c.ConfigFile))
+		}
+		if c.AuthFile != "" {
+			return filepath.Dir(filepath.Clean(c.AuthFile))
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
+}
+
+// codexHooksPath returns <codexDir>/hooks.json when codex is installed or the
+// hooks file already exists, "" otherwise.
+func codexHooksPath(home string, codexInstalled bool, cfg ...config.Codex) string {
+	return codexConfigPath(home, "hooks.json", codexInstalled, cfg...)
+}
+
+// codexSkillsPath returns <codexDir>/skills when codex is installed or the
+// skills directory already exists, "" otherwise.
+func codexSkillsPath(home string, codexInstalled bool, cfg ...config.Codex) string {
+	return codexConfigPath(home, "skills", codexInstalled, cfg...)
+}
+
+func codexConfigPath(home, name string, codexInstalled bool, cfg ...config.Codex) string {
+	dir := userCodexDir(home, cfg...)
+	if dir == "" {
+		return ""
+	}
+	p := filepath.Join(dir, name)
+	if _, err := os.Lstat(p); err == nil || codexInstalled {
+		return p
+	}
+	return ""
 }
 
 // runCommand runs one service manager command, its output in the error.

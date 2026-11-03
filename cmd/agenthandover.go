@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
-	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -50,7 +50,7 @@ follow-up session's prompt. It waits 3s at most for the state lock: a lock
 held longer fails the note unsaved, naming the lock's holder and the desktop
 import of the calling session when one is pending; note again.`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -62,7 +62,17 @@ import of the calling session when one is pending; note again.`,
 			case len(text) > maxNote:
 				return usageErr("the note has %d bytes, more than %d", len(text), maxNote)
 			}
-			if err := a.store.RecordWithin(noteLockWait, event(me, verbNote, "%s", text)); err != nil {
+			if a.managedExecutionID() != "" {
+				return a.remoteControl(cmd.Context(), "handover", executionEvent{Text: text})
+			}
+			if err := a.store.UpdateWithin(noteLockWait, func(st *state.State) ([]state.Event, error) {
+				for i := range st.Agents {
+					if st.Agents[i].Is(me) {
+						st.Agents[i].ActivityAt = a.now.UTC()
+					}
+				}
+				return []state.Event{event(me, verbNote, "%s", text)}, nil
+			}); err != nil {
 				return a.noteBusy(me, err)
 			}
 			_, err = fmt.Fprintf(a.out, "noted for the hand-over of %s\n", me.Name)
@@ -147,7 +157,7 @@ last events and its note. It carries no standing rules and no live values.`,
 			} else if home := a.cfg.Agents.Dir; home != "" {
 				// The follow-up keeps the old session's folder when agents
 				// may run there, else it runs in agents.dir.
-				if _, err := a.agentDir(h.dir); h.dir == "" || err != nil {
+				if _, err := a.agentDir(h.dir, ""); h.dir == "" || err != nil {
 					h.dir = homePath(home)
 				}
 			}
@@ -191,9 +201,12 @@ func (a *app) readHandover(q string) (handover, error) {
 		return handover{}, err
 	}
 	h := handover{agent: st.Agents[i]}
+	if h.agent.Execution != nil {
+		return handover{}, refused("remote handover is unavailable: https://github.com/giantswarm/beekeeper/issues/1714")
+	}
 	p := h.agent.Party
-	if strings.HasPrefix(p.HostSession, omp.HostPrefix) {
-		return handover{}, refused("%q is an omp agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name)
+	if hr, _, ok := harnessForHost(p.HostSession); ok {
+		return handover{}, refused("%q is an %s agent: a hand-over starts a Claude Code successor from a Claude transcript", p.Name, hr.Name())
 	}
 	for _, rl := range roles {
 		if r := rl.get(st); r.Holder != nil && r.Holder.Is(p) {
@@ -361,6 +374,7 @@ func (h handover) summary() string {
 
 // handOver runs the hand-over's steps, one line each.
 func (a *app) handOver(ctx context.Context, h handover) error {
+	defer a.recordStoppedGates(ctx)
 	began := time.Now()
 	me, err := a.caller()
 	if err != nil {
@@ -385,6 +399,14 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		return refused("%q is not handed over: no PermissionRequest hook runs `beekeeper hook permissionrequest` in %s, so its follow-up would stop at its first card; "+
 			"install the hook there (README: Agents started without a click) or pass --dir a folder whose settings have it", ag.Name, strings.Join(files, ", "))
 	}
+	// Before the note request, whose headless turn would wake the session.
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := a.refuseStopped(st, "handing over "+ag.Name); err != nil {
+		return err
+	}
 	noted := "no note"
 	note, ok, err := a.askNote(ctx, h)
 	if err != nil {
@@ -405,8 +427,14 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if err != nil {
 		return err
 	}
-	a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
-	listed, err := a.listSuccessor(me, ag.Party, state.Party{Session: sa.id, HostSession: "local_" + sa.id, Name: ag.Name}, h.task())
+	follow := state.Party{Session: sa.id, HostSession: "local_" + sa.id, Name: ag.Name}
+	if sa.background {
+		follow.HostSession = ""
+		a.say("started %q: background session %s with Remote Control, in %s, busy with %q", ag.Name, sa.id, sa.dir, sa.task)
+	} else {
+		a.say("started %q: session %s, desktop local_%s, in %s, busy with %q", ag.Name, sa.id, sa.id, sa.dir, sa.task)
+	}
+	listed, err := a.listSuccessor(me, ag.Party, follow, h.task())
 	if err != nil {
 		return fmt.Errorf("the follow-up %s is not on the roster, so session %s runs on: %w "+
 			"(beekeeper agents register in session %s lists it, beekeeper agents remove %q takes it off)", sa.id, ag.Session, err, sa.id, ag.Name)
@@ -418,13 +446,17 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 		a.say("leases: session %s held and was granted none", ag.Session)
 	}
 	a.say("%s", sa.turn)
-	if sa.restored != "" {
-		a.say("%s", sa.restored)
-	}
-	a.say("%s", titleLine(ag.Name, sa.title))
-	a.say("%s", modelLine(sa.model, sa.want, "local_"+sa.id))
-	if sa.kept != "" {
-		a.say("the desktop still shows %s", sa.kept)
+	if sa.background {
+		a.say("its turns run on %s", cmp.Or(sa.want, "Claude Code's default model"))
+	} else {
+		if sa.restored != "" {
+			a.say("%s", sa.restored)
+		}
+		a.say("%s", titleLine(ag.Name, sa.title))
+		a.say("%s", modelLine(sa.model, sa.want, "local_"+sa.id))
+		if sa.kept != "" {
+			a.say("the desktop still shows %s", sa.kept)
+		}
 	}
 	if h.session != nil {
 		n, err := endSession(ctx, h.session)
@@ -442,7 +474,9 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	for _, l := range stopUnits(ctx, ag.Session) {
 		a.say("%s", l)
 	}
-	a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
+	if a.hasDesktopSession(ag.Party) {
+		a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
+	}
 	took := time.Since(began)
 	if err := a.store.Record(event(me, "agents.handover", "%s: session %s at %s tokens to %s, %s, in %s",
 		ag.Name, ag.Session, tokensText(h.context), sa.id, noted, dur(took))); err != nil {
@@ -509,6 +543,20 @@ func keepListed(st *state.State, to state.Party, task string, live func(state.Pa
 		ag.Task, ag.AssignedAt = task, now
 	}
 	return fmt.Sprintf("session %s had no row: registered again, busy with %q", to.Session, ag.Task), nil
+}
+
+// hasDesktopSession reports whether p has a desktop session to archive: its
+// own host id, or its start's. A background session has none.
+func (a *app) hasDesktopSession(p state.Party) bool {
+	if strings.HasPrefix(p.HostSession, "local_") {
+		return true
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return true
+	}
+	i := st.StartIndex(p)
+	return i >= 0 && !st.Starts[i].Background && st.Starts[i].HostSession != ""
 }
 
 // archiveHandedOver archives the desktop session of the handed-over p once

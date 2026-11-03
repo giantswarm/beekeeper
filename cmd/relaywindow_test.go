@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -22,12 +26,12 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	succ := state.Party{Session: "sup-223", HostSession: "local_sup-223", Name: "Supervisor run 223"}
 
 	st := &state.State{}
-	supervisorRole.set(st, state.Role{
+	guideRole.set(st, state.Role{
 		Holder:   &state.Supervisor{Party: out, Since: at.Add(-2 * time.Hour)},
 		Relieved: []state.Relief{{Party: older, By: out, At: at.Add(-2 * time.Hour), Taken: at.Add(-2 * time.Hour)}},
 		Run:      222,
 	})
-	if _, _, err := relayRole(st, out, succ, at, window); err != nil {
+	if _, _, err := guideRole.relay(st, out, succ, at, window); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,14 +48,14 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	}
 	check := func(step string, now time.Time, sessions []*claude.Session, sock func(int) string, want string) {
 		t.Helper()
-		got, err := relayAddress(supervisorRole.get(st), supervisorRole, sessions, sock, now, window)
+		got, err := relayAddress(guideRole.get(st), guideRole, sessions, sock, now, window)
 		if err != nil || got != want {
 			t.Errorf("%s: %q, %v; want %q", step, got, err, want)
 		}
 	}
 	refused := func(step string, now time.Time, sessions []*claude.Session, sock func(int) string) {
 		t.Helper()
-		got, err := relayAddress(supervisorRole.get(st), supervisorRole, sessions, sock, now, window)
+		got, err := relayAddress(guideRole.get(st), guideRole, sessions, sock, now, window)
 		if err == nil || !strings.Contains(err.Error(), "send again") || !strings.Contains(err.Error(), out.Name) {
 			t.Errorf("%s: %q, %v; want a refusal saying when to send again", step, got, err)
 		}
@@ -65,10 +69,10 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	headless := succ
 	headless.HostSession = ""
 	taken := at.Add(10 * time.Second)
-	if _, _, err := startRole(st, headless, true, false, taken); err != nil {
+	if _, _, err := guideRole.start(st, headless, true, false, taken); err != nil {
 		t.Fatal(err)
 	}
-	if h := supervisorRole.get(st).Holder; h.HostSession != succ.HostSession {
+	if h := guideRole.get(st).Holder; h.HostSession != succ.HostSession {
 		t.Fatalf("holder's desktop id %q, want the relay's %q", h.HostSession, succ.HostSession)
 	}
 
@@ -84,3 +88,56 @@ func TestSupervisorAliasThroughTheRelayWindow(t *testing.T) {
 	// Past the window a relieved run gets nothing.
 	check("window over", taken.Add(window+time.Second), []*claude.Session{olderCLI, outCLI}, sock, succ.HostSession)
 }
+
+// After a relay, a worker's SendMessage to "the supervisor" and to the run's
+// name reaches the successor's CLI by the name it takes messages under, which
+// a desktop CLI derived from its folder keeps while its title follows the
+// run's name; never the relieved predecessor.
+func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
+	at := time.Date(2026, 10, 21, 8, 34, 0, 0, time.UTC)
+	window := 15 * time.Minute
+	out := state.Party{Session: "sup-249", HostSession: "local_sup-249", Name: "Supervisor run 249"}
+	succ := state.Party{Session: "sup-250", HostSession: "local_sup-250", Name: "Supervisor run 250"}
+	st := &state.State{}
+	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: at.Add(-3 * time.Hour)}, Run: 249})
+	if _, _, err := guideRole.relay(st, out, succ, at, window); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := guideRole.start(st, succ, true, false, at.Add(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []*claude.Session{
+		{ID: out.Session, HostID: out.HostSession, Name: out.Name, Peer: "klaus-lab-15", PID: 249},
+		{ID: succ.Session, HostID: succ.HostSession, Name: succ.Name, Peer: derivedPeer, PID: 250},
+	}
+	sock := func(pid int) string { return "/run/" + strconv.Itoa(pid) + ".sock" }
+	h := guard.Hook{
+		Role: func(role string) (string, error) {
+			rl := guideRole
+			if role == guard.RoleGuide {
+				rl = guideRole
+			}
+			return relayAddress(rl.get(st), rl, sessions, sock, at.Add(time.Minute), window)
+		},
+		Holds: func(name string) string { return holderRole(st, name) },
+	}
+	for _, to := range []string{"the supervisor", succ.Name, "supervisor run 250"} {
+		raw := fmt.Appendf(nil, `{"session_id":"w1","tool_name":%q,"tool_input":{"to":%q,"message":"done"}}`, guard.SendMessageTool, to)
+		var got struct {
+			Out struct {
+				Decision string         `json:"permissionDecision"`
+				Input    map[string]any `json:"updatedInput"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(h.Decide(raw), &got); err != nil {
+			t.Fatalf("%q: %v", to, err)
+		}
+		if got.Out.Decision != "allow" || got.Out.Input["to"] != derivedPeer {
+			t.Errorf("%q: %s to %v, want allow to %s", to, got.Out.Decision, got.Out.Input["to"], derivedPeer)
+		}
+	}
+}
+
+// derivedPeer is the name a desktop CLI derived from its folder takes
+// messages under while its title is the supervisor's run name.
+const derivedPeer = "klaus-lab-16"

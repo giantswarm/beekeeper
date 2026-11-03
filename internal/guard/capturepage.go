@@ -15,7 +15,7 @@ import (
 // a call past the hook. The turn finds its controls with find, clicks them
 // by ref, and runs one script, the reader.
 var BlindReads = []string{
-	"get_page_text", "read_page", "read_network_requests", "read_console_messages",
+	chromePageText, chromeReadPage, "read_network_requests", "read_console_messages",
 	"gif_creator", "upload_image", "file_upload", "shortcuts_execute", chromeBatch,
 }
 
@@ -24,7 +24,7 @@ var BlindReads = []string{
 // passes without its picture actions and its copy and paste keys, navigate
 // with an http or https URL alone, javascript_tool with the reader alone.
 var captureTools = []string{
-	"find", chromeComputer, chromeNavigation, chromeForm, chromeScript, "resize_window",
+	chromeFind, chromeComputer, chromeNavigation, chromeForm, chromeScript, "resize_window",
 	"tabs_context_mcp", "tabs_create_mcp", "tabs_close_mcp", "list_connected_browsers", "select_browser", "switch_browser",
 }
 
@@ -155,8 +155,10 @@ func (c Capture) refusal(tool string, input json.RawMessage) string {
 	case name == chromeNavigation && !strings.HasPrefix(str(urlKey), "https://") && !strings.HasPrefix(str(urlKey), "http://") &&
 		str(urlKey) != "back" && str(urlKey) != "forward":
 		return blind + "navigate opens an http or https page only."
-	case name == chromeScript && strings.TrimSpace(str(textKey)) != ReaderScript(c.Pattern.String()):
-		return blind + "the one script it runs is beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String())
+	case name == chromeScript && strings.TrimSpace(str(textKey)) != ReaderScript(c.Pattern.String()) &&
+		!isDrawCheck(str(textKey)) && !isLeaveDisarm(str(textKey)):
+		return blind + "the scripts it runs are beekeeper's reader, verbatim: " + ReaderScript(c.Pattern.String()) +
+			" and, read nothing of the page, beekeeper's draw check and leave-page disarm, verbatim"
 	}
 	return ""
 }

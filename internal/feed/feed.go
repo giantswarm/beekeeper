@@ -20,6 +20,10 @@ const Schema = "beekeeper.giantswarm.io/feed/v1"
 type Feed struct {
 	Schema string  `json:"schema"`
 	Events []Event `json:"events"`
+	// Gap, on a read after an id, says the instance no longer holds that
+	// event nor any older one: events right after it may have aged out
+	// unread.
+	Gap bool `json:"gap,omitempty"`
 }
 
 // Event is one change of the shared state.

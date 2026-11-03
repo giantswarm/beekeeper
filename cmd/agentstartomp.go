@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -42,11 +43,12 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return usageErr("--dir %s: not a directory", dir)
 	}
+	sp.brief = projectPrompt(dir, sp.brief)
 	bin, err := exec.LookPath(omp.Comm)
 	if err != nil {
 		return err
 	}
-	model, err := ompModel(sp.model, a.cfg.Omp.Model, func() ([]string, error) { return ompModels(ctx, bin) })
+	model, err := ompModel(sp.model, a.cfg.Omp.Model, func() ([]string, error) { return a.ompListed(ctx) })
 	if err != nil {
 		return err
 	}
@@ -83,7 +85,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err := omp.MakeInbox(inbox); err != nil {
 		return err
 	}
-	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness}
+	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
@@ -91,7 +93,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, "agents.start", "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
 	})
 	if err != nil {
 		return err
@@ -174,29 +176,230 @@ func (a *app) ompNeedsVault(model string) bool {
 	if model == "" {
 		model = a.cfg.Omp.Model
 	}
-	_, ok := a.cfg.Omp.Providers[ompProvider(model)]
+	_, ok := a.cfg.Omp.Providers[ompProvider(a.ompQualified(model))]
 	return ok
 }
 
 // ompStartNeedsVault reports whether a brokered agents start, by its
-// arguments (start --harness=omp [--model=m] …), reads the vault.
+// arguments (start [--harness=omp|auto] [--model=m] [--exclude=e] …), reads
+// the vault: a start naming no harness takes capacity's pick as auto does.
 func (a *app) ompStartNeedsVault(args []string) bool {
 	if len(args) == 0 || args[0] != agentStartName {
 		return false
 	}
-	var harness, model string
-	for _, arg := range args[1:] {
+	f := parseStartArgsForVault(args)
+	if strings.TrimSpace(f.model) == "" && f.name != "" {
+		kind := strings.TrimSpace(f.taskKind)
+		if kind == "" {
+			if f.review || f.ofSelfHosted {
+				kind = taskKindReview
+			} else {
+				kind = workerRole
+			}
+		}
+		f.model = a.ruleModel(f.name, kind)
+	}
+	switch f.harness {
+	case omp.Harness:
+		return a.ompNeedsVault(f.model)
+	case harnessAuto, "":
+		return a.autoStartNeedsVault(f)
+	}
+	return false
+}
+
+type startVaultFlags struct {
+	name         string
+	taskKind     string
+	authorModel  string
+	harness      string
+	model        string
+	excludes     []string
+	review       bool
+	ofSelfHosted bool
+	builds       bool
+	force        bool
+	scratchCfg   string
+}
+
+func parseStartArgsForVault(args []string) startVaultFlags {
+	var f startVaultFlags
+	var nameFlag string
+	var pos []string
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
 		if arg == "--" {
+			pos = append(pos, args[i+1:]...)
 			break
 		}
-		if v, ok := strings.CutPrefix(arg, "--harness="); ok {
-			harness = v
-		}
-		if v, ok := strings.CutPrefix(arg, modelFlag+"="); ok {
-			model = v
+		switch {
+		case strings.HasPrefix(arg, "--name="):
+			nameFlag = strings.TrimPrefix(arg, "--name=")
+		case arg == "--name" && i+1 < len(args):
+			i++
+			nameFlag = args[i]
+		case strings.HasPrefix(arg, "--kind="):
+			f.taskKind = strings.TrimPrefix(arg, "--kind=")
+		case arg == taskKindArg && i+1 < len(args):
+			i++
+			f.taskKind = args[i]
+		case strings.HasPrefix(arg, "--"+authorModelFlag+"="):
+			f.authorModel = strings.TrimPrefix(arg, "--"+authorModelFlag+"=")
+		case arg == "--"+authorModelFlag && i+1 < len(args):
+			i++
+			f.authorModel = args[i]
+		case strings.HasPrefix(arg, "--harness="):
+			f.harness = strings.TrimPrefix(arg, "--harness=")
+		case arg == "--harness" && i+1 < len(args):
+			i++
+			f.harness = args[i]
+		case strings.HasPrefix(arg, modelFlag+"="):
+			f.model = strings.TrimPrefix(arg, modelFlag+"=")
+		case arg == modelFlag && i+1 < len(args):
+			i++
+			f.model = args[i]
+		case strings.HasPrefix(arg, "--exclude="):
+			f.excludes = append(f.excludes, strings.Trim(strings.TrimPrefix(arg, "--exclude="), "[]"))
+		case arg == "--exclude" && i+1 < len(args):
+			i++
+			f.excludes = append(f.excludes, strings.Trim(args[i], "[]"))
+		case arg == "--review" || arg == "--review=true":
+			f.review = true
+		case arg == "--"+reviewOfSelfHostedFlag || arg == "--"+reviewOfSelfHostedFlag+"=true":
+			f.ofSelfHosted = true
+		case arg == "--builds" || arg == "--builds=true":
+			f.builds = true
+		case arg == "--force" || arg == "--force=true":
+			f.force = true
+		case strings.HasPrefix(arg, "--config="):
+			f.scratchCfg = strings.TrimPrefix(arg, "--config=")
+		case arg == "--config" && i+1 < len(args):
+			i++
+			f.scratchCfg = args[i]
+		case (arg == "--dir" || arg == "--task" || arg == "--mode" || arg == "--host" || arg == "--repo" || arg == "--ref" || arg == "--choice" || arg == "--as" || arg == "--timer-id" || arg == "--timer-due" || arg == "--timer-late") && i+1 < len(args):
+			i++
+		case !strings.HasPrefix(arg, "-"):
+			pos = append(pos, arg)
 		}
 	}
-	return harness == omp.Harness && a.ompNeedsVault(model)
+	if strings.TrimSpace(nameFlag) != "" {
+		f.name = strings.TrimSpace(nameFlag)
+	} else if len(pos) >= 2 {
+		f.name = strings.TrimSpace(pos[0])
+	}
+	return f
+}
+
+func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
+	target := *a
+	if target.now.IsZero() {
+		target.now = time.Now()
+	}
+	if f.scratchCfg != "" {
+		if !filepath.IsAbs(f.scratchCfg) {
+			return false
+		}
+		p := target.sandboxPolicy()
+		cwd, err := os.Getwd()
+		if err != nil || target.sandboxPaths([]string{f.scratchCfg}, nil) != nil || !p.Readable(f.scratchCfg, cwd) {
+			return false
+		}
+		c, err := config.Load(f.scratchCfg)
+		if err != nil {
+			return false
+		}
+		if target.sandboxPaths(nil, []string{c.StateDir, c.LeaseDir}) != nil ||
+			(c.StateDir != "" && !p.Writable(c.StateDir, cwd)) ||
+			(c.LeaseDir != "" && !p.Writable(c.LeaseDir, cwd)) {
+			return false
+		}
+		cfgCopy := *a.cfg
+		cfgCopy.StateDir, cfgCopy.LeaseDir = c.StateDir, c.LeaseDir
+		target.cfg = &cfgCopy
+		target.store = nil
+		if fi, err := os.Stat(c.StateDir); err == nil && fi.IsDir() {
+			if stStore, err := state.Open(c.StateDir); err == nil {
+				target.store = stStore
+			}
+		}
+	}
+	k := target.liveCapacity()
+	k.TaskKind, k.AuthorModel = f.taskKind, f.authorModel
+	if f.taskKind == taskKindReview {
+		f.review = true
+	}
+	if len(k.Choices) == 0 {
+		return false
+	}
+	wantModel := strings.TrimSpace(f.model)
+	if wantModel != "" && !choicesHaveModel(k.Choices, wantModel) {
+		return false
+	}
+	choicesCap := filterChoiceModel(k, wantModel)
+	if len(k.Providers) > 0 {
+		st := &state.State{}
+		if target.store != nil {
+			if s, err := target.store.Peek(); err == nil {
+				st = s
+			}
+		}
+		sessions, _, _ := target.sessions()
+		c := countAgents(st, sessions, target.now, target.cfg)
+		pa := countProviderAgents(st, sessions, k, target.now, target.cfg)
+		readings := make(map[string]providerReadingResult, len(k.Providers))
+		for _, name := range k.ProviderNames() {
+			p := k.Providers[name]
+			if p.SelfHosted() {
+				// A self-hosted provider reads no subscription usage; its
+				// ceiling may follow the serving mode of the model it
+				// serves, and a node constraint holds the model down to the
+				// mode free of the node before any switch ran.
+				readings[name] = target.serveModeReadings(context.Background(), name, p)
+				continue
+			}
+			if !p.Enabled() {
+				continue
+			}
+			r, err := target.resolveReading(context.Background(), usageProviderFile(name), p.Usage)
+			readings[name] = providerReadingResult{reading: r, err: err, ok: err == nil}
+		}
+		h := &headroom{
+			AvailableMiB:     max(64<<10, k.AvailMinMiB+1024),
+			AvailMinMiB:      k.AvailMinMiB,
+			SwapGrowthMaxMiB: k.SwapGrowthMaxMiB,
+			PSIMax:           k.SwapPSIMax,
+			LoadMax:          64,
+			Slots:            1,
+			SlotsFree:        1,
+			MaxLabs:          1,
+		}
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st.Stop)
+		ch, err := pickAutoChoice(v, f.force)
+		if err != nil || ch == nil {
+			return false
+		}
+		return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.Provider, wantModel)
+	}
+	normEx := normalizeExcludes(f.excludes)
+	for _, ch := range choicesCap.Choices {
+		if !choiceExcluded(ch, normEx, nil) {
+			return ch.Harness == omp.Harness && target.ompChoiceNeedsVault(ch.Model, ch.EffectiveProvider(), wantModel)
+		}
+	}
+	return false
+}
+
+func (a *app) ompChoiceNeedsVault(chModel, chProvider, wantModel string) bool {
+	if a.ompNeedsVault(chModel) {
+		return true
+	}
+	if strings.Contains(wantModel, "/") && a.ompNeedsVault(wantModel) {
+		return true
+	}
+	if !strings.Contains(chModel, "/") && chProvider != "" {
+		return a.ompNeedsVault(chProvider + "/" + chModel)
+	}
+	return false
 }
 
 // credentialNames are the variables the credentials fill.
@@ -236,10 +439,66 @@ func ompModel(flag, configured string, listed func() ([]string, error)) (string,
 	if err != nil {
 		return "", fmt.Errorf("listing omp's models: %w", err)
 	}
-	if !slices.Contains(models, model) {
-		return "", usageErr("omp lists no model %q: name one as provider/id, as omp models lists it", model)
+	return ompSelector(model, models)
+}
+
+// ompSelector is model as omp lists it: model itself when omp lists it, or,
+// for a bare id (capacity.choices names an omp model by its id, as capacity
+// pick returns it), the one provider/id omp lists for that id. An id two
+// providers serve is refused with both: the start names one.
+func ompSelector(model string, models []string) (string, error) {
+	if slices.Contains(models, model) {
+		return model, nil
 	}
-	return model, nil
+	if !strings.Contains(model, "/") {
+		var matches []string
+		for _, m := range models {
+			if _, id, ok := strings.Cut(m, "/"); ok && id == model {
+				matches = append(matches, m)
+			}
+		}
+		switch len(matches) {
+		case 1:
+			return matches[0], nil
+		case 0:
+		default:
+			return "", usageErr("omp lists %q under more than one provider (%s): name one as provider/id", model, strings.Join(matches, ", "))
+		}
+	}
+	return "", usageErr("omp lists no model %q: name one as provider/id, as omp models lists it", model)
+}
+
+// ompQualified is model as omp lists it: a bare id, as capacity pick returns
+// an omp choice, is the one provider/id omp lists for it; any other model,
+// or one omp cannot resolve, stays as it is (the start's own model check
+// refuses it).
+func (a *app) ompQualified(model string) string {
+	if model == "" || strings.Contains(model, "/") {
+		return model
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), inboxWait)
+	defer cancel()
+	models, err := a.ompListed(ctx)
+	if err != nil {
+		return model
+	}
+	if m, err := ompSelector(model, models); err == nil {
+		return m
+	}
+	return model
+}
+
+// ompListed are the selectors omp lists: a.ompModelList when set (tests),
+// else omp models from PATH.
+func (a *app) ompListed(ctx context.Context) ([]string, error) {
+	if a.ompModelList != nil {
+		return a.ompModelList(ctx)
+	}
+	bin, err := exec.LookPath(omp.Comm)
+	if err != nil {
+		return nil, err
+	}
+	return ompModels(ctx, bin)
 }
 
 // ompModels are the selectors (provider/id) of the chat models omp lists.

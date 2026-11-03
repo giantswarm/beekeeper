@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -22,10 +23,13 @@ import (
 // (gocache.trim). A cache past the cap by goCacheMargin is trimmed even
 // while go commands outside a beekeeper run run: the go command takes a
 // missing entry for a miss and builds it again. A beekeeper run holds the
-// cache's use lock shared for its command (gocache.Use), and no trim, forced
-// or not, starts while one holds it: a compile reading an entry the trim
-// removes fails. One process trims at a time (gocache.lock), and the
-// watches share when the cache was read last (gocache.json).
+// cache's use lock shared for its command (gocache.Use), and no trim starts
+// while one holds it: a compile reading an entry the trim removes fails. Past
+// the margin the trim waits for those runs as a clear does (gocache.Hold),
+// new runs waiting behind it, for at most goCacheHoldWait: overlapping runs
+// never hold the trim off for ever. One process trims at a time
+// (gocache.lock), and the watches share when the cache was read last
+// (gocache.json).
 
 const (
 	goCacheFile = "gocache.json"
@@ -39,6 +43,10 @@ const (
 // goCacheMargin is how far past its cap, in quarters of it, the cache grows
 // before a trim no longer waits for the go builds: 5/4 of the cap.
 const goCacheMargin = 5
+
+// goCacheHoldWait is how long a trim past the margin waits for the
+// beekeeper runs that hold the cache. Tests shorten it.
+var goCacheHoldWait = goCacheRetry
 
 // goCacheForce is the size past which a trim runs while go builds run.
 func goCacheForce(max int64) int64 { return max * goCacheMargin / 4 }
@@ -68,6 +76,9 @@ type goCacheRun struct {
 	// waited is how long the cache has stayed over its cap, as the watch
 	// saw it.
 	waited time.Duration
+	// heldFor is how long the trim waited for the beekeeper runs that held
+	// the cache past the margin.
+	heldFor time.Duration
 }
 
 // over says the cache is over its cap.
@@ -101,6 +112,8 @@ func (r goCacheRun) line() string {
 		return fmt.Sprintf("%s; trimmed to %s, %d entries removed, the rest waits for the go builds (PIDs %s)", head, gibStr(r.after), r.removed, pidList(r.waits))
 	case len(r.waits) > 0:
 		return fmt.Sprintf("%s; its trim waits for the go builds (PIDs %s)", head, pidList(r.waits))
+	case r.removed > 0 && r.heldFor > 0:
+		return fmt.Sprintf("%s; trimmed to %s, %d entries removed least recently used first, past the cap by a quarter, after waiting %s for the beekeeper runs", head, gibStr(r.after), r.removed, r.heldFor.Round(time.Second))
 	case r.removed > 0:
 		return fmt.Sprintf("%s; trimmed to %s, %d entries removed least recently used first", head, gibStr(r.after), r.removed)
 	case r.over():
@@ -156,11 +169,22 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 		return r
 	}
 	release, ok, err := gocache.TryTrim(r.dir)
+	if err == nil && !ok && r.before > goCacheForce(r.max) {
+		release, ok, err = r.holdForRuns()
+	}
 	if err != nil || !ok {
 		r.used, r.err = err == nil, err
 		return r
 	}
 	defer release()
+	if r.heldFor > 0 {
+		// The runs it waited for wrote on: trim and count what is there now.
+		u, err = gocache.Scan(r.dir)
+		r.before, r.after, r.err = u.Bytes, u.Bytes, err
+		if err != nil || !r.over() {
+			return r
+		}
+	}
 	r.waits = builds()
 	r.forced = len(r.waits) > 0 && r.before > goCacheForce(r.max)
 	if len(r.waits) == 0 || r.forced {
@@ -181,13 +205,30 @@ func (a *app) trimGoCache(dryRun bool, builds func() []int) goCacheRun {
 	return r
 }
 
+// holdForRuns waits up to goCacheHoldWait for the beekeeper runs that hold
+// the cache, new runs waiting behind it; ok false once the wait ran out.
+func (r *goCacheRun) holdForRuns() (release func(), ok bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), goCacheHoldWait)
+	defer cancel()
+	t0 := time.Now()
+	release, err = gocache.Hold(ctx, r.dir, func() {})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	r.heldFor = time.Since(t0)
+	return release, true, nil
+}
+
 // goCache reads the size of the Go build cache every doctor.goCacheEvery
 // and trims it over its cap, in the background so the sample goes on
 // (goCacheLook). The goCaching flag orders the looks: the
 // next look's time is read only with the flag held, after the look that
 // wrote it gave the flag back.
 func (w *watcher) goCache(now time.Time) {
-	if !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
+	if w.cfg.Disk.Auto() || !w.goCacheOn || w.cfg.Doctor.GoCacheMax() == 0 || !w.goCaching.CompareAndSwap(false, true) {
 		return
 	}
 	if now.Before(w.goCacheNext) {

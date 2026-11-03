@@ -7,14 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
+	"os/user"
 	"path"
 	"strings"
 
 	"github.com/itchyny/gojq"
-
-	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
 // The key and the type of a kubernetes.io/dockerconfigjson Secret.
@@ -42,6 +40,28 @@ func (d DockerConfig) check() error {
 	return nil
 }
 
+// fill writes the .dockerconfigjson that authenticates the user with
+// password under keys of doc, a Secret in file, and types the Secret. It
+// answers the .dockerconfigjson.
+func (d DockerConfig) fill(doc *document, file string, keys []string, password string) (string, error) {
+	v, err := d.value(password)
+	if err != nil {
+		return "", err
+	}
+	if err := doc.set("type", dockerConfigType); err != nil {
+		return "", fmt.Errorf("%s: %w", file, err)
+	}
+	return v, setAt(doc, file, keys, v)
+}
+
+// setAt puts v under keys of doc, the document of file.
+func setAt(doc *document, file string, keys []string, v string) error {
+	if err := doc.setKeys(keys, v); err != nil {
+		return fmt.Errorf("%s: %w", file, err)
+	}
+	return nil
+}
+
 // value is the .dockerconfigjson that authenticates the user with password.
 func (d DockerConfig) value(password string) (string, error) {
 	auth := base64.StdEncoding.EncodeToString([]byte(d.Username + ":" + password))
@@ -54,12 +74,11 @@ func (d DockerConfig) value(password string) (string, error) {
 // CaptureOptions are the producer whose stdout a capture takes the value
 // from and where the value goes besides the SOPS path.
 type CaptureOptions struct {
-	// Producer is the command that prints the value, run in this process.
+	// Producer is the command that prints the value, one of [Producers],
+	// run in this process.
 	Producer []string
 	// Env is the producer's environment ([ProducerEnv]).
 	Env []string
-	// Stderr receives the producer's stderr; nil discards it.
-	Stderr io.Writer
 	// JQ is a jq filter that picks the value out of the producer's JSON
 	// output, one string; empty takes the whole output, its line end
 	// trimmed.
@@ -85,9 +104,10 @@ type CaptureResult struct {
 // its JSON output with opt.JQ) to the shared vault's field first when one
 // is given, then into the SOPS path in o.Encode, or as a Secret's
 // .dockerconfigjson with opt.Docker. Every check (the references, the
-// creation rule, the filter) runs before the producer does: a credential
-// that is printed once is not spent on a call that could not store it. The
-// producer's stdout is never answered.
+// creation rule, the filter, the producer against [Producers]) runs before
+// the producer does: a credential that is printed once is not spent on a
+// call that could not store it. Neither the producer's stdout nor its
+// stderr is ever answered.
 func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (CaptureResult, error) {
 	switch {
 	case dst.Op != "" || dst.IsSource():
@@ -98,6 +118,9 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 		return CaptureResult{}, fmt.Errorf("%s: --dockerconfigjson writes the Secret's %s, name the file alone", dst, dockerConfigKey)
 	case len(opt.Producer) == 0:
 		return CaptureResult{}, errors.New("no producer: capture <file#path> -- <producer…>")
+	}
+	if err := checkProducer(opt.Producer); err != nil {
+		return CaptureResult{}, err
 	}
 	if opt.Docker != nil {
 		if !o.Encode.IsZero() {
@@ -146,19 +169,15 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 	}
 	// the vault keeps the printed value, the SOPS path its written form
 	if opt.Docker != nil {
-		if v, err = opt.Docker.value(v); err != nil {
-			return CaptureResult{}, err
-		}
-		if err := doc.set("type", dockerConfigType); err != nil {
-			return CaptureResult{}, fmt.Errorf("%s: %w", dst.File, err)
-		}
+		v, err = opt.Docker.fill(doc, dst.File, keys, v)
 	} else {
 		v = o.Encode.Apply(v)
+		err = setAt(doc, dst.File, keys, v)
+	}
+	if err != nil {
+		return CaptureResult{}, err
 	}
 	key := Ref{File: dst.File, Path: strings.Join(keys, ".")}
-	if err := doc.setKeys(keys, v); err != nil {
-		return CaptureResult{}, fmt.Errorf("%s: %w", dst.File, err)
-	}
 	if err := o.encrypt(ctx, doc, dst.File); err != nil {
 		if opt.Vault != (Ref{}) {
 			return CaptureResult{}, fmt.Errorf("the vault holds the value, the SOPS file not (copy %s %s): %w", opt.Vault, key, err)
@@ -180,15 +199,22 @@ func (o *Ops) captureTarget(ctx context.Context, dst Ref, opt CaptureOptions) (*
 		}
 		return doc, strings.Split(dst.Path, "."), nil
 	}
-	doc, err := o.document(ctx, dst.File, opt.New)
+	return o.dockerTarget(ctx, dst.File, opt.New)
+}
+
+// dockerTarget is the Secret in file a .dockerconfigjson goes into, an
+// absent file started as nw, and the keys of stringData..dockerconfigjson,
+// checked against the creation rule.
+func (o *Ops) dockerTarget(ctx context.Context, file string, nw *NewSecret) (*document, []string, error) {
+	doc, err := o.document(ctx, file, nw)
 	if err != nil {
 		return nil, nil, err
 	}
 	if k, _ := doc.get("kind"); k != secretKind {
-		return nil, nil, fmt.Errorf("%s: --dockerconfigjson writes a Secret; start one in an absent file with --name and --namespace", dst.File)
+		return nil, nil, fmt.Errorf("%s: --dockerconfigjson writes a Secret; start one in an absent file with --name and --namespace", file)
 	}
 	keys := []string{"stringData", dockerConfigKey}
-	if err := checkRule(dst.File, keys); err != nil {
+	if err := checkRule(file, keys); err != nil {
 		return nil, nil, err
 	}
 	return doc, keys, nil
@@ -207,13 +233,25 @@ func compileJQ(filter string) (*gojq.Code, error) {
 	return code, nil
 }
 
-// produce runs the producer with its environment, its stderr passed on,
-// and answers its stdout: a non-zero exit or nothing on stdout refuses.
+// produce runs the producer, one of [Producers], from the path beekeeper
+// resolves itself ([producerPath]), in the root directory, with its
+// environment, and answers its stdout: a non-zero exit or nothing on
+// stdout refuses. The caller's PATH and working directory never reach it:
+// a wrapper there, or a module a python producer would import from its
+// working directory, could read the value. Its stderr is discarded, a log
+// there may carry the value: a failure names its exit code alone.
 func produce(ctx context.Context, opt CaptureOptions) ([]byte, error) {
+	if err := checkProducer(opt.Producer); err != nil {
+		return nil, err
+	}
 	name := opt.Producer[0]
-	c := exec.CommandContext(ctx, name, opt.Producer[1:]...) //nolint:gosec // the caller's producer is the purpose
+	bin, err := producerPath(name)
+	if err != nil {
+		return nil, err
+	}
+	c := exec.CommandContext(ctx, bin, opt.Producer[1:]...) //nolint:gosec // an allowlisted producer is the purpose
 	c.Env = opt.Env
-	c.Stderr = opt.Stderr
+	c.Dir = "/"
 	var out bytes.Buffer
 	c.Stdout = &out
 	if err := c.Run(); err != nil {
@@ -279,17 +317,31 @@ func jsonKind(v any) string {
 	return "number"
 }
 
-// ProducerEnv is environ without the variables that carry a secret: the
-// vault's credentials, sops' age identity and those whose names match one
-// of the globs of drop (secret.env).
+// producerPATH is a producer's PATH: the interpreter a producer's script
+// names through env (az's bash) is the system's too.
+const producerPATH = "/usr/bin:/bin"
+
+// producerVars are the globs of the caller's variables a producer keeps:
+// the locale and the time zone. Every other one stays behind, those that
+// carry a secret and those that make a producer run code or reach a host
+// of the caller's choosing: a loader's (LD_PRELOAD, DYLD_*), an
+// interpreter's (PYTHONPATH, BASH_ENV), openssl's configuration, engines
+// and providers, az's configuration directory, a proxy and its CA bundle.
+var producerVars = []string{"LANG", "LANGUAGE", "LC_*", "TZ"}
+
+// ProducerEnv is a producer's clean environment: [producerPATH], HOME from
+// the user database, never the caller's, and the variables of environ
+// whose names match one of [producerVars] and none of the globs of drop,
+// secret.env.
 func ProducerEnv(environ, drop []string) []string {
-	out := make([]string, 0, len(environ))
+	out := []string{"PATH=" + producerPATH}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		out = append(out, "HOME="+u.HomeDir)
+	}
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if guard.VaultVar.MatchString(name) || name == envAgeKey || globbed(drop, name) {
-			continue
+		if name, _, _ := strings.Cut(kv, "="); globbed(producerVars, name) && !globbed(drop, name) {
+			out = append(out, kv)
 		}
-		out = append(out, kv)
 	}
 	return out
 }
