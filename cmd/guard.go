@@ -472,7 +472,8 @@ an Edit, Write or NotebookEdit, a git commit or push, a devctl pr merge or
 release promote, a gh pr merge or review, a GitHub connector tool that
 merges, reviews or pushes, and a browser (claude-in-chrome) action other
 than opening, reading or looking at a page are refused with the hint to
-hand the work to the supervisor in one line. Its AskUserQuestion is checked
+file the work in that turn as an issue on the board and tell the person
+in one line, never to hand it back to them. Its AskUserQuestion is checked
 as note add checks a note for the person: every question asks, carries a
 "Status quo: …" and a "Why: …" part, a "Checked: …" part for a claim that
 something is merged, green, released, rolled or closed, the full URL of

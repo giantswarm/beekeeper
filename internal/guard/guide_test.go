@@ -81,13 +81,18 @@ func TestGuideIsRefusedWork(t *testing.T) {
 	h := guideHook()
 	for name, ev := range guideCalls {
 		d := decideEvent(t, h, withSession(ev, guideSession))
-		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Hand it to the supervisor in one line") {
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "File it in this turn as an issue") {
 			t.Errorf("%s in the guide's session: want the delegation refusal, got %+v", name, d)
 		}
 		// https://github.com/giantswarm/beekeeper/issues/1776: the supervisor
 		// is the loop, which no SendMessage reaches; the hint names the board.
 		if d != nil && (strings.Contains(d.Reason, SendMessageTool) || !strings.Contains(d.Reason, "beekeeper board move")) {
 			t.Errorf("%s in the guide's session: want the board route, not %s: %s", name, SendMessageTool, d.Reason)
+		}
+		// https://github.com/giantswarm/beekeeper/issues/2197: the hint points
+		// to filing the work, never back to the person.
+		if d != nil && !strings.Contains(d.Reason, "never ask them to do it themselves") {
+			t.Errorf("%s in the guide's session: want the hint to keep the work off the person: %s", name, d.Reason)
 		}
 	}
 }
