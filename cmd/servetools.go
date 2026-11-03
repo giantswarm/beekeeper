@@ -842,7 +842,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	answer, _ := answerText(n, choice, text) // the verb took it
 	c.s.closeDecision(c.ctx, n, outcomeAnswered, answer)
-	return map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}, nil
+	res := map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}
+	if shown, err := c.app.localNote(id); err == nil && shown != nil && shown.Delivery != nil {
+		res["delivery"] = shown.Delivery
+	}
+	return res, nil
 }
 
 func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {

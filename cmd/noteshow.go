@@ -15,10 +15,11 @@ const noteStatusOpen = "open"
 // shownNote pairs the full note with its retained outcome.
 type shownNote struct {
 	state.Note
-	Status  string       `json:"status"`
-	Answer  string       `json:"answer,omitempty"`
-	Reason  string       `json:"reason,omitempty"`
-	Closure *state.Event `json:"closure,omitempty"`
+	Status   string        `json:"status"`
+	Answer   string        `json:"answer,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
+	Closure  *state.Event  `json:"closure,omitempty"`
+	Delivery *noteDelivery `json:"delivery,omitempty"`
 }
 
 func (a *app) noteShowCmd() *cobra.Command {
@@ -79,6 +80,9 @@ history cannot be recovered.`,
 				if local.Reason != "" {
 					m["reason"] = local.Reason
 				}
+				if local.Delivery != nil {
+					m["delivery"] = local.Delivery
+				}
 				if local.Answer != "" {
 					m["answer"] = local.Answer
 				}
@@ -93,6 +97,15 @@ history cannot be recovered.`,
 			}
 			if _, err := fmt.Fprintf(a.out, "%s [status: %s] [for %s]\n%s\n", noteRef(&local.Note), local.Status, audience, local.Text); err != nil {
 				return err
+			}
+			if local.Delivery != nil {
+				line := local.Delivery.Status
+				if local.Delivery.Detail != "" {
+					line += " " + local.Delivery.Detail
+				}
+				if _, err := fmt.Fprintf(a.out, "notification: %s\n", line); err != nil {
+					return err
+				}
 			}
 			if local.Default != "" {
 				if _, err := fmt.Fprintf(a.out, "default: %s\n", local.Default); err != nil {
@@ -118,7 +131,7 @@ history cannot be recovered.`,
 	}
 }
 
-func (a *app) localNote(id int) (*shownNote, error) {
+func (a *app) retainedNote(id int) (*shownNote, error) {
 	st, err := a.store.Read()
 	if err != nil {
 		return nil, err
