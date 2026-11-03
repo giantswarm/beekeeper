@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Require and retain a withdrawal reason for `note_done` and `note done --reason`, show it in note history and closed Slack decisions, name the remedy for a missing organization membership, and close due decisions with legacy passive defaults.
+- Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
 - The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).
