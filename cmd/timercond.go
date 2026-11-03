@@ -274,6 +274,18 @@ func (w *watcher) actTimers(ctx context.Context, fires []timerFire) {
 // wakeTimer wakes a fired timer's agent with its message; a wake that fails
 // is a line, so the supervisor's watch still has the text.
 func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
+	// A timer may have fired before the agent replaced its wait. Read the
+	// current park at delivery, including parks off the roster; a stale
+	// repeating timer must never turn a session waiting on a person.
+	st, err := w.store.Read()
+	if err != nil {
+		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
+		return
+	}
+	if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
+		w.emitNow("timer", "TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now))
+		return
+	}
 	quiet := *w.app // the wake's own report is not a watch line
 	quiet.out = io.Discard
 	if !f.t.Due.IsZero() {

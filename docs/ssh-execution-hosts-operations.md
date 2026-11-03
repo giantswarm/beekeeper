@@ -203,6 +203,27 @@ invalidates the policy: the host's `hosts check` fails on a digest mismatch
 until `agents hosts update <host>` prepares and pins it again. Do not weaken
 a required guard to make a check pass.
 
+A running execution stays bound to the policy it started under. After such a
+change its unit keeps running, but its `agents publish`, `agents merge` and
+capped runs refuse until the coordinator rebinds it. Once the new bundle is
+prepared on the host and its digest pinned in the coordinator catalog, rebind
+each running execution from the coordinator:
+
+```sh
+beekeeper agents recover worker
+```
+
+Recovery inspects the same execution and never starts a replacement. It rebinds
+only to the host's prepared policy, only when that is the catalog's pinned
+digest, and only from the policy the execution is bound to; it records an
+`execution.policy-rebound` event with both digests. The worker keeps its
+workspace, commits, owned branch and pull request, and retries its publication.
+While the host policy is unprepared, stale, or not yet pinned, `recover` exits 3
+and says that the unit is reachable but its publication is unavailable. Only a
+running execution whose owned unit is active is rebound: a stopped, completed,
+exited, failed or never launched one is not, and recovery confirms an exited
+execution as it is.
+
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
 configuration (`execution.maxBusy` included), and the start guards — the memory

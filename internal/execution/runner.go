@@ -27,7 +27,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	}
 	defer func() { runErr = errors.Join(runErr, s.RevokeGitHub(j)) }()
 	p, err := s.InstalledPolicy()
-	if err != nil || p.Digest() != j.Request.PolicyDigest {
+	if err != nil || p.Digest() != j.BoundPolicy() {
 		return errors.New("execution rules or guards changed before launch")
 	}
 	co, ok := s.Config.Coordinators[j.Request.Coordinator]
