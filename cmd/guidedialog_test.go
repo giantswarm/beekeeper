@@ -272,7 +272,7 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 }
 
 func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
-	a, out := answerApp(t)
+	a, _ := answerApp(t)
 	now := time.Date(2026, 10, 30, 14, 0, 0, 0, time.UTC)
 	a.now = now
 	a.cfg.Claude.ProjectsDir = t.TempDir()
@@ -321,22 +321,25 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// sessionTail directly, as rostername_test.go does: the tail command
+	// itself starts with the process table, which the darwin and
+	// systemd-less Linux builds do not have.
 	for _, target := range []string{pastGuideName, pastGuideCLI, pastGuideHost} {
-		out.Reset()
-		c := a.tailCmd()
-		c.SetArgs([]string{target, "-n", "5"})
-		c.SetOut(out)
-		c.SetErr(out)
-		if err := c.Execute(); err != nil {
-			t.Fatalf("tail %q: %v\n%s", target, err, out.String())
+		turns, err := a.sessionTail(nil, target, 5, false, now)
+		if err != nil {
+			t.Fatalf("tail %q: %v", target, err)
 		}
-		got := out.String()
+		var sb strings.Builder
+		for _, tr := range turns {
+			sb.WriteString(tr.Text + "\n")
+		}
+		got := sb.String()
 		for _, want := range []string{
 			"Approach 1 — keep the existing config path and do not rename the flag",
 			"Also make sure the migration is backwards compatible.",
 		} {
 			if !strings.Contains(got, want) {
-				t.Errorf("tail %q output lacks %q:\n%s", target, want, got)
+				t.Errorf("tail %q turns lack %q:\n%s", target, want, got)
 			}
 		}
 	}
@@ -348,14 +351,7 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	out.Reset()
-	c := a.tailCmd()
-	c.SetArgs([]string{"Gone worker"})
-	c.SetOut(out)
-	c.SetErr(out)
-	c.SilenceErrors, c.SilenceUsage = true, true
-	err := c.Execute()
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `no CLI of "Gone worker" runs`) {
-		t.Fatalf("tail Gone worker = %v, out = %q", err, out.String())
+	if _, err := a.sessionTail(nil, "Gone worker", 3, false, now); Code(err) != ExitRefused || !strings.Contains(err.Error(), `no CLI of "Gone worker" runs`) {
+		t.Fatalf("tail Gone worker = %v", err)
 	}
 }
