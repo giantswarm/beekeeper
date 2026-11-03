@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/merge"
 )
 
 const executionRerun = execution.CIRerun
@@ -56,7 +57,7 @@ func (a *app) executionCIRerun(ctx context.Context, host string, req execution.C
 
 var runExecutionCIRerun = func(ctx context.Context, binary, repository string, pr int) (executionRerunResult, error) {
 	if binary == "" {
-		binary = "devctl"
+		binary = merge.Tool
 	}
 	child := exec.CommandContext(ctx, binary, "pr", "rerun", repository, strconv.Itoa(pr)) //nolint:gosec // configured coordinator devctl, fixed verb and validated repository/PR
 	var out, errOut bytes.Buffer
