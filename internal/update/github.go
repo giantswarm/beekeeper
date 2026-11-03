@@ -65,8 +65,10 @@ type candidateSet struct {
 	olderTagSHAs map[string]bool
 }
 
-func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
-	var opts []github.ClientOptionsFunc
+// authToken is the token the release lookup sends: GH_TOKEN, GITHUB_TOKEN
+// or the gh login's, as every other GitHub call of beekeeper; errNoToken
+// without one.
+func authToken() (string, error) {
 	token := os.Getenv("GH_TOKEN")
 	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
@@ -76,14 +78,22 @@ func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
 		token, _ = githubToken(ctx)
 		cancel()
 	}
-	if token != "" {
-		opts = append(opts, github.WithAuthToken(token))
+	if token == "" {
+		return "", errNoToken
+	}
+	return token, nil
+}
+
+func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
+	token, err := authToken()
+	if err != nil {
+		return nil, err
 	}
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token})
 	if err != nil {
 		return nil, err
 	}
-	client, err := github.NewClient(opts...)
+	client, err := github.NewClient(github.WithAuthToken(token))
 	if err != nil {
 		return nil, err
 	}

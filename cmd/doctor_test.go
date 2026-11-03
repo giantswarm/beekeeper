@@ -178,7 +178,7 @@ func TestCheckFaults(t *testing.T) {
 	var ran []string
 	run := func(_ context.Context, command string, _ time.Duration) error {
 		name, verb, _ := strings.Cut(command, " ")
-		if verb == "fix" {
+		if verb == testFixWord {
 			ran = append(ran, name)
 			if name != stuck {
 				broken[name] = false
@@ -375,6 +375,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
 			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
 			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
+			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review"}},
 			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
 			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
 			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},
@@ -502,6 +503,27 @@ func TestCheckAgyHooks(t *testing.T) {
 	}
 	if got := checkAgyHooks(home, "/other/beekeeper", true); !strings.Contains(got, "runs /opt/bin/beekeeper instead of /other/beekeeper") {
 		t.Errorf("other binary: got %q", got)
+	}
+	// Another entry agy rejects drops beekeeper's valid one with it.
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := strings.Replace(string(raw), "{", `{"stale": {"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]},`, 1)
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := root.WriteFile(filepath.Join(".gemini", "config", "hooks.json"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgyHooks(home, exe, true); !strings.Contains(got, "agy rejects the stale entry, so none of the file's hooks runs, beekeeper's neither") {
+		t.Errorf("stale entry: got %q", got)
 	}
 }
 

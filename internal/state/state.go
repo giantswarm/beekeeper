@@ -235,11 +235,14 @@ type Grant struct {
 // Hold stops work on a target (a repository's merges, "github" for every
 // GitHub call) until it is lifted or Until passes.
 type Hold struct {
-	Target string    `json:"target"`
-	Reason string    `json:"reason"`
-	By     Party     `json:"by"`
-	At     time.Time `json:"at"`
-	Until  time.Time `json:"until,omitzero"`
+	// Incident pauses supervisor starts in Target except the named repair.
+	// It stays set through the repair release and proof, until lifted.
+	Incident bool      `json:"incident,omitempty"`
+	Target   string    `json:"target"`
+	Reason   string    `json:"reason"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	Until    time.Time `json:"until,omitzero"`
 	// Except is what a merge hold lets through: a repository (the tool's own
 	// during a tool-release window) or one pull request, owner/repo#n.
 	Except string `json:"except,omitempty"`
@@ -306,6 +309,9 @@ func (h Hold) Admits(session string) bool {
 // probe waits on that repository's release or tag: only the repository's
 // own promote cuts it, so the hold lets that promote through.
 func (h Hold) AwaitsOwnRelease() bool {
+	if h.Incident && strings.Contains(h.Target, "/") {
+		return true
+	}
 	probe := strings.ToLower(h.LiftWhen)
 	if !strings.Contains(h.Target, "/") || !strings.Contains(probe, strings.ToLower(h.Target)) {
 		return false
@@ -623,6 +629,50 @@ func (t Timer) Auto() bool {
 // Conditional reports whether the timer waits on a condition.
 func (t Timer) Conditional() bool { return t.When != "" || t.Probe != "" }
 
+// Override is a temporary change of the configuration file (config set
+// --until): the keys it set, each one's value before, why and its end, a
+// time or an issue or pull request whose closing ends it. The watch and the
+// supervisor loop restore the values before once its end arrives, or ask the
+// person when a restore needs a decision.
+type Override struct {
+	ID int `json:"id"`
+	// Path is the configuration file the override changed.
+	Path   string        `json:"path"`
+	Keys   []OverrideKey `json:"keys"`
+	Reason string        `json:"reason"`
+	// Until is the time the override ends; Ref (owner/repo#n) the issue or
+	// pull request whose closing ends it. One of the two is set.
+	Until time.Time `json:"until,omitzero"`
+	Ref   string    `json:"ref,omitempty"`
+	By    Party     `json:"by"`
+	At    time.Time `json:"at"`
+	// Checked is when Ref was last found open or unreadable, Found what
+	// that check found.
+	Checked time.Time `json:"checked,omitzero"`
+	Found   string    `json:"found,omitempty"`
+	// Ended is when its end arrived and a restore took it, Ending why (the
+	// time came, Ref closed): another tick leaves it to that restore.
+	Ended  time.Time `json:"ended,omitzero"`
+	Ending string    `json:"ending,omitempty"`
+	// Decision is why the restore waits on the person (a key changed since
+	// the override), Note the decision note asking them.
+	Decision string `json:"decision,omitempty"`
+	Note     int    `json:"note,omitempty"`
+
+	rest rest
+}
+
+// OverrideKey is one key an override set: the value it set and the value
+// before, YAML, or Absent when the file had no such key.
+type OverrideKey struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Previous string `json:"previous,omitempty"`
+	Absent   bool   `json:"absent,omitempty"`
+
+	rest rest
+}
+
 // Looked reports whether someone has to look at the timer by now: a plain
 // timer whose time has come. An auto timer is the watch's to act on.
 func (t Timer) Looked(now time.Time) bool { return !t.Auto() && !t.Due.After(now) }
@@ -791,6 +841,7 @@ type AppCreated struct {
 // existed. A session cannot add itself: its id is only ever written here by
 // the start that created it.
 type Start struct {
+	Effort string `json:"effort,omitempty"`
 	Party
 	Execution *ExecutionRecord `json:"execution,omitempty"`
 	Mode      string           `json:"mode"`
@@ -859,6 +910,13 @@ type ExecutionRecord struct {
 	StartUnsent bool `json:"startUnsent,omitempty"`
 	// StartSentAt is when the coordinator last sent its start request.
 	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// TranscriptCollected says the ended execution's stream log is
+	// persisted to the transcript store to EOF; until then its host
+	// reconciliation keeps collecting it, also after Settled.
+	TranscriptCollected bool `json:"transcriptCollected,omitempty"`
+	// TranscriptError is why the last pull of the execution's transcript
+	// failed, empty once one succeeded.
+	TranscriptError string `json:"transcriptError,omitempty"`
 	// ReleasedAt is when a reservation the host never acknowledged was
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
@@ -1085,6 +1143,10 @@ type State struct {
 	NextNote  int     `json:"nextNote,omitempty"`
 	Timers    []Timer `json:"timers,omitempty"`
 	NextTimer int     `json:"nextTimer,omitempty"`
+	// Overrides are the temporary configuration changes in effect (config
+	// set --until).
+	Overrides    []Override `json:"overrides,omitempty"`
+	NextOverride int        `json:"nextOverride,omitempty"`
 	// Records say which session serves which issue.
 	Records []Record `json:"records,omitempty"`
 	// Claims are the records this desk published on GitHub as claims
@@ -1166,6 +1228,48 @@ type State struct {
 	// update): the release each runs and the policy digest its starts are
 	// pinned to, or why it is held.
 	HostPins []HostPin `json:"hostPins,omitempty"`
+	// TranscriptGrants are the guide's expiring grants of wider transcript
+	// access to workers.
+	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
+	// TranscriptRequests are open worker requests for wider transcript
+	// access awaiting the guide's grant.
+	TranscriptRequests  []TranscriptRequest `json:"transcriptRequests,omitempty"`
+	NextTranscriptGrant int                 `json:"nextTranscriptGrant,omitempty"`
+
+	rest rest
+}
+
+// TranscriptGrant is the guide's expiring authorization for a worker to read
+// and search transcripts beyond its own repository.
+type TranscriptGrant struct {
+	ID      int       `json:"id"`
+	To      Party     `json:"to"`
+	Repo    string    `json:"repo,omitempty"`
+	Session string    `json:"session,omitempty"`
+	All     bool      `json:"all,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	By      Party     `json:"by"`
+	At      time.Time `json:"at"`
+	Expires time.Time `json:"expires"`
+
+	rest rest
+}
+
+// Active reports whether the grant holds at now.
+func (g TranscriptGrant) Active(now time.Time) bool {
+	return g.Expires.IsZero() || now.Before(g.Expires)
+}
+
+// TranscriptRequest is a worker's request to the guide for wider transcript
+// access (another session, another repository, or all transcripts).
+type TranscriptRequest struct {
+	ID      int       `json:"id"`
+	By      Party     `json:"by"`
+	Repo    string    `json:"repo,omitempty"`
+	Session string    `json:"session,omitempty"`
+	All     bool      `json:"all,omitempty"`
+	Reason  string    `json:"reason"`
+	At      time.Time `json:"at"`
 
 	rest rest
 }
@@ -1466,6 +1570,12 @@ type Merge struct {
 	// auto-release run or tag pipeline failed, nothing rolls, and the lane
 	// settles at once.
 	ReleaseFailed bool `json:"releaseFailed,omitempty"`
+	// Releasing marks a merge of a lane without an installation whose gate
+	// confirms its release after devctl ended at the merge: the lane's next
+	// merge starts its update and CI meanwhile and merges once the release
+	// is confirmed or failed. A releasing merge whose gate is gone settles
+	// by the settle rule, its release unknown.
+	Releasing bool `json:"releasing,omitempty"`
 	// HandCut is the merge's base branch when no Auto-release run tags a
 	// merge into it (its tags are cut by hand): devctl awaits no release and
 	// the merge leaves its lane once merged.

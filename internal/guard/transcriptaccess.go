@@ -215,10 +215,13 @@ var transcriptHomeComponent = regexp.MustCompile(`['"]\.(?:codex|claude|gemini|o
 var transcriptCodeString = regexp.MustCompile(`[fF]?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`)
 var transcriptPathOperation = regexp.MustCompile(`[/+]|\b(?:join|Join|joinpath|home|expanduser|homedir|environ|getenv)\b`)
 
+// Runtime home/environment lookups can reach any harness store without naming
+// a harness component at all (for example by globbing, splitting a name, or
+// selecting a directory from an environment variable). The command-text guard
+// cannot establish the resulting target or apply a path grant to it.
+var transcriptRuntimeRoot = regexp.MustCompile(`\b(?:home|homedir|expanduser|getenv|Getenv|UserHomeDir)\s*\(|\b(?:environ|env)\s*[\[.]|\bENV\s*[\[{.]`)
+
 func unresolvedTranscriptPath(code string) bool {
-	if !transcriptHomeComponent.MatchString(code) {
-		return false
-	}
 	operations := transcriptCodeString.ReplaceAllStringFunc(code, func(literal string) string {
 		// Formatted strings contain executable expressions, not just data.
 		if literal[0] == 'f' || literal[0] == 'F' {
@@ -226,7 +229,8 @@ func unresolvedTranscriptPath(code string) bool {
 		}
 		return ""
 	})
-	return transcriptPathOperation.MatchString(operations)
+	return transcriptRuntimeRoot.MatchString(operations) ||
+		transcriptHomeComponent.MatchString(code) && transcriptPathOperation.MatchString(operations)
 }
 
 const transcriptUnresolved = "Refused: the guard cannot resolve a constructed harness path in this script. Use explicit file paths so transcript access can be checked, or ask the supervisor for an explicit fixture grant."
