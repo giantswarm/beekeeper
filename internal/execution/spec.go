@@ -89,6 +89,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	GitHub         bool   `json:"github,omitempty"`
 	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
@@ -309,6 +310,7 @@ func (r Resources) Validate(now time.Time) error {
 }
 
 type Capabilities struct {
+	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`
 	Identity     HostID            `json:"identity"`
