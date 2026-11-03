@@ -1134,10 +1134,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt, w.Waits = loopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
-			if !shouldEndReviewWorker(st, ag) || l.dryRun {
-				w.ReviewRequested = ag.Park.ReviewHead != ""
-				w.ParkedHead = ag.Park.ReviewHead
-			}
+			// A verified park requests review even while retirement waits for
+			// the worker's current turn to end.
+			w.ReviewRequested = ag.Park.ReviewHead != ""
+			w.ParkedHead = ag.Park.ReviewHead
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
@@ -2512,6 +2512,11 @@ func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	}
 	if ag.Execution != nil {
 		return st.Starts[k].Execution != nil
+	}
+	// The watch stops parked background sessions to free memory. Their
+	// roster entry and park remain the durable owner of the review and wake.
+	if st.Starts[k].Background {
+		return false
 	}
 	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
 }
