@@ -402,7 +402,7 @@ func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
 	}{
 		{name: "held", held: true},
 		{name: "refused", code: ExitRefused},
-		{name: "failed", code: 1},
+		{name: "start failed", code: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
