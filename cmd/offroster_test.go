@@ -45,3 +45,18 @@ func TestWakePartyReachesSessionsOffTheRoster(t *testing.T) {
 		t.Error("a name nothing carries was resolved")
 	}
 }
+
+func TestWakeIDKeepsHarnessChannel(t *testing.T) {
+	for _, host := range []string{offCodex, offOmp, "agy_test", ""} {
+		t.Run(host, func(t *testing.T) {
+			p := state.Party{Session: offID, HostSession: host}
+			want := host
+			if host == "" {
+				want = offID
+			}
+			if got := wakeID(p); got != want {
+				t.Fatalf("wakeID = %q, want %q", got, want)
+			}
+		})
+	}
+}

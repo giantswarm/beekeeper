@@ -71,12 +71,21 @@ const (
 	// the priority list, unless it already sits on another board where it
 	// is being worked.
 	KindIntake = "intake"
+	// KindOwner gives an overlapping pull request (or the higher-ranked item
+	// it overlaps with) a live owner when a worker parks on it and its owner
+	// is gone, it has made no progress for OverlapWait, or board rank orders
+	// the waiting worker's item first.
+	KindOwner = "owner"
 )
+
+// OverlapWait is how long a worker may wait on an overlapping pull request
+// with no progress before the loop gives that pull request an owner.
+const OverlapWait = 30 * time.Minute
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindMerge}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindOwner, KindMerge}
 }
 
 // The verbs of the events the rules act on.
@@ -103,6 +112,8 @@ const (
 
 // Pull is a tracked pull request as GitHub reports it.
 type Pull struct {
+	// Closes names the issues closed by this pull request.
+	Closes                []string
 	Draft                 bool
 	Mergeable, MergeState string
 	Ref                   string // owner/repo#n
@@ -118,7 +129,9 @@ type Pull struct {
 	// Red are the checks on Head that concluded red (failure, cancelled,
 	// timed out, startup failure, action required; a commit status's
 	// failure or error), by name. Superseded cancellations are excluded.
-	Red     []Check
+	Red []Check
+	// Checks are the names of the non-superseded checks on Head.
+	Checks  []string
 	Reviews []Review // oldest first
 	// Author is the login that opened it; Title, Branch (its head branch)
 	// and Files (the paths it changes, ChangedFiles of them in all, which
@@ -217,6 +230,8 @@ type Worker struct {
 	// Serves is the issue the agent's active sessions serve record names
 	// (owner/repo#n), "" without one or once it waits for "done".
 	Serves string
+	// Waits is what the agent's park says it waits for.
+	Waits string
 }
 
 // Event is one line of the event log the loop acts on.
@@ -309,6 +324,9 @@ type Input struct {
 	// Filed are the issues sessions on the desk created (gh issue create,
 	// create_issue, issue_write), read from their transcripts.
 	Filed []FiledIssue
+	// Rank returns the board priority rank of ref (1 the top, 0 when
+	// unranked) so overlapping pull requests are ordered by board rank.
+	Rank func(ref string) int
 }
 
 // FiledIssue is an issue a session on the desk created, with the issue or
@@ -439,6 +457,7 @@ type Action struct {
 	Key   string
 	Kind  string
 	Ref   string // the pull request, when there is one
+	Block string // the overlapping pull request or issue recorded blocked by Ref
 	URL   string
 	Agent string // the worker it concerns
 	Head  string
@@ -522,10 +541,12 @@ type ledger struct {
 	escalated map[string]escalation
 	ended     map[string]bool
 	reviewer  map[string]string // a pull request's worker, from its last review
-	// goAgent is the worker the go for a pull request was given to; acts
-	// are when the loop acted on a pull request (a review, go, forward,
-	// escalation or end), oldest first.
+	// goAgent is the worker the go for a pull request was given to; goHead
+	// is the last head given a go and not superseded by a later review,
+	// forward, rework or escalation; acts are when the loop acted on a pull
+	// request (a review, go, forward, escalation or end), oldest first.
 	goAgent map[string]string
+	goHead  map[string]string
 	acts    map[string][]time.Time
 	// asked are the pull requests whose ownership the person was asked
 	// about, overridden the ones they let the desk take over.
@@ -537,10 +558,10 @@ type ledger struct {
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
+		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
-		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave}, t.Kind) {
+		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
 			l.acts[t.Ref] = append(l.acts[t.Ref], t.At)
 		}
 		switch t.Kind {
@@ -548,9 +569,13 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			_, head, _ := strings.Cut(t.Key, "@")
 			l.rounds[t.Ref] = append(l.rounds[t.Ref], round{head: head, at: t.At})
 			l.reviewer[t.Ref] = t.Agent
+			delete(l.goHead, t.Ref)
 		case KindEscalate:
 			_, head, _ := strings.Cut(t.Key, "@")
 			l.escalated[t.Ref] = escalation{head: head, at: t.At}
+			delete(l.goHead, t.Ref)
+		case KindRework:
+			delete(l.goHead, t.Ref)
 		case KindEnd:
 			l.ended[t.Ref] = true
 		case KindOwnership:
@@ -564,7 +589,14 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 					l.red[prefix+": "+name] = true
 				}
 			}
-		case KindGo, KindForward:
+		case KindGo, KindForward, KindOwner:
+			if t.Kind == KindGo {
+				if _, head, ok := strings.Cut(t.Key, "@"); ok && head != "" {
+					l.goHead[t.Ref] = head
+				}
+			} else {
+				delete(l.goHead, t.Ref)
+			}
 			if t.Agent != "" {
 				l.reviewer[t.Ref] = t.Agent
 				if t.Kind == KindGo {
@@ -634,12 +666,26 @@ func ReviewerName(ref string, rd int) string {
 	return fmt.Sprintf("Review %s %s r%d", name, n, rd)
 }
 
+// PullWorkerName is the default roster name of the worker that owns ref
+// (owner/repo#n): "<repo> <n>".
+func PullWorkerName(ref string) string {
+	repo, n, _ := strings.Cut(ref, "#")
+	_, name, _ := strings.Cut(repo, "/")
+	if name == "" || n == "" {
+		return ""
+	}
+	return name + " " + n
+}
+
 // Key renderings.
 func reviewKey(ref, head string) string    { return fmt.Sprintf("review %s@%s", ref, head) }
 func goKey(ref, head string) string        { return fmt.Sprintf("go %s@%s", ref, head) }
 func forwardKey(ref, review string) string { return fmt.Sprintf("forward %s %s", ref, review) }
 func reworkKey(ref, head string, parked time.Time) string {
 	return fmt.Sprintf("rework %s@%s %s", ref, head, parked.UTC().Format(time.RFC3339Nano))
+}
+func ownerKey(ref, head string, parked time.Time) string {
+	return fmt.Sprintf("owner %s@%s %s", ref, head, parked.UTC().Format(time.RFC3339Nano))
 }
 func escalateKey(ref, head string) string   { return fmt.Sprintf("escalate %s@%s", ref, head) }
 func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d", ref, note) }
@@ -683,7 +729,8 @@ var prRef = regexp.MustCompile(`^[\w.-]+/[\w.-]+#\d+$`)
 func IsPull(on string) bool { return prRef.MatchString(on) }
 
 // Tracked are the pull requests a pass reads: every verified review request
-// an agent is parked on, every one the loop started a review of that it
+// an agent is parked on, every overlapping pull request another worker is
+// parked on, every one the loop started a review of that it
 // has not seen merged or closed, and every ended one whose worker waits
 // for its retirement. An escalation an earlier loop filed holds none of
 // them: their review rounds are the loop's. None outside the
@@ -697,7 +744,7 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 	}
 	// A pull request every park on is from before the loop's first start
 	// is left alone; one parked on since is read.
-	fresh, stale := parks(workers, desk)
+	fresh, stale := parks(workers, l, desk)
 	for ref := range fresh {
 		set[ref] = true
 	}
@@ -721,12 +768,46 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 	return out
 }
 
+// HasOverlapWait reports whether any worker on the roster is waiting on
+// another pull request.
+func HasOverlapWait(workers []Worker, taken []Taken, answers []Answer) bool {
+	l := newLedger(taken, answers)
+	return slices.ContainsFunc(workers, func(w Worker) bool { return waitsOnOtherPull(w, l) })
+}
+
+func ownPullWait(waits string) bool {
+	w := strings.ToLower(strings.TrimSpace(waits))
+	return strings.HasPrefix(w, "desk review") || strings.HasPrefix(w, "ci pending")
+}
+
+// waitsOnOtherPull reports whether w is plain-parked on another worker's pull
+// request rather than its own.
+func waitsOnOtherPull(w Worker, l ledger) bool {
+	ref := w.ParkedOn
+	if !IsPull(ref) || w.ReviewRequested || strings.HasPrefix(w.Name, "Review ") {
+		return false
+	}
+	if w.Waits != "" && ownPullWait(w.Waits) {
+		return false
+	}
+	if owner := l.reviewer[ref]; owner != "" {
+		return !strings.EqualFold(owner, w.Name)
+	}
+	if w.Serves != "" {
+		return !strings.EqualFold(w.Serves, ref)
+	}
+	if w.Waits != "" {
+		return true
+	}
+	return w.Name != "" && w.Name != "worker one" && !strings.EqualFold(w.Name, PullWorkerName(ref))
+}
+
 // parks are the pull requests workers are parked on: fresh those parked
 // on since the desk's loop first started, stale those parked on before.
-func parks(workers []Worker, desk Desk) (fresh, stale map[string]bool) {
+func parks(workers []Worker, l ledger, desk Desk) (fresh, stale map[string]bool) {
 	fresh, stale = map[string]bool{}, map[string]bool{}
 	for _, w := range workers {
-		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
+		if !IsPull(w.ParkedOn) || (!w.ReviewRequested && !waitsOnOtherPull(w, l)) {
 			continue
 		}
 		if early, _ := desk.early(w.ParkedAt); early {
@@ -773,7 +854,7 @@ func Plan(in Input) []Action {
 		add(Action{Key: leaveKey(ref, reason), Kind: KindLeave, Ref: ref, URL: url, Agent: agent, Message: why})
 	}
 	// A park the loop leaves alone without reading its pull request.
-	fresh, _ := parks(in.Workers, in.Desk)
+	fresh, _ := parks(in.Workers, l, in.Desk)
 	for _, w := range in.Workers {
 		if !IsPull(w.ParkedOn) || !w.ReviewRequested {
 			continue
@@ -838,213 +919,10 @@ func Plan(in Input) []Action {
 			}
 			continue
 		}
-		w, isParked := parked[ref]
-		if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
-			continue
-		}
-		if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
-			continue
-		}
-		agent := w.Name
-		if agent == "" {
-			agent = l.reviewer[ref]
-		}
-		if agent == "" || p.Head == "" {
-			continue
-		}
-		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
-		switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
-		case nobodys:
-			leave(ref, p.URL, agent, reason, why)
-			continue
-		case theirs:
-			leave(ref, p.URL, agent, reason, why)
-			planRed(l, p, w, isParked, add)
-			planTheirs(in, l, p, w, isParked, base, ask, asked, add)
-			continue
-		case unknown:
-			continue
-		}
-		planRed(l, p, w, isParked, add)
-		rs := l.rounds[ref]
-		// An escalation logged before its key named a head was on the
-		// head of the last round, whose findings stood unfixed.
-		if escalated && esc.head == "" && len(rs) > 0 {
-			esc.head = rs[len(rs)-1].head
-		}
-		if escalated {
-			// The person answered: a release is the merge go for the head
-			// the escalation named; any other answer goes to the worker,
-			// and the pull request's review rounds go on from there.
-			// A release of a head the worker moved past goes on as the
-			// rounds say of the new head, unless the new head only merges
-			// the base into the released one.
-			an := esc.answer
-			released := Releases(an.Text)
-			if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
-				if p.Green {
-					why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
-					if !sameHead(esc.head, p.Head) {
-						why += fmt.Sprintf("; head %s only merges %s into the released head %s", short(p.Head), baseName(p), short(esc.head))
-					}
-					add(goAction(in, base, why))
-				}
-				continue
-			}
-			if ak := answerKey(ref, an.Note); !released && !l.has(ak) {
-				a := base
-				a.Key, a.Kind = ak, KindAnswer
-				a.Message = answerMessage(p, esc.head, *an)
-				add(a)
-				continue
-			}
-		}
-		review := func() {
-			a := base
-			a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
-			add(a)
-		}
-		// escalate hands a head that needs a review past MaxReviews to the
-		// person, once: one answered already goes on as its answer says.
-		escalate := func(reviewed, why string) {
-			if escalated && sameHead(esc.head, p.Head) {
-				return
-			}
-			a := base
-			a.Key, a.Kind = escalateKey(ref, p.Head), KindEscalate
-			a.Question = EscalationQuestion(p.URL, p.Head)
-			a.Message = fmt.Sprintf("%s: its %d reviews are used, the last on head %s, and head %s changes more than the base since (%s): it gets no third review", p.URL, len(rs), short(reviewed), short(p.Head), why)
-			add(a)
-		}
-		// cycles is how many of the rounds asked for changes: the rounds
-		// supervisor.reviewRounds caps. An approved head is no cycle; a new
-		// head after it gets a review only for a change the approval does
-		// not cover, and never past MaxReviews.
-		cycles := 0
-		for _, rd := range rs {
-			if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested {
-				cycles++
-			}
-		}
-		if len(rs) == 0 {
-			if p.Green && isParked {
-				review()
-			}
-			continue
-		}
-		last := rs[len(rs)-1]
-		v := p.verdict(last, l.pushed(p))
-		if v == nil {
-			// The round runs until its reviewer reports done. One done
-			// without a verdict on the round's head or on the head now
-			// reviewed a head the worker pushed in between: the newest
-			// head gets its round.
-			done := slices.ContainsFunc(in.Events, func(e Event) bool {
-				return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
-			})
-			if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
-				continue
-			}
-			if len(rs) < MaxReviews {
-				review()
-				continue
-			}
-			escalate(last.head, "its last reviewer finished without a verdict")
-			continue
-		}
-		left := cycles < rounds && len(rs) < MaxReviews
-		// reviewed is the head the verdict is on: the round's, or a newer
-		// one the worker pushed while the round ran.
-		reviewed, moved := v.Head, ""
-		if !sameHead(reviewed, last.head) {
-			moved = fmt.Sprintf(" (the round opened on head %s)", short(last.head))
-		}
-		switch v.Verdict {
-		case Approved:
-			if sameHead(reviewed, p.Head) {
-				if p.Green {
-					add(goAction(in, base, fmt.Sprintf("review round %d approved head %s%s", len(rs), short(p.Head), moved)))
-				}
-				continue
-			}
-			// The head moved past the approval. The approval covers a head
-			// that only brings the base into the approved one (the gate's
-			// --update-branch, the worker's merge of the base and its
-			// conflicts' resolution, a rebase onto it); any other change
-			// gets a review while one of MaxReviews is left, else goes to
-			// the person. A park since the round opened asks for the
-			// newest head.
-			if !p.Green || !isParked {
-				continue
-			}
-			if !w.ParkedAt.After(last.at) {
-				leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
-				continue
-			}
-			if in.baseMerged(p, reviewed) {
-				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only brings %s into it", len(rs), short(reviewed), short(p.Head), baseName(p))))
-				continue
-			}
-			if len(rs) < MaxReviews {
-				review()
-				continue
-			}
-			// The reviews are used: a head whose new changes stay inside
-			// what the reviews asked for (the findings' files, tests)
-			// merges as the desk's standing rule says, one review, then the
-			// fixes and the merge; the person hears only of a change past
-			// them.
-			var findings []string
-			for _, rd := range rs {
-				if fv := p.verdict(rd, l.pushed(p)); fv != nil {
-					findings = append(findings, fv.Body)
-				}
-			}
-			ok, why := in.fixesOnly(p, reviewed, findings)
-			if ok {
-				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, the last approving head %s; %s", len(rs), short(reviewed), why)))
-				continue
-			}
-			escalate(reviewed, why)
-		case ChangesRequested:
-			fk := forwardKey(ref, v.ID)
-			if !l.has(fk) {
-				a := base
-				a.Key, a.Kind = fk, KindForward
-				a.Message = forwardMessage(p, *v, left)
-				add(a)
-				continue
-			}
-			// The fixes count once the worker parked after the forward.
-			if !isParked || !w.ParkedAt.After(l.keys[fk].At) {
-				continue
-			}
-			// A head that only merges the base into the head the findings
-			// were about carries no fixes: it is that head, never a go.
-			merged := p.Green && in.baseMerged(p, reviewed)
-			if sameHead(p.Head, reviewed) || merged {
-				// The findings stand unfixed: with no round left, or on a
-				// base merge, the worker reworks, once for each such park.
-				// Review and rework are the loop's; no merge question goes
-				// to the person, and an answered escalation of this head
-				// is handled above.
-				if (!left || merged) && (!escalated || !sameHead(esc.head, p.Head)) {
-					a := base
-					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-					a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
-					add(a)
-				}
-				continue
-			}
-			if !p.Green {
-				continue
-			}
-			if left {
-				review()
-				continue
-			}
-			add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
-		}
+		planPull(in, l, rounds, ref, p, parked, esc, escalated, ask, asked, leave, add)
+		planOverlap(in, l, ref, p, parked, func(r string) bool {
+			return slices.ContainsFunc(out, func(a Action) bool { return strings.EqualFold(a.Ref, r) })
+		}, add)
 	}
 	// A reviewer leaves once the loop acted on its round's verdict.
 	reviewed := make([]string, 0, len(l.rounds))
@@ -1259,6 +1137,395 @@ func Plan(in Input) []Action {
 		return 0
 	})
 	return out
+}
+
+func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[string]Worker, esc escalation, escalated bool, ask escalation, asked bool, leave func(string, string, string, string, string), add func(Action)) {
+	w, isParked := parked[ref]
+	if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
+		return
+	}
+	if early, _ := in.Desk.early(w.ParkedAt); isParked && early {
+		return
+	}
+	agent := w.Name
+	if agent == "" {
+		agent = l.reviewer[ref]
+	}
+	if agent == "" || p.Head == "" {
+		return
+	}
+	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
+	switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
+	case nobodys:
+		leave(ref, p.URL, agent, reason, why)
+		return
+	case theirs:
+		leave(ref, p.URL, agent, reason, why)
+		planRed(l, p, w, isParked, add)
+		planTheirs(in, l, p, w, isParked, base, ask, asked, add)
+		return
+	case unknown:
+		return
+	}
+	planRed(l, p, w, isParked, add)
+	rs := l.rounds[ref]
+	// An escalation logged before its key named a head was on the
+	// head of the last round, whose findings stood unfixed.
+	if escalated && esc.head == "" && len(rs) > 0 {
+		esc.head = rs[len(rs)-1].head
+	}
+	if escalated {
+		// The person answered: a release is the merge go for the head
+		// the escalation named; any other answer goes to the worker,
+		// and the pull request's review rounds go on from there.
+		// A release of a head the worker moved past goes on as the
+		// rounds say of the new head, unless the new head only merges
+		// the base into the released one.
+		an := esc.answer
+		released := Releases(an.Text)
+		if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
+			if p.Green {
+				why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
+				if !sameHead(esc.head, p.Head) {
+					why += fmt.Sprintf("; head %s only merges %s into the released head %s", short(p.Head), baseName(p), short(esc.head))
+				}
+				add(goAction(in, base, why))
+			}
+			return
+		}
+		if ak := answerKey(ref, an.Note); !released && !l.has(ak) {
+			a := base
+			a.Key, a.Kind = ak, KindAnswer
+			a.Message = answerMessage(p, esc.head, *an)
+			add(a)
+			return
+		}
+	}
+	review := func() {
+		a := base
+		a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
+		add(a)
+	}
+	// escalate hands a head that needs a review past MaxReviews to the
+	// person, once: one answered already goes on as its answer says.
+	escalate := func(reviewed, why string) {
+		if escalated && sameHead(esc.head, p.Head) {
+			return
+		}
+		a := base
+		a.Key, a.Kind = escalateKey(ref, p.Head), KindEscalate
+		a.Question = EscalationQuestion(p.URL, p.Head)
+		a.Message = fmt.Sprintf("%s: its %d reviews are used, the last on head %s, and head %s changes more than the base since (%s): it gets no third review", p.URL, len(rs), short(reviewed), short(p.Head), why)
+		add(a)
+	}
+	// cycles is how many of the rounds asked for changes: the rounds
+	// supervisor.reviewRounds caps. An approved head is no cycle; a new
+	// head after it gets a review only for a change the approval does
+	// not cover, and never past MaxReviews.
+	cycles := 0
+	for _, rd := range rs {
+		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested {
+			cycles++
+		}
+	}
+	if len(rs) == 0 {
+		if p.Green && isParked {
+			review()
+		}
+		return
+	}
+	last := rs[len(rs)-1]
+	v := p.verdict(last, l.pushed(p))
+	if v == nil {
+		// The round runs until its reviewer reports done. One done
+		// without a verdict on the round's head or on the head now
+		// reviewed a head the worker pushed in between: the newest
+		// head gets its round.
+		done := slices.ContainsFunc(in.Events, func(e Event) bool {
+			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
+		})
+		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
+			return
+		}
+		if len(rs) < MaxReviews {
+			review()
+			return
+		}
+		escalate(last.head, "its last reviewer finished without a verdict")
+		return
+	}
+	left := cycles < rounds && len(rs) < MaxReviews
+	// reviewed is the head the verdict is on: the round's, or a newer
+	// one the worker pushed while the round ran.
+	reviewed, moved := v.Head, ""
+	if !sameHead(reviewed, last.head) {
+		moved = fmt.Sprintf(" (the round opened on head %s)", short(last.head))
+	}
+	switch v.Verdict {
+	case Approved:
+		if sameHead(reviewed, p.Head) {
+			if p.Green {
+				add(goAction(in, base, fmt.Sprintf("review round %d approved head %s%s", len(rs), short(p.Head), moved)))
+			}
+			return
+		}
+		// The head moved past the approval. The approval covers a head
+		// that only brings the base into the approved one (the gate's
+		// --update-branch, the worker's merge of the base and its
+		// conflicts' resolution, a rebase onto it); any other change
+		// gets a review while one of MaxReviews is left, else goes to
+		// the person. A base merge needs no new park: it brings no
+		// change of the worker's. Any other head asks for a park
+		// since the round opened.
+		if !p.Green {
+			return
+		}
+		if in.baseMerged(p, reviewed) {
+			add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only brings %s into it", len(rs), short(reviewed), short(p.Head), baseName(p))))
+			return
+		}
+		if goHead := l.goHead[ref]; goHead != "" && !sameHead(goHead, reviewed) && !sameHead(goHead, p.Head) && in.baseMerged(p, goHead) {
+			add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(goHead), short(p.Head), baseName(p))))
+			return
+		}
+		if !isParked {
+			return
+		}
+		if !w.ParkedAt.After(last.at) {
+			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
+			return
+		}
+		if len(rs) < MaxReviews {
+			review()
+			return
+		}
+		// The reviews are used: a head whose new changes stay inside
+		// what the reviews asked for (the findings' files, tests)
+		// merges as the desk's standing rule says, one review, then the
+		// fixes and the merge; the person hears only of a change past
+		// them.
+		var findings []string
+		for _, rd := range rs {
+			if fv := p.verdict(rd, l.pushed(p)); fv != nil {
+				findings = append(findings, fv.Body)
+			}
+		}
+		ok, why := in.fixesOnly(p, reviewed, findings)
+		if ok {
+			add(goAction(in, base, fmt.Sprintf("its %d reviews are used, the last approving head %s; %s", len(rs), short(reviewed), why)))
+			return
+		}
+		escalate(reviewed, why)
+	case ChangesRequested:
+		fk := forwardKey(ref, v.ID)
+		if !l.has(fk) {
+			a := base
+			a.Key, a.Kind = fk, KindForward
+			a.Message = forwardMessage(p, *v, left)
+			add(a)
+			return
+		}
+		if goHead := l.goHead[ref]; !left && goHead != "" && !sameHead(goHead, reviewed) && !sameHead(goHead, p.Head) && p.Green && in.baseMerged(p, goHead) {
+			add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(goHead), short(p.Head), baseName(p))))
+			return
+		}
+		// The fixes count once the worker parked after the forward.
+		if !isParked || !w.ParkedAt.After(l.keys[fk].At) {
+			return
+		}
+		// A head that only merges the base into the head the findings
+		// were about carries no fixes: it is that head, never a go.
+		merged := p.Green && in.baseMerged(p, reviewed)
+		if sameHead(p.Head, reviewed) || merged {
+			// The findings stand unfixed: with no round left, or on a
+			// base merge, the worker reworks, once for each such park.
+			// Review and rework are the loop's; no merge question goes
+			// to the person, and an answered escalation of this head
+			// is handled above.
+			if (!left || merged) && (!escalated || !sameHead(esc.head, p.Head)) {
+				a := base
+				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+				a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
+				add(a)
+			}
+			return
+		}
+		if !p.Green {
+			return
+		}
+		if left {
+			review()
+			return
+		}
+		add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
+	}
+}
+
+// planOverlap orders overlapping pull requests by board rank and ensures that
+// the first pull request has a live owner when a worker parks on ref and ref's
+// owner is gone or ref has made no progress for OverlapWait.
+func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worker, hasPlanned func(string) bool, add func(Action)) {
+	if p.State != Open || p.Head == "" {
+		return
+	}
+	if o, _, _ := in.Desk.owner(p, l.overridden[ref]); o != ours {
+		return
+	}
+	// Normalize issue-based serve records to the observed pull request. Keep
+	// the PR identity for tie-breaking, action keys and progress tracking.
+	pullRef := func(r string) string {
+		if _, ok := in.Pulls[r]; ok {
+			return r
+		}
+		var matches []string
+		for key, pull := range in.Pulls {
+			if slices.ContainsFunc(pull.Closes, func(issue string) bool { return strings.EqualFold(issue, r) }) {
+				matches = append(matches, key)
+			}
+		}
+		slices.Sort(matches)
+		if len(matches) > 0 {
+			return matches[0]
+		}
+		return r
+	}
+	w, isParked := parked[ref]
+	rs := l.rounds[ref]
+	for _, waiter := range in.Workers {
+		if !strings.EqualFold(waiter.ParkedOn, ref) || waiter.ReviewRequested || !waitsOnOtherPull(waiter, l) {
+			continue
+		}
+		if early, _ := in.Desk.early(waiter.ParkedAt); early {
+			continue
+		}
+		serves := pullRef(waiter.Serves)
+		if strings.EqualFold(serves, ref) {
+			serves = ""
+		}
+		if serves != "" {
+			rankA, rankB := 0, 0
+			if in.Rank != nil {
+				rankA, rankB = in.Rank(serves), in.Rank(ref)
+			}
+			mutual := slices.ContainsFunc(in.Workers, func(other Worker) bool {
+				return !strings.EqualFold(other.Name, waiter.Name) &&
+					strings.EqualFold(pullRef(other.ParkedOn), serves) && !other.ReviewRequested &&
+					(strings.EqualFold(pullRef(other.Serves), ref) || strings.EqualFold(other.Name, l.reviewer[ref]) || strings.EqualFold(other.Name, PullWorkerName(ref)))
+			})
+			aFirst := (rankA > 0 && (rankB == 0 || rankA < rankB)) ||
+				(mutual && rankA == rankB && strings.ToLower(serves) < strings.ToLower(ref))
+			if aFirst {
+				if hasPlanned(serves) {
+					continue
+				}
+				sHead, sURL := p.Head, p.URL
+				if sp, ok := in.Pulls[serves]; ok && sp.Head != "" {
+					sHead, sURL = sp.Head, sp.URL
+				}
+				add(Action{
+					Key:     ownerKey(serves, sHead, waiter.ParkedAt),
+					Kind:    KindOwner,
+					Ref:     serves,
+					Block:   ref,
+					URL:     sURL,
+					Agent:   waiter.Name,
+					Head:    sHead,
+					Message: fmt.Sprintf("%s ranks ahead of %s on the board: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
+				})
+				continue
+			}
+		}
+		if hasPlanned(ref) {
+			continue
+		}
+		owner := w.Name
+		if owner == "" || strings.EqualFold(owner, waiter.Name) {
+			owner = l.reviewer[ref]
+		}
+		if owner == "" || strings.EqualFold(owner, waiter.Name) {
+			owner = PullWorkerName(ref)
+		}
+		var liveOwner *Worker
+		for i := range in.Workers {
+			o := &in.Workers[i]
+			if strings.EqualFold(o.Name, waiter.Name) {
+				continue
+			}
+			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(pullRef(o.Serves), ref) {
+				liveOwner = o
+				if owner == "" || owner == PullWorkerName(ref) {
+					owner = o.Name
+				}
+				break
+			}
+		}
+		roundRunning := false
+		var lastVerdict *Review
+		if len(rs) > 0 {
+			last := rs[len(rs)-1]
+			lastVerdict = p.verdict(last, l.pushed(p))
+			if lastVerdict == nil {
+				done := slices.ContainsFunc(in.Events, func(e Event) bool {
+					return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
+				})
+				roundRunning = !done
+			}
+		}
+		hasActiveUnparkedOwner := liveOwner != nil && liveOwner.ParkedOn == ""
+		ownerGone := !hasActiveUnparkedOwner && (!isParked && !roundRunning ||
+			p.Draft || p.Mergeable == "CONFLICTING" ||
+			(lastVerdict != nil && lastVerdict.Verdict == ChangesRequested && l.has(forwardKey(ref, lastVerdict.ID)) && (!isParked || !w.ParkedAt.After(l.keys[forwardKey(ref, lastVerdict.ID)].At))))
+		stalled := false
+		if !in.Now.IsZero() && !waiter.ParkedAt.IsZero() && !in.Now.Before(waiter.ParkedAt.Add(OverlapWait)) {
+			last := pullProgress(p, l, w, isParked, liveOwner)
+			stalled = last.IsZero() || !in.Now.Before(last.Add(OverlapWait))
+		}
+		if !ownerGone && !stalled {
+			continue
+		}
+		add(Action{
+			Key:     ownerKey(ref, p.Head, waiter.ParkedAt),
+			Kind:    KindOwner,
+			Ref:     ref,
+			Block:   serves,
+			URL:     p.URL,
+			Agent:   owner,
+			Head:    p.Head,
+			Message: ownerMessage(p, waiter, serves, stalled && !ownerGone),
+		})
+	}
+}
+
+func pullProgress(p Pull, l ledger, w Worker, isParked bool, liveOwner *Worker) time.Time {
+	var last time.Time
+	if isParked && w.ParkedAt.After(last) {
+		last = w.ParkedAt
+	}
+	if liveOwner != nil && liveOwner.LastActive.After(last) {
+		last = liveOwner.LastActive
+	}
+	for _, at := range l.acts[p.Ref] {
+		if at.After(last) {
+			last = at
+		}
+	}
+	for _, r := range p.Reviews {
+		if r.At.After(last) {
+			last = r.At
+		}
+	}
+	return last
+}
+
+func ownerMessage(p Pull, waiter Worker, blocked string, stalled bool) string {
+	why := fmt.Sprintf("%s is parked on %s, which has no live owner", waiter.Name, p.URL)
+	if stalled {
+		why = fmt.Sprintf("%s has waited on %s for %s with no progress", waiter.Name, p.URL, OverlapWait)
+	}
+	if blocked != "" {
+		why += fmt.Sprintf(" (%s is blocked by %s)", blocked, p.Ref)
+	}
+	return fmt.Sprintf("%s: take ownership of %s at head %s, bring it to green CI and request its review (or merge it once approved) so the waiting work can proceed.", why, p.URL, short(p.Head))
 }
 
 // planRed wakes worker w, parked on p, when a check on the head it parked

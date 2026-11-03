@@ -37,6 +37,7 @@ type githubSource struct {
 	prereleases       bool
 	current           string
 	commit            string
+	skipped           bool
 }
 
 type releaseCandidate struct {
@@ -161,10 +162,17 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	staleSHAs := make(map[string]bool)
 	// Why each candidate was passed over, for an incomplete lookup's error.
 	var skipped []string
-	for i, candidate := range set.candidates {
-		if i == maxReleaseCandidates {
+	skip := optionsFrom(ctx).Skip
+	checked := 0
+	for _, candidate := range set.candidates {
+		if skip != nil && (skip(candidate.tag) || skip("v"+strings.TrimPrefix(candidate.tag, "v"))) {
+			s.skipped = true
+			continue
+		}
+		if checked == maxReleaseCandidates {
 			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags (%s); %w", maxReleaseCandidates, strings.Join(skipped, "; "), errIncompleteLookup)
 		}
+		checked++
 		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, set, runningSHA, staleSHAs)
 		if err != nil {
 			return nil, err

@@ -143,6 +143,10 @@ func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok boo
 // object, and required tool arguments, and contains no NUL bytes. Returns a
 // non-empty refusal reason when invalid.
 func ValidateCodexInput(input []byte) string {
+	return validateCodexInput(input, false)
+}
+
+func validateCodexInput(input []byte, coordinatorMCP bool) string {
 	if len(bytes.TrimSpace(input)) == 0 {
 		return codexFailClosedMsg
 	}
@@ -170,6 +174,8 @@ func ValidateCodexInput(input []byte) string {
 		}
 	}
 	switch {
+	case coordinatorMCP && strings.HasPrefix(toolName, coordinatorMCPPrefix):
+		return ""
 	case isCodexShellTool(toolName):
 		if _, _, ok := extractCodexShellCommand(toolInput); !ok {
 			return "Refused: " + toolName + " call is missing a string `command` in tool_input; failing closed."
@@ -424,15 +430,12 @@ func (h Hook) codexSandboxCheck(ev event) string {
 // Every internal error, malformed payload, or unrecognized tool argument shape
 // fails closed with DenyCodex.
 func (h Hook) DecideCodex(input []byte) (out []byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			out = DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r))
-		}
-	}()
+	h.beginCheck("codex adapter")
+	defer h.recoverDecision(&out, DenyCodex)
 	if h.ConfigErr != nil {
 		return DenyCodex("Refused: cannot load beekeeper configuration (" + h.ConfigErr.Error() + "); failing closed.")
 	}
-	if reason := ValidateCodexInput(input); reason != "" {
+	if reason := validateCodexInput(input, h.ExecutionMCP); reason != "" {
 		return DenyCodex(reason)
 	}
 	var ev event
@@ -513,8 +516,11 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 }
 
 func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) []byte {
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	raw := h.labProxy(ev, h.decide(ev))
+	raw := h.decide(ev)
+	h.beginCheck("labProxy")
+	raw = h.labProxy(ev, raw)
 	var out hookOutput
 	if len(raw) > 0 {
 		var wrapper struct {
@@ -528,6 +534,7 @@ func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) [
 			return DenyCodex(out.Reason)
 		}
 	}
+	h.beginCheck("repoReads")
 	reads := h.repoReads(ev)
 	ctx := out.AdditionalContext
 	for _, add := range []string{extraContext, reads} {
@@ -1090,6 +1097,16 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 		}
 		isMeta = isMeta && !findReads(args)
 	}
+	isQuietGrep := grepCmds[name] && slices.ContainsFunc(args, grepQuiet.MatchString)
+	isJQ := name == "jq" || name == gojqCmd || name == "yq"
+	// A command-line helper can concatenate or join its path arguments.
+	if !isMeta && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) && len(args) > 1 {
+		for _, joined := range []string{strings.Join(args, ""), strings.Join(args, "/")} {
+			if isGuardedCodexHomePath(joined, dir) || containsGuardedCodexHomeRef(joined) {
+				return codexHomeRefusalMsg, ""
+			}
+		}
+	}
 	// A function defined on the command line has an unchecked body: what it
 	// is handed may be written, so a guarded Codex home path is refused.
 	if helper && !isSymbolic && lnArgs == nil {
@@ -1224,8 +1241,6 @@ func (h Hook) codexSegmentRefusal(ev event, cmd string, sc shellScan, segs []seg
 	}
 
 	// Check every argument of non-metadata commands for secret files (e.g. symlinked auth.json).
-	isQuietGrep := grepCmds[name] && slices.ContainsFunc(args, grepQuiet.MatchString)
-	isJQ := name == "jq" || name == gojqCmd || name == "yq"
 	if !isMeta && !isQuietGrep && !isJQ && !isBeekeeperTextSubcommand(name, args) {
 		for _, a := range args {
 			if _, v, ok := strings.Cut(a, "="); ok {
@@ -1278,7 +1293,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		return false
 	}
 	switch sub[0] + " " + sub[1] {
-	case "note add", "log add", "agents idle", "agents park", "agents note":
+	case "note add", "log add", "agents idle", "agents park", "agents note", "agents problem":
 		return true
 	}
 	return false

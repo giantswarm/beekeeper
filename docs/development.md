@@ -74,6 +74,17 @@ older events without that audience show it as unknown rather than naming the
 answerer as the addressee. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
+A note answer reaches its filing session by session or harness ID even when
+that session is absent from the agent roster or has no display name. Harness
+IDs select their own inbox rather than treating a UUID conversation ID as a
+Claude session. The answer remains recorded when notification fails: the
+answer command reports the failure and `note show` retains the last notification
+attempt as `notification: failed` with its reason (`delivery` in JSON).
+Successful attempts show `delivered`; a central mailbox shows `queued`, and a
+role awaiting its next holder shows `waiting`. This is the recorded attempt,
+not a claim that a queued message has since been consumed. Older notes without
+a retained delivery event show no invented notification status.
+
 `note list` and `guide queue` show open notes. An answer removes a note from both; a
 successful filing followed by an empty listing can mean it was answered between those
 calls. Check the server's `note_add` and `note_answer` audit lines before diagnosing a lost
@@ -93,6 +104,32 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
+
+The doctor releases a local lease when its session is no longer running,
+preserving any lab configuration drift for the next claimant. Person-held
+leases and remote holders are left alone. Each release is logged once as
+`lease.release-gone`. Configured kind labs with no lease are stopped after
+15 minutes (`lab.stop`); containers and their data stay intact. The idle
+observation is persisted across watch restarts and reset by a claim.
+Unmapped clusters are never stopped. A failed Docker read or stop is reported
+and retried on the next doctor tick; `doctor --dry-run` changes nothing.
+
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
+A successful lab claim starts existing stopped kind nodes (`lab.start`)
+before returning the kubeconfig. It does not create a missing cluster. A
+failed restart fails the command while retaining ownership for a claim retry.
+Sandboxed claims run the restart through the host broker, which rechecks
+ownership. Docker stop and start operations share the state lock with claims.
+For a live lifecycle proof, use isolated state and disposable Docker containers
+with a unique `io.x-k8s.kind.cluster` label: seed an idle timestamp 15 minutes
+ago, run the doctor, then claim the lease and check that the same containers
+restart with a marker file intact. Never point scratch state at another
+worker's lab.
 
 ```bash
 cat >| /tmp/bk.yaml <<EOF
@@ -262,6 +299,15 @@ after. The second `claude --bg` through a running daemon lands in its spare; a w
 spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves it, and a
 `--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
 once its last worker stops.
+
+`alerts snapshot` groups text rows by severity, team, alert name, cluster and namespace;
+rows with a namespace label append `namespace=<value>`. `alerts snapshot --json` returns
+an object with `lines` (the text view, including PagerDuty) and `installations`. Each
+installation carries `installation`, `reachable`, optional `why` and `noContext`, and
+an `alerts` array with every visible alert's full `labels` map. Ignored, silenced,
+inhibited and below-floor alerts follow the same filtering as the text view. This
+replaces the previous JSON array of formatted strings; scripts reading that array
+should read `lines` instead.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
@@ -525,10 +571,28 @@ The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
 names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
-The pinned path never updates the branch: a behind or conflicting branch goes back to its
+After approval only the merge moves the head. A branch that is only behind its base merges
+at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
+update and no second CI run. Only a base that requires up-to-date branches refuses that
+merge (GitHub's merge state `BEHIND`); `merge.admin` passes the requirement. Without it, the
+mutation child updates the branch itself, once its authority, stop and hold checks pass:
+GitHub's update-branch
+merges the base into it, pinned to the reviewed head, and the child waits up to the squash
+timeout for the new head's checks (every check the reviewed head had, all green), confirms
+that the approval covers the new head (`github.ApprovalCovers`: it only merges the base),
+checks the stop and holds again and merges that head. The loop accepts a merged head the
+approval covers; its planner gives the go for such a head without a fresh park. A rebase
+merge method cannot take a base merge, so its branch behind such a base, a conflicting or
+draft branch,
+red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
-a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
-not worker merge grants. An already queued or running gate is observed without submitting
+a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
+not worker merge grants; when the pinned merge step fails on an open, green, approved head
+for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
+back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
+pull request remains open at that green head, directs the worker session with an exact-head
+`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
 
@@ -567,6 +631,55 @@ reads them in full, and `handover --full` retains live details and recent histor
 a large standing file, using a conservative 25,000-byte prompt budget (no more
 than 25,000 byte-level tokens). The role skill and project instructions loaded
 by the harness remain outside the generated prompt's budget.
+
+## Task model policy
+
+`agents.models` is an ordered list of `{match: <name regexp>, model: <selector>}`,
+optionally restricted by `kind`. A start's `--kind` defaults to `worker`, or
+`review` with `--review`. The first matching rule with a nonempty model selects it before
+provider capacity is evaluated. `--model` overrides the rules. Without a match,
+Claude uses `agents.model`, Codex uses `codex.model`, and omp uses `omp.model`;
+with capacity choices and no explicit model, the capacity pick supplies both
+harness and model. `agents.requireModel: true` refuses an unresolved model with
+exit 3, including dry runs, rather than allowing a harness default.
+Rules without a model are skipped for model selection, allowing independent
+settings to match without masking a later model rule or the fallback.
+
+`guide.model` selects the model for both relayed and standby-started successors,
+ahead of the previous holder's model. Without it the holder's model is retained,
+then name rules and `agents.model` supply a fallback. The supervisor is a service
+loop and starts no supervisor model session; its workers and reviewers use the
+same start policy as manual starts.
+
+Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
+capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
+kinds; empty allows all), and `reviewReserve` (0–100 percent of the weekly
+window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
+constrain the choices. A positive maximum rejects unknown costs. Class 0 means
+unclassified. No changing provider price or capability claim is shipped.
+
+`capacity --kind audit` and `capacity pick --kind audit --json` use the same
+policy as `agents start --kind audit`. Both capacity commands and starts accept
+`--author-model <configured selector>` with a review to exclude that model's
+family; unknown author or candidate families refuse selection.
+`capacity.taskPolicies.review.differentFamily: true` requires this for every
+review. The supervisor loop supplies the author's recorded model automatically;
+manual reviews must supply `--author-model`. Unclassified explicit targets
+cannot bypass a configured capability, cost or family requirement.
+
+Review reserve uses the choice's usage bucket, or its provider's weekly window. It adds a stop
+for non-review tasks; reviews still obey provider window and pace limits.
+Provider room and weekly pace are decided first, with lower positive configured
+cost breaking equal pace between subscription choices. Configured order breaks
+remaining ties and keeps self-hosted choices as fallbacks.
+
+Capacity JSON includes `taskKind`, `decision`, and every rejected candidate's
+reason. Successful starts log the kind, harness, model and choice under
+`agents.start`; the roster retains the model for comparing outcomes. Explicit
+models select a target but cannot make an automatic pick ignore a model-policy
+rejection, even with `--force`.
+
+## Worktree orphan cleanup
 
 The doctor stops reparented process trees left in linked worktrees by known local
 workers that have left the roster. It sends SIGTERM, then SIGKILL after
