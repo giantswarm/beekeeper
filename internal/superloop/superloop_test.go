@@ -1106,12 +1106,12 @@ func TestAPreRoundHeadsVerdictLeavesTheRoundRunning(t *testing.T) {
 	}
 }
 
-// A green head past its approval whose park is from before the round gets
-// a leave line with the reason, once, never silence.
+// A green head past its approval whose park proved another head from before
+// the round gets a leave line with the reason, once, never silence.
 func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
-	in := Input{Workers: parked(t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	in := Input{Workers: parkedOn(head1, t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
 	a := only(t, Plan(in), KindLeave)
 	if a.Key != leaveKey(pr, leftUnreviewed(head2)) || a.Agent != worker || !strings.Contains(a.Message, "park on the pull request again") {
 		t.Errorf("leave = %+v", a)
@@ -1124,6 +1124,40 @@ func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
 	in.Workers = parked(t0.Add(2 * time.Hour))
 	if r := only(t, Plan(in), KindReview); r.Head != head2 {
 		t.Errorf("review = %+v", r)
+	}
+}
+
+// A verified park of the head now stands whatever its age: its worker, stopped
+// on it, cannot park again, so the head gets its round.
+func TestAnOldParkOfTheCurrentHeadGetsItsReview(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	old := parkedOn(head2, t0.Add(-time.Minute))
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{Workers: old, Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	if r := only(t, Plan(in), KindReview); r.Head != head2 || r.Round != 2 {
+		t.Errorf("after an approval of the older head: review = %+v", r)
+	}
+	// Its reviewer done without a verdict: the same head, the same round.
+	in.Pulls = pull(head2, true)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
+	}
+	// The loop takes the reviewer's done as well.
+	in.Events = []Event{{At: t1, Verb: VerbDone, Agent: ReviewerName(pr, 1)}}
+	reviews := func() []Action {
+		return slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind != KindReview })
+	}
+	if r := only(t, reviews(), KindReview); r.Head != head2 || r.Round != 2 {
+		t.Errorf("after a done without a verdict: review = %+v", r)
+	}
+	// A red head still waits, and a park of another head is still stale.
+	in.Pulls = pull(head2, false)
+	if got := reviews(); len(got) != 0 {
+		t.Errorf("a head not green got %+v", got)
+	}
+	in.Pulls = pull(head3, true)
+	if got := reviews(); len(got) != 0 {
+		t.Errorf("a park of another head got %+v", got)
 	}
 }
 

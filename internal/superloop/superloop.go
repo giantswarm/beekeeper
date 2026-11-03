@@ -1229,6 +1229,11 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	last := rs[len(rs)-1]
+	// A head past the last round's asks for a park since that round
+	// opened, or for a verified park of that very head: a worker stopped
+	// on such a park cannot repeat it. A park of any other head from
+	// before the round is stale.
+	requested := w.ParkedAt.After(last.at) || sameHead(w.ParkedHead, p.Head)
 	v := p.verdict(last, l.pushed(p))
 	if v == nil {
 		// The round runs until its reviewer reports done. One done
@@ -1238,7 +1243,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
 			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
 		})
-		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
+		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
 			return
 		}
 		if len(rs) < MaxReviews {
@@ -1269,8 +1274,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// conflicts' resolution, a rebase onto it); any other change
 		// gets a review while one of MaxReviews is left, else goes to
 		// the person. A base merge needs no new park: it brings no
-		// change of the worker's. Any other head asks for a park
-		// since the round opened.
+		// change of the worker's. Any other head asks for its park.
 		if !p.Green {
 			return
 		}
@@ -1285,7 +1289,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !isParked {
 			return
 		}
-		if !w.ParkedAt.After(last.at) {
+		if !requested {
 			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 			return
 		}
