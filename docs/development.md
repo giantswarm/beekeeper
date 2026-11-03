@@ -629,11 +629,21 @@ closures attributable without relying on that retention window.
 The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed-head <sha>`.
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
-names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
+names to `squash` (the default), `rebase`, or `merge`. The coordinator never passes
+`--admin`, which bypasses the required server-side merge queue.
+A refusal that names the base branch policy and suggests `--admin` is a configuration
+refusal, including when the merge state is `BEHIND`. The loop reports it once per
+reviewed head, naming `merge.admin`, and retries on the next round without a worker
+wake, branch repair or another review. This never authorizes bypassing the server-side
+merge queue: the corrected policy must still admit its required checks. A loop that finds
+a branch repair an older loop requested for such a refusal closes it on start
+(`supervisor.unstage` for the repair stage, `supervisor.unclaim` for the go it completed),
+so the unchanged approved head rejoins the merge lane; any other repair stage stands.
+
 After approval only the merge moves the head. A branch that is only behind its base merges
 at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
 update and no second CI run. Only a base that requires up-to-date branches refuses that
-merge (GitHub's merge state `BEHIND`); `merge.admin` passes the requirement. Without it, the
+merge (GitHub's merge state `BEHIND`). Unless the repository is in `merge.admin`, the
 mutation child updates the branch itself, once its authority, stop and hold checks pass:
 GitHub's update-branch
 merges the base into it, pinned to the reviewed head, and the child waits up to the squash
@@ -646,11 +656,9 @@ draft branch,
 red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
-not worker merge grants; when the pinned merge step fails on an open, green, approved head
-for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
-back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
-pull request remains open at that green head, directs the worker session with an exact-head
-`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
+the configuration refusal above retries each round. Neither grants a direct worker merge
+around queue validation. Merge goes never go through `answer verify`.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
@@ -669,6 +677,15 @@ second wake when a review or merge arrives. Only rostered review parks carry thi
 plain waits and off-roster sessions keep the normal watcher lifecycle. A closed pull request,
 or a merged pull request whose served issue remains open or unreadable, wakes its worker to
 continue or verify the task rather than leaving it parked.
+
+An ended worker's saved review park still lets the loop request a fixer when that
+parked head conflicts with its base or fails CI. The saved park alone does not
+keep the worker's board item served after the worker ends. This recovery requires
+a tracked pull and saved review ownership; it does not discover every open pull
+or recover every ownerless In Progress item. The broader 15-minute orphan sweep
+remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
+pulls without saved review metadata and stale serve records from relieved or
+off-roster sessions.
 
 The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
 The receipt binds its active local note, session, thread, displayed head, selected option and
@@ -691,6 +708,36 @@ a large standing file, using a conservative 25,000-byte prompt budget (no more
 than 25,000 byte-level tokens). The role skill and project instructions loaded
 by the harness remain outside the generated prompt's budget.
 
+## Task kinds
+
+`agents.kinds` is a list of `{name, match, maxBusy, minInterval, dailySpend}`:
+`match` is a regexp over the agent's name, and every kind whose regexp matches
+holds a start, so a filer kind and a meta kind over filers and scans cap both.
+
+- `maxBusy` (0: none) counts the kind's busy agents as capacity counts them
+  (parked, waiting and idle agents hold no slot).
+- `minInterval` (0: none) is measured from the kind's last recorded start
+  (`state.starts`, kept 30 days), done or not.
+- `dailySpend` (USD, 0: none) is the day's figure at which the watch prints
+  `SPEND <kind>` once; the mark is kept in the watch's seen file, so a restarted
+  watch does not repeat it. The watch sums the day every 10 minutes off the poll.
+
+`beekeeper capacity` prints `no start <kind>: <reason>` after the verdict (and
+`kindBlocks` in `--json`). `agents start` checks the kinds before the start gate
+and again under `kinds.lock` in the state directory, which it holds until the
+start is recorded: concurrent starts of a kind are admitted one at a time, for
+every harness and for `--host` starts. A refusal is exit 3; `--force` does not
+pass a kind's cap. Hand-overs and role successors replace an agent and are not
+held.
+
+`beekeeper sessions --by kind [--day 2006-01-02] [--tz <zone>]` prints the day's
+starts, sessions, hours (each session's first to last request of the day) and
+spend per kind, priced from the whole transcripts as `beekeeper spend` prices
+them. Spend is attributed by the session id a Claude Code transcript's path
+names; transcripts of no recorded start of a kind's agent, or of harnesses whose
+files name no session beekeeper recorded (omp, agy, codex), are summed as "of no
+kind".
+
 ## Task model policy
 
 `agents.models` is an ordered list of `{match: <name regexp>, model: <selector>}`,
@@ -712,7 +759,8 @@ same start policy as manual starts.
 
 Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
 capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
-kinds; empty allows all), and `reviewReserve` (0–100 percent of the weekly
+kinds; empty allows all, except that a choice on a self-hosted provider takes
+the `worker` kind, code changes, only when its `kinds` list it), and `reviewReserve` (0–100 percent of the weekly
 window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
 constrain the choices. A positive maximum rejects unknown costs. Class 0 means
 unclassified. No changing provider price or capability claim is shipped.
