@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -24,6 +25,11 @@ var githubToken = deskgithub.Token
 // lookup uses two small requests, independent of the release history's size.
 const maxReleaseCandidates = 8
 const emptyRefAttempts = 3
+
+// errIncompleteLookup is a lookup that read maxReleaseCandidates tags
+// without a signed binary: GitHub answered, so it is no question of being
+// online.
+var errIncompleteLookup = errors.New("refusing an incomplete lookup")
 
 type githubSource struct {
 	selfupdate.Source // retain the upstream asset downloader
@@ -154,6 +160,8 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	set := s.collectCandidates(refs)
 	runningSHA := s.runningSHA(set.tagSHA)
 	staleSHAs := make(map[string]bool)
+	// Why each candidate was passed over, for an incomplete lookup's error.
+	var skipped []string
 	skip := optionsFrom(ctx).Skip
 	checked := 0
 	for _, candidate := range set.candidates {
@@ -162,27 +170,34 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 			continue
 		}
 		if checked == maxReleaseCandidates {
-			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags; refusing an incomplete lookup", maxReleaseCandidates)
+			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags (%s); %w", maxReleaseCandidates, strings.Join(skipped, "; "), errIncompleteLookup)
 		}
 		checked++
 		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, set, runningSHA, staleSHAs)
 		if err != nil {
 			return nil, err
 		}
-		if stale {
+		if stale != "" {
 			if candidate.sha != "" {
 				staleSHAs[candidate.sha] = true
 			}
+			skipped = append(skipped, candidate.tag+": "+stale)
 			continue
 		}
 		release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, candidate.tag)
 		if response != nil && response.StatusCode == http.StatusNotFound {
+			skipped = append(skipped, candidate.tag+": no release")
 			continue
 		} // tag without a release
 		if err != nil {
 			return nil, err
 		}
-		if release.GetDraft() || (!s.prereleases && release.GetPrerelease()) {
+		if release.GetDraft() {
+			skipped = append(skipped, candidate.tag+": a draft release")
+			continue
+		}
+		if !s.prereleases && release.GetPrerelease() {
+			skipped = append(skipped, candidate.tag+": a pre-release")
 			continue
 		}
 		if release.GetTagName() != candidate.tag {
@@ -199,6 +214,11 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 		}
 		if binary && bundle {
 			return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
+		}
+		if !binary {
+			skipped = append(skipped, candidate.tag+": no "+name)
+		} else {
+			skipped = append(skipped, candidate.tag+": no "+name+".bundle")
 		}
 	}
 	return nil, nil
@@ -261,7 +281,9 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 					continue
 				}
 			}
-			if latestRC.version != nil && latestRC.sha != "" && !sameCommit(c.sha, latestRC.sha) && c.version.LessThan(latestRC.version) {
+			// A running release never follows a pre-release: a later base's
+			// release candidate leaves the releases before it eligible.
+			if s.prereleases && latestRC.version != nil && latestRC.sha != "" && !sameCommit(c.sha, latestRC.sha) && c.version.LessThan(latestRC.version) {
 				if rcVer := allRCSHAs[c.sha]; rcVer != nil && rcVer.LessThan(latestRC.version) {
 					continue
 				}
@@ -303,37 +325,59 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 	}
 }
 
-func (s *githubSource) isStaleCandidate(ctx context.Context, owner, repo string, c releaseCandidate, set candidateSet, runningSHA string, staleSHAs map[string]bool) (bool, error) {
+// isStaleCandidate says why candidate c is behind a commit the lookup must
+// not go back from, "" when it is not.
+func (s *githubSource) isStaleCandidate(ctx context.Context, owner, repo string, c releaseCandidate, set candidateSet, runningSHA string, staleSHAs map[string]bool) (string, error) {
 	if c.sha == "" {
-		return false, nil
+		return "", nil
 	}
 	if c.version.Prerelease() == "" {
 		bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
 		if rc, ok := set.newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
-			behind, err := s.isBehind(ctx, owner, repo, rc.sha, c.sha)
-			if err != nil || behind {
-				return behind, err
+			if why, err := s.behindWhy(ctx, owner, repo, rc, c.sha); why != "" || err != nil {
+				return why, err
 			}
 		}
-		if set.latestRC.sha != "" && !set.stableSHAs[set.latestRC.sha] && !sameCommit(c.sha, set.latestRC.sha) {
-			behind, err := s.isBehind(ctx, owner, repo, set.latestRC.sha, c.sha)
-			if err != nil || behind {
-				return behind, err
+		// Only a running pre-release follows the newest release candidate:
+		// on a release, the newest release is the latest whatever
+		// pre-releases a later base has.
+		if s.prereleases && set.latestRC.sha != "" && !set.stableSHAs[set.latestRC.sha] && !sameCommit(c.sha, set.latestRC.sha) {
+			if why, err := s.behindWhy(ctx, owner, repo, set.latestRC, c.sha); why != "" || err != nil {
+				return why, err
 			}
 		}
 	} else if set.latestStable.sha != "" && !staleSHAs[set.latestStable.sha] && !set.olderTagSHAs[set.latestStable.sha] && !sameCommit(c.sha, set.latestStable.sha) && (runningSHA == "" || !sameCommit(c.sha, runningSHA)) {
-		behind, err := s.isBehind(ctx, owner, repo, set.latestStable.sha, c.sha)
-		if err != nil || behind {
-			return behind, err
+		if why, err := s.behindWhy(ctx, owner, repo, set.latestStable, c.sha); why != "" || err != nil {
+			return why, err
 		}
 	}
 	if runningSHA != "" && !sameCommit(c.sha, runningSHA) {
 		if set.olderTagSHAs[c.sha] {
-			return true, nil
+			return "at the commit of a release older than this one", nil
 		}
-		return s.isBehind(ctx, owner, repo, runningSHA, c.sha)
+		return s.behindWhy(ctx, owner, repo, rcRef{sha: runningSHA}, c.sha)
 	}
-	return false, nil
+	return "", nil
+}
+
+// behindWhy says that head is behind ref's commit, "" when it is not.
+func (s *githubSource) behindWhy(ctx context.Context, owner, repo string, ref rcRef, head string) (string, error) {
+	behind, err := s.isBehind(ctx, owner, repo, ref.sha, head)
+	if err != nil || !behind {
+		return "", err
+	}
+	if ref.version == nil {
+		return "behind the running commit " + shortSHA(ref.sha), nil
+	}
+	return "behind " + ref.version.Original() + " at " + shortSHA(ref.sha), nil
+}
+
+// shortSHA is a commit's abbreviation for a message.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 func (s *githubSource) runningSHA(tagSHA map[string]string) string {

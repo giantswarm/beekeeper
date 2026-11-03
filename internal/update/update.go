@@ -154,6 +154,9 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		if errors.As(err, &limited) {
 			return res, fmt.Errorf("GitHub release lookup rate limit exceeded; resets at %s: %w", limited.Rate.Reset.UTC().Format(time.RFC3339), err)
 		}
+		if errors.Is(err, errIncompleteLookup) {
+			return res, fmt.Errorf("looking up the latest release of %s: %w", Repository, err)
+		}
 		return res, fmt.Errorf("looking up the latest release of %s (is this machine online?): %w", Repository, err)
 	case !found && filtered.skipped:
 		res.Latest = res.Current

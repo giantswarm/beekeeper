@@ -263,8 +263,10 @@ transient user unit beekeeper-codex-<id> with an isolated CODEX_HOME, its
 FIFO inbox in beekeeper's state folder and the worker rules + brief as its
 first message. It is registered on the roster as codex_<id> under <name>
 and shows in sessions and agents with harness codex; agents wake queues a
-message in its inbox, which codex-run delivers as the next turn via codex
-exec resume.
+message in its inbox. The PreToolUse hook delivers it during the running
+turn at its next tool call; with no further tool call it waits for turn end
+(remaining duration unknown), then codex-run delivers it via codex exec
+resume. An idle worker starts that next turn immediately.
 
 --harness auto picks the first non-excluded (harness, model) pair in
 capacity.choices whose provider has room (5-hour and 7-day windows below
