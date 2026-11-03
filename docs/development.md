@@ -586,8 +586,13 @@ merge method cannot take a base merge, so its branch behind such a base, a confl
 draft branch,
 red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
-a mutation whose completion record was lost. Successful merge actions are `supervisor.merge`,
-not worker merge grants. An already queued or running gate is observed without submitting
+a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
+not worker merge grants; when the pinned merge step fails on an open, green, approved head
+for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
+back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
+pull request remains open at that green head, directs the worker session with an exact-head
+`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
 

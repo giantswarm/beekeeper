@@ -134,7 +134,7 @@ func TestReviewedMergeOfAnUpdatedBranchStopsShort(t *testing.T) {
 		"update refused": {github.SquashNotApplicable, "merge conflict", func(b *behindRig) {
 			b.command = func([]string) (string, int) { return "merge conflict", 1 }
 		}},
-		"stopped meanwhile": {github.SquashNotApplicable, reasonDeskStopped, func(b *behindRig) {
+		"stopped meanwhile": {github.SquashRefused, reasonDeskStopped, func(b *behindRig) {
 			b.onPause = func(int) {
 				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
 				if err := b.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
