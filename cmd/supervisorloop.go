@@ -3325,7 +3325,7 @@ func (l *supervisorLoop) classify(ctx context.Context, st *state.State, act supe
 	}
 	ref := agentRef(st, e.Agent)
 	if ref == "" {
-		return "", fmt.Errorf("%s's %s names no issue or pull request to file the guide's note on", e.Agent, e.Verb)
+		return fmt.Sprintf("dropped %s from %s: names no issue or pull request to file the guide's note on; %s", e.Verb, e.Agent, e.Detail), nil
 	}
 	q := fmt.Sprintf("Decide what %s does next about its %s (%s)?", e.Agent, strings.TrimPrefix(e.Verb, "agents."), label)
 	if err := l.toGuide(ctx, act, ref, q, fmt.Sprintf("%s logged %s at %s: %s", e.Agent, e.Verb, e.At.UTC().Format(time.RFC3339), e.Detail), why,
@@ -3454,6 +3454,9 @@ func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act s
 		}
 		out, err := l.run(ctx, loopBoard, "move", act.Ref, "backlog", "--intake")
 		if err != nil {
+			if Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+				return fmt.Sprintf("dropped intake of %s: not an issue (%s)", act.Ref, oneLine(out)), nil
+			}
 			return "", err
 		}
 		l.mu.Lock()

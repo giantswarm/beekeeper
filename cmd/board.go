@@ -1128,8 +1128,9 @@ issue without an item on the board is added first, as move adds it, with
 board.team as its Team and no Status, whatever the owner of its repository
 (GitHub decides whether it may be added).
 The other issue must be on the board already. Only the items named are read,
-never the board's items. Every GitHub call acts on the repository of the
-issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
+except an archived after anchor: board order is read to find its nearest
+unarchived predecessor, or the board's end if none precedes it. Every GitHub
+call acts on the repository of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
 exist, another issue that has no item on the board, an item placed against itself.
 Any session (including the guide on the person's word) may change positions;
 every move logs board.rank naming the caller. Outside a session, --as <name>
