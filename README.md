@@ -1461,7 +1461,8 @@ In the guide's session the hook refuses the calls that do work: `Edit`, `Write`,
 (at a command position or inside a `-c` string), a GitHub connector tool that merges, reviews or
 pushes, and a browser action (`claude-in-chrome`) other than opening, reading or looking at a page
 (navigate, read, find, a screenshot or scroll). The refusal says to hand the work to the supervisor
-in one line. Questions, notes, `SendMessage`, reads and `beekeeper` pass; other sessions are not
+in one line: the supervisor loop is no session a `SendMessage` reaches, so the line is an issue in
+the work's owning repository, put on the board (`beekeeper board move`). Questions, notes, `SendMessage`, reads and `beekeeper` pass; other sessions are not
 affected.
 
 The guide's own `AskUserQuestion` gets the checks of `note add --for <person>`: each question asks,
@@ -3379,8 +3380,12 @@ subsequent turns with `codex exec resume --json --dangerously-bypass-approvals-a
 --dangerously-bypass-hook-trust [-m <model>] <thread-id> -`, recording the thread id in
 `<stateDir>/codex/<id>.thread` and `<stateDir>/codex/threads/<thread-id>`. `agents wake <name>
 <message>` writes to the agent's persistent FIFO inbox (`<stateDir>/codex/<id>.in`), and `codex-run`
-starts a `codex exec resume` turn with the queued message as soon as the current turn finishes (or at
-once when idle). Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
+delivers queued messages through `hook pretooluse --format codex` as model-visible
+`additionalContext` at the next tool call inside the running turn. The hook preserves guard
+decisions and consumes only pending wakes, never the runner’s inflight prompt. If there is no
+further tool call, delivery waits until the turn ends (whose remaining duration is unknown);
+`codex-run` then starts a `codex exec resume` turn with the queued message, or does so at once
+when idle. `agents wake` states this fallback explicitly. Taking the agent off the roster (`agents remove`, `beekeeper doctor`) stops its
 `beekeeper-codex-<id[:8]>` unit and removes its inbox, queue, lock, state, stream log and thread link
 files.
 

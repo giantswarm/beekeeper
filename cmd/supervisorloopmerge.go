@@ -48,12 +48,15 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if st.Stop != nil {
 		return "", refused("the desk is stopped")
 	}
-	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
+	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
 	repairStage := act.Key + " repair"
-	if l.stages[repairStage] {
-		return l.repairPull(ctx, st, act, l.stageDetail[repairStage])
+	l.mu.Lock()
+	repairing, reason := l.stages[repairStage], l.stageDetail[repairStage]
+	l.mu.Unlock()
+	if repairing {
+		return l.repairPull(ctx, st, act, reason)
 	}
 	p, err := readLoopPull(ctx, act.Ref)
 	if err != nil {
@@ -65,8 +68,20 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if p.Draft || p.Mergeable == mergeableConflicting {
-		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): branch is draft or conflicts with its base", github.SquashNotApplicable))
+	repair := func(code int, reason string) (string, error) {
+		_, _ = stopMerges(a.store, loopParty, func(m state.Merge) bool {
+			return m.Repo == ref.Repo && m.PR == ref.N && m.Phase == state.Waiting
+		}, false, func(state.Merge) string {
+			return reason
+		})
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			merge.Retry(current, ref.Repo, ref.N)
+			return nil, nil
+		})
+		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(reason)))
+	}
+	if p.Draft || strings.EqualFold(p.Mergeable, mergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
+		return repair(github.SquashNotApplicable, "branch is draft or conflicts with its base")
 	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
@@ -74,6 +89,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return m.Repo == ref.Repo && m.PR == ref.N && (m.Phase == state.Waiting || m.Phase == state.Running) && merge.Runs(m, proc.Alive)
 	}) {
 		return "", errLoopLater
+	}
+	for _, f := range st.Failed {
+		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && (f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed) {
+			return repair(f.Exit, cmp.Or(f.Reason, "merge failed in lane"))
+		}
 	}
 	var execRef *execution.Ref
 	for _, worker := range st.Agents {
@@ -99,7 +119,12 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	out, code, err := beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))...)
+	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head}
+	if act.Priority > 0 {
+		gateArgs = append(gateArgs, "--priority", strconv.Itoa(act.Priority))
+	}
+	gateArgs = append(gateArgs, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))
+	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
 	p, readErr := readLoopPull(ctx, act.Ref)
@@ -163,10 +188,14 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 // fixer so capacity waits never retry the merge command each pass.
 func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
 	repairStage := act.Key + " repair"
-	if !l.stages[repairStage] {
+	l.mu.Lock()
+	repairing := l.stages[repairStage]
+	l.mu.Unlock()
+	if !repairing {
 		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", repairStage, reason), act.Ref)); err != nil {
 			return "", err
 		}
+		l.mu.Lock()
 		if l.stages == nil {
 			l.stages = map[string]bool{}
 		}
@@ -175,6 +204,7 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 		}
 		l.stages[repairStage] = true
 		l.stageDetail[repairStage] = reason
+		l.mu.Unlock()
 	}
 	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
@@ -242,11 +272,11 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
-			endNotes(current, rp.Party, l.a.now)
+			endNotes(current, rp.Party, l.a.timeNow())
 			clearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
 			task := cmp.Or(rp.Serves, act.Ref)
-			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.a.now, Task: task, Text: report})
+			current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: rp.Party, At: l.a.timeNow(), Task: task, Text: report})
 			return []state.Event{event(rp.Party, superloop.VerbDone, "%s done: %s", rp.Agent, task), event(rp.Party, superloop.VerbReport, "%s: %s", rp.Agent, report)}, nil
 		})
 		return "merged; task closed without waking worker", err
@@ -301,9 +331,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
 		reportIdle(worker, time.Now())
 		worker.Done = true
-		endNotes(current, worker.Party, l.a.now)
+		endNotes(current, worker.Party, l.a.timeNow())
 		clearRecords(current, worker.Party)
-		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.a.now, Task: worker.LastTask, Text: report})
+		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.a.timeNow(), Task: worker.LastTask, Text: report})
 		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err

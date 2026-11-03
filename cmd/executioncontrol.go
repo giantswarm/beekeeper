@@ -97,6 +97,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		return json.NewEncoder(output).Encode(reply)
 	}
 	reply.Ref, reply.RequestID = req.Ref, req.RequestID
+	if req.Operation == workerGitHubIssue || req.Operation == workerGitHubRevoke || req.Operation == workerGitHubBudget {
+		value, callErr := a.executionGitHub(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	if req.Operation == execution.MCPList || req.Operation == execution.MCPCall {
 		value, callErr := a.executionMCP(ctx, host, req)
 		if callErr != nil {
@@ -273,6 +285,13 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 	})
 	if err != nil {
 		reply.Error = err.Error()
+	}
+	if st, readErr := a.store.Read(); readErr == nil {
+		if r, _ := executionRecord(st, req.Ref); r != nil && (r.Completed || r.Terminal() || r.StopRequest != nil || st.Stop != nil) {
+			if revokeErr := a.revokeWorkerGitHub(ctx, req.Ref); revokeErr != nil {
+				reply.Error = revokeErr.Error()
+			}
+		}
 	}
 	return json.NewEncoder(output).Encode(reply)
 }
