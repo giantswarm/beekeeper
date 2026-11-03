@@ -253,6 +253,10 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; post-merge work requested", nil
 		}
+		if l.otherReviewParks(rp.Party, act.Ref) {
+			clearReviewPark()
+			return "merged; other pull requests still await review or merge", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
@@ -303,6 +307,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			return "", err
 		}
 		return "merged; post-merge work requested", nil
+	}
+	if l.otherReviewParks(ag.Party, act.Ref) {
+		return "merged; other pull requests still await review or merge", nil
 	}
 	// Do not finish a task serving other open work merely because one PR merged.
 	serves := loopServes(st, ag)
