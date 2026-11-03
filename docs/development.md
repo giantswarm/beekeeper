@@ -97,6 +97,32 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+The doctor releases a local lease when its session is no longer running,
+preserving any lab configuration drift for the next claimant. Person-held
+leases and remote holders are left alone. Each release is logged once as
+`lease.release-gone`. Configured kind labs with no lease are stopped after
+15 minutes (`lab.stop`); containers and their data stay intact. The idle
+observation is persisted across watch restarts and reset by a claim.
+Unmapped clusters are never stopped. A failed Docker read or stop is reported
+and retried on the next doctor tick; `doctor --dry-run` changes nothing.
+
+A handover successor's recorded start protects inherited leases throughout
+the five-minute first-reply startup window, including when the doctor's
+process snapshot predates the handover or launch. The original claim time
+stays intact; after the startup window an absent successor's lease is
+eligible for normal cleanup.
+
+A successful lab claim starts existing stopped kind nodes (`lab.start`)
+before returning the kubeconfig. It does not create a missing cluster. A
+failed restart fails the command while retaining ownership for a claim retry.
+Sandboxed claims run the restart through the host broker, which rechecks
+ownership. Docker stop and start operations share the state lock with claims.
+For a live lifecycle proof, use isolated state and disposable Docker containers
+with a unique `io.x-k8s.kind.cluster` label: seed an idle timestamp 15 minutes
+ago, run the doctor, then claim the lease and check that the same containers
+restart with a marker file intact. Never point scratch state at another
+worker's lab.
+
 ```bash
 cat >| /tmp/bk.yaml <<EOF
 stateDir: /tmp/bk-state
@@ -265,6 +291,15 @@ after. The second `claude --bg` through a running daemon lands in its spare; a w
 spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves it, and a
 `--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
 once its last worker stops.
+
+`alerts snapshot` groups text rows by severity, team, alert name, cluster and namespace;
+rows with a namespace label append `namespace=<value>`. `alerts snapshot --json` returns
+an object with `lines` (the text view, including PagerDuty) and `installations`. Each
+installation carries `installation`, `reachable`, optional `why` and `noContext`, and
+an `alerts` array with every visible alert's full `labels` map. Ignored, silenced,
+inhibited and below-floor alerts follow the same filtering as the text view. This
+replaces the previous JSON array of formatted strings; scripts reading that array
+should read `lines` instead.
 
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
