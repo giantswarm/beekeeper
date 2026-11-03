@@ -115,3 +115,22 @@ func TestReadSpendTranscriptsWithoutTheDirectory(t *testing.T) {
 		t.Error("no error for a missing projects directory")
 	}
 }
+
+func TestReadSpendTranscriptsNamesTheSession(t *testing.T) {
+	dir := t.TempDir()
+	from := time.Date(2026, 10, 8, 8, 0, 0, 0, time.UTC)
+	spendFixture(t, dir, from)
+	ts, err := ReadSpendTranscripts(dir, from, from.Add(4*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tr := range ts {
+		got[tr.Session+map[bool]string{true: " subagent"}[tr.Subagent]] = true
+	}
+	for _, want := range []string{"s1", "s1 subagent", "s2"} {
+		if !got[want] {
+			t.Errorf("sessions %v lack %q", got, want)
+		}
+	}
+}

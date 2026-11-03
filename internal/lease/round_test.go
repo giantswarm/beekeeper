@@ -1,0 +1,52 @@
+package lease
+
+import (
+	"testing"
+	"time"
+)
+
+func TestRound(t *testing.T) {
+	for _, tc := range []struct {
+		purpose string
+		want    time.Duration
+	}{
+		{"60-minute round", time.Hour},
+		{"proof for 60m", time.Hour},
+		{"1h30m round", 90 * time.Minute},
+		{"1h30m15s round", 90*time.Minute + 15*time.Second},
+		{"a 1.5 hour round", 90 * time.Minute},
+		{"30 minutes to prove it", 30 * time.Minute},
+		{"2 HOURS", 2 * time.Hour},
+		{"90-second check", 90 * time.Second},
+		{"no duration", 45 * time.Minute},
+		{"version 60main", 45 * time.Minute},
+		{"0m round", 45 * time.Minute},
+		{"-5m round", 45 * time.Minute},
+		{"999999999999999999999h round", 45 * time.Minute},
+	} {
+		t.Run(tc.purpose, func(t *testing.T) {
+			if got := (Holder{Purpose: tc.purpose}).Round(45 * time.Minute); got != tc.want {
+				t.Errorf("Round = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOverrun(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		since string
+		want  time.Duration
+	}{
+		{now.Add(-78 * time.Minute).Format(time.RFC3339), 18 * time.Minute},
+		{now.Add(-time.Hour).Format(time.RFC3339), 0},
+		{now.Add(time.Hour).Format(time.RFC3339), 0},
+		{"", 0},
+		{"invalid", 0},
+	} {
+		h := Holder{Purpose: "60-minute round", Since: tc.since}
+		if got, round := h.Overrun(now, 30*time.Minute); got != tc.want || round != time.Hour {
+			t.Errorf("Overrun(%q) = %s, %s; want %s, 1h", tc.since, got, round, tc.want)
+		}
+	}
+}

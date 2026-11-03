@@ -36,7 +36,9 @@ func ompUnit(id string) string { return "beekeeper-omp-" + id[:8] }
 // agent, starts it in a transient user unit with its stdin on its inbox,
 // hands it the key through the inbox and sends it the brief.
 func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
-	dir, err := filepath.Abs(sp.dir)
+	// the directory every harness starts in: --dir, else agents.dir, within
+	// agents.dir or a worktree under agents.roots
+	dir, err := a.agentDir(sp.dir, sp.role)
 	if err != nil {
 		return err
 	}
@@ -384,7 +386,7 @@ func (a *app) autoStartNeedsVault(f startVaultFlags) bool {
 			SlotsFree:        1,
 			MaxLabs:          1,
 		}
-		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st.Stop)
+		v := buildProvidersCapacity(c, pa, choicesCap, readings, h, false, f.excludes, startKind(f.review, f.ofSelfHosted), target.now).stopped(&target, st)
 		ch, err := pickAutoChoice(v, f.force)
 		if err != nil || ch == nil {
 			return false

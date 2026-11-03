@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,7 +28,6 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -44,12 +46,14 @@ var loopParty = state.Party{Name: "supervisor loop"}
 const loopStartVerb = "supervisor.loop"
 
 // loopClaimVerb logs an action the loop is about to take, before its side
-// effect; loopStageVerb a finished stage of a release.
+// effect; loopStageVerb a finished stage of a release; loopUnstageVerb a
+// stage found obsolete, which no later pass resumes.
 const (
 	loopClaimVerb    = "supervisor.claim"
 	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
+	loopUnstageVerb  = "supervisor.unstage"
 	loopFailureVerb  = "supervisor.failure"
 )
 
@@ -409,13 +413,10 @@ its key first in the detail):
   review    an agent parked from its pull request's worktree at its
             published HEAD (agents park --on owner/repo#n), with every
             check on the head green, for the
-            first round; a second (superloop.MaxReviews, 2, whatever
-            happens) only for a new head the worker parked on after an
-            approval with a change the approval does not cover (below), or
-            after the last round's findings were forwarded and the worker
-            parked again on a new head while a change-request round is left
-            (supervisor.reviewRounds, default 1, the fixes of one review
-            get the go without another): a reviewer starts
+            first round and for each new head the last approval does not
+            cover, including fixes after changes requested. There is one
+            review per head; supervisor.reviewRounds never releases an
+            unapproved head. A reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), using reserved review headroom; a worker on a
@@ -465,26 +466,10 @@ its key first in the detail):
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
   rework    the worker parked again after the forward on the head the
-            findings were about with no change-request round left
-            (supervisor.reviewRounds counts the rounds that asked for
-            changes; an approved head is none), or, rounds left or not, on
-            a head that only brings the base into it, which carries no
-            fixes: the worker is told to fix them and push (agents wake),
-            once for each such park; its new green head gets the next
-            round, or the merge go once none is left. Review and rework
-            stay in the loop: no merge question goes to guide.person
-  go        (past the reviews) a green head the worker parked on after
-            superloop.MaxReviews reviews, the last approving, whose change
-            differs from the approved head's (compare API, the base's own
-            changes left out) only in test files (_test.go, testdata/) and
-            files a review's findings name: the desk's rule is one review,
-            then the fixes and the merge, so the merge go, with no note
-  escalate  a head that would need a review past superloop.MaxReviews (an
-            approved second review, then a change past its findings and
-            tests, or a comparison GitHub cuts short): a decision for
-            guide.person (note add, options Merge and Rework) naming the
-            files past the findings, once per head; no third reviewer
-            starts
+            findings were about, or a head that only brings the base into
+            it: tell the worker to fix them and push, once per park. Its
+            new green head gets its own review. Exhausted rounds never
+            authorize a merge or send a merge question to guide.person
   answer    the person answered an escalation (beekeeper answer --note):
             an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -578,6 +563,9 @@ its key first in the detail):
   file      a problem found (agents.problem) that cites no issue URL:
             the full report is logged in supervisor.file and delivered once
             by guide watch as GUIDE PROBLEM, to file in its owning repository.
+            A step failing the same way for 30 minutes or on more than one
+            item is filed the same way, once per episode, naming the step,
+            the items it blocks and the error.
             A done report's problems arrive together before the done settles.
             No decision note or thread reference is needed. A problem naming
             its issue is already filed; the agent keeps its task
@@ -585,9 +573,8 @@ its key first in the detail):
             follow-up named in a report, an issue a session created with gh
             issue create): put on the configured board in Backlog (board
             move --intake), unless it already sits on another board where it
-            is being worked, and ranked from the priority list (board rank
-            --after) right after the high-ranked epic or item it blocks or
-            follows from
+            is being worked, and ranked on the board (board rank --after)
+            right after the epic or item it blocks or follows from
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -706,13 +693,6 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
-	// priorities, issueParents, pullIssues and pullPriorities cache board
-	// priority resolution for tracked pull requests.
-	priorities     board.Priorities
-	prioritiesAt   time.Time
-	issueParents   map[string]string
-	pullIssues     map[string]string
-	pullPriorities map[string]int
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -1107,16 +1087,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
-		ranks := map[string]int{}
-		in.Rank = func(ref string) int {
-			key := strings.ToLower(ref)
-			if r, ok := ranks[key]; ok {
-				return r
-			}
-			r, _ := readBoardRank(ctx, a, ref)
-			ranks[key] = r
-			return r
-		}
 	}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
@@ -1139,7 +1109,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			continue
 		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Name == rp.Agent || (ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On))
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
 		}) {
 			continue
 		}
@@ -1169,9 +1139,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
 	failures := map[string]loopFailure{}
+	stuckFiled := map[string]time.Time{}
 	for _, e := range taken {
 		if t, ok := superloop.ParseTaken(e.At, e.Verb, e.Subject, e.Detail); ok {
 			in.Taken = append(in.Taken, t)
+			// A step taken is no longer failing.
+			delete(failures, t.Key)
+			if t.Kind == superloop.KindFile && strings.HasPrefix(t.Key, loopStuckKey) {
+				// The episode's start ends the key; filed is by step and error.
+				i := strings.LastIndexByte(t.Key, ' ')
+				stuckFiled[t.Key[:max(i, 0)]] = e.At
+			}
 			continue
 		}
 		key, rest, ok := keyed(e.Detail)
@@ -1185,15 +1163,27 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 			stageDetail[key] = rest
+		case e.Verb == loopUnstageVerb:
+			delete(stages, key)
+			delete(stageDetail, key)
 		case e.Verb == loopFailureVerb:
 			var f loopFailure
 			if json.Unmarshal([]byte(rest), &f) == nil {
+				// Failures an older loop logged carry neither time.
+				f.At = cmp.Or(f.At, e.At)
+				f.Since = cmp.Or(f.Since, e.At)
+				kind, _, _ := strings.Cut(key, " ")
+				f.Kind = cmp.Or(f.Kind, kind)
+				f.Ref = cmp.Or(f.Ref, e.Subject)
 				failures[key] = f
 			}
 		}
 	}
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
+	}
+	if in.Taken, err = l.dropAdminRepairs(in.Taken, stages, stageDetail); err != nil {
+		return err
 	}
 	l.mu.Lock()
 	l.stages, l.stageDetail = stages, stageDetail
@@ -1261,7 +1251,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.mu.Unlock()
 		}
 	}
-	l.resolvePullPriorities(ctx, &in)
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
 	// planning the end and retaining its worker for any post-merge work.
@@ -1329,6 +1318,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return nil
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.stuck(failures, stuckFiled); err != nil {
+			return err
+		}
+	}
 	if l.dryRun {
 		for _, act := range actions {
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
@@ -1338,123 +1332,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return l.fill(ctx, st, claims, in.Taken)
 	}
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
-}
-
-// readPullPriority resolves the board priority rank (1 is highest, 0 is
-// unranked) of a tracked pull request or the issue its worker serves.
-var readPullPriority = func(ctx context.Context, l *supervisorLoop, ref, serves string) (int, error) {
-	return l.pullPriority(ctx, ref, serves)
-}
-
-func (l *supervisorLoop) resolvePullPriorities(ctx context.Context, in *superloop.Input) {
-	if !in.Board || l.a.cfg.Board.Owner == "" {
-		return
-	}
-	servesByRef := map[string]string{}
-	for _, w := range in.Workers {
-		if w.ParkedOn != "" && w.Serves != "" {
-			servesByRef[w.ParkedOn] = w.Serves
-		}
-	}
-	for ref, p := range in.Pulls {
-		if p.State != superloop.Open || p.Priority > 0 {
-			continue
-		}
-		if prio, err := readPullPriority(ctx, l, ref, servesByRef[ref]); err == nil && prio > 0 {
-			p.Priority = prio
-			in.Pulls[ref] = p
-		}
-	}
-}
-
-// readLoopPriorities reads the current board order for the resolution cache.
-var readLoopPriorities = func(ctx context.Context, l *supervisorLoop) (board.Priorities, error) {
-	return l.a.boardClient().Priorities(ctx)
-}
-
-func (l *supervisorLoop) pullPriority(ctx context.Context, ref, serves string) (int, error) {
-	key := ref + " " + serves
-	l.mu.Lock()
-	needPriorities := l.priorities == nil && l.prioritiesAt.IsZero() || l.a.timeNow().Sub(l.prioritiesAt) >= loopOpenEvery
-	l.mu.Unlock()
-	if needPriorities {
-		prios, err := readLoopPriorities(ctx, l)
-		l.mu.Lock()
-		l.prioritiesAt = l.a.timeNow()
-		if err == nil {
-			l.priorities = prios
-			// Relationships and zero ranks can change along with board order.
-			l.pullPriorities = nil
-			l.pullIssues = nil
-			l.issueParents = nil
-		}
-		l.mu.Unlock()
-	}
-	l.mu.Lock()
-	if prio, ok := l.pullPriorities[key]; ok {
-		l.mu.Unlock()
-		return prio, nil
-	}
-	prios := l.priorities
-	l.mu.Unlock()
-	if len(prios) == 0 {
-		return 0, nil
-	}
-	issue := serves
-	if issue == "" || strings.EqualFold(issue, ref) {
-		l.mu.Lock()
-		cached, ok := l.pullIssues[ref]
-		l.mu.Unlock()
-		if !ok {
-			closed, err := l.a.boardClient().Closes(ctx, []string{ref})
-			if err == nil {
-				if refs := closed[strings.ToLower(ref)]; len(refs) > 0 {
-					cached = refs[0]
-				} else if refs := closed[ref]; len(refs) > 0 {
-					cached = refs[0]
-				}
-				l.mu.Lock()
-				if l.pullIssues == nil {
-					l.pullIssues = map[string]string{}
-				}
-				l.pullIssues[ref] = cached
-				l.mu.Unlock()
-			}
-		}
-		if cached != "" {
-			issue = cached
-		}
-	}
-	parentOf := func(r string) string {
-		l.mu.Lock()
-		if p, ok := l.issueParents[r]; ok {
-			l.mu.Unlock()
-			return p
-		}
-		l.mu.Unlock()
-		parent, err := l.a.boardClient().IssueParent(ctx, r)
-		if err != nil {
-			return ""
-		}
-		l.mu.Lock()
-		if l.issueParents == nil {
-			l.issueParents = map[string]string{}
-		}
-		l.issueParents[r] = parent
-		l.mu.Unlock()
-		return parent
-	}
-	rank := prios.IssueRank(cmp.Or(issue, ref), parentOf)
-	if rank == 0 && issue != "" && !strings.EqualFold(issue, ref) {
-		rank = prios.IssueRank(ref, parentOf)
-	}
-	l.mu.Lock()
-	if l.pullPriorities == nil {
-		l.pullPriorities = map[string]int{}
-	}
-	l.pullPriorities[key] = rank
-	l.mu.Unlock()
-	return rank, nil
 }
 
 func (l *supervisorLoop) beginInFlight(key string) bool {
@@ -1483,14 +1360,16 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	// An earlier pass can finish after this pass took its snapshot.
 	l.mu.Lock()
 	done := l.completed[act.Key]
-	l.mu.Unlock()
 	if done {
+		l.mu.Unlock()
 		return nil
 	}
 
 	if l.a.timeNow().Before(failures[act.Key].RetryAt) {
+		l.mu.Unlock()
 		return nil
 	}
+	l.mu.Unlock()
 	if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
 		// Claimed before an interruption: what the log shows of its
 		// side effect decides, never a second one.
@@ -1504,8 +1383,11 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	}
 	if act.Kind == superloop.KindQuestion {
 		if err := l.readdress(act); err != nil {
-			return l.failed(act, failures[act.Key], err)
+			return l.failed(act, failures, err)
 		}
+		l.mu.Lock()
+		delete(failures, act.Key)
+		l.mu.Unlock()
 		return nil
 	}
 	what, err := l.act(ctx, st, act)
@@ -1513,7 +1395,7 @@ func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims
 	case errors.Is(err, errLoopLater):
 		return nil
 	case err != nil:
-		return l.failed(act, failures[act.Key], err)
+		return l.failed(act, failures, err)
 	}
 	if act.Kind == superloop.KindGo && what == loopWorkerMergeGo {
 		l.rememberAction(act)
@@ -2016,10 +1898,16 @@ func (l *supervisorLoop) readdress(act superloop.Action) error {
 // consecutive failures defer the action for five minutes, keeping it pending;
 // each further identical failure doubles the deferral up to an hour, so a
 // refusal that does not change is not retried every five minutes all day.
+// Since is when the step began failing this way, on this item or on another
+// item still failing the same way; At is the latest attempt.
 type loopFailure struct {
 	Message string    `json:"message"`
 	Count   int       `json:"count"`
 	RetryAt time.Time `json:"retryAt"`
+	Kind    string    `json:"kind,omitempty"`
+	Ref     string    `json:"ref,omitempty"`
+	Since   time.Time `json:"since,omitempty"`
+	At      time.Time `json:"at,omitempty"`
 }
 
 const (
@@ -2036,16 +1924,48 @@ func loopFailureDelay(count int) time.Duration {
 	return min(d, loopFailureBackoffCap)
 }
 
-func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, cause error) error {
-	f := loopFailure{Message: cause.Error(), Count: 1}
+// A step failing the same way for loopStuckAfter, or on more than one item,
+// is stuck: the guide hears of it once (stuck). Failures missing their
+// scheduled retry by loopStuckRecent drop out.
+const (
+	loopStuckAfter  = 30 * time.Minute
+	loopStuckRecent = 3 * loopFailureBackoff
+	loopStuckKey    = "stuck "
+)
+
+// recent keeps an episode alive through its scheduled backoff. A step
+// missing its retry for loopStuckRecent starts a new episode.
+func (f loopFailure) recent(now time.Time) bool {
+	at := f.At
+	if f.RetryAt.After(at) {
+		at = f.RetryAt
+	}
+	return now.Sub(at) < loopStuckRecent
+}
+
+// failed logs act's failure and keeps it in failures, by key.
+func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFailure, cause error) error {
+	l.mu.Lock()
+	previous := failures[act.Key]
+	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
-	if f.Message == previous.Message {
+	// An episode expires after its retry has been missed for loopStuckRecent.
+	if f.Message == previous.Message && previous.recent(l.a.now) {
 		f.Count = previous.Count + 1
+		f.Since = cmp.Or(previous.Since, f.Since)
+	} else {
+		// The same failure of the same step on another item continues
+		// that episode rather than starting one.
+		for _, o := range l.stuckGroup(failures, f.Kind, f.Message) {
+			f.Since = minTime(f.Since, o.Since)
+		}
 	}
 	if f.Count >= 2 {
 		f.RetryAt = l.a.timeNow().Add(loopFailureDelay(f.Count))
 	}
+	failures[act.Key] = f
+	l.mu.Unlock()
 	b, err := json.Marshal(f)
 	if err != nil {
 		return err
@@ -2060,6 +1980,73 @@ func (l *supervisorLoop) failed(act superloop.Action, previous loopFailure, caus
 		_, err = fmt.Fprintf(l.a.out, "SUPERVISOR BACKOFF %s: identical failures; retry after %s\n", act.Key, f.RetryAt.UTC().Format(time.RFC3339))
 	}
 	return err
+}
+
+// stuckGroup are the failures of kind with message attempted recently, by key.
+func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, message string) map[string]loopFailure {
+	group := map[string]loopFailure{}
+	for key, f := range failures {
+		if f.Kind == kind && f.Message == message && f.recent(l.a.now) {
+			group[key] = f
+		}
+	}
+	return group
+}
+
+// stuck files each step failing the same way for loopStuckAfter or on more
+// than one item, once per episode: the guide's feed says it as GUIDE
+// PROBLEM. An episode filed before it began (filed, by step and error) is a
+// new one.
+func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
+	keys := slices.Sorted(maps.Keys(failures))
+	done := map[string]bool{}
+	for _, key := range keys {
+		f := failures[key]
+		sum := sha256.Sum256([]byte(f.Kind + "\x00" + f.Message))
+		step := loopStuckKey + f.Kind + " " + hex.EncodeToString(sum[:6])
+		if done[step] {
+			continue
+		}
+		done[step] = true
+		group := l.stuckGroup(failures, f.Kind, f.Message)
+		if len(group) == 0 {
+			continue
+		}
+		since, attempts := l.a.now, 0
+		var items []string
+		for _, k := range slices.Sorted(maps.Keys(group)) {
+			g := group[k]
+			since = minTime(since, g.Since)
+			attempts += g.Count
+			items = append(items, cmp.Or(g.Ref, k))
+		}
+		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
+			continue
+		}
+		if at, ok := filed[step]; ok && !at.Before(since) {
+			continue
+		}
+		slices.Sort(items)
+		items = slices.Compact(items)
+		text := fmt.Sprintf("The supervisor loop's %s step has failed the same way since %s, %d attempt(s), blocking %s: %s. "+
+			"It retries with backoff from %s up to %s; own the failure to the component its error names.",
+			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff, loopFailureBackoffCap)
+		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		// Each episode its own key: guide watch says each one once.
+		fileKey := step + " " + since.UTC().Format("20060102T150405Z")
+		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
+			return err
+		}
+		filed[step] = l.a.now
+	}
+	return nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // errLoopLater is an action that waits for a later pass, quietly: no room
@@ -2248,7 +2235,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.ownOverlap(ctx, st, act)
 	case superloop.KindEscalate:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
-			fmt.Sprintf("the loop starts at most %d reviews of a pull request, and head %s changes more than the base since the last one: only a person lets it merge without another review; the loop gives the merge go for that head on an answer that releases it", superloop.MaxReviews, shortSHA(act.Head)),
+			fmt.Sprintf("legacy review escalation for head %s; new heads now get their own independent review", shortSHA(act.Head)),
 			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
 			return "", err
 		}
@@ -3034,7 +3021,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return l.hostsFirstLocal(ctx, flags, model, roomOpen(out), mapped)
+		return l.hostsFirstLocal(ctx, flags, model, out, mapped)
 	}
 	if model != "" && !roomOpen(out) {
 		return startHost{}, errLoopLater
@@ -3048,8 +3035,12 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 // while the local verdict (localRoom) has room. With a mapped repository
 // the choices a host can run wait for one; the others start locally, the
 // host-run choices excluded from the start, while the local verdict
-// without them has room. Everything else waits.
-func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model string, localRoom, mapped bool) (startHost, error) {
+// without them has room and picks no self-hosted choice the local verdict
+// (local, with every choice) does not pick itself: excluding the
+// subscriptions a host runs never makes a self-hosted model the pick while
+// a subscription is eligible. Everything else waits.
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model, local string, mapped bool) (startHost, error) {
+	localRoom := roomOpen(local)
 	var hosts []execution.Host
 	for _, selector := range l.a.cfg.Supervisor.Hosts {
 		if h, err := l.a.executionHost(selector); err == nil {
@@ -3067,10 +3058,30 @@ func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, mo
 		return startHost{}, errLoopLater
 	}
 	place := startHost{Exclude: hosted}
-	if !l.capacityRoom(ctx, append(slices.Clone(flags), place.excludeFlags()...)...) {
+	out, code, err := beekeeperRun(ctx, l.as(append(append([]string{loopCapacity}, flags...), place.excludeFlags()...)...)...)
+	if err != nil || code != 0 || !roomOpen(out) {
+		return startHost{}, errLoopLater
+	}
+	providers := l.a.cfg.Capacity.Providers
+	if pick := verdictProvider(out); providers[pick].SelfHosted() && !providers[verdictProvider(local)].SelfHosted() {
+		l.sayOnce("self-hosted "+pick, "SUPERVISOR HOST WAITS: no host has room, and without the choices a host runs the local pick is self-hosted %s while a subscription is eligible", pick)
 		return startHost{}, errLoopLater
 	}
 	return place, nil
+}
+
+// verdictProvider is the provider of a `capacity --json` answer's pick:
+// empty when it picks none or cannot be read.
+func verdictProvider(out string) string {
+	var v struct {
+		Choice *struct {
+			Provider string `json:"provider"`
+		} `json:"choice"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil || v.Choice == nil {
+		return ""
+	}
+	return v.Choice.Provider
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:
@@ -3503,11 +3514,6 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 	return a.boardClient().RankAnchor(ctx, ref, from)
 }
 
-// readBoardRank resolves the priority rank of ref on the board (Client.RankOf).
-var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
-	return a.boardClient().RankOf(ctx, ref)
-}
-
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
@@ -3579,9 +3585,8 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 }
 
 // intakeIssue puts act.Ref onto the configured board in Backlog, unless it
-// already sits on another board where it is being worked, and ranks it from
-// the priority list right after the high-ranked epic or item it blocks or
-// follows from.
+// already sits on another board where it is being worked, and ranks it on the
+// board right after the epic or item it blocks or follows from.
 func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		return "", errLoopLater

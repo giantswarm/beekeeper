@@ -416,7 +416,9 @@ where configured and offered). `hostsFirst` prefers
 hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
 an adapter for (`omp`), starts on the coordinator within its local
-room; for the latter the local start excludes the choices a host runs. A desk
+room; for the latter the local start excludes the choices a host runs, and
+waits instead when that exclusion alone would make a self-hosted choice the pick
+while a subscription is eligible. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
 read-and-review path. A review waits when coordinator review capacity is full.
@@ -779,6 +781,24 @@ workspace's `go.mod` against those tools. A newer toolchain requirement in a
 new repository or ref refuses preparation before the harness launches; update
 the installed toolchain and its policy pin before retrying. Tools remain
 host installations shared by workers, rather than per-worker downloads.
+
+Host sync also asks each used, pinned host for the active journal-backed
+executions of this coordinator, including once when the coordinator has no
+active execution records left on that host. An execution absent from the
+coordinator's current records is stopped through its exact journal-backed
+identity. The host retains its stopped journal, and naturally exited or failed
+journals are excluded, so neither is reconciled again. Other coordinators'
+executions are excluded.
+
+A recorded execution whose host journal disappeared is settled as failed only
+when the host also confirms its unit is inactive. Unknown or active unit state
+remains unconfirmed; no process without its ownership journal is stopped.
+The reconciliation writes an audit event and does not claim a stop acknowledgement.
+Host update drain messages name the recorded workers and execution IDs; a busy
+host also returns its blocking execution IDs. On a host predating inventory, a
+recorded execution whose host journal is confirmed absent does not block
+`agents hosts update` from upgrading the host, after which unit inactivity is
+confirmed and the record settles.
 
 ### Per-worker GitHub credentials
 
