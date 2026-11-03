@@ -9,6 +9,17 @@ A plain build reports the version Go derives from the checkout's tag (`v0.2.0+di
 binary `dev`, which `self-update` refuses. To try `self-update` against the latest release, stamp
 an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
 
+Reviewed supervisor merges require a GitHub merge queue on the target branch, with the
+repository's required CI checks running on `merge_group` events. The queue validates the
+actual combination again when the base advances; a local check cannot atomically pin
+GitHub's base. Queue submissions never use `--admin`, which would bypass this protection.
+A missing or unreadable queue is a tooling refusal, not permission to merge directly.
+
+The local merge-result guard also requires a matching checkout, a successful fetch of
+the current base, the reviewed commit, and `golangci-lint` on PATH. For Go modules it
+runs configured lint and `go test ./...`, including unchanged tests and reverse
+dependents even for dependency-only changes. A missing prerequisite fails closed.
+
 A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
 `devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs
 stable releases only. To run a candidate before its promotion, build it from its tag:
