@@ -60,7 +60,7 @@ func (a *app) remoteControl(ctx context.Context, op string, data any) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.SendControl(ctx, j, op, data, a.executionRequestID, nil)
+	result, err := s.SendControl(ctx, j, op, data, a.executionRequestID, s.Callback)
 	if err != nil {
 		if result.ID != "" && result.Error != "" {
 			return refused("coordinator acknowledged and refused request %q: %s; use a new request ID for corrected input", result.ID, result.Error)
@@ -176,11 +176,15 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			defer cancel()
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
+				if !publication.SyncBase && publicationCommit(publication.Head) && publication.BundleDigest != "" && len(publication.Title) <= 256 && len(publication.Body) <= 64<<10 {
+					r.PendingPublication = &state.ExecutionPendingPublication{Head: publication.Head, BundleDigest: publication.BundleDigest, Title: publication.Title, Body: publication.Body}
+				}
 				reply.Error = publishErr.Error()
 				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
+					r.PendingPublication = nil
 				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}
@@ -384,10 +388,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			v.PostMerge = nil
 		}
 		if v.On != "" {
-			if rp, ok := st.ReviewParkFor(v.On); ok {
+			if rp, ok := st.ReviewParkFor(v.On); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, ag.Name) || rp.Party.Is(me)) {
 				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
+				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 			}
-			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
@@ -396,6 +400,13 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			}
 		}
 		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+	case "problem":
+		var finding string
+		if err := execution.Decode(c.Data, &finding); err != nil {
+			return "", nil, err
+		}
+		events, err := a.recordWorkerProblem(st, ag, me, finding)
+		return "problem acknowledged by coordinator", events, err
 	case "report":
 		var v executionReport
 		if err := execution.Decode(c.Data, &v); err != nil {
@@ -415,6 +426,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if err := a.captureExecutionReviewReport(ctx, st, me, v.Text, a.now, v.Finished); err != nil {
 			return "", nil, err
 		}
+		problems = freshWorkerProblems(ag, problems)
 		reportIdle(ag, a.now)
 		endNotes(st, me, a.now)
 		ag.Done = v.Finished

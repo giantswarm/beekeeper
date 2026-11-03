@@ -110,34 +110,44 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
 	s.GuardProbe = func() error {
+		const probeSession = "probe"
 		h := a.executionHook()
 		for _, command := range []string{"git push origin main", "gh pr merge 1 --repo giantswarm/beekeeper", "gh issue create --repo forbidden/repository --title fixture --body fixture"} {
-			raw, _ := json.Marshal(map[string]any{executionOmpSession: executionHookProbe, executionOmpCwd: cfg.WorkspaceRoot, executionHookTool: "Bash", executionHookInput: map[string]any{hookTypeCommand: command}})
+			raw, _ := json.Marshal(map[string]any{"session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
 			var out struct {
 				Hook struct {
 					Decision string `json:"permissionDecision"`
 				} `json:"hookSpecificOutput"`
 			}
-			b := h.DecideExecution(raw, executionHookProbe, cfg.WorkspaceRoot, a.executionProtected(s))
+			b := h.DecideExecution(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
 			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
 			}
 			if _, ok := cfg.Harnesses[execution.HarnessOmp]; ok {
 				ompRaw, _ := json.Marshal(map[string]any{executionOmpSession: executionHookProbe, executionOmpCwd: cfg.WorkspaceRoot, executionHookTool: executionOmpBash, executionHookInput: map[string]any{hookTypeCommand: command}})
-				b = h.DecideExecutionOmp(ompRaw, executionHookProbe, cfg.WorkspaceRoot, a.executionProtected(s))
 				out.Hook.Decision = ""
+				b = h.DecideExecutionOmp(ompRaw, executionHookProbe, cfg.WorkspaceRoot, a.executionProtected(s))
 				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 					return errors.New("omp execution hook conformance probe failed")
 				}
 			}
-			if _, ok := cfg.Harnesses[execution.HarnessCodex]; !ok {
-				continue
+			if _, ok := cfg.Harnesses[execution.HarnessCodex]; ok {
+				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
+				out.Hook.Decision = ""
+				b = h.DecideExecutionCodex(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
+					return errors.New("codex execution hook conformance probe failed")
+				}
 			}
-			raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", executionOmpSession: executionHookProbe, executionOmpCwd: cfg.WorkspaceRoot, executionHookTool: "exec_command", executionHookInput: map[string]any{"cmd": command}})
-			out.Hook.Decision = ""
-			b = h.DecideExecutionCodex(raw, executionHookProbe, cfg.WorkspaceRoot, a.executionProtected(s))
-			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
-				return errors.New("codex execution hook conformance probe failed")
+			if _, ok := cfg.Harnesses[execution.HarnessAgy]; ok {
+				raw, _ = json.Marshal(map[string]any{"conversationId": probeSession, "workspacePaths": []string{cfg.WorkspaceRoot}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": command}}})
+				var agyOut struct {
+					Decision string `json:"decision"`
+				}
+				b = h.DecideExecutionAgy(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &agyOut) != nil || agyOut.Decision != guardDeny {
+					return errors.New("agy execution hook conformance probe failed")
+				}
 			}
 		}
 		return nil
@@ -162,10 +172,10 @@ func (a *app) executionHook() guard.Hook {
 	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
-// executionGuardDecision picks the guard for the hook's format. A hook in the
-// other harness's format is configuration that does not belong to this
+// executionGuardDecision picks the guard for the hook's format. A hook in
+// another harness's format is configuration that does not belong to this
 // execution: it is denied in the format asked for, never translated. A codex
-// hook binds its calls to the thread the runner recorded.
+// or agy hook binds its calls to the thread the runner recorded.
 func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
 	h.ExecutionMCP = j.Request.MCP
 	if format == execution.HarnessOmp {
@@ -189,22 +199,34 @@ func executionGuardDecision(h guard.Hook, format string, j execution.Journal, pr
 			return out
 		}
 	}
-	if j.Request.Harness == execution.HarnessOmp {
-		return func([]byte) []byte { return guard.ExecutionDeny("hook format does not match the execution harness") }
+	deny := guard.ExecutionDeny
+	switch format {
+	case execution.HarnessCodex:
+		deny = guard.ExecutionDenyCodex
+	case execution.HarnessAgy:
+		deny = guard.ExecutionDenyAgy
 	}
-	codexHook := format == execution.HarnessCodex
-	if codexHook != (j.Request.Harness == execution.HarnessCodex) {
-		deny := guard.ExecutionDeny
-		if codexHook {
-			deny = guard.ExecutionDenyCodex
-		}
+	wantFormat := ""
+	switch j.Request.Harness {
+	case execution.HarnessCodex:
+		wantFormat = execution.HarnessCodex
+	case execution.HarnessAgy:
+		wantFormat = execution.HarnessAgy
+	case execution.HarnessOmp:
+		wantFormat = execution.HarnessOmp
+	}
+	if format != wantFormat {
 		return func([]byte) []byte { return deny("hook format does not match the execution's harness") }
 	}
-	if codexHook {
+	switch format {
+	case execution.HarnessCodex:
 		return func(raw []byte) []byte { return h.DecideExecutionCodex(raw, j.Thread, j.Handle.Workspace, protected) }
-	}
-	return func(raw []byte) []byte {
-		return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
+	case execution.HarnessAgy:
+		return func(raw []byte) []byte { return h.DecideExecutionAgy(raw, j.Thread, j.Handle.Workspace, protected) }
+	default:
+		return func(raw []byte) []byte {
+			return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
+		}
 	}
 }
 
@@ -303,7 +325,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -344,8 +366,11 @@ func (a *app) executionHostCmds() []*cobra.Command {
 	guardCmd := &cobra.Command{Use: "execution-guard", Hidden: true, Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return nil }, RunE: func(cmd *cobra.Command, _ []string) error {
 		var out []byte
 		denial := guard.ExecutionDeny
-		if guardFormat == execution.HarnessCodex {
+		switch guardFormat {
+		case execution.HarnessCodex:
 			denial = guard.ExecutionDenyCodex
+		case execution.HarnessAgy:
+			denial = guard.ExecutionDenyAgy
 		}
 		if guardFormat == execution.HarnessOmp {
 			denial = guard.ExecutionDenyOmp
@@ -359,7 +384,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 			_, err := cmd.OutOrStdout().Write(denial("execution identity, policy or coordinating authority could not be verified"))
 			return err
 		}
-		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessOmp {
+		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessAgy && guardFormat != execution.HarnessOmp {
 			return deny()
 		}
 		if err := a.load(); err != nil {
@@ -391,7 +416,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		}
 		return err
 	}}
-	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex, omp")
+	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex, agy or omp")
 	run := &cobra.Command{Use: "execution-run <execution>", Hidden: true, Args: cobra.ExactArgs(1), PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return a.load() }, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.hostRuntime()
 		if err != nil {
@@ -457,7 +482,30 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(caps)
+		// Keep the observed release and toolchain visible even when the
+		// coordinator release differs, so operators can diagnose the host.
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
+			return err
+		}
+		return checkHostRelease(caps.Version)
+	}})
+	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot provision host tools")
+		}
+		s, err := a.hostRuntime()
+		if err != nil {
+			return err
+		}
+		busy, release, err := s.Quiesce(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer release()
+		if busy > 0 {
+			return refused("execution host is busy; tool provisioning waits until executions end")
+		}
+		return s.ProvisionTools(cmd.Context())
 	}})
 	c.AddCommand(a.executionHostUpdateCmds()...)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
@@ -536,4 +584,12 @@ func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord
 		}
 	}
 	return nil, -1
+}
+
+func checkHostRelease(version string) error {
+	want := coordinatorVersion()
+	if releaseVersion(want) && version != want {
+		return refused("execution host runs %s, coordinator runs %s; run beekeeper agents hosts update <host>", version, want)
+	}
+	return nil
 }

@@ -83,7 +83,7 @@ type secretFiles struct {
 
 // newSecretFiles takes the built-in list and extra, ~/ expanded.
 func newSecretFiles(extra []string) secretFiles {
-	home, _ := os.UserHomeDir()
+	home, _ := guardHomeDir()
 	f := secretFiles{home: home}
 	list := slices.Concat(SecretFiles, extra, []string{"~/.local/state/beekeeper/codex/home/auth.json"})
 	if ch := strings.TrimSpace(os.Getenv("CODEX_HOME")); ch != "" {
@@ -219,6 +219,28 @@ func (g secretGuard) fileLeak(words []string, dirs []string) *leak {
 		return l
 	} else if checked {
 		isMeta = true // a link to a guarded file, no read of it
+	}
+	// A directory copy (including cp -rs) exposes every guarded descendant.
+	// Refuse it at the source, before an alias can escape the path guard.
+	if name == "cp" {
+		sources, _, _, _ := lnOperands(args)
+		for _, d := range dirs {
+			for _, source := range sources {
+				if file := g.files.holds(wordPath(source, d)); file != "" {
+					return &leak{what: "a copy of " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+				}
+			}
+		}
+	}
+	// Opaque helpers may assemble a path from separate arguments.
+	if !isMeta && len(args) > 1 {
+		for _, joined := range []string{strings.Join(args, ""), strings.Join(args, "/")} {
+			for _, d := range dirs {
+				if file := g.files.match(wordPath(joined, d)); file != "" {
+					return &leak{what: "a split path to " + file + ", a file that holds secret values", safe: fileReadSafe(file), file: file}
+				}
+			}
+		}
 	}
 	if name == findCmd {
 		if file := g.files.findSource(args, dirs, g.feeds); file != "" {

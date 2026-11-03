@@ -310,8 +310,8 @@ func TestSnapshotGroupedPageAndTeamFirst(t *testing.T) {
 		t.Errorf("head = %q", lines[0])
 	}
 	equal(t, got, []string{
-		"PAGE BUMBLEBEE DeploymentNotSatisfiedBumblebee alpha 1",
-		"PAGE shield FluxCustomerHelmReleaseFailed acme0230 2",
+		"PAGE BUMBLEBEE DeploymentNotSatisfiedBumblebee alpha 1 namespace=agent-platform",
+		"PAGE shield FluxCustomerHelmReleaseFailed acme0230 2 namespace=org-acme",
 		"notify rocket ManagementClusterContainerIsRestartingTooFrequently alpha 1",
 	})
 }

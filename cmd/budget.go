@@ -131,6 +131,9 @@ unread core budget:
 				for _, l := range searchLines(a, b.Search) {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
+				if l := loopSpendLine(a, loopSpend); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
@@ -255,6 +258,25 @@ func probeSearch(ctx context.Context) *github.Searches {
 		result.Search, result.CodeSearch = minimum(result.Search, s.Search), minimum(result.CodeSearch, s.CodeSearch)
 	}
 	return result
+}
+
+func loopSpendLine(a *app, s loopGraphQLSpend) string {
+	if s.Spent == 0 && len(s.Steps) == 0 {
+		return ""
+	}
+	var steps []string
+	for step, points := range s.Steps {
+		steps = append(steps, fmt.Sprintf("%s %d", step, points))
+	}
+	slices.Sort(steps)
+	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, loopGraphQLLimit)
+	if len(steps) > 0 {
+		line += " (" + strings.Join(steps, ", ") + ")"
+	}
+	if !s.Reset.IsZero() {
+		line += ", resets " + clock(a.now, s.Reset)
+	}
+	return line
 }
 
 // searchLines are a row per search limit: its figures and reset, or that it

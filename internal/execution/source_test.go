@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,72 @@ func TestWorkspaceStartsAtCoordinatorHeadWithStaleHost(t *testing.T) {
 	retry, err := f.s.Start(ctx, f.r)
 	if err != nil || retry.Commit != head {
 		t.Fatalf("retry changed pinned source: %v", err)
+	}
+}
+
+func TestWorkspaceUnshallowsHostCheckoutWhenPinnedSourceIsComplete(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := filepath.Join(root, "upstream")
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := hostCommand(ctx, dir, os.Environ(), "git", args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "clone", f.source, upstream)
+	git(upstream, "config", "user.name", "Fixture")
+	git(upstream, "config", "user.email", "fixture@example.invalid")
+	for _, name := range []string{"second.txt", "third.txt"} {
+		if err := os.WriteFile(filepath.Join(upstream, name), []byte(name+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		git(upstream, "add", name)
+		git(upstream, "commit", "-m", "add "+name)
+	}
+	// Replace the host's mapped checkout with a shallow clone of an older commit.
+	shallowSource := filepath.Join(root, "shallow-source")
+	git("", "clone", "--depth", "1", "file://"+f.source, shallowSource)
+	git(shallowSource, "remote", "set-url", "origin", "https://github.com/"+f.r.Repository+".git")
+	f.s.Config.Repositories[f.r.Repository] = shallowSource
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+
+	head := git(upstream, "rev-parse", "HEAD")
+	git(upstream, "update-ref", "refs/heads/execution-source", head)
+	bundle := filepath.Join(root, "source.bundle")
+	git(upstream, "bundle", "create", bundle, "refs/heads/execution-source")
+	data, err := readRegular(bundle, MaxSourceBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := f.s.sourcePath(f.r.Ref)
+	if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicFile(source, data); err != nil {
+		t.Fatal(err)
+	}
+	f.r.GitRef, f.r.SourceDigest = head, Digest(data)
+
+	handle, err := f.s.Start(ctx, f.r)
+	if err != nil {
+		t.Fatalf("prepare workspace from shallow host checkout: %v", err)
+	}
+	if got := git(handle.Workspace, "rev-parse", "--is-shallow-repository"); got != "false" {
+		t.Fatalf("provisioned workspace remained shallow: %s", got)
+	}
+	if got := git(handle.Workspace, "rev-list", "--count", "HEAD"); got != "3" {
+		t.Fatalf("provisioned workspace history count = %s, want 3", got)
 	}
 }
 
@@ -193,5 +260,73 @@ func TestSourceInspectionDistinguishesMissingAndUnreadableJournal(t *testing.T) 
 	}
 	if _, err := transport.Inspect(ctx, f.r.Ref); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("unreadable journal treated as absent: %v", err)
+	}
+}
+
+// An organization admitted by host policy needs no preseeded source checkout.
+func TestWorkspaceProvisionsThirdRepository(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprint(denied), func(t *testing.T) {
+			f := testFixture(t)
+			ctx := context.Background()
+			out, err := f.s.git(ctx, f.source, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := strings.TrimSpace(string(out))
+			if _, err := f.s.git(ctx, f.source, "update-ref", "refs/heads/execution-source", head); err != nil {
+				t.Fatal(err)
+			}
+			bundle := filepath.Join(t.TempDir(), "source.bundle")
+			if _, err := f.s.git(ctx, f.source, "bundle", "create", bundle, "refs/heads/execution-source"); err != nil {
+				t.Fatal(err)
+			}
+			data, err := readRegular(bundle, MaxSourceBundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(f.s.Config)
+			var config map[string]any
+			if err := json.Unmarshal(raw, &config); err != nil {
+				t.Fatal(err)
+			}
+			config["repositoryOrgs"] = []string{fixtureRepositoryOwner}
+			raw, _ = json.Marshal(config)
+			if err := json.Unmarshal(raw, &f.s.Config); err != nil {
+				t.Fatal(err)
+			}
+			digest, err := f.s.Prepare(f.s.Policy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.r.Repository, f.r.GitRef, f.r.SourceDigest, f.r.PolicyDigest = "example/third", head, Digest(data), digest
+			if denied {
+				f.r.Repository = "foreign/third"
+			}
+			if err := f.s.ReceiveSource(ctx, f.r.Ref, SourceChunk{Total: int64(len(data)), Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			h, err := f.s.Start(ctx, f.r)
+			if denied {
+				if err == nil {
+					t.Fatal("untrusted repository admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("provision third repository: %v", err)
+			}
+			origin, err := f.s.git(ctx, h.Workspace, "remote", "get-url", "origin")
+			if err != nil || strings.TrimSpace(string(origin)) != "https://github.com/example/third.git" {
+				t.Fatalf("origin=%s err=%v", origin, err)
+			}
+			if h.Commit != head {
+				t.Fatalf("commit=%s want=%s", h.Commit, head)
+			}
+			again, err := f.s.Start(ctx, f.r)
+			if err != nil || again.Commit != head {
+				t.Fatalf("retry: %v %v", again, err)
+			}
+		})
 	}
 }
