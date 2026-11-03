@@ -19,7 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.StateDir != "/state/beekeeper" || c.LeaseDir != "/state/beekeeper/leases" || c.GitHub.Floor != 2500 ||
-		c.Watch.Interval.Duration != 30*time.Second || c.Watch.BatchInterval.Duration != 5*time.Minute || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 200_000 {
+		c.LeaseRound.Duration != time.Hour || c.Watch.Interval.Duration != 30*time.Second || c.Watch.BatchInterval.Duration != 5*time.Minute || c.Watch.LoadMax != 0 || c.Watch.LoadLimit(24) != 36 || c.Agents.RelayAt != 400_000 || c.Guide.RelayAt != 200_000 {
 		t.Errorf("defaults = %+v", c)
 	}
 	if len(c.Notify.Kinds) != 5 || c.Notify.Policy().Quiet != nil {
@@ -50,6 +50,7 @@ func TestLoadFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	raw := `resources: [kind-1, staging]
 grantTTL: 10m
+leaseRound: 45m
 github: {floor: 3000}
 watch: {interval: 1m}
 alerts:
@@ -71,7 +72,7 @@ supervisor: {loop: true, relayAt: 1.5M, skill: beekeeper:supervise, restartGrace
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.GitHub.Floor != 3000 ||
+	if !c.IsLeasable("staging") || c.GrantTTL.Duration != 10*time.Minute || c.LeaseRound.Duration != 45*time.Minute || c.GitHub.Floor != 3000 ||
 		c.Watch.Interval.Duration != time.Minute || c.Guide.RelayAt != 1_500_000 {
 		t.Errorf("config = %+v", c)
 	}
@@ -171,6 +172,7 @@ func TestLoadRejects(t *testing.T) {
 		"pagerduty without services":  "alerts: {pagerduty: {context: example}}",
 		"flapping at once":            "alerts: {flap: {changes: 1}}",
 		"bad duration":                "grantTTL: soon",
+		"negative lease round":        "leaseRound: -1h",
 		"sink without a repo":         "sink: {workflow: refresh.yaml}",
 		"sink repo not owner/repo":    "sink: {repo: site, workflow: refresh.yaml}",
 		"sink without a workflow":     "sink: {repo: o/site}",

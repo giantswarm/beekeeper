@@ -9,16 +9,22 @@ A plain build reports the version Go derives from the checkout's tag (`v0.2.0+di
 binary `dev`, which `self-update` refuses. To try `self-update` against the latest release, stamp
 an older version: `go build -ldflags "-X github.com/giantswarm/beekeeper/pkg/project.version=0.0.1" .`
 
-Reviewed supervisor merges require a GitHub merge queue on the target branch, with the
-repository's required CI checks running on `merge_group` events. The queue validates the
-actual combination again when the base advances; a local check cannot atomically pin
-GitHub's base. Queue submissions never use `--admin`, which would bypass this protection.
-A missing or unreadable queue is a tooling refusal, not permission to merge directly.
+Before a reviewed supervisor merge, the lane builds the pull request merged into the
+freshly fetched base in a temporary worktree of the repository's local checkout (found
+in `disk.checkouts`, `agents.dir` or `agents.roots`, `~/` expanded, as `<root>`,
+`<root>/<name>` or `<root>/<owner>/<name>`) whenever the base has moved past the head.
+For Go modules it runs configured lint and `go test ./...`, including unchanged tests and
+reverse dependents even for dependency-only changes; `golangci-lint` must be on PATH. A
+failing combination goes back to its owner. A failed fetch, a reviewed commit that cannot
+be read or a missing lint tool refuses the merge with
+`merge-result validation unavailable: <the condition that failed>`. A repository with no
+local checkout is not validated: the merge's reason says so and the pull request's own
+checks stand, as for a head that already contains its base.
 
-The local merge-result guard also requires a matching checkout, a successful fetch of
-the current base, the reviewed commit, and `golangci-lint` on PATH. For Go modules it
-runs configured lint and `go test ./...`, including unchanged tests and reverse
-dependents even for dependency-only changes. A missing prerequisite fails closed.
+Where the base branch has a GitHub merge queue (required CI on `merge_group` events), the
+merge is submitted to the queue, which retests the combination if the base advances, and
+never with `--admin`. Without a queue the lane's own check is the validation and the
+desk's admin merge (`merge.admin`) applies; an unreadable queue answer refuses the merge.
 
 A merge to `main` cuts a release candidate, `vX.Y.Z-rc.N` (a GitHub pre-release with signed assets);
 `devctl release promote giantswarm/beekeeper` makes the stable release, and `self-update` installs
@@ -664,7 +670,8 @@ same start policy as manual starts.
 
 Each `capacity.choices` entry may carry a desk-maintained `class` (nonnegative
 capability rank), `cost` (positive relative cost), `family`, `kinds` (allowed
-kinds; empty allows all), and `reviewReserve` (0–100 percent of the weekly
+kinds; empty allows all, except that a choice on a self-hosted provider takes
+the `worker` kind, code changes, only when its `kinds` list it), and `reviewReserve` (0–100 percent of the weekly
 window kept for reviews). `capacity.taskPolicies.<kind>.minClass` and `maxCost`
 constrain the choices. A positive maximum rejects unknown costs. Class 0 means
 unclassified. No changing provider price or capability claim is shipped.

@@ -41,6 +41,7 @@ identity:
 # leaseDir: /home/ada/.local/state/beekeeper/leases   # default: <stateDir>/leases, one directory per held lease
 resources: [kind-1, kind-2, staging, production, homelab]   # leasable besides the browser (and the model server)
 labs: {kind-1: kind, kind-2: kind-2}   # a lab lease and the kind cluster it stands for
+leaseRound: 1h             # default round when the lease purpose names no duration
 grantTTL: 30m               # a grant expires this long after its resource is free
 shell: zsh                  # the shell the hook runs a rewritten build in; default: $SHELL, else sh
 maxKindClusters: 2          # kind clusters the machine runs at most; default: one per 40 GiB of RAM, at least one
@@ -315,6 +316,7 @@ capacity:                   # the busy agents the supervisor keeps (beekeeper ca
   #   review: {differentFamily: true}  # the loop supplies the author's model; manual reviews need --author-model
   # choices may add kinds: [worker, review], class: 3, cost: 5,
   # family: claude and reviewReserve: 20 (percent of the weekly window).
+  # A self-hosted choice writes code (kind worker) only when its kinds list it.
   choices:                  # ordered (harness, model) candidates for agents start (no --harness, or --harness auto), beekeeper capacity pick and the supervisor loop; every start alike, none ahead of its provider's even 7-day pace
     - {harness: claude, model: claude-opus-4-7, paceMargin: 0}
     - {harness: agy, model: claude-opus-4-6-thinking, paceMargin: 0}
