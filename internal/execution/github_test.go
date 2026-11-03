@@ -24,7 +24,7 @@ func TestWorkerGitHubDispatchPreservesClientArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"gh", GitHubGitTool} {
-		verb, args := "github-cli", []string{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}
+		verb, args := "github-cli", []string{workerGitHubIssueGroup, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}
 		if name == GitHubGitTool {
 			verb, args = "github-git", []string{"push", "origin", "HEAD:refs/heads/beekeeper-execution/fixture/1"}
 		}
@@ -42,13 +42,16 @@ func TestWorkerGitHubDispatchPreservesClientArguments(t *testing.T) {
 }
 
 const (
-	workerGitHubIssue       = "issue"
-	workerGitHubView        = "view"
-	workerGitHubStatus      = "status"
 	workerGitHubMainBranch  = "main"
 	workerGitHubPrivateRepo = "example/private"
 	workerGitHubTestPath    = "PATH=/usr/bin"
 	workerGitHubTestDir     = "/tmp/fixture"
+	workerGitHubDefaultRepo = "example/default"
+	workerGitHubOutsideRepo = "outside/project"
+	workerGitHubDelete      = "delete"
+	workerGitHubBodyFlag    = "--body"
+	workerGitHubTitleField  = "title=fixture"
+	workerGitHubTag         = "v1.0.0"
 )
 
 func TestWorkerGitHubPushScope(t *testing.T) {
@@ -64,20 +67,126 @@ func TestWorkerGitHubPushScope(t *testing.T) {
 }
 
 func TestWorkerGitHubRepositorySelection(t *testing.T) {
-	for _, args := range [][]string{{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}, {"pr", workerGitHubView, "https://github.com/example/private/pull/1"}, {"api", "repos/example/private/actions/runs"}} {
-		repo, err := GitHubRepository(args, "example/default")
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}, {"pr", workerGitHubView, "https://github.com/example/private/pull/1"}, {"api", "repos/example/private/actions/runs"}} {
+		repo, err := GitHubRepository(args, workerGitHubDefaultRepo)
 		if err != nil || repo != workerGitHubPrivateRepo {
 			t.Fatalf("scope %q err %v", repo, err)
 		}
 	}
-	if _, err := GitHubRepository([]string{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, "outside/repo/extra"}, "example/default"); err == nil {
+	if _, err := GitHubRepository([]string{workerGitHubIssueGroup, workerGitHubView, "1", workerGitHubRepoFlag, "outside/repo/extra"}, workerGitHubDefaultRepo); err == nil {
 		t.Fatal("invalid repository accepted")
+	}
+}
+
+func TestWorkerGitHubWriteRepositoryResolvesEveryTarget(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{workerGitHubIssueGroup, workerGitHubCreate, "--title", mcpFixtureName}, workerGitHubDefaultRepo},
+		{[]string{workerGitHubIssueGroup, workerGitHubClose, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}, workerGitHubPrivateRepo},
+		{[]string{workerGitHubPRGroup, workerGitHubComment, "https://github.com/Example/Private/pull/1", "--repo=example/private"}, workerGitHubPrivateRepo},
+		{[]string{workerGitHubIssueGroup, workerGitHubComment, "1", workerGitHubBodyFlag, "repos/outside/project"}, workerGitHubDefaultRepo},
+		{[]string{workerGitHubIssueGroup, workerGitHubComment, "1", workerGitHubBodyFlag, "https://example.invalid/outside/project"}, workerGitHubDefaultRepo},
+	} {
+		if repo, err := GitHubWriteRepository(tc.args, workerGitHubDefaultRepo); err != nil || repo != tc.want {
+			t.Errorf("%v: scope %q err %v", tc.args, repo, err)
+		}
+	}
+	for _, args := range [][]string{
+		{workerGitHubIssueGroup, workerGitHubComment, "1", workerGitHubRepoFlag, workerGitHubOutsideRepo, workerGitHubBodyFlag, "https://github.com/example/private/issues/1"},
+		{workerGitHubIssueGroup, workerGitHubClose, "https://github.com/outside/project/issues/1", workerGitHubRepoFlag, workerGitHubPrivateRepo},
+		{workerGitHubIssueGroup, workerGitHubClose, "http://github.com/outside/project/issues/1", workerGitHubRepoFlag, workerGitHubPrivateRepo},
+		{workerGitHubIssueGroup, workerGitHubClose, "HTTPS://WWW.GITHUB.COM/outside/project/issues/1", workerGitHubRepoFlag, workerGitHubPrivateRepo},
+		{workerGitHubIssueGroup, workerGitHubEdit, "https://github.com/example/private/issues/1", "https://github.com/outside/project/issues/2"},
+		{workerGitHubIssueGroup, workerGitHubClose, "1", "-Routside/project"},
+		{workerGitHubIssueGroup, workerGitHubClose, "1", "-R=outside/project"},
+		{workerGitHubPRGroup, workerGitHubCreate, "-dR", workerGitHubOutsideRepo},
+		{workerGitHubIssueGroup, workerGitHubClose, "1", workerGitHubRepoPrefix},
+		{workerGitHubIssueGroup, workerGitHubClose, "1", workerGitHubRepoFlag},
+	} {
+		if repo, err := GitHubWriteRepository(args, workerGitHubPrivateRepo); err == nil {
+			t.Errorf("%v: ambiguous write scoped to %q", args, repo)
+		}
+	}
+}
+
+func TestWorkerGitHubWriteClassification(t *testing.T) {
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate}, {workerGitHubIssueGroup, workerGitHubClose, "1"}, {workerGitHubIssueGroup, "reopen", "1"}, {workerGitHubIssueGroup, workerGitHubEdit, "1"}, {workerGitHubPRGroup, workerGitHubComment, "1"}} {
+		if write, err := GitHubWrite(args); err != nil || !write {
+			t.Errorf("%v: write %v err %v", args, write, err)
+		}
+	}
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubView, "1"}, {workerGitHubPRGroup, "checks", "1"}, {workerGitHubRunGroup, "watch", "1"}, {workerGitHubRepoGroup, workerGitHubClone, "example/private"}, {workerGitHubReleaseGroup, workerGitHubDownload, workerGitHubTag}, {workerGitHubWorkflowGroup, workerGitHubList}} {
+		if write, err := GitHubWrite(args); err != nil || write {
+			t.Errorf("%v: write %v err %v", args, write, err)
+		}
+	}
+	for _, args := range [][]string{
+		{workerGitHubIssueGroup}, {workerGitHubIssueGroup, workerGitHubRepoFlag, workerGitHubOutsideRepo, workerGitHubClose, "1"},
+		{workerGitHubIssueGroup, workerGitHubDelete, "1"}, {workerGitHubIssueGroup, "transfer", "1", workerGitHubOutsideRepo}, {workerGitHubIssueGroup, "new"},
+		{workerGitHubPRGroup, workerGitHubClose, "1"}, {workerGitHubPRGroup, "review", "1"}, {workerGitHubPRGroup, "update-branch", "1"},
+		{workerGitHubRepoGroup, workerGitHubDelete, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, workerGitHubEdit, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, "deploy-key", "add"},
+		{workerGitHubRunGroup, "cancel", "1"}, {workerGitHubRunGroup, "rerun", "1"}, {workerGitHubRunGroup, workerGitHubDelete, "1"},
+		{workerGitHubWorkflowGroup, workerGitHubRunGroup, mcpFixtureName}, {workerGitHubWorkflowGroup, "enable", mcpFixtureName}, {workerGitHubWorkflowGroup, "disable", mcpFixtureName},
+		{workerGitHubReleaseGroup, workerGitHubCreate, workerGitHubTag}, {workerGitHubReleaseGroup, workerGitHubDelete, workerGitHubTag}, {workerGitHubReleaseGroup, "delete-asset", workerGitHubTag, mcpFixtureName}, {workerGitHubReleaseGroup, workerGitHubEdit, workerGitHubTag}, {workerGitHubReleaseGroup, "upload", workerGitHubTag, mcpFixtureName},
+	} {
+		if write, err := GitHubWrite(args); err == nil {
+			t.Errorf("%v: unsupported command dispatched, write %v", args, write)
+		}
+	}
+}
+
+func TestWorkerGitHubAPIDispatchIsReadOnly(t *testing.T) {
+	const endpoint = "repos/example/private/issues"
+	for _, args := range [][]string{
+		{endpoint},
+		{endpoint, "--paginate", "--jq", ".[].title"},
+		{endpoint, "-q", ".[].title", "-i"},
+		{endpoint, "-iq.[].title"},
+		{"-X", workerGitHubGet, endpoint, "-f", "state=open"},
+		{"--method=get", endpoint, "-F", "per_page=100"},
+		{"-XHEAD", endpoint},
+		{"-H", "Accept: application/vnd.github+json", endpoint},
+		{"--", endpoint},
+	} {
+		if err := ValidateGitHubAPIRead(args); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{},
+		{"-X", "PATCH", endpoint},
+		{"-Xpatch", endpoint},
+		{"-X=PATCH", endpoint},
+		{"-iXPATCH", endpoint},
+		{"--method", "POST", endpoint},
+		{"--method=PATCH", endpoint},
+		{"-X", workerGitHubGet, "-X", "DELETE", endpoint},
+		{"-X"},
+		{endpoint, "-f", workerGitHubTitleField},
+		{endpoint, "-ftitle=fixture"},
+		{endpoint, "-F", workerGitHubTitleField},
+		{endpoint, "--raw-field=title=fixture"},
+		{endpoint, "--field", workerGitHubTitleField},
+		{endpoint, "-if", workerGitHubTitleField},
+		{"graphql", "-f", "query=query { viewer { login } }"},
+		{endpoint, "--input", "fixture.json"},
+		{endpoint, "--input=-"},
+		{endpoint, "--hostname", "example.invalid"},
+		{endpoint, "-H", "X-HTTP-Method-Override: PATCH"},
+		{endpoint, "--unknown"},
+		{endpoint, "second"},
+	} {
+		if err := ValidateGitHubAPIRead(args); err == nil {
+			t.Errorf("%v: mutation dispatched as a read", args)
+		}
 	}
 }
 
 func TestWorkerGitHubEnvironmentContainsDispatchOnly(t *testing.T) {
 	s := &Server{Root: t.TempDir(), Executable: "/usr/bin/beekeeper", ConfigPath: "/etc/beekeeper/host.yaml"}
-	j := Journal{Request: StartRequest{GitHub: true}, Handle: Handle{Ref: Ref{Execution: "fixture"}}}
+	j := Journal{Request: StartRequest{GitHub: true}, Handle: Handle{Ref: Ref{Execution: mcpFixtureName}}}
 	env, err := s.GitHubEnvironment(j, []string{workerGitHubTestPath})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +195,7 @@ func TestWorkerGitHubEnvironmentContainsDispatchOnly(t *testing.T) {
 		t.Fatal("dispatch directory absent")
 	}
 	for _, name := range []string{"gh", GitHubGitTool} {
-		p := filepath.Join(s.Root, workerGitHubBinDir, "fixture", name)
+		p := filepath.Join(s.Root, workerGitHubBinDir, mcpFixtureName, name)
 		b, err := os.ReadFile(p) //nolint:gosec // generated dispatch script in the test-owned temporary directory
 		if err != nil {
 			t.Fatal(err)

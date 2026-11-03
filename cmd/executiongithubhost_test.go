@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,9 @@ import (
 const workerGitHubTokenVerb = "token"
 const workerGitHubRevParse = "rev-parse"
 const workerGitHubMissingRef = "missing"
+const workerGitHubClose = "close"
+const workerGitHubDelete = "delete"
+const workerGitHubIssueNumber = "123"
 
 func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
@@ -35,7 +39,8 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	cli := filepath.Join(root, "gh")
-	script := "#!/bin/sh\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n[ \"$GH_REPO\" = 'example/private' ] || exit 8\nprintf 'private issue proof\\n'\n"
+	cliArgs := filepath.Join(root, "gh-args")
+	script := "#!/bin/sh\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n[ \"$GH_REPO\" = 'example/private' ] || exit 8\nprintf '%s\\n' \"$*\" >> '" + cliArgs + "'\nprintf 'private issue proof\\n'\n"
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in this test's temporary directory
 		t.Fatal(err)
 	}
@@ -52,7 +57,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	}
 	s.OwnUnit = func() string { return j.Handle.Unit }
 	calls := 0
-	wantRepo, wantWrite := workerGitHubPrivateRepo, false
+	wantRepo, wantWrite, refuseIssue := workerGitHubPrivateRepo, false, false
 	s.Callback = func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
 		var req execution.CallbackRequest
 		if err := execution.Decode(raw, &req); err != nil {
@@ -63,6 +68,9 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 			t.Fatal("wrong host callback scope")
 		}
 		calls++
+		if refuseIssue {
+			return nil, errors.New("worker GitHub repository is outside configured owners")
+		}
 		return json.Marshal(execution.WireResponse{Protocol: execution.Protocol, RequestID: req.RequestID, Ref: r.Ref, Payload: mustExecutionJSON(t, workerGitHubToken{Token: workerTokenFixture, Expires: time.Now().Add(time.Hour)})})
 	}
 	a.executionRuntime = func() (*execution.Server, error) { return s, nil }
@@ -97,6 +105,70 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		}
 	}
 
+	// Only a PR takes the execution branch: gh issue create has no --head.
+	wantWrite = true
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, "--title", remoteMCPFixture}, {"pr", workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, "--title", remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", loopRepoFlag, workerGitHubPrivateRepo}} {
+		c := a.executionGitHubCommands()[0]
+		c.SetOut(&output)
+		c.SetErr(&output)
+		c.SetArgs(args)
+		c.SilenceErrors, c.SilenceUsage = true, true
+		if err := c.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	logged, err := os.ReadFile(cliArgs) //nolint:gosec // argument log written by this test's fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatched := strings.Split(strings.TrimSpace(string(logged)), "\n")
+	if len(dispatched) != 6 || strings.Contains(dispatched[3], workerGitHubHeadFlag) || !strings.HasSuffix(dispatched[4], workerGitHubHeadFlag+" "+execution.GitHubBranch(r.Ref)) || strings.Contains(dispatched[5], workerGitHubHeadFlag) {
+		t.Fatalf("create dispatched wrong arguments: %q", dispatched)
+	}
+	wantWrite = false
+	c = a.executionGitHubCommands()[0]
+	c.SetOut(&output)
+	c.SetErr(&output)
+	c.SetArgs([]string{workerGitHubAPIGroup, "-X", "GET", "repos/example/private/issues", "-f", "state=open"})
+	c.SilenceErrors, c.SilenceUsage = true, true
+	if err := c.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A mutation of an outside repository asks for a write, never a read
+	// credential, so the issuer's github.allowedOrgs check applies to it.
+	wantRepo, wantWrite, refuseIssue = "outside/project", true, true
+	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, loopRepoFlag, wantRepo}, {workerGitHubIssueGroup, "reopen", "https://github.com/outside/project/issues/123"}} {
+		c := a.executionGitHubCommands()[0]
+		c.SetArgs(args)
+		c.SilenceErrors, c.SilenceUsage = true, true
+		if c.ExecuteContext(context.Background()) == nil {
+			t.Fatalf("%v: outside mutation dispatched", args)
+		}
+	}
+	issued := calls
+	for _, args := range [][]string{
+		{workerGitHubIssueGroup, workerGitHubDelete, workerGitHubIssueNumber, loopRepoFlag, wantRepo},
+		{"pr", workerGitHubClose, workerGitHubIssueNumber, loopRepoFlag, wantRepo},
+		{workerGitHubReleaseGroup, workerGitHubDelete, "v1.0.0", loopRepoFlag, wantRepo},
+		{workerGitHubWorkflowGroup, "run", remoteMCPFixture, loopRepoFlag, wantRepo},
+		{workerGitHubRunGroup, "rerun", workerGitHubIssueNumber, loopRepoFlag, wantRepo},
+		{workerGitHubRepoGroup, workerGitHubDelete, wantRepo, "--yes"},
+		{workerGitHubIssueGroup, workerGitHubClose, workerGitHubIssueNumber, "-Routside/project"},
+		{workerGitHubIssueGroup, workerGitHubClose, "https://github.com/outside/project/issues/123", loopRepoFlag, workerGitHubPrivateRepo},
+		{workerGitHubAPIGroup, "--method=PATCH", "repos/outside/project/issues/123"},
+		{workerGitHubAPIGroup, "-XPATCH", "repos/outside/project/issues/123"},
+		{workerGitHubAPIGroup, "repos/outside/project/issues", "-f", "title=fixture"},
+		{workerGitHubAPIGroup, "repos/outside/project/issues", "-F", "title=fixture"},
+	} {
+		c := a.executionGitHubCommands()[0]
+		c.SetArgs(args)
+		c.SilenceErrors, c.SilenceUsage = true, true
+		if c.ExecuteContext(context.Background()) == nil || calls != issued {
+			t.Fatalf("%v: unsupported mutation reached token issuer", args)
+		}
+	}
+	refuseIssue, calls = false, 3
 	// Reviews need a write-scoped credential for the task repository.
 	wantRepo, wantWrite = r.Repository, true
 	if err := os.WriteFile(cli, []byte("#!/bin/sh\nprintf 'review posted\\n'\n"), 0o700); err != nil { //nolint:gosec // executable test fixture
@@ -110,6 +182,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantRepo, wantWrite = workerGitHubPrivateRepo, false
+	calls = 3
 
 	// The same dispatch path invokes git on the host, with the owned branch
 	// and token in its environment, while local commands never ask for one.
@@ -184,8 +257,8 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	destination := filepath.Join(root, "destination.git")
 	runGit(root, "init", "--bare", destination)
 	runGit(workspace, "init")
-	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture")
-	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "tag", "-a", "unexpected-tag", "-m", "fixture")
+	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", remoteMCPFixture)
+	runGit(workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "tag", "-a", "unexpected-tag", "-m", remoteMCPFixture)
 	runGit(workspace, "branch", "unexpected-branch")
 	runGit(workspace, "config", "push.followTags", "true")
 	shim := "#!/bin/sh\nexec '" + realGit + "' -c 'protocol.file.allow=always' -c 'url.file://" + destination + ".insteadOf=https://github.com/" + r.Repository + ".git' \"$@\"\n"
