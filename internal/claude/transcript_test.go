@@ -236,6 +236,31 @@ func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
 	}
 }
 
+func TestTailAskUserQuestion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := strings.Join([]string{
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which retention policy?"}]}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions: \"Which retention policy?\"=\"Keep 30 days with 2 GiB cap\"."}]},"toolUseResult":{"answers":{"Which retention policy?":"Keep 30 days with 2 GiB cap"}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Role != "user" || !strings.Contains(turns[0].Text, "Keep 30 days with 2 GiB cap") {
+		t.Fatalf("Tail = %+v, want AskUserQuestion answer as user turn", turns)
+	}
+	followed, err := Follow(path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(followed) != 2 || followed[0].Role != RoleTool || followed[0].Text != "AskUserQuestion: Which retention policy?" {
+		t.Fatalf("Follow = %+v, want AskUserQuestion tool turn and user answer", followed)
+	}
+}
+
 func TestTailKeepsDialogAlongsideText(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mixed.jsonl")
 	lines := []string{

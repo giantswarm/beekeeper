@@ -274,7 +274,7 @@ func RemoveInbox(path string) (removed bool, err error) {
 				paths = append(paths, ConvLinkPath(filepath.Dir(filepath.Dir(path)), c))
 			}
 		}
-		paths = append(paths, convFile, base+".log")
+		paths = append(paths, convFile, base+".log", base+".quota.json")
 	}
 	for _, p := range paths {
 		if rerr := os.Remove(p); rerr == nil {

@@ -20,6 +20,8 @@ const (
 	guidePerson = "pat"
 	// mergeAnswer is the label of an escalation's releasing option.
 	mergeAnswer = "Merge"
+	// deskAuthor is the login the desk opens its pull requests as.
+	deskAuthor = "alice"
 )
 
 var (
@@ -246,7 +248,8 @@ func TestTheGoNamesTheRepositorysMergeCommand(t *testing.T) {
 	}
 }
 
-// An approval and a change request on earlier heads never release a new head.
+// An approved round followed by a change-request round requires a review
+// approving the fixed head before any merge go.
 func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
 	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
 	changes := Review{ID: "R2", Head: head2, Verdict: ChangesRequested, Body: "fix y", At: t0.Add(3 * time.Hour)}
@@ -258,13 +261,21 @@ func TestAnApprovedRoundIsNoChangeRequestRound(t *testing.T) {
 	}
 	tk = append(tk, taken(t, t0.Add(4*time.Hour), Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
 	in = Input{Workers: parked(t0.Add(5 * time.Hour)), Pulls: pull(head3, true, approved, changes), Rounds: 1, Taken: tk}
-	if a := only(t, Plan(in), KindReview); a.Head != head3 || a.Round != 3 {
+	r3 := only(t, Plan(in), KindReview)
+	if r3.Round != 3 || r3.Head != head3 {
+		t.Errorf("review = %+v", r3)
+	}
+	tk = append(tk, taken(t, t0.Add(5*time.Hour+time.Minute), r3)...)
+	approved3 := Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(6 * time.Hour)}
+	in = Input{Workers: parked(t0.Add(5 * time.Hour)), Pulls: pull(head3, true, approved, changes, approved3), Rounds: 1, Taken: tk}
+	if a := only(t, Plan(in), KindGo); a.Head != head3 {
 		t.Errorf("go = %+v", a)
 	}
 }
 
 // Findings reach the worker even when its head moved before the loop saw
-// them, and its fixes count only after it parked again.
+// them, and its fixes count only after it parked again and a review
+// approves the fixed head.
 func TestFindingsAreForwardedAfterTheHeadMoved(t *testing.T) {
 	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix x", At: t1}
 	started := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}
@@ -278,7 +289,13 @@ func TestFindingsAreForwardedAfterTheHeadMoved(t *testing.T) {
 		t.Errorf("a park from before the forward got %+v", got)
 	}
 	in.Workers = parked(t0.Add(time.Hour))
-	if a := only(t, Plan(in), KindReview); a.Head != head2 {
+	r2 := only(t, Plan(in), KindReview)
+	if r2.Head != head2 || r2.Round != 2 {
+		t.Errorf("review = %+v", r2)
+	}
+	in.Taken = append(in.Taken, taken(t, t0.Add(time.Hour+time.Minute), r2)...)
+	in.Pulls = pull(head2, true, changes, Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2 * time.Hour)})
+	if a := only(t, Plan(in), KindGo); a.Head != head2 {
 		t.Errorf("go = %+v", a)
 	}
 }
@@ -309,18 +326,23 @@ func TestTheNextRoundStartsOnTheFixedHead(t *testing.T) {
 	}
 }
 
-func TestTheFixesOfTheLastRoundGetTheirOwnReview(t *testing.T) {
+func TestTheFixesOfTheLastRoundRequireAnApprovingReview(t *testing.T) {
 	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	acts := []Action{
 		{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
 		{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker},
 	}
-	a := only(t, Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, rev), Rounds: 1, Taken: taken(t, t0, acts...)}), KindReview)
-	if a.Head != head2 {
-		t.Errorf("go = %+v, want the fixed head", a)
+	r2 := only(t, Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, rev), Rounds: 1, Taken: taken(t, t0, acts...)}), KindReview)
+	if r2.Head != head2 || r2.Round != 2 {
+		t.Errorf("review = %+v, want round 2 on the fixed head", r2)
 	}
 	if acts := Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, false, rev), Rounds: 1, Taken: taken(t, t0, acts...)}); len(acts) != 0 {
 		t.Errorf("a fixed head with red checks got %+v", acts)
+	}
+	tk := append(taken(t, t0, acts...), taken(t, t0.Add(time.Hour+time.Minute), r2)...)
+	approved := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2 * time.Hour)}
+	if g := only(t, Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, rev, approved), Rounds: 1, Taken: tk}), KindGo); g.Head != head2 {
+		t.Errorf("go = %+v, want the approved fixed head", g)
 	}
 }
 
@@ -343,7 +365,7 @@ func TestOpenFindingsPastTheLastRoundGoBackToTheWorker(t *testing.T) {
 		!strings.Contains(rw.Message, prURL) || !strings.Contains(rw.Message, "fix every finding") || !strings.Contains(rw.Message, "1 of 1") {
 		t.Errorf("rework = %+v", rw)
 	}
-	// Told once for that park; still tracked, so its fixes get their go.
+	// Told once for that park; still tracked, so its fixes get their review and go.
 	in.Taken = append(in.Taken, taken(t, t0.Add(2*time.Hour), rw)...)
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a rework told already got %+v", got)
@@ -356,16 +378,22 @@ func TestOpenFindingsPastTheLastRoundGoBackToTheWorker(t *testing.T) {
 	if again := only(t, Plan(in), KindRework); again.Key == rw.Key {
 		t.Errorf("the second park's rework has the first's key %q", again.Key)
 	}
-	// Its fixes pushed and parked on: a review for the new head.
+	// Its fixes pushed and parked on: the next review round starts, then its approval gives the go.
 	in.Pulls = pull(head2, true, rev)
-	if g := only(t, Plan(in), KindReview); g.Head != head2 {
+	r2 := only(t, Plan(in), KindReview)
+	if r2.Head != head2 || r2.Round != 2 {
+		t.Errorf("review = %+v, want round 2 on the fixed head", r2)
+	}
+	in.Taken = append(in.Taken, taken(t, t0.Add(3*time.Hour+time.Minute), r2)...)
+	in.Pulls = pull(head2, true, rev, Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(4 * time.Hour)})
+	if g := only(t, Plan(in), KindGo); g.Head != head2 {
 		t.Errorf("go = %+v, want the fixed head", g)
 	}
 }
 
 // A head that only merges the base into the head a review asked changes on
 // carries no fixes: the worker reworks, with or without a round left, and
-// no go comes; a head with fixes after it is judged as before.
+// no go comes; a head with fixes after it gets the next review round.
 func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
 	rev := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	tk := taken(t, t0,
@@ -382,11 +410,10 @@ func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
 		if rw.Head != head2 || !strings.Contains(rw.Message, "only brings main into head "+short(head1)) || !strings.Contains(rw.Message, "stand unfixed") || !strings.Contains(rw.Message, "the next review round starts then") {
 			t.Errorf("rounds %d: rework = %+v", rounds, rw)
 		}
-		// Its fixes on top always get their own review.
+		// Its fixes on top: the next review round.
 		in.Pulls = pull(head3, true, rev)
-		want := KindReview
-		if a := only(t, Plan(in), want); a.Head != head3 {
-			t.Errorf("rounds %d: %s = %+v", rounds, want, a)
+		if a := only(t, Plan(in), KindReview); a.Head != head3 || a.Round != 2 {
+			t.Errorf("rounds %d: review = %+v", rounds, a)
 		}
 	}
 }
@@ -419,21 +446,63 @@ func TestNewHeadAfterExhaustedRoundsGetsOneReview(t *testing.T) {
 	}
 }
 
-// The fixes of a second review need approval on their own head.
-func TestFindingsOfASecondReviewGetAThirdReview(t *testing.T) {
+// A second review that asks for changes overrides the earlier approval and
+// is forwarded; its fixed head gets a review and no merge go until a review
+// approves the current head.
+func TestFindingsOfASecondReviewRequireAnApprovingReview(t *testing.T) {
 	r1 := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
-	r2 := Review{ID: "R2", Head: head2, Verdict: ChangesRequested, At: t0.Add(2*time.Hour + time.Minute)}
-	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	r2 := Review{ID: "R2", Head: head2, Verdict: ChangesRequested, Body: "bypass in resolved", At: t0.Add(2*time.Hour + time.Minute)}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})
 	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker},
 		Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
-	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 5, Taken: acts}
-	if g := only(t, Plan(in), KindReview); g.Head != head3 || g.Round != 3 {
-		t.Errorf("go = %+v", g)
+	// Even if BaseMerged would cover head3 from the earlier approved head1,
+	// the later changes-requested review on head2 blocks any go until head3
+	// is approved.
+	in := Input{
+		Workers:    parked(t0.Add(3 * time.Hour)),
+		Pulls:      pull(head3, true, r1, r2),
+		Rounds:     1,
+		Taken:      acts,
+		BaseMerged: func(_ Pull, from string) bool { return from == head1 },
 	}
-	// Parked again on the head the findings were about: rework first.
+	r3 := only(t, Plan(in), KindReview)
+	if r3.Head != head3 || r3.Round != 3 {
+		t.Errorf("review = %+v", r3)
+	}
+	// Parked again on the head the findings were about: rework, with the
+	// next review round promised.
 	in.Pulls = pull(head2, true, r1, r2)
+	in.BaseMerged = nil
 	if rw := only(t, Plan(in), KindRework); !strings.Contains(rw.Message, "the next review round starts then") {
 		t.Errorf("rework = %+v", rw)
+	}
+	// Once the third review approves head3, the merge go follows.
+	in.Taken = append(acts, taken(t, t0.Add(3*time.Hour+time.Minute), r3)...)
+	r3Approved := Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(4 * time.Hour)}
+	in.Pulls = pull(head3, true, r1, r2, r3Approved)
+	if g := only(t, Plan(in), KindGo); g.Head != head3 {
+		t.Errorf("go = %+v", g)
+	}
+}
+
+// A later changes-requested review in the same round overrides an earlier
+// approval on that round's head or on a conflict-resolved head.
+func TestALaterChangeRequestOverridesAnEarlierApproval(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	r2 := Review{ID: "R2", Head: head2, Verdict: ChangesRequested, Body: "dropped guard in conflict resolution", At: t0.Add(2 * time.Hour)}
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
+		Action{Key: goKey(pr, head1), Kind: KindGo, Ref: pr, Agent: worker})
+	in := Input{
+		Workers:    parked(t0.Add(90 * time.Minute)),
+		Pulls:      pull(head2, true, r1, r2),
+		Rounds:     1,
+		Taken:      tk,
+		BaseMerged: func(Pull, string) bool { return true },
+	}
+	f := only(t, Plan(in), KindForward)
+	if !strings.Contains(f.Message, "dropped guard in conflict resolution") {
+		t.Errorf("forward = %+v", f)
 	}
 }
 
@@ -468,8 +537,9 @@ func TestAnApprovedHeadResolvedAgainAndAgainGetsNoNewReview(t *testing.T) {
 	}
 }
 
-// Findings are forwarded once; green fixes are reviewed before the merge go.
-func TestForwardedFindingsRequireApprovalOfTheFixedHead(t *testing.T) {
+// Findings are forwarded once and the worker's fixed head gets a review
+// round on green checks, then the go once that review approves it.
+func TestForwardedFindingsGetAReviewThenTheGoOnTheFixedHead(t *testing.T) {
 	changes := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
 	in := Input{Workers: parked(t0), Pulls: pull(head1, true), Taken: nil}
 	in.Taken = taken(t, t0, only(t, Plan(in), KindReview))
@@ -481,17 +551,20 @@ func TestForwardedFindingsRequireApprovalOfTheFixedHead(t *testing.T) {
 		t.Errorf("a fixed head with red checks got %+v", got)
 	}
 	in.Pulls = pull(head2, true, changes)
-	review := only(t, Plan(in), KindReview)
-	in.Taken = append(in.Taken, taken(t, t0.Add(150*time.Minute), review)...)
-	approved := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(151 * time.Minute)}
+	r2 := only(t, Plan(in), KindReview)
+	if r2.Head != head2 || r2.Round != 2 {
+		t.Errorf("review = %+v", r2)
+	}
+	in.Taken = append(in.Taken, taken(t, t0.Add(2*time.Hour+time.Minute), r2)...)
+	approved := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2*time.Hour + 2*time.Minute)}
 	in.Pulls = pull(head2, true, changes, approved)
 	g := only(t, Plan(in), KindGo)
 	if g.Head != head2 {
 		t.Errorf("go = %+v", g)
 	}
-	// If the fixed head later conflicts with main and the worker rebases or
-	// merges main into it, the new head gets its go once green, without a
-	// new review or a new park.
+	// If the approved fixed head later conflicts with main and the worker
+	// rebases or merges main into it, the new head gets its go once green,
+	// without a new review or a new park.
 	in.Taken = append(in.Taken, taken(t, t0.Add(3*time.Hour), g)...)
 	in.Workers = nil
 	in.BaseMerged = func(p Pull, from string) bool { return from == head2 && p.Head == head3 }
@@ -896,11 +969,18 @@ func TestAnAnswerKeepingAnEscalationGoesToTheWorker(t *testing.T) {
 		if got := Plan(in); len(got) != 0 {
 			t.Errorf("%q: told twice or escalated again: %+v", words, got)
 		}
-		// The reworked head needs its own review.
+		// The reworked head carries the fixes: the next review round starts,
+		// and its approval gives the merge go.
 		in.Workers = parked(t0.Add(5 * time.Hour))
 		in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
-		if g := only(t, Plan(in), KindReview); g.Head != head2 {
-			t.Errorf("%q: review = %+v", words, g)
+		r2 := only(t, Plan(in), KindReview)
+		if r2.Head != head2 || r2.Round != 2 {
+			t.Errorf("%q: review = %+v", words, r2)
+		}
+		in.Taken = append(in.Taken, taken(t, t0.Add(5*time.Hour+time.Minute), r2)...)
+		in.Pulls = pull(head2, true, append(slices.Clone(in.Pulls[pr].Reviews), Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(6 * time.Hour)})...)
+		if g := only(t, Plan(in), KindGo); g.Head != head2 {
+			t.Errorf("%q: go = %+v", words, g)
 		}
 	}
 }
@@ -1086,12 +1166,12 @@ func TestAPreRoundHeadsVerdictLeavesTheRoundRunning(t *testing.T) {
 	}
 }
 
-// A green head past its approval whose park is from before the round gets
-// a leave line with the reason, once, never silence.
+// A green head past its approval whose park proved another head from before
+// the round gets a leave line with the reason, once, never silence.
 func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
 	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
-	in := Input{Workers: parked(t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	in := Input{Workers: parkedOn(head1, t0.Add(-time.Minute)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
 	a := only(t, Plan(in), KindLeave)
 	if a.Key != leaveKey(pr, leftUnreviewed(head2)) || a.Agent != worker || !strings.Contains(a.Message, "park on the pull request again") {
 		t.Errorf("leave = %+v", a)
@@ -1104,6 +1184,40 @@ func TestAnUnreviewedHeadWithAnOldParkIsLeftWithAReason(t *testing.T) {
 	in.Workers = parked(t0.Add(2 * time.Hour))
 	if r := only(t, Plan(in), KindReview); r.Head != head2 {
 		t.Errorf("review = %+v", r)
+	}
+}
+
+// A verified park of the head now stands whatever its age: its worker, stopped
+// on it, cannot park again, so the head gets its round.
+func TestAnOldParkOfTheCurrentHeadGetsItsReview(t *testing.T) {
+	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	old := parkedOn(head2, t0.Add(-time.Minute))
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{Workers: old, Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk}
+	if r := only(t, Plan(in), KindReview); r.Head != head2 || r.Round != 2 {
+		t.Errorf("after an approval of the older head: review = %+v", r)
+	}
+	// Its reviewer done without a verdict: the same head, the same round.
+	in.Pulls = pull(head2, true)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a running round got %+v", got)
+	}
+	// The loop takes the reviewer's done as well.
+	in.Events = []Event{{At: t1, Verb: VerbDone, Agent: ReviewerName(pr, 1)}}
+	reviews := func() []Action {
+		return slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind != KindReview })
+	}
+	if r := only(t, reviews(), KindReview); r.Head != head2 || r.Round != 2 {
+		t.Errorf("after a done without a verdict: review = %+v", r)
+	}
+	// A red head still waits, and a park of another head is still stale.
+	in.Pulls = pull(head2, false)
+	if got := reviews(); len(got) != 0 {
+		t.Errorf("a head not green got %+v", got)
+	}
+	in.Pulls = pull(head3, true)
+	if got := reviews(); len(got) != 0 {
+		t.Errorf("a park of another head got %+v", got)
 	}
 }
 
@@ -1471,5 +1585,45 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 	act = only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
 		t.Fatalf("missing owner: %+v", act)
+	}
+}
+
+// Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
+// planOverlap matches pull request refs and default pull worker names
+// case-insensitively.
+func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
+	t0 := time.Date(2026, 11, 3, 2, 0, 0, 0, time.UTC)
+	const (
+		prRef  = "GiantSwarm/Beekeeper#42"
+		prLow  = "giantswarm/beekeeper#42"
+		waitPR = "GiantSwarm/Beekeeper#43"
+	)
+	in := Input{
+		Now:  t0.Add(OverlapWait + time.Minute),
+		Desk: Desk{Authors: []string{deskAuthor}},
+		Workers: []Worker{
+			{Name: "beekeeper 42", Serves: prLow, ParkedOn: "giantswarm/beekeeper#43", ParkedAt: t0, Waits: "waiting on #43"},
+			{Name: "beekeeper 43", Serves: "giantswarm/beekeeper#43", ParkedOn: prLow, ParkedAt: t0, Waits: "waiting on #42"},
+		},
+		Pulls: map[string]Pull{
+			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: deskAuthor, State: Open, Head: head1},
+			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: deskAuthor, State: Open, Head: head2},
+		},
+	}
+	acts := Plan(in)
+	var ownerAct *Action
+	for i := range acts {
+		if acts[i].Kind == KindOwner {
+			ownerAct = &acts[i]
+			break
+		}
+	}
+	if ownerAct == nil {
+		t.Fatalf("expected KindOwner action, got %+v", acts)
+	}
+	// The mutual wait orders #42 first: it gets the owner, #43 is blocked
+	// by it, whatever the case of the refs the workers serve and park on.
+	if ownerAct.Ref != prRef || ownerAct.Head != head1 || ownerAct.Block != waitPR {
+		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
 	}
 }

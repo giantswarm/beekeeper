@@ -1001,8 +1001,12 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 				bBlocks = append(bBlocks, highBlockText(fh, pv.HighPercent, now))
 			case pCfg.FiveHourMax > 0 && fh != nil && fh.UsedPercent >= pCfg.FiveHourMax:
 				bBlocks = append(bBlocks, fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(pCfg.FiveHourMax)))
+			case fh != nil && fh.UsedPercent >= 100:
+				bBlocks = append(bBlocks, fmt.Sprintf("5h %s at or past 100%%", pct(fh.UsedPercent)))
 			case pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax:
 				bBlocks = append(bBlocks, fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax)))
+			case sd != nil && sd.UsedPercent >= 100:
+				bBlocks = append(bBlocks, fmt.Sprintf("7d %s at or past 100%%", pct(sd.UsedPercent)))
 			case dp.Ceiling == 0:
 				bBlocks = append(bBlocks, ceilingZero)
 			case len(bBusy) >= dp.Ceiling:
@@ -1068,8 +1072,12 @@ func buildProviderForStart(name string, pCfg config.Provider, pa providerAgents,
 		pv.Blocks = []string{highBlockText(pv.FiveHour, pv.HighPercent, now)}
 	case pCfg.FiveHourMax > 0 && pv.FiveHour != nil && pv.FiveHour.UsedPercent >= pCfg.FiveHourMax:
 		pv.Blocks = []string{fmt.Sprintf("5h %s at or past %s", pct(pv.FiveHour.UsedPercent), pct(pCfg.FiveHourMax))}
+	case pv.FiveHour != nil && pv.FiveHour.UsedPercent >= 100:
+		pv.Blocks = []string{fmt.Sprintf("5h %s at or past 100%%", pct(pv.FiveHour.UsedPercent))}
 	case pCfg.SevenDayMax > 0 && pv.SevenDay != nil && pv.SevenDay.UsedPercent >= pCfg.SevenDayMax:
 		pv.Blocks = []string{fmt.Sprintf("7d %s at or past %s", pct(pv.SevenDay.UsedPercent), pct(pCfg.SevenDayMax))}
+	case pv.SevenDay != nil && pv.SevenDay.UsedPercent >= 100:
+		pv.Blocks = []string{fmt.Sprintf("7d %s at or past 100%%", pct(pv.SevenDay.UsedPercent))}
 	case pv.Ceiling == 0:
 		pv.Blocks = []string{ceilingZero}
 	case len(pv.Busy) >= pv.Ceiling:
@@ -1615,8 +1623,14 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 		if max5h, ok := ch.EffectiveFiveHourMax(pCfg); ok && fh != nil && fh.UsedPercent >= max5h {
 			return fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(max5h))
 		}
+		if fh != nil && fh.UsedPercent >= 100 {
+			return fmt.Sprintf("5h %s at or past 100%%", pct(fh.UsedPercent))
+		}
 		if pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax {
 			return fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax))
+		}
+		if sd != nil && sd.UsedPercent >= 100 {
+			return fmt.Sprintf("7d %s at or past 100%%", pct(sd.UsedPercent))
 		}
 		if bv.Room <= 0 {
 			if len(bv.Blocks) > 0 {
@@ -1635,8 +1649,14 @@ func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerVi
 		if max5h, ok := ch.EffectiveFiveHourMax(pCfg); ok && fh != nil && fh.UsedPercent >= max5h {
 			return fmt.Sprintf("5h %s at or past %s", pct(fh.UsedPercent), pct(max5h))
 		}
+		if fh != nil && fh.UsedPercent >= 100 {
+			return fmt.Sprintf("5h %s at or past 100%%", pct(fh.UsedPercent))
+		}
 		if pCfg.SevenDayMax > 0 && sd != nil && sd.UsedPercent >= pCfg.SevenDayMax {
 			return fmt.Sprintf("7d %s at or past %s", pct(sd.UsedPercent), pct(pCfg.SevenDayMax))
+		}
+		if sd != nil && sd.UsedPercent >= 100 {
+			return fmt.Sprintf("7d %s at or past 100%%", pct(sd.UsedPercent))
 		}
 		if pv.Room <= 0 {
 			if len(pv.Blocks) > 0 {
@@ -1675,6 +1695,7 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 	if now.IsZero() {
 		now = time.Now()
 	}
+	a.syncAgyQuotaFromState(st, now)
 	c := countAgents(st, sessions, now, a.cfg)
 	pa := countProviderAgents(st, sessions, k, now, a.cfg)
 	readings := make(map[string]providerReadingResult, len(k.Providers))

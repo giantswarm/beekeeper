@@ -61,11 +61,21 @@ supervisor's successors all go on. beekeeper status starts with STARTS HELD,
 who set it and why. Unlike beekeeper stop it ends no session and holds no
 merge or GitHub call.
 
+A repository hold with --incident also stops the supervisor's new workers,
+reviewers and fixers in that repository except the repair named by --except.
+Board selection skips its other issues so other repositories keep moving.
+There is no timed expiry: lift it only after the repair is merged, released
+and proven, or use --lift-when with a probe of that completed proof. The
+exception may name the repair issue before its pull request exists; update
+the hold to name the pull request when it is ready for review. Incident
+holds are local; central repository holds do not support this flag.
+
 Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.holdList() },
 	}
 	var reason, until, except, exceptSession, liftWhen string
+	var incident bool
 	var lane laneFlag
 	set := &cobra.Command{
 		Use:   "set <target> | --lane <name>",
@@ -75,6 +85,16 @@ Without a subcommand, lists the holds.`,
 			args = lane.target(args)
 			if err := a.checkTarget(args[0]); err != nil {
 				return err
+			}
+			if incident {
+				repo, n, ok := splitPR(args[0])
+				fixRepo, fix, valid := splitPR(except)
+				if !ok || n != 0 || !valid || fix == 0 || !strings.EqualFold(repo, fixRepo) || exceptSession != "" || until != "" {
+					return usageErr("--incident requires a repository, --except owner/repo#n naming its repair, and no --until or --except-session; lift only after the repair is merged, released and proven")
+				}
+				if a.centralTarget(args[0]) {
+					return usageErr("--incident is a local supervisor hold; central repository holds do not support incident starts yet")
+				}
 			}
 			exceptSession = strings.TrimSpace(exceptSession)
 			if err := a.checkExcept(args[0], except, exceptSession); err != nil {
@@ -100,7 +120,7 @@ Without a subcommand, lists the holds.`,
 			if err != nil {
 				return err
 			}
-			h := state.Hold{Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except, ExceptSession: exceptSession, LiftWhen: strings.TrimSpace(liftWhen)}
+			h := state.Hold{Incident: incident, Target: args[0], Reason: reason, By: me, At: a.now.UTC(), Until: u.UTC(), Except: except, ExceptSession: exceptSession, LiftWhen: strings.TrimSpace(liftWhen)}
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Holds = slices.DeleteFunc(st.Holds, func(x state.Hold) bool { return x.Target == h.Target || x.Expired(a.now) })
 				st.Holds = append(st.Holds, h)
@@ -113,6 +133,7 @@ Without a subcommand, lists the holds.`,
 			return err
 		},
 	}
+	set.Flags().BoolVar(&incident, "incident", false, "merge outage: also pause supervisor starts in the repository except --except; lift after the repair release is proven")
 	set.Flags().StringVarP(&reason, "reason", "r", "", "why (required)")
 	set.Flags().StringVar(&until, "until", "", "when the hold ends by itself: a time (15:30) or a duration (2h); default: until lifted")
 	set.Flags().StringVar(&except, "except", "", "the one owner/repo or owner/repo#n the merge hold lets through")
@@ -301,6 +322,9 @@ func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
 // holdTarget is the hold's target with its exceptions.
 func holdTarget(h state.Hold) string {
 	var except []string
+	if h.Incident {
+		h.Target += " (merge incident; starts paused)"
+	}
 	if h.Except != "" {
 		except = append(except, h.Except)
 	}

@@ -187,7 +187,7 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 		if p, _ := ev.ToolInput[pathKey].(string); !target(p) {
 			return ExecutionDenyCodex("file tool target is outside its owned workspace")
 		}
-	case ev.ToolName == codexUpdatePlanTool || ev.ToolName == codexWebTool:
+	case ev.ToolName == codexUpdatePlanTool || isCodexWebTool(ev.ToolName):
 	default:
 		return ExecutionDenyCodex("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 	}

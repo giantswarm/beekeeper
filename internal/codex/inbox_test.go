@@ -31,6 +31,13 @@ func TestInboxSendNotRunning(t *testing.T) {
 }
 
 func TestRunTurnAtATimeAndResume(t *testing.T) {
+	for _, level := range []string{"", "high"} {
+		t.Run("effort="+level, func(t *testing.T) { testRunTurnsWithEffort(t, level) })
+	}
+}
+
+func testRunTurnsWithEffort(t *testing.T, level string) {
+	t.Helper()
 	stateDir := t.TempDir()
 	agentID := "agent-turns"
 	inbox := InboxPath(stateDir, agentID)
@@ -62,7 +69,7 @@ fi
 	done := make(chan error, 1)
 	var stderr bytes.Buffer
 	go func() {
-		done <- Run(ctx, inbox, logPath, fakeCodex, testModel, &stderr)
+		done <- Run(ctx, inbox, logPath, fakeCodex, testModel, &stderr, level)
 	}()
 
 	// Wait until runner holds the FIFO open.
@@ -98,6 +105,16 @@ fi
 		t.Fatalf("Run error: %v (stderr: %s)", err, stderr.String())
 	}
 
+	if level != "" && strings.Count(calls, `model_reasoning_effort="`+level+`"`) != 2 {
+		t.Errorf("effort did not reach both turns: %s", calls)
+	}
+	if level == "" && strings.Contains(calls, "model_reasoning_effort") {
+		t.Errorf("default overridden: %s", calls)
+	}
+	// Compare the existing protocol independently of the effort override.
+	if level != "" {
+		calls = strings.ReplaceAll(calls, ` -c model_reasoning_effort="`+level+`"`, "")
+	}
 	lines := strings.Split(strings.TrimSpace(calls), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("calls = %q, want 2 lines", calls)

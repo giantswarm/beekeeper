@@ -7,10 +7,14 @@ import (
 	"strings"
 )
 
-// The guide asks its person and relays the answers; it never works itself.
-// For the guide role's holder the hook refuses the tool calls that do work
-// (an edit, a commit or push, a merge, a review, a click in the browser)
-// and checks its questions as `note add` checks a note for the person.
+// The guide asks its person and relays the answers, and carries out at once
+// a direct request from the person its own tools allow, stuck operational
+// state included (a hold, a pinned release, a parked session), which it
+// sets, narrows or lifts itself; work outside its role it files as an issue
+// on the board, never hands back. For the guide
+// role's holder the hook refuses the tool calls that do work (an edit, a
+// commit or push, a merge, a review, a click in the browser) and checks its
+// questions as `note add` checks a note for the person.
 
 // editTools change files.
 var editTools = []string{"Edit", "Write", "NotebookEdit"}
@@ -67,10 +71,13 @@ func (h Hook) guideRefusal(ev event) string {
 	if guide, _ := h.Guide(ev.Session); !guide {
 		return ""
 	}
-	return "Refused: the guide asks and relays, it never works itself, and " + what + " is work. " +
-		"Hand it to the supervisor in one line: the supervisor is the supervisor loop, no session a message reaches, " +
-		"so file it as an issue in its owning repository and put it on the board (`beekeeper board move <owner/repo#n> <status>`), " +
-		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it. Then carry on guiding."
+	return "Refused: " + what + " is work outside the guide's role (code, commits, merges, reviews, browser clicks). " +
+		"File it in this turn as an issue in its owning repository and put it on the board (`beekeeper board move <owner/repo#n> <status>`), " +
+		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it; " +
+		"the supervisor loop schedules it from the board, no session a message reaches. " +
+		"Tell the person in one line that it is filed, with its URL; never ask them to do it themselves. " +
+		"Whatever else they asked that the guide's own tools allow (a command, a board move, an issue), run at once, then carry on guiding. " +
+		"Stuck operational state (a hold, a pinned release, a parked session) is not such work: the guide is its escalation point and sets, narrows or lifts it itself with `beekeeper` to carry out what the person decided, then reports."
 }
 
 // work names the work ev does, "" for a call that asks, relays or reads.

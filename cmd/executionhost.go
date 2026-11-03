@@ -325,9 +325,11 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
-	case agentsName, "agents list", "supervisor status":
+	case "supervisor", "supervisor status":
+		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
+	case agentsName, "agents list":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 			s, j, err := a.executionCaller()
 			if err != nil {
@@ -430,7 +432,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -508,6 +510,13 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		return s.ProvisionTools(cmd.Context())
 	}})
 	c.AddCommand(a.executionHostUpdateCmds()...)
+	var loginClientID, loginRefreshRef string
+	login := &cobra.Command{Use: "github-login", Short: "Authorize this coordinator's github.workerApp via GitHub OAuth device flow and store its refresh token", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return a.authorizeWorkerGitHub(cmd.Context(), loginClientID, loginRefreshRef, cmd.OutOrStdout())
+	}}
+	login.Flags().StringVar(&loginClientID, "client-id", "", "GitHub App client ID (defaults to github.workerApp.clientID)")
+	login.Flags().StringVar(&loginRefreshRef, "refresh-token", "", "secret reference for the refresh token (defaults to github.workerApp.refreshToken)")
+	c.AddCommand(login)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
 	return c
 }

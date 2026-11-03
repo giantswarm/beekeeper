@@ -293,7 +293,7 @@ func TestSupervisorStatusReadsTheLoop(t *testing.T) {
 	}
 	for _, c := range a.supervisorCmd().Commands() {
 		switch c.Name() {
-		case "status", "loop":
+		case testStatusWord, "loop":
 		default:
 			t.Errorf("the supervisor command has %q: no session holds the role", c.Name())
 		}

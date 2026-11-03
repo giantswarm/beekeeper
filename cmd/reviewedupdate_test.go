@@ -36,6 +36,7 @@ func newBehindRig(t *testing.T) *behindRig {
 	r.pull.Base = mainBranch
 	r.pull.MergeState = mergeStateBehind
 	r.pull.Checks = []string{behindBuild, behindUnit}
+	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.baseMerge = func(p superloop.Pull, approved string) (bool, error) {
 		return approved == loopHead && p.Head == loopFixed, nil
 	}
@@ -183,7 +184,7 @@ func TestLoopMergesAnApprovedBehindHeadAfterUpdatingIt(t *testing.T) {
 	if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
 		t.Fatalf("the merge woke the worker: %v", c)
 	}
-	if got := r.logged(t, "supervisor.merge"); len(got) != 1 || !strings.Contains(got[0].Detail, "merged") {
+	if got := r.logged(t, "supervisor.merge"); len(got) != 1 || !strings.Contains(got[0].Detail, testMergedWord) {
 		t.Fatalf("merge records %v", got)
 	}
 	r.pass(t)

@@ -247,10 +247,7 @@ devctl slot any more.`,
 			return a.load()
 		},
 		RunE: func(_ *cobra.Command, args []string) error {
-			me, err := a.caller()
-			if err != nil {
-				me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
-			}
+			me := a.gateCaller("", 0, nil, false)
 			said, err := a.gateStop(me, args[0])
 			if err != nil {
 				return err

@@ -469,7 +469,7 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	command := rig.a.executionPublishCmd()
 	var output bytes.Buffer
 	command.SetOut(&output)
-	command.SetArgs([]string{"--title", "fix: fixture change", "--body-file", bodyPath})
+	command.SetArgs([]string{titleFlag, "fix: fixture change", "--body-file", bodyPath})
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +567,7 @@ func TestExecutionPublicationFollowUpAfterHostPolicyRebind(t *testing.T) {
 		}
 		return result, json.Unmarshal(output.Bytes(), &result)
 	}
-	first, err := publish("--title", "fix: fixture before the host upgrade", "--body-file", bodyPath)
+	first, err := publish(titleFlag, "fix: fixture before the host upgrade", "--body-file", bodyPath)
 	if err != nil || first.URL == "" {
 		t.Fatal("first publication failed", err)
 	}
