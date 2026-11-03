@@ -69,7 +69,8 @@ func TestQueuedChangelogEntriesMerge(t *testing.T) {
 	git("commit", "-am", "conflicting code")
 	cmd := exec.Command("git", "merge", "main")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null")
+	// Git localizes its conflict message; match it in the C locale.
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "LC_ALL=C", "LANGUAGE=C")
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "CONFLICT (content): Merge conflict in code.txt") {
 		t.Fatalf("expected code conflict, got %v: %s", err, out)
 	}
