@@ -1424,9 +1424,9 @@ func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
 	r.a.now = t0
 	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
 	cause := errors.New("invalid merge authorization identity")
-	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: "o/r#1"}
-	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: "o/r#2"}
-	other := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#3", Ref: "o/r#3"}
+	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: refOne}
+	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: idleRef}
+	other := superloop.Action{Kind: superloop.KindReview, Key: "review " + loopPR, Ref: loopPR}
 	for _, act := range []superloop.Action{a, other} {
 		if err := l.failed(act, failures, cause); err != nil {
 			t.Fatal(err)
@@ -1451,7 +1451,7 @@ func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
 		}
 	}
 	evs := r.logged(t, loopFileVerb)
-	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, "o/r#3") {
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, loopPR) {
 		t.Fatalf("filed: %+v", evs)
 	}
 	guide := &state.State{}
@@ -3306,7 +3306,7 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 	}
 	start := r.a.now
 	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
-	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: "o/r#1"}
+	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
 	for count := 1; count <= 7; count++ {
 		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
 			t.Fatal(err)
