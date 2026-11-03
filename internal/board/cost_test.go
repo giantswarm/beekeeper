@@ -164,9 +164,9 @@ func TestGraphQLCostFollowsGitHubsFormula(t *testing.T) {
 }
 
 // largeBoard is a board the size the desk's walks met: epics in progress
-// with their sub-issues, epics in planning, ranked epics and a long tail
-// of items, read by an order with a step of every Status (so the read takes
-// every open item of the team), sub-issues, a search and plans.
+// with their sub-issues, epics in planning and a long tail of items, read by
+// an order with a step of every Status (so the read takes every open item of
+// the team), sub-issues, a search and plans.
 type largeBoard struct {
 	t        *testing.T
 	progress int // epics in progress, each with subs sub-issues, open of them open
@@ -174,7 +174,6 @@ type largeBoard struct {
 	tail     int // plain items
 	subs     int
 	open     int
-	ranked   int // the epics in progress with a rank
 	queries  []string
 	cost     int
 }
@@ -182,8 +181,7 @@ type largeBoard struct {
 const largeMeta = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[{},
 {"id":"FS","name":"Status","options":[{"id":"s0","name":"Inbox 📥"},{"id":"s1","name":"Backlog 📦"},{"id":"s2","name":"Up Next ➡️"},{"id":"s3","name":"In Progress ⛏️"}]},
 {"id":"FK","name":"Kind","options":[{"id":"k1","name":"Epic 🎯"},{"id":"k2","name":"Alert 🚨"}]},
-{"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"}]},
-{"id":"FP","name":"Priority","dataType":"NUMBER"}]}}}}}`
+{"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"}]}]}}}}}`
 
 func (b *largeBoard) order() config.Board {
 	return config.Board{Owner: "o", Project: 7, Team: "X", People: []string{"me"}, Order: []config.BoardStep{
@@ -199,13 +197,9 @@ func (b *largeBoard) order() config.Board {
 func (b *largeBoard) items() []string {
 	var out []string
 	n := 1
-	for i := range b.progress {
-		prio := jsonNull
-		if i < b.ranked {
-			prio = fmt.Sprintf(`{"number":%d}`, i+1)
-		}
-		out = append(out, fmt.Sprintf(`{"id":"I%d","status":{"name":%q},"kind":{"name":"Epic 🎯"},"priority":%s,"content":%s}`,
-			n, inProgress, prio, issue(n, fmt.Sprintf(`,"subIssuesSummary":{"total":%d,"completed":%d}`, b.subs, b.subs-b.open))))
+	for range b.progress {
+		out = append(out, fmt.Sprintf(`{"id":"I%d","status":{"name":%q},"kind":{"name":"Epic 🎯"},"content":%s}`,
+			n, inProgress, issue(n, fmt.Sprintf(`,"subIssuesSummary":{"total":%d,"completed":%d}`, b.subs, b.subs-b.open))))
 		n++
 	}
 	for range b.planning {
@@ -305,7 +299,7 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 // board of 426 candidates 92 points, 53 of them for sub-issue slots no epic
 // filled. With current-blocker reads and 80-item issue pages, it costs 37.
 func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
-	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4, ranked: 20}
+	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4}
 	c := &Client{GH: b.run, Board: b.order(), Plans: []string{plansRepo}}
 	snap, err := c.Read(t.Context(), now)
 	if err != nil {
@@ -353,22 +347,5 @@ func TestSubIssuePageIsTheEpicsSizeUpToItsLimit(t *testing.T) {
 	}
 	if pages != 2 {
 		t.Errorf("%d epic pages read, want 2", pages)
-	}
-}
-
-func TestPriorityPagesKeepTheirGraphQLCostLow(t *testing.T) {
-	b := &largeBoard{t: t, progress: 40, planning: 10, ranked: 20}
-	c := &Client{GH: b.run, Board: b.order()}
-	p, err := c.Priorities(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(p) != b.ranked || p[0].Rank != 1 || p[len(p)-1].Rank != b.ranked {
-		t.Fatalf("priority list changed: %+v", p)
-	}
-	// One metadata request and two team/label pages; each page needs
-	// blockers but no candidate labels or assignees.
-	if b.cost > 3 {
-		t.Fatalf("priority list costs %d GraphQL points, want at most 3", b.cost)
 	}
 }

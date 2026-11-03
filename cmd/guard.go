@@ -563,7 +563,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
 				// every session on the machine, the desk's or not
 				if isCodex {
-					_, _ = w.Write(guard.DecideUnsandboxedCodex(raw))
+					_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), guard.DecideUnsandboxedCodex(raw)))
 					return nil
 				}
 				if isAgy {
@@ -578,7 +578,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
 				if isCodex {
-					_, _ = w.Write((guard.Hook{Sandbox: sandboxed}).DecideSandboxCodex(raw))
+					_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), (guard.Hook{Sandbox: sandboxed}).DecideSandboxCodex(raw)))
 					return nil
 				}
 				if isAgy {
@@ -618,7 +618,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
-				_, _ = w.Write(h.DecideCodex(raw))
+				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), h.DecideCodex(raw)))
 				return nil
 			}
 			if isAgy {

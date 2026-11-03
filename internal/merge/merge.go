@@ -580,7 +580,7 @@ type Lane struct {
 }
 
 // Queue returns the lane's running and settling merges and the waiting
-// ones in turn order: a settled outside merge first, then in join order.
+// ones in turn order: a settled outside merge first, then by join order.
 func Queue(st *state.State, lane string) Lane {
 	q := Lane{Name: lane, Waiting: []state.Merge{}}
 	for i := range st.Merges {

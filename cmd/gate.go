@@ -594,6 +594,9 @@ func (g *gateRun) enqueue(why string) error {
 		if c := g.explicitConfig(); c != "" {
 			argv = append(argv, "--config", c)
 		}
+		if g.as != "" {
+			argv = append(argv, "--as", g.as)
+		}
 		argv = append(argv, gateCmdName, "--queued", "--wait", g.cfg.Merge.SeedTTL.String())
 		if g.reviewedHead != "" {
 			argv = append(argv, "--reviewed-head", g.reviewedHead)

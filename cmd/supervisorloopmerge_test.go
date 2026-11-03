@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -49,14 +54,14 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
-func TestLoopMergeRepairAndAdmin(t *testing.T) {
+func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.command = func(argv []string) (string, int) {
-		if !slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
+		if slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
 			t.Fatalf("merge flags: %v", argv)
 		}
 		return "branch conflicts with base", 1
@@ -154,7 +159,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 		t.Fatalf("merge %+v", doc)
 	}
 	argv := r.cmds[0]
-	for _, flag := range []string{"--rebase", "--admin", "--match-head-commit", loopHead} {
+	for _, flag := range []string{"--rebase", "--match-head-commit", loopHead} {
 		if !slices.Contains(argv, flag) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}
@@ -337,43 +342,19 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 }
 
 func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T) {
-	t.Run("gh pr merge tooling failure triggers session merge go", func(t *testing.T) {
+	t.Run("gh merge tooling failure cannot delegate a queue bypass", func(t *testing.T) {
 		r := newLoopRig(t)
 		r.a.cfg.Merge.DevctlOwners = []string{"o"}
 		r.park(t, loopPR, time.Now())
 		r.pass(t)
 		r.verdict("R1", loopHead, superloop.Approved, "")
-		r.command = func(argv []string) (string, int) {
-			if slices.Contains(argv, superloop.KindMerge) {
-				return "GraphQL: Resource not accessible by integration", 1
-			}
-			return "", 0
-		}
-		var grantedBeforeWake bool
-		r.answer = func(args []string) (string, int) {
-			if len(args) > 0 && args[0] == gateCmdName && !slices.Contains(args, "--reviewed-head") {
-				t.Fatalf("unpinned gate call: %v", args)
-			}
-			if len(args) >= 3 && args[0] == agentsName && args[1] == agentWakeName && args[2] == loopWorker {
-				evs := r.logged(t, "supervisor.go")
-				grantedBeforeWake = recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead)
-			}
-			return "", 0
-		}
+		r.command = func(argv []string) (string, int) { return "GraphQL: Resource not accessible by integration", 1 }
 		r.pass(t)
-		if !grantedBeforeWake {
-			t.Fatal("supervisor.go was not recorded before waking the worker")
+		if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
+			t.Fatalf("unsafe merge delegated: %v", wake)
 		}
-		if r.called("note", loopAdd) != nil {
-			t.Fatalf("broken merge step asked the person: %v", r.calls)
-		}
-		wake := r.called(agentsName, agentWakeName, loopWorker)
-		if wake == nil || strings.Contains(wake[3], "Repair the branch") || !strings.Contains(wake[3], "devctl pr merge o/r 7") || !strings.Contains(wake[3], loopHead) {
-			t.Fatalf("worker was not directed to merge approved head: %v\n%s", r.calls, r.out)
-		}
-		evs := r.logged(t, "supervisor.go")
-		if len(evs) != 1 || !recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead) {
-			t.Fatalf("worker merge go not granted: %+v", evs)
+		if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+			t.Fatalf("unsafe merge go: %+v", evs)
 		}
 	})
 
@@ -395,4 +376,353 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 			t.Fatalf("interrupted worker merge go did not reconcile as supervisor.go: go=%+v merge=%+v\n%s", evs, r.logged(t, "supervisor.merge"), r.out)
 		}
 	})
+}
+
+func TestLoopConflictingPRHandsOffToWorkerOnce(t *testing.T) {
+	t.Run("conflicting pull state skips gate and hands off once", func(t *testing.T) {
+		r := newLoopRig(t)
+		r.park(t, loopPR, time.Now())
+		r.pass(t)
+		r.verdict("R1", loopHead, superloop.Approved, "")
+		r.pull.Mergeable = "CONFLICTING"
+		r.pull.MergeState = github.DirtyState
+		r.pass(t)
+		if c := r.called(gateCmdName); c != nil {
+			t.Fatalf("conflicting PR invoked gate: %v", c)
+		}
+		wake := r.called(agentsName, agentWakeName, loopWorker)
+		if wake == nil || !strings.Contains(wake[3], "conflicts with its base") {
+			t.Fatalf("conflicting PR did not wake worker for repair: %v", r.calls)
+		}
+		if len(r.logged(t, "supervisor.merge")) != 1 {
+			t.Fatalf("expected 1 supervisor.merge record, got %d", len(r.logged(t, "supervisor.merge")))
+		}
+		// Subsequent passes do not retry or wake again for the same head.
+		r.pass(t)
+		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+			t.Fatalf("conflicting PR retried repair wake on next pass: %v", c)
+		}
+		if c := r.called(gateCmdName); c != nil {
+			t.Fatalf("conflicting PR retried gate on next pass: %v", c)
+		}
+	})
+
+	t.Run("queued gate failure in state hands off once", func(t *testing.T) {
+		r := newLoopRig(t)
+		r.park(t, loopPR, time.Now())
+		r.pass(t)
+		r.verdict("R1", loopHead, superloop.Approved, "")
+		// First pass queues behind a busy lane.
+		r.answer = func(args []string) (string, int) {
+			if len(args) > 0 && args[0] == gateCmdName {
+				return "queued in lane", ExitGateQueued
+			}
+			return "", 0
+		}
+		r.pass(t)
+		if len(r.logged(t, "supervisor.merge")) != 0 {
+			t.Fatal("queued merge should not be recorded complete before it finishes")
+		}
+		// The detached gate runner finishes with a conflict/branch refusal in st.Failed.
+		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Failed = append(st.Failed, state.Failed{
+				Repo:   loopMergeRepo,
+				PR:     7,
+				Lane:   loopMergeRepo,
+				By:     loopParty,
+				At:     r.a.now,
+				Exit:   github.SquashNotApplicable,
+				Reason: "pull request is not mergeable (CONFLICTING)",
+			})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		r.pass(t)
+		if c := r.called(gateCmdName); c != nil {
+			t.Fatalf("failed detached merge called gate again instead of handing off: %v", c)
+		}
+		wake := r.called(agentsName, agentWakeName, loopWorker)
+		if wake == nil || !strings.Contains(wake[3], "CONFLICTING") {
+			t.Fatalf("detached merge failure did not wake worker: %v", r.calls)
+		}
+		if len(r.logged(t, "supervisor.merge")) != 1 {
+			t.Fatalf("expected 1 supervisor.merge record, got %d", len(r.logged(t, "supervisor.merge")))
+		}
+		r.pass(t)
+		if c := r.called(agentsName, agentWakeName, loopWorker); c != nil {
+			t.Fatalf("repeated repair wake after detached failure: %v", c)
+		}
+	})
+}
+
+func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
+	r := newLoopRig(t)
+	brief := filepath.Join(t.TempDir(), "worker.md")
+	if err := os.WriteFile(brief, []byte("Work {{.URL}}."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a.cfg.Supervisor.WorkerBrief = brief
+	r.a.cfg.Supervisor.FillRetryEvery.Duration = 5 * time.Minute
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "parallel-test-model"}}
+	r.a.cfg.Board = config.Board{Owner: "o", Project: 1, TidyEvery: config.Duration{Duration: time.Minute}, EscalateEvery: config.Duration{Duration: -1}}
+
+	const (
+		reviewPR  = "o/s#8"
+		reviewURL = "https://github.com/o/s/pull/8"
+	)
+	now := r.a.now
+	// loopPR (o/r#7) already had its review started and approved; reviewPR (o/s#8)
+	// is newly parked waiting for a reviewer to start; board next has o/s#10 ready.
+	r.park(t, loopPR, now)
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{
+			Party: state.Party{Name: loopSecondWorker, Session: "s-two"},
+			Task:  "work " + reviewURL,
+			Park:  &state.Park{On: reviewPR, At: now.Add(time.Second), Waits: deskReviewWait, ReviewHead: loopHead},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pulls[reviewPR] = superloop.Pull{Ref: reviewPR, URL: reviewURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+
+	gateEntered := make(chan struct{})
+	releaseGate := make(chan struct{})
+	reviewStarted := make(chan struct{})
+	workerStarted := make(chan struct{})
+	tidyRan := make(chan struct{})
+	busy := 0
+
+	r.answer = func(args []string) (string, int) {
+		switch {
+		case len(args) > 0 && args[0] == gateCmdName:
+			close(gateEntered)
+			<-releaseGate
+			return "", 0
+		case slices.Equal(args, []string{loopBoard, boardTidyName}):
+			close(tidyRan)
+			return "", 0
+		case len(args) > 0 && args[0] == fillCapacityCommand:
+			if slices.Contains(args, "--review") {
+				return loopRoomJSON, 0
+			}
+			r.mu.Lock()
+			b := busy
+			r.mu.Unlock()
+			if b > 0 {
+				return `{"ceiling":1,"room":0}`, 0
+			}
+			return `{"ceiling":1,"room":1}`, 0
+		case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
+			return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
+		case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
+			if slices.Contains(args, "--review") {
+				close(reviewStarted)
+			} else if args[2] == "s 10" {
+				r.mu.Lock()
+				busy++
+				r.mu.Unlock()
+				close(workerStarted)
+			}
+		}
+		return "", 0
+	}
+
+	passDone := make(chan error, 1)
+	go func() {
+		passDone <- r.passErr()
+	}()
+
+	select {
+	case <-gateEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("merge did not enter gate")
+	}
+
+	// While the merge of o/r#7 is blocked inside gate waiting on CI, the
+	// reviewer start for o/s#8, the worker start for o/s#10, and board tidy
+	// must all complete without waiting for the merge.
+	for name, ch := range map[string]<-chan struct{}{
+		"review start": reviewStarted,
+		"worker start": workerStarted,
+		"board tidy":   tidyRan,
+	} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s was blocked by in-flight merge", name)
+		}
+	}
+
+	close(releaseGate)
+	if err := <-passDone; err != nil {
+		t.Fatal(err)
+	}
+	if len(r.logged(t, "supervisor.merge")) != 1 {
+		t.Fatalf("expected 1 supervisor.merge event, got %d", len(r.logged(t, "supervisor.merge")))
+	}
+	if len(r.logged(t, "supervisor.review")) != 2 {
+		t.Fatalf("expected 2 supervisor.review events, got %d", len(r.logged(t, "supervisor.review")))
+	}
+	if len(r.logged(t, "supervisor.next")) != 1 {
+		t.Fatalf("expected 1 supervisor.next event, got %d", len(r.logged(t, "supervisor.next")))
+	}
+}
+
+func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
+	for _, slow := range []string{taskKindReview, workerRole} {
+		t.Run(slow, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.park(t, loopPR, r.a.now)
+			r.pass(t) // The first PR's reviewer is already running.
+			brief := filepath.Join(t.TempDir(), "worker.md")
+			if err := os.WriteFile(brief, []byte("Work {{.URL}}."), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.a.cfg.Supervisor.WorkerBrief = brief
+			r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "parallel-test-model"}}
+			r.a.cfg.Board = config.Board{Owner: "o", Project: 1, TidyEvery: config.Duration{Duration: time.Minute}, EscalateEvery: config.Duration{Duration: -1}}
+			const second = "o/s#8"
+			r.pulls[second] = superloop.Pull{Ref: second, URL: "https://github.com/o/s/pull/8", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = append(st.Agents, state.Agent{
+					Party: state.Party{Name: loopSecondWorker, Session: "s-two"},
+					Task:  "work https://github.com/o/s/pull/8",
+					Park:  &state.Park{On: second, At: r.a.now, Waits: deskReviewWait, ReviewHead: loopHead},
+				})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			entered, release, merged := make(chan struct{}), make(chan struct{}), make(chan struct{}, 4)
+			var starts, busy atomic.Int32
+			r.answer = func(args []string) (string, int) {
+				switch {
+				case len(args) > 0 && args[0] == gateCmdName:
+					merged <- struct{}{}
+				case len(args) > 0 && args[0] == fillCapacityCommand:
+					if slices.Contains(args, "--review") {
+						return loopRoomJSON, 0
+					}
+					if busy.Load() > 0 {
+						return `{"ceiling":1,"room":0}`, 0
+					}
+					return `{"ceiling":1,"room":1}`, 0
+				case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
+					return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
+				case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
+					review := slices.Contains(args, "--review")
+					if !review {
+						busy.Add(1)
+					}
+					if review == (slow == taskKindReview) {
+						if starts.Add(1) == 1 {
+							close(entered)
+						}
+						<-release
+					}
+				}
+				return "", 0
+			}
+			l, err := r.a.newSupervisorLoop(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			released := false
+			defer func() {
+				if !released {
+					close(release)
+				}
+				l.passActions.Wait()
+				l.mergeActions.Wait()
+			}()
+			pass := func() {
+				t.Helper()
+				done := make(chan error, 1)
+				go func() { done <- l.pass(context.Background()) }()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("slow start blocked observation")
+				}
+			}
+			pass()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("start did not enter")
+			}
+			// This approval was absent from the first snapshot. The next pass
+			// must observe and submit it while the unrelated start remains stuck.
+			now := r.a.now.Add(time.Second)
+			r.a.loopNow.Store(&now)
+			r.verdict("R1", loopHead, superloop.Approved, "")
+			if err := r.a.store.Record(event(state.Party{Name: superloop.ReviewerName(loopPR, 1)}, superloop.VerbDone, "%s done: review complete", superloop.ReviewerName(loopPR, 1))); err != nil {
+				t.Fatal(err)
+			}
+			pass()
+			select {
+			case <-merged:
+			case <-time.After(5 * time.Second):
+				t.Fatal("newly approved merge blocked by slow start")
+			}
+			if got := starts.Load(); got != 1 {
+				t.Fatalf("slow start launched %d times, want 1", got)
+			}
+			// A binary replacement also must not block a pass behind the
+			// slow start. Re-execution happens only after the streams drain.
+			r.mu.Lock()
+			r.replaced = true
+			r.mu.Unlock()
+			pass()
+			if r.execs != 0 {
+				t.Fatal("re-executed while the start was still in flight")
+			}
+			close(release)
+			released = true
+			l.passActions.Wait()
+			l.mergeActions.Wait()
+			if reexec, err := l.reexec(t.Context()); err != nil || !reexec {
+				t.Fatalf("quiet re-execution = %v, %v", reexec, err)
+			}
+		})
+	}
+}
+
+// A pass may have read its action list just before a previous pass records
+// completion. Reusing that stale list must not start a second reviewer.
+func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 1 && args[0] == agentsName && args[1] == agentStartName {
+			starts++
+		}
+		return "", 0
+	}
+	acts := []superloop.Action{{Kind: superloop.KindReview, Key: "review stale snapshot", Ref: loopPR, URL: loopURL, Head: loopHead, Round: 1}}
+	for range 2 {
+		if err := l.runPassActions(t.Context(), st, nil, nil, nil, acts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("started %d reviewers from the same snapshot, want 1", starts)
+	}
 }
