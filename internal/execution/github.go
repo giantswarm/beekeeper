@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -76,6 +78,58 @@ func (s *Server) RevokeGitHub(j Journal) error {
 	return CoordinatorCall(ctx, co.Callback, string(j.Handle.Ref.Host), "github-revoke", j.Handle.Ref, struct{}{}, j.Request.ControlKey, &result, s.Callback)
 }
 
+const (
+	workerGitHubIssueGroup = "issue"
+	workerGitHubPRGroup    = "pr"
+
+	workerGitHubRepoGroup     = "repo"
+	workerGitHubRunGroup      = "run"
+	workerGitHubWorkflowGroup = "workflow"
+	workerGitHubReleaseGroup  = "release"
+
+	workerGitHubList     = "list"
+	workerGitHubLs       = "ls"
+	workerGitHubView     = "view"
+	workerGitHubStatus   = "status"
+	workerGitHubDownload = "download"
+	workerGitHubCreate   = "create"
+	workerGitHubEdit     = "edit"
+	workerGitHubComment  = "comment"
+	workerGitHubClose    = "close"
+	workerGitHubGet      = "GET"
+
+	workerGitHubRepoPrefix  = "--repo="
+	workerGitHubMissingRepo = "missing GitHub repository"
+
+	workerGitHubMethodFlag   = "method"
+	workerGitHubFieldFlag    = "field"
+	workerGitHubRawFieldFlag = "raw-field"
+	workerGitHubHeaderFlag   = "header"
+)
+
+var (
+	workerGitHubReads = map[string][]string{
+		workerGitHubIssueGroup:    {workerGitHubList, workerGitHubLs, workerGitHubView, workerGitHubStatus},
+		workerGitHubPRGroup:       {workerGitHubList, workerGitHubLs, workerGitHubView, workerGitHubStatus, "checks", "diff", "checkout"},
+		workerGitHubRepoGroup:     {workerGitHubList, workerGitHubLs, workerGitHubView, workerGitHubClone},
+		workerGitHubRunGroup:      {workerGitHubList, workerGitHubLs, workerGitHubView, "watch", workerGitHubDownload},
+		workerGitHubWorkflowGroup: {workerGitHubList, workerGitHubLs, workerGitHubView},
+		workerGitHubReleaseGroup:  {workerGitHubList, workerGitHubLs, workerGitHubView, workerGitHubDownload, "verify", "verify-asset"},
+	}
+	// `gh pr close` stays out: its --delete-branch reaches branches a worker
+	// cannot push to.
+	workerGitHubWrites = map[string][]string{
+		workerGitHubIssueGroup: {workerGitHubCreate, workerGitHubEdit, workerGitHubComment, workerGitHubClose, "reopen"},
+		workerGitHubPRGroup:    {workerGitHubCreate, workerGitHubEdit, workerGitHubComment},
+	}
+	// gh api's flags and whether each takes a value.
+	workerGitHubAPIFlags = map[string]bool{
+		"allow-escape-sequences": false, "include": false, "paginate": false, "silent": false, "slurp": false, "verbose": false,
+		"cache": true, workerGitHubFieldFlag: true, workerGitHubHeaderFlag: true, "jq": true, workerGitHubMethodFlag: true, "preview": true, workerGitHubRawFieldFlag: true, "template": true,
+	}
+	workerGitHubAPIShorthands = map[byte]string{'F': workerGitHubFieldFlag, 'H': workerGitHubHeaderFlag, 'X': workerGitHubMethodFlag, 'f': workerGitHubRawFieldFlag, 'i': "include", 'p': "preview", 'q': "jq", 't': "template"}
+)
+
 // GitHubRepository determines the scope of one gh invocation. Cross-owner
 // calls must name their repository explicitly; global auth/search commands
 // have no safely bounded repository scope.
@@ -85,11 +139,11 @@ func GitHubRepository(args []string, fallback string) (string, error) {
 		switch {
 		case arg == workerGitHubRepoFlag || arg == "-R":
 			if i+1 >= len(args) {
-				return "", errors.New("missing GitHub repository")
+				return "", errors.New(workerGitHubMissingRepo)
 			}
 			repo = args[i+1]
-		case strings.HasPrefix(arg, "--repo="):
-			repo = strings.TrimPrefix(arg, "--repo=")
+		case strings.HasPrefix(arg, workerGitHubRepoPrefix):
+			repo = strings.TrimPrefix(arg, workerGitHubRepoPrefix)
 		case strings.HasPrefix(arg, workerGitHubHTTPSPrefix):
 			parts := strings.Split(strings.TrimPrefix(arg, workerGitHubHTTPSPrefix), "/")
 			if len(parts) >= 2 {
@@ -107,6 +161,155 @@ func GitHubRepository(args []string, fallback string) (string, error) {
 		return "", errors.New("invalid worker GitHub repository")
 	}
 	return repo, nil
+}
+
+// GitHubWriteRepository is the single repository a write acts on. gh prefers a
+// URL target over --repo, so GitHubRepository's last-match reading could vouch
+// for one owner while gh writes to another: every target must agree. Text that
+// starts with a GitHub URL of another repository goes through --body-file.
+func GitHubWriteRepository(args []string, fallback string) (string, error) {
+	named := ""
+	for i, arg := range args {
+		repo := ""
+		switch {
+		case arg == workerGitHubRepoFlag || arg == "-R":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return "", errors.New(workerGitHubMissingRepo)
+			}
+			repo = args[i+1]
+		case arg == workerGitHubRepoPrefix:
+			return "", errors.New(workerGitHubMissingRepo)
+		case strings.HasPrefix(arg, workerGitHubRepoPrefix):
+			repo = strings.TrimPrefix(arg, workerGitHubRepoPrefix)
+		case len(arg) > 1 && arg[0] == '-' && arg[1] != '-' && strings.Contains(arg, "R"):
+			return "", errors.New("worker gh writes name their repository as --repo owner/repo")
+		default:
+			repo = gitHubURLRepository(arg)
+		}
+		if repo = strings.ToLower(repo); repo == "" {
+			continue
+		}
+		if named != "" && repo != named {
+			return "", errors.New("worker gh write names more than one repository")
+		}
+		named = repo
+	}
+	if named == "" {
+		named = strings.ToLower(fallback)
+	}
+	if RepositoryIdentity(workerGitHubHTTPSPrefix+named) != named {
+		return "", errors.New("invalid worker GitHub repository")
+	}
+	return named, nil
+}
+
+// gitHubURLRepository reads an argument as gh does: either scheme, any case,
+// and subdomains that gh normalizes to github.com.
+func gitHubURLRepository(arg string) string {
+	u, err := url.Parse(arg)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[:2], "/")
+}
+
+// GitHubWrite classifies one gh subcommand. The token behind a read is as
+// write-capable as any other, so a subcommand named in neither table, a later
+// gh release's included, is refused rather than dispatched as a read.
+func GitHubWrite(args []string) (bool, error) {
+	if len(args) > 1 && slices.Contains(workerGitHubWrites[args[0]], args[1]) {
+		return true, nil
+	}
+	if len(args) > 1 && slices.Contains(workerGitHubReads[args[0]], args[1]) {
+		return false, nil
+	}
+	return false, errors.New("worker gh does not support this command: " + strings.Join(args[:min(len(args), 2)], " "))
+}
+
+// ValidateGitHubAPIRead parses the arguments after `gh api` the way gh does, so
+// that only GET and HEAD reach the shared token. A field makes gh default to
+// POST and stays a query parameter only under an explicit read method; a flag
+// not listed here, --input and --hostname among them, is refused.
+func ValidateGitHubAPIRead(args []string) error {
+	unsupported := errors.New("worker gh api supports reads only")
+	endpoints, fields, method := 0, false, false
+	check := func(name, value string) error {
+		switch name {
+		case workerGitHubMethodFlag:
+			if !strings.EqualFold(value, workerGitHubGet) && !strings.EqualFold(value, "HEAD") {
+				return unsupported
+			}
+			method = true
+		case workerGitHubFieldFlag, workerGitHubRawFieldFlag:
+			fields = true
+		case workerGitHubHeaderFlag:
+			if strings.Contains(strings.ToLower(value), "method-override") {
+				return unsupported
+			}
+		}
+		return nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			endpoints += len(args) - i - 1
+			i = len(args)
+		case strings.HasPrefix(arg, "--"):
+			name, value, attached := strings.Cut(arg[2:], "=")
+			takesValue, known := workerGitHubAPIFlags[name]
+			if !known {
+				return unsupported
+			}
+			if !takesValue {
+				continue
+			}
+			if !attached {
+				if i++; i >= len(args) {
+					return unsupported
+				}
+				value = args[i]
+			}
+			if err := check(name, value); err != nil {
+				return err
+			}
+		case len(arg) > 1 && arg[0] == '-':
+			for j := 1; j < len(arg); j++ {
+				name, known := workerGitHubAPIShorthands[arg[j]]
+				if !known {
+					return unsupported
+				}
+				if !workerGitHubAPIFlags[name] {
+					continue
+				}
+				value := strings.TrimPrefix(arg[j+1:], "=")
+				if value == "" {
+					if i++; i >= len(args) {
+						return unsupported
+					}
+					value = args[i]
+				}
+				if err := check(name, value); err != nil {
+					return err
+				}
+				break
+			}
+		default:
+			endpoints++
+		}
+	}
+	if endpoints != 1 || (fields && !method) {
+		return unsupported
+	}
+	return nil
 }
 
 func ValidateWorkerPush(args []string, branch string) error {

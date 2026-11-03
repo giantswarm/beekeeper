@@ -22,6 +22,7 @@ import (
 const workerGitHubCredentialHelper = `credential.https://github.com.helper=!f() { printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`
 
 const workerGitHubHead = "HEAD"
+const workerGitHubHeadFlag = "--head"
 const workerGitHubNoCredentialHelper = "credential.helper=" //nolint:gosec // G101: clears inherited Git helpers; contains no credential
 
 // SSH execution hosts run Linux. Resolve git outside the worker-controlled
@@ -60,27 +61,28 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				default:
 					return refused("worker gh requires an explicit repository command; auth, aliases and global command overrides are unavailable")
 				}
-				request.Repository, err = execution.GitHubRepository(args, request.Repository)
-				if err != nil {
-					return err
-				}
-				request.Write = len(args) > 1 && (args[0] == "pr" || args[0] == workerGitHubIssueGroup) && (args[1] == workerGitHubCreate || args[1] == "edit" || args[1] == "comment")
-				// Mutation authority is never inferred from arbitrary API request bodies.
 				if len(args) > 1 && args[0] == "pr" && args[1] == gitMerge {
 					return refused("merges stay on the coordinator")
 				}
 				if args[0] == workerGitHubAPIGroup {
-					for _, arg := range args[1:] {
-						lower := strings.ToLower(arg)
-						if strings.Contains(lower, "mutation") || strings.Contains(lower, "/merge") || lower == "post" || lower == "put" || lower == "patch" || lower == "delete" || lower == "--input" {
-							return refused("worker gh api supports reads only")
-						}
-					}
+					err = execution.ValidateGitHubAPIRead(args[1:])
+				} else {
+					request.Write, err = execution.GitHubWrite(args)
 				}
-				if request.Write && args[1] == workerGitHubCreate {
+				if err != nil {
+					return refused("%v", err)
+				}
+				if request.Write {
+					if request.Repository, err = execution.GitHubWriteRepository(args, request.Repository); err != nil {
+						return refused("%v", err)
+					}
+				} else if request.Repository, err = execution.GitHubRepository(args, request.Repository); err != nil {
+					return err
+				}
+				if args[0] == "pr" && len(args) > 1 && args[1] == workerGitHubCreate {
 					branch := execution.GitHubBranch(j.Handle.Ref)
 					for i, arg := range args {
-						if arg == "--head" || arg == "-H" {
+						if arg == workerGitHubHeadFlag || arg == "-H" {
 							if i+1 >= len(args) || args[i+1] != branch {
 								return refused("PR must use its execution branch")
 							}
@@ -89,7 +91,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 							return refused("PR must use its execution branch")
 						}
 					}
-					args = append(args, "--head", branch)
+					args = append(args, workerGitHubHeadFlag, branch)
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {

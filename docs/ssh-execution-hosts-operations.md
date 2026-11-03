@@ -777,9 +777,16 @@ In an enabled execution `gh issue`, `gh pr` and `gh api` commands use a
 short-lived credential fetched over the authenticated SSH callback. Cross-repo
 calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Reads may
 reach any repository the user can access. Writes (`git push`, `gh pr create`,
-`gh pr edit`, `gh pr comment`, `gh issue create`, `gh issue edit`, `gh issue comment`)
-are restricted by the wrappers to owners in `github.allowedOrgs` (an empty list
-allows no writes or GitHub-enabled starts), and a worker may work in and
+`gh pr edit`, `gh pr comment`, `gh issue create`, `gh issue edit`, `gh issue comment`,
+`gh issue close`, `gh issue reopen`) are restricted by the wrappers to owners in
+`github.allowedOrgs` (an empty list allows no writes or GitHub-enabled starts). A
+write names one repository, as `--repo owner/repo` or a URL target, never two.
+Every other `gh` subcommand is refused unless the wrapper lists it as a read
+(`list`, `view`, `status`, `pr checks`, `pr diff`, `pr checkout`, `repo clone`,
+`run watch`, `run download`, `release download`, `release verify`, `release
+verify-asset`). `gh api` runs GET and HEAD only: `-f`/`-F` need an explicit
+`-X GET`, since gh otherwise sends POST, and `--input`, `--hostname` and
+GraphQL's POST are refused. A worker may work in and
 open pull requests across multiple repositories in one task (using its primary
 workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner
 installs dispatch scripts for `gh` and `git` ahead of the pinned tools; scripts
