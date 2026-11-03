@@ -22,6 +22,7 @@ const (
 	issueOneURL    = "https://github.com/o/r/issues/1"
 	teammateLogin  = "teammate"
 	askedState     = "abc123"
+	blockerRef     = "o/r#20"
 )
 
 func blockedItem(ref, status string) board.Item {
@@ -298,7 +299,7 @@ func TestJudgeAsksOnceWhileUnchanged(t *testing.T) {
 		func(_ *escalation, f *escalateFacts) {
 			f.Comments = append(f.Comments, github.Comment{Login: "me", At: r.a.now, URL: issueOneURL + "#issuecomment-11"})
 		},
-		func(e *escalation, _ *escalateFacts) { e.item.OpenBlockedBy = []string{"o/r#20"} },
+		func(e *escalation, _ *escalateFacts) { e.item.OpenBlockedBy = []string{blockerRef} },
 		func(e *escalation, _ *escalateFacts) { e.item.StatusSet = r.a.now },
 	}
 	for i, edit := range changed {
@@ -396,7 +397,7 @@ func TestJudgeSkipsWhatExplainsTheBlock(t *testing.T) {
 		skip string
 	}{
 		{"open blocker", func(e *escalation, _ *escalateFacts, _ *state.State) {
-			e.item.Blockers, e.item.OpenBlockers, e.item.OpenBlockedBy = 1, 1, []string{"o/r#20"}
+			e.item.Blockers, e.item.OpenBlockers, e.item.OpenBlockedBy = 1, 1, []string{blockerRef}
 		}, "held: blocked by [r#20](https://github.com/o/r/issues/20); 1 of 1 blockers open: its recorded blockers explain it"},
 		{"worker on the gate, its task names the item", func(_ *escalation, _ *escalateFacts, st *state.State) {
 			st.Agents = []state.Agent{worker("Work the board item "+issueOneURL+" in o/r.", "hold:github")}

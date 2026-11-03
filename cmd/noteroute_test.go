@@ -49,7 +49,10 @@ func redirected(t *testing.T, a *app) []state.Event {
 }
 
 // opReview is the class of a review ask.
-const opReview = "review"
+const (
+	opReview = "review"
+	opDefect = "defect"
+)
 
 // openThread is decisionRef open, its epic open.
 var openThread = map[string]github.Thread{decisionRef: {State: github.Open, Parent: refOne, ParentState: github.Open}}
@@ -68,9 +71,9 @@ func TestWorkerOperationalAskIsRefusedNamingWhereItWent(t *testing.T) {
 		{"rollout", "Shall the guide fast-forward the main checkout so the merged change goes live?"},
 		{"rollout", "Install the new binary of the release on this machine?"},
 		{"sessions", "Restart the worker session that stopped mid-task?"},
-		{"defect", "Please track the guard panic as a defect?"},
-		{"defect", "Who should fix the red main of " + prURL + "?"},
-		{"defect", "File an issue for the crash in the wake hook?"},
+		{opDefect, "Please track the guard panic as a defect?"},
+		{opDefect, "Who should fix the red main of " + prURL + "?"},
+		{opDefect, "File an issue for the crash in the wake hook?"},
 	} {
 		t.Run(c.question, func(t *testing.T) {
 			a := workerNoteApp(t, openThread, nil)

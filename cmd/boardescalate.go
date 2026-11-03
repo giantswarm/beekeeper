@@ -171,7 +171,7 @@ func namesURL(text, url string) bool {
 			return false
 		}
 		end := i + j + len(u)
-		if end == len(lower) || !(lower[end] >= '0' && lower[end] <= '9') {
+		if end == len(lower) || lower[end] < '0' || lower[end] > '9' {
 			return true
 		}
 		i = end
