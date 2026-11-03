@@ -171,7 +171,23 @@ one is confirmed as it is.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Com
 		if err != nil {
 			return err
 		}
-		return a.activateExecution(cmd.Context(), ref)
+		result, found, pubErr := a.recoverExecutionPublication(cmd.Context(), ref, false)
+		if st, readErr := a.store.Read(); readErr == nil {
+			if r, _ := executionRecord(st, ref); r != nil && r.Terminal() && found {
+				if pubErr != nil {
+					return pubErr
+				}
+				if a.json {
+					return a.printJSON(result)
+				}
+				_, err = fmt.Fprintf(a.out, "%s\n", result.URL)
+				return err
+			}
+		}
+		if err := a.activateExecution(cmd.Context(), ref); err != nil {
+			return err
+		}
+		return pubErr
 	}}
 }
 func (a *app) executionLogsCmd() *cobra.Command {
@@ -282,7 +298,7 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	}
 	var indices []int
 	for i, s := range st.Starts {
-		if r := s.Execution; r != nil && r.Selector == selector && executionNeedsSync(st, r) {
+		if r := s.Execution; r != nil && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
 			indices = append(indices, i)
 		}
 	}
@@ -308,6 +324,17 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
+		if !executionNeedsSync(st, r) {
+			if st.Stop == nil && r.StopRequest == nil && a.hasUnrecoveredPublication(r) {
+				opCtx, cancel := withTimeout(ctx)
+				_, _, pubErr := a.recoverExecutionPublication(opCtx, ref, true)
+				cancel()
+				if pubErr != nil {
+					failures = append(failures, pubErr.Error())
+				}
+			}
+			continue
+		}
 		// A reservation its host never acknowledged, past its start's
 		// window, is released when no host journal backs it: it holds
 		// no host or desk slot from then on.
@@ -405,6 +432,14 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 					break
 				}
 			}
+			if a.hasUnrecoveredPublication(r) {
+				opCtx, cancel = withTimeout(ctx)
+				_, _, pubErr := a.recoverExecutionPublication(opCtx, ref, true)
+				cancel()
+				if pubErr != nil {
+					failures = append(failures, pubErr.Error())
+				}
+			}
 		}
 	}
 	if len(failures) > 0 {
@@ -420,7 +455,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	selectors := []string{}
 	active := map[string]bool{}
 	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && executionNeedsSync(st, r) {
+		if r := s.Execution; r != nil && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
 			if !slices.Contains(selectors, r.Selector) {
 				selectors = append(selectors, r.Selector)
 			}

@@ -430,11 +430,8 @@ func (h Hook) codexSandboxCheck(ev event) string {
 // Every internal error, malformed payload, or unrecognized tool argument shape
 // fails closed with DenyCodex.
 func (h Hook) DecideCodex(input []byte) (out []byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			out = DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r))
-		}
-	}()
+	h.beginCheck("codex adapter")
+	defer h.recoverDecision(&out, DenyCodex)
 	if h.ConfigErr != nil {
 		return DenyCodex("Refused: cannot load beekeeper configuration (" + h.ConfigErr.Error() + "); failing closed.")
 	}
@@ -519,8 +516,11 @@ func (h Hook) DecideCodex(input []byte) (out []byte) {
 }
 
 func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) []byte {
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	raw := h.labProxy(ev, h.decide(ev))
+	raw := h.decide(ev)
+	h.beginCheck("labProxy")
+	raw = h.labProxy(ev, raw)
 	var out hookOutput
 	if len(raw) > 0 {
 		var wrapper struct {
@@ -534,6 +534,7 @@ func (h Hook) decideCodexEvent(ev event, origCmd, cmdKey, extraContext string) [
 			return DenyCodex(out.Reason)
 		}
 	}
+	h.beginCheck("repoReads")
 	reads := h.repoReads(ev)
 	ctx := out.AdditionalContext
 	for _, add := range []string{extraContext, reads} {
@@ -1292,7 +1293,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		return false
 	}
 	switch sub[0] + " " + sub[1] {
-	case "note add", "log add", "agents idle", "agents park", "agents note":
+	case "note add", "log add", "agents idle", "agents park", "agents note", "agents problem":
 		return true
 	}
 	return false

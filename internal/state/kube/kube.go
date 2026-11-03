@@ -593,7 +593,7 @@ func (s *Store) Feed(n int) ([]feed.Event, error) {
 	seen := map[string]bool{}
 	for i := range list.Items {
 		ev := &list.Items[i]
-		if strings.HasPrefix(ev.Reason, "serve.") {
+		if strings.HasPrefix(ev.Reason, "serve.") || ev.Reason == "note.delivery" {
 			continue
 		}
 		fe, err := FeedEvent(ev)
@@ -749,7 +749,7 @@ func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) 
 	ev := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   ns,
-			Name:        fmt.Sprintf("%s.%x", obj.GetName(), at.UnixNano()),
+			Name:        fmt.Sprintf("%s.%s", obj.GetName(), id),
 			Labels:      map[string]string{managedBy: beekeeper},
 			Annotations: map[string]string{byAnnotation: string(by), idAnnotation: id},
 		},

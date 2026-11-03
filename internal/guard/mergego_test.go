@@ -21,6 +21,8 @@ func TestMergeRequiresSupervisorGo(t *testing.T) {
 	}
 }
 
+const mergeGoTestRepo = "person/project"
+
 const mergeGoTestHead = "0123456789012345678901234567890123456789"
 
 func TestMergeGoAcrossHarnesses(t *testing.T) {
@@ -29,7 +31,7 @@ func TestMergeGoAcrossHarnesses(t *testing.T) {
 		calls := 0
 		h.MergeGo = func(session, repo string, pr int, head string) string {
 			calls++
-			if repo != "person/project" || pr != 7 || head != mergeGoTestHead {
+			if repo != mergeGoTestRepo || pr != 7 || head != mergeGoTestHead {
 				t.Errorf("wrong merge tuple: %s %d %s", repo, pr, head)
 			}
 			if !allow {
