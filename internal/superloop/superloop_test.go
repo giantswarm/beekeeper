@@ -181,6 +181,16 @@ func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a second pass took %+v", got)
 	}
+	// A base merge needs no park since the round: the merge's own update of
+	// a behind branch, or the worker's, carries no change of the worker's.
+	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if a := only(t, Plan(in), KindGo); a.Head != head2 {
+		t.Errorf("go on a base merge after an earlier park = %+v", a)
+	}
+	in.BaseMerged = baseMerged(false)
+	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
+		t.Errorf("a new head with an earlier park got %+v", got)
+	}
 	// Any other change is a new head with its own review.
 	in = Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
 	if a := only(t, Plan(in), KindReview); a.Head != head2 {

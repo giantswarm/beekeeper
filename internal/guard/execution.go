@@ -198,6 +198,127 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 	return h.DecideCodex(raw)
 }
 
+// ExecutionDenyAgy is ExecutionDeny in agy's PreToolUse format: agy 1.4.7
+// treats a non-JSON answer or an empty stdout as a failed hook without an
+// explicit reason, so every denial exits 0 with {"decision":"deny","reason":...}.
+func ExecutionDenyAgy(reason string) []byte { return DenyAgy(reason) }
+
+// DecideExecutionAgy is DecideExecution for the remote agy adapter. The
+// session is the agy conversation the runner recorded. Shell commands and file
+// or search targets stay inside the owned workspace and pass the same remote
+// command guard before the full agy guard runs; every unsupported agy tool is
+// refused.
+func (h Hook) DecideExecutionAgy(raw []byte, session, workspace string, protected []string) (out []byte) {
+	defer func() {
+		if recover() != nil {
+			out = ExecutionDenyAgy("execution guard failed; tool call denied")
+		}
+	}()
+	var p agyPayload
+	if json.Unmarshal(raw, &p) != nil || p.ToolCall == nil || p.ToolCall.Name == "" || p.ToolCall.Args == nil || hasNULValue(p.ToolCall.Args) || p.ConversationID != session || session == "" || !filepath.IsAbs(workspace) {
+		return ExecutionDenyAgy("invalid managed execution tool event")
+	}
+	if h.ConfigErr != nil {
+		return ExecutionDenyAgy("execution guard configuration is unavailable")
+	}
+	for _, wp := range p.WorkspacePaths {
+		wp = expandHome(wp)
+		if !filepath.IsAbs(wp) || wp == "~" || strings.HasPrefix(wp, "~/") || !executionWithin(workspace, wp) {
+			return ExecutionDenyAgy("tool working directory is outside its owned workspace")
+		}
+	}
+	if h.Project == "" {
+		h.Project = workspace
+	}
+	ev, _, errReason := h.parseAgy(raw)
+	if errReason != "" {
+		if strings.HasPrefix(errReason, "Refused: unknown agy tool") {
+			return ExecutionDenyAgy("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+		}
+		return ExecutionDenyAgy(errReason)
+	}
+	baseCWD := workspace
+	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {
+		baseCWD = expandHome(p.WorkspacePaths[0])
+	}
+	cwd := ev.CWD
+	if cwd == "" {
+		cwd = baseCWD
+	}
+	if !filepath.IsAbs(cwd) || cwd == "~" || strings.HasPrefix(cwd, "~/") || !executionWithin(workspace, cwd) {
+		return ExecutionDenyAgy("tool working directory is outside its owned workspace")
+	}
+	for _, k := range []string{agyCwdKey, agyDirPathKey, agySearchPathKey, agySearchDirKey} {
+		if v, ok := p.ToolCall.Args[k].(string); ok && v != "" {
+			d := expandHome(v)
+			if d == "~" || strings.HasPrefix(d, "~/") {
+				return ExecutionDenyAgy("tool working directory is outside its owned workspace")
+			}
+			if !filepath.IsAbs(d) {
+				d = filepath.Join(baseCWD, d)
+			}
+			if !filepath.IsAbs(d) || !executionWithin(workspace, d) {
+				return ExecutionDenyAgy("tool working directory is outside its owned workspace")
+			}
+		}
+	}
+	target := func(q string) bool {
+		q = expandHome(q)
+		if q == "~" || strings.HasPrefix(q, "~/") {
+			return false
+		}
+		if filepath.IsAbs(q) {
+			return executionWithin(workspace, q)
+		}
+		if !executionWithin(workspace, filepath.Join(cwd, q)) {
+			return false
+		}
+		if cwd != baseCWD && !executionWithin(workspace, filepath.Join(baseCWD, q)) {
+			return false
+		}
+		return true
+	}
+	switch {
+	case h.ExecutionMCP && strings.HasPrefix(ev.ToolName, coordinatorMCPPrefix):
+	case ev.ToolName == bashTool:
+		if p.ToolCall.Name == manageTaskTool || p.ToolCall.Name == "send_command_input" {
+			return ExecutionDenyAgy("uninspected shell input is not supported remotely; run a guarded command directly")
+		}
+		command, ok := ev.ToolInput[commandKey].(string)
+		if !ok || strings.TrimSpace(command) == "" {
+			return ExecutionDenyAgy("invalid execution command")
+		}
+		if bg, _ := ev.ToolInput[backgroundKey].(bool); bg {
+			return ExecutionDenyAgy("remote background tool calls are unavailable in this slice; use foreground commands and component parks")
+		}
+		if err := executionShell(command, workspace, cwd, protected, 0); err != nil {
+			return ExecutionDenyAgy(err.Error())
+		}
+	case ev.ToolName == readTool || ev.ToolName == writeTool || ev.ToolName == editTool || ev.ToolName == notebookTool || ev.ToolName == grepTool || ev.ToolName == globTool:
+		key := filePathKey
+		switch ev.ToolName {
+		case grepTool, globTool:
+			key = pathKey
+		case notebookTool:
+			key = notebookPathKey
+		}
+		tp, _ := ev.ToolInput[key].(string)
+		if tp == "" || !target(tp) {
+			return ExecutionDenyAgy("file tool target is outside its owned workspace")
+		}
+		for _, k := range []string{agyDirPathKey, agySearchPathKey, agySearchDirKey, "Path", "TargetFile", "AbsolutePath", "NotebookPath", "File", filePathKey, notebookPathKey, pathKey} {
+			if v, ok := p.ToolCall.Args[k].(string); ok && v != "" && !target(v) {
+				return ExecutionDenyAgy("file tool target is outside its owned workspace")
+			}
+		}
+	case ev.ToolName == TaskStopTool || ev.ToolName == manageTaskTool || ev.ToolName == commandStatusTool || ev.ToolName == "search_web":
+	default:
+		return ExecutionDenyAgy("tool is not supported by the managed remote adapter; use component commands for notes and reports")
+	}
+	h.Transcripts.Managed = func(string) (bool, error) { return true, nil }
+	return h.DecideAgy(raw)
+}
+
 func executionWithin(root, p string) bool {
 	root, p = filepath.Clean(root), filepath.Clean(p)
 	r, err := filepath.Rel(root, p)
@@ -219,7 +340,11 @@ func executionWithin(root, p string) bool {
 }
 
 func executionLiteral(w *syntax.Word) (string, error) {
-	return expand.Literal(&expand.Config{Env: expand.ListEnviron(os.Environ()...)}, w)
+	env := os.Environ()
+	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+		env = append(env, "HOME="+filepath.Clean(h))
+	}
+	return expand.Literal(&expand.Config{Env: expand.ListEnviron(env...)}, w)
 }
 
 // executionShell guards one remote command run in cwd, inside workspace.
@@ -474,8 +599,8 @@ func ExecutionRulesAllowed(p string, extra []string) bool {
 			return false
 		}
 	}
-	home, _ := os.UserHomeDir()
-	for _, q := range []string{".ssh", ".config/gh", ".claude/.credentials.json", ".codex/auth.json", ".aws", ".kube", ".netrc", ".git-credentials"} {
+	home, _ := guardHomeDir()
+	for _, q := range []string{".ssh", ".config/gh", ".claude/.credentials.json", ".codex/auth.json", ".gemini/antigravity-cli/antigravity-oauth-token", ".gemini/jetski-standalone-oauth-token", ".aws", ".kube", ".netrc", ".git-credentials"} {
 		if executionLexicalWithin(filepath.Join(home, q), p) {
 			return false
 		}
@@ -578,5 +703,5 @@ func executionUnwrap(words []string) ([]string, error) {
 }
 
 func executionIdentityVariable(name string) bool {
-	return name == "BEEKEEPER_EXECUTION_ID" || name == "BEEKEEPER_EXECUTION_COORDINATOR" || name == "BEEKEEPER_CONFIG"
+	return name == "BEEKEEPER_EXECUTION_ID" || name == "BEEKEEPER_EXECUTION_COORDINATOR" || name == "BEEKEEPER_CONFIG" || name == "BEEKEEPER_EXECUTION_HOME"
 }

@@ -70,10 +70,11 @@ func TestExecutionHostConfigValidatesCatalogWithoutChangingLocalDefaults(t *test
 	for _, tc := range []struct{ name, raw, want string }{
 		{"absent", "", ""},
 		{"valid", "agents:\n  hosts:\n" + first, ""},
+		{"digest from state", "agents:\n  hosts:\n" + fmt.Sprintf(entry, "host-a", "host-a", ""), ""},
 		{"reserved", "agents:\n  hosts:\n" + fmt.Sprintf(entry, "local", "host-a", digest), "local is reserved"},
 		{"duplicate identity", "agents:\n  hosts:\n" + first + fmt.Sprintf(entry, "host-b", "host-a", digest), "unique identities"},
 		{"unsafe endpoint", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "host-a.example", "-unsafe"), "SSH endpoint"},
-		{"unsupported harness", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "[claude]", "[agy]"), "entries of claude and codex"},
+		{"unsupported harness", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "[claude]", "[omp]"), "entries of claude, codex and agy"},
 		{"workspace root", "agents:\n  hosts:\n" + strings.ReplaceAll(first, "/srv/workspaces", "/"), "workspace root"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,6 +91,9 @@ func TestExecutionHostConfigValidatesCatalogWithoutChangingLocalDefaults(t *test
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if findings, err := Check(p); err != nil || len(findings) != 0 {
+				t.Fatalf("loaded catalog must also check: %v, %v", findings, err)
 			}
 			if cfg.Agents.Mode != ModeDesktop || cfg.Agents.Execution != nil {
 				t.Fatal("local defaults changed")
