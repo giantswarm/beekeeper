@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -124,6 +126,15 @@ func TestPrepareInstallsManagedCodexHome(t *testing.T) {
 	config, err := os.ReadFile(filepath.Join(home, "config.toml")) //nolint:gosec // test-owned managed home
 	if err != nil || !strings.Contains(string(config), "hooks = true") || !strings.Contains(string(config), "computer_use = false") || strings.Contains(string(config), "[projects") {
 		t.Fatalf("managed codex configuration: %s %v", config, err)
+	}
+	var installed struct {
+		Features map[string]bool `toml:"features"`
+	}
+	if err := toml.Unmarshal(config, &installed); err != nil {
+		t.Fatal(err)
+	}
+	if !installed.Features["code_mode_host"] || !installed.Features["hooks"] {
+		t.Fatal("managed codex workers need code-mode tools with execution hooks enabled")
 	}
 	if rules, err := os.ReadFile(filepath.Join(home, "AGENTS.md")); err != nil || string(rules) != string(f.s.Rules) { //nolint:gosec // test-owned managed home
 		t.Fatal("codex home does not carry the embedded worker rules")
