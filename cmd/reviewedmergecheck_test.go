@@ -28,15 +28,18 @@ const (
 // mergeCheckRepo is a real git repository in a scratch directory backing
 // loopMergeRepo ("o/r") with a Go module and two PR branches from main.
 type mergeCheckRepo struct {
-	dir   string
-	base  string
-	head1 string
-	head2 string
+	dir       string
+	originDir string
+	base      string
+	head1     string
+	head2     string
 }
 
 func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseFiles map[string]string) *mergeCheckRepo {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "r")
+	tmp := t.TempDir()
+	originDir := filepath.Join(tmp, "origin.git")
+	dir := filepath.Join(tmp, "r")
 	if err := os.MkdirAll(filepath.Join(dir, "guard"), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +63,12 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 		}
 		return strings.TrimSpace(string(out))
 	}
+	git("init", "-q", "--bare", originDir)
 	git("init", "-q", "-b", mainBranch)
 	git("config", "user.name", "Test")
 	git("config", "user.email", "test@example.com")
-	git("remote", loopAdd, "origin", "https://github.com/"+loopMergeRepo+".git")
+	git("remote", loopAdd, "origin", originDir)
+	git("remote", "set-url", "--push", "origin", "https://github.com/"+loopMergeRepo+".git")
 
 	write("go.mod", "module example.com/r\n\ngo 1.24\n")
 	for k, v := range baseFiles {
@@ -72,6 +77,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 	git(loopAdd, ".")
 	git("commit", "-q", "-m", "initial")
 	base := git("rev-parse", "HEAD")
+	git("push", "-q", originDir, mainBranch)
 
 	git("checkout", "-q", "-b", "pr-1", base)
 	for k, v := range pr1Files {
@@ -91,7 +97,7 @@ func newMergeCheckRepo(t *testing.T, pr1Files, pr2Files map[string]string, baseF
 
 	git("checkout", "-q", mainBranch)
 	git("update-ref", "refs/remotes/origin/"+mainBranch, base)
-	return &mergeCheckRepo{dir: dir, base: base, head1: head1, head2: head2}
+	return &mergeCheckRepo{dir: dir, originDir: originDir, base: base, head1: head1, head2: head2}
 }
 
 // advanceMain simulates GitHub merging head into main on origin.
@@ -110,6 +116,7 @@ func (m *mergeCheckRepo) advanceMain(t *testing.T, head string) string {
 	git("checkout", "-q", mainBranch)
 	git(gitMerge, "--no-ff", "--no-edit", head)
 	sha := git("rev-parse", "HEAD")
+	git("push", "-q", m.originDir, mainBranch)
 	git("update-ref", "refs/remotes/origin/"+mainBranch, sha)
 	return sha
 }
@@ -247,6 +254,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			}
 			// Route gate --reviewed-head for either PR #7 or PR #8 to reviewedMerge.
 			prevRun := beekeeperRun
+			t.Cleanup(func() { beekeeperRun = prevRun })
 			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
 				if g := slices.Index(args, gateCmdName); g >= 0 && slices.Contains(args, "8") {
 					clean := args[g:]

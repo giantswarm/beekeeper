@@ -19,6 +19,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -149,22 +150,39 @@ func matchesReviewedRepo(ctx context.Context, dir, repo string) bool {
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	out, err := runGit(ctx, dir, "remote", "get-url", "origin")
-	if err != nil {
-		return false
+	for _, args := range [][]string{
+		{"remote", "get-url", "origin"},
+		{"remote", "get-url", "--push", "origin"},
+	} {
+		out, err := runGit(ctx, dir, args...)
+		if err == nil && strings.EqualFold(worktrees.RepoOf(strings.TrimSpace(string(out))), repo) {
+			return true
+		}
 	}
-	return strings.EqualFold(worktrees.RepoOf(strings.TrimSpace(string(out))), repo)
+	return false
 }
 
 func fetchReviewedMergeRefs(ctx context.Context, repoDir, base, head string, prNumber int) {
-	_, _ = runGit(ctx, repoDir, "fetch", "--no-tags", "--quiet", "origin", base)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", base)
 	if hasReviewedCommit(ctx, repoDir, head) {
 		return
 	}
-	_, _ = runGit(ctx, repoDir, "fetch", "--no-tags", "--quiet", "origin", head)
+	runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", head)
 	if !hasReviewedCommit(ctx, repoDir, head) && prNumber > 0 {
-		_, _ = runGit(ctx, repoDir, "fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("refs/pull/%d/head", prNumber))
+		runFetchGit(fetchCtx, repoDir, "fetch", "--no-tags", "--quiet", "origin", fmt.Sprintf("refs/pull/%d/head", prNumber))
 	}
+}
+
+func runFetchGit(ctx context.Context, dir string, args ...string) {
+	c := proc.Command(proc.Background(ctx), "git", append([]string{"-C", dir, "-c", "credential.interactive=never"}, args...)...)
+	c.Env = append(os.Environ(),
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH_COMMAND=ssh -oBatchMode=yes -oConnectTimeout=5",
+	)
+	_ = c.Run()
 }
 
 func resolveReviewedBaseCommit(ctx context.Context, repoDir, base string) string {
