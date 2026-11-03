@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Only beekeeper starts a guide run: `guide start` refuses a session beekeeper did not start as a guide run, `guide start --new` starts the next run from a terminal (in `guide.dir`, with the configured skill, model and mode) when the guide's session is gone or none is recorded, and `beekeeper resume` starts one when the guide's session runs no CLI. The standby watch and `guide status` record when the guide's CLI was first seen gone, so its restart grace runs out after a reboot or crash instead of starting anew on every read (https://github.com/giantswarm/beekeeper/issues/2205).
+
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
 - The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).
