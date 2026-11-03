@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
@@ -476,6 +477,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
+		s.cleanStoppedRuntime(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -501,7 +503,19 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
+	s.cleanStoppedRuntime(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
+}
+
+// Only the disposable MCP proxy home is runtime state. The workspace and
+// source bundle may contain unpublished work and are deliberately retained.
+func (s *Server) cleanStoppedRuntime(r Ref) {
+	if s.Root != "" {
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
+	}
 }
 
 // RebindPolicy binds a running execution to the host's prepared policy. The
