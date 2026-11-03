@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -72,7 +73,8 @@ func TestSweepFinishedSymlinkAliases(t *testing.T) {
 			if err := runner.Sweep(context.Background(), []string{finished}, false); err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"--kubeconfig", "fixture-kubeconfig", "--context", "fixture-context", "--namespace", "builders", "--request-timeout=15s", "delete", "job", builder, "--ignore-not-found=true", "--wait=false"}
+			want := []string{"--kubeconfig", runner.Config.Kubeconfig, "--context", runner.Config.Context, "--namespace", runner.Config.Namespace, "--request-timeout=15s"}
+			want = append(want, strings.Fields("delete job "+builder+" --ignore-not-found=true --wait=false")...)
 			if len(calls) != 1 || !slices.Equal(calls[0], want) {
 				t.Fatalf("cluster calls = %v, want [%v]", calls, want)
 			}
