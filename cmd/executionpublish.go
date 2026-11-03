@@ -42,11 +42,14 @@ type executionPublicationResult struct {
 }
 
 func executionBranch(ref execution.Ref) string {
-	return fmt.Sprintf("beekeeper-execution/%s/%d", ref.Execution, ref.Generation)
+	return execution.GitHubBranch(ref)
 }
 
 func executionOwnedBranch(r *state.ExecutionRecord) string {
 	if r != nil {
+		if r.Request.GitHub {
+			return execution.GitHubBranch(r.Handle.Ref)
+		}
 		if r.Published != nil && r.Published.Branch != "" {
 			return r.Published.Branch
 		}

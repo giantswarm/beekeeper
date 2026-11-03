@@ -96,7 +96,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			l.sayOnce("replace "+r.Key, "SUPERVISOR ALERT REPLACEMENT FAILED %s: %v", r.Name, err)
 			continue
 		}
-		if !l.startsHeld {
+		if !l.holdingStarts() {
 			done[r.Key] = true
 		}
 	}
@@ -142,7 +142,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			}
 			waiting = true
 			key := "alert wake " + f.Installation + "/" + f.Key + " " + ag.Name
-			if done[key] || pendingKeys[key] || l.startsHeld {
+			if done[key] || pendingKeys[key] || l.holdingStarts() {
 				continue
 			}
 			err := l.wakeAlertWorker(ctx, st, ag, f, key, claims, evs)
@@ -150,7 +150,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				l.sayOnce(key, "SUPERVISOR ALERT WAKE FAILED %s: %v", ag.Name, err)
 				continue
 			}
-			delete(l.said, key)
+			l.clearSaid(key)
 			done[key] = true
 		}
 		// Existing firing pages are included: taking over from a watch must
@@ -244,7 +244,7 @@ func (l *supervisorLoop) alertNote(act superloop.Action, question string, f aler
 		status := fmt.Sprintf("%s %s since %s blocks %s", f.Instance(), f.Where, f.Since, strings.Join(refs, ", "))
 		st.Notes = append(st.Notes, state.Note{
 			Refs: refs, ID: id, For: l.a.cfg.Guide.Person, By: loopParty,
-			Text: question + "\n" + status, At: l.a.now, Kind: noteDecision,
+			Text: question + "\n" + status, At: l.a.timeNow(), Kind: noteDecision,
 			Question: question, StatusQuo: status,
 			Default: "keep this alert unowned until an owner is assigned",
 		})
@@ -258,7 +258,7 @@ func (l *supervisorLoop) alertNote(act superloop.Action, question string, f aler
 }
 
 func (l *supervisorLoop) replaceAlertWorker(ctx context.Context, r alertReplacement, evs []state.Event) error {
-	if l.startsHeld {
+	if l.holdingStarts() {
 		return nil
 	}
 	// The intent precedes remove/start. Reconcile a successful start after
