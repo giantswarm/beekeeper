@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,12 +29,13 @@ import (
 )
 
 const (
-	loopPR     = "o/r#7"
-	loopURL    = "https://github.com/o/r/pull/7"
-	loopHead   = "1111111111111111111111111111111111111111"
-	loopFixed  = "2222222222222222222222222222222222222222"
-	loopWorker = "worker one"
-	loopPerson = "pat"
+	loopPR           = "o/r#7"
+	loopURL          = "https://github.com/o/r/pull/7"
+	loopHead         = "1111111111111111111111111111111111111111"
+	loopFixed        = "2222222222222222222222222222222222222222"
+	loopWorker       = "worker one"
+	loopSecondWorker = "worker two"
+	loopPerson       = "pat"
 	// loopLocal is a self-hosted provider.
 	loopLocal = "local"
 	// loopQwen is a self-hosted model, loopPostInstall a post-install
@@ -51,6 +54,7 @@ const (
 // loopRig is a loop's app over a scratch store, with the beekeeper commands
 // and the pull request reads it makes faked.
 type loopRig struct {
+	mu    sync.Mutex
 	a     *app
 	out   *bytes.Buffer
 	calls [][]string
@@ -91,9 +95,15 @@ type loopRig struct {
 // loopFakeBinary is the loop's binary as the rig says it.
 type loopFakeBinary struct{ r *loopRig }
 
-func (b loopFakeBinary) Replaced() bool { return b.r.replaced }
+func (b loopFakeBinary) Replaced() bool {
+	b.r.mu.Lock()
+	defer b.r.mu.Unlock()
+	return b.r.replaced
+}
 
 func (b loopFakeBinary) Exec(...string) error {
+	b.r.mu.Lock()
+	defer b.r.mu.Unlock()
 	b.r.execs++
 	b.r.replaced = false
 	return nil
@@ -106,20 +116,27 @@ type rigStore struct {
 }
 
 func (s rigStore) Record(events ...state.Event) error {
-	if f := s.r.failRecord; f != nil && slices.ContainsFunc(events, f) {
+	s.r.mu.Lock()
+	f := s.r.failRecord
+	if f != nil && slices.ContainsFunc(events, f) {
 		s.r.failRecord = nil
+		s.r.mu.Unlock()
 		return errors.New("disk full")
 	}
+	s.r.mu.Unlock()
 	return s.Store.Record(events...)
 }
 
 func (s rigStore) Update(fn func(*state.State) ([]state.Event, error)) error {
 	return s.Store.Update(func(st *state.State) ([]state.Event, error) {
 		evs, err := fn(st)
+		s.r.mu.Lock()
 		if err == nil && s.r.failRecord != nil && slices.ContainsFunc(evs, s.r.failRecord) {
 			s.r.failRecord = nil
+			s.r.mu.Unlock()
 			return nil, errors.New("disk full")
 		}
+		s.r.mu.Unlock()
 		return evs, err
 	})
 }
@@ -200,9 +217,22 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.answer = func([]string) (string, int) { return "", 0 }
 	r.command = func(argv []string) (string, int) {
 		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
-			r.pull.State = superloop.Merged
-			r.pull.MergeCommit = loopFixed
-			r.lastMerged = r.pull.Head
+			r.mu.Lock()
+			repo := r.pullRepo()
+			if idx := slices.Index(argv, "--repo"); idx >= 0 && idx+1 < len(argv) {
+				repo = argv[idx+1]
+			}
+			ref := repo + "#" + argv[3]
+			if p, ok := r.pulls[ref]; ok {
+				p.State = superloop.Merged
+				p.MergeCommit = loopFixed
+				r.pulls[ref] = p
+			} else {
+				r.pull.State = superloop.Merged
+				r.pull.MergeCommit = loopFixed
+				r.lastMerged = r.pull.Head
+			}
+			r.mu.Unlock()
 		}
 		return "", 0
 	}
@@ -220,12 +250,16 @@ func newLoopRig(t *testing.T) *loopRig {
 		return nil, errors.New("no comparison in this rig")
 	}
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+		r.mu.Lock()
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
+		r.mu.Unlock()
 		return r.baseMerge(p, approved)
 	}
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	readTeams = func(context.Context, config.Ownership) (map[string]string, error) {
+		r.mu.Lock()
 		r.teamReads++
+		r.mu.Unlock()
 		return r.teams, r.teamsErr
 	}
 	loopInTurn = func(a *app, p state.Party) bool { return r.inTurn(p) || a.executionInTurn(p) }
@@ -236,12 +270,22 @@ func newLoopRig(t *testing.T) *loopRig {
 		if len(args) >= 2 && args[0] == "--as" {
 			args = args[2:]
 		}
+		r.mu.Lock()
 		r.calls = append(r.calls, args)
+		r.mu.Unlock()
 		o, code := r.answer(args)
-		if len(args) > 0 && args[0] == gateCmdName && code == 0 {
+		if len(args) > 0 && args[0] == gateCmdName && code == 0 && o == "" {
 			idx := slices.Index(args, "--reviewed-head")
 			if idx >= 0 && idx+1 < len(args) {
-				doc := r.a.reviewedMerge(context.Background(), r.pullRepo(), 7, args[idx+1])
+				repo := r.pullRepo()
+				pr := 7
+				if sep := slices.Index(args, "--"); sep >= 0 && sep+5 < len(args) {
+					repo = args[sep+4]
+					if n, err := strconv.Atoi(args[sep+5]); err == nil && n > 0 {
+						pr = n
+					}
+				}
+				doc := r.a.reviewedMerge(context.Background(), repo, pr, args[idx+1])
 				code = doc.ExitCode
 				b, _ := json.Marshal(doc)
 				o = string(b)
@@ -255,6 +299,8 @@ func newLoopRig(t *testing.T) *loopRig {
 		return o, code, nil
 	}
 	readLoopPull = func(_ context.Context, ref string) (superloop.Pull, error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 		if p, ok := r.pulls[ref]; ok {
 			return p, nil
 		}
@@ -264,8 +310,10 @@ func newLoopRig(t *testing.T) *loopRig {
 		return r.pull, nil
 	}
 	loopCommand = func(_ context.Context, stdin string, argv []string) (string, string, int, error) {
+		r.mu.Lock()
 		r.cmds = append(r.cmds, argv)
 		r.stdin = append(r.stdin, stdin)
+		r.mu.Unlock()
 		o, code := r.command(argv)
 		return o, r.stderr, code, nil
 	}
@@ -301,7 +349,9 @@ func (r *loopRig) pass(t *testing.T) {
 }
 
 func (r *loopRig) passErr() error {
+	r.mu.Lock()
 	r.calls = nil
+	r.mu.Unlock()
 	return r.a.runSupervisorLoop(context.Background(), true)
 }
 
@@ -312,6 +362,8 @@ func (r *loopRig) verdict(id, head, verdict, body string) {
 
 // called is the call whose line starts with prefix.
 func (r *loopRig) called(prefix ...string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, c := range r.calls {
 		if len(c) >= len(prefix) && slices.Equal(c[:len(prefix)], prefix) {
 			return c
@@ -1275,6 +1327,7 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	act := superloop.Action{Key: "file test", Kind: superloop.KindFile, Agent: loopWorker}
 	text := "worker reported at now" + fileReportSeparator + report
 	if err := l.record(act, text); err != nil {
@@ -1707,11 +1760,13 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 		}
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
+			r.mu.Lock()
 			r.replaced = true
+			r.mu.Unlock()
 			runningVer = testLoopNewVer
 			return "", 0
 		}
-		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && r.replaced {
+		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && (loopFakeBinary{r}).Replaced() {
 			boardCallsBeforeReexec++
 		}
 		return "", 0
@@ -1722,6 +1777,7 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // Observe settled streams before the caller's quiet-point check.
 	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
 		t.Fatal(err)
 	}
@@ -1730,6 +1786,9 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.reexec(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !installed || r.execs != 2 || !l.reexecuted {
@@ -2174,7 +2233,7 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	r.ownedBy("team-a")
 	r.park(t, loopPR, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopSecondWorker}, Task: "upstream",
 			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge", ReviewHead: loopHead}})
 		return nil, nil
 	}); err != nil {
