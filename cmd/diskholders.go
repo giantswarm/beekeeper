@@ -184,7 +184,7 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 		window = cfg.AsideRetention.Duration
 	}
 	switch {
-	case filepath.Clean(path) == filepath.Clean(a.cfg.StateDir):
+	case diskprune.InUse(path, []string{a.cfg.StateDir}) || diskprune.InUse(a.cfg.StateDir, []string{path}):
 		h.Owner, h.Why = pluginName, "beekeeper's own state"
 	case !aside && slices.Contains(cfg.Keep, name):
 		h.Why = "kept by disk.holders.keep"
