@@ -1156,7 +1156,15 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	case unknown:
 		return
 	}
-	if isParked && (p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY") {
+	rs := l.rounds[ref]
+	// Approved heads use the merge executor's durable repair handoff, which
+	// retains the approval and retries a capacity-limited fixer only once.
+	approved := false
+	if len(rs) > 0 {
+		v := p.verdict(rs[len(rs)-1], l.pushed(p))
+		approved = v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head)
+	}
+	if isParked && !approved && (p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY") {
 		if sameHead(w.ParkedHead, p.Head) {
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
@@ -1169,7 +1177,6 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	planRed(l, p, w, isParked, add)
-	rs := l.rounds[ref]
 	// An escalation logged before its key named a head was on the
 	// head of the last round, whose findings stood unfixed.
 	if escalated && esc.head == "" && len(rs) > 0 {
