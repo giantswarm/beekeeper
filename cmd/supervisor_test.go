@@ -406,3 +406,37 @@ func TestAMessageToTheSupervisorIsRefused(t *testing.T) {
 		t.Fatalf("a message to the supervisor: %v", err)
 	}
 }
+
+// supervisor status prints the binary version the loop runs, both in text and
+// in --json.
+func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
+	a, out := supervisorApp(t)
+	oldVer := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = oldVer })
+	loopRunningVersion = func() string { return "0.175.0-rc.25" }
+
+	pid := os.Getpid()
+	if err := a.store.WriteFile(loopPIDFile, pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeLoopVersion(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.supervisorStatus(); err != nil {
+		t.Fatal(err)
+	}
+	wantLine := "the supervisor loop runs (PID "
+	if !strings.Contains(out.String(), wantLine) || !strings.Contains(out.String(), ", v0.175.0-rc.25)\n") {
+		t.Fatalf("supervisor status = %q, want PID and v0.175.0-rc.25", out.String())
+	}
+
+	out.Reset()
+	a.json = true
+	if err := a.supervisorStatus(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"version": "v0.175.0-rc.25"`) {
+		t.Fatalf("supervisor status --json = %q, want version v0.175.0-rc.25", out.String())
+	}
+}
+
