@@ -504,7 +504,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if !ok {
 			continue
 		}
-		if key == "go "+ref+"@"+head {
+		// The sweep's go again for a head whose go was never carried out
+		// is the same authority, keyed by its stretch without an owner.
+		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
 			if e.Verb == loopClaimVerb {
 				claimed = true
 				claimAgent = rest

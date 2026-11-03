@@ -85,10 +85,10 @@ func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, records: []state.Record{{Session: four, Issue: issue}}}
 	w.sessions = map[string]*claude.Session{
 		hostFour:  {ID: "s4", HostID: hostFour, Name: agentFour},
-		"local_5": {ID: "s5", HostID: "local_5", Name: "Agent five"},
+		"local_5": {ID: "s5", HostID: "local_5", Name: agentFive},
 	}
 	w.sessionChanges(nil)
-	if got := out.String(); strings.Contains(got, agentFour) || !strings.Contains(got, "Agent five") {
+	if got := out.String(); strings.Contains(got, agentFour) || !strings.Contains(got, agentFive) {
 		t.Errorf("SESSIONS ended line:\n%s", got)
 	}
 }
