@@ -37,6 +37,14 @@ func (a *app) sessionEffort(sp agentStart) string {
 	return a.cfg.Agents.EffortFor(sp.name, cmp.Or(sp.kind, sp.role))
 }
 
+// refuseAgyEffort refuses an effort agy would silently ignore.
+func refuseAgyEffort(level string) error {
+	if level == "" {
+		return nil
+	}
+	return usageErr("agy does not expose a session effort option; choose a model with the desired effort")
+}
+
 func effortFlags(level string) []string {
 	if level == "" {
 		return nil

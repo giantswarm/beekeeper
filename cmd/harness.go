@@ -238,15 +238,15 @@ func (agyHarness) HostPrefix() string { return agy.HostPrefix }
 func (agyHarness) EnvAgent() string   { return agy.EnvAgent }
 
 func (agyHarness) Start(ctx context.Context, a *app, sp agentStart) error {
-	if sp.effort != "" {
-		return usageErr("agy does not expose a session effort option; choose a model with the desired effort")
+	if err := refuseAgyEffort(sp.effort); err != nil {
+		return err
 	}
 	return a.startAgyAgent(ctx, sp)
 }
 
 func (agyHarness) DryRun(_ context.Context, a *app, sp agentStart, gaps []string) error {
-	if sp.effort != "" {
-		return usageErr("agy does not expose a session effort option; choose a model with the desired effort")
+	if err := refuseAgyEffort(sp.effort); err != nil {
+		return err
 	}
 	return a.dryRunAgyStart(sp, gaps)
 }

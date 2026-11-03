@@ -737,8 +737,9 @@ agents:
 Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
 `-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
 The selected model must support the level. agy has no session effort option:
-an explicit effort is refused instead of silently ignored. SSH Claude and
-Codex starts carry effort in the owned execution request and reuse it for
+an effort from the flag or a rule is refused instead of silently ignored, on
+local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude
+and Codex starts carry effort in the owned execution request and reuse it for
 later turns.
 
 A Claude desktop-mode start with an effort runs its task headless, with its

@@ -114,6 +114,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if !execution.SupportedHarness(o.Harness) || slices.Contains(exclude, o.Harness) || o.Model == "" {
 		return usageErr("remote %s requires an explicit --model or a configured auto choice this host offers", o.Harness)
 	}
+	if o.Harness == execution.HarnessAgy {
+		if err := refuseAgyEffort(o.Effort); err != nil {
+			return err
+		}
+	}
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
 	}
