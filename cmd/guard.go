@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -521,16 +522,21 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				w = cmd.OutOrStdout()
 			}
 			defer func() {
-				if r := recover(); r != nil {
-					if isCodex {
-						_, _ = w.Write(guard.DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r)))
-						return
+				if recover() != nil {
+					reason := "Refused: internal panic in PreToolUse check setup; failing closed. See beekeeper log (hook.panic)."
+					if a.cfg != nil {
+						a.recordGuardPanic("setup", debug.Stack())
 					}
-					if isAgy {
-						_, _ = w.Write(guard.PassAgy())
+					switch {
+					case isCodex:
+						_, _ = w.Write(guard.DenyCodex(reason))
+					case isAgy:
+						_, _ = w.Write(guard.DenyAgy(reason))
+					default:
+						_ = json.NewEncoder(w).Encode(map[string]any{"hookSpecificOutput": map[string]string{"hookEventName": guard.PreToolUseEvent, "permissionDecision": "deny", "permissionDecisionReason": reason}})
 					}
 				}
-			}() // a broken hook must not block the tool call (codex fails closed)
+			}()
 			raw, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
 				if isCodex {
@@ -557,7 +563,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
 				// every session on the machine, the desk's or not
 				if isCodex {
-					_, _ = w.Write(guard.DecideUnsandboxedCodex(raw))
+					_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), guard.DecideUnsandboxedCodex(raw)))
 					return nil
 				}
 				if isAgy {
@@ -572,7 +578,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
 				if isCodex {
-					_, _ = w.Write((guard.Hook{Sandbox: sandboxed}).DecideSandboxCodex(raw))
+					_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), (guard.Hook{Sandbox: sandboxed}).DecideSandboxCodex(raw)))
 					return nil
 				}
 				if isAgy {
@@ -585,7 +591,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
+			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
@@ -612,7 +618,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
-				_, _ = w.Write(h.DecideCodex(raw))
+				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), h.DecideCodex(raw)))
 				return nil
 			}
 			if isAgy {
@@ -1182,4 +1188,13 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 		g.StoreDeny = append(g.StoreDeny, guard.StoreRule{Vault: r.Vault, Item: r.Item})
 	}
 	return g
+}
+
+// recordGuardPanic keeps stack traces in the event log, never tool responses.
+func (a *app) recordGuardPanic(check string, stack []byte) {
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return
+	}
+	_ = store.Log(event(state.Party{Name: "hook"}, "hook.panic", "check %s\n%s", check, stack))
 }

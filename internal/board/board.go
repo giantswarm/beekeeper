@@ -39,7 +39,7 @@ type Item struct {
 	Updated   time.Time `json:"updated"`
 	// Blockers counts the recorded blockers, OpenBlockers the open ones;
 	// OpenBlockedBy names those read (owner/repo#n), from a read of the
-	// board's items or the priority list only.
+	// board's items only.
 	Blockers      int      `json:"blockers,omitempty"`
 	OpenBlockers  int      `json:"openBlockers,omitempty"`
 	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
@@ -113,8 +113,25 @@ type Snapshot struct {
 	// Missing names what GitHub answered with an error and no item's
 	// Missing holds ("<path>: <message>"), a search step's issues for one.
 	Missing []string
-	// Priorities is the priority list Read read with the items.
-	Priorities Priorities
+}
+
+// maxDepth bounds parent walks against cycles.
+const maxDepth = 10
+
+// Parent is the issue ref is a sub-issue of in snap, from its Items and the
+// SubIssues read with them; "" when snap does not say.
+func (snap *Snapshot) Parent(ref string) string {
+	for _, it := range snap.Items {
+		if strings.EqualFold(it.Ref, ref) {
+			return it.Parent
+		}
+		for _, sub := range it.SubIssues {
+			if strings.EqualFold(sub.Ref, ref) {
+				return cmp.Or(sub.Parent, it.Ref)
+			}
+		}
+	}
+	return ""
 }
 
 // Candidate is an item the order offers, in its place.
@@ -130,10 +147,6 @@ type Candidate struct {
 	Match string `json:"match,omitempty"`
 	// Skip says why it is not free, empty when it is.
 	Skip string `json:"skip,omitempty"`
-	// Priority is the rank Annotate recorded, 0 for none; PriorityOf the
-	// epic it is the rank of, the candidate itself or an ancestor.
-	Priority   int    `json:"priority,omitempty"`
-	PriorityOf string `json:"priorityOf,omitempty"`
 	// Claim is another desk's claim of a free candidate that holds no
 	// more (stale): shown, not honoured.
 	Claim string `json:"claim,omitempty"`
@@ -148,25 +161,10 @@ func (c Candidate) Why() string {
 	if c.Status != "" {
 		s += " (" + c.Status + ")"
 	}
-	if p := c.PriorityText(); p != "" {
-		s += ", " + p
-	}
 	if c.Claim != "" {
 		s += "; a claim " + c.Claim
 	}
 	return s
-}
-
-// PriorityText says the rank applied: "priority 2", "priority 2 of epic
-// owner/repo#n" when inherited; "" for none.
-func (c Candidate) PriorityText() string {
-	switch {
-	case c.Priority == 0:
-		return ""
-	case strings.EqualFold(c.PriorityOf, c.Ref):
-		return fmt.Sprintf("priority %d", c.Priority)
-	}
-	return fmt.Sprintf("priority %d of epic %s", c.Priority, c.PriorityOf)
 }
 
 // Rank returns the candidates of every step in order, each item once, in

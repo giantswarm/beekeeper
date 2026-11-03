@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -99,6 +100,8 @@ func Main() int {
 }
 
 type app struct {
+	selectionKind      string
+	selectionAuthor    string
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)
@@ -116,7 +119,10 @@ type app struct {
 	cfg   *config.Config
 	store state.Store
 	now   time.Time
-	out   io.Writer
+	// loopNow advances the long-running supervisor clock without mutating now
+	// while actions from earlier passes still use the app.
+	loopNow *atomic.Pointer[time.Time]
+	out     io.Writer
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
@@ -236,7 +242,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.priorityCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
@@ -363,7 +369,7 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.timeNow()), t, nil
 }
 
 // discover returns the running sessions of every harness.
@@ -510,4 +516,23 @@ func (a *app) versionCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// timeNow returns the supervisor clock, or the command's fixed observation time.
+func (a *app) timeNow() time.Time {
+	if a.loopNow != nil {
+		if now := a.loopNow.Load(); now != nil {
+			return *now
+		}
+	}
+	return a.now
+}
+
+// snapshotAtNow gives helpers that use a command's fixed time an observation
+// that stays stable while subsequent supervisor passes advance their clock.
+func (a *app) snapshotAtNow() *app {
+	snapshot := *a
+	snapshot.now = a.timeNow()
+	snapshot.loopNow = nil
+	return &snapshot
 }

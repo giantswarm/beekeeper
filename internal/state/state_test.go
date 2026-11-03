@@ -336,7 +336,7 @@ const newerSchema = `{
   "timers": [{"id": 1, "due": "2026-10-02T15:00:00Z", "what": "w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "jitter": "1m"}],
   "records": [{"session": {"name": "a"}, "issue": "o/r#1", "by": {"name": "a"}, "at": "2026-10-02T14:00:00Z", "phase": "ci"}],
   "starts": [{"session": "s1", "name": "Agent one", "mode": "bypassPermissions", "dir": "/w", "by": {"name": "s"}, "at": "2026-10-02T14:00:00Z", "model": "m"}],
-  "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "priority": 2}],
+  "merges": [{"repo": "o/r", "pr": 1, "lane": "l", "by": {"name": "a"}, "pid": 1, "phase": "waiting", "joined": "2026-10-02T14:00:00Z", "seen": "2026-10-02T14:00:00Z", "slot": 2}],
   "budget": {"remaining": 1, "limit": 2, "reset": "2026-10-02T15:00:00Z", "at": "2026-10-02T14:00:00Z", "search": 3},
   "rota": {"next": "Supervisor run 13"}
 }`
@@ -408,7 +408,7 @@ func TestOlderSaveKeepsANewerSchema(t *testing.T) {
 		{[]any{"timers", 0, "jitter"}, "1m"},
 		{[]any{"records", 0, "phase"}, "ci"},
 		{[]any{"starts", 0, "model"}, "m"},
-		{[]any{"merges", 0, "priority"}, 2.0},
+		{[]any{"merges", 0, "slot"}, 2.0},
 		{[]any{"budget", "search"}, 3.0},
 		{[]any{"rota", "next"}, "Supervisor run 13"},
 	}
@@ -472,7 +472,7 @@ func TestRetiredSupervisorKeysAreDropped(t *testing.T) {
 func TestAnOlderReleasesSaveIsRefused(t *testing.T) {
 	const newest = "v0.73.0"
 	dir := t.TempDir()
-	before := `{"writer":{"version":"v0.72.0"},"nextNote":1,"merges":[{"repo":"o/r","pr":7,"lane":"l","phase":"waiting","priority":2}]}`
+	before := `{"writer":{"version":"v0.72.0"},"nextNote":1,"merges":[{"repo":"o/r","pr":7,"lane":"l","phase":"waiting","slot":2}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}

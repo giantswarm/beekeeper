@@ -68,6 +68,8 @@ func TestWorkerOperationalAskIsRefusedNamingWhereItWent(t *testing.T) {
 		{"rollout", "Shall the guide fast-forward the main checkout so the merged change goes live?"},
 		{"rollout", "Install the new binary of the release on this machine?"},
 		{"sessions", "Restart the worker session that stopped mid-task?"},
+		{"publication", "Can the coordinator fix SSH publication for " + prURL + " so the lint fix can be pushed?"},
+		{"publication", "How should commit 937e7b9 reach " + prURL + " while the coordinator refuses its publication?"},
 	} {
 		t.Run(c.question, func(t *testing.T) {
 			a := workerNoteApp(t, openThread, nil)

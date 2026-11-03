@@ -30,7 +30,7 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 			if strings.HasPrefix(key, "go "+ref+"@") {
 				allowed = key == "go "+ref+"@"+head && strings.HasPrefix(rest, worker.Name+": ")
 			}
-		case "supervisor.merge":
+		case "supervisor.merge", loopClaimEndVerb:
 			if strings.HasPrefix(key, "go "+ref+"@") {
 				allowed = false
 			}

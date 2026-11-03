@@ -193,7 +193,8 @@ A host first needs a release with `agents hosts self-update` installed by
 hand; from then on it follows the coordinator. A development build of the
 coordinator updates no host and gates no start on a host's release.
 
-`hosts check` reports each host's release for diagnostics, and still requires
+`hosts check` reports each host's release and tool versions, refuses a release
+that differs from a released coordinator, and still requires
 the expected identity, protocol, pinned policy, harness and fresh resource
 observation.
 
@@ -201,6 +202,27 @@ Changing the host binary, rules, settings, or protected host configuration
 invalidates the policy: the host's `hosts check` fails on a digest mismatch
 until `agents hosts update <host>` prepares and pins it again. Do not weaken
 a required guard to make a check pass.
+
+A running execution stays bound to the policy it started under. After such a
+change its unit keeps running, but its `agents publish`, `agents merge` and
+capped runs refuse until the coordinator rebinds it. Once the new bundle is
+prepared on the host and its digest pinned in the coordinator catalog, rebind
+each running execution from the coordinator:
+
+```sh
+beekeeper agents recover worker
+```
+
+Recovery inspects the same execution and never starts a replacement. It rebinds
+only to the host's prepared policy, only when that is the catalog's pinned
+digest, and only from the policy the execution is bound to; it records an
+`execution.policy-rebound` event with both digests. The worker keeps its
+workspace, commits, owned branch and pull request, and retries its publication.
+While the host policy is unprepared, stale, or not yet pinned, `recover` exits 3
+and says that the unit is reachable but its publication is unavailable. Only a
+running execution whose owned unit is active is rebound: a stopped, completed,
+exited, failed or never launched one is not, and recovery confirms an exited
+execution as it is.
 
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
@@ -614,8 +636,9 @@ this command grants no general GitHub API authority.
 
 To bring the latest default branch into the workspace before publishing again
 (before the desk review approves the PR; after approval only the merge moves the
-head: the supervisor's reviewed merge updates a behind branch itself, and a
-sync is left for a conflict the supervisor reports):
+head: the supervisor's reviewed merge takes a behind branch as it stands, or
+updates it itself where the base requires up-to-date branches and the desk has
+no admin merge, and a sync is left for a conflict the supervisor reports):
 
 ```sh
 beekeeper agents publish --sync-base
@@ -679,3 +702,99 @@ host journal whose reply was lost. Recovery inspects that journal before
 pinning source and reuses its original request and commit. Only an explicit
 missing-journal response permits a new source pin; an unreadable journal or
 uncertain connection preserves the reservation for another recovery attempt.
+
+## Provision repositories by owner
+
+A host need not keep a preseeded checkout of every repository on the board.
+Set `repositoryOrgs: [example]` under both the coordinator's
+`agents.hosts.<host>` entry and the host's `agents.execution` configuration,
+then prepare and pin the new policy with `agents hosts update <host>`.
+Only list owners authorized for workers on that host. Explicit `repositories`
+mappings continue to work and can be combined with `repositoryOrgs`.
+
+Remote placement and `agents start --host <host> --repo example/another
+--ref main` admit repositories under those owners. The coordinator fetches
+and pins the requested commit using its own GitHub transport and sends the
+existing bounded source bundle. The host verifies its digest and commit and
+clones it into the execution's owned workspace, with the canonical GitHub
+origin. No host GitHub credential or additional shared source checkout is
+needed for provisioning. An unmapped repository without a pinned bundle is
+refused. The workspace and transfer use the normal execution lifecycle and
+cleanup; provisioning creates no extra repository or cache outside it.
+
+Pin `gh` and Go as described above on every host. On an idle host,
+`beekeeper agents hosts provision-tools` installs missing pinned tools from
+the official Go and GitHub CLI releases, checking the published SHA-256
+before extraction. Go needs a dedicated installation directory with its
+executable at `<installation>/bin/go`; gh needs its configured executable
+path. The provisioner refuses traversal, links and oversized archives, and
+preserves an existing mismatched installation: configure a new versioned
+path to upgrade it. The normal host update provisions missing tools before
+preparing the current release's policy, so repeat updates also repair a
+missing installation. Both paths refuse to change tools while executions
+run. No provider or GitHub credential is used to download these public tools.
+
+ In addition to
+checking mapped checkouts, preparation validates the actual committed
+workspace's `go.mod` against those tools. A newer toolchain requirement in a
+new repository or ref refuses preparation before the harness launches; update
+the installed toolchain and its policy pin before retrying. Tools remain
+host installations shared by workers, rather than per-worker downloads.
+
+### Per-worker GitHub credentials
+
+The coordinator can issue GitHub App installation tokens separately for each
+execution, repository and permission level. Configure only the coordinator:
+
+```yaml
+github:
+  allowedOrgs: [example]
+  workerApp:
+    appID: 12345
+    privateKey: op://Shared/worker-app/private-key
+    installations:
+      example: 67890
+```
+
+The App needs Contents, Pull requests, Issues, Checks, Actions, Commit statuses
+and Metadata read access. Contents, Workflows and Pull requests write access are needed for
+the task repository. Its installation must include every repository workers
+need to research. The private-key reference is resolved in the coordinator;
+no App key, refresh token or permanent GitHub login is installed on a host.
+This configuration enables GitHub for newly started executions. Existing
+executions retain their recorded publication mode.
+
+In an enabled execution `gh issue view`, `gh pr view` and `gh pr checks` use a
+short-lived credential fetched over the authenticated SSH callback. Cross-repo
+calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Read tokens
+reach only the named repository in a configured owner. A write token reaches
+only the execution's task repository. Read-only Git clone, fetch and ls-remote
+operations may also name an explicit GitHub repository URL in those owners.
+The runner installs dispatch scripts for
+`gh` and `git` ahead of the pinned tools; scripts and journals contain no token.
+Only the launched GitHub client receives it, through its environment.
+
+Push from the owned workspace with
+`git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
+then open the PR with `gh pr create`. The adapter supplies that same head branch,
+and the coordinator verifies it against GitHub and the parked workspace commit
+before requesting desk review. Force pushes, other branches and alternate push
+remotes are refused. Local Git commands run without a credential. Network Git
+uses the pinned HTTPS origin and disables inherited credential helpers, global
+Git configuration, hooks and redirects. Authenticated pushes use a disposable
+bare repository with only the resolved workspace commit and object storage;
+workspace Git configuration and refs cannot add tags, mirror other branches or
+redirect the transport. Inherited Git environment overrides are removed.
+Merges continue through the coordinator's
+review and exact-head authorization, never a worker's `gh pr merge`.
+
+GitHub installation tokens expire after an hour. The coordinator caches them
+until five minutes before expiry and retains a private revocation ledger under
+its own state directory, outside scheduling state and event logs. Runner exit,
+completion, explicit stop and terminal inspection revoke credentials; a failed
+revocation retains the ledger and reports an error for retry. An unreachable
+host does not prevent coordinator revocation; failed host contact after the
+execution lease expires also revokes its credentials. The managed command hooks are the
+same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
+installation token cannot itself limit Contents writes to one branch. Hosts
+therefore still require the managed guards and owned execution identity.

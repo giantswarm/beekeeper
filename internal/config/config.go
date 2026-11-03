@@ -370,10 +370,7 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
-	// TeamLabel is the issue label of the team's epics (default team/ and
-	// Team's first word, lower-cased: team/bumblebee): the priority list
-	// keeps a ranked epic that carries it whatever its Team field says, so
-	// a label sync that moves the Team never drops a rank.
+	// TeamLabel is read and ignored so an existing configuration loads.
 	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
@@ -464,8 +461,7 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope is read and ignored, so an existing configuration loads:
-	// the priority list no longer gates what a step offers.
+	// WorkScope is read and ignored so an existing configuration loads.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -929,6 +925,34 @@ type Agents struct {
 	// Model is the model of a session beekeeper starts when the start names
 	// none (--model, a successor's holder's); empty: Claude Code's default.
 	Model string `yaml:"model"`
+	// Models is ordered: the first matching nonempty model wins.
+	Models []AgentModelRule `yaml:"models"`
+	// RequireModel refuses omission rather than using a harness default.
+	RequireModel bool `yaml:"requireModel"`
+}
+
+// AgentModelRule selects a model for a named task before provider selection.
+type AgentModelRule struct {
+	Match string `yaml:"match"`
+	Kind  string `yaml:"kind"`
+	Model string `yaml:"model"`
+}
+
+// ModelFor returns the first matching nonempty model, then the desk-wide
+// fallback. A rule may leave the model unset for independent settings.
+func (a Agents) ModelFor(name, kind string) string {
+	for _, r := range a.Models {
+		if strings.TrimSpace(r.Model) == "" {
+			continue
+		}
+		if r.Kind != "" && r.Kind != kind {
+			continue
+		}
+		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
+			return strings.TrimSpace(r.Model)
+		}
+	}
+	return strings.TrimSpace(a.Model)
 }
 
 type ExecutionHost = execution.Host
@@ -1075,10 +1099,21 @@ const (
 	DefaultAgyClaudeBucket = "Claude and GPT models"
 )
 
-// Capacity is the supervisor's ceiling of busy agents and the memory guards
-// that bound a new start (beekeeper capacity, the watch's CAPACITY lines).
+// TaskPolicy constrains model choices for a kind of task. Classes and costs
+// are desk-maintained relative values; no provider price is assumed.
+type TaskPolicy struct {
+	MinClass        int     `yaml:"minClass"`
+	MaxCost         float64 `yaml:"maxCost"`
+	DifferentFamily bool    `yaml:"differentFamily"`
+}
+
+// Capacity is the supervisor's ceiling and model selection policy.
 // Any legacy floor key in YAML is ignored.
 type Capacity struct {
+	TaskPolicies map[string]TaskPolicy `yaml:"taskPolicies"`
+	TaskKind     string                `yaml:"-"`
+	AuthorModel  string                `yaml:"-"`
+	AuthorFamily string                `yaml:"-"`
 	// Ceiling is the most busy agents the supervisor starts (10). Zero is
 	// honoured: ceiling 0 refuses every unforced start.
 	Ceiling    int `yaml:"ceiling"`
@@ -1279,6 +1314,13 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
+	// Kinds limits this choice to task kinds; empty permits all kinds.
+	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
+	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`
+	Family string   `yaml:"family,omitempty" json:"family,omitempty"`
+	// ReviewReserve keeps this percent of the weekly window for reviews.
+	ReviewReserve float64 `yaml:"reviewReserve,omitempty" json:"reviewReserve,omitempty"`
 	// Harness is the agent harness to start ("claude", "agy", "codex", "omp").
 	Harness string `yaml:"harness" json:"harness"`
 	// Model is the model selector passed to the harness.
@@ -2215,6 +2257,8 @@ func (o Ownership) validateEach(report func(error)) {
 // successor's session prompt (the instructions it follows, a skill or a
 // file, not both) and the relay.
 type Role struct {
+	// Model overrides the previous holder's model for every successor.
+	Model string `yaml:"model"`
 	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
@@ -2535,7 +2579,32 @@ var DefaultQuietSessions = []string{"test: *"}
 var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
+// WorkerGitHub is coordinator-only App authority. The private key is a vault
+// reference, never a value or a file copied to an execution host.
+type WorkerGitHub struct {
+	AppID         int64            `yaml:"appID"`
+	PrivateKey    string           `yaml:"privateKey"`
+	Installations map[string]int64 `yaml:"installations"`
+}
+
+func (w *WorkerGitHub) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if w.AppID <= 0 || !strings.Contains(w.PrivateKey, "://") || strings.ContainsAny(w.PrivateKey, "\r\n") || len(w.Installations) == 0 {
+		return errors.New("github.workerApp requires appID, privateKey reference and owner installations")
+	}
+	for owner, id := range w.Installations {
+		if !execution.ValidIdentity(owner) || owner != strings.ToLower(owner) || id <= 0 {
+			return errors.New("github.workerApp.installations requires lowercase owners and positive installation IDs")
+		}
+	}
+	return nil
+}
+
 type GitHub struct {
+	WorkerApp *WorkerGitHub `yaml:"workerApp,omitempty"`
+
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
 	// UrgentBound is the budget an urgent merge keeps for itself under the
@@ -3615,6 +3684,19 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	for i, r := range c.Agents.Models {
+		if _, err := regexp.Compile(r.Match); err != nil {
+			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
+		}
+		if strings.TrimSpace(r.Match) == "" {
+			report(fmt.Errorf("agents.models[%d]: match is required", i))
+		}
+	}
+	for kind, p := range c.Capacity.TaskPolicies {
+		if strings.TrimSpace(kind) == "" || p.MinClass < 0 || p.MaxCost < 0 {
+			report(fmt.Errorf("capacity.taskPolicies.%s: nonempty kind and nonnegative class and cost required", kind))
+		}
+	}
 	if err := c.Run.Remote.Validate(); err != nil {
 		report(err)
 	}
@@ -3639,6 +3721,9 @@ func (c *Config) validateEach(report func(error)) {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
 			report(fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths"))
 		}
+	}
+	if err := c.GitHub.WorkerApp.Validate(); err != nil {
+		report(err)
 	}
 	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
 		report(fmt.Errorf("agents.remoteMCP: %w", err))
@@ -3948,6 +4033,9 @@ func (c *Config) validateEach(report func(error)) {
 		p.validateNamedEach("capacity.providers."+name, report)
 	}
 	for i, ch := range c.Capacity.Choices {
+		if ch.Class < 0 || ch.Cost < 0 || ch.ReviewReserve < 0 || ch.ReviewReserve > 100 {
+			report(fmt.Errorf("capacity.choices[%d]: class and cost must be nonnegative, reviewReserve in [0, 100]", i))
+		}
 		switch {
 		case strings.TrimSpace(ch.Harness) == "":
 			report(fmt.Errorf("capacity.choices[%d]: harness is required", i))

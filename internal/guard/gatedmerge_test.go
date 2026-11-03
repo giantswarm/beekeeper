@@ -8,7 +8,6 @@ import (
 )
 
 const gatedCommand = "devctl pr merge giantswarm/project 7 --update-branch"
-const agyHarnessName = "agy"
 
 // gatedHook is a desk whose giantswarm merges are the gate's and whose
 // supervisor go is recorded for every merge it is asked about.
@@ -47,7 +46,7 @@ func TestGatedRepositoryMergeIsTheGates(t *testing.T) {
 				}
 				return d.Reason
 			}(),
-			agyHarnessName: func() string {
+			agyHarness: func() string {
 				d := decideAgyCmd(t, h, "/", command)
 				if d.Decision != decisionDeny {
 					return ""
@@ -113,7 +112,7 @@ func TestPersonalRepositoryMergeStaysWithTheGo(t *testing.T) {
 	calls := 0
 	h.MergeGo = func(_, repo string, pr int, head string) string {
 		calls++
-		if repo != "person/project" || pr != 7 || head != mergeGoTestHead {
+		if repo != mergeGoTestRepo || pr != 7 || head != mergeGoTestHead {
 			t.Errorf("wrong merge tuple: %s %d %s", repo, pr, head)
 		}
 		return ""

@@ -35,9 +35,9 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 		switch {
 		case pin != nil && pin.Held == "" && pin.Version == version:
 			continue
-		case pin != nil && pin.Held != "" && pin.HeldVersion == version && a.now.Sub(pin.Tried) < hostUpdateRetry:
+		case pin != nil && pin.Held != "" && pin.HeldVersion == version && a.timeNow().Sub(pin.Tried) < hostUpdateRetry:
 			continue
-		case pin != nil && pin.Held == "" && a.now.Sub(pin.Tried) < hostDrainRetry:
+		case pin != nil && pin.Held == "" && a.timeNow().Sub(pin.Tried) < hostDrainRetry:
 			continue
 		}
 		if n := hostExecutions(st, selector); n > 0 {

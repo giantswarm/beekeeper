@@ -144,6 +144,10 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		}()
 	}
 	env := append(s.toolPath(s.agyEnvironmentWithHome(home)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
+	env, envErr := s.GitHubEnvironment(j, env)
+	if envErr != nil {
+		return envErr
+	}
 	first := func() error {
 		return s.update(ctx, ref, func(j *Journal) error {
 			j.Ready, j.InTurn, j.LastActive = true, true, s.now()

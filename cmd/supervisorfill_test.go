@@ -286,6 +286,7 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			l.once = true // These checks inspect completed pass effects.
 			pass := func() {
 				t.Helper()
 				if err := l.pass(t.Context()); err != nil {
@@ -346,6 +347,7 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			l.once = true // These checks inspect completed pass effects.
 			if err := l.pass(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -409,6 +411,7 @@ func emptyBoardFill(t *testing.T) (*loopRig, *supervisorLoop, *int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	return r, l, &reads
 }
 
@@ -709,6 +712,7 @@ func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *supervisorLoop, *int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	var evs []state.Event
 	for i := range doneN {
 		name := fmt.Sprintf("worker %d", i+1)
@@ -916,6 +920,7 @@ func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		l.once = true // These checks inspect completed pass effects.
 		if next, err := l.readNextItem(t.Context()); next != nil || err == nil {
 			t.Errorf("refusal %q read as %v, %v", body, next, err)
 		}
