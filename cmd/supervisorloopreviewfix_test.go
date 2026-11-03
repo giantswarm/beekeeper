@@ -496,3 +496,24 @@ func TestLoopKeepsBackgroundReviewWorkerAfterMemoryStop(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopReviewsParkWhileWorkerTurnStillRuns(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "active-review-worker")
+	r.inTurn = func(p state.Party) bool { return p.Name == loopWorker }
+	work := "prove rollout"
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.PostMerge = &work
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if r.called(agentsName, loopRemove, loopWorker) != nil {
+		t.Fatal("active worker removed")
+	}
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("review waits on worker retirement: %v\n%s", r.calls, r.out)
+	}
+}
