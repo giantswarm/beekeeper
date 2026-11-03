@@ -165,3 +165,48 @@ func TestARedKeyReadsBack(t *testing.T) {
 		t.Errorf("an odd check name woke again: %+v", acts)
 	}
 }
+
+func TestConflictingParkedHeadRequestsRepairBeforeReview(t *testing.T) {
+	for _, status := range []struct{ mergeable, mergeState string }{{mergeable: mergeableConflicting}, {mergeState: mergeStateDirty}} {
+		t.Run(status.mergeable+status.mergeState, func(t *testing.T) {
+			in := Input{Workers: parkedOn(head1, t0), Pulls: pull(head1, true), Rounds: 1}
+			p := in.Pulls[pr]
+			p.Mergeable, p.MergeState = status.mergeable, status.mergeState
+			// A conflict and failing checks in the same pass need one fixer.
+			p.Red = []Check{{Name: lintCheck, URL: lintURL}}
+			in.Pulls[pr] = p
+			a := only(t, Plan(in), KindRework)
+			if a.Agent != worker || a.Head != head1 || !strings.Contains(a.Message, "conflicts with its base") {
+				t.Fatalf("wrong repair: %+v", a)
+			}
+			in.Taken = taken(t, t1, a)
+			if acts := Plan(in); len(acts) != 0 {
+				t.Fatalf("duplicate repair or review: %+v", acts)
+			}
+			in.Workers = parkedOn(head1, t1)
+			again := only(t, Plan(in), KindRework)
+			if again.Key == a.Key {
+				t.Fatal("new park reused repair key")
+			}
+			in.Workers = parkedOn(head2, t1)
+			if acts := Plan(in); len(acts) != 0 {
+				t.Fatalf("repair for a head that was not parked: %+v", acts)
+			}
+		})
+	}
+}
+
+// An approval must reach the merge executor's durable conflict repair path.
+func TestApprovedConflictingHeadUsesMergeRepair(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{
+		Workers: parkedOn(head1, t0), Pulls: pull(head1, true, approved), Rounds: 1,
+		Taken: taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}),
+	}
+	p := in.Pulls[pr]
+	p.Mergeable, p.MergeState = mergeableConflicting, mergeStateDirty
+	in.Pulls[pr] = p
+	if a := only(t, Plan(in), KindGo); a.Head != head1 {
+		t.Fatalf("wrong reviewed repair head: %+v", a)
+	}
+}

@@ -92,14 +92,14 @@ func TestPriceSpendCountsTheWindowOnce(t *testing.T) {
 	if want := (Tokens{Input: 3_600_000, CacheWrite5m: 1_000_000, CacheWrite1h: 1_000_000, CacheRead: 10_000_000, Output: 50_000}); s.Tokens != want {
 		t.Errorf("tokens %+v, want %+v", s.Tokens, want)
 	}
-	if !slices.Equal(s.Unpriced, []string{"x-unpriced"}) {
+	if !slices.Equal(s.Unpriced, []string{unpricedModel}) {
 		t.Errorf("unpriced %v", s.Unpriced)
 	}
 	var got []string
 	for _, m := range s.Models {
 		got = append(got, m.Model)
 	}
-	if want := []string{"m", "m (fast)", "m-20251001", "x-unpriced"}; !slices.Equal(got, want) {
+	if want := []string{"m", "m (fast)", "m-20251001", unpricedModel}; !slices.Equal(got, want) {
 		t.Errorf("models %v, want %v", got, want)
 	}
 	if m := s.Models[0]; m.Requests != 2 || math.Abs(m.USD-6.60) > 1e-9 || !m.Priced {
@@ -113,5 +113,24 @@ func TestPriceSpendCountsTheWindowOnce(t *testing.T) {
 func TestReadSpendTranscriptsWithoutTheDirectory(t *testing.T) {
 	if _, err := ReadSpendTranscripts(filepath.Join(t.TempDir(), "none"), time.Time{}, time.Now()); err == nil {
 		t.Error("no error for a missing projects directory")
+	}
+}
+
+func TestReadSpendTranscriptsNamesTheSession(t *testing.T) {
+	dir := t.TempDir()
+	from := time.Date(2026, 10, 8, 8, 0, 0, 0, time.UTC)
+	spendFixture(t, dir, from)
+	ts, err := ReadSpendTranscripts(dir, from, from.Add(4*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, tr := range ts {
+		got[tr.Session+map[bool]string{true: " subagent"}[tr.Subagent]] = true
+	}
+	for _, want := range []string{"s1", "s1 subagent", "s2"} {
+		if !got[want] {
+			t.Errorf("sessions %v lack %q", got, want)
+		}
 	}
 }

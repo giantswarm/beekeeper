@@ -806,6 +806,11 @@ type Start struct {
 	// (agents.mode background): it has no desktop session, and its wakes go
 	// by its messaging, a stopped one's by claude --bg --resume.
 	Background bool `json:"background,omitempty"`
+	// Role is the relayed role the session was started to take (a guide
+	// run); empty: none. Only such a start may take the role.
+	// Once relieved or taken over, its session stays the person's to close: nothing stops or
+	// archives it.
+	Role string `json:"role,omitempty"`
 
 	rest rest
 }
@@ -831,6 +836,12 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
+	// HostJournalMissing records confirmed journal absence AND an inactive
+	// owned unit. It settles a lost execution without fabricating a stop ack.
+	HostJournalMissing bool `json:"hostJournalMissing,omitempty"`
+	// HostJournalUnconfirmed records confirmed journal absence on a pre-inventory
+	// host whose unit state can be confirmed only after the host upgrades.
+	HostJournalUnconfirmed bool `json:"hostJournalUnconfirmed,omitempty"`
 	// Published is the execution's last publication (agents publish): its
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
@@ -885,6 +896,9 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.HostJournalMissing {
+		return true
+	}
 	if r.Released() {
 		return true
 	}
@@ -1107,6 +1121,9 @@ type State struct {
 	BudgetETag string `json:"budgetETag,omitempty"`
 	// Budget is the last reading of the GitHub core budget.
 	Budget *Budget `json:"budget,omitempty"`
+	// BranchReleases are how the base branches of the queued merges release,
+	// one read per repository and branch for the lane's pass.
+	BranchReleases []BranchRelease `json:"branchReleases,omitempty"`
 	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
 	// order, running, and settling until the lane's installation rolled them.
 	Merges []Merge `json:"merges,omitempty"`
@@ -1171,6 +1188,12 @@ type HostPin struct {
 	HeldVersion string    `json:"heldVersion,omitempty"`
 	// Reported says the supervisor loop handed the hold on as its finding.
 	Reported bool `json:"reported,omitempty"`
+	// Behind is the first coordinator release the host did not follow
+	// while it drained or waited; BehindReported says the supervisor loop
+	// handed on, once, that it stayed behind for more than that release.
+	// The next successful update clears both.
+	Behind         string `json:"behind,omitempty"`
+	BehindReported bool   `json:"behindReported,omitempty"`
 
 	rest rest
 }
@@ -1348,6 +1371,20 @@ type Budget struct {
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
+
+	rest rest
+}
+
+// BranchRelease is how a repository's base branch releases, as the gate
+// read it (github.ReadBranchRelease) at At: the merges queued into the
+// branch reuse it while their repository has places in the gate.
+type BranchRelease struct {
+	Repo      string    `json:"repo"`
+	Base      string    `json:"base"`
+	Auto      bool      `json:"auto,omitempty"`
+	Plugins   bool      `json:"plugins,omitempty"`
+	ReleasePR bool      `json:"releasePR,omitempty"`
+	At        time.Time `json:"at"`
 
 	rest rest
 }
