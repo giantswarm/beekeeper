@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
+- No person is asked whether to merge. Past its reviews the supervisor loop now gives the go for a reviewed, green head itself, where it used to ask the guide's person in a note ("Merge … without a third review, or have it reworked?"). `note add` refuses a decision from anyone that asks whether to merge a pull request and logs it as `note.redirected`. `beekeeper answer verify`, the `answer_verify` tool, the computed answer channel with its relay attribution and guide dialog receipt, and the verified-answer suffix on `merge.merged` are removed; `answer --via cli|slack` stays a plain record of how the words came (https://github.com/giantswarm/beekeeper/issues/2207).
+
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
 - The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).

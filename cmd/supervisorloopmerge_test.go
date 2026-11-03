@@ -196,39 +196,6 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	}
 }
 
-func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
-	r := newLoopRig(t)
-	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring additional reviews.
-	r.command = func([]string) (string, int) { return "branch behind base", 1 }
-	r.park(t, loopPR, time.Now())
-	r.pass(t)
-	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.pass(t)
-	r.pull.Head = loopFixed
-	r.park(t, loopPR, time.Now().Add(time.Minute))
-	r.pass(t)
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	const third = "3333333333333333333333333333333333333333"
-	r.pull.Head = third
-	r.park(t, loopPR, time.Now().Add(2*time.Minute))
-	r.pass(t)
-	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
-		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
-	}
-	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
-		t.Fatalf("no independent review for third head: %v", r.calls)
-	}
-	r.verdict("R3", third, superloop.Approved, "")
-
-	r.pass(t)
-	call := r.called(gateCmdName)
-	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
-	}
-}
-
 func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

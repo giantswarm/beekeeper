@@ -10,7 +10,7 @@ import (
 )
 
 // Desk is whose pull requests the loop acts on: the policy every pull
-// request passes before a review, a go, a forward or an escalation.
+// request passes before a review, a go or a forward.
 type Desk struct {
 	// Since is the loop's first start: a park from before it is no request
 	// for a review.
@@ -225,7 +225,11 @@ func leaveKey(ref, reason string) string { return fmt.Sprintf("leave %s %s", ref
 
 // leftUnreviewed is the reason a green head past its approval waits for a
 // new park: one leave line per head.
-func leftUnreviewed(head string) string  { return "unreviewed@" + short(head) }
+func leftUnreviewed(head string) string { return "unreviewed@" + short(head) }
+
+// leftNoVerdict is the reason a head whose reviews are used and gave no
+// verdict gets no go: one leave line per head.
+func leftNoVerdict(head string) string   { return "noverdict@" + short(head) }
 func relayKey(ref, review string) string { return fmt.Sprintf("relay %s %s", ref, review) }
 func ownershipKey(ref string) string     { return "ownership " + ref }
 func overrideKey(ref string) string      { return "override " + ref }
