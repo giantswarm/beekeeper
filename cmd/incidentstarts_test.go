@@ -13,12 +13,19 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const (
+	incidentRepairIssue = "o/r#3"
+	incidentReason      = "merge engine unavailable"
+	incidentExceptFlag  = "--except"
+	incidentModeFlag    = "--incident"
+)
+
 func TestIncidentBoardSkipsOtherWorkButOffersRepair(t *testing.T) {
-	st := &state.State{Holds: []state.Hold{{Target: "o/r", Except: "o/r#3", Incident: true}}}
+	st := &state.State{Holds: []state.Hold{{Target: loopMergeRepo, Except: incidentRepairIssue, Incident: true}}}
 	sc := pickScope{listed: time.Now(), alive: func(state.Party) bool { return false }}
 	cands := boardCandidates(3)
 	res := nextFree(st, cands, sc)
-	if res.Pick == nil || res.Pick.Ref != "o/r#3" {
+	if res.Pick == nil || res.Pick.Ref != incidentRepairIssue {
 		t.Fatalf("repair not offered: %+v", res)
 	}
 	cands[2] = board.Candidate{Item: board.Item{Ref: "other/repo#1"}, Step: stepUpNext}
@@ -31,16 +38,16 @@ func TestIncidentBoardSkipsOtherWorkButOffersRepair(t *testing.T) {
 func TestIncidentHoldRequiresNamedRepairAndNoExpiry(t *testing.T) {
 	run := holdRunner(t, "")
 	for _, args := range [][]string{
-		{"set", "merges", "--incident", "--except", "o/r#7", "-r", "broken"},
-		{"set", "o/r", "--incident", "-r", "broken"},
-		{"set", "o/r", "--incident", "--except", "o/r#7", "--until", "1h", "-r", "broken"},
-		{"set", "o/r", "--incident", "--except", "o/s#7", "-r", "broken"},
+		{setOp, holdMerges, incidentModeFlag, incidentExceptFlag, loopPR, "-r", incidentReason},
+		{setOp, loopMergeRepo, incidentModeFlag, "-r", incidentReason},
+		{setOp, loopMergeRepo, incidentModeFlag, incidentExceptFlag, loopPR, untilFlag, "1h", "-r", incidentReason},
+		{setOp, loopMergeRepo, incidentModeFlag, incidentExceptFlag, "o/s#7", "-r", incidentReason},
 	} {
 		if out, code := run(args...); code != ExitUsage {
 			t.Fatalf("%v: %d %s", args, code, out)
 		}
 	}
-	if out, code := run("set", "o/r", "--incident", "--except", "o/r#7", "-r", "broken"); code != 0 || !strings.Contains(out, "starts paused") {
+	if out, code := run(setOp, loopMergeRepo, incidentModeFlag, incidentExceptFlag, loopPR, "-r", incidentReason); code != 0 || !strings.Contains(out, "starts paused") {
 		t.Fatalf("%d %s", code, out)
 	}
 	if out, code := run("list"); code != 0 || !strings.Contains(out, "starts paused") {
