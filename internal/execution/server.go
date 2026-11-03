@@ -374,18 +374,28 @@ var quiesceWait = 30 * time.Second
 
 // busy counts the executions other than own that run or may run.
 func (s *Server) busy(ctx context.Context, own Ref) (int, error) {
+	refs, err := s.BusyExecutions(ctx, own)
+	return len(refs), err
+}
+
+// BusyExecutions names every journal-backed execution that blocks an update.
+func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	busy := 0
+	busy := []Ref{}
 	for _, p := range paths {
 		if _, err := uuid.Parse(strings.TrimSuffix(filepath.Base(p), ".json")); err != nil {
 			continue
 		}
 		var j Journal
 		if err := readJSON(p, &j); err != nil {
-			return 0, errors.New("cannot establish execution host capacity")
+			return nil, errors.New("cannot establish execution host capacity")
+		}
+		j, err = s.Read(j.Handle.Ref)
+		if err != nil {
+			return nil, err
 		}
 		if j.Handle.Ref == own || j.StopAcknowledged {
 			continue
@@ -393,13 +403,13 @@ func (s *Server) busy(ctx context.Context, own Ref) (int, error) {
 		if j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
-				return 0, errors.New("cannot establish owned unit state")
+				return nil, errors.New("cannot establish owned unit state")
 			}
 			if o.ProcessState == Exited || o.ProcessState == Failed {
 				continue
 			}
 		}
-		busy++
+		busy = append(busy, j.Handle.Ref)
 	}
 	return busy, nil
 }
@@ -629,6 +639,14 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		} else {
 			var value any
 			switch req.Operation {
+			case inventoryOperation:
+				var coordinator string
+				err = Decode(req.Payload, &coordinator)
+				if err == nil {
+					value, err = s.Inventory(ctx, coordinator)
+				}
+			case missingOperation:
+				value, err = s.Missing(ctx, req.Ref)
 			case "check":
 				value, err = s.Check(ctx)
 			case "source-chunk":
@@ -649,9 +667,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 			case inspectOperation:
 				value, err = s.Inspect(ctx, req.Ref)
-			case "sync-control":
+			case syncControlOperation:
 				value, err = s.SyncControl(ctx, req.Ref, nil)
-			case "stop":
+			case stopOperation:
 				var q StopRequest
 				err = Decode(req.Payload, &q)
 				if err == nil {
@@ -685,7 +703,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
-				if req.Operation == inspectOperation && errors.Is(err, os.ErrNotExist) {
+				if (req.Operation == inspectOperation || req.Operation == syncControlOperation || req.Operation == stopOperation) && errors.Is(err, os.ErrNotExist) {
 					reply.Code = "not-found"
 				}
 				if errors.Is(err, ErrUnsupported) {

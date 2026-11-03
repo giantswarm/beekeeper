@@ -48,18 +48,15 @@ func crossOwnerSnapshot(t *testing.T, now time.Time) *board.Snapshot {
 		},
 		Gate: board.Gate{Kind: []string{kindEpic}, Planning: []string{stepUpNext}, Go: stepInProgress},
 		// Deliberately put Backlog before Up Next before In Progress.
-		Items:      []board.Item{item(crossBacklog, stepBacklog), item(crossHome, stepUpNext), item(crossForeign, stepUpNext), ep},
-		Priorities: board.Priorities{{Ref: crossEpic, Rank: 2}, {Ref: crossHome, Rank: 1}},
+		Items: []board.Item{item(crossBacklog, stepBacklog), item(crossHome, stepUpNext), item(crossForeign, stepUpNext), ep},
 	}
 }
 
 func crossOwnerCandidates(snap *board.Snapshot, now time.Time) []board.Candidate {
-	cands := board.Rank(snap, config.Board{Owner: crossOwner}, now)
-	board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
-	return cands
+	return board.Rank(snap, config.Board{Owner: crossOwner}, now)
 }
 
-func TestCrossOwnerBoardOrderPriorityAndUnstaffedEpic(t *testing.T) {
+func TestCrossOwnerBoardOrder(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	snap := crossOwnerSnapshot(t, now)
 	cands := crossOwnerCandidates(snap, now)
@@ -71,14 +68,11 @@ func TestCrossOwnerBoardOrderPriorityAndUnstaffedEpic(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
-	if cands[0].Priority != 2 || cands[0].PriorityOf != crossEpic || cands[1].Priority != 1 {
-		t.Fatalf("priority annotations lost across owners: %+v", cands)
-	}
 	// No worker serves the foreign epic: its child is immediately free.
 	scope := pickScope{listed: now, alive: func(state.Party) bool { return false }}
 	res := nextFree(&state.State{}, cands, scope)
 	if res.Pick == nil || res.Pick.Ref != crossChild {
-		t.Fatalf("unstaffed epic pick = %+v", res.Pick)
+		t.Fatalf("epic sub-issue pick = %+v", res.Pick)
 	}
 	// Planning still holds the foreign epic's children, without blocking the
 	// other owner's Up Next item. No hand-start queue changes the gate.
@@ -146,8 +140,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	r, busy := fillRig(t)
 	r.a.cfg.Board = config.Board{Owner: crossOwner, Project: 1}
 	snap := crossOwnerSnapshot(t, r.a.now)
-	// Place crossHome (priority 1) at the top of the board and crossBacklog
-	// (unranked) at the bottom, where an unranked backlog item sits.
+	// Place crossHome at the top of the board and crossBacklog at the bottom.
 	snap.Items = []board.Item{snap.Items[1], snap.Items[2], snap.Items[3], snap.Items[0]}
 	const worker = "worker-1"
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -163,7 +156,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Worker-1, serving crossHome (priority 1), reports done and files a
+	// Worker-1, serving crossHome, reports done and files a
 	// blocking/follow-up issue in another owner's repository (org/engine#88).
 	const filedRef = "org/engine#88"
 	const filedURL = "https://github.com/org/engine/issues/88"
@@ -303,7 +296,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	}
 
 	// 1. Move succeeds, then anchor lookup fails: intake is not settled.
-	anchorErr = errors.New("priority query failed")
+	anchorErr = errors.New("anchor query failed")
 	r.pass(t)
 	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") == nil {
 		t.Fatalf("move did not run on pass 1: %v", r.calls)
