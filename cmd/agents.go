@@ -50,6 +50,10 @@ type agentView struct {
 	// nobody sees it there, reads its transcript or types into it, until
 	// the standby watch imports it beside its turn or the doctor reopens it.
 	NoRow bool `json:"noDesktopRow,omitempty"`
+	// SDKChildren are the sdk-py sessions run in its folder since it
+	// registered (attachSDKChildren): its security reviews, with their
+	// models and cost.
+	SDKChildren []claude.SDKChild `json:"sdkChildren,omitempty"`
 }
 
 // An agent's Browser.
@@ -732,6 +736,7 @@ func (a *app) agentList(full bool) error {
 		return err
 	}
 	views := a.agentViews(st, sessions)
+	a.attachSDKChildren(views)
 	if a.json {
 		return a.printJSON(views)
 	}
@@ -744,7 +749,7 @@ func (a *app) printAgents(views []agentView) {
 		return
 	}
 	w, headless, rowless := a.table(), 0, 0
-	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tBROWSER\tREACHABLE\tKEPT")
+	_, _ = fmt.Fprintln(w, "AGENT\tTASK\tSINCE\tMODEL\tSDK-PY\tBROWSER\tREACHABLE\tKEPT")
 	for _, v := range views {
 		task, since := "(idle)", v.IdleSince
 		if v.Task != "" {
@@ -752,7 +757,7 @@ func (a *app) printAgents(views []agentView) {
 		}
 		headless += boolInt(v.HeadlessTurn)
 		rowless += boolInt(v.NoRow)
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), truncate(sdkChildrenCell(v.SDKChildren), 48), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
 	}
 	_ = w.Flush()
 	if headless > 0 {

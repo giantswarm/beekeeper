@@ -37,6 +37,10 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does the supervisor loop's orphan sweep list pull requests on
+	// GitHub: the desk has none open beside those a test tracks; a test of
+	// the sweep stubs its own.
+	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
 	// Nor does an execution host wait for the release the test binary was
 	// built as: the coordinator is a development build, and a test of the
 	// host updates names its own release.
