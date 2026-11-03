@@ -25,7 +25,6 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
-	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -587,9 +586,8 @@ its key first in the detail):
             follow-up named in a report, an issue a session created with gh
             issue create): put on the configured board in Backlog (board
             move --intake), unless it already sits on another board where it
-            is being worked, and ranked from the priority list (board rank
-            --after) right after the high-ranked epic or item it blocks or
-            follows from
+            is being worked, and ranked on the board (board rank --after)
+            right after the epic or item it blocks or follows from
   question  a worker's open note for someone other than guide.person,
             asked before the loop started or after: the note is
             re-addressed to guide.person, into the guide's queue
@@ -708,13 +706,6 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
-	// priorities, issueParents, pullIssues and pullPriorities cache board
-	// priority resolution for tracked pull requests.
-	priorities     board.Priorities
-	prioritiesAt   time.Time
-	issueParents   map[string]string
-	pullIssues     map[string]string
-	pullPriorities map[string]int
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -1109,16 +1100,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
-		ranks := map[string]int{}
-		in.Rank = func(ref string) int {
-			key := strings.ToLower(ref)
-			if r, ok := ranks[key]; ok {
-				return r
-			}
-			r, _ := readBoardRank(ctx, a, ref)
-			ranks[key] = r
-			return r
-		}
 	}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
@@ -1269,7 +1250,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.mu.Unlock()
 		}
 	}
-	l.resolvePullPriorities(ctx, &in)
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
 	// planning the end and retaining its worker for any post-merge work.
@@ -1346,123 +1326,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return l.fill(ctx, st, claims, in.Taken)
 	}
 	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
-}
-
-// readPullPriority resolves the board priority rank (1 is highest, 0 is
-// unranked) of a tracked pull request or the issue its worker serves.
-var readPullPriority = func(ctx context.Context, l *supervisorLoop, ref, serves string) (int, error) {
-	return l.pullPriority(ctx, ref, serves)
-}
-
-func (l *supervisorLoop) resolvePullPriorities(ctx context.Context, in *superloop.Input) {
-	if !in.Board || l.a.cfg.Board.Owner == "" {
-		return
-	}
-	servesByRef := map[string]string{}
-	for _, w := range in.Workers {
-		if w.ParkedOn != "" && w.Serves != "" {
-			servesByRef[w.ParkedOn] = w.Serves
-		}
-	}
-	for ref, p := range in.Pulls {
-		if p.State != superloop.Open || p.Priority > 0 {
-			continue
-		}
-		if prio, err := readPullPriority(ctx, l, ref, servesByRef[ref]); err == nil && prio > 0 {
-			p.Priority = prio
-			in.Pulls[ref] = p
-		}
-	}
-}
-
-// readLoopPriorities reads the current board order for the resolution cache.
-var readLoopPriorities = func(ctx context.Context, l *supervisorLoop) (board.Priorities, error) {
-	return l.a.boardClient().Priorities(ctx)
-}
-
-func (l *supervisorLoop) pullPriority(ctx context.Context, ref, serves string) (int, error) {
-	key := ref + " " + serves
-	l.mu.Lock()
-	needPriorities := l.priorities == nil && l.prioritiesAt.IsZero() || l.a.timeNow().Sub(l.prioritiesAt) >= loopOpenEvery
-	l.mu.Unlock()
-	if needPriorities {
-		prios, err := readLoopPriorities(ctx, l)
-		l.mu.Lock()
-		l.prioritiesAt = l.a.timeNow()
-		if err == nil {
-			l.priorities = prios
-			// Relationships and zero ranks can change along with board order.
-			l.pullPriorities = nil
-			l.pullIssues = nil
-			l.issueParents = nil
-		}
-		l.mu.Unlock()
-	}
-	l.mu.Lock()
-	if prio, ok := l.pullPriorities[key]; ok {
-		l.mu.Unlock()
-		return prio, nil
-	}
-	prios := l.priorities
-	l.mu.Unlock()
-	if len(prios) == 0 {
-		return 0, nil
-	}
-	issue := serves
-	if issue == "" || strings.EqualFold(issue, ref) {
-		l.mu.Lock()
-		cached, ok := l.pullIssues[ref]
-		l.mu.Unlock()
-		if !ok {
-			closed, err := l.a.boardClient().Closes(ctx, []string{ref})
-			if err == nil {
-				if refs := closed[strings.ToLower(ref)]; len(refs) > 0 {
-					cached = refs[0]
-				} else if refs := closed[ref]; len(refs) > 0 {
-					cached = refs[0]
-				}
-				l.mu.Lock()
-				if l.pullIssues == nil {
-					l.pullIssues = map[string]string{}
-				}
-				l.pullIssues[ref] = cached
-				l.mu.Unlock()
-			}
-		}
-		if cached != "" {
-			issue = cached
-		}
-	}
-	parentOf := func(r string) string {
-		l.mu.Lock()
-		if p, ok := l.issueParents[r]; ok {
-			l.mu.Unlock()
-			return p
-		}
-		l.mu.Unlock()
-		parent, err := l.a.boardClient().IssueParent(ctx, r)
-		if err != nil {
-			return ""
-		}
-		l.mu.Lock()
-		if l.issueParents == nil {
-			l.issueParents = map[string]string{}
-		}
-		l.issueParents[r] = parent
-		l.mu.Unlock()
-		return parent
-	}
-	rank := prios.IssueRank(cmp.Or(issue, ref), parentOf)
-	if rank == 0 && issue != "" && !strings.EqualFold(issue, ref) {
-		rank = prios.IssueRank(ref, parentOf)
-	}
-	l.mu.Lock()
-	if l.pullPriorities == nil {
-		l.pullPriorities = map[string]int{}
-	}
-	l.pullPriorities[key] = rank
-	l.mu.Unlock()
-	return rank, nil
 }
 
 func (l *supervisorLoop) beginInFlight(key string) bool {
@@ -3511,11 +3374,6 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 	return a.boardClient().RankAnchor(ctx, ref, from)
 }
 
-// readBoardRank resolves the priority rank of ref on the board (Client.RankOf).
-var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
-	return a.boardClient().RankOf(ctx, ref)
-}
-
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
@@ -3587,9 +3445,8 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 }
 
 // intakeIssue puts act.Ref onto the configured board in Backlog, unless it
-// already sits on another board where it is being worked, and ranks it from
-// the priority list right after the high-ranked epic or item it blocks or
-// follows from.
+// already sits on another board where it is being worked, and ranks it on the
+// board right after the epic or item it blocks or follows from.
 func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.timeNow()) {
 		return "", errLoopLater
