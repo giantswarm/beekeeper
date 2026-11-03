@@ -206,7 +206,7 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 		{"verbatim option label only when dialog has notes", false, 1, 0, opt1Full},
 		{"recommended option label only when dialog has notes", false, 1, 0, opt1Label + " (Recommended)"},
 		{"omitted note flag when asking note and dialog has notes", false, 0, 0, opt1Label},
-		{"choice only when person typed follow-up text in transcript", true, 1, 1, ""},
+		{"choice only when the transcript's dialog for this note has notes", true, 1, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := answerApp(t)
@@ -234,13 +234,9 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 				if err := os.MkdirAll(projDir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				transcript := filepath.Join(projDir, dialogSession+".jsonl")
-				lines := []string{
-					`{"type":"user","timestamp":"2026-10-30T12:00:05Z","message":{"role":"user","content":"` + userNotes + `"}}`,
-				}
-				if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				// No hook receipt: the note's own dialog in the transcript,
+				// bound by its thread URL, carries the notes.
+				writeDialogTranscript(t, filepath.Join(projDir, dialogSession+".jsonl"), q, opt1Label, userNotes)
 			}
 			raw, _ := json.Marshal(map[string]any{
 				transcriptHookEventKey: guard.PostToolUseEvent,
@@ -249,7 +245,9 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 				transcriptInputKey:     map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: q, paramOptions: []any{map[string]any{dialogLabelKey: opt1Label}, map[string]any{dialogLabelKey: opt2Label}}}}},
 				dialogToolRespKey:      resp,
 			})
-			a.redactResult(raw)
+			if !tc.fromTranscript {
+				a.redactResult(raw)
+			}
 			a.as = ""
 			t.Setenv("BEEKEEPER_OMP_AGENT", "")
 			t.Setenv("BEEKEEPER_AGY_AGENT", "")
@@ -266,6 +264,97 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 			st, _ := a.store.Read()
 			if len(st.Notes) != 1 {
 				t.Fatalf("note should remain open: %+v", st.Notes)
+			}
+		})
+	}
+}
+
+// writeDialogTranscript writes a guide transcript holding an unrelated
+// earlier user turn and an AskUserQuestion call for question answered with
+// label and notes (no notes: label alone).
+func writeDialogTranscript(t *testing.T, path, question, label, notes string) {
+	t.Helper()
+	in, _ := json.Marshal(map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: question}}})
+	res := map[string]any{dialogAnswersKey: map[string]string{question: label}}
+	if notes != "" {
+		res["annotations"] = map[string]any{question: map[string]string{keyNotes: notes}}
+	}
+	out, _ := json.Marshal(res)
+	lines := []string{
+		`{"type":"user","timestamp":"2026-10-30T12:00:01Z","message":{"role":"user","content":"ok, let's go through the queue"}}`,
+		`{"type":"assistant","timestamp":"2026-10-30T12:00:04Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"ask1","name":"AskUserQuestion","input":` + string(in) + `}]}}`,
+		`{"type":"user","timestamp":"2026-10-30T12:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"ask1","content":"answered"}]},"toolUseResult":` + string(out) + `}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A label-only answer is the person's whole answer when their dialog for the
+// note carried no notes: other things they said in the guide session, before
+// or after, are not words for this note.
+func TestGuideDialogAcceptsOptionLabelOnlyBesideUnrelatedTurns(t *testing.T) {
+	const (
+		opt1Label = "Approach 1"
+		opt1Full  = "Approach 1: use a dedicated service account"
+		opt2Full  = "Approach 2: reuse the existing token"
+	)
+	for _, tc := range []struct {
+		name    string
+		receipt bool
+		// question is the transcript dialog's question, notes its notes.
+		question, notes string
+	}{
+		{"label-only dialog receipt, unrelated earlier turn", true, dialogMergeQuestion, ""},
+		{"label-only dialog receipt, notes on another note's dialog", true, "Which approach for the other thread?", "something else entirely"},
+		{"no receipt, label-only dialog for this note in the transcript", false, dialogMergeQuestion, ""},
+		{"no receipt, notes only on another note's dialog", false, "Which approach for the other thread?", "something else entirely"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := answerApp(t)
+			now := time.Date(2026, 10, 30, 12, 0, 10, 0, time.UTC)
+			a.now = now
+			stubWakes(t)
+			stubSeat(t, dialogSession, false)
+			verifyNote(t, a)
+			guide := state.Party{Session: dialogSession, Name: verifyGuide}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Notes[0].Options = []string{opt1Full, opt2Full}
+				st.Notes[0].At = now.Add(-time.Hour)
+				st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: guide, Since: now.Add(-30 * time.Second)}, Asking: 1})
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			a.cfg.Claude.ProjectsDir = t.TempDir()
+			projDir := filepath.Join(a.cfg.Claude.ProjectsDir, "proj")
+			if err := os.MkdirAll(projDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeDialogTranscript(t, filepath.Join(projDir, dialogSession+".jsonl"), tc.question, opt1Label, tc.notes)
+			if tc.receipt {
+				q := dialogMergeQuestion
+				raw, _ := json.Marshal(map[string]any{
+					transcriptHookEventKey: guard.PostToolUseEvent,
+					dialogSessionKey:       dialogSession,
+					transcriptToolName:     guard.AskTool,
+					transcriptInputKey:     map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: q, paramOptions: []any{map[string]any{dialogLabelKey: opt1Label}, map[string]any{dialogLabelKey: "Approach 2"}}}}},
+					dialogToolRespKey:      map[string]any{dialogAnswersKey: map[string]string{q: opt1Label}},
+				})
+				a.redactResult(raw)
+			}
+			a.as = ""
+			t.Setenv("BEEKEEPER_OMP_AGENT", "")
+			t.Setenv("BEEKEEPER_AGY_AGENT", "")
+			t.Setenv("BEEKEEPER_CODEX_AGENT", "")
+			t.Setenv("CLAUDE_CODE_SESSION_ID", dialogSession)
+			t.Setenv("CLAUDE_CODE_SESSION_NAME", verifyGuide)
+			if err := a.recordAnswer(t.Context(), privateThread, 1, 1, viaCLI, "", false); err != nil {
+				t.Fatalf("recordAnswer: %v", err)
+			}
+			got, err := a.answeredSince(time.Time{})
+			if err != nil || len(got) != 1 || got[0].Answer != opt1Label {
+				t.Fatalf("answeredSince = %+v, %v; want %q", got, err, opt1Label)
 			}
 		})
 	}

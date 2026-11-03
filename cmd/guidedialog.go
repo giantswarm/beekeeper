@@ -78,11 +78,8 @@ func (a *app) observeGuideDialog(raw []byte) error {
 		q := r.Input.Questions[0]
 		// The displayed question binds the selection to the thread and every
 		// head named by the note. A stale dialog cannot answer its successor.
-		if !strings.Contains(q.Question, issueURL(n.Refs[0])) {
-			ref, valid := parseRef(n.Refs[0])
-			if !valid || !strings.Contains(q.Question, "https://github.com/"+ref.Repo+"/pull/"+strings.TrimPrefix(refName(ref), ref.Repo+"#")) {
-				return nil, nil
-			}
+		if !questionNamesThread(q.Question, n.Refs[0]) {
+			return nil, nil
 		}
 		for _, head := range shaWord.FindAllString(n.Text, -1) {
 			if !strings.Contains(strings.ToLower(q.Question), strings.ToLower(head)) {
@@ -120,11 +117,14 @@ func (a *app) observeGuideDialog(raw []byte) error {
 			label, _, _ := n.Option(i + 1)
 			optLabel := strings.TrimSpace(q.Options[i].Label)
 			shown := strings.TrimSuffix(optLabel, recommendedSuffix)
-			if ans == optLabel || ans == shown || ans == label {
+			full := strings.TrimSpace(n.Options[i])
+			if ans == optLabel || ans == shown || ans == label || ans == full {
 				choice = i + 1
 				break
 			}
-			if rest, ok := cutDialogOptionPrefix(ans, optLabel, shown, label); ok {
+			// The full option goes first: "<label>: <description>" is the
+			// option itself, not a label with notes.
+			if rest, ok := cutDialogOptionPrefix(ans, full, optLabel, shown, label); ok {
 				choice = i + 1
 				extra = joinDialogText(rest, extra)
 				break
@@ -150,6 +150,16 @@ func (a *app) observeGuideDialog(raw []byte) error {
 		}
 		return []state.Event{event(role.Holder.Party, guideDialogVerb, "%s", b)}, nil
 	})
+}
+
+// questionNamesThread reports whether a dialog question names the thread
+// ref by its issue or pull request URL.
+func questionNamesThread(question, ref string) bool {
+	if strings.Contains(question, issueURL(ref)) {
+		return true
+	}
+	r, valid := parseRef(ref)
+	return valid && strings.Contains(question, "https://github.com/"+r.Repo+"/pull/"+strings.TrimPrefix(refName(r), r.Repo+"#"))
 }
 
 func guideDialogAnnotationFor(question string, maps ...map[string]json.RawMessage) (notes, unanswered string) {
@@ -273,6 +283,10 @@ func (a *app) refuseOptionLabelOnly(st *state.State, me state.Party, n *state.No
 	return refused("note #%d: the person also wrote %q, so recording only option label %q loses their words; record everything they wrote verbatim", n.ID, extra, label)
 }
 
+// personExtraText is what the person wrote for note n beyond an option label.
+// The latest dialog receipt for n settles it alone: no notes, nothing extra.
+// Without one, only an answer in a guide transcript to a question naming n's
+// thread counts; the person's other turns are about other things.
 func (a *app) personExtraText(st *state.State, me state.Party, n *state.Note) string {
 	if n == nil {
 		return ""
@@ -283,16 +297,19 @@ func (a *app) personExtraText(st *state.State, me state.Party, n *state.Note) st
 			if json.Unmarshal([]byte(e.Detail), &r) != nil || r.Note != n.ID || e.At.Before(n.At) {
 				continue
 			}
-			if strings.TrimSpace(r.Notes) != "" {
-				return strings.TrimSpace(r.Notes)
+			if notes := strings.TrimSpace(r.Notes); notes != "" {
+				return notes
 			}
-			if r.Choice == 0 && strings.TrimSpace(r.Text) != "" {
-				if _, only := noteOptionLabel(n, 0, r.Text); !only {
-					return strings.TrimSpace(r.Text)
+			if text := strings.TrimSpace(r.Text); r.Choice == 0 && text != "" {
+				if _, only := noteOptionLabel(n, 0, text); !only {
+					return text
 				}
 			}
-			break
+			return ""
 		}
+	}
+	if len(n.Refs) == 0 {
+		return ""
 	}
 	var parties []state.Party
 	if h := guideRole.get(st).Holder; h != nil {
@@ -306,21 +323,21 @@ func (a *app) personExtraText(st *state.State, me state.Party, n *state.Note) st
 		if tr == "" {
 			continue
 		}
-		turns, err := claude.UserTurnsSince(tr, n.At)
+		dialogs, err := claude.DialogsSince(tr, n.At)
 		if err != nil {
 			continue
 		}
-		for _, t := range slices.Backward(turns) {
-			u := strings.TrimSpace(t.Text)
-			if u == "" || strings.HasPrefix(u, "GUIDE ") || strings.HasPrefix(u, "NOTE ") || strings.HasPrefix(u, "ANSWER ") {
+		for _, d := range slices.Backward(dialogs) {
+			if !slices.ContainsFunc(d.Questions, func(q string) bool { return questionNamesThread(q, n.Refs[0]) }) {
 				continue
 			}
-			if _, only := noteOptionLabel(n, 0, u); only {
-				continue
+			u := strings.TrimSpace(d.Text)
+			if _, only := noteOptionLabel(n, 0, u); only || u == "" {
+				return ""
 			}
 			for i := range n.Options {
 				optLabel, _, _ := n.Option(i + 1)
-				if rest := trimOptionPrefix(optLabel, u); rest != u && rest != "" {
+				if rest := trimOptionPrefix(optLabel, u, n.Options[i]); rest != u {
 					return rest
 				}
 			}

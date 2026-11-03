@@ -874,14 +874,47 @@ func (a *app) tailSession(sessions []*claude.Session, q string, now time.Time) (
 // Code (desktop records, project folders, or the state directory) and the
 // non-Claude harnesses.
 func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, harness string) {
-	if s, ok := claude.Live(running, p); ok && s.Transcript != "" {
+	return (&transcriptFinder{a: a, running: running}).find(p)
+}
+
+// transcriptFinder locates transcripts for many parties, reading the desktop
+// records by CLI session and each harness's ended sessions once.
+type transcriptFinder struct {
+	a       *app
+	running []*claude.Session
+	byCLI   map[string]*claude.Record
+	ended   map[string][]*claude.Session
+}
+
+func (f *transcriptFinder) endedOf(h Harness) []*claude.Session {
+	if f.ended == nil {
+		f.ended = map[string][]*claude.Session{}
+	}
+	es, ok := f.ended[h.Name()]
+	if !ok {
+		es = h.Ended(f.a.cfg, f.running, time.Time{})
+		f.ended[h.Name()] = es
+	}
+	return es
+}
+
+func (f *transcriptFinder) record(cli string) *claude.Record {
+	if f.byCLI == nil {
+		f.byCLI = claude.ByCLI(f.a.cfg)
+	}
+	return f.byCLI[cli]
+}
+
+func (f *transcriptFinder) find(p state.Party) (path, harness string) {
+	if s, ok := claude.Live(f.running, p); ok && s.Transcript != "" {
 		return s.Transcript, s.Harness
 	}
-	if a.cfg == nil {
+	cfg := f.a.cfg
+	if cfg == nil {
 		return "", ""
 	}
 	if h, id, ok := harnessForHost(p.HostSession); ok {
-		for _, e := range h.Ended(a.cfg, running, time.Time{}) {
+		for _, e := range f.endedOf(h) {
 			if (e.ID == id || p.Session != "" && e.ID == p.Session || e.HostID == p.HostSession) && e.Transcript != "" {
 				return e.Transcript, e.Harness
 			}
@@ -891,13 +924,13 @@ func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, h
 		if id == "" || strings.ContainsAny(id, `/\*?[`) {
 			return ""
 		}
-		if a.cfg.Claude.ProjectsDir != "" {
-			if tr := claude.Transcript(a.cfg, id, cwd); tr != "" {
+		if cfg.Claude.ProjectsDir != "" {
+			if tr := claude.Transcript(cfg, id, cwd); tr != "" {
 				return tr
 			}
 		}
-		if a.cfg.StateDir != "" {
-			tr := filepath.Join(a.cfg.StateDir, id+".jsonl")
+		if cfg.StateDir != "" {
+			tr := filepath.Join(cfg.StateDir, id+".jsonl")
 			if _, err := os.Stat(tr); err == nil { // #nosec G703 -- id carries no path separator (checked above), so the name stays inside the state directory
 				return tr
 			}
@@ -919,7 +952,7 @@ func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, h
 		return ""
 	}
 	if p.HostSession != "" {
-		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok {
+		if r, ok := claude.ReadRecord(cfg, p.HostSession); ok {
 			if tr := recordTranscript(r); tr != "" {
 				return tr, ""
 			}
@@ -929,14 +962,14 @@ func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, h
 		if tr := claudeFile(p.Session, ""); tr != "" {
 			return tr, ""
 		}
-		if r := claude.ByCLI(a.cfg)[p.Session]; r != nil {
+		if r := f.record(p.Session); r != nil {
 			if tr := recordTranscript(r); tr != "" {
 				return tr, ""
 			}
 		}
 	}
 	for _, h := range harnesses {
-		for _, e := range h.Ended(a.cfg, running, time.Time{}) {
+		for _, e := range f.endedOf(h) {
 			if (p.Session != "" && e.ID == p.Session || p.HostSession != "" && e.HostID == p.HostSession) && e.Transcript != "" {
 				return e.Transcript, e.Harness
 			}
@@ -952,14 +985,85 @@ var asGuideRun = regexp.MustCompile(`\bas (Guide run \d+)\b`)
 // the run, so past guide runs are findable by their name.
 const guideStartVerb = "guide.start"
 
-// endedSessionNamed resolves q among ended sessions (past guide runs, session
-// records, desktop records and ended harness sessions) whose transcript is on
-// disk.
+// endedSessionNamed resolves q among ended sessions (past guide runs, the
+// guide role's relieved and relay parties, session records, desktop records
+// and ended harness sessions) whose transcript is on disk. Names and ids are
+// matched first; only the matching sessions' transcripts are looked up.
 func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q string) (*claude.Session, bool) {
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return nil, false
 	}
+	lq := strings.ToLower(q)
+	bare := strings.ToLower(strings.TrimSpace(titleSuffix.ReplaceAllString(q, "")))
+	// matches reports whether a session with these ids and names is q.
+	matches := func(id, host string, names []string) bool {
+		return id == q || host == q || slices.ContainsFunc(names, func(n string) bool {
+			ln := strings.ToLower(strings.TrimSpace(n))
+			return ln != "" && (ln == bare || strings.Contains(ln, lq))
+		})
+	}
+
+	type party struct {
+		p     state.Party
+		at    time.Time
+		names []string
+	}
+	var parties []*party
+	byKey := map[string]*party{}
+	addParty := func(p state.Party, at time.Time, names ...string) {
+		if p.Session == "" && p.HostSession == "" {
+			return
+		}
+		k := p.Session + "\x00" + p.HostSession
+		c, ok := byKey[k]
+		if !ok {
+			c = &party{p: p}
+			byKey[k] = c
+			parties = append(parties, c)
+		}
+		if at.After(c.at) {
+			c.at = at
+		}
+		c.names = append(c.names, p.Name)
+		c.names = append(c.names, names...)
+	}
+	if st != nil {
+		r := st.GuideRole()
+		if r.Holder != nil {
+			var names []string
+			if r.Run > 0 {
+				names = append(names, guideRole.runName(r.Run))
+			}
+			addParty(r.Holder.Party, r.Holder.Since, names...)
+		}
+		if r.Relay != nil {
+			addParty(r.Relay.From, r.Relay.At)
+			addParty(r.Relay.To, r.Relay.At)
+		}
+		for _, rf := range r.Relieved {
+			addParty(rf.Party, cmp.Or(rf.Taken, rf.At))
+		}
+		for _, rec := range st.Records {
+			addParty(rec.Session, cmp.Or(rec.Ended, rec.At))
+		}
+	}
+	if evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == guideStartVerb }); err == nil {
+		for _, e := range evs {
+			var extra []string
+			if m := asGuideRun.FindStringSubmatch(e.Detail); m != nil {
+				extra = append(extra, m[1])
+			}
+			addParty(e.By, e.At, extra...)
+		}
+	}
+	f := &transcriptFinder{a: a, running: running}
+	if a.cfg != nil {
+		for _, rec := range claude.AllRecords(a.cfg) {
+			addParty(rec.Party(), rec.LastSeen(), rec.Title)
+		}
+	}
+
 	type candidate struct {
 		s     *claude.Session
 		names []string
@@ -996,67 +1100,34 @@ func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q st
 			}
 		}
 	}
-	addParty := func(p state.Party, at time.Time, names ...string) {
-		tr, h := a.partyTranscript(p, running)
-		if tr == "" {
-			return
+	for _, c := range parties {
+		if !matches(c.p.Session, c.p.HostSession, c.names) {
+			continue
 		}
+		tr, h := f.find(c.p)
+		if tr == "" {
+			continue
+		}
+		at := c.at
 		if at.IsZero() {
 			if fi, err := os.Stat(tr); err == nil {
 				at = fi.ModTime()
 			}
 		}
-		addSession(&claude.Session{ID: p.Session, HostID: p.HostSession, Name: p.Name, Transcript: tr, Harness: h, LastActive: at}, names...)
-	}
-	if st != nil {
-		r := st.GuideRole()
-		if r.Holder != nil {
-			var names []string
-			if r.Run > 0 {
-				names = append(names, guideRole.runName(r.Run))
-			}
-			addParty(r.Holder.Party, r.Holder.Since, names...)
-		}
-		if r.Relay != nil {
-			addParty(r.Relay.From, r.Relay.At)
-			addParty(r.Relay.To, r.Relay.At)
-		}
-		for _, rf := range r.Relieved {
-			addParty(rf.Party, cmp.Or(rf.Taken, rf.At))
-		}
-		for _, rec := range st.Records {
-			addParty(rec.Session, cmp.Or(rec.Ended, rec.At))
-		}
-	}
-	if evs, err := a.store.Events(0, nil); err == nil {
-		for _, e := range evs {
-			if e.By.Session == "" && e.By.HostSession == "" {
-				continue
-			}
-			var extra []string
-			if e.Verb == guideStartVerb {
-				if m := asGuideRun.FindStringSubmatch(e.Detail); m != nil {
-					extra = append(extra, m[1])
-				}
-			}
-			addParty(e.By, e.At, extra...)
-		}
+		addSession(&claude.Session{ID: c.p.Session, HostID: c.p.HostSession, Name: c.p.Name, Transcript: tr, Harness: h, LastActive: at}, c.names...)
 	}
 	if a.cfg != nil {
-		for _, rec := range claude.AllRecords(a.cfg) {
-			addParty(rec.Party(), rec.LastSeen(), rec.Title)
-		}
 		for _, h := range harnesses {
-			for _, e := range h.Ended(a.cfg, running, time.Time{}) {
-				addSession(e, e.Name)
+			for _, e := range f.endedOf(h) {
+				if matches(e.ID, e.HostID, []string{e.Name}) {
+					addSession(e, e.Name)
+				}
 			}
 		}
-		if tr, h := a.partyTranscript(state.Party{Session: q, Name: q}, running); tr != "" {
+		if tr, h := f.find(state.Party{Session: q, Name: q}); tr != "" {
 			addSession(&claude.Session{ID: q, Name: q, Transcript: tr, Harness: h}, q)
 		}
 	}
-	lq := strings.ToLower(q)
-	bare := strings.ToLower(strings.TrimSpace(titleSuffix.ReplaceAllString(q, "")))
 	var idHits, whole, part []*candidate
 	for _, c := range list {
 		if c.s.ID == q || c.s.HostID == q {

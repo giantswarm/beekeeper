@@ -3,6 +3,7 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,9 @@ func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
 		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Merge?"}]}}]}}`,
 		`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions: \"Merge?\"=\"Merge\" user's notes: \"please wait for CI first\". You can now continue with the user's answers in mind."}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"annotations":{"Merge?":{"notes":"please wait for CI first"}}}}`,
 		`{"type":"user","timestamp":"2026-10-05T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q2","content":"ignored timeout"}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"afkTimeoutMs":5000}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","content":"The user responded: not a dialog"}]},"toolUseResult":{"response":"not a person","notes":"neither"}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q3","name":"AskUserQuestion","input":{"questions":[{"question":"Approach?"}]}}]}}`,
 		`{"type":"user","timestamp":"2026-10-05T10:00:07Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q3","content":"User has answered your questions: \"Approach?\"=\"Option A\" user's notes: \"keep the existing flag\"."}]}}`,
 		`{"type":"user","timestamp":"2026-10-05T10:00:08Z","message":{"role":"user","content":"also update the docs"}}`,
 	}
@@ -223,11 +227,11 @@ func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
 		}
 	}
 
-	sinceTurns, err := UserTurnsSince(path, time.Date(2026, 10, 5, 10, 0, 7, 0, time.UTC))
+	dialogs, err := DialogsSince(path, time.Date(2026, 10, 5, 10, 0, 6, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sinceTurns) != 2 || sinceTurns[0].Text != "Option A — keep the existing flag" || sinceTurns[1].Text != "also update the docs" {
-		t.Fatalf("UserTurnsSince = %+v", sinceTurns)
+	if len(dialogs) != 1 || dialogs[0].Text != "Option A — keep the existing flag" || !slices.Equal(dialogs[0].Questions, []string{"Approach?"}) {
+		t.Fatalf("DialogsSince = %+v, want the Approach? answer alone", dialogs)
 	}
 }
