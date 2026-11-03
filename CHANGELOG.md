@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The hook follows script files run from shell `-c` strings, including nested strings, using the same recursion bound as nested scripts. Refusals name the script and line; files used only as data remain unread (https://github.com/giantswarm/beekeeper/issues/971).
+- Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
