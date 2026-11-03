@@ -152,7 +152,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	if mutationResult && code == github.SquashTooling {
-		return "", refused("merge-result validation unavailable: %s", reply.Reason)
+		if strings.HasPrefix(reply.Reason, reasonMergeValidationUnavailable) {
+			return "", refused("%s", reply.Reason)
+		}
+		return "", refused("%s: %s", reasonMergeValidationUnavailable, reply.Reason)
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
@@ -517,22 +520,35 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		}
 		p, merging = up, up.Head
 	}
+	var note string
 	if merging == head {
-		if reason, code := a.checkReviewedMergeResult(ctx, p, head); code != 0 {
+		reason, code := a.checkReviewedMergeResult(ctx, p, head)
+		if code != 0 {
 			doc.ExitCode, doc.Reason = code, reason
 			return doc
 		}
+		note = reason
 	}
-	if err := requireReviewedMergeQueue(ctx, p); err != nil {
+	queue, err := readReviewedMergeQueue(ctx, p)
+	if err != nil {
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
-	// Never pass --admin: it bypasses the server-side merge queue.
+	// A merge queue retests the merge group when the base advances; --admin
+	// would bypass it. Without a queue the lane's own merge-result check
+	// above is the validation, and the desk's admin merge passes the base's
+	// review requirement as before the check.
+	if !queue && a.cfg.Merge.AdminMerge(repo) {
+		argv = append(argv, "--admin")
+	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	if runErr != nil {
 		doc.Reason = runErr.Error()
+	}
+	if note != "" {
+		doc.Reason = strings.TrimSuffix(note+"; "+doc.Reason, "; ")
 	}
 	p, err = readLoopPull(ctx, ref)
 	if err != nil {
@@ -815,29 +831,31 @@ func sameCommit(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
-// A local validation cannot atomically pin GitHub's base branch. Require the
-// server queue to retest its merge group if any writer advances the base.
-var requireReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) error {
+// readReviewedMergeQueue reads whether p's base branch has a GitHub merge
+// queue. With one, the queue retests the merge group if any writer advances
+// the base after the lane's local check; without one, the lane's check
+// stands. Only an unreadable answer refuses.
+var readReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) (bool, error) {
 	ref, ok := parseRef(p.Ref)
 	if !ok || p.Base == "" {
-		return fmt.Errorf("merge queue: invalid base")
+		return false, fmt.Errorf("merge queue: invalid base")
 	}
 	owner, name, _ := strings.Cut(ref.Repo, "/")
 	out, err := github.RunGH(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id}}}", "-f", "owner="+owner, "-f", "name="+name, "-f", "branch="+p.Base)
 	if err != nil {
-		return fmt.Errorf("merge queue unavailable: %w", err)
+		return false, fmt.Errorf("merge queue unavailable: %w", err)
 	}
 	var result struct {
 		Data struct {
-			Repository struct{ MergeQueue *struct{ ID string } }
+			Repository *struct{ MergeQueue *struct{ ID string } }
 		}
 		Errors []json.RawMessage
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
-		return fmt.Errorf("reading merge queue: %w", err)
+		return false, fmt.Errorf("reading merge queue: %w", err)
 	}
-	if len(result.Errors) != 0 || result.Data.Repository.MergeQueue == nil || result.Data.Repository.MergeQueue.ID == "" {
-		return fmt.Errorf("merge queue required for atomic merge-result validation; configure required merge-group CI before merging")
+	if len(result.Errors) != 0 || result.Data.Repository == nil {
+		return false, fmt.Errorf("reading merge queue of %s: %s", ref.Repo, oneLine(string(out)))
 	}
-	return nil
+	return result.Data.Repository.MergeQueue != nil && result.Data.Repository.MergeQueue.ID != "", nil
 }
