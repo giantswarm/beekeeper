@@ -2948,7 +2948,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return l.hostsFirstLocal(ctx, flags, model, roomOpen(out), mapped)
+		return l.hostsFirstLocal(ctx, flags, model, out, mapped)
 	}
 	if model != "" && !roomOpen(out) {
 		return startHost{}, errLoopLater
@@ -2962,8 +2962,12 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 // while the local verdict (localRoom) has room. With a mapped repository
 // the choices a host can run wait for one; the others start locally, the
 // host-run choices excluded from the start, while the local verdict
-// without them has room. Everything else waits.
-func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model string, localRoom, mapped bool) (startHost, error) {
+// without them has room and picks no self-hosted choice the local verdict
+// (local, with every choice) does not pick itself: excluding the
+// subscriptions a host runs never makes a self-hosted model the pick while
+// a subscription is eligible. Everything else waits.
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model, local string, mapped bool) (startHost, error) {
+	localRoom := roomOpen(local)
 	var hosts []execution.Host
 	for _, selector := range l.a.cfg.Supervisor.Hosts {
 		if h, err := l.a.executionHost(selector); err == nil {
@@ -2981,10 +2985,30 @@ func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, mo
 		return startHost{}, errLoopLater
 	}
 	place := startHost{Exclude: hosted}
-	if !l.capacityRoom(ctx, append(slices.Clone(flags), place.excludeFlags()...)...) {
+	out, code, err := beekeeperRun(ctx, l.as(append(append([]string{loopCapacity}, flags...), place.excludeFlags()...)...)...)
+	if err != nil || code != 0 || !roomOpen(out) {
+		return startHost{}, errLoopLater
+	}
+	providers := l.a.cfg.Capacity.Providers
+	if pick := verdictProvider(out); providers[pick].SelfHosted() && !providers[verdictProvider(local)].SelfHosted() {
+		l.sayOnce("self-hosted "+pick, "SUPERVISOR HOST WAITS: no host has room, and without the choices a host runs the local pick is self-hosted %s while a subscription is eligible", pick)
 		return startHost{}, errLoopLater
 	}
 	return place, nil
+}
+
+// verdictProvider is the provider of a `capacity --json` answer's pick:
+// empty when it picks none or cannot be read.
+func verdictProvider(out string) string {
+	var v struct {
+		Choice *struct {
+			Provider string `json:"provider"`
+		} `json:"choice"`
+	}
+	if json.Unmarshal([]byte(out), &v) != nil || v.Choice == nil {
+		return ""
+	}
+	return v.Choice.Provider
 }
 
 // remoteStartFlags are what a placed start names on its agents start line:

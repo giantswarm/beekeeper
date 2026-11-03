@@ -467,7 +467,10 @@ standby successors. The supervisor loop uses the same model policy for its
 workers and reviewers.
 
 `capacity.choices` can describe model class, relative cost, allowed task kinds,
-family and weekly review reserve. `capacity.taskPolicies` constrains task kinds;
+family and weekly review reserve; a choice on a self-hosted provider takes code
+changes (kind `worker`) only when its `kinds` list it. Every start, the loop's
+included, picks the eligible subscription first and a self-hosted choice only
+when no subscription is eligible. `capacity.taskPolicies` constrains task kinds;
 `--kind` selects the policy for both capacity and starts. Review starts can use
 `--author-model` to require another model family. Capacity JSON explains the
 choice and rejections; successful starts record the model and reason.
@@ -3371,6 +3374,13 @@ response without a `fast` multiplier, makes the cost `cost unknown`, never a gue
 Prometheus export: nothing on the lab machine scrapes one.
 
 ## The central instance
+
+A local lease's purpose may name its round, for example `60m`, `1h30m`, or
+`60-minute round`. The first positive duration is used; without one,
+`leaseRound` defaults to `1h`. Once past that round, `watch` prints
+`LEASE HELD PAST ROUND` once for the claim, naming the holder, claim time,
+purpose and overrun. Queued claims include the same overrun, including when
+`--wait` ends queued. This is a report only: the holder keeps the lease.
 
 The leases of the installations a team shares live in one place, `beekeeper serve` behind
 muster, so two people's machines see one holder; its tools, as a model reads them, are in
