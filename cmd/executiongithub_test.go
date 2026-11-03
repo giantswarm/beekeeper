@@ -3,38 +3,47 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
-	workerGitHubKeyRef          = "op://Shared/worker-app/private-key"
+	workerGitHubClientIDFixture = "Iv23liFixtureClientID"
+	workerGitHubRefreshRef      = "op://Shared/worker-app/password"
+	workerRefreshTokenFixture   = "ghr_fixture_refresh_initial" //nolint:gosec // synthetic test fixture
 	workerGitHubCompleted       = "completed"
 	workerGitHubPrivateRepo     = "example/private"
 	workerGitHubWrongGeneration = "wrong generation"
 )
 
-const workerTokenFixture = "fixture-worker-installation-token"
+const workerTokenFixture = "fixture-worker-user-token" //nolint:gosec // synthetic test fixture
 
 func workerGitHubTestApp(t *testing.T) (*app, execution.StartRequest) {
 	t.Helper()
 	a, r := executionTestApp(t)
+	sa, tools, _ := secretApp(t)
+	a.cfg.Secret = sa.cfg.Secret
+	tools.Vault[workerGitHubRefreshRef] = workerRefreshTokenFixture
 	r.GitHub = true
 	a.cfg.Identity.Host = r.Coordinator
 	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg, fixtureOrg}
-	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{AppID: fixtureAppID, PrivateKey: workerGitHubKeyRef, Installations: map[string]int64{defaultOrg: 42, fixtureOrg: 43}}
+	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{ClientID: workerGitHubClientIDFixture, RefreshToken: workerGitHubRefreshRef}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Starts[0].Execution.Request = r
 		st.Starts[0].Execution.RequestDigest = r.Digest()
@@ -45,62 +54,64 @@ func workerGitHubTestApp(t *testing.T) (*app, execution.StartRequest) {
 	return a, r
 }
 
+func writeTestOAuthToken(w http.ResponseWriter, access, refresh string) {
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // synthetic OAuth response in unit test server
+		"access_token":                access,
+		"token_type":                  "bearer",
+		"expires_in":                  28800,
+		workerGitHubRefreshTokenField: refresh,
+	})
+}
+
 func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
-	sa, tools, _ := secretApp(t)
-	a.cfg.Secret = sa.cfg.Secret
-	_, pem := fixtureKey()
-	ref := workerGitHubKeyRef
-	tools.Vault[ref] = pem
-	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{AppID: fixtureAppID, PrivateKey: ref, Installations: map[string]int64{defaultOrg: 42}}
-	issued, revoked := 0, 0
+	rotations := 0
+	wantRefresh := workerRefreshTokenFixture
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch req.URL.Path {
-		case "/app/installations/42/access_tokens":
-			if !(&fakeGitHub{}).appToken(req.Header.Get("Authorization")) {
-				t.Error("request not signed by coordinator App")
-			}
-			var body struct {
-				Repositories []string          `json:"repositories"`
-				Permissions  map[string]string `json:"permissions"`
-			}
-			if json.NewDecoder(req.Body).Decode(&body) != nil || len(body.Repositories) != 1 || body.Repositories[0] != pluginName || body.Permissions["contents"] != workerGitHubWrite || body.Permissions["checks"] != workerGitHubRead || body.Permissions["actions"] != workerGitHubRead || body.Permissions["administration"] != "" {
-				t.Error("token scope widened or required read permissions absent")
-			}
-			issued++
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(workerGitHubToken{Token: workerTokenFixture, Expires: time.Now().Add(time.Hour)})
-		case workerGitHubRevokePath:
-			if req.Method != http.MethodDelete || req.Header.Get("Authorization") != "Bearer "+workerTokenFixture {
-				t.Error("wrong revocation")
-			}
-			revoked++
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			t.Errorf("unexpected path %s", req.URL.Path)
+		if req.Method != http.MethodPost || req.URL.Path != workerGitHubOAuthTokenPath {
+			t.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
+			return
 		}
-	}))
-	defer server.Close()
-	previous := githubAPI
-	githubAPI = server.URL
-	t.Cleanup(func() { githubAPI = previous })
-	var token workerGitHubToken
-	request := workerGitHubRequest{Repository: r.Repository, Write: true}
-	for range 2 {
-		if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &token, false); err != nil {
+		if err := req.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
+		if req.Form.Get(workerGitHubClientIDField) != workerGitHubClientIDFixture || req.Form.Get("grant_type") != workerGitHubRefreshTokenField || req.Form.Get(workerGitHubRefreshTokenField) != wantRefresh {
+			t.Errorf("unexpected refresh form: %v (want refresh_token %s)", req.Form, wantRefresh)
+		}
+		rotations++
+		wantRefresh = "ghr_fixture_refresh_" + strconv.Itoa(rotations)
+		tok := workerTokenFixture
+		if rotations > 1 {
+			tok = workerTokenFixture + "-" + strconv.Itoa(rotations)
+		}
+		writeTestOAuthToken(w, tok, wantRefresh)
+	}))
+	defer server.Close()
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
+	var token workerGitHubToken
+	for _, request := range []workerGitHubRequest{
+		{Repository: r.Repository, Write: true},
+		{Repository: r.Repository, Write: true},
+		{Repository: "example/other", Write: true},
+		{Repository: "outside/readable", Write: false},
+	} {
+		if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &token, false); err != nil {
+			t.Fatalf("%+v: %v", request, err)
+		}
 	}
-	if issued != 1 || token.Token != workerTokenFixture {
-		t.Fatal("credential not issued/cached per worker scope")
+	if rotations != 1 || token.Token != workerTokenFixture {
+		t.Fatalf("credential not issued/cached across repositories: rotations=%d token=%q", rotations, token.Token)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(st)
-	if strings.Contains(string(raw), workerTokenFixture) {
+	if strings.Contains(string(raw), workerTokenFixture) || strings.Contains(string(raw), wantRefresh) {
 		t.Fatal("token leaked into scheduling state")
 	}
 	info, err := os.Stat(a.workerGitHubPath(r.Ref))
@@ -110,15 +121,15 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Starts[0].Execution.Completed = true; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &token, false); err == nil {
+	if err := coordinatorTestCall(t, a, r, workerGitHubIssue, workerGitHubRequest{Repository: r.Repository, Write: true}, &token, false); err == nil {
 		t.Fatal("completed worker received token")
 	}
 	var result struct{}
 	if err := coordinatorTestCall(t, a, r, workerGitHubRevoke, nil, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if issued != 1 || revoked != 1 {
-		t.Fatalf("issued %d revoked %d", issued, revoked)
+	if rotations != 2 {
+		t.Fatalf("revocation did not rotate refresh token: rotations=%d", rotations)
 	}
 	tokens, err := readWorkerGitHub(a.workerGitHubPath(r.Ref))
 	if err != nil || len(tokens) != 0 {
@@ -126,8 +137,86 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 	}
 }
 
+func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
+	a, r := workerGitHubTestApp(t)
+	sopsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sopsFile := filepath.Join(sopsDir, "worker-github.sops.yaml")
+	if err := os.WriteFile(sopsFile, secrettest.Encrypt("refresh_token: old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sopsRef := "sops://" + sopsFile + "#refresh_token"
+	a.cfg.Secret.Files = []string{sopsFile}
+	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{ClientID: workerGitHubClientIDFixture, RefreshToken: sopsRef}
+
+	prevSleep := workerGitHubPollSleep
+	workerGitHubPollSleep = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { workerGitHubPollSleep = prevSleep })
+
+	polls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case workerGitHubDeviceCodePath:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code":      "dev-code-1",
+				"user_code":        "ABCD-1234",
+				"verification_uri": "https://github.com/login/device",
+				"expires_in":       900,
+				"interval":         1,
+			})
+		case workerGitHubOAuthTokenPath:
+			_ = req.ParseForm()
+			if req.Form.Get("grant_type") == workerGitHubDeviceGrant {
+				polls++
+				if polls == 1 {
+					_ = json.NewEncoder(w).Encode(map[string]any{"error": "authorization_pending"})
+					return
+				}
+				writeTestOAuthToken(w, workerTokenFixture, "ghr_from_device_flow")
+				return
+			}
+			if req.Form.Get(workerGitHubRefreshTokenField) != "ghr_from_device_flow" {
+				t.Errorf("unexpected SOPS refresh token: %q", req.Form.Get(workerGitHubRefreshTokenField))
+			}
+			writeTestOAuthToken(w, workerTokenFixture+"-rotated", "ghr_rotated_sops")
+		case "/user":
+			if req.Header.Get("Authorization") != "Bearer "+workerTokenFixture {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": "fixture-operator"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
+
+	var out bytes.Buffer
+	if err := a.authorizeWorkerGitHub(context.Background(), "", "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "ABCD-1234") || !strings.Contains(out.String(), "authorized fixture-operator") || strings.Contains(out.String(), "ghr_") || strings.Contains(out.String(), workerTokenFixture) {
+		t.Fatalf("unexpected login output: %s", out.String())
+	}
+	var token workerGitHubToken
+	if err := coordinatorTestCall(t, a, r, workerGitHubIssue, workerGitHubRequest{Repository: r.Repository, Write: true}, &token, false); err != nil {
+		t.Fatal(err)
+	}
+	if token.Token != workerTokenFixture {
+		t.Fatalf("got %q, want %q", token.Token, workerTokenFixture)
+	}
+	if err := a.revokeWorkerGitHub(context.Background(), r.Ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkerGitHubRejectsAuthorityAndScopeChanges(t *testing.T) {
-	for _, change := range []string{"wrong key", workerGitHubWrongGeneration, bgStopCmd, workerGitHubCompleted, "outside owner", "other write", deviceFlowDisabled} {
+	for _, change := range []string{"wrong key", workerGitHubWrongGeneration, bgStopCmd, workerGitHubCompleted, "outside owner", deviceFlowDisabled} {
 		t.Run(change, func(t *testing.T) {
 			a, r := workerGitHubTestApp(t)
 			request := workerGitHubRequest{Repository: r.Repository, Write: true}
@@ -138,8 +227,6 @@ func TestWorkerGitHubRejectsAuthorityAndScopeChanges(t *testing.T) {
 				r.Ref.Generation++
 			case "outside owner":
 				request.Repository = "outside/repo"
-			case "other write":
-				request.Repository = "example/other"
 			default:
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 					switch change {
@@ -182,9 +269,9 @@ func TestWorkerGitHubFailedRevocationRetainsLedger(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer server.Close()
-	previous := githubAPI
-	githubAPI = server.URL
-	t.Cleanup(func() { githubAPI = previous })
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
 	if err := a.revokeWorkerGitHub(context.Background(), r.Ref); err == nil {
 		t.Fatal("failed revocation reported success")
 	}
@@ -197,7 +284,7 @@ func TestWorkerGitHubFailedRevocationRetainsLedger(t *testing.T) {
 func TestWorkerGitHubStartRequiresHostAdapter(t *testing.T) {
 	a, brief := sshStartTestApp(t)
 	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
-	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{AppID: 42, PrivateKey: workerGitHubKeyRef, Installations: map[string]int64{defaultOrg: 42}}
+	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{ClientID: workerGitHubClientIDFixture, RefreshToken: workerGitHubRefreshRef}
 	err := a.startSSHExecution(context.Background(), "fixture worker", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel, DryRun: true})
 	if err == nil || !strings.Contains(err.Error(), "GitHub adapter") {
 		t.Fatalf("old host not refused before reservation: %v", err)
@@ -223,16 +310,16 @@ func TestWorkerGitHubExpiredLeaseRevokesWithoutHostContact(t *testing.T) {
 	}
 	revoked := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodDelete || req.URL.Path != workerGitHubRevokePath {
+		if req.Method != http.MethodPost || req.URL.Path != workerGitHubOAuthTokenPath {
 			t.Error("unexpected revocation request")
 		}
 		revoked++
-		w.WriteHeader(http.StatusNoContent)
+		writeTestOAuthToken(w, workerTokenFixture+"-rotated", "ghr_rotated_after_lease")
 	}))
 	defer server.Close()
-	previous := githubAPI
-	githubAPI = server.URL
-	t.Cleanup(func() { githubAPI = previous })
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
 	var token workerGitHubToken
 	if err := coordinatorTestCall(t, a, r, workerGitHubIssue, workerGitHubRequest{Repository: r.Repository}, &token, false); err == nil {
 		t.Fatal("expired execution lease obtained cached token")
@@ -258,9 +345,9 @@ func TestWorkerGitHubRevocationFailureStillStopsHost(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer server.Close()
-	previous := githubAPI
-	githubAPI = server.URL
-	t.Cleanup(func() { githubAPI = previous })
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -286,5 +373,179 @@ func TestWorkerGitHubRevocationFailureStillStopsHost(t *testing.T) {
 	tokens, err := readWorkerGitHub(path)
 	if err != nil || len(tokens) != 1 {
 		t.Fatal("failed revocation lost its retry ledger")
+	}
+}
+
+// Both executions are live together and GitHub invalidates old access tokens
+// on every refresh, matching the provider rather than just counting callbacks.
+func TestWorkerGitHubConcurrentExecutionCompletion(t *testing.T) {
+	a, first := workerGitHubTestApp(t)
+	second := first
+	second.Ref.Generation++
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := *st.Starts[0].Execution
+		record.Request = second
+		record.Handle.Ref = second.Ref
+		record.RequestDigest = second.Digest()
+		st.Starts = append(st.Starts, state.Start{Execution: &record})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rotations := 0
+	current := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == workerGitHubOAuthTokenPath {
+			rotations++
+			current = workerTokenFixture + strconv.Itoa(rotations)
+			writeTestOAuthToken(w, current, "ghr_next_fixture")
+			return
+		}
+		if req.Header.Get("Authorization") != "Bearer "+current {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": remoteMCPFixture})
+	}))
+	defer server.Close()
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
+	request := workerGitHubRequest{Repository: first.Repository, Write: true}
+	var issued workerGitHubToken
+	for _, r := range []execution.StartRequest{first, second} {
+		if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &issued, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.revokeWorkerGitHub(context.Background(), first.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if rotations != 1 {
+		t.Fatal("completion invalidated another live execution's credential")
+	}
+	if err := coordinatorTestCall(t, a, second, workerGitHubIssue, request, &issued, false); err != nil {
+		t.Fatal(err)
+	}
+	var user struct{ Login string }
+	if err := githubJSON(context.Background(), http.MethodGet, "/user", "Bearer "+issued.Token, http.StatusOK, &user); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate refresh by another request. The second execution's ledger still
+	// has eight hours left but must no longer hand out its invalidated token.
+	if _, err := a.refreshWorkerGitHubToken(context.Background(), a.workerGitHubOAuthPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinatorTestCall(t, a, second, workerGitHubIssue, request, &issued, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := githubJSON(context.Background(), http.MethodGet, "/user", "Bearer "+issued.Token, http.StatusOK, &user); err != nil {
+		t.Fatal(err)
+	}
+	// A third live execution has never fetched a token. It must still
+	// trigger deferred revocation when it is the last one to finish.
+	third := second
+	third.Ref.Generation++
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := *st.Starts[1].Execution
+		record.Request = third
+		record.Handle.Ref = third.Ref
+		record.RequestDigest = third.Digest()
+		st.Starts = append(st.Starts, state.Start{Execution: &record})
+		st.Starts[1].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.revokeWorkerGitHub(context.Background(), second.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if rotations != 2 {
+		t.Fatal("rotation while an execution is still live")
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[2].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := a.revokeWorkerGitHub(context.Background(), third.Ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rotations != 3 {
+		t.Fatalf("last execution did not revoke shared authority: %d", rotations)
+	}
+}
+
+func TestWorkerGitHubSourceRefsRejectedBeforeNetwork(t *testing.T) {
+	a, _ := workerGitHubTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("read-only reference reached GitHub")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	prevWeb := githubWeb
+	githubWeb = server.URL
+	t.Cleanup(func() { githubWeb = prevWeb })
+	for _, ref := range []string{"store://worker", "file:///tmp/worker-token", "cmd://producer#token", "k8s://context/namespace/secret/name#token"} {
+		a.cfg.GitHub.WorkerApp.RefreshToken = ref
+		if err := a.authorizeWorkerGitHub(context.Background(), "", "", &bytes.Buffer{}); err == nil {
+			t.Fatal("source accepted for authorization")
+		}
+		if _, err := a.refreshWorkerGitHubToken(context.Background(), ""); err == nil {
+			t.Fatal("source accepted for refresh")
+		}
+	}
+}
+
+func TestWorkerGitHubEmptyAllowlistDeniesStarts(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	a.cfg.GitHub.AllowedOrgs = []string{}
+	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{ClientID: workerGitHubClientIDFixture, RefreshToken: workerGitHubRefreshRef}
+	err := a.startSSHExecution(context.Background(), "fixture worker", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel, DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "github.allowedOrgs") {
+		t.Fatalf("empty allowlist permitted start: %v", err)
+	}
+}
+
+func TestWorkerGitHubEmptyAllowlistDeniesWrites(t *testing.T) {
+	a, r := workerGitHubTestApp(t)
+	a.cfg.GitHub.AllowedOrgs = []string{}
+	if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true}); err == nil {
+		t.Fatal("empty allowlist permitted writes")
+	}
+	if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
+	a, _ := workerGitHubTestApp(t)
+	previousRun := secretRun
+	secretRun = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" && len(args) > 1 && args[0] == "item" && (args[1] == "edit" || args[1] == "create") {
+			return nil, errors.New("fixture vault locked")
+		}
+		return previousRun(ctx, dir, env, stdin, name, args...)
+	}
+	t.Cleanup(func() { secretRun = previousRun })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestOAuthToken(w, workerTokenFixture, "ghr_rotated_fixture")
+	}))
+	defer server.Close()
+	prevWeb := githubWeb
+	githubWeb = server.URL
+	t.Cleanup(func() { githubWeb = prevWeb })
+	_, err := a.refreshWorkerGitHubToken(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "authorization is lost") || !strings.Contains(err.Error(), "beekeeper agents hosts github-login") {
+		t.Fatalf("missing persistence recovery instructions: %v", err)
 	}
 }

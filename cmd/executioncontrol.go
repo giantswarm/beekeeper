@@ -511,7 +511,7 @@ var executionReviewGH = github.RunGH
 // or a pull request GitHub does not answer for, is a plain wait.
 func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head string) string {
 	ref, ok := parseRef(on)
-	if !ok || !strings.EqualFold(ref.Repo, r.Request.Repository) || head != "" && !publicationCommit(head) {
+	if !ok || (!r.Request.GitHub && !strings.EqualFold(ref.Repo, r.Request.Repository)) || head != "" && !publicationCommit(head) {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -528,7 +528,7 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
 		return ""
 	}
 	return p.Head.SHA

@@ -812,58 +812,90 @@ confirmed and the record settles.
 
 ### Per-worker GitHub credentials
 
-The coordinator can issue GitHub App installation tokens separately for each
-execution, repository and permission level. Configure only the coordinator:
+The coordinator issues short-lived GitHub App user-to-server tokens (`ghu_...`)
+so every worker action runs as `<user> via <App>` within the authorizing user's
+own GitHub permissions. No GitHub App private key, client secret, refresh token
+or permanent GitHub login is installed on an execution host; worker tokens are
+never installation tokens. Configure only the coordinator:
 
 ```yaml
 github:
   allowedOrgs: [example]
   workerApp:
-    appID: 12345
-    privateKey: op://Shared/worker-app/private-key
-    installations:
-      example: 67890
+    clientID: Iv23liExampleClientID
+    refreshToken: op://Shared/worker-app/refresh-token
 ```
 
-The App needs Contents, Pull requests, Issues, Checks, Actions, Commit statuses
-and Metadata read access. Contents, Workflows and Pull requests write access are needed for
-the task repository. Its installation must include every repository workers
-need to research. The private-key reference is resolved in the coordinator;
-no App key, refresh token or permanent GitHub login is installed on a host.
-This configuration enables GitHub for newly started executions. Existing
-executions retain their recorded publication mode.
+The `refreshToken` field may name a 1Password reference (`op://<vault>/<item>/<field>`),
+or a SOPS path (`sops://<file>#<path>`). Read-only source references are rejected
+before authorization or refresh. If persisting a rotated refresh token fails,
+repeat `beekeeper agents hosts github-login` to restore authorization.
+Authorize the coordinator once through GitHub's OAuth device flow:
 
-In an enabled execution `gh issue view`, `gh pr view` and `gh pr checks` use a
+```sh
+beekeeper agents hosts github-login
+```
+
+The command prints the verification URL (`https://github.com/login/device`) and
+one-time user code, waits for authorization, verifies the resulting user-to-server
+token has expiration enabled, and writes the refresh token to the configured
+secret reference. This configuration enables GitHub for newly started executions.
+Existing executions retain their recorded publication mode.
+
+In an enabled execution `gh issue`, `gh pr` and `gh api` commands use a
 short-lived credential fetched over the authenticated SSH callback. Cross-repo
-calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Read tokens
-reach only the named repository in a configured owner. A write token reaches
-only the execution's task repository. Read-only Git clone, fetch and ls-remote
-operations may also name an explicit GitHub repository URL in those owners.
-The runner installs dispatch scripts for
-`gh` and `git` ahead of the pinned tools; scripts and journals contain no token.
-Only the launched GitHub client receives it, through its environment.
+calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Reads may
+reach any repository the user can access. Writes (`git push`, `gh pr create`,
+`gh pr edit`, `gh pr comment`, `gh issue create`, `gh issue edit`, `gh issue comment`)
+are restricted by the wrappers to owners in `github.allowedOrgs` (an empty list
+allows no writes or GitHub-enabled starts), and a worker may work in and
+open pull requests across multiple repositories in one task (using its primary
+workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner
+installs dispatch scripts for `gh` and `git` ahead of the pinned tools; scripts
+and journals contain no token. Only the launched GitHub client receives it,
+through its environment.
 
-Push from the owned workspace with
-`git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
+Push from the owned workspace (or a secondary checkout under `.beekeeper-scratch`)
+with `git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
 then open the PR with `gh pr create`. The adapter supplies that same head branch,
-and the coordinator verifies it against GitHub and the parked workspace commit
+and the coordinator verifies it against GitHub and the parked checkout commit
 before requesting desk review. Force pushes, other branches and alternate push
 remotes are refused. Local Git commands run without a credential. Network Git
 uses the pinned HTTPS origin and disables inherited credential helpers, global
 Git configuration, hooks and redirects. Authenticated pushes use a disposable
-bare repository with only the resolved workspace commit and object storage;
+bare repository with only the resolved checkout commit and object storage;
 workspace Git configuration and refs cannot add tags, mirror other branches or
 redirect the transport. Inherited Git environment overrides are removed.
-Merges continue through the coordinator's
-review and exact-head authorization, never a worker's `gh pr merge`.
+Merges continue through the coordinator's review and exact-head authorization,
+never a worker's `gh pr merge`.
 
-GitHub installation tokens expire after an hour. The coordinator caches them
-until five minutes before expiry and retains a private revocation ledger under
-its own state directory, outside scheduling state and event logs. Runner exit,
-completion, explicit stop and terminal inspection revoke credentials; a failed
-revocation retains the ledger and reports an error for retry. An unreachable
-host does not prevent coordinator revocation; failed host contact after the
-execution lease expires also revokes its credentials. The managed command hooks are the
-same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
-installation token cannot itself limit Contents writes to one branch. Hosts
+The same write-capable user token serves reads and writes across repositories.
+It is not scoped by repository or by the wrapper's requested operation.
+`allowedOrgs` restricts managed wrapper commands, not the token itself: GitHub's
+actual authority boundary is the App's installations intersected with the
+user's permissions.
+
+GitHub user-to-server tokens expire after eight hours. The coordinator caches the
+current user token until five minutes before expiry and records issued tokens in
+a private per-execution ledger under its own state directory, outside scheduling
+state and event logs. Every issuance consults the coordinator cache so refresh
+never reissues a stale per-execution entry. Runner exit, completion, explicit
+stop and terminal inspection immediately deny further callbacks. Because the
+access token is shared, they rotate the coordinator's refresh token only when
+no other live GitHub-enabled execution remains. Until then a stopped worker's
+already-issued token remains valid; managed guards and host process termination
+remain necessary. The last execution rotates and persists the refresh token,
+invalidating the old access token at GitHub. Failed revocation retains the ledger
+and reports an error for retry. An unreachable host does not prevent coordinator
+revocation. Device-wide revocation rotates or revokes that coordinator's refresh
+token; user-wide revocation removes the App authorization in GitHub settings.
+The managed command
+hooks are the same policy boundary as the rest of SSH execution, not an OS
+sandbox: a GitHub token cannot itself limit Contents writes to one branch. Hosts
 therefore still require the managed guards and owned execution identity.
+
+Post-merge operations for this migration include creating/configuring one public
+GitHub App owned by the organization, authorizing each coordinator through device
+flow, updating coordinator and execution hosts, and proving multi-worker GitHub
+access live. After that proof, retire the previous worker-access App and delete
+its private key from the coordinator secret store.

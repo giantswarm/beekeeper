@@ -987,14 +987,19 @@ func publishedParkHead(ctx context.Context, on, dir string, git worktrees.Git, g
 // executionWorkspaceHead is the HEAD of the calling execution's workspace
 // for a park on a pull request, or "" when it has none to read.
 func (a *app) executionWorkspaceHead(ctx context.Context, on string) string {
-	if _, ok := parseRef(on); !ok {
+	ref, ok := parseRef(on)
+	if !ok {
 		return ""
 	}
 	_, j, err := a.executionCaller()
 	if err != nil || j.Handle.Workspace == "" {
 		return ""
 	}
-	head, err := publishGit(ctx, j.Handle.Workspace, "rev-parse", "HEAD")
+	dir, repo := workerGitHubWorkDir(j.Handle.Workspace, j.Request.Repository)
+	if !strings.EqualFold(repo, ref.Repo) {
+		dir = j.Handle.Workspace
+	}
+	head, err := publishGit(ctx, dir, "rev-parse", "HEAD")
 	if err != nil || !publicationCommit(head) {
 		return ""
 	}

@@ -508,6 +508,13 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		return s.ProvisionTools(cmd.Context())
 	}})
 	c.AddCommand(a.executionHostUpdateCmds()...)
+	var loginClientID, loginRefreshRef string
+	login := &cobra.Command{Use: "github-login", Short: "Authorize this coordinator's github.workerApp via GitHub OAuth device flow and store its refresh token", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return a.authorizeWorkerGitHub(cmd.Context(), loginClientID, loginRefreshRef, cmd.OutOrStdout())
+	}}
+	login.Flags().StringVar(&loginClientID, "client-id", "", "GitHub App client ID (defaults to github.workerApp.clientID)")
+	login.Flags().StringVar(&loginRefreshRef, "refresh-token", "", "secret reference for the refresh token (defaults to github.workerApp.refreshToken)")
+	c.AddCommand(login)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
 	return c
 }
