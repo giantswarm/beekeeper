@@ -29,6 +29,8 @@ const (
 	// usageFile is the state's side file holding the latest subscription
 	// usage reading, shared by watch, capacity, snapshot and agents start/resume.
 	usageFile = "usage.json"
+	// codexAccountUsageFile shares the last account probe across provider aliases.
+	codexAccountUsageFile = "codex-account-usage.json"
 	// usageHighFile records the busy workers already told to park in the
 	// current USAGE HIGH episode, so watch restarts never tell a worker twice.
 	usageHighFile = "usage-high.json"
@@ -735,7 +737,7 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	var cached usageReading
 	haveCached := false
 	if a.store != nil {
-		found, e := a.store.ReadFile(usageProviderFile(codex.Harness), &cached)
+		found, e := a.store.ReadFile(codexAccountUsageFile, &cached)
 		haveCached = e == nil && found && !cached.SourceAt.IsZero()
 		if haveCached && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
 			return cached, nil
@@ -753,19 +755,24 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	}
 	fresh, probeErr := codex.ProbeUsage(probeCtx, dir, home, now)
 	if probeErr == nil {
-		return codexUsageToReading(fresh), nil
+		r := codexUsageToReading(fresh)
+		r.At = now.UTC()
+		if a.store != nil {
+			_ = a.store.WriteFile(codexAccountUsageFile, r)
+		}
+		return r, nil
 	}
 	if errors.Is(probeErr, codex.ErrUsageStopped) {
 		return usageReading{}, probeErr
 	}
-	if err != nil {
-		if haveCached && errors.Is(err, codex.ErrNoUsage) {
-			cached.At = now.UTC()
-			if validateReadingAt(cached, u, now) == nil {
-				cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
-				return cached, nil
-			}
+	if haveCached && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
+		cached.At = now.UTC()
+		if validateReadingAt(cached, u, now) == nil {
+			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
+			return cached, nil
 		}
+	}
+	if err != nil {
 		return usageReading{}, probeErr
 	}
 	r := codexUsageToReading(cr)

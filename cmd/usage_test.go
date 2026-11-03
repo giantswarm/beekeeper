@@ -3764,7 +3764,7 @@ echo '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"windowDuratio
 read -r keepalive
 `, now.Add(24*time.Hour).Unix())
 	executable := filepath.Join(dir, "codex")
-	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
 		t.Fatal(err)
 	}
 	a := &app{cfg: cfg, store: store, now: now}
@@ -3776,7 +3776,7 @@ read -r keepalive
 	if r.SevenDay.UsedPercent != 20 || !r.SourceAt.Equal(now) {
 		t.Fatalf("account reading: %+v", r)
 	}
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
 		t.Fatal(err)
 	}
 	a.now = now.Add(time.Minute)
@@ -3784,12 +3784,36 @@ read -r keepalive
 	if err != nil || !r.SourceAt.Equal(now) {
 		t.Fatalf("cached account reading: %+v, %v", r, err)
 	}
+	// A transcript older than the account snapshot must not replace it on
+	// a failed refresh, even though that older transcript remains valid.
+	rolloutDir := codex.HomeSessionsDir(cfg.StateDir)
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(rolloutDir, "old.jsonl")
+	old := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,"resets_at":%d}}}}`+"\n", now.Add(-2*time.Hour).Format(time.RFC3339), now.Add(24*time.Hour).Unix())
+	if err := os.WriteFile(rollout, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	a.now = now.Add(time.Hour)
 	r, err = a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u)
-	if err != nil || !r.SourceAt.Equal(now) || r.Fallback == "" {
+	if err != nil || !r.SourceAt.Equal(now) || r.Fallback == "" || r.SevenDay.UsedPercent != 20 {
 		t.Fatalf("old account fallback: %+v, %v", r, err)
 	}
-
+	stopped := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"spend_control_reached":true}}}`+"\n", a.now.Format(time.RFC3339))
+	if err := os.WriteFile(rollout, []byte(stopped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err == nil {
+		t.Fatal("fresh stop must block starts")
+	}
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
+		t.Fatal(err)
+	}
+	a.now = now.Add(2 * time.Hour)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err != nil {
+		t.Fatalf("account probe must recover an old stop: %v", err)
+	}
 }
 
 func TestCodexStaleSourceValidation(t *testing.T) {
