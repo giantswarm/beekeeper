@@ -468,7 +468,7 @@ func runReason(doc []byte, last, handCut string) string {
 		case handCut != "":
 			rel = "none awaited, " + handCut + " has no auto-release and its tags are cut by hand"
 		case o.NoRelease:
-			rel = "none warranted"
+			rel = noneWarranted
 		case rel == "":
 			rel = "unknown"
 		}
