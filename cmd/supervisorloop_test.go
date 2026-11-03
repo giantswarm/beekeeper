@@ -486,7 +486,7 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != "Review r 7 r2" {
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no review for the fixed head: %v", r.calls)
 	}
 }
@@ -520,7 +520,7 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 		t.Fatalf("a new head after an approval escalated: %v", note)
 	}
 	start := r.called(agentsName, agentStartName)
-	if start == nil || start[2] != "Review r 7 r2" {
+	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no review of the new head: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
@@ -534,7 +534,7 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r.pull.Head = own
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != "Review r 7 r3" {
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 3) {
 		t.Fatalf("no third review: %v", r.calls)
 	}
 	r.pass(t)
@@ -661,7 +661,7 @@ func TestLoopReviewsFixesAfterExhaustedRounds(t *testing.T) {
 	r.pull.Head = fixedAgain
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c == nil || c[2] != "Review r 7 r3" {
+	if c := r.called(agentsName, agentStartName); c == nil || c[2] != superloop.ReviewerName(loopPR, 3) {
 		t.Fatalf("no independent round for fixed head: %v", r.calls)
 	}
 	if r.called(gateCmdName) != nil {
@@ -1542,7 +1542,7 @@ func TestLoopAnOldApprovalAuthorizesNoNewHead(t *testing.T) {
 	r.pull.Head = loopFixed // the head moved before the go
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != "Review r 7 r2" {
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no second round for the new head: %v", r.calls)
 	}
 	r.pass(t)
@@ -1570,7 +1570,7 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if review := r.called(agentsName, agentStartName); review == nil || review[2] != "Review r 7 r2" {
+	if review := r.called(agentsName, agentStartName); review == nil || review[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Errorf("no review for the fixes: %v", r.calls)
 	}
 }
