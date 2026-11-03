@@ -405,6 +405,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		}
 		p, merging = up, up.Head
 	}
+	if merging == head {
+		if reason, code := a.checkReviewedMergeResult(ctx, p, head); code != 0 {
+			doc.ExitCode, doc.Reason = code, reason
+			return doc
+		}
+	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	if a.cfg.Merge.AdminMerge(repo) {
 		argv = append(argv, "--admin")
