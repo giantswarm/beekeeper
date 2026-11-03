@@ -420,6 +420,9 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				break
 			}
 		} else if syncErr == nil {
+			opCtx, cancel = withTimeout(ctx)
+			a.syncRemoteExecutionTranscriptByRef(opCtx, ref)
+			cancel()
 			_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
 				if rec, _ := executionRecord(current, ref); rec != nil && rec.Terminal() {
 					rec.Settled = true

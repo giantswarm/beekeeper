@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -113,20 +115,24 @@ const (
 )
 
 type entry struct {
-	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
-	IsMeta    bool      `json:"isMeta"`
-	Message   struct {
+	Type          string          `json:"type"`
+	Timestamp     time.Time       `json:"timestamp"`
+	IsMeta        bool            `json:"isMeta"`
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Message       struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
 
 type block struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 }
 
 func parseTurn(line []byte) (Turn, bool) {
@@ -138,7 +144,8 @@ func parseTurn(line []byte) (Turn, bool) {
 }
 
 // parseTurns reads one transcript line: its text as one turn and, with
-// tools, a turn for each tool call after it.
+// tools, a turn for each tool call after it. A person's AskUserQuestion
+// dialog answer in a tool_result or toolUseResult is kept as a user turn.
 func parseTurns(line []byte, tools bool) []Turn {
 	if len(line) == 0 {
 		return nil
@@ -165,6 +172,11 @@ func parseTurns(line []byte, tools bool) []Turn {
 				calls = append(calls, Turn{At: e.Timestamp, Role: RoleTool, Text: ToolGist(b.Name, b.Input)})
 			}
 		}
+		if e.Type == roleUser {
+			if ans := askUserAnswer(e.ToolUseResult, blocks); ans != "" {
+				text = append(text, ans)
+			}
+		}
 	}
 	var out []Turn
 	joined := strings.TrimSpace(strings.Join(text, "\n"))
@@ -172,6 +184,37 @@ func parseTurns(line []byte, tools bool) []Turn {
 		out = append(out, Turn{At: e.Timestamp, Role: e.Type, Text: joined})
 	}
 	return append(out, calls...)
+}
+
+// askUserAnswer extracts a person's AskUserQuestion answer from a user
+// entry's toolUseResult or tool_result blocks so dialog answers are never
+// dropped when tool results are omitted.
+func askUserAnswer(toolUseResult json.RawMessage, blocks []block) string {
+	var res struct {
+		Answers map[string]string `json:"answers"`
+	}
+	_ = json.Unmarshal(toolUseResult, &res)
+	var parts []string
+	for _, b := range blocks {
+		if b.Type != blockToolResult || b.IsError {
+			continue
+		}
+		t := strings.TrimSpace(resultText(b.Content))
+		if t != "" && (len(res.Answers) > 0 || strings.HasPrefix(t, "User has answered")) {
+			parts = append(parts, t)
+		}
+	}
+	joined := strings.Join(parts, "\n")
+	for _, k := range slices.Sorted(maps.Keys(res.Answers)) {
+		v := strings.TrimSpace(res.Answers[k])
+		if v == "" {
+			continue
+		}
+		if joined == "" || !strings.Contains(joined, v) {
+			parts = append(parts, k+": "+v)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // turnEndReasons are the stop reasons that close a turn: the model answered
@@ -267,6 +310,16 @@ func ToolGist(name string, input json.RawMessage) string {
 			if v, ok := in[k].(string); ok && strings.TrimSpace(v) != "" {
 				first, _, _ := strings.Cut(strings.TrimSpace(v), "\n")
 				return name + ": " + first
+			}
+		}
+		if qs, ok := in["questions"].([]any); ok {
+			for _, item := range qs {
+				if m, ok := item.(map[string]any); ok {
+					if q, ok := m["question"].(string); ok && strings.TrimSpace(q) != "" {
+						first, _, _ := strings.Cut(strings.TrimSpace(q), "\n")
+						return name + ": " + first
+					}
+				}
 			}
 		}
 	}

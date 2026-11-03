@@ -121,6 +121,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		return json.NewEncoder(output).Encode(reply)
 	}
+	if req.Operation == transcriptsListOp || req.Operation == transcriptsSearchOp || req.Operation == transcriptsReadOp {
+		value, callErr := a.executionTranscriptRPC(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, req.Ref)
 		if r == nil || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {
@@ -494,6 +506,16 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			verb = "agents.note"
 		}
 		return "recorded by coordinator", []state.Event{event(me, verb, "%s", v.Text)}, nil
+	case transcriptsRequestOp:
+		var v remoteTranscriptAccessReq
+		if err := execution.Decode(c.Data, &v); err != nil {
+			return "", nil, err
+		}
+		created, events, err := a.recordTranscriptRequest(st, me, v)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("transcript access request #%d recorded for the guide (%s)", created.ID, transcriptScopeText(created.Repo, created.Session, created.All)), events, nil
 	default:
 		return "", nil, refused("unsupported worker control")
 	}

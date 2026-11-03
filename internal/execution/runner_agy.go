@@ -148,6 +148,24 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 	if envErr != nil {
 		return envErr
 	}
+	var transcriptOff int64
+	mirrorAgyTranscript := func(threadID string) {
+		if threadID == "" || !ValidIdentity(threadID) {
+			return
+		}
+		tp := filepath.Join(s.agyAppDir(), "brain", threadID, ".system_generated", "logs", "transcript.jsonl")
+		f, err := os.Open(filepath.Clean(tp))
+		if err != nil {
+			return
+		}
+		defer func() { _ = f.Close() }()
+		if _, err := f.Seek(transcriptOff, io.SeekStart); err != nil {
+			return
+		}
+		if n, err := io.Copy(log, f); err == nil && n > 0 {
+			transcriptOff += n
+		}
+	}
 	first := func() error {
 		return s.update(ctx, ref, func(j *Journal) error {
 			j.Ready, j.InTurn, j.LastActive = true, true, s.now()
@@ -155,6 +173,7 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		})
 	}
 	thread, accepted, turnErr := s.agyTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
+	mirrorAgyTranscript(thread)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -221,6 +240,7 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		}
 		accept := func() error { return s.acceptCodexMessage(ctx, ref, current.Handle.ConversationID, next.ID) }
 		_, accepted, turnErr := s.agyTurn(ctx, ref, h, env, log, current, codexMessageText(next), thread, accept)
+		mirrorAgyTranscript(thread)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -128,8 +128,10 @@ type (
 	plainUrgent       Urgent
 	plainRoleLine     RoleLine
 	plainPair         Pair
-	plainStop         Stop
-	plainHostPin      HostPin
+	plainStop              Stop
+	plainHostPin           HostPin
+	plainTranscriptGrant   TranscriptGrant
+	plainTranscriptRequest TranscriptRequest
 )
 
 func (v *State) UnmarshalJSON(b []byte) error {
@@ -267,3 +269,15 @@ func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
 func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
 func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }
+func (v *TranscriptGrant) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainTranscriptGrant)(v), &v.rest)
+}
+func (v TranscriptGrant) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainTranscriptGrant(v), v.rest)
+}
+func (v *TranscriptRequest) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainTranscriptRequest)(v), &v.rest)
+}
+func (v TranscriptRequest) MarshalJSON() ([]byte, error) {
+	return encodeKeeping(plainTranscriptRequest(v), v.rest)
+}
