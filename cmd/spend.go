@@ -53,13 +53,9 @@ only; spend is the figure for a day or any other window.`,
 			if !from.Before(to) {
 				return usageErr("--since %s is not before --until %s", from.In(zone).Format(time.RFC3339), to.In(zone).Format(time.RFC3339))
 			}
-			var ts []claude.SpendTranscript
-			for _, h := range harnesses {
-				hs, err := h.SpendTranscripts(a.cfg, from, to)
-				if err != nil {
-					return err
-				}
-				ts = append(ts, hs...)
+			ts, err := a.spendTranscripts(from, to)
+			if err != nil {
+				return err
 			}
 			s := claude.PriceSpend(ts, from, to, a.cfg.Metrics)
 			if a.json {

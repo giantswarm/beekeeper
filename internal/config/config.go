@@ -50,6 +50,8 @@ type Config struct {
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
+	// LeaseRound is the default round when a lease purpose names no duration (1h).
+	LeaseRound Duration `yaml:"leaseRound"`
 	// Identity is whose agents run here: every party this machine's
 	// commands record carries it.
 	Identity Identity `yaml:"identity"`
@@ -929,6 +931,40 @@ type Agents struct {
 	Models []AgentModelRule `yaml:"models"`
 	// RequireModel refuses omission rather than using a harness default.
 	RequireModel bool `yaml:"requireModel"`
+	// Kinds are the desk's task kinds by name regexp, each with its own caps
+	// on starts; a name may match several (a filer kind and a meta kind
+	// over all meta workers), and every matching kind's caps hold.
+	Kinds []AgentKind `yaml:"kinds"`
+}
+
+// AgentKind is a task kind: the agents whose name Match matches, at most
+// MaxBusy of them busy at once, a start at most every MinInterval, and the
+// daily spend at which the watch says SPEND <kind>. A zero cap is none.
+type AgentKind struct {
+	Name        string   `yaml:"name"`
+	Match       string   `yaml:"match"`
+	MaxBusy     int      `yaml:"maxBusy"`
+	MinInterval Duration `yaml:"minInterval"`
+	// DailySpend is in USD for a day of the desk's time zone.
+	DailySpend float64 `yaml:"dailySpend"`
+}
+
+// Matches reports whether name is one of k's agents; an invalid regexp,
+// which validation refuses, matches none.
+func (k AgentKind) Matches(name string) bool {
+	re, err := regexp.Compile(k.Match)
+	return err == nil && re.MatchString(name)
+}
+
+// KindsOf returns the kinds whose regexp matches name, in their order.
+func (a Agents) KindsOf(name string) []AgentKind {
+	var out []AgentKind
+	for _, k := range a.Kinds {
+		if k.Matches(name) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // AgentModelRule selects a model for a named task before provider selection.
@@ -1042,7 +1078,8 @@ var DefaultClaudeUsageCommand = []string{ClaudeHarness, "-p", "/usage", "--outpu
 var DefaultAgyUsageCommand = []string{AgyHarness, "-p", "/usage"}
 
 // DefaultCodexUsageCommand is capacity.providers.codex.command when unset:
-// beekeeper reads the freshest token_count rate_limits event across Codex
+// beekeeper probes account usage when local events age out and otherwise reads
+// the freshest token_count rate_limits event across Codex
 // rollout transcripts in-process.
 var DefaultCodexUsageCommand = []string{CodexHarness, "usage"}
 
@@ -1314,7 +1351,9 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
-	// Kinds limits this choice to task kinds; empty permits all kinds.
+	// Kinds limits this choice to task kinds; empty permits all kinds, but
+	// a choice on a self-hosted provider takes task kind worker (code
+	// changes) only when Kinds lists it.
 	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
 	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
 	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`
@@ -2161,15 +2200,10 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
-	// ReviewRounds is how many review rounds asking for changes `supervisor
-	// loop` runs for a pull request (default 1): after the last one's
-	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: a new head
-	// after an approval gets its own review only for a change the approval
-	// does not cover (more than a merge of the base, its conflicts'
-	// resolution or a rebase). Never more than two reviews start for one
-	// pull request, whatever this says: a third need is a decision for
-	// guide.person.
+	// ReviewRounds is retained for configuration compatibility and reporting
+	// (default 1). It never releases a head without an approving review.
+	// Every new head gets one independent review, except a proven base-only
+	// update of an approved head, which remains covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -3258,6 +3292,7 @@ func (c *Config) defaults() error {
 	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	setDur(&c.LeaseRound, time.Hour)
 	if c.Identity.Host == "" {
 		if h, err := os.Hostname(); err == nil {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
@@ -3707,12 +3742,32 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	if c.LeaseRound.Duration < 0 {
+		report(errors.New("leaseRound: want a positive duration"))
+	}
 	for i, r := range c.Agents.Models {
 		if _, err := regexp.Compile(r.Match); err != nil {
 			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
 		}
 		if strings.TrimSpace(r.Match) == "" {
 			report(fmt.Errorf("agents.models[%d]: match is required", i))
+		}
+	}
+	seenKinds := map[string]bool{}
+	for i, k := range c.Agents.Kinds {
+		if !profileNamePattern.MatchString(k.Name) {
+			report(fmt.Errorf("agents.kinds[%d].name: want letters, digits, - or _", i))
+		} else if seenKinds[k.Name] {
+			report(fmt.Errorf("agents.kinds[%d].name: %s is named twice", i, k.Name))
+		}
+		seenKinds[k.Name] = true
+		if strings.TrimSpace(k.Match) == "" {
+			report(fmt.Errorf("agents.kinds[%d]: match is required", i))
+		} else if _, err := regexp.Compile(k.Match); err != nil {
+			report(fmt.Errorf("agents.kinds[%d].match: %w", i, err))
+		}
+		if k.MaxBusy < 0 || k.MinInterval.Duration < 0 || k.DailySpend < 0 {
+			report(fmt.Errorf("agents.kinds[%d]: maxBusy, minInterval and dailySpend must not be negative", i))
 		}
 	}
 	for kind, p := range c.Capacity.TaskPolicies {
