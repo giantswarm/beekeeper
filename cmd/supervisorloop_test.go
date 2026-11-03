@@ -3094,3 +3094,52 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		t.Fatalf("expected supervisor.owner logged, got %+v", evs)
 	}
 }
+
+func TestParseLoopPullClosingIssueAliases(t *testing.T) {
+	p, err := parseLoopPull(loopPR, []byte(`{"closingIssuesReferences":[{"url":"https://github.com/o/r/issues/101"},{"url":"https://github.com/o/other/issues/102"}]}`))
+	if err != nil || !slices.Equal(p.Closes, []string{"o/r#101", "o/other#102"}) {
+		t.Fatalf("closing issues = %v, %v", p.Closes, err)
+	}
+}
+
+func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
+	for _, operation := range []string{"unblock", "block"} {
+		t.Run(operation, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopBoard && args[1] == operation {
+					return "dependency API unavailable", 1
+				}
+				return "", 0
+			}
+			r.pass(t)
+			if got := r.logged(t, "supervisor.owner"); len(got) != 0 {
+				t.Fatalf("dependency failure recorded as taken: %+v", got)
+			}
+			if got := r.logged(t, loopFailureVerb); len(got) != 1 || !strings.Contains(got[0].Detail, "dependency") {
+				t.Fatalf("dependency failure not reported: %+v", got)
+			}
+			if r.called(agentsName, agentStartName) != nil || r.called(agentsName, agentWakeName) != nil {
+				t.Fatalf("assigned owner before dependency confirmation: %v", r.calls)
+			}
+			if operation == "unblock" && r.called(loopBoard, "block") != nil {
+				t.Fatalf("continued after failed unblock: %v", r.calls)
+			}
+			r.answer = func([]string) (string, int) { return "", 0 }
+			r.pass(t)
+			if r.called(loopBoard, "block", "o/r#10", "--by", loopPR) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
+				t.Fatalf("retry did not record dependency then assign owner: %v", r.calls)
+			}
+			if got := r.logged(t, "supervisor.owner"); len(got) != 1 {
+				t.Fatalf("retry did not record success: %+v", got)
+			}
+		})
+	}
+}

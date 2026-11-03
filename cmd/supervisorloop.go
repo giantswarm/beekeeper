@@ -146,7 +146,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -209,6 +209,9 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
+	Closes []struct {
+		URL string `json:"url"`
+	} `json:"closingIssuesReferences"`
 	Draft       bool   `json:"isDraft"`
 	Mergeable   string `json:"mergeable"`
 	MergeState  string `json:"mergeStateStatus"`
@@ -332,6 +335,11 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
 	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	for _, issue := range j.Closes {
+		if r, ok := parseRef(issue.URL); ok {
+			p.Closes = append(p.Closes, refName(r))
+		}
+	}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -2819,8 +2827,12 @@ var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
-		_, _ = l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block)
-		_, _ = l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref)
+		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
+			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
+		}
+		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
+			return "", fmt.Errorf("record overlap dependency: %w", err)
+		}
 	}
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err

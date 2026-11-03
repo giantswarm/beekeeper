@@ -1453,3 +1453,33 @@ func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
 		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=%s", act, overlapPRA, overlapPRB, overlapWaiter)
 	}
 }
+
+func TestOverlapClosingIssuesMutualSameRank(t *testing.T) {
+	in := Input{
+		Now:  t0.Add(time.Minute),
+		Rank: func(string) int { return 1 },
+		Workers: []Worker{
+			{Name: "issue worker A", Serves: "o/r#101", ParkedOn: overlapPRB, ParkedAt: t0, Started: true},
+			{Name: "issue worker B", Serves: "o/r#102", ParkedOn: overlapPRA, ParkedAt: t0, Started: true},
+		},
+		Pulls: map[string]Pull{
+			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", Closes: []string{"o/r#101"}, State: Open, Head: head1},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, Closes: []string{"o/r#102"}, State: Open, Head: head2},
+		},
+	}
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != "issue worker A" || act.Head != head1 {
+		t.Fatalf("mutual issue workers: %+v", act)
+	}
+	// An active issue worker is the live PR owner, even with a different name.
+	in.Workers[0].ParkedOn = ""
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("active closing-issue owner missed: %+v", got)
+	}
+	// Once that owner leaves, the ordinary missing-owner acceptance still holds.
+	in.Workers = in.Workers[1:]
+	act = only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
+		t.Fatalf("missing owner: %+v", act)
+	}
+}

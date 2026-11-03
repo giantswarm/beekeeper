@@ -112,6 +112,8 @@ const (
 
 // Pull is a tracked pull request as GitHub reports it.
 type Pull struct {
+	// Closes names the issues closed by this pull request.
+	Closes                []string
 	Draft                 bool
 	Mergeable, MergeState string
 	Ref                   string // owner/repo#n
@@ -1345,6 +1347,24 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 	if o, _, _ := in.Desk.owner(p, l.overridden[ref]); o != ours {
 		return
 	}
+	// Normalize issue-based serve records to the observed pull request. Keep
+	// the PR identity for tie-breaking, action keys and progress tracking.
+	pullRef := func(r string) string {
+		if _, ok := in.Pulls[r]; ok {
+			return r
+		}
+		var matches []string
+		for key, pull := range in.Pulls {
+			if slices.ContainsFunc(pull.Closes, func(issue string) bool { return strings.EqualFold(issue, r) }) {
+				matches = append(matches, key)
+			}
+		}
+		slices.Sort(matches)
+		if len(matches) > 0 {
+			return matches[0]
+		}
+		return r
+	}
 	w, isParked := parked[ref]
 	rs := l.rounds[ref]
 	for _, waiter := range in.Workers {
@@ -1354,7 +1374,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		if early, _ := in.Desk.early(waiter.ParkedAt); early {
 			continue
 		}
-		serves := waiter.Serves
+		serves := pullRef(waiter.Serves)
 		if strings.EqualFold(serves, ref) {
 			serves = ""
 		}
@@ -1365,8 +1385,8 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			}
 			mutual := slices.ContainsFunc(in.Workers, func(other Worker) bool {
 				return !strings.EqualFold(other.Name, waiter.Name) &&
-					strings.EqualFold(other.ParkedOn, serves) && !other.ReviewRequested &&
-					(strings.EqualFold(other.Serves, ref) || strings.EqualFold(other.Name, l.reviewer[ref]) || strings.EqualFold(other.Name, PullWorkerName(ref)))
+					strings.EqualFold(pullRef(other.ParkedOn), serves) && !other.ReviewRequested &&
+					(strings.EqualFold(pullRef(other.Serves), ref) || strings.EqualFold(other.Name, l.reviewer[ref]) || strings.EqualFold(other.Name, PullWorkerName(ref)))
 			})
 			aFirst := (rankA > 0 && (rankB == 0 || rankA < rankB)) ||
 				(mutual && rankA == rankB && strings.ToLower(serves) < strings.ToLower(ref))
@@ -1407,7 +1427,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			if strings.EqualFold(o.Name, waiter.Name) {
 				continue
 			}
-			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(o.Serves, ref) {
+			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(pullRef(o.Serves), ref) {
 				liveOwner = o
 				if owner == "" || owner == PullWorkerName(ref) {
 					owner = o.Name
