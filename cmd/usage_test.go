@@ -1200,7 +1200,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
   choices:
     - {harness: claude, model: claude-opus-4-7}
     - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}
-    - {harness: omp, model: provider/omp-model, provider: omp, skipPace: true}
+    - {harness: omp, model: provider/omp-model, provider: omp, skipPace: true, kinds: [worker]}
 `
 	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -1577,7 +1577,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		{Harness: claudeComm, Model: testModelOpus47},
 		{Harness: harnessAgy, Model: testModelOpus46, SkipPace: true},
 		{Harness: harnessAgy, Model: testModelGemini, SkipPace: true},
-		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true},
+		{Harness: omp.Harness, Model: "provider/omp-model", Provider: omp.Harness, SkipPace: true, Kinds: []string{workerRole}},
 	}
 	rawCfgWithOpus46 := strings.Replace(rawCfg,
 		"    - {harness: agy, model: gemini-3-1-pro-medium, skipPace: true}\n",
