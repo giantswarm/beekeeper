@@ -98,6 +98,9 @@ func TestMain(m *testing.M) {
 		}
 		return ""
 	}
+	// Nor does an agy start read the machine's agy hooks.json: it loads
+	// beekeeper's guard; a test of the refusal stubs its own.
+	agyUnguarded = func() string { return "" }
 	// Nor its Docker: the prune sees no docker CLI; a test that wants one
 	// gives it a fake.
 	dockerCLI = nil

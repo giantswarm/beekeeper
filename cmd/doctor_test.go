@@ -503,6 +503,27 @@ func TestCheckAgyHooks(t *testing.T) {
 	if got := checkAgyHooks(home, "/other/beekeeper", true); !strings.Contains(got, "runs /opt/bin/beekeeper instead of /other/beekeeper") {
 		t.Errorf("other binary: got %q", got)
 	}
+	// Another entry agy rejects drops beekeeper's valid one with it.
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := strings.Replace(string(raw), "{", `{"stale": {"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]},`, 1)
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := root.WriteFile(filepath.Join(".gemini", "config", "hooks.json"), []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkAgyHooks(home, exe, true); !strings.Contains(got, "agy rejects the stale entry, so none of the file's hooks runs, beekeeper's neither") {
+		t.Errorf("stale entry: got %q", got)
+	}
 }
 
 // The doctor checks ~/.gemini/config/skills.json and the skills directory it

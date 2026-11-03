@@ -664,6 +664,9 @@ func (a *app) preflightStartTarget(ctx context.Context, harness, model, dir stri
 		if err != nil {
 			return err
 		}
+		if err := refuseUnguardedAgy(); err != nil {
+			return err
+		}
 		_, err = agyModel(model, func() ([]string, error) { return agyModels(ctx, bin) })
 		return err
 	case omp.Harness:
