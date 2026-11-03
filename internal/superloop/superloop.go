@@ -132,6 +132,8 @@ type Pull struct {
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
+	// Priority is the board priority rank (1 is highest, 0 is unranked).
+	Priority int
 }
 
 // Check is one check on a pull request's head: its name and the URL of its
@@ -459,6 +461,8 @@ type Action struct {
 	Note int
 	// Version is the release to install.
 	Version string
+	// Priority is the board priority rank (1 is highest, 0 is unranked).
+	Priority int
 }
 
 // Line is the action's log detail: its key first, then what it did.
@@ -790,7 +794,21 @@ func Plan(in Input) []Action {
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
 	}
-	sort.Strings(refs)
+	slices.SortFunc(refs, func(a, b string) int {
+		pa, pb := in.Pulls[a].Priority, in.Pulls[b].Priority
+		switch {
+		case pa == pb || pa <= 0 && pb <= 0:
+			return strings.Compare(a, b)
+		case pa <= 0:
+			return 1
+		case pb <= 0:
+			return -1
+		case pa < pb:
+			return -1
+		default:
+			return 1
+		}
+	})
 	for _, ref := range refs {
 		p := in.Pulls[ref]
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
@@ -854,7 +872,7 @@ func Plan(in Input) []Action {
 		if agent == "" || p.Head == "" {
 			continue
 		}
-		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
+		base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head, Priority: p.Priority}
 		switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
 		case nobodys:
 			leave(ref, p.URL, agent, reason, why)

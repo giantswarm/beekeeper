@@ -24,6 +24,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -632,8 +633,10 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
+	mu    sync.Mutex
 	a     *app
 	since time.Time
+	once  bool
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
@@ -659,6 +662,10 @@ type supervisorLoop struct {
 	boardNone *loopBoardNone
 	// timerActs are timer side effects; shutdown and re-exec await them.
 	timerActs sync.WaitGroup
+	// inFlight tracks merge actions currently running in background
+	// goroutines across passes; mergeActions awaits them on exit or re-exec.
+	inFlight     map[string]bool
+	mergeActions sync.WaitGroup
 	// login is the login gh acts as, once read; teams the team files'
 	// owners, read at teamsAt.
 	login   string
@@ -680,6 +687,13 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
+	// priorities, issueParents, pullIssues and pullPriorities cache board
+	// priority resolution for tracked pull requests.
+	priorities     board.Priorities
+	prioritiesAt   time.Time
+	issueParents   map[string]string
+	pullIssues     map[string]string
+	pullPriorities map[string]int
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -696,9 +710,12 @@ const loopOpenEvery = 10 * time.Minute
 // every loopOpenEvery; one it cannot read counts as open, said once, so no
 // worker is retired on a failed read.
 func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
+	l.mu.Lock()
 	if o, ok := l.opens[ref]; ok && l.a.now.Sub(o.at) < loopOpenEvery {
+		l.mu.Unlock()
 		return o.open
 	}
+	l.mu.Unlock()
 	r, ok := parseRef(ref)
 	if !ok {
 		return true
@@ -710,10 +727,12 @@ func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 		return true
 	}
 	open := st.State == github.Open
+	l.mu.Lock()
 	if l.opens == nil {
 		l.opens = map[string]loopOpen{}
 	}
 	l.opens[ref] = loopOpen{open: open, at: l.a.now}
+	l.mu.Unlock()
 	return open
 }
 
@@ -772,6 +791,8 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	if err != nil {
 		return err
 	}
+	l.once = once
+	defer l.mergeActions.Wait()
 	defer l.timerActs.Wait()
 	if !once {
 		l.stopWatch = a.startLoopWatch(ctx)
@@ -843,13 +864,16 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a
+	l.mu.Lock()
 	l.boardNone = nil
+	l.mu.Unlock()
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
 	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
+		l.mergeActions.Wait()
 		l.timerActs.Wait()
 		if l.stopWatch != nil {
 			l.stopWatch()
@@ -865,14 +889,14 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.startsHeld = true
 			l.sayOnce("watch-conditions", "SUPERVISOR WATCH conditions failed; starts remain held: %v", err)
 		} else {
-			delete(l.said, "watch-conditions")
+			l.clearSaid("watch-conditions")
 		}
 	}
 	if !l.dryRun {
 		if err := l.watchAlerts(ctx); err != nil {
 			l.sayOnce("alerts", "SUPERVISOR ALERTS FAILED: %v", err)
 		} else {
-			delete(l.said, "alerts")
+			l.clearSaid("alerts")
 		}
 	}
 	st, err := a.store.Read()
@@ -892,17 +916,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
-	delete(l.said, "graphql budget")
+	l.clearSaid("graphql budget")
 	if !l.dryRun {
 		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 			return nil
 		}
-		delete(l.said, "graphql allowance")
+		l.clearSaid("graphql allowance")
 	}
 	if !l.dryRun {
-		l.tidy(ctx, st)
 		l.updateHosts(ctx, st)
+		l.tidy(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
 		}
@@ -1006,7 +1030,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, t := range in.Taken {
 		delete(claims, t.Key)
 	}
+	l.mu.Lock()
 	l.stages, l.stageDetail = stages, stageDetail
+	l.mu.Unlock()
 	since := l.since
 	evs, err := a.store.Follow("supervisor-loop", func(e state.Event) bool {
 		return slices.Contains(loopEventVerbs, e.Verb) && !e.At.Before(since)
@@ -1039,8 +1065,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		// A merged pull request stays merged: a worker kept for the open
 		// work it serves does not have it read again every pass.
-		if p, ok := l.merged[ref]; ok {
-			in.Pulls[ref] = p
+		l.mu.Lock()
+		mergedPull, wasMerged := l.merged[ref]
+		l.mu.Unlock()
+		if wasMerged {
+			in.Pulls[ref] = mergedPull
 			continue
 		}
 		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
@@ -1056,12 +1085,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		in.Pulls[ref] = p
 		if p.State == superloop.Merged {
+			l.mu.Lock()
 			if l.merged == nil {
 				l.merged = map[string]superloop.Pull{}
 			}
 			l.merged[ref] = p
+			l.mu.Unlock()
 		}
 	}
+	l.resolvePullPriorities(ctx, &in)
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
 	// planning the end and retaining its worker for any post-merge work.
@@ -1119,62 +1151,332 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.releaseAt = a.now
 		in.Release = l.newerRelease(ctx)
 	}
-	planned := map[string]bool{}
-	for _, act := range append(superloop.Plan(in), orphanedReviewClaims(claims, in)...) {
-		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
-			planned[act.Agent] = true
-		}
-		if l.dryRun {
+	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if l.dryRun {
+		for _, act := range actions {
 			if _, err := fmt.Fprintf(a.out, "SUPERVISOR WOULD %s %s\n", strings.ToUpper(act.Kind), superloop.Detail(act, would(act))); err != nil {
 				return err
 			}
+		}
+		return l.fill(ctx, st, claims, in.Taken)
+	}
+	return l.runPassActions(ctx, st, claims, failures, in.Taken, actions)
+}
+
+// readPullPriority resolves the board priority rank (1 is highest, 0 is
+// unranked) of a tracked pull request or the issue its worker serves.
+var readPullPriority = func(ctx context.Context, l *supervisorLoop, ref, serves string) (int, error) {
+	return l.pullPriority(ctx, ref, serves)
+}
+
+func (l *supervisorLoop) resolvePullPriorities(ctx context.Context, in *superloop.Input) {
+	if !in.Board || l.a.cfg.Board.Owner == "" {
+		return
+	}
+	servesByRef := map[string]string{}
+	for _, w := range in.Workers {
+		if w.ParkedOn != "" && w.Serves != "" {
+			servesByRef[w.ParkedOn] = w.Serves
+		}
+	}
+	for ref, p := range in.Pulls {
+		if p.State != superloop.Open || p.Priority > 0 {
 			continue
 		}
-		if a.now.Before(failures[act.Key].RetryAt) {
-			continue
+		if prio, err := readPullPriority(ctx, l, ref, servesByRef[ref]); err == nil && prio > 0 {
+			p.Priority = prio
+			in.Pulls[ref] = p
 		}
-		if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
-			// Claimed before an interruption: what the log shows of its
-			// side effect decides, never a second one.
-			what, done, err := l.reconcile(ctx, st, act, c)
-			if err != nil {
-				return err
-			}
-			if done {
-				if err := l.record(act, what); err != nil {
-					return err
+	}
+}
+
+func (l *supervisorLoop) pullPriority(ctx context.Context, ref, serves string) (int, error) {
+	key := ref + " " + serves
+	l.mu.Lock()
+	if prio, ok := l.pullPriorities[key]; ok {
+		l.mu.Unlock()
+		return prio, nil
+	}
+	needPriorities := l.priorities == nil && l.prioritiesAt.IsZero() || l.a.now.Sub(l.prioritiesAt) >= loopOpenEvery
+	l.mu.Unlock()
+	if needPriorities {
+		prios, err := l.a.boardClient().Priorities(ctx)
+		l.mu.Lock()
+		l.prioritiesAt = l.a.now
+		if err == nil {
+			l.priorities = prios
+		}
+		l.mu.Unlock()
+	}
+	l.mu.Lock()
+	prios := l.priorities
+	l.mu.Unlock()
+	if len(prios) == 0 {
+		return 0, nil
+	}
+	issue := serves
+	if issue == "" || strings.EqualFold(issue, ref) {
+		l.mu.Lock()
+		cached, ok := l.pullIssues[ref]
+		l.mu.Unlock()
+		if !ok {
+			closed, err := l.a.boardClient().Closes(ctx, []string{ref})
+			if err == nil {
+				if refs := closed[strings.ToLower(ref)]; len(refs) > 0 {
+					cached = refs[0]
+				} else if refs := closed[ref]; len(refs) > 0 {
+					cached = refs[0]
 				}
+				l.mu.Lock()
+				if l.pullIssues == nil {
+					l.pullIssues = map[string]string{}
+				}
+				l.pullIssues[ref] = cached
+				l.mu.Unlock()
+			}
+		}
+		if cached != "" {
+			issue = cached
+		}
+	}
+	parentOf := func(r string) string {
+		l.mu.Lock()
+		if p, ok := l.issueParents[r]; ok {
+			l.mu.Unlock()
+			return p
+		}
+		l.mu.Unlock()
+		parent, err := l.a.boardClient().IssueParent(ctx, r)
+		if err != nil {
+			return ""
+		}
+		l.mu.Lock()
+		if l.issueParents == nil {
+			l.issueParents = map[string]string{}
+		}
+		l.issueParents[r] = parent
+		l.mu.Unlock()
+		return parent
+	}
+	rank := prios.IssueRank(cmp.Or(issue, ref), parentOf)
+	if rank == 0 && issue != "" && !strings.EqualFold(issue, ref) {
+		rank = prios.IssueRank(ref, parentOf)
+	}
+	l.mu.Lock()
+	if l.pullPriorities == nil {
+		l.pullPriorities = map[string]int{}
+	}
+	l.pullPriorities[key] = rank
+	l.mu.Unlock()
+	return rank, nil
+}
+
+func (l *supervisorLoop) beginInFlight(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.inFlight[key] {
+		return false
+	}
+	if l.inFlight == nil {
+		l.inFlight = map[string]bool{}
+	}
+	l.inFlight[key] = true
+	return true
+}
+
+func (l *supervisorLoop) endInFlight(key string) {
+	l.mu.Lock()
+	delete(l.inFlight, key)
+	l.mu.Unlock()
+}
+
+func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action) error {
+	if l.a.now.Before(failures[act.Key].RetryAt) {
+		return nil
+	}
+	if c, ok := claims[act.Key]; ok && act.Kind != superloop.KindRelease {
+		// Claimed before an interruption: what the log shows of its
+		// side effect decides, never a second one.
+		what, done, err := l.reconcile(ctx, st, act, c)
+		if err != nil {
+			return err
+		}
+		if done {
+			return l.record(act, what)
+		}
+	}
+	if act.Kind == superloop.KindQuestion {
+		if err := l.readdress(act); err != nil {
+			return l.failed(act, failures[act.Key], err)
+		}
+		return nil
+	}
+	what, err := l.act(ctx, st, act)
+	switch {
+	case errors.Is(err, errLoopLater):
+		return nil
+	case err != nil:
+		return l.failed(act, failures[act.Key], err)
+	}
+	return l.record(act, what)
+}
+
+// runPassActions runs merges, review starts, intake, worker starts and PR/worker
+// transitions independently so a merge waiting on CI or in a lane queue never
+// delays a review or worker start, and the reverse.
+func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, taken []superloop.Taken, actions []superloop.Action) error {
+	planned := map[string]bool{}
+	var (
+		laneOrder  []string
+		laneMerges = map[string][]superloop.Action{}
+		reviewActs []superloop.Action
+		intakeActs []superloop.Action
+		doneActs   []superloop.Action
+		nextActs   []superloop.Action
+		otherActs  []superloop.Action
+	)
+	for _, act := range actions {
+		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
+			planned[act.Agent] = true
+		}
+		switch act.Kind {
+		case superloop.KindGo:
+			if !l.beginInFlight(act.Key) {
 				continue
 			}
+			lane := act.Ref
+			if r, ok := parseRef(act.Ref); ok {
+				lane = strings.ToLower(r.Repo)
+			}
+			if _, ok := laneMerges[lane]; !ok {
+				laneOrder = append(laneOrder, lane)
+			}
+			laneMerges[lane] = append(laneMerges[lane], act)
+		case superloop.KindReview:
+			reviewActs = append(reviewActs, act)
+		case superloop.KindIntake:
+			intakeActs = append(intakeActs, act)
+		case superloop.KindDone:
+			doneActs = append(doneActs, act)
+		case superloop.KindNext:
+			nextActs = append(nextActs, act)
+		default:
+			otherActs = append(otherActs, act)
 		}
-		if act.Kind == superloop.KindQuestion {
-			if err := l.readdress(act); err != nil {
-				if err := l.failed(act, failures[act.Key], err); err != nil {
-					return err
+	}
+
+	var errMu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
+	var passMerges sync.WaitGroup
+	for _, lane := range laneOrder {
+		acts := laneMerges[lane]
+		passMerges.Add(1)
+		l.mergeActions.Go(func() {
+			defer passMerges.Done()
+			for _, act := range acts {
+				err := l.execAction(ctx, st, claims, failures, act)
+				l.endInFlight(act.Key)
+				if err != nil {
+					setErr(err)
+					return
 				}
 			}
-			continue
-		}
-		what, err := l.act(ctx, st, act)
-		switch {
-		case errors.Is(err, errLoopLater):
-			continue
-		case err != nil:
-			if err := l.failed(act, failures[act.Key], err); err != nil {
-				return err
+		})
+	}
+
+	var passWG sync.WaitGroup
+	if len(reviewActs) > 0 {
+		passWG.Go(func() {
+			for _, act := range reviewActs {
+				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+					setErr(err)
+					return
+				}
 			}
-			continue
-		}
-		if err := l.record(act, what); err != nil {
-			return err
-		}
+		})
 	}
-	if !l.dryRun {
+
+	// When a worker finishes (KindDone) and files a follow-up issue in the
+	// same pass, intake and rank that issue before refilling the freed slot;
+	// otherwise run intake concurrently in its own stream.
+	intakeBeforeFill := len(doneActs) > 0 && len(intakeActs) > 0
+	if len(intakeActs) > 0 && !intakeBeforeFill {
+		passWG.Go(func() {
+			for _, act := range intakeActs {
+				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+					setErr(err)
+					return
+				}
+			}
+		})
+	}
+
+	passWG.Go(func() {
+		if intakeBeforeFill {
+			for _, act := range intakeActs {
+				if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+					setErr(err)
+					return
+				}
+			}
+		}
+		for _, act := range doneActs {
+			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				setErr(err)
+				return
+			}
+		}
+		for _, act := range nextActs {
+			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				setErr(err)
+				return
+			}
+		}
+		if err := l.fill(ctx, st, claims, taken); err != nil {
+			setErr(err)
+		}
+	})
+
+	passWG.Go(func() {
+		for _, act := range otherActs {
+			if err := l.execAction(ctx, st, claims, failures, act); err != nil {
+				setErr(err)
+				return
+			}
+		}
 		if err := l.roster(ctx, planned); err != nil {
-			return err
+			setErr(err)
+		}
+	})
+
+	passWG.Wait()
+	if l.once {
+		passMerges.Wait()
+	} else if len(laneOrder) > 0 {
+		done := make(chan struct{})
+		go func() {
+			passMerges.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	return l.fill(ctx, st, claims, in.Taken)
+	errMu.Lock()
+	defer errMu.Unlock()
+	return firstErr
 }
 
 // baseMerged reports whether p's head only merges its base into approved,
@@ -1182,15 +1484,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 // no: the new head gets its review.
 func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, approved string) bool {
 	key := p.Ref + " " + approved + " " + p.Head
+	l.mu.Lock()
 	if ok, read := l.baseMerges[key]; read {
+		l.mu.Unlock()
 		return ok
 	}
+	l.mu.Unlock()
 	ok, err := readBaseMerge(ctx, p, approved)
 	if err != nil {
 		l.sayOnce("base merge "+key, "SUPERVISOR LOOP cannot tell whether %s's head only merges its base: %v", p.Ref, err)
 		return false
 	}
+	l.mu.Lock()
+	if l.baseMerges == nil {
+		l.baseMerges = map[string]bool{}
+	}
 	l.baseMerges[key] = ok
+	l.mu.Unlock()
 	return ok
 }
 
@@ -1198,17 +1508,22 @@ func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, appro
 // read once per pair of heads; a read that fails is read again next pass.
 func (l *supervisorLoop) changed(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
 	key := p.Ref + " " + reviewed + " " + p.Head
+	l.mu.Lock()
 	if files, read := l.changedPast[key]; read {
+		l.mu.Unlock()
 		return files, nil
 	}
+	l.mu.Unlock()
 	files, err := readChangedPast(ctx, p, reviewed)
 	if err != nil {
 		return nil, err
 	}
+	l.mu.Lock()
 	if l.changedPast == nil {
 		l.changedPast = map[string][]string{}
 	}
 	l.changedPast[key] = files
+	l.mu.Unlock()
 	return files, nil
 }
 
@@ -1393,10 +1708,12 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		for _, e := range evs {
 			if e.Verb == "board.move" && opens(e.Detail) {
 				moveStage := act.Key + " move"
+				l.mu.Lock()
 				l.stages[moveStage] = true
 				if l.stageDetail != nil && l.stageDetail[moveStage] == "" {
 					l.stageDetail[moveStage] = e.Detail
 				}
+				l.mu.Unlock()
 			}
 		}
 		done = logged("board.rank", opens)
@@ -1488,11 +1805,20 @@ var errLoopLater = errors.New("later")
 
 // sayOnce prints a failure once per key and run.
 func (l *supervisorLoop) sayOnce(key, format string, args ...any) {
+	l.mu.Lock()
 	if l.said[key] {
+		l.mu.Unlock()
 		return
 	}
 	l.said[key] = true
+	l.mu.Unlock()
 	_, _ = fmt.Fprintf(l.a.out, format+"\n", args...)
+}
+
+func (l *supervisorLoop) clearSaid(key string) {
+	l.mu.Lock()
+	delete(l.said, key)
+	l.mu.Unlock()
 }
 
 // newerRelease is a newer release's version, "" when this is the latest or
@@ -1523,7 +1849,7 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 		l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
 		return
 	}
-	delete(l.said, "board tidy")
+	l.clearSaid("board tidy")
 	sayBoard(a, out)
 	// The board's blocked items reach the person, once each, and again
 	// on their re-check timers while they stay blocked.
@@ -1534,7 +1860,7 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 		l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
 		return
 	}
-	delete(l.said, "board escalate")
+	l.clearSaid("board escalate")
 	sayBoard(a, out)
 }
 
@@ -1994,7 +2320,9 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	head := act.Head
 	if act.Kind == superloop.KindEnd {
 		tmpl = defaultContinuationBrief
+		l.mu.Lock()
 		merged := l.merged[act.Ref]
+		l.mu.Unlock()
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
 		branch = cmp.Or(place.Ref, merged.Base, head)
 		if place.remote() && place.Ref == "" {
@@ -2456,22 +2784,30 @@ type loopBoardNone struct{ err error }
 // No walk runs while the GitHub budget is under github.floor: the pass
 // answers errLoopLater, so a done event waits unsettled and costs nothing.
 func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
+	l.mu.Lock()
 	if l.boardNone != nil {
-		return nil, l.boardNone.err
+		err := l.boardNone.err
+		l.mu.Unlock()
+		return nil, err
 	}
+	l.mu.Unlock()
 	st, err := l.a.store.Read()
 	if err != nil {
 		return nil, err
 	}
 	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+		l.mu.Lock()
 		l.boardNone = &loopBoardNone{err: errLoopLater}
+		l.mu.Unlock()
 		l.sayOnce("board budget", "SUPERVISOR NEXT HELD: the GitHub budget is under github.floor (%d), no board walk until it recovers", l.a.cfg.GitHub.Floor)
 		return nil, errLoopLater
 	}
-	delete(l.said, "board budget")
+	l.clearSaid("board budget")
 	next, err := l.readNextItem(ctx)
 	if next == nil {
+		l.mu.Lock()
 		l.boardNone = &loopBoardNone{err: err}
+		l.mu.Unlock()
 	}
 	return next, err
 }
@@ -2647,7 +2983,10 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	what = append(what, broker)
 	if argv := l.a.cfg.Supervisor.PostInstall; len(argv) > 0 {
 		stage := act.Key + " post-install"
-		if !l.stages[stage] {
+		l.mu.Lock()
+		doneStage := l.stages[stage]
+		l.mu.Unlock()
+		if !doneStage {
 			out, errOut, code, err := loopCommand(ctx, "", argv)
 			if err != nil || code != 0 {
 				return "", fmt.Errorf("%s installed, supervisor.postInstall failed (exit %d, %v): %s", version, code, err, oneLine(out+errOut))
@@ -2655,7 +2994,9 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 			if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] ran", stage)); err != nil {
 				return "", err
 			}
+			l.mu.Lock()
 			l.stages[stage] = true
+			l.mu.Unlock()
 		}
 		what = append(what, "supervisor.postInstall ran")
 	}
@@ -2845,8 +3186,11 @@ func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act s
 		return "", errLoopLater
 	}
 	moveStage := act.Key + " move"
+	l.mu.Lock()
 	moveLine := l.stageDetail[moveStage]
-	if !l.stages[moveStage] {
+	moved := l.stages[moveStage]
+	l.mu.Unlock()
+	if !moved {
 		if err := l.claim(act, act.Ref); err != nil {
 			return "", err
 		}
@@ -2854,8 +3198,10 @@ func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act s
 		if err != nil {
 			return "", err
 		}
+		l.mu.Lock()
 		l.boardNone = nil
 		l.fillPause = fillPause{}
+		l.mu.Unlock()
 		moveLine = oneLine(out)
 		if strings.HasPrefix(moveLine, "left ") {
 			return moveLine, nil
@@ -2863,10 +3209,12 @@ func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act s
 		if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] %s", moveStage, moveLine)); err != nil {
 			return "", err
 		}
+		l.mu.Lock()
 		l.stages[moveStage] = true
 		if l.stageDetail != nil {
 			l.stageDetail[moveStage] = moveLine
 		}
+		l.mu.Unlock()
 	}
 	from := cmp.Or(act.Message, agentRef(st, act.Agent))
 	anchor, err := readIntakeAnchor(ctx, l.a, act.Ref, from)
@@ -3028,7 +3376,10 @@ func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Act
 	for _, w := range l.postMerge {
 		stage := "post-merge wake " + w.Ref + "@" + w.Head + " " + w.Agent
 		checked := release.Key + " excludes " + w.Ref + "@" + w.Head
-		if w.Head == "" || l.stages[stage] || l.stages[checked] {
+		l.mu.Lock()
+		skip := w.Head == "" || l.stages[stage] || l.stages[checked]
+		l.mu.Unlock()
+		if skip {
 			continue
 		}
 		contains, err := loopReleaseContains(ctx, w.Ref, w.Head, release.Version)
@@ -3039,7 +3390,9 @@ func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Act
 			if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] merge absent from installed release", checked)); err != nil {
 				return err
 			}
+			l.mu.Lock()
 			l.stages[checked] = true
+			l.mu.Unlock()
 			continue
 		}
 		w.Key = stage
@@ -3050,7 +3403,9 @@ func (l *supervisorLoop) wakeReleased(ctx context.Context, release superloop.Act
 		if err := l.a.store.Record(event(loopParty, loopStageVerb, "[%s] woke worker", stage)); err != nil {
 			return err
 		}
+		l.mu.Lock()
 		l.stages[stage] = true
+		l.mu.Unlock()
 	}
 	return nil
 }

@@ -107,9 +107,10 @@ type app struct {
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
 	// reloads Capacity from cfgPath or loadedCfg without mutating cfg.
-	loadedCfg string
-	as        string
-	json      bool
+	loadedCfg    string
+	as           string
+	gatePriority int
+	json         bool
 	// hook says a hook runs, for a session whose environment it keeps.
 	hook bool
 

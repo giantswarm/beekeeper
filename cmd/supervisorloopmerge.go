@@ -47,12 +47,39 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
+	repair := func(code int, reason string) (string, error) {
+		_, _ = stopMerges(a.store, loopParty, func(m state.Merge) bool {
+			return m.Repo == ref.Repo && m.PR == ref.N && m.Phase == state.Waiting
+		}, false, func(state.Merge) string {
+			return reason
+		})
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			merge.Retry(current, ref.Repo, ref.N)
+			return nil, nil
+		})
+		if err := l.claim(act, act.Agent); err != nil {
+			return "", err
+		}
+		act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s (exit %d): %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again. The supervisor performs the merge.", act.URL, act.Head, code, oneLine(reason))
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+			return "", err
+		}
+		return "merge failed; branch repair requested", nil
+	}
+	if p.Draft || strings.EqualFold(p.Mergeable, "CONFLICTING") || strings.EqualFold(p.MergeState, github.DirtyState) {
+		return repair(github.SquashNotApplicable, "branch is draft or conflicts with its base")
+	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
 	if slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
 		return m.Repo == ref.Repo && m.PR == ref.N && (m.Phase == state.Waiting || m.Phase == state.Running) && merge.Runs(m, proc.Alive)
 	}) {
 		return "", errLoopLater
+	}
+	for _, f := range st.Failed {
+		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && (f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed) {
+			return repair(f.Exit, cmp.Or(f.Reason, "merge failed in lane"))
+		}
 	}
 	var execRef *execution.Ref
 	for _, worker := range st.Agents {
@@ -78,7 +105,12 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
-	out, code, err := beekeeperRun(ctx, l.as(gateCmdName, "--limit", "0", "--reviewed-head", act.Head, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))...)
+	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head}
+	if act.Priority > 0 {
+		gateArgs = append(gateArgs, "--priority", strconv.Itoa(act.Priority))
+	}
+	gateArgs = append(gateArgs, "--", "devctl", "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N))
+	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
 	p, readErr := readLoopPull(ctx, act.Ref)

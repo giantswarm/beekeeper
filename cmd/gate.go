@@ -72,6 +72,7 @@ func (a *app) gateCmd() *cobra.Command {
 	var wait, limit time.Duration
 	var queued bool
 	var reviewedHead string
+	var priority int
 	c := &cobra.Command{
 		Use:   gateCmdName + " [--wait DURATION] [--limit DURATION] -- devctl pr merge|release promote|pr wait|release wait|rollout wait <args>",
 		Short: "The PreToolUse hook's gate on devctl's blocking commands",
@@ -261,6 +262,7 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 			if !cmd.Flags().Changed("limit") {
 				limit = a.cfg.Merge.ToolLimit.Duration
 			}
+			a.gatePriority = priority
 			return a.gate(cmd.Context(), args, wait, limit, queued, reviewedHead)
 		},
 	}
@@ -268,6 +270,7 @@ gate runs lists the runs the gate runs outside their callers, gate stop
 	c.Flags().DurationVar(&wait, "wait", DefaultGateWait, "how long to wait for the merge's turn")
 	c.Flags().DurationVar(&limit, "limit", 0, "how long the call runs before it exits 76 and the merge or wait runs on outside it (default merge.toolLimit; 0: no limit)")
 	c.Flags().StringVar(&reviewedHead, "reviewed-head", "", "pin the supervisor merge to its reviewed head; refuse a moved head")
+	c.Flags().IntVar(&priority, "priority", 0, "board priority rank of the merge in its lane (1 is highest)")
 	c.Flags().BoolVar(&queued, "queued", false, "wait as a queued merge's own run, which refuses at the end of --wait")
 	_ = c.Flags().MarkHidden("queued")
 	c.AddCommand(a.gateRunsCmd(), a.gateStopCmd(), a.gateCheckCmd())
@@ -296,6 +299,7 @@ func gateRefusedWith(code int, format string, args ...any) error {
 // gateRun is one gated merge.
 type gateRun struct {
 	reviewedHead string
+	priority     int
 	*app
 	ctx     context.Context
 	argv    []string
@@ -378,7 +382,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 	}
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
-		bin: runningBinary(), output: gateOutput()}
+		priority: a.gatePriority, bin: runningBinary(), output: gateOutput()}
 	if len(reviewedHead) > 0 {
 		g.reviewedHead = reviewedHead[0]
 	}
@@ -594,9 +598,15 @@ func (g *gateRun) enqueue(why string) error {
 		if c := g.explicitConfig(); c != "" {
 			argv = append(argv, "--config", c)
 		}
+		if g.as != "" {
+			argv = append(argv, "--as", g.as)
+		}
 		argv = append(argv, gateCmdName, "--queued", "--wait", g.cfg.Merge.SeedTTL.String())
 		if g.reviewedHead != "" {
 			argv = append(argv, "--reviewed-head", g.reviewedHead)
+		}
+		if g.priority > 0 {
+			argv = append(argv, "--priority", strconv.Itoa(g.priority))
 		}
 		argv = append(append(argv, "--"), g.argv...)
 		_ = os.Setenv(gateFromEnv, strconv.Itoa(g.pid))
@@ -730,6 +740,9 @@ func (g *gateRun) step() (string, error) {
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
+			if g.priority > 0 {
+				m.Priority = g.priority
+			}
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -741,7 +754,7 @@ func (g *gateRun) step() (string, error) {
 			return nil, nil
 		} else {
 			st.Merges = append(st.Merges, state.Merge{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, PID: g.pid, Output: g.output,
-				Phase: state.Waiting, Joined: g.now.UTC(), Seen: g.now.UTC(), Candidate: g.candidate})
+				Phase: state.Waiting, Joined: g.now.UTC(), Priority: g.priority, Seen: g.now.UTC(), Candidate: g.candidate})
 			detail := fmt.Sprintf("%s in lane %s", g.key(), g.lane.Name)
 			if g.pr == 0 {
 				detail += ", for " + candidateText(g.candidate)
