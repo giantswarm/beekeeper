@@ -339,6 +339,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		if c.superseded(j.Rollup) {
 			continue
 		}
+		p.Checks = append(p.Checks, cmp.Or(c.Name, c.Context))
 		if !c.green() {
 			p.Green = false
 		}
@@ -2329,7 +2330,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
 			continue
 		}
-		if _, ok := h.Repositories[repo]; !ok {
+		if !h.AdmitsRepository(repo) {
 			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
 			continue
 		}

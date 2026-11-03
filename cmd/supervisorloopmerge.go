@@ -41,8 +41,8 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err != nil {
 		return "", err
 	}
-	if p.State == superloop.Merged && p.Head == act.Head {
-		return fmt.Sprintf("merged %s at %s", act.URL, act.Head), nil
+	if p.State == superloop.Merged && (p.Head == act.Head || l.baseMerged(ctx, p, act.Head)) {
+		return fmt.Sprintf("merged %s at %s", act.URL, p.Head), nil
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
@@ -86,7 +86,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", readErr
 	}
 	if p.State == superloop.Merged {
-		if p.Head != act.Head {
+		// Where the base requires up-to-date branches and the desk merges
+		// without --admin, the merge brings a behind branch up to date
+		// first: a merged head that only merges the base into the reviewed
+		// one is the reviewed change.
+		if p.Head != act.Head && !l.baseMerged(ctx, p, act.Head) {
 			return "", refused("merged head differs from the reviewed head; reconciliation required")
 		}
 		return fmt.Sprintf("merged %s at %s (merge commit %s)", act.URL, p.Head, p.MergeCommit), nil
@@ -247,8 +251,21 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	return "merged; task closed without waking worker", err
 }
 
-// reviewedMerge is the gate's mutation child. It never updates the branch,
-// waits for a different head, or retries a mutation. The gate retains its
+// The reasons a reviewed merge stops for desk policy, before and after a
+// branch update alike.
+const (
+	reasonDeskStopped = "the desk is stopped"
+	reasonMergeHeld   = "merge held by desk policy"
+	mergeMethodRebase = "rebase"
+)
+
+// reviewedMerge is the gate's mutation child. A branch behind its base it
+// merges at the reviewed head, as it stands. Only where the base requires
+// up-to-date branches and the desk merges without --admin does it update the
+// branch once, as the gate's --update-branch would, and merge the updated
+// head once its checks are green and the approval covers it
+// (updateReviewedBranch); it never waits for a head anyone else pushed, or
+// retries a mutation. The gate retains its
 // ordinary holds, queue, readiness, review and release settlement policy.
 func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head string) github.SquashDoc {
 	doc := github.SquashDoc{Repo: repo, Number: number, HeadSha: head, SchemaVersion: 1, Command: "pr merge", Route: reviewedMergeRoute, ExitCode: github.SquashNotApplicable}
@@ -256,7 +273,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if method == "" {
 		method = "squash"
 	}
-	if method != "squash" && method != "rebase" && method != superloop.KindMerge {
+	if method != "squash" && method != mergeMethodRebase && method != superloop.KindMerge {
 		doc.Reason = "invalid configured merge method"
 		return doc
 	}
@@ -275,18 +292,20 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "merge head moved or current CI is not green"
 		return doc
 	}
-	if p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND" {
-		doc.Reason = "branch is draft, behind or conflicts with its base"
+	if p.Draft || p.Mergeable == "CONFLICTING" {
+		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
 	}
-	behind, err := readReviewedBehind(ctx, p)
-	if err != nil {
-		doc.ExitCode = github.SquashTooling
-		doc.Reason = "base comparison unavailable: " + err.Error()
-		return doc
-	}
-	if behind > 0 {
-		doc.Reason = "branch is behind its base"
+	// A branch only behind its base merges as it stands: GitHub merges the
+	// reviewed head onto the current base, with no branch update and no
+	// second CI run. Only a base that requires up-to-date branches refuses
+	// that merge, which GitHub reports as the merge state BEHIND: the desk's
+	// admin merge (merge.admin) passes the requirement; without it the branch
+	// is brought up to date below, once the merge is authorized, by merging
+	// the base, which a rebase merge cannot take.
+	update := p.MergeState == mergeStateBehind && !a.cfg.Merge.AdminMerge(repo)
+	if update && method == mergeMethodRebase {
+		doc.Reason = "branch is behind a base that requires up-to-date branches"
 		return doc
 	}
 	st, err := a.store.Read()
@@ -346,7 +365,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.Reason = "execution stopped"
 			return doc
 		}
-		if err := a.authenticateExecutionReview(st, use, p); err != nil {
+		if err := a.authenticateExecutionReview(ctx, st, use, p); err != nil {
 			doc.Reason = err.Error()
 			return doc
 		}
@@ -356,14 +375,37 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	if st.Stop != nil {
-		doc.Reason = "the desk is stopped"
+		doc.Reason = reasonDeskStopped
 		return doc
 	}
 	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
-		doc.Reason = "merge held by desk policy"
+		doc.Reason = reasonMergeHeld
 		return doc
 	}
-	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", head}
+	merging := head
+	if update {
+		up, reason, code := updateReviewedBranch(ctx, p, head)
+		if code != github.SquashMerged {
+			doc.ExitCode, doc.Reason = code, reason
+			return doc
+		}
+		// The wait for the updated head's checks is long: a stop or a hold
+		// meanwhile still stops the merge.
+		if st, err = a.store.Read(); err != nil {
+			doc.Reason = err.Error()
+			return doc
+		}
+		if st.Stop != nil {
+			doc.Reason = reasonDeskStopped
+			return doc
+		}
+		if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+			doc.Reason = reasonMergeHeld
+			return doc
+		}
+		p, merging = up, up.Head
+	}
+	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	if a.cfg.Merge.AdminMerge(repo) {
 		argv = append(argv, "--admin")
 	}
@@ -380,7 +422,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = err.Error()
 		return doc
 	}
-	if p.State == superloop.Merged && p.Head == head {
+	if p.State == superloop.Merged && p.Head == merging {
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
@@ -391,8 +433,10 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	return doc
 }
 
-// Compare against the current base even when branch protection does not
-// require an up-to-date branch. Admin permission never waives this check.
+// readReviewedBehind is how many commits of its base p's head lacks, read
+// from GitHub's comparison: the update of a branch whose base requires
+// up-to-date branches (updateReviewedBranch) reads it of the head it made,
+// whose merge state GitHub may not have computed yet.
 var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error) {
 	if p.Base == "" {
 		return 0, nil
