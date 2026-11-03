@@ -147,7 +147,7 @@ func TestMergeAskIsRefusedFromAnyone(t *testing.T) {
 		t.Run(q, func(t *testing.T) {
 			worker := workerNoteApp(t, openThread, nil)
 			session, _ := noteApp(t)
-			for name, a := range map[string]*app{"worker": worker, "session": session} {
+			for name, a := range map[string]*app{workerRole: worker, "session": session} {
 				err := addNote(a, append(slices.Clone(decisionArgs), q)...)
 				if Code(err) != ExitRefused || !strings.Contains(err.Error(), "whether to merge is never a person's decision") || !strings.Contains(err.Error(), "the loop merges it, asking nobody") {
 					t.Fatalf("%s: refusal: %v", name, err)
