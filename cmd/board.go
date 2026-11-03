@@ -242,6 +242,7 @@ alone, until exit 3 says none is left.`,
 				return err
 			}
 			sc := pickScope{me: me, alive: alive, listed: listed, owner: a.cfg.Board.Owner,
+				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
@@ -486,6 +487,7 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 type pickScope struct {
 	me     state.Party
 	alive  func(state.Party) bool
+	gone   func(state.Agent) bool
 	listed time.Time
 	closes map[string][]string
 	owner  string
@@ -797,7 +799,7 @@ func titleOwners(st *state.State, sc pickScope) []titled {
 		}
 	}
 	for _, ag := range st.Agents {
-		if ag.Task != "" && !ag.Done {
+		if ag.Task != "" && !ag.Done && (sc.gone == nil || !sc.gone(ag)) {
 			add(ag.Task, partyLabel(ag.Party, sc.me)+" (task)")
 			add(ag.Name, partyLabel(ag.Party, sc.me)+" (title)")
 		}
@@ -872,7 +874,7 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	// a headless turn ended) until it reports idle or leaves the roster.
 	busy := func(p state.Party) bool {
 		i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		return i >= 0 && !agentIdle(st, p)
+		return i >= 0 && !agentIdle(st, p) && (sc.gone == nil || !sc.gone(st.Agents[i]))
 	}
 	out := map[string]string{}
 	for _, r := range st.Records {
@@ -914,7 +916,7 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	for _, ag := range st.Agents {
-		if ag.Task != "" && !ag.Done {
+		if ag.Task != "" && !ag.Done && (sc.gone == nil || !sc.gone(ag)) {
 			named(ag.Task, name(ag.Party)+" (task)")
 		}
 	}

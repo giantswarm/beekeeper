@@ -76,7 +76,7 @@ func TestConfigSet(t *testing.T) {
 // Config failure must precede opening either the default store or any
 // state directory named by the real configuration.
 func TestMissingEnvironmentConfigDoesNotOpenState(t *testing.T) {
-	for _, args := range [][]string{{verbHold}, {verbHold, setOp, holdMerges, "--reason=config-test", "--as=config-test-actor"}, {configFlag, setOp, "stateDir", "unused-state"}, {"run", "--", "printf"}} {
+	for _, args := range [][]string{{verbHold}, {verbHold, setOp, holdMerges, "--reason=config-test", "--as=config-test-actor"}, {configFlag, setOp, "stateDir", "unused-state"}, {testRunWord, "--", "printf"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOME", root)

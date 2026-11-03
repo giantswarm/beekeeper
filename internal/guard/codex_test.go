@@ -552,7 +552,7 @@ func TestCodexReviewR1Regressions(t *testing.T) {
 
 // Web tools use the shared guard rather than being rejected as unknown.
 func TestCodexWebTools(t *testing.T) {
-	for _, tool := range []string{codexWebTool, "WebFetch", webSearchTool} {
+	for _, tool := range []string{codexWebTool, "web_run", "web.run", "web__run", "WebFetch", webSearchTool} {
 		t.Run(tool, func(t *testing.T) {
 			input := map[string]any{"search_query": []any{map[string]any{"q": executionFixture}}}
 			raw := executionCodexEvent(tool, input, executionThread, t.TempDir())
@@ -571,6 +571,16 @@ func TestCodexWebTools(t *testing.T) {
 		raw, _ := json.Marshal(map[string]any{hookEventKey: PreToolUseEvent, toolNameKey: "webrun", toolInputKey: input})
 		if reason := ValidateCodexInput(raw); reason == "" {
 			t.Fatalf("invalid web input accepted: %s", raw)
+		}
+	}
+}
+
+func TestCodexWebToolUnknownNames(t *testing.T) {
+	for _, tool := range []string{"web_search", "web.run_unknown", "other.web.run"} {
+		raw := executionCodexEvent(tool, map[string]any{}, executionThread, t.TempDir())
+		d := decideCodexRaw(t, Hook{}, raw)
+		if d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, tool) {
+			t.Fatalf("unknown tool %q: got %+v", tool, d)
 		}
 	}
 }

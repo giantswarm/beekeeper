@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const agyUsageSample = "Gemini Models\tWeekly Limit Remaining\t51%\t2026-11-03T09:23:51Z\n" +
@@ -147,5 +149,350 @@ func TestAgyUsageProbeCwdEnvAndCache(t *testing.T) {
 	read()
 	if got, _ := os.ReadFile(calls); string(got) != once+once { //nolint:gosec // test-owned calls file
 		t.Fatalf("probe calls after every: %q want %q", got, once+once)
+	}
+}
+
+func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	rawCfg := `capacity:
+  ceiling: 4
+  availMinMiB: 1
+  providers:
+    agy:
+      ceiling: 4
+      every: 2m
+      staleAfter: 10m
+  choices:
+    - harness: agy
+      model: claude-opus-4-6-thinking
+    - harness: agy
+      model: gemini-3.1-pro-high
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 28, 0, 30, 0, 0, time.UTC)
+	a := &app{cfg: cfg, cfgPath: cfgPath, store: store, now: t0}
+
+	// 1. Provider reports Claude and GPT models weekly limit remaining 0% (100% used):
+	// the pick must not choose the exhausted bucket, even without explicit sevenDayMax.
+	exhaustedTSV := "Gemini Models\tWeekly Limit Remaining\t95%\t2026-11-03T09:23:51Z\n" +
+		"Gemini Models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n" +
+		"Claude and GPT models\tWeekly Limit Remaining\t0%\t2026-11-03T09:58:13Z\n" +
+		"Claude and GPT models\tFive Hour Limit Remaining\t95%\t2026-10-28T05:00:00Z\n"
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return parseAgyBuiltinUsage([]byte(exhaustedTSV))
+	}
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
+		t.Fatalf("choice with 0%% remaining Claude bucket = %+v, want gemini-3.1-pro-high", v.Choice)
+	}
+	if bv := v.Providers[config.AgyHarness].Buckets[config.DefaultAgyClaudeBucket]; bv == nil || bv.Ceiling != 0 || bv.Room != 0 {
+		t.Fatalf("Claude bucket view = %+v, want ceiling 0 and room 0", bv)
+	}
+
+	// 2. Provider usage reading lags (still reporting 95% remaining / 5% used on Claude),
+	// then the first 429 marks the Claude bucket full until its reset and stops starts on it.
+	laggingTSV := "Gemini Models\tWeekly Limit Remaining\t95%\t2026-11-03T09:23:51Z\n" +
+		"Gemini Models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n" +
+		"Claude and GPT models\tWeekly Limit Remaining\t98%\t2026-11-03T09:58:13Z\n" +
+		"Claude and GPT models\tFive Hour Limit Remaining\t98%\t2026-10-28T05:00:00Z\n"
+	_ = os.Remove(filepath.Join(cfg.StateDir, usageProviderFile(config.AgyHarness)))
+	a.readUsage = func(context.Context, []string, time.Duration) (usageReading, error) {
+		return parseAgyBuiltinUsage([]byte(laggingTSV))
+	}
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
+		t.Fatalf("choice before 429 = %+v, want %s", v.Choice, testModelOpus46)
+	}
+
+	resetDur := 4*time.Hour + 46*time.Minute + 32*time.Second
+	a.recordAgyQuotaExhausted(testModelOpus46, &agy.QuotaError{
+		ShortError: "Individual quota reached for this model, resets in 4h46m32s",
+		ErrorCode:  429,
+		Status:     "RESOURCE_EXHAUSTED",
+		ResetsIn:   resetDur,
+		At:         t0,
+		Model:      testModelOpus46,
+	}, t0)
+
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	if v.Choice == nil || v.Choice.Model != "gemini-3.1-pro-high" {
+		t.Fatalf("choice after 429 = %+v, want gemini-3.1-pro-high", v.Choice)
+	}
+	if bv := v.Providers[config.AgyHarness].Buckets[config.DefaultAgyClaudeBucket]; bv == nil || bv.Room != 0 || !bv.High {
+		t.Fatalf("Claude bucket after 429 = %+v, want room 0 and High", bv)
+	}
+
+	// After the reset time passes, the quota lock lifts.
+	_ = dir
+	a.now = t0.Add(resetDur + time.Minute)
+	v = a.resolveProvidersCapacity(context.Background(), st, nil, cfg.Capacity, false, nil, forWorker)
+	if v.Choice == nil || v.Choice.Model != testModelOpus46 {
+		t.Fatalf("choice after reset = %+v, want %s", v.Choice, testModelOpus46)
+	}
+}
+
+// The quota-stopped worker of the quota tests and its task.
+const (
+	quotaTestWorker = "beekeeper 2150"
+	quotaTestTask   = "Work https://github.com/giantswarm/beekeeper/issues/2150"
+)
+
+// quotaFixture is a desk whose agy session name hit a quota 429 and still
+// holds task.
+type quotaFixture struct {
+	cfg     *config.Config
+	store   *state.FileStore
+	t0      time.Time
+	startID string
+	party   state.Party
+}
+
+func newQuotaFixture(t *testing.T, name, task, issue string) quotaFixture {
+	t.Helper()
+	dir, cfgPath := isolateUsageTestEnv(t)
+	briefTpl := filepath.Join(dir, "worker-brief.md")
+	if err := os.WriteFile(briefTpl, []byte("Work {{.URL}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawCfg := `capacity:
+  ceiling: 2
+  availMinMiB: 1
+  providers:
+    agy:
+      ceiling: 2
+      every: 2m
+      staleAfter: 10m
+  choices:
+    - harness: agy
+      model: claude-opus-4-6-thinking
+    - harness: agy
+      model: gemini-3.1-pro-high
+supervisor:
+  workerBrief: ` + briefTpl + `
+`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := quotaFixture{cfg: cfg, store: store, t0: time.Date(2026, 10, 28, 0, 30, 0, 0, time.UTC), startID: "quota-worker-1"}
+	f.party = state.Party{HostSession: agy.HostPrefix + f.startID, Name: name}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: f.party, Harness: agy.Harness, Model: testModelOpus46, At: f.t0})
+		st.Agents = append(st.Agents, state.Agent{Party: f.party, Harness: agy.Harness, Model: testModelOpus46, Task: task, Registered: f.t0, AssignedAt: f.t0, ActivityAt: f.t0})
+		st.Records = append(st.Records, state.Record{Session: f.party, Issue: issue, By: f.party, At: f.t0})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agy.WriteQuotaError(agy.InboxPath(cfg.StateDir, f.startID), &agy.QuotaError{
+		ShortError: "Individual quota reached for this model, resets in 4h46m32s",
+		ErrorCode:  429,
+		Status:     "RESOURCE_EXHAUSTED",
+		ResetsIn:   4*time.Hour + 46*time.Minute + 32*time.Second,
+		At:         f.t0,
+		Model:      testModelOpus46,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// loop is a supervisor loop over f whose beekeeper runs answer with run.
+func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *supervisorLoop {
+	t.Helper()
+	a := &app{cfg: f.cfg, store: f.store, out: out, now: f.t0.Add(time.Minute)}
+	origRun := beekeeperRun
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
+	t.Cleanup(func() { beekeeperRun = origRun })
+	return &supervisorLoop{a: a, said: map[string]bool{}}
+}
+
+func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
+	f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
+	cfg, store, t0 := f.cfg, f.store, f.t0
+	st, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Slot is immediately freed in countAgents and countProviderAgents even before staleAfter (24h).
+	c := countAgents(st, nil, t0.Add(time.Minute), cfg)
+	if len(c.Busy) != 0 || len(c.Gone) != 1 || !strings.HasPrefix(c.Gone[0], quotaTestWorker) {
+		t.Fatalf("countAgents = %+v, want 0 busy and 1 gone", c)
+	}
+	pa := countProviderAgents(st, nil, cfg.Capacity, t0.Add(time.Minute), cfg)
+	if len(pa[config.AgyHarness].Busy) != 0 {
+		t.Fatalf("countProviderAgents busy = %v, want empty", pa[config.AgyHarness].Busy)
+	}
+	sc := pickScope{
+		me:     state.Party{Name: "caller"},
+		alive:  func(state.Party) bool { return false },
+		gone:   func(ag state.Agent) bool { return agyQuotaError(cfg, ag) != nil },
+		listed: t0.Add(time.Minute),
+		owner:  defaultOrg,
+	}
+	if owners := boardOwners(st, sc); len(owners) != 0 {
+		t.Fatalf("boardOwners = %v, want empty for quota-stopped worker", owners)
+	}
+
+	var out bytes.Buffer
+	var runCalls [][]string
+	l := f.loop(t, &out, func(args []string) (string, int, error) {
+		runCalls = append(runCalls, args)
+		return "started replacement\n", 0, nil
+	})
+	if err := l.recoverQuota(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SUPERVISOR QUOTA beekeeper 2150:") || !strings.Contains(out.String(), "re-queuing giantswarm/beekeeper#2150 on another choice") {
+		t.Fatalf("recoverQuota output = %q", out.String())
+	}
+	if len(runCalls) != 1 || !slices.Contains(runCalls[0], "start") || !slices.Contains(runCalls[0], quotaTestWorker) || !slices.Contains(runCalls[0], "auto") || slices.Contains(runCalls[0], "--review") {
+		t.Fatalf("recoverQuota runCalls = %v", runCalls)
+	}
+	brief, err := os.ReadFile(runCalls[0][slices.Index(runCalls[0], quotaTestWorker)+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(brief), quotaTestTask) || !strings.Contains(string(brief), "Continue your existing task:") {
+		t.Fatalf("replacement brief = %q", brief)
+	}
+	after, err := store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Agents) != 0 {
+		t.Fatalf("agents after recoverQuota = %+v, want empty", after.Agents)
+	}
+	if len(after.Records) != 1 || after.Records[0].Ended.IsZero() {
+		t.Fatalf("records after recoverQuota = %+v, want ended", after.Records)
+	}
+	if _, err := os.Stat(agy.QuotaPath(cfg.StateDir, f.startID)); !os.IsNotExist(err) {
+		t.Fatalf("quota marker after replacement: %v, want removed", err)
+	}
+}
+
+// A held or refused replacement start keeps the entry, its records and its
+// quota marker, so the next pass re-queues the task.
+func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		held bool
+		code int
+	}{
+		{name: "held", held: true},
+		{name: "refused by the gate", code: ExitRefused},
+		{name: "start failed", code: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
+			st, err := f.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			var runCalls [][]string
+			l := f.loop(t, &out, func(args []string) (string, int, error) {
+				runCalls = append(runCalls, args)
+				return "no room\n", tc.code, nil
+			})
+			l.startsHeld = tc.held
+			if err := l.recoverQuota(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			if tc.held != (len(runCalls) == 0) {
+				t.Fatalf("runCalls = %v, held %v", runCalls, tc.held)
+			}
+			after, err := f.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(after.Agents) != 1 || !after.Agents[0].Is(f.party) || after.Agents[0].Task == "" {
+				t.Fatalf("agents = %+v, want the quota-stopped entry kept", after.Agents)
+			}
+			if len(after.Records) != 1 || !after.Records[0].Ended.IsZero() {
+				t.Fatalf("records = %+v, want open", after.Records)
+			}
+			if agyQuotaError(f.cfg, after.Agents[0]) == nil {
+				t.Fatal("quota marker removed, want kept for the next pass")
+			}
+			if strings.Contains(out.String(), "re-queuing") {
+				t.Fatalf("output = %q, want no re-queue reported", out.String())
+			}
+
+			// The next pass with room starts the replacement and frees it.
+			runCalls = nil
+			l.startsHeld = false
+			tc.code = 0
+			if err := l.recoverQuota(context.Background(), after); err != nil {
+				t.Fatal(err)
+			}
+			if len(runCalls) != 1 {
+				t.Fatalf("second pass runCalls = %v", runCalls)
+			}
+			if after, err = f.store.Read(); err != nil {
+				t.Fatal(err)
+			}
+			if len(after.Agents) != 0 {
+				t.Fatalf("agents after second pass = %+v, want empty", after.Agents)
+			}
+		})
+	}
+}
+
+// A reviewer the loop started that hits a quota 429 restarts as the
+// reviewer of its round, with its round's brief and the review flags.
+func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
+	const ref = "giantswarm/beekeeper#2153"
+	name := superloop.ReviewerName(ref, 2)
+	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
+	key := "review " + ref + "@abc"
+	if err := f.store.Record(about(event(loopParty, loopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var runCalls [][]string
+	l := f.loop(t, &out, func(args []string) (string, int, error) {
+		runCalls = append(runCalls, args)
+		return `{"room":1}` + "\n", 0, nil
+	})
+	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "c0ffee"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := f.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.recoverQuota(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })
+	if i < 0 {
+		t.Fatalf("runCalls = %v, want a start", runCalls)
+	}
+	start := runCalls[i]
+	if !slices.Contains(start, name) || !slices.Contains(start, brief) || !slices.Contains(start, "--review") || !slices.Contains(start, "--"+reviewOfSelfHostedFlag) {
+		t.Fatalf("reviewer restart = %v, want %q with brief %s, --review and --%s", start, name, brief, reviewOfSelfHostedFlag)
 	}
 }

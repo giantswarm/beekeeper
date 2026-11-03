@@ -128,6 +128,7 @@ delivers it to the filing session.`,
 	}
 	c.Flags().StringVar(&addr, "http", ":8080", "the address to serve MCP on")
 	c.Flags().StringVar(&kubeContext, "context", "", "the kubeconfig context of the cluster the state lives in (default: in-cluster, else the current one)")
+	c.AddCommand(a.serveIdentityCmd())
 	return c
 }
 

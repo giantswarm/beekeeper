@@ -151,7 +151,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	askText := func(text, forWho, due string) int {
 		args := map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
-			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
+			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", paramOptions: []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane, paramRefs: []any{privateThread}}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)
@@ -235,18 +235,38 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	// Withdrawn by its filer; two defaulted at their due time in one
 	// update, then the first answered.
 	n = ask("bo", "3h")
-	e.expect(t, bo, "note_done", map[string]any{paramNote: n}, true, "only that person")
-	e.expect(t, ana, "note_done", map[string]any{paramNote: n}, false, "done")
+	e.expect(t, bo, "note_done", map[string]any{paramNote: n, paramReason: withdrawalReason}, true, "only that person")
+	for _, missing := range []map[string]any{{paramNote: n}, {paramNote: n, paramReason: " \n "}} {
+		e.expect(t, ana, "note_done", missing, true, "reason is required")
+	}
+	e.expect(t, ana, "note_done", map[string]any{paramNote: n, paramReason: withdrawalReason}, false, withdrawalReason)
+	closure, err := e.store.NoteClosure(n)
+	if err != nil || closure == nil || !strings.Contains(closure.Detail, withdrawalReason) {
+		t.Fatalf("withdrawal reason not retained: %+v %v", closure, err)
+	}
 	withdrawn := n
 	if got := heard(); len(got) != 0 {
 		t.Fatalf("the filer heard of its own withdrawal: %q", got)
 	}
 	n = ask("bo", "1h")
 	n2 := askText(whichLane, "bo", "1h") // the same question would fold into n
+	// A legacy decision can carry a passive default, even though new filing
+	// refuses one. It still closes and rewrites its Slack message when due.
+	const passiveDefault = "wait"
+	if err := e.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Notes {
+			if st.Notes[i].ID == n2 {
+				st.Notes[i].Default = passiveDefault
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.srv.defaultDue(context.Background(), time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if got := heard(); len(got) != 2 || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n, ownLane)) || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n2, ownLane)) {
+	if got := heard(); len(got) != 2 || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n, ownLane)) || !slices.Contains(got, fmt.Sprintf("NOTE DEFAULTED #%d: %s", n2, passiveDefault)) {
 		t.Fatalf("the filer heard %q", got)
 	}
 	// An answer after the default replaces it; a second one finds it closed.
@@ -255,7 +275,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	if got := heard(); len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprintf("NOTE ANSWERED #%d by %s: portal (replaces the default applied: %s)", n, boEmail, ownLane)) {
 		t.Fatalf("the filer heard %q", got)
 	}
-	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: " || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+ownLane || closed[5] != "d4 answered: portal" {
+	if _, closed := gw.seen(); len(closed) != 6 || closed[2] != "d3 withdrawn: "+withdrawalReason || closed[3] != "d4 defaulted: "+ownLane || closed[4] != "d5 defaulted: "+passiveDefault || closed[5] != "d4 answered: portal" {
 		t.Fatalf("closed %q", closed)
 	}
 	if evs, _ := e.store.Events(0, func(ev state.Event) bool { return ev.Verb == noteDefaulted }); len(evs) != 2 {
@@ -292,7 +312,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 		t.Fatalf("a new decision after #%d closed is #%d", n2+1, next)
 	}
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: withdrawn, paramChoice: 1}, true, "not open")
-	e.expect(t, ana, "note_done", map[string]any{paramNote: withdrawn}, true, "not open")
+	e.expect(t, ana, "note_done", map[string]any{paramNote: withdrawn, paramReason: withdrawalReason}, true, "not open")
 	if st, _ := e.store.Read(); len(st.Notes) != 1 {
 		t.Fatalf("open notes %+v", st.Notes)
 	}

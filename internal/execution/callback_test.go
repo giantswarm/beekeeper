@@ -151,3 +151,32 @@ func TestFailedContactDoesNotInferCompletion(t *testing.T) {
 		t.Fatal("transport loss changed process or stop evidence")
 	}
 }
+
+func TestCIRerunCallbackAllowsColdCoordinator(t *testing.T) {
+	f := testFixture(t)
+	endpoint := f.s.Config.Coordinators[f.r.Coordinator].Callback
+	for _, op := range []string{CIRerun, "guard"} {
+		t.Run(op, func(t *testing.T) {
+			var result struct{}
+			err := CoordinatorCall(context.Background(), endpoint, string(f.r.Ref.Host), op, f.r.Ref, struct{}{}, f.r.ControlKey, &result, func(ctx context.Context, _ []string, raw []byte) ([]byte, error) {
+				deadline, ok := ctx.Deadline()
+				remaining := time.Until(deadline)
+				bound := 30 * time.Second
+				if op == CIRerun {
+					bound = 3 * time.Minute
+				}
+				if !ok || remaining > bound || remaining < bound-time.Second {
+					t.Fatalf("unexpected callback deadline: %v", remaining)
+				}
+				var req CallbackRequest
+				if err := Decode(raw, &req); err != nil {
+					return nil, err
+				}
+				return json.Marshal(WireResponse{Protocol: Protocol, RequestID: req.RequestID, Ref: req.Ref, Payload: mustJSON(struct{}{})})
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

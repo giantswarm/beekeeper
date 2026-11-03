@@ -715,6 +715,31 @@ type Disk struct {
 	// its default entries (DiskCacheGo, DiskCacheSccache, DiskCacheTmp): an
 	// entry of the same name changes them, mode off drops them.
 	Caches []DiskCache `yaml:"caches"`
+	// Holders is the lifecycle of the state home's holders (beekeeper disk
+	// holders): it lists them and what is eligible for removal, removing
+	// nothing.
+	Holders Holders `yaml:"holders"`
+}
+
+// Holders configures the listing of the state home's holders: each entry of
+// Root (default the parent of stateDir, ~/.local/state), and each entry of
+// its AsideDirs one by one. A holder unused for StaleAfter (default 72h), or
+// an aside entry kept past AsideRetention (default 168h), whose task is not
+// open and which no process uses, is eligible for removal; the watch says
+// STATE HOLDERS once the eligible ones reach WarnGiB (default 10; negative,
+// never), looking every Every (default 6h).
+type Holders struct {
+	Root           string   `yaml:"root"`
+	StaleAfter     Duration `yaml:"staleAfter"`
+	AsideRetention Duration `yaml:"asideRetention"`
+	// AsideDirs are the root's directories holding moved-aside material
+	// (default aside, moved-aside).
+	AsideDirs []string `yaml:"asideDirs"`
+	// Keep names the root's entries never eligible (model weights, costly
+	// to fetch again).
+	Keep    []string `yaml:"keep"`
+	WarnGiB int      `yaml:"warnGiB"`
+	Every   Duration `yaml:"every"`
 }
 
 // Cache modes of the disk step. Entries removes a root's direct children
@@ -731,9 +756,10 @@ const (
 
 // Names of the built-in cache entries.
 const (
-	DiskCacheGo      = "go-build"
-	DiskCacheSccache = "sccache"
-	DiskCacheTmp     = "beekeeper-tmp"
+	DiskCacheGo          = "go-build"
+	DiskCacheSccache     = "sccache"
+	DiskCacheTmp         = "beekeeper-tmp"
+	DiskCacheTranscripts = "transcripts"
 )
 
 // DiskCache is one cache policy of the disk step. Path is absolute (or
@@ -763,7 +789,7 @@ func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
 
 // Builtin reports whether name is one of beekeeper's own cache entries.
 func (DiskCache) Builtin(name string) bool {
-	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp || name == DiskCacheTranscripts
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.
@@ -857,6 +883,11 @@ type Stop struct {
 	// Units are more user units (a timer of the desk's own) that beekeeper
 	// stop stops while they run and beekeeper resume starts again.
 	Units []string `yaml:"units"`
+}
+
+// ValidEffort reports whether a level is unset or a supported effort selector.
+func ValidEffort(level string) bool {
+	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
 }
 
 // Agents configures the hand-over of registered agents.
@@ -972,23 +1003,39 @@ type AgentModelRule struct {
 	Match string `yaml:"match"`
 	Kind  string `yaml:"kind"`
 	Model string `yaml:"model"`
+	// Effort is the session's effort level (low, medium, high, xhigh, max);
+	// empty leaves it to a later rule or the harness default.
+	Effort string `yaml:"effort"`
 }
 
 // ModelFor returns the first matching nonempty model, then the desk-wide
 // fallback. A rule may leave the model unset for independent settings.
 func (a Agents) ModelFor(name, kind string) string {
 	for _, r := range a.Models {
-		if strings.TrimSpace(r.Model) == "" {
-			continue
-		}
-		if r.Kind != "" && r.Kind != kind {
-			continue
-		}
-		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
-			return strings.TrimSpace(r.Model)
+		if m := strings.TrimSpace(r.Model); m != "" && r.matches(name, kind) {
+			return m
 		}
 	}
 	return strings.TrimSpace(a.Model)
+}
+
+// EffortFor returns the first matching nonempty effort; empty keeps the
+// harness default.
+func (a Agents) EffortFor(name, kind string) string {
+	for _, r := range a.Models {
+		if e := strings.TrimSpace(r.Effort); e != "" && r.matches(name, kind) {
+			return e
+		}
+	}
+	return ""
+}
+
+func (r AgentModelRule) matches(name, kind string) bool {
+	if r.Kind != "" && r.Kind != kind {
+		return false
+	}
+	re, err := regexp.Compile(r.Match)
+	return err == nil && re.MatchString(name)
 }
 
 type ExecutionHost = execution.Host
@@ -1853,7 +1900,13 @@ func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Pro
 	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
 		ceiling = 0
 	}
+	if fiveHour != nil && *fiveHour >= 100 {
+		ceiling = 0
+	}
 	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
+		ceiling = 0
+	}
+	if sevenDay != nil && *sevenDay >= 100 {
 		ceiling = 0
 	}
 	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {
@@ -2094,6 +2147,28 @@ type Serve struct {
 	// Gateway is the klaus-gateway that puts decisions to their addressee
 	// in Slack; without its URL, decisions stay in beekeeper.
 	Gateway Gateway `yaml:"gateway"`
+	// Identity is serve's own identity toward muster, for the calls no
+	// person makes (the fleet watch's reads).
+	Identity ServeIdentity `yaml:"identity"`
+}
+
+// ServeIdentity is serve's own Dex identity: its projected ServiceAccount
+// token exchanged at serve.issuer's Dex (RFC 8693) for a short-lived Dex ID
+// token, the only token serve presents to muster as itself. muster accepts
+// no ServiceAccount token; Dex is the one trust point.
+type ServeIdentity struct {
+	// TokenFile is the projected ServiceAccount token (the audience Dex's
+	// connector expects), read anew for each exchange.
+	TokenFile string `yaml:"tokenFile"`
+	// ConnectorID is the Dex connector that trusts the cluster's
+	// ServiceAccount issuer.
+	ConnectorID string `yaml:"connectorID"`
+	// ClientID is the public Dex client the exchange is made as.
+	ClientID string `yaml:"clientID"`
+	// Audience is the Dex client the issued token is for, requested with
+	// Dex's cross-client scope (that client trusts ClientID as a peer);
+	// empty, the token is for ClientID.
+	Audience string `yaml:"audience"`
 }
 
 // OrganizationGroups is every group that makes a caller a member:
@@ -2178,6 +2253,8 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
+	// Effort is the default for sessions started by the supervisor loop.
+	Effort string `yaml:"effort"`
 	// ReviewRounds is retained for configuration compatibility and reporting
 	// (default 1). It never releases a head without an approving review.
 	// Every new head gets one independent review, except a proven base-only
@@ -2293,6 +2370,8 @@ func (o Ownership) validateEach(report func(error)) {
 type Role struct {
 	// Model overrides the previous holder's model for every successor.
 	Model string `yaml:"model"`
+	// Effort is every successor's effort level; empty: the harness default.
+	Effort string `yaml:"effort"`
 	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
@@ -2613,25 +2692,34 @@ var DefaultQuietSessions = []string{"test: *"}
 var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
-// WorkerGitHub is coordinator-only App authority. The private key is a vault
-// reference, never a value or a file copied to an execution host.
+// WorkerGitHub is coordinator-only user-to-server GitHub App authority. The
+// refresh token is a vault or SOPS reference on the coordinator, never a raw
+// value or a file copied to an execution host.
 type WorkerGitHub struct {
-	AppID         int64            `yaml:"appID"`
-	PrivateKey    string           `yaml:"privateKey"`
-	Installations map[string]int64 `yaml:"installations"`
+	ClientID     string `yaml:"clientID"`
+	RefreshToken string `yaml:"refreshToken"`
 }
 
 func (w *WorkerGitHub) Validate() error {
 	if w == nil {
 		return nil
 	}
-	if w.AppID <= 0 || !strings.Contains(w.PrivateKey, "://") || strings.ContainsAny(w.PrivateKey, "\r\n") || len(w.Installations) == 0 {
-		return errors.New("github.workerApp requires appID, privateKey reference and owner installations")
+	if !execution.ValidIdentity(w.ClientID) || !strings.Contains(w.RefreshToken, "://") || strings.ContainsAny(w.RefreshToken, "\r\n") {
+		return errors.New("github.workerApp requires clientID and refreshToken reference")
 	}
-	for owner, id := range w.Installations {
-		if !execution.ValidIdentity(owner) || owner != strings.ToLower(owner) || id <= 0 {
-			return errors.New("github.workerApp.installations requires lowercase owners and positive installation IDs")
-		}
+	// The full reference is parsed at use sites. Config cannot import secret
+	// (its sandbox depends on config), but must reject read-only schemes here.
+	writable := false
+	if rest, ok := strings.CutPrefix(w.RefreshToken, "op://"); ok {
+		parts := strings.Split(rest, "/")
+		writable = len(parts) >= 3 && !slices.Contains(parts, "")
+	}
+	if rest, ok := strings.CutPrefix(w.RefreshToken, "sops://"); ok {
+		file, path, found := strings.Cut(rest, "#")
+		writable = found && file != "" && path != ""
+	}
+	if !writable {
+		return errors.New("github.workerApp.refreshToken must name a writable op:// or sops:// secret reference")
 	}
 	return nil
 }
@@ -3254,6 +3342,22 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Disk.Every, time.Hour)
 	setInt(&c.Disk.SccacheMaxGiB, 10)
+	h := &c.Disk.Holders
+	// The state home is stateDir's parent; a stateDir right under the
+	// filesystem root is its own home, never the root itself.
+	root := filepath.Dir(c.StateDir)
+	if filepath.Clean(root) == string(filepath.Separator) {
+		root = c.StateDir
+	}
+	setStr(&h.Root, root)
+	h.Root = filepath.Clean(homePath(home, h.Root))
+	setDur(&h.StaleAfter, 72*time.Hour)
+	setDur(&h.AsideRetention, 7*24*time.Hour)
+	if h.AsideDirs == nil {
+		h.AsideDirs = []string{"aside", "moved-aside"}
+	}
+	setInt(&h.WarnGiB, 10)
+	setDur(&h.Every, 6*time.Hour)
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}
@@ -3296,6 +3400,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
+	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)
@@ -3722,7 +3827,15 @@ func (c *Config) validateEach(report func(error)) {
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
+	for key, level := range map[string]string{"guide.effort": c.Guide.Effort, "supervisor.effort": c.Supervisor.Effort} {
+		if !ValidEffort(level) {
+			report(fmt.Errorf("%s: invalid effort %q (low, medium, high, xhigh, max)", key, level))
+		}
+	}
 	for i, r := range c.Agents.Models {
+		if !ValidEffort(strings.TrimSpace(r.Effort)) {
+			report(fmt.Errorf("agents.models[%d].effort: invalid effort %q (low, medium, high, xhigh, max)", i, r.Effort))
+		}
 		if _, err := regexp.Compile(r.Match); err != nil {
 			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
 		}
@@ -3769,6 +3882,17 @@ func (c *Config) validateEach(report func(error)) {
 	for _, n := range c.Disk.BuildDirs {
 		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
 			report(fmt.Errorf("disk.buildDirs: invalid directory %q", n))
+		}
+	}
+	if r := c.Disk.Holders.Root; r != "" && (!filepath.IsAbs(r) || filepath.Clean(r) == string(filepath.Separator)) {
+		report(fmt.Errorf("disk.holders.root: must be an absolute directory, not a filesystem root"))
+	}
+	if h := c.Disk.Holders; h.StaleAfter.Duration < 0 || h.AsideRetention.Duration < 0 || h.Every.Duration < 0 {
+		report(fmt.Errorf("disk.holders: staleAfter, asideRetention and every take no negative duration"))
+	}
+	for _, n := range append(slices.Clone(c.Disk.Holders.AsideDirs), c.Disk.Holders.Keep...) {
+		if n == "" || n == "." || strings.ContainsRune(n, filepath.Separator) || strings.Contains(n, "..") {
+			report(fmt.Errorf("disk.holders: %q is no entry name of the root", n))
 		}
 	}
 	validateDiskCachesEach(c.Disk.Caches, report)

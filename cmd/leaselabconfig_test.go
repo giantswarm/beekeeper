@@ -78,7 +78,7 @@ func TestLabReleaseUnchanged(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Replace(labYAML, "v0.1.0", "v0.2.0", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runLease(a, "status", labOne)
+	out, err := runLease(a, testStatusWord, labOne)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "\nagentlab.yaml is at its claim-time state") {
 		t.Errorf("status of the held lab: %q, %v", out, err)
 	}
@@ -99,7 +99,7 @@ func TestLabReleaseChangedIsRefusedThenRestored(t *testing.T) {
 	path := labConfigPath(t, a, labOne)
 	overlay(t, path)
 	a.json = true
-	out, err := runLease(a, "status", labOne)
+	out, err := runLease(a, testStatusWord, labOne)
 	a.json = false
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "\nagentlab.yaml changed since the claim in platform.valuesFiles") {
 		t.Errorf("status of the changed lab: %v", err)
@@ -125,7 +125,7 @@ func TestLabReleaseChangedIsRefusedThenRestored(t *testing.T) {
 	if raw, _ := os.ReadFile(path + ".released"); !strings.Contains(string(raw), "overlay-857-freshdb.yaml") { //nolint:gosec // the test's lab
 		t.Errorf("the released agentlab.yaml was not kept: %q", raw)
 	}
-	if out, err := runLease(a, "status", labOne); err != nil || out != "free\n" {
+	if out, err := runLease(a, testStatusWord, labOne); err != nil || out != "free\n" {
 		t.Errorf("status after the restore: %q, %v", out, err)
 	}
 }
@@ -144,7 +144,7 @@ func TestLabKeepConfigIsShownToTheNextClaim(t *testing.T) {
 		t.Errorf("release --keep-config: %q, %v", out, err)
 	}
 	want := `agentlab.yaml was left changed by "Agent me" at ` + relayNow.UTC().Format(time.RFC3339) + " in platform.valuesFiles: the fresh database stays for the follow-up proof"
-	if out, err := runLease(a, "status", labOne); err != nil || out != "free; "+want+"\n" {
+	if out, err := runLease(a, testStatusWord, labOne); err != nil || out != "free; "+want+"\n" {
 		t.Errorf("status of the free lab: %q, %v", out, err)
 	}
 	out, err = runLease(a, "claim", labOne, "-p", "the follow-up proof")
