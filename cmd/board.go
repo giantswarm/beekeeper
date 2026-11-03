@@ -659,7 +659,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		if asked {
 			c.Skip = ""
 		}
-		c.Skip = cmp.Or(heldByDecision(st.Notes, c.Item), c.Skip)
+		c.Skip = cmp.Or(incidentStartReason(st, sc.listed, c.Ref), heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
 			c.Skip = owned(c.Ref)
 		}
