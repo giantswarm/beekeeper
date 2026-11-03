@@ -15,10 +15,11 @@ mkdir -p "/work/runs/$id" /work/incoming
 tar -xf - -C /work/incoming
 trap - EXIT`
 
-const wrapper = `id=$1 sub=$2 command=$3
+const wrapper = `id=$1 sub=$2 command=$3 tool=${4:-}
 r=/work/runs/$id
 rc=143 child=
 finish() {
+` + cacheFinish + `
  printf '%s\n' "$rc" > "$r/rc.tmp" && mv "$r/rc.tmp" "$r/rc"
  if [ "$(cat /work/busy/id 2>/dev/null)" = "$id" ]; then rm -rf /work/busy; fi
  touch /work/active
@@ -37,6 +38,7 @@ printf '%s' "$$" > /work/busy/owner
 rm -rf /work/src
 mv /work/incoming /work/src || { rc=2; finish; exit 2; }
 cd "/work/src/$sub" || { rc=2; finish; exit 2; }
+` + cacheSetup + `
 setsid bash -c "$command" >> "$r/log" 2>&1 < /dev/null &
 child=$!; printf '%s' "$child" > "$r/child"
 wait "$child"; rc=$?
@@ -45,7 +47,7 @@ finish`
 
 const start = `set -eu
 [ "$(cat /work/busy/id)" = "$1" ]
-nohup setsid bash -c "$4" -- "$1" "$2" "$3" >/dev/null 2>&1 </dev/null &`
+nohup setsid bash -c "$4" -- "$1" "$2" "$3" "$5" >/dev/null 2>&1 </dev/null &`
 
 // Emit exactly the bytes after the client's acknowledged offset. Once rc is
 // published no process writes the log. Reading rc separately keeps exit status

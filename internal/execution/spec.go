@@ -31,6 +31,7 @@ const (
 	unitActive       = "active"
 	unitInactive     = "inactive"
 	inspectOperation = "inspect"
+	rebindOperation  = "rebind-policy"
 	sshCommand       = "ssh"
 	authCommand      = "auth"
 	Protocol         = 1
@@ -88,6 +89,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	GitHub         bool   `json:"github,omitempty"`
 	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
@@ -178,6 +180,31 @@ type Observation struct {
 	StopRequested    bool        `json:"stopRequested"`
 	StopAcknowledged bool        `json:"stopAcknowledged"`
 	LastError        string      `json:"lastError,omitempty"`
+	// PolicyDigest is the policy the execution's host-side commands are bound
+	// to; HostPolicyDigest is the host's prepared policy, empty when it is
+	// unprepared or stale. A difference leaves the unit running while its
+	// publication, merge and capped runs refuse until a policy rebind.
+	PolicyDigest     string `json:"policyDigest,omitempty"`
+	HostPolicyDigest string `json:"hostPolicyDigest,omitempty"`
+}
+
+// PolicyAvailable reports whether the execution's host-side commands accept
+// the host's prepared policy. Hosts that predate the fields report neither.
+func (o Observation) PolicyAvailable() bool {
+	return o.PolicyDigest == "" || o.PolicyDigest == o.HostPolicyDigest
+}
+
+// PolicyRebind moves a running execution from the policy it is bound to onto
+// the host's prepared policy, once the coordinator approved that policy.
+type PolicyRebind struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// PolicyRebinder is the optional host operation behind agents recover after
+// an approved host-policy update.
+type PolicyRebinder interface {
+	RebindPolicy(context.Context, Ref, PolicyRebind) (Observation, error)
 }
 
 // FailedContact preserves the last process evidence. A transport failure
@@ -283,6 +310,7 @@ func (r Resources) Validate(now time.Time) error {
 }
 
 type Capabilities struct {
+	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`
 	Identity     HostID            `json:"identity"`

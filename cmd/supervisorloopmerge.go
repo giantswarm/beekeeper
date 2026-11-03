@@ -51,6 +51,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st) {
 		return "", errLoopLater
 	}
+	repairStage := act.Key + " repair"
+	if l.stages[repairStage] {
+		return l.repairPull(ctx, st, act, l.stageDetail[repairStage])
+	}
 	p, err := readLoopPull(ctx, act.Ref)
 	if err != nil {
 		return "", err
@@ -60,6 +64,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
+	}
+	if p.Draft || p.Mergeable == mergeableConflicting {
+		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): branch is draft or conflicts with its base", github.SquashNotApplicable))
 	}
 	// A detached gate owns the queued/running mutation. Observe its result
 	// on later passes; do not submit another command for the same PR.
@@ -123,17 +130,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if mutationResult && code == github.SquashNotApplicable {
+	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
 		if reply.Reason != "" {
 			out = reply.Reason
 		}
-		// A confirmed open pull request needs repair. Recording this action after
-		// the wake or fixer start prevents repeated repair wakes for the same failed head.
-		act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s (exit %d): %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again. The supervisor performs the merge.", act.URL, act.Head, code, oneLine(out))
-		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
-			return "", err
-		}
-		return "merge failed; branch repair requested", nil
+		return l.repairPull(ctx, st, act, fmt.Sprintf("(exit %d): %s", code, oneLine(out)))
 	}
 	if !pullNeedsBranchRepair(p) && act.Agent != "" && execRef == nil {
 		if err := l.record(act, loopWorkerMergeGo); err != nil {
@@ -155,6 +156,31 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		out = reply.Reason
 	}
 	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
+}
+
+// repairPull hands an open pull request whose merge was not applicable or red
+// to its worker once, recording the repair stage before waking or starting a
+// fixer so capacity waits never retry the merge command each pass.
+func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act superloop.Action, reason string) (string, error) {
+	repairStage := act.Key + " repair"
+	if !l.stages[repairStage] {
+		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", repairStage, reason), act.Ref)); err != nil {
+			return "", err
+		}
+		if l.stages == nil {
+			l.stages = map[string]bool{}
+		}
+		if l.stageDetail == nil {
+			l.stageDetail = map[string]string{}
+		}
+		l.stages[repairStage] = true
+		l.stageDetail[repairStage] = reason
+	}
+	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again; if the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without a new review.", act.URL, act.Head, reason)
+	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+		return "", err
+	}
+	return "merge failed; branch repair requested", nil
 }
 
 // endMerged closes tasks that explicitly declared no post-merge work and
@@ -286,9 +312,10 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 // The reasons a reviewed merge stops for desk policy, before and after a
 // branch update alike.
 const (
-	reasonDeskStopped = "the desk is stopped"
-	reasonMergeHeld   = "merge held by desk policy"
-	mergeMethodRebase = "rebase"
+	reasonDeskStopped    = "the desk is stopped"
+	reasonMergeHeld      = "merge held by desk policy"
+	mergeableConflicting = "CONFLICTING"
+	mergeMethodRebase    = "rebase"
 )
 
 // reviewedMerge is the gate's mutation child. A branch behind its base it
@@ -327,7 +354,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "merge head moved or current CI is not green"
 		return doc
 	}
-	if p.Draft || p.Mergeable == "CONFLICTING" {
+	if p.Draft || p.Mergeable == mergeableConflicting {
 		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
 	}
