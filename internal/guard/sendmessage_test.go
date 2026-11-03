@@ -160,26 +160,27 @@ func TestSendMessageByASharedNameGoesToTheAgent(t *testing.T) {
 }
 
 func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
+	const codexWorker = "codex worker"
 	var gotSession, gotName, gotMsg string
 	h := Hook{
 		Inbox: func(session, name, msg string) (string, error) {
 			gotSession, gotName, gotMsg = session, name, msg
-			if name != "codex worker" {
+			if name != codexWorker {
 				return "", nil
 			}
 			return "written to the codex inbox of codex worker", nil
 		},
 		Absent: func(string) string { t.Error("a delivered send is not looked up as absent"); return "" },
 	}
-	raw, _ := json.Marshal(map[string]any{"session_id": "guide-session", "tool_name": SendMessageTool,
-		"tool_input": map[string]any{"to": "codex worker", "message": "go ahead", "summary": "s"}})
+	raw, _ := json.Marshal(map[string]any{sessionKey: "guide-session", executionToolName: SendMessageTool,
+		executionToolInput: map[string]any{"to": codexWorker, messageKey: "go ahead", "summary": "s"}})
 	var ev map[string]any
 	_ = json.Unmarshal(raw, &ev)
 	d := decideEvent(t, h, ev)
 	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Delivered by beekeeper") || !strings.Contains(d.Reason, "codex inbox of codex worker") {
 		t.Fatalf("want the delivery said, got %+v", d)
 	}
-	if gotSession != "guide-session" || gotName != "codex worker" || gotMsg != "go ahead" {
+	if gotSession != "guide-session" || gotName != codexWorker || gotMsg != "go ahead" {
 		t.Fatalf("Inbox(%q, %q, %q)", gotSession, gotName, gotMsg)
 	}
 	if d := decideSend(t, Hook{Inbox: h.Inbox}, "claude worker"); d != nil {
@@ -188,7 +189,7 @@ func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
 	gone := Hook{Inbox: func(string, string, string) (string, error) {
 		return "", errors.New("codex worker: its codex agent no longer runs")
 	}}
-	if d := decideSend(t, gone, "codex worker"); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no longer runs") {
+	if d := decideSend(t, gone, codexWorker); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no longer runs") {
 		t.Fatalf("want the inbox's refusal, got %+v", d)
 	}
 	if d := decideSend(t, Hook{Inbox: func(string, string, string) (string, error) {

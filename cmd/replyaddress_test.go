@@ -44,7 +44,7 @@ func TestGuideRepliesToACodexWorkerByRosterName(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideSession, Name: "Guide run 9"}, Since: time.Now()}})
+		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: state.Party{Session: guideSession, Name: guideSeven}, Since: time.Now()}})
 		st.Agents = append(st.Agents, state.Agent{Party: state.Party{HostSession: codex.HostPrefix + workerID, Name: workerName}})
 		return nil, nil
 	}); err != nil {
@@ -59,7 +59,7 @@ func TestGuideRepliesToACodexWorkerByRosterName(t *testing.T) {
 	var out bytes.Buffer
 	hookCmd.SetOut(&out)
 	hookCmd.SetIn(strings.NewReader(`{"session_id":"` + guideSession + `","hook_event_name":"PreToolUse","tool_name":"SendMessage","tool_input":{"to":"` + workerName + `","message":"merge on the go","summary":"go"}}`))
-	hookCmd.SetArgs([]string{"--" + configFlag + "=" + cfgFile, "hook", "pretooluse"})
+	hookCmd.SetArgs([]string{"--" + configFlag + "=" + cfgFile, configHookVerb, configPreToolUse})
 	if err := hookCmd.Execute(); err != nil {
 		t.Fatalf("hook pretooluse: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestWakeCarriesTheSendersRosterName(t *testing.T) {
 	}{
 		{sender, "rebased, please look", `[from "worker a": reply by SendMessage to "worker a", or beekeeper agents wake "worker a"]` + "\nrebased, please look"},
 		// A sender off the roster has no address to reply by.
-		{state.Party{Name: "a script"}, "plain", "plain"},
+		{state.Party{Name: "a script"}, "as sent", "as sent"},
 	} {
 		if err := a.wakeAgent(t.Context(), c.by, "worker b", c.msg, ""); err != nil {
 			t.Fatal(err)
