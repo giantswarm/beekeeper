@@ -2017,6 +2017,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	} else {
 		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
 	}
+	if w.chores {
+		w.overrides(ctx, githubHeld)
+	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
 		w.wouldFireTimers(st, found)
