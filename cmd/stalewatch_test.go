@@ -84,12 +84,12 @@ func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
 	var out bytes.Buffer
 	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
 	w.replaced = func(int) (string, bool) { return path, true }
-	w.versionOf = func(context.Context, string) string { return "v9.9.9" }
+	w.versionOf = func(context.Context, string) string { return "v8.8.8" }
 	w.gateOf = func(context.Context, string) error {
 		return errors.New("GitHub budget under the floor")
 	}
 	tb := &proc.Table{ByPID: map[int]*proc.Process{
-		os.Getpid(): {PID: os.Getpid(), PPID: 1, Comm: "beekeeper", Args: []string{path, "watch"}},
+		os.Getpid(): {PID: os.Getpid(), PPID: 1, Comm: pluginName, Args: []string{path, watchName}},
 	}}
 	w.staleWatches(context.Background(), tb)
 	if !strings.Contains(out.String(), "WATCH GATE FAILED "+path+": budget --gate failed after install: GitHub budget under the floor") {

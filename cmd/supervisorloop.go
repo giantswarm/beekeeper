@@ -850,7 +850,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
-		if out, code, err := beekeeperRun(ctx, l.as("budget", "--gate")...); err != nil || code != 0 {
+		if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
 			l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
 		}
 		l.timerActs.Wait()
@@ -2639,7 +2639,7 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 			return "", err
 		}
 	}
-	if out, code, err := beekeeperRun(ctx, l.as("budget", "--gate")...); err != nil || code != 0 {
+	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
 		return "", fmt.Errorf("%s installed, but budget --gate exits %d: %s", version, code, oneLine(out))
 	}
 	what := []string{version + " installed"}

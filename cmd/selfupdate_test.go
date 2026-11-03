@@ -44,6 +44,12 @@ func TestLeftBehind(t *testing.T) {
 }
 
 func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
+	const (
+		cfgSwitch            = "--" + configFlag
+		canaryCurrentVersion = "v1.4.0"
+		canaryFailedVersion  = "v1.5.0"
+		stagedCanaryPath     = "/tmp/staged-beekeeper"
+	)
 	dir := t.TempDir()
 	cfgPath := emptyTestConfig(t, filepath.Join(dir, "config.yaml"))
 	t.Setenv("XDG_STATE_HOME", dir)
@@ -54,14 +60,15 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 		runCanaryCheck = prevCanary
 	})
 
+	gateArgs := append([]string{cfgSwitch, cfgPath}, budgetGateArgs...)
 	var ranChecks [][]string
 	failGate := true
 	runCanaryCheck = func(_ context.Context, path string, args ...string) (string, error) {
-		if path != "/tmp/staged-beekeeper" {
+		if path != stagedCanaryPath {
 			t.Fatalf("canary path = %q", path)
 		}
 		ranChecks = append(ranChecks, slices.Clone(args))
-		if failGate && slices.Equal(args, []string{"--config", cfgPath, "budget", "--gate"}) {
+		if failGate && slices.Equal(args, gateArgs) {
 			return "GitHub budget under the floor (app metadata unreadable)", errors.New("exit status 3")
 		}
 		return "ok", nil
@@ -70,25 +77,25 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	installed := false
 	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
 		opts := update.OptionsFrom(ctx)
-		if opts.Skip != nil && opts.Skip("v0.3.0") {
-			return update.Result{Current: "v0.2.0", Latest: "v0.2.0"}, nil
+		if opts.Skip != nil && opts.Skip(canaryFailedVersion) {
+			return update.Result{Current: canaryCurrentVersion, Latest: canaryCurrentVersion}, nil
 		}
 		if check {
-			return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true}, update.ErrOutdated
+			return update.Result{Current: canaryCurrentVersion, Latest: canaryFailedVersion, Newer: true}, update.ErrOutdated
 		}
 		if opts.Canary == nil {
 			t.Fatal("self-update did not attach a canary to ctx")
 		}
-		if err := opts.Canary(ctx, "/tmp/staged-beekeeper", "v0.3.0"); err != nil {
-			return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true}, err
+		if err := opts.Canary(ctx, stagedCanaryPath, canaryFailedVersion); err != nil {
+			return update.Result{Current: canaryCurrentVersion, Latest: canaryFailedVersion, Newer: true}, err
 		}
 		installed = true
-		return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true, Updated: true, Path: "/bin/beekeeper"}, nil
+		return update.Result{Current: canaryCurrentVersion, Latest: canaryFailedVersion, Newer: true, Updated: true, Path: "/bin/beekeeper"}, nil
 	}
 
 	var out bytes.Buffer
 	root := New()
-	root.SetArgs([]string{"--config", cfgPath, selfUpdateCmdName})
+	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	err := root.Execute()
@@ -104,13 +111,13 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "v0.3.0") || !strings.Contains(evs[0].Detail, "budget --gate") {
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, canaryFailedVersion) || !strings.Contains(evs[0].Detail, "budget --gate") {
 		t.Fatalf("canary events = %+v", evs)
 	}
 
 	// Subsequent --check skips the failed release.
 	root = New()
-	root.SetArgs([]string{"--config", cfgPath, selfUpdateCmdName, "--check"})
+	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, "--check"})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -121,14 +128,14 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	ranChecks = nil
 	failGate = false
 	a := &app{cfgPath: cfgPath, store: store}
-	if err := a.canaryRelease(context.Background(), &out, "/tmp/staged-beekeeper", "v0.3.1"); err != nil {
+	if err := a.canaryRelease(context.Background(), &out, stagedCanaryPath, "v1.5.1"); err != nil {
 		t.Fatalf("canaryRelease on healthy release = %v", err)
 	}
 	wantChecks := [][]string{
-		{"--config", cfgPath, "version"},
-		{"--config", cfgPath, "budget", "--gate"},
-		{"--config", cfgPath, "supervisor", "status"},
-		{"--config", cfgPath, "capacity"},
+		{cfgSwitch, cfgPath, "version"},
+		gateArgs,
+		{cfgSwitch, cfgPath, supervisorName, executionStatus},
+		{cfgSwitch, cfgPath, "capacity"},
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)

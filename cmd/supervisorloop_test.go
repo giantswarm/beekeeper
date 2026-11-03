@@ -1075,7 +1075,7 @@ func TestLoopReportsFailedGateAfterInstallAndClosesSkippedClaim(t *testing.T) {
 			installed = true
 			return "", 0
 		}
-		if slices.Equal(args, []string{"budget", "--gate"}) {
+		if slices.Equal(args, budgetGateArgs) {
 			return "GitHub budget under the floor", ExitRefused
 		}
 		return "", 0

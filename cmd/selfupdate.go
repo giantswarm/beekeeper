@@ -33,12 +33,15 @@ const verbSelfUpdateCanary = "self-update.canary"
 // are skipped on later checks and updates.
 const skippedReleasesFile = "skipped-releases.json"
 
+// budgetGateArgs is the command that checks the GitHub budget and active gates.
+var budgetGateArgs = strings.Fields("budget --gate")
+
 // canaryChecks are the commands a candidate release must pass with the live
 // configuration before it replaces the running binary.
 var canaryChecks = [][]string{
 	{"version"},
-	{"budget", "--gate"},
-	{"supervisor", "status"},
+	budgetGateArgs,
+	strings.Fields("supervisor status"),
 	{"capacity"},
 }
 

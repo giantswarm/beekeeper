@@ -86,14 +86,14 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	staged := filepath.Join(dir, filepath.Base(target))
-	if err := os.WriteFile(staged, nil, 0o700); err != nil {
+	if err := os.WriteFile(staged, nil, 0o600); err != nil {
 		return err
 	}
 	if err := installVerified(ctx, up, rel, staged); err != nil {
 		return fmt.Errorf("verifying staged release: %w", err)
 	}
 	if canary != nil {
-		_ = os.Chmod(staged, 0o700)
+		_ = os.Chmod(staged, mode|0o700)
 		if err := canary(ctx, staged, version); err != nil {
 			return err
 		}
