@@ -177,7 +177,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 			l.mu.Lock()
 			l.stages[stage] = true
 			l.mu.Unlock()
-			fmt.Fprintln(a.out, message)
+			_, _ = fmt.Fprintln(a.out, message)
 		}
 		return "", errLoopLater
 	}
