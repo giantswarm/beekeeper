@@ -230,3 +230,78 @@ func TestMissingEnvironmentConfigHooks(t *testing.T) {
 		})
 	}
 }
+
+// Check chooses the normal config path but never opens its state, even when
+// keys or types are broken. An explicit flag takes precedence over the env.
+func TestConfigCheck(t *testing.T) {
+	rootDir := t.TempDir()
+	stateDir := filepath.Join(rootDir, "state")
+	good := filepath.Join(rootDir, "good.yaml")
+	bad := filepath.Join(rootDir, "bad.yaml")
+	if err := os.WriteFile(good, []byte("stateDir: "+stateDir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bad, []byte("typo: true\nwatch: {loadMax: bad}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", filepath.Join(rootDir, "default-state"))
+	t.Setenv("BEEKEEPER_CONFIG", bad)
+	for _, tc := range []struct {
+		args      []string
+		wantError bool
+	}{
+		{[]string{configFlag, appCheck}, true},
+		{[]string{"--" + configFlag, good, configFlag, appCheck}, false},
+		{[]string{configFlag, appCheck, "--" + configFlag, bad}, true},
+		{[]string{configFlag, appCheck, "--" + configFlag, filepath.Join(rootDir, "missing")}, true},
+	} {
+		var out bytes.Buffer
+		root := New()
+		root.SetArgs(tc.args)
+		root.SetOut(&out)
+		root.SetErr(io.Discard)
+		err := root.Execute()
+		if (err != nil) != tc.wantError {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if err == nil && !strings.Contains(out.String(), good) {
+			t.Fatalf("success output: %q", out.String())
+		}
+		if len(tc.args) == 2 && (!strings.Contains(err.Error(), "typo:") || !strings.Contains(err.Error(), "watch.loadMax:")) {
+			t.Fatalf("findings: %v", err)
+		}
+	}
+	for _, p := range []string{stateDir, filepath.Join(rootDir, "default-state")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("state was opened: %s: %v", p, err)
+		}
+	}
+}
+
+func TestConfigCheckDefaultPath(t *testing.T) {
+	rootDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", rootDir)
+	t.Setenv("APPDATA", rootDir)
+	t.Setenv("BEEKEEPER_CONFIG", "")
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "beekeeper", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execute(t, configFlag, appCheck); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_CONFIG", filepath.Join(rootDir, "absent.yaml"))
+	if _, err := execute(t, configFlag, appCheck); err == nil {
+		t.Fatal("missing environment file passed")
+	}
+	if _, err := execute(t, "--"+configFlag, file, configFlag, appCheck); err != nil {
+		t.Fatal(err)
+	}
+}

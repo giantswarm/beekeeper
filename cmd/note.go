@@ -27,8 +27,9 @@ asks its person to sign in and closes once its probe passes. The guide
 puts them to the person (guide queue, guide watch). beekeeper watch
 reports a note once when it is due. Notes appear in every hand-over until
 marked done. A session's state is its hand-over, rendered from live
-state; deferred work is a board item, a priority a board rank and a hold
-a blocked-by (board rank, board block), or on a person a decision that
+state; deferred work is a board item, a priority a board move or board
+reorder (board move, board rank / board order) and a hold a blocked-by
+(board block), or on a person a decision that
 sets its item's Status (note add --holds).
 
 Without a subcommand, lists the open notes.`,
@@ -385,7 +386,7 @@ notes' only.`,
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
 						} else {
-							evs = append(evs, event(me, noteDone, "#%d %s", n.ID, n.Text))
+							evs = append(evs, event(me, noteDone, "#%d withdrawn: %s", n.ID, n.Text))
 						}
 						return true
 					}
@@ -465,6 +466,15 @@ naming both. --post is the machine's notes' only.`,
 				return a.answerCentral(cmd.Context(), ids[0].ID, choice, via, strings.Join(args[1:], " "), post)
 			}
 			if n == nil {
+				if history, ok := a.store.(state.NoteHistory); ok {
+					closed, err := history.NoteClosure(ids[0].ID)
+					if err != nil {
+						return err
+					}
+					if closed != nil && closed.Verb == noteDefaulted {
+						return refused("note #%d was closed by its default; the %s late-answer window has expired", ids[0].ID, shortDur(defaultedKeep))
+					}
+				}
 				return refused("note #%d is not open, nor closed by its default within %s", ids[0].ID, shortDur(defaultedKeep))
 			}
 			if len(n.Refs) == 0 {
@@ -474,7 +484,7 @@ naming both. --post is the machine's notes' only.`,
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
-	answer.Flags().StringVar(&via, "via", viaCLI, "how the answer came: cli or slack")
+	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool
@@ -492,7 +502,7 @@ machine's, each named <context>#<n> (in JSON its "central"); with the
 central instance unreachable, the list fails after the machine's notes.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
-	c.AddCommand(add, answer, done, list)
+	c.AddCommand(add, answer, done, list, a.noteShowCmd())
 	return c
 }
 

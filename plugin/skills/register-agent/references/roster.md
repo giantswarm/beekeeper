@@ -15,8 +15,8 @@ reach it.
   registers idle and gets its task as a message. Either works the task, reports, goes idle and ends
   its turn; the supervisor takes it off the roster, which archives a session beekeeper started and
   leaves one the person started in their sidebar.
-- **No role is handed to an agent.** A supervisor or guide relay, and the hand-over after a crash,
-  start a fresh "Supervisor run N" or "Guide run N" session; a registered agent never takes a role,
+- **No role is handed to an agent.** A guide relay, and the hand-over after a crash, start a fresh
+  "Guide run N" session; a registered agent never takes a role,
   and a relay or hand-over prompt reaching one is refused in one line to its sender.
 - **Reachability.** A message by name reaches a session only while its CLI runs; `beekeeper agents
   wake <agent> "<message>"` also reaches a stopped one, resuming its CLI headless for the message's

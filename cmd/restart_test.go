@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,41 @@ func TestWatchWithoutRequestRunsOn(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("the cancelled run ended with %v", err)
+	}
+}
+
+func TestWatchCancellationWaitsForBackgroundRuns(t *testing.T) {
+	w, _ := loopWatcher(t, "1h", "", nil)
+	clk := newFakeClock(t)
+	w.clock = clk
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release, stopping := make(chan struct{}), make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	defer finish()
+	w.bg.Go(func() {
+		<-ctx.Done()
+		close(stopping)
+		<-release
+	})
+	done := make(chan error, 1)
+	go func() { done <- w.run(ctx, false) }()
+	clk.settle(loopTimers)
+	cancel()
+	<-stopping
+	select {
+	case err := <-done:
+		t.Fatalf("watch ended while a background run was still active: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	finish()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("completed background run held watch shutdown")
 	}
 }
 

@@ -11,8 +11,9 @@ import (
 )
 
 // standingFile, in the state directory, holds the desk's standing
-// instructions. Both hand-overs print it in full; the person edits it, and an
-// instruction ends when its block is deleted.
+// instructions. The full hand-over prints it verbatim; the guide prompt
+// references it. The person edits it; an instruction ends when its block is
+// deleted.
 const standingFile = "standing.md"
 
 func (a *app) standingPath() string { return filepath.Join(a.cfg.StateDir, standingFile) }
@@ -24,16 +25,6 @@ func (a *app) readStanding() (string, error) {
 		return "", fmt.Errorf("the standing instructions: %w", err)
 	}
 	return strings.TrimSpace(string(raw)), nil
-}
-
-// promptStanding prints the standing instructions in a successor's prompt
-// in full; nothing without any.
-func promptStanding(p printer, s string) {
-	if s == "" {
-		return
-	}
-	section(p, "Standing instructions", false, "")
-	p("%s\n", s)
 }
 
 // printStanding prints the standing instructions in a hand-over.

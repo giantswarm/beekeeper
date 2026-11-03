@@ -130,10 +130,28 @@ type (
 	plainRoleLine      RoleLine
 	plainPair          Pair
 	plainStop          Stop
+	plainHostPin       HostPin
 )
 
-func (v *State) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainState)(v), &v.rest) }
-func (v State) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainState(v), v.rest) }
+func (v *State) UnmarshalJSON(b []byte) error {
+	if err := decodeKeeping(b, (*plainState)(v), &v.rest); err != nil {
+		return err
+	}
+	for _, k := range retiredStateKeys {
+		delete(v.rest, k)
+	}
+	if len(v.rest) == 0 {
+		v.rest = nil
+	}
+	return nil
+}
+
+// retiredStateKeys are the members of the supervisor session's role that
+// older binaries wrote: the supervisor is the supervisor loop, so a state
+// read drops them and the next write leaves them out.
+var retiredStateKeys = []string{"supervisor", "relay", "relieved", "supervisorCLI", "supervisorRun", "relayDue"}
+
+func (v State) MarshalJSON() ([]byte, error) { return encodeKeeping(plainState(v), v.rest) }
 func (v *Supervisor) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainSupervisor)(v), &v.rest)
 }
@@ -254,3 +272,5 @@ func (v *Pair) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plai
 func (v Pair) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainPair(v), v.rest) }
 func (v *Stop) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainStop)(v), &v.rest) }
 func (v Stop) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainStop(v), v.rest) }
+func (v *HostPin) UnmarshalJSON(b []byte) error { return decodeKeeping(b, (*plainHostPin)(v), &v.rest) }
+func (v HostPin) MarshalJSON() ([]byte, error)  { return encodeKeeping(plainHostPin(v), v.rest) }

@@ -27,8 +27,8 @@ func executionHarness(base Harness, options executionStartOptions, briefPath str
 	if options.Host == "" || options.Host == executionLocal {
 		return base, nil
 	}
-	if base == nil || base.Name() != "" {
-		return nil, refused("SSH execution supports the Claude harness in this slice")
+	if base == nil || base.Name() != "" && base.Name() != execution.HarnessCodex && base.Name() != execution.HarnessAgy {
+		return nil, refused("SSH execution supports the Claude, Codex and Agy harnesses in this slice")
 	}
 	return sshHarness{Harness: base, options: options, briefPath: briefPath}, nil
 }

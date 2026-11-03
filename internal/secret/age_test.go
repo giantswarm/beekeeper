@@ -686,3 +686,25 @@ func TestAgeIdentityEntryInAnAgeVault(t *testing.T) {
 		t.Error("an op:// reference into an age vault reads")
 	}
 }
+
+func TestAgeStoreReadAndSearchPreserveArguments(t *testing.T) {
+	const entry = "keys/custom-field"
+	o := &Ops{Store: Store{Read: []string{"read-own-field", storeFieldTemplate}, Search: []string{"search-own-field", storeFieldTemplate}}}
+	o.Run = func(_ context.Context, _ string, _ []string, _ io.Reader, name string, args ...string) ([]byte, error) {
+		if len(args) != 2 || args[0] != storeFieldTemplate {
+			t.Fatalf("store arguments changed: %q", args)
+		}
+		if name == "search-own-field" {
+			return []byte(entry + "\n"), nil
+		}
+		return []byte("configured-identity-field"), nil
+	}
+	keys, err := o.ageKeys(context.Background(), StoreRef+entry, nil)
+	if err != nil || len(keys) != 1 || keys[0].value != "configured-identity-field" {
+		t.Fatalf("age read: %v", err)
+	}
+	entries, err := o.storeSearch(context.Background(), []string{"age1public-recipient"})
+	if err != nil || !slices.Equal(entries, []string{entry}) {
+		t.Fatalf("store search: %q, %v", entries, err)
+	}
+}

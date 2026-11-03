@@ -14,54 +14,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-func TestOneSessionHoldsOneRole(t *testing.T) {
-	st := handOverState() // supA supervises
-	if _, _, err := guideRole.start(st, supA, false, false, relayNow); Code(err) != ExitRefused {
-		t.Fatalf("the supervisor's session took the guide role: %v", err)
-	}
-	msg, evs, err := guideRole.start(st, agentC, false, false, relayNow)
-	if err != nil || msg != `"Agent three" guides now as Guide run 1` || evs[0].Verb != "guide.start" {
-		t.Fatalf("guide start: %q %v %v", msg, evs, err)
-	}
-	if _, _, err := supervisorRole.start(st, agentC, true, true, relayNow); Code(err) != ExitRefused {
-		t.Fatalf("the guide's session took the supervisor role: %v", err)
-	}
-	if _, _, err := guideRole.relay(st, agentC, supA, relayNow, 15*time.Minute); Code(err) != ExitRefused {
-		t.Fatalf("the guide relayed its role to the supervisor: %v", err)
-	}
-	if !st.Supervisor.Is(supA) || !st.Guide.Holder.Is(agentC) {
-		t.Fatalf("both roles run in two sessions: supervisor %+v, guide %+v", st.Supervisor, st.Guide.Holder)
-	}
-}
-
-func TestGuideRelayLeavesTheSupervisorUntouched(t *testing.T) {
-	st := handOverState()
-	if _, _, err := guideRole.start(st, agentC, false, false, relayNow); err != nil {
-		t.Fatal(err)
-	}
-	before, _ := json.Marshal(st.SupervisorRole())
-	grants := len(st.Grants)
-	msg, _, err := guideRole.relay(st, agentC, agentD, relayNow, 15*time.Minute)
-	if err != nil || strings.Contains(msg, "grants") || !strings.Contains(msg, "`beekeeper guide start`") {
-		t.Fatalf("guide relay: %q %v", msg, err)
-	}
-	msg, _, err = guideRole.start(st, agentD, true, false, relayNow.Add(time.Minute))
-	if err != nil || !strings.Contains(msg, `relieving "Agent three"`) || strings.Contains(msg, "grant") {
-		t.Fatalf("successor start: %q %v", msg, err)
-	}
-	if relievedIn(st.GuideRole(), agentC) == nil || relievedBy(st, agentC) != nil {
-		t.Fatal("the guide relay relieved the guide and only in the guide's record")
-	}
-	after, _ := json.Marshal(st.SupervisorRole())
-	if string(before) != string(after) || len(st.Grants) != grants || !st.Grants[0].By.Is(supA) {
-		t.Fatalf("the guide relay touched the supervisor:\n%s\n%s", before, after)
-	}
-	lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute))
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], `GUIDE RELAY TAKEN: "Agent five" guides since`) {
-		t.Fatalf("relay taken: %q", lines)
-	}
-}
-
 func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 	st := &state.State{}
 	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: agentC, Since: relayNow}})
@@ -69,8 +21,8 @@ func TestGuideRelayDueFiresOncePerTerm(t *testing.T) {
 	if len(lines) != 1 || lines[0] != `GUIDE RELAY DUE: "Agent three" is at 50k tokens of context: beekeeper guide handover --prompt` || evs[0].Verb != "guide.relay-due" {
 		t.Fatalf("relay due: %q %v", lines, evs)
 	}
-	if st.RelayDue != nil {
-		t.Fatal("the guide's relay due landed in the supervisor's record")
+	if st.Guide.RelayDue == nil {
+		t.Fatal("the guide's relay due is not recorded")
 	}
 	if lines, _ := guideRole.fireRelayDue(st, quietness{checked: true, context: 60_000, relayAt: 40_000}, nil, relayNow); lines != nil {
 		t.Fatalf("relay due said twice: %q", lines)

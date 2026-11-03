@@ -17,6 +17,9 @@ import (
 type Work struct {
 	Repos []string `json:"repos,omitempty"`
 	Refs  []string `json:"refs,omitempty"`
+	// Created are the issues the session created (gh issue create,
+	// create_issue, issue_write), most recent first.
+	Created []string `json:"created,omitempty"`
 	// Mentioned are the refs its window names that it did not act on:
 	// quoted in a message, read in a tool's output.
 	Mentioned []string `json:"mentioned,omitempty"`

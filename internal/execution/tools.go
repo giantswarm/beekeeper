@@ -1,0 +1,192 @@
+package execution
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/semver"
+)
+
+// ToolGo and ToolGitHub are the worker toolchain a host provisions next to
+// its harness: Go for the repositories whose source checkout has a go.mod,
+// and the GitHub CLI on every host.
+const (
+	ToolGo     = "go"
+	ToolGitHub = "gh"
+)
+
+// ToolConfig pins one operator-installed tool a worker calls by bare name.
+type ToolConfig struct {
+	Executable string `yaml:"executable" json:"executable"`
+	Version    string `yaml:"version" json:"version"`
+}
+
+func (t ToolConfig) validate(name string) error {
+	if name != ToolGo && name != ToolGitHub {
+		return errors.New("execution host tools must be go or gh")
+	}
+	if !HostPath(t.Executable) || filepath.Base(t.Executable) != name || !semver.IsValid(goSemver(t.Version)) {
+		return fmt.Errorf("tool %s requires an absolute executable named %s and a pinned version", name, name)
+	}
+	return nil
+}
+
+// goSemver turns a Go or gh release ("1.27.3", "1.26", "1.27rc1") into the
+// semver form x/mod compares; anything else stays invalid.
+func goSemver(v string) string {
+	v = strings.TrimPrefix(v, "go")
+	if i := strings.IndexAny(v, "abcdefghijklmnopqrstuvwxyz"); i > 0 {
+		v = v[:i] + "-" + v[i:]
+	}
+	return "v" + v
+}
+
+// requiredTools names each tool a worker on this host needs and the lowest
+// version that serves it: gh everywhere, Go at the highest toolchain (or go
+// line) any served repository's go.mod names.
+func (s *Server) requiredTools() (map[string]string, error) {
+	need := map[string]string{ToolGitHub: ""}
+	repos := make([]string, 0, len(s.Config.Repositories))
+	for repo := range s.Config.Repositories {
+		repos = append(repos, repo)
+	}
+	slices.Sort(repos)
+	for _, repo := range repos {
+		p := filepath.Join(s.Config.Repositories[repo], "go.mod")
+		b, err := readRegular(p, MaxWire)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading go.mod of %s: %w", repo, err)
+		}
+		f, err := modfile.Parse(p, b, nil)
+		if err != nil {
+			return nil, fmt.Errorf("parsing go.mod of %s: %w", repo, err)
+		}
+		want := ""
+		if f.Go != nil {
+			want = f.Go.Version
+		}
+		if f.Toolchain != nil && semver.Compare(goSemver(f.Toolchain.Name), goSemver(want)) > 0 {
+			want = strings.TrimPrefix(f.Toolchain.Name, "go")
+		}
+		if cur, ok := need[ToolGo]; !ok || semver.Compare(goSemver(want), goSemver(cur)) > 0 {
+			need[ToolGo] = want
+		}
+	}
+	return need, nil
+}
+
+// probeTools checks every required tool against its pin: configured, the
+// pinned version on the executable's own version line, and at least the
+// version the served repositories name. It returns the passing versions and
+// one reason per missing tool.
+func (s *Server) probeTools(ctx context.Context) (map[string]string, map[string]string, error) {
+	need, err := s.requiredTools()
+	if err != nil {
+		return nil, nil, err
+	}
+	ok, missing := map[string]string{}, map[string]string{}
+	for name, least := range need {
+		t, configured := s.Config.Tools[name]
+		switch {
+		case !configured:
+			missing[name] = "not provisioned under agents.execution.tools"
+		case least != "" && semver.Compare(goSemver(t.Version), goSemver(least)) < 0:
+			missing[name] = fmt.Sprintf("pinned %s is older than %s the served repositories name", t.Version, least)
+		default:
+			if err := s.probeTool(ctx, name, t); err != nil {
+				missing[name] = err.Error()
+				continue
+			}
+			ok[name] = t.Version
+		}
+	}
+	return ok, missing, nil
+}
+
+func (s *Server) probeTool(ctx context.Context, name string, t ToolConfig) error {
+	// GOTOOLCHAIN=local makes go report itself rather than a toolchain a
+	// go.mod in the current directory would select and download.
+	env := append(cleanEnvironment("", ""), "GOTOOLCHAIN=local")
+	args, want := []string{"version"}, "go version go"+t.Version
+	if name == ToolGitHub {
+		args, want = []string{"--version"}, "gh version "+t.Version
+	}
+	out, err := s.command(ctx, "", env, t.Executable, args...)
+	if err != nil || !strings.HasPrefix(strings.Join(strings.Fields(string(out)), " ")+" ", want+" ") {
+		return fmt.Errorf("missing or mismatched %s version at %s", name, t.Executable)
+	}
+	return nil
+}
+
+func toolsError(missing map[string]string) error {
+	var reasons []string
+	for name, reason := range missing {
+		reasons = append(reasons, name+": "+reason)
+	}
+	slices.Sort(reasons)
+	return errors.New("execution host lacks the worker toolchain (" + strings.Join(reasons, "; ") + "); install it, pin it under agents.execution.tools and prepare the host again")
+}
+
+// toolPath puts the pinned tools' directories on a worker's PATH right after
+// the component's, so a worker calls go and gh by bare name.
+func (s *Server) toolPath(env []string) []string {
+	var dirs []string
+	names := make([]string, 0, len(s.Config.Tools))
+	for name := range s.Config.Tools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if d := filepath.Clean(filepath.Dir(s.Config.Tools[name].Executable)); !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	if len(dirs) == 0 {
+		return env
+	}
+	out := slices.Clone(env)
+	for i, kv := range out {
+		v, isPath := strings.CutPrefix(kv, "PATH=")
+		if !isPath {
+			continue
+		}
+		list := filepath.SplitList(v)
+		var head, rest []string
+		if len(list) > 0 && s.Executable != "" && filepath.Clean(list[0]) == filepath.Clean(filepath.Dir(s.Executable)) {
+			head, list = list[:1], list[1:]
+		}
+		for _, d := range list {
+			if d != "" && !slices.Contains(dirs, filepath.Clean(d)) {
+				rest = append(rest, d)
+			}
+		}
+		out[i] = "PATH=" + strings.Join(slices.Concat(head, dirs, rest), string(filepath.ListSeparator))
+		return out
+	}
+	return append(out, "PATH="+strings.Join(dirs, string(filepath.ListSeparator)))
+}
+
+// checkWorkspaceTools checks the committed source, rather than assuming a
+// preseeded checkout has the same go.mod as the requested ref.
+func (s *Server) checkWorkspaceTools(ctx context.Context, workspace string) error {
+	copy := *s
+	copy.Config = s.Config
+	copy.Config.Repositories = map[string]string{"workspace/source": workspace}
+	_, missing, err := copy.probeTools(ctx)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return toolsError(missing)
+	}
+	return nil
+}

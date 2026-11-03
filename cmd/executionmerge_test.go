@@ -122,15 +122,44 @@ func TestExecutionMergeLiveDeniesStopHoldMovedHeadAndMissingLease(t *testing.T) 
 	}
 }
 
+// The loop merges an execution worker's approved head itself and presents no
+// grant; that is no "invalid merge authorization identity".
+func TestExecutionMergeLiveAdmitsTheLoopsOwnMergeWithoutAGrant(t *testing.T) {
+	a, r := executionTestApp(t)
+	r.LeaseRequired = true
+	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
+	head := strings.Repeat("a", 40)
+	use := execution.MergeUse{Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
+	old := readLoopPull
+	t.Cleanup(func() { readLoopPull = old })
+	pull := superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{Head: head, Verdict: superloop.Approved}}}
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Starts[0].Execution.Request = r
+	st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Minute)}
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return pull, nil }
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatalf("loop merge of an approved head refused: %v", err)
+	}
+	pull.Reviews = nil
+	if a.executionMergeLive(context.Background(), st, use) == nil {
+		t.Fatal("loop merge admitted without the approved review")
+	}
+}
+
 func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.GitHub.AllowedOrgs = []string{defaultOrg}
 	r.LeaseRequired = true
 	now := time.Now()
 	head := strings.Repeat("a", 40)
-	supervisor := state.Party{Session: "supervisor-session", Name: supervisorName}
+	// A session named like the supervisor is no supervisor: only the loop
+	// issues merge authority.
+	session := state.Party{Session: "supervisor-session", Name: supervisorName}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Supervisor = &state.Supervisor{Party: supervisor}
 		st.Starts[0].Execution.Request = r
 		st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: now.Add(time.Minute)}
 		return nil, nil
@@ -149,15 +178,21 @@ func TestExecutionMergeGrantRequiresSupervisorAndReviewRound(t *testing.T) {
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 		return superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{approved}}, nil
 	}
-	if _, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, state.Party{Name: r.Name}); err == nil {
-		t.Fatal("worker impersonated supervisor")
+	for _, p := range []state.Party{{Session: "s-worker", Name: r.Name}, session} {
+		if _, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, p); err == nil {
+			t.Fatalf("%q impersonated the supervisor loop", p.Name)
+		}
 	}
-	grant, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, supervisor)
+	// The loop's own --as call as caller() builds it: the configured person,
+	// team and host stamped on its name.
+	stamped := loopParty
+	stamped.Person, stamped.Team, stamped.Host = "Pat", ourTeam, "desk-host"
+	grant, err := a.issueExecutionMerge(context.Background(), r.Ref, r.Repository, 7, head, stamped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	stored, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), grant.ID)
-	if err != nil || stored.Issuer != supervisor.Name || stored.Ref != r.Ref {
+	if err != nil || stored.Issuer != loopParty.Name || stored.Ref != r.Ref {
 		t.Fatal("grant identity not durable", err)
 	}
 }

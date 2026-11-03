@@ -33,7 +33,7 @@ func checkNoteRecovery(t *testing.T, c client.Client) {
 	t.Helper()
 	broken := New(failNoteStatus{c})
 	now := time.Now().Truncate(time.Second)
-	n := state.Note{ID: 1, By: ana, At: now, Kind: state.NoteDecision, For: "bo", Text: asked, Due: now.Add(-time.Minute), Default: "Keep the release unpublished"}
+	n := state.Note{ID: 1, By: ana, At: now, Kind: state.NoteDecision, For: "bo", Text: asked, Due: now.Add(-time.Minute), Default: unreleasedDefault}
 	err := broken.Update(func(st *state.State) ([]state.Event, error) {
 		st.Notes = append(st.Notes, n)
 		return nil, nil
@@ -64,7 +64,7 @@ func checkNoteRecovery(t *testing.T, c client.Client) {
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Defaulted = append(st.Defaulted, st.Notes...)
 		st.Notes = nil
-		return nil, nil
+		return []state.Event{{By: ana, Verb: noteDefaultedEvent, Detail: firstDefaulted}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

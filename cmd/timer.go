@@ -48,10 +48,24 @@ line says it. A timer with a condition, --wake or --run closes when it
 fires. --repeat daily, weekdays or weekly re-arms a --wake or --run timer
 at the same local time instead; it stays open until timer done.
 
+Times carry their zone (08:30 CET). A timer firing more than a tick past
+its time says how late it is and what held it: a beekeeper stop, or no tick
+at all (the watch and the supervisor loop down, or the state locked). Its
+--run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
+BEEKEEPER_TIMER_LATE: an agents start it runs makes the session's first
+line, and its log entry (agents.start), the timer, its due time and the
+start in one zone and, when late, what held it (the timer's late firing,
+the capacity gate's wait); a start the gate refuses is logged with the
+timer.
+
 The conditions of --when, each one read of its reference per check, shared
 by every timer on it; a GitHub one waits while the budget is under the
 floor:
   pr-merged owner/repo#n
+  pr-checks owner/repo#n   (the head's checks settled: every one green,
+                           or any red: failed, cancelled, timed out;
+                           merged or closed; the woken agent reads which,
+                           with each red check's name and URL)
   issue-closed owner/repo#n
   helmrelease-ready context/namespace/name [version]   (Ready and, given a
                                          version, running it: the newest
@@ -59,8 +73,11 @@ floor:
   controlplane-ready context/namespace/name   (every replica ready and updated)
 --probe takes any shell command that exits 0 once the condition holds. A
 rollout is helmrelease-ready with its version: current Flux leaves a
-HelmRelease's applied revision empty, so a probe of it never holds.`,
+HelmRelease's applied revision empty, so a probe of it never holds. CI is
+pr-checks: a probe of gh pr checks exits non-zero both while checks run
+and once one failed, so it never fires on red.`,
 		Example: `  beekeeper timer add 5m "PR 243 merged: rebase and merge yours" --when "pr-merged giantswarm/beekeeper#243" --wake "BK 229" --until 2h
+  beekeeper timer add 2m "CI of PR 244 settled: park for review, or fix" --when "pr-checks giantswarm/beekeeper#244" --wake "BK 230" --until 2h
   beekeeper timer add 10m "backstage 2.67.0 rolled: prove it" --when "helmrelease-ready admin@mc/flux-giantswarm/backstage 2.67.0" --wake "BK 737" --until 3h
   beekeeper timer add 23:00 "swap flat again" --probe "test $(awk '/SwapFree/{print $2}' /proc/meminfo) -gt 8000000" --until 06:00 --expire
   beekeeper timer add 11:01 "budget reset" --run "beekeeper agents wake 'BK 228' 'the budget is back'"
@@ -97,7 +114,7 @@ HelmRelease's applied revision empty, so a probe of it never holds.`,
 		},
 	}
 	f := add.Flags()
-	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
+	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, pr-checks (green or red), issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
 	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
 	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
@@ -304,14 +321,14 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 
 // timerWhen says when a timer fires and what it does then.
 func timerWhen(now time.Time, t state.Timer) string {
-	s := "at " + clock(now, t.Due)
+	s := "at " + clockZone(now, t.Due)
 	if t.Conditional() {
-		s = "from " + clock(now, t.Due) + " when " + timerCond(t)
+		s = "from " + clockZone(now, t.Due) + " when " + timerCond(t)
 		if t.Every != 0 {
 			s += ", every " + t.Every.String()
 		}
 		if !t.Until.IsZero() {
-			s += ", until " + clock(now, t.Until)
+			s += ", until " + clockZone(now, t.Until)
 			if t.Expire {
 				s += " (then expires)"
 			}

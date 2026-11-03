@@ -84,6 +84,11 @@ func TestGuideIsRefusedWork(t *testing.T) {
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Hand it to the supervisor in one line") {
 			t.Errorf("%s in the guide's session: want the delegation refusal, got %+v", name, d)
 		}
+		// https://github.com/giantswarm/beekeeper/issues/1776: the supervisor
+		// is the loop, which no SendMessage reaches; the hint names the board.
+		if d != nil && (strings.Contains(d.Reason, SendMessageTool) || !strings.Contains(d.Reason, "beekeeper board move")) {
+			t.Errorf("%s in the guide's session: want the board route, not %s: %s", name, SendMessageTool, d.Reason)
+		}
 	}
 }
 
