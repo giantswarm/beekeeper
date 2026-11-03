@@ -13,9 +13,8 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
 - **External state** (rollout, registry, CI outside `devctl`): set a wake timer, then park: `beekeeper timer add <time> "<what>" --when "<condition>"` (CI: `pr-checks <owner/repo#n>`, green or red)
   or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`. A rollout is
   checked once, when its timer falls due.
-- **Park only on a wait outside the task's hands** or a decision a person must make, never on a
-  problem: a problem is reported to the supervisor and every part of the task that still moves goes
-  on.
+- **Overlap:** name it in your PR, build on the other, or park `--on <owner/repo#n>` for merge. No coordination wait.
+- **Park only on external waits** or a person's decision. Report problems; continue work that can move.
 - **A park on a person is news.** Tell the supervisor in one line at once for an answer,
   review, reply or note. The watch says PARKED ON A PERSON; the guide tells the person.
 - **Before the turn ends**, `beekeeper sessions serve "<name>" <owner/repo#n> --waits "<what>"`

@@ -372,6 +372,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
+		if err := validateOverlapPark(v.On, v.Waits); err != nil {
+			return "", nil, err
+		}
 		if id, ok := parkNote(v.On); ok {
 			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
 				return "", nil, refused("note is not open")
