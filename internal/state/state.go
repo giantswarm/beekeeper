@@ -831,6 +831,12 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
+	// HostJournalMissing records confirmed journal absence AND an inactive
+	// owned unit. It settles a lost execution without fabricating a stop ack.
+	HostJournalMissing bool `json:"hostJournalMissing,omitempty"`
+	// HostJournalUnconfirmed records confirmed journal absence on a pre-inventory
+	// host whose unit state can be confirmed only after the host upgrades.
+	HostJournalUnconfirmed bool `json:"hostJournalUnconfirmed,omitempty"`
 	// Published is the execution's last publication (agents publish): its
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
@@ -885,6 +891,9 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.HostJournalMissing {
+		return true
+	}
 	if r.Released() {
 		return true
 	}
@@ -1107,6 +1116,9 @@ type State struct {
 	BudgetETag string `json:"budgetETag,omitempty"`
 	// Budget is the last reading of the GitHub core budget.
 	Budget *Budget `json:"budget,omitempty"`
+	// BranchReleases are how the base branches of the queued merges release,
+	// one read per repository and branch for the lane's pass.
+	BranchReleases []BranchRelease `json:"branchReleases,omitempty"`
 	// Merges are the wrapped devctl pr merge runs, per lane: waiting in join
 	// order, running, and settling until the lane's installation rolled them.
 	Merges []Merge `json:"merges,omitempty"`
@@ -1348,6 +1360,20 @@ type Budget struct {
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
+
+	rest rest
+}
+
+// BranchRelease is how a repository's base branch releases, as the gate
+// read it (github.ReadBranchRelease) at At: the merges queued into the
+// branch reuse it while their repository has places in the gate.
+type BranchRelease struct {
+	Repo      string    `json:"repo"`
+	Base      string    `json:"base"`
+	Auto      bool      `json:"auto,omitempty"`
+	Plugins   bool      `json:"plugins,omitempty"`
+	ReleasePR bool      `json:"releasePR,omitempty"`
+	At        time.Time `json:"at"`
 
 	rest rest
 }

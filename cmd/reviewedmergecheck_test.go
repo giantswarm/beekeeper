@@ -384,9 +384,9 @@ func TestMergeResultRequiresFreshRefs(t *testing.T) {
 		t.Fatalf("got %d: %s", code, reason)
 	}
 	r.a.cfg.Disk.Checkouts = nil
-	_, _, code = checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
-	if code != github.SquashTooling {
-		t.Fatalf("missing checkout: %d", code)
+	checked, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if checked || code != 0 || !strings.Contains(reason, "skipped: no checkout") {
+		t.Fatalf("missing checkout: %d, %s", code, reason)
 	}
 }
 
@@ -402,23 +402,25 @@ func TestMergeResultRequiresLintTool(t *testing.T) {
 	}
 }
 
-func TestReviewedMergeQueueIsRequired(t *testing.T) {
-	check := requireReviewedMergeQueue
+func TestReviewedMergeQueueIsRead(t *testing.T) {
+	check := readReviewedMergeQueue
 	prev := github.RunGH
 	t.Cleanup(func() { github.RunGH = prev })
 	for _, reply := range []struct {
 		body      string
+		queue     bool
 		wantError bool
 	}{
-		{`{"data":{"repository":{"mergeQueue":null}}}`, true},
-		{`{"data":{"repository":{"mergeQueue":{"id":"queue"}}}}`, false},
-		{`{"errors":[{"message":"unavailable"}]}`, true},
-		{`invalid`, true},
+		{body: `{"data":{"repository":{"mergeQueue":null}}}`},
+		{body: `{"data":{"repository":{"mergeQueue":{"id":"queue"}}}}`, queue: true},
+		{body: `{"data":{"repository":null},"errors":[{"message":"unavailable"}]}`, wantError: true},
+		{body: `{"errors":[{"message":"unavailable"}]}`, wantError: true},
+		{body: `invalid`, wantError: true},
 	} {
 		github.RunGH = func(context.Context, ...string) ([]byte, error) { return []byte(reply.body), nil }
-		err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
-		if (err != nil) != reply.wantError {
-			t.Fatalf("%s: %v", reply.body, err)
+		queue, err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
+		if (err != nil) != reply.wantError || queue != reply.queue {
+			t.Fatalf("%s: %v, %v", reply.body, queue, err)
 		}
 	}
 }
@@ -468,7 +470,9 @@ func TestMergeResultConfiguredLintFailure(t *testing.T) {
 
 func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r := newLoopRig(t)
-	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return fmt.Errorf("merge queue unavailable") }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) {
+		return false, fmt.Errorf("merge queue unavailable")
+	}
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")

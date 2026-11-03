@@ -36,11 +36,12 @@ const (
 // repositories, and only the selector token changes them. Repository ids
 // are 100 + their index in repoIDs.
 type fakeInstallation struct {
-	mu        sync.Mutex
-	selection string
-	installed bool
-	suspended bool
-	repos     []string
+	mu          sync.Mutex
+	selection   string
+	installed   bool
+	userAccount bool
+	suspended   bool
+	repos       []string
 	// calls are the requests in order, "METHOD path".
 	calls   []string
 	revoked bool
@@ -99,7 +100,11 @@ func (f *fakeInstallation) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	case p == "/app" && asApp:
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: fixtureApp, clientIDKey: fixtureClientID})
-	case p == "/orgs/"+fixtureOrg+"/installation" && asApp:
+	case (p == "/orgs/"+fixtureOrg+"/installation" || p == "/users/"+fixtureOrg+"/installation") && asApp:
+		if strings.HasPrefix(p, "/users/") != f.userAccount {
+			http.NotFound(w, r)
+			return
+		}
 		if !f.installed {
 			http.NotFound(w, r)
 			return
@@ -355,5 +360,52 @@ func TestAppInstallationUsage(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("calls: %v", f.calls)
+	}
+}
+
+func TestAppInstallationPersonalAccount(t *testing.T) {
+	a, _ := installationApp(t)
+	f := newFakeInstallation(t, "all")
+	f.userAccount = true
+	out, err := runInstallation(t, a)
+	if err != nil || !strings.Contains(out, "installation 9001 on example: all repositories, 3 reached") {
+		t.Fatalf("personal installation: %v\n%s", err, out)
+	}
+	if !slices.Contains(f.calls, "GET /users/"+fixtureOrg+"/installation") || !f.revoked {
+		t.Fatalf("installation lookup/token cleanup: %v, revoked=%v", f.calls, f.revoked)
+	}
+	evs := installationEvents(t, a)
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "installation 9001 on example") {
+		t.Fatalf("installation ID not recorded: %+v", evs)
+	}
+}
+
+func TestAppInstallationLookupErrors(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Header.Get("Authorization") != "Bearer fixture-app-jwt" {
+					t.Error("App authorization not preserved")
+				}
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+			prev := githubAPI
+			githubAPI = srv.URL
+			defer func() { githubAPI = prev }()
+			_, err := orgInstallation(context.Background(), "Bearer fixture-app-jwt", "example")
+			wantCalls := 1
+			if status == http.StatusNotFound {
+				wantCalls = 2
+			}
+			if err == nil || calls != wantCalls {
+				t.Fatalf("error=%v calls=%d want=%d", err, calls, wantCalls)
+			}
+			if status == http.StatusNotFound && !strings.Contains(err.Error(), "not installed on example") {
+				t.Fatal(err)
+			}
+		})
 	}
 }

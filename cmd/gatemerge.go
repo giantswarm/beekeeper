@@ -30,9 +30,12 @@ import (
 
 // Seams for the tests.
 var (
-	pullState   = github.PullState
-	baseRelease = func(ctx context.Context, repo string, n int) (github.BaseRelease, error) {
-		return github.ReadBaseRelease(ctx, github.RunGH, repo, n)
+	pullState = github.PullState
+	pullBase  = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
+		return github.ReadPullBase(ctx, github.RunGH, repo, n)
+	}
+	branchRelease = func(ctx context.Context, repo, base string) (github.BaseRelease, error) {
+		return github.ReadBranchRelease(ctx, github.RunGH, repo, base)
 	}
 	pluginTags = func(ctx context.Context, repo, sha string) ([]string, error) {
 		return github.PluginTags(ctx, github.RunGH, repo, sha)
