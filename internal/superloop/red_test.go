@@ -195,3 +195,18 @@ func TestConflictingParkedHeadRequestsRepairBeforeReview(t *testing.T) {
 		})
 	}
 }
+
+// An approval must reach the merge executor's durable conflict repair path.
+func TestApprovedConflictingHeadUsesMergeRepair(t *testing.T) {
+	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+	in := Input{
+		Workers: parkedOn(head1, t0), Pulls: pull(head1, true, approved), Rounds: 1,
+		Taken: taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker}),
+	}
+	p := in.Pulls[pr]
+	p.Mergeable, p.MergeState = "CONFLICTING", "DIRTY"
+	in.Pulls[pr] = p
+	if a := only(t, Plan(in), KindGo); a.Head != head1 {
+		t.Fatalf("wrong reviewed repair head: %+v", a)
+	}
+}

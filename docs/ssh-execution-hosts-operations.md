@@ -181,13 +181,22 @@ is not the coordinator's release, so a coordinator self-update carries the
 hosts with it. A coordinator that runs a release starts nothing on a host
 until the host runs that release:
 
-- a host with running executions drains: no new start there, and it updates
-  once they end;
+- a host with an execution in a turn drains: no new start there, and it
+  updates once no execution is in a turn. An execution between turns (a
+  parked worker waiting for its wake: ready, no turn running, no wake
+  stored, no delivery uncertain) does not hold the update back. The host
+  holds its admission through the install, so the next turn begins only
+  after it, on the updated host, and the coordinator then rebinds that
+  execution to the pinned policy as `agents recover` does; an execution it
+  cannot rebind is named in the update's line with that retry;
 - a host whose update fails (unreachable, no signed release, a prepare or
   check that fails) is held: no start there until an update succeeds. The
   loop hands the hold on once as a finding (`supervisor.file`, delivered by
   `guide watch`) and tries the host again hourly; the other hosts keep
-  running. `beekeeper agents hosts update <host>` retries it at once.
+  running. `beekeeper agents hosts update <host>` retries it at once;
+- a host that drains or waits past more than one coordinator release (it did
+  not follow one release and does not follow the next either) is handed on
+  once as a finding, with the executions or the error that keep it behind.
 
 A host first needs a release with `agents hosts self-update` installed by
 hand; from then on it follows the coordinator. A development build of the
