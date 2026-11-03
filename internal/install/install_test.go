@@ -702,7 +702,7 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 
 	// Missing PreInvocation in beekeeper's hooks.json entry is named by CheckAgyHooks.
 	missingPre := filepath.Join(home, "missing-pre.json")
-	write(t, missingPre, `{"beekeeper":{"PreToolUse":[{"hooks":[{"type":"command","command":"/opt/bin/beekeeper hook pretooluse --format agy","timeout":30}]}]}}`)
+	write(t, missingPre, `{"beekeeper":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/bin/beekeeper hook pretooluse --format agy","timeout":30}]}]}}`)
 	if got := CheckAgyHooks(missingPre, e.Exe, home); !strings.Contains(got, "PreInvocation hook differs") {
 		t.Errorf("missing PreInvocation: CheckAgyHooks = %q", got)
 	}
@@ -982,6 +982,29 @@ func TestAgyHooksUnguarded(t *testing.T) {
 	write(t, path, `{"beekeeper": `+string(AgyHook("/opt/bin/beekeeper"))+`}`)
 	if got := AgyHooksUnguarded(path); got != "" {
 		t.Errorf("guarded: %q", got)
+	}
+}
+
+func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
+	for _, exe := range []string{"/opt/bin/beekeeper", "/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+		t.Run(exe, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hooks.json")
+			raw := AgyHook(exe)
+			write(t, path, `{"beekeeper": `+string(raw)+`}`)
+			if got := AgyHooksUnguarded(path); got != "" {
+				t.Fatalf("install-generated guard refused: %s", got)
+			}
+			if got := CheckAgyHooks(path, "", ""); got != "" {
+				t.Fatalf("install-generated hooks refused by doctor: %s", got)
+			}
+			for _, matcher := range []string{"Read", "Bash", ""} {
+				restricted := strings.Replace(string(raw), `"matcher":"*"`, `"matcher":"`+matcher+`"`, 1)
+				write(t, path, `{"beekeeper": `+restricted+`}`)
+				if got := AgyHooksUnguarded(path); got == "" {
+					t.Errorf("restricted matcher %q accepted", matcher)
+				}
+			}
+		})
 	}
 }
 

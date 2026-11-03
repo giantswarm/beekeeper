@@ -267,17 +267,32 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 		return "", 0
 	}
 	list := events["PreToolUse"]
-	if len(list) != 1 || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+	if len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
 		return "", 0
 	}
-	f := strings.Fields(list[0].Hooks[0].Command)
-	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "agy" {
-		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
-	}
-	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=agy" {
-		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+	for _, suffix := range []string{" hook pretooluse --format agy", " hook pretooluse --format=agy"} {
+		if exe := installedHookBinary(list[0].Hooks[0].Command, suffix); exe != "" {
+			return exe, list[0].Hooks[0].Timeout
+		}
 	}
 	return "", 0
+}
+
+// installedHookBinary recognizes only the literal executable spelling generated
+// by shellQuote, so shell operators or expansions cannot masquerade as a guard.
+func installedHookBinary(command, suffix string) string {
+	if !strings.HasSuffix(command, suffix) {
+		return ""
+	}
+	quoted := strings.TrimSuffix(command, suffix)
+	exe := quoted
+	if strings.HasPrefix(quoted, "'") && strings.HasSuffix(quoted, "'") && len(quoted) >= 2 {
+		exe = strings.ReplaceAll(quoted[1:len(quoted)-1], `'\''`, "'")
+	}
+	if shellQuote(exe) != quoted {
+		return ""
+	}
+	return exe
 }
 
 // agyPreInvocationBinary returns the binary path and timeout of an agy hook
@@ -294,9 +309,8 @@ func agyPreInvocationBinary(raw json.RawMessage) (string, int) {
 	if len(list) != 1 || list[0].Type != hookTypeCommand {
 		return "", 0
 	}
-	f := strings.Fields(list[0].Command)
-	if len(f) == 3 && f[1] == hookWord && f[2] == "preinvocation" {
-		return strings.Trim(f[0], `'"`), list[0].Timeout
+	if exe := installedHookBinary(list[0].Command, " hook preinvocation"); exe != "" {
+		return exe, list[0].Timeout
 	}
 	return "", 0
 }
