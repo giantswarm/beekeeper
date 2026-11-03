@@ -770,7 +770,7 @@ func TestPrintNextFields(t *testing.T) {
 	if doc["skipped_by"] == nil {
 		t.Errorf("--fields drops skipped_by:\n%s", out.String())
 	}
-	if err := checkFields([]string{fieldRef, "title", "url", "step", "priorityOf"}); err != nil {
+	if err := checkFields([]string{fieldRef, "title", "url", "step", "epic"}); err != nil {
 		t.Error(err)
 	}
 	if err := checkFields([]string{fieldRef, "nope"}); err == nil || !strings.Contains(err.Error(), "--fields nope: no such field") || !strings.Contains(err.Error(), "ref,url,title") {

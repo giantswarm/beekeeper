@@ -140,8 +140,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	r, busy := fillRig(t)
 	r.a.cfg.Board = config.Board{Owner: crossOwner, Project: 1}
 	snap := crossOwnerSnapshot(t, r.a.now)
-	// Place crossHome (priority 1) at the top of the board and crossBacklog
-	// (unranked) at the bottom, where an unranked backlog item sits.
+	// Place crossHome at the top of the board and crossBacklog at the bottom.
 	snap.Items = []board.Item{snap.Items[1], snap.Items[2], snap.Items[3], snap.Items[0]}
 	const worker = "worker-1"
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -157,7 +156,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Worker-1, serving crossHome (priority 1), reports done and files a
+	// Worker-1, serving crossHome, reports done and files a
 	// blocking/follow-up issue in another owner's repository (org/engine#88).
 	const filedRef = "org/engine#88"
 	const filedURL = "https://github.com/org/engine/issues/88"
@@ -297,7 +296,7 @@ func TestLoopIntakeRetriesFailedRankAndResumesAfterRestart(t *testing.T) {
 	}
 
 	// 1. Move succeeds, then anchor lookup fails: intake is not settled.
-	anchorErr = errors.New("priority query failed")
+	anchorErr = errors.New("anchor query failed")
 	r.pass(t)
 	if r.called(loopBoard, "move", reportIssue, "backlog", "--intake") == nil {
 		t.Fatalf("move did not run on pass 1: %v", r.calls)

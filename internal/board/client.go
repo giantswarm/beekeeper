@@ -938,7 +938,7 @@ func (c *Client) Intake(ctx context.Context, ref, in string) (*Moved, error) {
 // item is the issue's item on the board, read from the issue's
 // projectItems, else answered by addProjectV2ItemById: the issue's
 // existing item, or a new one, which marks mv added. An issue GitHub does
-// not resolve is refused as no issue. Rank and priority add an issue of any
+// not resolve is refused as no issue. Rank adds an issue of any
 // accessible repository as Move does, whatever its owner: GitHub decides
 // whether it may be added. An item added outside beekeeper that the issue's
 // projectItems do not list (GitHub lists an item of another owner's project
