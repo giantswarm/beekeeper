@@ -118,9 +118,9 @@ func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
 // An effort agy would ignore must never reach a request, a start record or an
 // event, however it was selected and whichever way agy was chosen.
 func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
-	remote := []string{"--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch}
-	explicit := []string{"--harness", harnessAgy, "--model", agyTestModel}
-	auto := []string{"--harness", harnessAuto}
+	remote := []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch}
+	explicit := []string{testHarnessFlag, harnessAgy, modelFlag, agyTestModel}
+	auto := []string{testHarnessFlag, harnessAuto}
 	flag := []string{effortFlag, testEffortHigh}
 	for _, tc := range []struct {
 		name   string
@@ -137,7 +137,7 @@ func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: "1.4.7"})
 			a.cfg.Agents.Models = tc.models
-			args := slices.Concat([]string{agentStartName, "--name", "remote-agy", brief}, remote, tc.args)
+			args := slices.Concat([]string{agentStartName, nameFlag, "remote-agy", brief}, remote, tc.args)
 			_, err := runAgents(a, args...)
 			if err == nil || !strings.Contains(err.Error(), "agy does not expose a session effort option") {
 				t.Fatalf("remote agy accepted an effort: %v", err)
@@ -156,7 +156,7 @@ func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 // The refusal follows the harness auto resolved, not the choices it could have made.
 func TestExecutionAutoKeepsEffortOnAHarnessThatTakesIt(t *testing.T) {
 	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer})
-	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto, effortFlag, testEffortHigh); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, testHarnessFlag, harnessAuto, effortFlag, testEffortHigh); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != claudeComm || (*requests)[1].Effort != testEffortHigh {
