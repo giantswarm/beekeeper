@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `board move <epic> "In Progress"` records the go when the epic's plan pull request is already merged: with no open plan found, it searches the plans repositories' merged pull requests for the epic's number, takes the latest whose Epic line names it (its URL or `owner/repo#n`), and records the go at its merge commit. A merged plan's head is its merge commit wherever an epic's plan is shown; a go recorded earlier at the merged branch's head counts as unmoved. With neither an open nor a merged plan, the move says so and records no go (https://github.com/giantswarm/beekeeper/issues/1540).
 - Secret-file checks track `pushd`/`popd`, refuse directory copies and `find` moves that expose guarded files, and recognize helper paths split across arguments. Codex also checks split protected-home paths (https://github.com/giantswarm/beekeeper/issues/1902).
+- Isolate priority reads and renumbering by the configured Team even when stale team labels remain, reject ranking another team's epic, and document the enforced split between person-only epic priorities and session-editable board positions (logged with the caller), refusing anonymous position edits.
 
 - Priority-list reads omit candidate-only label and assignee connections, keeping the large-board regression at 37 GraphQL points without changing ranks or blocker holds.
 - Initialize notification-test watchers through the production constructor and supply deterministic OOM history in harness tracking tests, preventing a host-dependent nil-map panic (https://github.com/giantswarm/beekeeper/issues/2102).
@@ -102,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
 
+- Record and deliver mid-task findings with `agents problem`, deduplicating findings repeated at idle within the same worker assignment (https://github.com/giantswarm/beekeeper/issues/952).
 - Allow UI-only permissions section expansion, collapse and tab clicks without an App or permission in the summary, after verifying the clicked ref’s role and label in a current page read; permission changes and grant submissions retain their record checks (https://github.com/giantswarm/beekeeper/issues/927).
 
 ### Changed

@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -67,12 +68,13 @@ const UnseenRepeat = 15 * time.Minute
 
 // Alert is what a line prints of one alert.
 type Alert struct {
-	Severity  string `json:"severity"`
-	Team      string `json:"team"`
-	Alertname string `json:"alertname"`
-	Cluster   string `json:"cluster"`
-	Where     string `json:"where"`
-	Since     string `json:"since"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Severity  string            `json:"severity"`
+	Team      string            `json:"team"`
+	Alertname string            `json:"alertname"`
+	Cluster   string            `json:"cluster"`
+	Where     string            `json:"where"`
+	Since     string            `json:"since"`
 	// fp is the fingerprint of a changed alert (missing), for the quiet
 	// rules' repeat check.
 	fp string
@@ -208,6 +210,7 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 			order = append(order, key)
 		}
 		out[key] = Alert{
+			Labels:   maps.Clone(l),
 			Severity: first(l["severity"], "-"), Team: first(l["team"], "-"),
 			Alertname: first(l["alertname"], "-"), Cluster: cluster, Where: where, Since: a.StartsAt,
 		}
@@ -649,8 +652,17 @@ func (r Rules) Count(installation string, ans Answer) (active, paging int) {
 	return len(shown), paging
 }
 
-// SnapshotLines is the current set grouped by severity, team, alertname and
-// cluster, pages and the team's alerts first.
+// SnapshotAlerts returns the visible alerts with their complete original labels.
+func (r Rules) SnapshotAlerts(installation string, ans Answer) []Alert {
+	if !ans.OK {
+		return nil
+	}
+	_, shown := r.shownAlerts(installation, ans)
+	return shown
+}
+
+// SnapshotLines is the current set grouped by severity, team, alertname,
+// cluster and namespace, pages and the team's alerts first.
 func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []string {
 	if !ans.OK {
 		return []string{fmt.Sprintf("%s unreachable: %s", installation, ans.Why)}
@@ -661,9 +673,9 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 		n int
 	}
 	var groups []*group
-	byKey := map[[4]string]*group{}
+	byKey := map[[5]string]*group{}
 	for _, a := range shown {
-		k := [4]string{a.Severity, a.Team, a.Alertname, a.Cluster}
+		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, a.Labels["namespace"]}
 		if g, ok := byKey[k]; ok {
 			g.n++
 			continue
@@ -681,7 +693,11 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	lines := []string{fmt.Sprintf("%s at %s: %d active%s", installation, now.UTC().Format("15:04Z"), len(shown), r.hidden(installation, current))}
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
-		lines = append(lines, fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n))
+		line := fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n)
+		if ns := g.Labels["namespace"]; ns != "" {
+			line += " namespace=" + ns
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
