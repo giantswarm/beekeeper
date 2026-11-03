@@ -15,17 +15,18 @@ import (
 )
 
 func TestStartedWorkerRegistersWithoutChangingItsEntry(t *testing.T) {
+	const startedName = "started harness worker"
 	for _, h := range []struct{ name, env, prefix string }{
-		{"agy", agy.EnvAgent, agy.HostPrefix},
-		{"codex", codex.EnvAgent, codex.HostPrefix},
-		{"omp", omp.EnvAgent, omp.HostPrefix},
+		{agy.Harness, agy.EnvAgent, agy.HostPrefix},
+		{codex.Harness, codex.EnvAgent, codex.HostPrefix},
+		{omp.Harness, omp.EnvAgent, omp.HostPrefix},
 	} {
 		t.Run(h.name, func(t *testing.T) {
 			for _, env := range []string{agy.EnvAgent, codex.EnvAgent, omp.EnvAgent} {
 				t.Setenv(env, "")
 			}
 			t.Setenv(h.env, "started-worker")
-			t.Setenv(agy.EnvName, "worker")
+			t.Setenv(agy.EnvName, startedName)
 			t.Setenv("CLAUDE_CODE_SESSION_ID", "unrelated-session")
 			dir := t.TempDir()
 			store, err := state.Open(dir)
@@ -33,7 +34,7 @@ func TestStartedWorkerRegistersWithoutChangingItsEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC()
-			original := state.Agent{Party: state.Party{HostSession: h.prefix + "started-worker", Name: "worker"}, Harness: h.name, Task: "finish task", Registered: now, AssignedAt: now}
+			original := state.Agent{Party: state.Party{HostSession: h.prefix + "started-worker", Name: startedName}, Harness: h.name, Task: "finish task", Registered: now, AssignedAt: now}
 			if err := store.Update(func(st *state.State) ([]state.Event, error) { st.Agents = []state.Agent{original}; return nil, nil }); err != nil {
 				t.Fatal(err)
 			}
@@ -46,7 +47,7 @@ func TestStartedWorkerRegistersWithoutChangingItsEntry(t *testing.T) {
 			if err := c.Execute(); err != nil {
 				t.Fatalf("register: %v", err)
 			}
-			if !strings.Contains(out.String(), "already registered as worker") {
+			if !strings.Contains(out.String(), "already registered as "+startedName) {
 				t.Fatalf("output: %s", out.String())
 			}
 			st, err := store.Read()
