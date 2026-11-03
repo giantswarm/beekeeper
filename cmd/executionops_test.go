@@ -204,6 +204,15 @@ func TestExecutionWatchEndedRunSettlesAndMultiHostRotationDoesNotFlap(t *testing
 	hB.Identity = hostB
 	hB.SSH = "host-b.example"
 	a.cfg.Agents.Hosts[hostB] = hB
+	hUnpinned := hA
+	hUnpinned.Identity = "host-unpinned"
+	hUnpinned.SSH = "host-unpinned.example"
+	hUnpinned.PolicyDigest = ""
+	a.cfg.Agents.Hosts["host-unpinned"] = hUnpinned
+	hIdle := hA
+	hIdle.Identity = "host-idle"
+	hIdle.SSH = "host-idle.example"
+	a.cfg.Agents.Hosts["host-idle"] = hIdle
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		partyB := state.Party{Session: reqB.ConversationID, Name: reqB.Name, Host: hostB}
 		st.Agents = append(st.Agents, state.Agent{Party: partyB, Task: r.Task, Execution: &refB, Park: &state.Park{By: partyB, At: a.now, Waits: "proof timer"}})
