@@ -110,10 +110,9 @@ type app struct {
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
 	// reloads Capacity from cfgPath or loadedCfg without mutating cfg.
-	loadedCfg    string
-	as           string
-	gatePriority int
-	json         bool
+	loadedCfg string
+	as        string
+	json      bool
 	// hook says a hook runs, for a session whose environment it keeps.
 	hook bool
 
@@ -243,7 +242,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.priorityCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
