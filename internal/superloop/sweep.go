@@ -200,7 +200,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	}
 	reviewedHere := slices.ContainsFunc(rs, func(rd round) bool { return sameHead(rd.head, p.Head) })
 	switch {
-	case p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY":
+	case p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty:
 		fix(fmt.Sprintf("head %s conflicts with %s: merge %s into the branch and resolve the conflicts", short(p.Head), baseName(p), baseName(p)))
 	case len(p.Red) > 0:
 		var names []string
@@ -222,8 +222,6 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		add(a)
 	case v != nil && v.Verdict == Approved && (sameHead(v.Head, p.Head) || in.baseMerged(p, v.Head)):
 		// planPull gives its go.
-	case len(rs) >= MaxReviews:
-		fix(fmt.Sprintf("its %d reviews are used and head %s has none: take it over", len(rs), short(p.Head)))
 	case reviewedHere || l.has(reviewKey(ref, p.Head)):
 		// A review of this head started and ended without a verdict.
 		review(sweepKey("review", ref, p.Head, since))
