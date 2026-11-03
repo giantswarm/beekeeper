@@ -27,8 +27,9 @@ asks its person to sign in and closes once its probe passes. The guide
 puts them to the person (guide queue, guide watch). beekeeper watch
 reports a note once when it is due. Notes appear in every hand-over until
 marked done. A session's state is its hand-over, rendered from live
-state; deferred work is a board item, a priority a board rank and a hold
-a blocked-by (board rank, board block), or on a person a decision that
+state; deferred work is a board item, a priority a board move or board
+reorder (board move, board rank / board order) and a hold a blocked-by
+(board block), or on a person a decision that
 sets its item's Status (note add --holds).
 
 Without a subcommand, lists the open notes.`,
@@ -501,7 +502,7 @@ machine's, each named <context>#<n> (in JSON its "central"); with the
 central instance unreachable, the list fails after the machine's notes.`
 	list.Flags().StringVar(&listFor, "for", "", "only the notes for this person or team")
 	list.Flags().BoolVar(&full, "full", false, "each note's whole text and the issues and pull requests it names")
-	c.AddCommand(add, answer, done, list)
+	c.AddCommand(add, answer, done, list, a.noteShowCmd())
 	return c
 }
 

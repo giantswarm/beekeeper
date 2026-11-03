@@ -1,7 +1,8 @@
 # Operating SSH execution hosts
 
 Managed, headless Claude Code sessions run on an explicitly selected SSH host.
-Each execution gets an isolated clone, an owned user service,
+Each execution gets its own linked worktree and branch backed by an isolated
+bare repository copy, an owned user service,
 a conversation identifier, and one coordinator roster registration. Omitting
 `--host`, or selecting `--host local`, keeps the local launch path.
 
@@ -29,6 +30,20 @@ in the supported family (`>= 2.1.268, < 3.0.0`), a pinned Codex CLI (see
 there independently. `agents hosts check` reads version and authentication
 metadata; it makes no model request. Starting a session never copies a provider
 credential store or forwards an authentication agent.
+
+Provision the worker toolchain the same way on every host, and pin it under
+`tools`: the GitHub CLI (`gh`) everywhere, and Go for each served repository
+whose source checkout has a `go.mod`, at least at the version its `toolchain`
+line (or, without one, its `go` line) names. Each pin is an absolute executable
+named `go` or `gh` and the version it reports (`go version` with
+`GOTOOLCHAIN=local`, `gh --version`). `agents hosts check`, and every start,
+refuses a host whose required tool is unpinned, reports another version than its
+pin, or is older than a served `go.mod` asks for, naming each one; a passing
+check lists the pinned versions under `tools`. The runner puts each tool's
+directory on the worker's PATH right after the component's, so a worker runs
+`go` and `gh` by bare name. The tools are part of the pinned policy: changing
+one, or raising Go when a `go.mod` moves to a newer toolchain, needs a new
+`prepare` and digest.
 
 Provision SSH authentication and known-host keys separately in both directions:
 the coordinator calls the host's component, and the managed worker calls the
@@ -78,6 +93,13 @@ agents:
         executable: /usr/local/bin/claude
         version: 2.1.290
         configDir: /srv/beekeeper/claude
+    tools:
+      go:
+        executable: /srv/tools/go1.27.3/bin/go
+        version: 1.27.3
+      gh:
+        executable: /usr/bin/gh
+        version: 2.83.0
     coordinators:
       coordinator:
         publicKey: <coordinator-public-key>
@@ -102,8 +124,17 @@ beekeeper --config /etc/beekeeper/host.yaml agents hosts bundle > /srv/beekeeper
 beekeeper --config /etc/beekeeper/host.yaml agents hosts prepare --bundle /srv/beekeeper/bundle.json
 ```
 
-`prepare` prints the policy digest to pin in the coordinator catalog. Add the
-following to the coordinator configuration, substituting that digest:
+`prepare` prints the policy digest. The coordinator records the digest it
+pins in its own state, not in its configuration: once the host runs a release
+with `agents hosts self-update`, run on the coordinator
+
+```sh
+beekeeper agents hosts update host-a
+```
+
+which has the host install the coordinator's release (below) and pins the
+digest the host prepared once `hosts check` passes with it. The coordinator
+configuration names the host and its limits only:
 
 ```yaml
 agents:
@@ -117,22 +148,81 @@ agents:
       repositories:
         example/repository: /srv/checkouts/repository
       harnesses: [claude]
-      policyDigest: <prepared-policy-digest>
       maxBusy: 2
       connectTimeout: 10s
       operationTimeout: 30s
 ```
 
-Coordinator and host releases may differ while they use the same execution
-protocol. A coordinator self-update does not require reinstalling or re-preparing
-the hosts. `hosts check` reports each host's release for diagnostics, and still
-requires the expected identity, protocol, pinned policy, harness and fresh resource
-observation. A different protocol is refused; upgrade the host to a release with
-the coordinator's protocol before starting new work.
+An entry's own `policyDigest` is deprecated: it still pins a host beekeeper
+never updated, and beekeeper's recorded pin replaces it.
 
-Changing the host binary, rules, settings, or protected host configuration invalidates
-the policy. Prepare and pin a matching bundle again before starting new work.
-Do not weaken a required guard to make a check pass.
+### Host updates follow the coordinator
+
+Hosts run the coordinator's release. `agents hosts update <host>` connects
+over the host's SSH route and runs `agents hosts self-update --version
+<coordinator release>` there. With no execution running, the host holds its
+admission, installs exactly that release once its Sigstore bundle verifies (as
+`self-update` does), and has the installed release prepare its own policy.
+The download is staged in a writable temporary directory beside the executable
+and atomically renamed over it; no backup or hard link is created. The update
+account needs write permission on that directory, rather than ownership of the
+old binary. If a system installation directory is not writable, beekeeper verifies
+the download in its own temporary directory, then uses `sudo -n` only to stage
+and atomically rename it in the destination directory. Sudo never prompts;
+if it is unavailable or denied, the failure is reported and the host stays held. A release that does not prepare leaves the host held for a retry;
+one that does moves the host's watches and sandbox broker onto it, as
+`self-update` does.
+The coordinator then runs `hosts check` with the digest the host answered and
+records the release and digest in its state (`hostPins`): every start on the
+host is pinned to it. No configuration change and no person is involved.
+
+The supervisor loop runs the update for every `agents.hosts` entry whose pin
+is not the coordinator's release, so a coordinator self-update carries the
+hosts with it. A coordinator that runs a release starts nothing on a host
+until the host runs that release:
+
+- a host with running executions drains: no new start there, and it updates
+  once they end;
+- a host whose update fails (unreachable, no signed release, a prepare or
+  check that fails) is held: no start there until an update succeeds. The
+  loop hands the hold on once as a finding (`supervisor.file`, delivered by
+  `guide watch`) and tries the host again hourly; the other hosts keep
+  running. `beekeeper agents hosts update <host>` retries it at once.
+
+A host first needs a release with `agents hosts self-update` installed by
+hand; from then on it follows the coordinator. A development build of the
+coordinator updates no host and gates no start on a host's release.
+
+`hosts check` reports each host's release and tool versions, refuses a release
+that differs from a released coordinator, and still requires
+the expected identity, protocol, pinned policy, harness and fresh resource
+observation.
+
+Changing the host binary, rules, settings, or protected host configuration
+invalidates the policy: the host's `hosts check` fails on a digest mismatch
+until `agents hosts update <host>` prepares and pins it again. Do not weaken
+a required guard to make a check pass.
+
+A running execution stays bound to the policy it started under. After such a
+change its unit keeps running, but its `agents publish`, `agents merge` and
+capped runs refuse until the coordinator rebinds it. Once the new bundle is
+prepared on the host and its digest pinned in the coordinator catalog, rebind
+each running execution from the coordinator:
+
+```sh
+beekeeper agents recover worker
+```
+
+Recovery inspects the same execution and never starts a replacement. It rebinds
+only to the host's prepared policy, only when that is the catalog's pinned
+digest, and only from the policy the execution is bound to; it records an
+`execution.policy-rebound` event with both digests. The worker keeps its
+workspace, commits, owned branch and pull request, and retries its publication.
+While the host policy is unprepared, stale, or not yet pinned, `recover` exits 3
+and says that the unit is reachable but its publication is unavailable. Only a
+running execution whose owned unit is active is rebound: a stopped, completed,
+exited, failed or never launched one is not, and recovery confirms an exited
+execution as it is.
 
 The pinned digest covers every host setting that changes what a worker may start
 under or how much it may consume: the security sections, the execution host
@@ -143,7 +233,7 @@ floor (`capacity.availMinMiB`), the swap guard (`capacity.swapGrowthMaxMiB` and
 the build slots and their caps (`memcap.slots`, `memcap.max`, `memcap.cpuQuota`,
 `memcap.cpuWeight`) and the kind lab cap (`maxKindClusters`). Weakening one of
 them on the host is a digest mismatch in `agents hosts check` until a matching
-bundle is prepared and pinned again. What stays host-local on purpose is the
+policy is prepared and pinned again (`agents hosts update <host>`). What stays host-local on purpose is the
 machine's own watch and desk pacing, which never bounds a pinned remote worker:
 the supervisor's target and pace (`capacity.ceiling` and the
 rest of `capacity` beyond the guards above), watch's alert thresholds and
@@ -205,6 +295,60 @@ Claude. Codex usage stays on the coordinator: the remote worker counts against
 the configured `codex` provider's ceiling, and the coordinator's own usage
 reading covers the shared subscription; a host adds machine room only.
 
+## Antigravity (agy) on an execution host
+
+A host may also run Antigravity (`agy` / Gemini) workers. Install a pinned `agy`
+CLI in the supported family (`>= 1.4.7, < 2.0.0`) and add it to the host's
+`harnesses`:
+
+```yaml
+agents:
+  execution:
+    harnesses:
+      agy:
+        executable: /usr/local/bin/agy
+        version: 1.4.7
+        configDir: /srv/beekeeper/agy
+```
+
+`configDir` is the directory holding the host's `agy` OAuth login token, and it
+is required. Logging in is a one-time step for the person on the execution
+host; credentials are never copied from the coordinator:
+
+```sh
+HOME=/srv/beekeeper/agy agy
+```
+
+(or point `configDir` at the host user's `~/.gemini` directory after logging in
+once with `agy` on the host). `prepare` locates the OAuth token at
+`<configDir>/.gemini/antigravity-cli/antigravity-oauth-token`,
+`<configDir>/antigravity-cli/antigravity-oauth-token`, or
+`<configDir>/antigravity-oauth-token` and links only that token into a managed
+home inside the policy directory (`<policy>/agy/.gemini/`).
+
+Workers never run in the host's own home. Inside `<policy>/agy/.gemini/config`,
+`prepare` installs the embedded worker rules as `GEMINI.md`, empty
+`mcp_config.json` and `skills.json` files (augmented per execution only with
+the authenticated `coordinator` MCP proxy when `agents.remoteMCP` is enabled),
+and a `hooks.json` in the `{"beekeeper":{"PreToolUse":[...]}}` format running
+`beekeeper agents execution-guard --format agy`. The policy digest binds those
+files; tampering with any of them fails `hosts check` until a matching bundle
+is prepared again.
+
+`hosts check` verifies `agy --version`, probes login with `agy models` inside
+the managed home without a model call, and runs the `agy` execution guard
+conformance probe. The host advertises `agy` only when all three pass, and a
+coordinator listing `agy` in the host's `harnesses` (`harnesses: [claude,
+codex, agy]`) starts `agy` workers there only when advertised.
+
+A remote `agy` worker runs one `agy --input-format stream-json --output-format
+stream-json` turn per message. The first turn sends the brief and records the
+emitted `conversation_id`, binds the execution guard to that conversation, and
+resumes stored wakes with `--conversation <id>`. Lease, publication, review,
+merge, stop and recovery follow the same contract as Claude and Codex. `agy`
+usage and pace stay on the coordinator: remote `agy` workers count against the
+`agy` provider ceiling, not the coordinator's local ceiling (`local.ceiling`).
+
 ## Start, inspect, and recover
 
 Run the coordinator's commands against its configuration:
@@ -228,10 +372,11 @@ host's physical guards. A host does not create another subscription budget.
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
 coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
-check weighs only the choices it can run (Claude Code). `hostsFirst` prefers
-hosts only for what a host can run: without room on any host a Claude start
+check weighs only the choices it can run (Claude Code, Codex, and Antigravity
+where configured and offered). `hostsFirst` prefers
+hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
-an adapter for (agy, omp, codex), starts on the coordinator within its local
+an adapter for (`omp`), starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs. A desk
 without `capacity.choices` never places remotely. Reviewers stay on the
 coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
@@ -489,7 +634,11 @@ up the exact owned branch before creating a PR. A create attempt is never retrie
 blindly. PR editing and commenting continue to use coordinating workflows;
 this command grants no general GitHub API authority.
 
-To bring the latest default branch into the workspace before publishing again:
+To bring the latest default branch into the workspace before publishing again
+(before the desk review approves the PR; after approval only the merge moves the
+head: the supervisor's reviewed merge takes a behind branch as it stands, or
+updates it itself where the base requires up-to-date branches and the desk has
+no admin merge, and a sync is left for a conflict the supervisor reports):
 
 ```sh
 beekeeper agents publish --sync-base
@@ -511,7 +660,22 @@ credential workaround. Chunk retries verify existing bytes; partial or corrupt
 bundles cannot be published. Transfer files remain under the coordinator's
 `execution-publications/transfers` state directory for recovery and may be moved
 aside once the execution is retired. Failed staging directories remain for
-inspection; successful staging directories are removed.
+inspection under the coordinator's `execution-publications/transfer-*` state
+directories; successful staging directories are removed.
+
+A failed Git step reports its stage and a fixed diagnosis, never Git's raw
+output, which may carry URLs or credentials: for example `publication Git push
+failed: GitHub refused a workflow file change: the coordinator's GitHub
+credential lacks the workflow scope or permission`. That one is an
+authorization barrier, not a transfer, ancestry or execution-policy error: the
+coordinator neither retries it nor changes its authentication, and repeating
+the publication fails the same until the coordinator's credential may change
+workflow files. Other diagnoses name a protected branch or repository rule, a
+non-fast-forward push, a rejected or missing credential, denied write access,
+an unreachable GitHub or the 20-second limit; anything else is an
+unclassified Git failure. The coordinator's event log records each denial as
+`execution.publish-denied` with the head and the same diagnosis (`beekeeper
+log`).
 
 Every chunk and publication checks the exact execution generation, repository
 allowlist, current lease, completion, execution/global stop and GitHub hold.
@@ -538,3 +702,99 @@ host journal whose reply was lost. Recovery inspects that journal before
 pinning source and reuses its original request and commit. Only an explicit
 missing-journal response permits a new source pin; an unreadable journal or
 uncertain connection preserves the reservation for another recovery attempt.
+
+## Provision repositories by owner
+
+A host need not keep a preseeded checkout of every repository on the board.
+Set `repositoryOrgs: [example]` under both the coordinator's
+`agents.hosts.<host>` entry and the host's `agents.execution` configuration,
+then prepare and pin the new policy with `agents hosts update <host>`.
+Only list owners authorized for workers on that host. Explicit `repositories`
+mappings continue to work and can be combined with `repositoryOrgs`.
+
+Remote placement and `agents start --host <host> --repo example/another
+--ref main` admit repositories under those owners. The coordinator fetches
+and pins the requested commit using its own GitHub transport and sends the
+existing bounded source bundle. The host verifies its digest and commit and
+clones it into the execution's owned workspace, with the canonical GitHub
+origin. No host GitHub credential or additional shared source checkout is
+needed for provisioning. An unmapped repository without a pinned bundle is
+refused. The workspace and transfer use the normal execution lifecycle and
+cleanup; provisioning creates no extra repository or cache outside it.
+
+Pin `gh` and Go as described above on every host. On an idle host,
+`beekeeper agents hosts provision-tools` installs missing pinned tools from
+the official Go and GitHub CLI releases, checking the published SHA-256
+before extraction. Go needs a dedicated installation directory with its
+executable at `<installation>/bin/go`; gh needs its configured executable
+path. The provisioner refuses traversal, links and oversized archives, and
+preserves an existing mismatched installation: configure a new versioned
+path to upgrade it. The normal host update provisions missing tools before
+preparing the current release's policy, so repeat updates also repair a
+missing installation. Both paths refuse to change tools while executions
+run. No provider or GitHub credential is used to download these public tools.
+
+ In addition to
+checking mapped checkouts, preparation validates the actual committed
+workspace's `go.mod` against those tools. A newer toolchain requirement in a
+new repository or ref refuses preparation before the harness launches; update
+the installed toolchain and its policy pin before retrying. Tools remain
+host installations shared by workers, rather than per-worker downloads.
+
+### Per-worker GitHub credentials
+
+The coordinator can issue GitHub App installation tokens separately for each
+execution, repository and permission level. Configure only the coordinator:
+
+```yaml
+github:
+  allowedOrgs: [example]
+  workerApp:
+    appID: 12345
+    privateKey: op://Shared/worker-app/private-key
+    installations:
+      example: 67890
+```
+
+The App needs Contents, Pull requests, Issues, Checks, Actions, Commit statuses
+and Metadata read access. Contents, Workflows and Pull requests write access are needed for
+the task repository. Its installation must include every repository workers
+need to research. The private-key reference is resolved in the coordinator;
+no App key, refresh token or permanent GitHub login is installed on a host.
+This configuration enables GitHub for newly started executions. Existing
+executions retain their recorded publication mode.
+
+In an enabled execution `gh issue view`, `gh pr view` and `gh pr checks` use a
+short-lived credential fetched over the authenticated SSH callback. Cross-repo
+calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Read tokens
+reach only the named repository in a configured owner. A write token reaches
+only the execution's task repository. Read-only Git clone, fetch and ls-remote
+operations may also name an explicit GitHub repository URL in those owners.
+The runner installs dispatch scripts for
+`gh` and `git` ahead of the pinned tools; scripts and journals contain no token.
+Only the launched GitHub client receives it, through its environment.
+
+Push from the owned workspace with
+`git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
+then open the PR with `gh pr create`. The adapter supplies that same head branch,
+and the coordinator verifies it against GitHub and the parked workspace commit
+before requesting desk review. Force pushes, other branches and alternate push
+remotes are refused. Local Git commands run without a credential. Network Git
+uses the pinned HTTPS origin and disables inherited credential helpers, global
+Git configuration, hooks and redirects. Authenticated pushes use a disposable
+bare repository with only the resolved workspace commit and object storage;
+workspace Git configuration and refs cannot add tags, mirror other branches or
+redirect the transport. Inherited Git environment overrides are removed.
+Merges continue through the coordinator's
+review and exact-head authorization, never a worker's `gh pr merge`.
+
+GitHub installation tokens expire after an hour. The coordinator caches them
+until five minutes before expiry and retains a private revocation ledger under
+its own state directory, outside scheduling state and event logs. Runner exit,
+completion, explicit stop and terminal inspection revoke credentials; a failed
+revocation retains the ledger and reports an error for retry. An unreachable
+host does not prevent coordinator revocation; failed host contact after the
+execution lease expires also revokes its credentials. The managed command hooks are the
+same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
+installation token cannot itself limit Contents writes to one branch. Hosts
+therefore still require the managed guards and owned execution identity.

@@ -286,6 +286,7 @@ func TestLoopFillBacksOffEmptyAndFailedBoardReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			l.once = true // These checks inspect completed pass effects.
 			pass := func() {
 				t.Helper()
 				if err := l.pass(t.Context()); err != nil {
@@ -346,6 +347,7 @@ func TestLoopFillStateChangesAndBoardBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			l.once = true // These checks inspect completed pass effects.
 			if err := l.pass(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -409,6 +411,7 @@ func emptyBoardFill(t *testing.T) (*loopRig, *supervisorLoop, *int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	return r, l, &reads
 }
 
@@ -425,7 +428,7 @@ func TestLoopFillPauseHoldsThroughRosterChurn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := countAgents(st, nil, r.a.now)
+		c := countAgents(st, nil, r.a.now, r.a.cfg)
 		out, err := json.Marshal(capacityView{Ceiling: 5, Room: 5 - len(c.Busy), agentCount: c})
 		if err != nil {
 			t.Fatal(err)
@@ -709,6 +712,7 @@ func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *supervisorLoop, *int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	var evs []state.Event
 	for i := range doneN {
 		name := fmt.Sprintf("worker %d", i+1)
@@ -772,8 +776,8 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 	for _, name := range []string{"graphql under floor", "graphql refused", "rest under floor"} {
 		t.Run(name, func(t *testing.T) {
 			r, l, reads := nothingFreeRig(t, 2)
-			r.a.cfg.GitHub.Floor = 2500
 			r.loopPass(t, l)
+			r.a.cfg.GitHub.Floor = 2500
 			setBudget := func(low bool) {
 				t.Helper()
 				err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -810,7 +814,7 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 			if got := len(r.logged(t, "supervisor.next")); got != 0 {
 				t.Fatalf("next starts settled without a board read: %d", got)
 			}
-			if !strings.Contains(r.out.String(), "SUPERVISOR NEXT HELD") {
+			if !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
 				t.Errorf("the hold is not said:\n%s", r.out)
 			}
 			setBudget(false)
@@ -819,6 +823,83 @@ func TestLoopReadsNoBoardUnderTheBudgetFloor(t *testing.T) {
 				t.Fatalf("after recovery: %d reads, %d settled", *reads-before, len(r.logged(t, "supervisor.next")))
 			}
 		})
+	}
+}
+
+// A low GraphQL reading holds the refill's board read until the reading's
+// window resets, not an hour after the reading.
+func TestLoopReadsNoBoardUntilTheGraphQLReset(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	r.a.cfg.GitHub.Floor = 2500
+	reset := r.a.now.Add(20 * time.Minute)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		now := r.a.now
+		st.Budget = &state.Budget{Remaining: 4000, Limit: 5000, Reset: now.Add(time.Hour), At: now,
+			GraphQL: &state.GraphQL{Remaining: 100, Limit: 5000, Reset: reset, At: now}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for r.a.now.Before(reset.Add(-30 * time.Second)) {
+		r.loopPass(t, l)
+	}
+	if *reads != 0 {
+		t.Fatalf("read the board %d times before the GraphQL reset", *reads)
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR GITHUB HELD") {
+		t.Errorf("the hold is not said:\n%s", r.out)
+	}
+	r.loopPass(t, l)
+	r.loopPass(t, l)
+	if *reads != 0 {
+		t.Fatal("read board on an expired low reading without evidence of recovery")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget.GraphQL = &state.GraphQL{Remaining: 4900, Limit: 5000, At: r.a.now, Reset: r.a.now.Add(time.Hour)}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.loopPass(t, l)
+	if *reads != 1 {
+		t.Fatalf("past the GraphQL reset: %d board reads, want 1", *reads)
+	}
+}
+
+// Consecutive empty reads double the refill's pause up to four times
+// supervisor.fillRetryEvery; a change that ends the pause starts it over.
+func TestLoopFillBacksOffOverAnEmptyBoard(t *testing.T) {
+	r, l, reads := emptyBoardFill(t)
+	ceiling := 5
+	board := r.answer
+	var at []time.Duration
+	start := r.a.now
+	r.answer = func(args []string) (string, int) {
+		switch args[0] {
+		case fillCapacityCommand:
+			return fmt.Sprintf(`{"floor":3,"ceiling":%d,"room":5,"busy":[]}`, ceiling), 0
+		case loopBoard:
+			at = append(at, r.a.now.Sub(start))
+		}
+		return board(args)
+	}
+	passes := func(d time.Duration) {
+		t.Helper()
+		for end := r.a.now.Add(d); r.a.now.Before(end); r.a.now = r.a.now.Add(30 * time.Second) {
+			if err := l.pass(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	passes(56 * time.Minute)
+	m := time.Minute
+	if want := []time.Duration{0, 5 * m, 15 * m, 35 * m, 55 * m}; !slices.Equal(at, want) {
+		t.Fatalf("empty reads at %v, want %v", at, want)
+	}
+	ceiling = 6 // a change ends the pause and starts the backoff over
+	passes(6 * time.Minute)
+	if want := []time.Duration{56 * m, 61 * m}; *reads != 7 || !slices.Equal(at[5:], want) {
+		t.Fatalf("after the change: reads at %v, want %v next", at, want)
 	}
 }
 
@@ -839,6 +920,7 @@ func TestLoopBoardNextRefusalWithoutNothingFreeFails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		l.once = true // These checks inspect completed pass effects.
 		if next, err := l.readNextItem(t.Context()); next != nil || err == nil {
 			t.Errorf("refusal %q read as %v, %v", body, next, err)
 		}

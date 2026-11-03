@@ -313,9 +313,13 @@ type choiceCandidate struct {
 	Model      string   `json:"model"`
 	Provider   string   `json:"provider"`
 	Bucket     string   `json:"bucket,omitempty"`
+	Class      int      `json:"class,omitempty"`
+	Cost       float64  `json:"cost,omitempty"`
+	Family     string   `json:"family,omitempty"`
 	OK         bool     `json:"ok"`
 	Reason     string   `json:"reason,omitempty"`
 	BehindPace *float64 `json:"behindPace,omitempty"`
+	Rate       *float64 `json:"rate,omitempty"`
 }
 
 // choiceView is the result of evaluating capacity.choices for a start.
@@ -324,6 +328,8 @@ type choiceView struct {
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Bucket   string `json:"bucket,omitempty"`
+	TaskKind string `json:"taskKind,omitempty"`
+	Decision string `json:"decision,omitempty"`
 	Review   bool   `json:"review,omitempty"`
 	// ReviewOfSelfHosted says the start reviews a self-hosted model's work:
 	// no choice on a self-hosted provider is eligible.
@@ -407,6 +413,7 @@ type agentCount struct {
 	Parked  []string `json:"parked"`
 	Waiting []string `json:"waiting"`
 	Idle    []string `json:"idle"`
+	Gone    []string `json:"gone"`
 }
 
 // waitQuiet is how long a session whose tool commands only wait must have
@@ -416,15 +423,18 @@ const waitQuiet = 5 * time.Minute
 
 // countAgents sorts st's roster at now; sessions say which agents wait on
 // their person or in a wait of their own (none known without them).
-func countAgents(st *state.State, sessions []*claude.Session, now time.Time) agentCount {
-	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}}
+func countAgents(st *state.State, sessions []*claude.Session, now time.Time, cfg *config.Config) agentCount {
+	cfg, staleAfter := rosterConfig(cfg)
+	c := agentCount{Busy: []string{}, Parked: []string{}, Waiting: []string{}, Idle: []string{}, Gone: []string{}}
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if executionReserved(st, ag) {
-				c.Busy = append(c.Busy, ag.Name)
-			} else {
+			if !executionReserved(st, ag) {
 				c.Idle = append(c.Idle, ag.Name)
+			} else if k := keptBy(st, ag, now); k != "" {
+				c.Parked = append(c.Parked, fmt.Sprintf("%s (%s)", ag.Name, k))
+			} else {
+				c.Busy = append(c.Busy, ag.Name)
 			}
 			continue
 		}
@@ -438,6 +448,10 @@ func countAgents(st *state.State, sessions []*claude.Session, now time.Time) age
 		}
 		if k := keptBy(st, ag, now); k != "" {
 			c.Parked = append(c.Parked, fmt.Sprintf("%s (%s)", ag.Name, k))
+			continue
+		}
+		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone {
+			c.Gone = append(c.Gone, fmt.Sprintf("%s (last activity %s)", ag.Name, last.UTC().Format(time.RFC3339)))
 			continue
 		}
 		s, live := claude.Live(sessions, p)
@@ -462,7 +476,8 @@ type providerAgents struct {
 	BucketBusy  map[string][]string
 }
 
-func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time) map[string]providerAgents {
+func countProviderAgents(st *state.State, sessions []*claude.Session, k config.Capacity, now time.Time, cfg *config.Config) map[string]providerAgents {
+	cfg, staleAfter := rosterConfig(cfg)
 	out := make(map[string]providerAgents, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		out[name] = providerAgents{Busy: []string{}, BucketBusy: map[string][]string{}}
@@ -470,7 +485,7 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 	guide := st.GuideRole()
 	for _, ag := range st.Agents {
 		if ag.Execution != nil {
-			if !executionReserved(st, ag) {
+			if !executionReserved(st, ag) || keptBy(st, ag, now) != "" {
 				continue
 			}
 			r, _ := executionRecord(st, *ag.Execution)
@@ -508,6 +523,9 @@ func countProviderAgents(st *state.State, sessions []*claude.Session, k config.C
 		}
 		s, live := claude.Live(sessions, p)
 		if live && (s.Waiting != nil || s.OwnWait(now, waitQuiet) != "") {
+			continue
+		}
+		if _, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone {
 			continue
 		}
 		harness, model := agentHarnessModel(st, sessions, ag)
@@ -573,6 +591,12 @@ func ompChoiceModel(ch config.Choice, model string) bool {
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "/"+id)
+}
+
+// choiceModelMatches compares a configured selector with a requested or
+// recorded model, including omp's provider-qualified form of a bare id.
+func choiceModelMatches(ch config.Choice, model string) bool {
+	return strings.EqualFold(strings.TrimSpace(ch.Model), strings.TrimSpace(model)) || ompChoiceModel(ch, model)
 }
 
 func resolveAgentProviderBucket(k config.Capacity, harness, model string) (prov, bucket string) {
@@ -645,7 +669,11 @@ func (c agentCount) line(k config.Capacity) string {
 	if len(c.Busy) > 0 {
 		s += ": " + strings.Join(c.Busy, ", ")
 	}
-	return s + fmt.Sprintf("; %d parked, %d waiting, %d idle", len(c.Parked), len(c.Waiting), len(c.Idle))
+	s += fmt.Sprintf("; %d parked, %d waiting, %d idle", len(c.Parked), len(c.Waiting), len(c.Idle))
+	if len(c.Gone) > 0 {
+		s += "; gone: " + strings.Join(c.Gone, ", ")
+	}
+	return s
 }
 
 // headroom is what bounds a new start: MemAvailable, disk swap's growth
@@ -1445,9 +1473,10 @@ func choiceExcluded(ch config.Choice, excludes, providerNames []string) bool {
 	return false
 }
 
-// evaluateChoices ranks eligible subscriptions by distance behind weekly pace.
-// Configured order breaks ties; self-hosted choices are fallbacks. The same
-// gates apply to every kind of start.
+// evaluateChoices ranks eligible subscriptions by budget left per hour until
+// their 7-day window resets (remaining percent / hours to reset). Configured
+// order breaks ties; self-hosted choices are fallbacks. The same gates apply
+// to every kind of start.
 func evaluateChoices(k config.Capacity, providers map[string]*providerView, machineBlocks []string, stopped string, exclude []string, kind startFor, now time.Time) *choiceView {
 	normEx := normalizeExcludes(exclude)
 	cv := &choiceView{
@@ -1455,9 +1484,20 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		ReviewOfSelfHosted: kind == forReviewOfSelfHosted,
 		Exclude:            normEx,
 	}
+	if k.TaskKind != "" || len(k.TaskPolicies) > 0 {
+		cv.TaskKind = k.TaskKind
+		if cv.TaskKind == "" {
+			cv.TaskKind = workerRole
+			if kind != forWorker {
+				cv.TaskKind = taskKindReview
+			}
+		}
+		cv.Decision = "task " + cv.TaskKind + ": eligible provider furthest behind weekly pace, lower configured cost breaks equal pace"
+	}
 	var reasons []string
 	bestSubscription := false
-	bestBehind := math.Inf(-1)
+	bestRate := math.Inf(-1)
+	bestCost := math.Inf(1)
 
 	for _, ch := range k.Choices {
 		provName := ch.EffectiveProvider()
@@ -1468,28 +1508,37 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 			bucketName = ch.EffectiveBucket(pCfg)
 		}
 		cand := choiceCandidate{
+			Class: ch.Class, Cost: ch.Cost, Family: ch.Family,
 			Harness:  ch.Harness,
 			Model:    ch.Model,
 			Provider: provName,
 			Bucket:   bucketName,
 		}
-		reason := evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
+		reason := modelPolicyReason(k, ch, pv, bucketName, kind)
+		if reason == "" {
+			reason = evaluateSingleChoice(ch, pCfg, pv, bucketName, machineBlocks, stopped, normEx, k.ProviderNames(), kind, now)
+		}
 		if reason == "" {
 			cand.OK = true
 			subscription := !pCfg.SelfHosted()
-			behind := 0.0
+			rate := 0.0
 			if subscription {
 				sd := pv.SevenDay
 				if len(pv.Buckets) > 0 && !pv.supplementalBuckets {
 					sd = pv.findBucket(bucketName).SevenDay
 				}
 				if sd != nil && sd.Pace != nil {
-					behind = *sd.Pace - sd.UsedPercent
+					behind := math.Round((*sd.Pace-sd.UsedPercent)*10) / 10
 					cand.BehindPace = &behind
 				}
+				if r, ok := windowRate(sd, now); ok {
+					rate = r
+					rounded := math.Round(r*10) / 10
+					cand.Rate = &rounded
+				}
 			}
-			if cv.Harness == "" || subscription && (!bestSubscription || behind > bestBehind) {
-				bestSubscription, bestBehind = subscription, behind
+			if cv.Harness == "" || subscription && (!bestSubscription || rate > bestRate+1e-9 || math.Abs(rate-bestRate) <= 1e-9 && ch.Cost > 0 && ch.Cost < bestCost) {
+				bestSubscription, bestRate, bestCost = subscription, rate, ch.Cost
 				cv.Harness = ch.Harness
 				cv.Model = ch.Model
 				cv.Provider = provName
@@ -1505,6 +1554,28 @@ func evaluateChoices(k config.Capacity, providers map[string]*providerView, mach
 		cv.Reason = strings.Join(reasons, "; ")
 	}
 	return cv
+}
+
+// windowRate returns w's remaining budget per hour until its 7-day reset at
+// now (remaining percent / hours to reset), and whether hours to reset are
+// known.
+func windowRate(w *usageWindow, now time.Time) (float64, bool) {
+	if w == nil {
+		return 0, false
+	}
+	hours := 0.0
+	switch {
+	case !w.ResetsAt.IsZero() && now.Before(w.ResetsAt):
+		hours = w.ResetsAt.Sub(now).Hours()
+	case w.ResetsAt.IsZero() && w.Pace != nil && *w.Pace < 100:
+		hours = (100 - *w.Pace) / 100 * sevenDaySpan.Hours()
+	default:
+		return 0, false
+	}
+	if hours <= 0 {
+		return 0, false
+	}
+	return max(0, 100-w.UsedPercent) / hours, true
 }
 
 func evaluateSingleChoice(ch config.Choice, pCfg config.Provider, pv *providerView, bucketName string, machineBlocks []string, stopped string, excludes, providerNames []string, kind startFor, now time.Time) string {
@@ -1600,8 +1671,8 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 	if now.IsZero() {
 		now = time.Now()
 	}
-	c := countAgents(st, sessions, now)
-	pa := countProviderAgents(st, sessions, k, now)
+	c := countAgents(st, sessions, now, a.cfg)
+	pa := countProviderAgents(st, sessions, k, now, a.cfg)
 	readings := make(map[string]providerReadingResult, len(k.Providers))
 	for _, name := range k.ProviderNames() {
 		p := k.Providers[name]
@@ -1621,7 +1692,14 @@ func (a *app) resolveProvidersCapacityForModel(ctx context.Context, st *state.St
 		readings[name] = a.serveModeReadings(ctx, name, p)
 	}
 	h := a.readHeadroom(ctx, k, a.watchSwap())
-	return buildProvidersCapacity(c, pa, filterChoiceModel(k, wantModel), readings, h, builds, exclude, kind, now)
+	choicesCap := filterChoiceModel(k, wantModel)
+	v := buildProvidersCapacity(c, pa, choicesCap, readings, h, builds, exclude, kind, now)
+	if len(k.Choices) > 0 && len(choicesCap.Choices) == 0 {
+		reason := fmt.Sprintf("model %q is not in capacity.choices", strings.TrimSpace(wantModel))
+		v.Choice = &choiceView{Review: kind != forWorker, ReviewOfSelfHosted: kind == forReviewOfSelfHosted, Reason: reason}
+		v.Room, v.Blocks = 0, []string{"no choice has room: " + reason}
+	}
+	return v
 }
 
 // withUsage attaches u to v and replaces or prepends the usage block when
@@ -1695,10 +1773,13 @@ func (v *capacityView) verdict() string {
 func (a *app) liveCapacity() config.Capacity {
 	if p := cmp.Or(a.cfgPath, a.loadedCfg); p != "" {
 		if c, err := config.Load(p); err == nil {
+			c.Capacity.TaskKind, c.Capacity.AuthorModel = a.selectionKind, a.selectionAuthor
 			return c.Capacity
 		}
 	}
-	return a.cfg.Capacity
+	k := a.cfg.Capacity
+	k.TaskKind, k.AuthorModel = a.selectionKind, a.selectionAuthor
+	return k
 }
 
 // readHeadroom reads the machine's headroom now against k; swap is the
@@ -1751,7 +1832,7 @@ func (a *app) watchSwap() *swapReading {
 }
 
 func (a *app) capacityCmd() *cobra.Command {
-	var host string
+	var host, model string
 	var builds, review, ofSelfHosted bool
 	var exclude []string
 	c := &cobra.Command{
@@ -1774,8 +1855,9 @@ configured, beekeeper reads each provider's usage windows (such as Claude's
 JSON windows and agy -p /usage's model buckets), counts busy agents against
 the provider and bucket they run on, caps the subscription providers' total by
 the machine guards and capacity.ceiling, and prints each provider's windows and
-verdict plus the eligible choice furthest behind its even 7-day pace, breaking
-ties by capacity.choices order, with self-hosted choices as fallbacks. Each
+verdict plus the eligible choice with the most 7-day budget left per hour until
+its reset (remaining percent / hours to reset), breaking ties by
+capacity.choices order, with self-hosted choices as fallbacks. Each
 provider must have room, its 5-hour window below its threshold and its 7-day use
 within the weekly cap and at or under the even pace of its 7-day window.
 Every start is decided alike: --review marks a review start, which skips no
@@ -1852,6 +1934,13 @@ capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -1867,6 +1956,9 @@ nothing; it makes no GitHub call.`,
 				if err != nil {
 					return err
 				}
+				if err := a.admitExecution(host, h); err != nil {
+					return err
+				}
 				caps, err := a.probeExecution(cmd.Context(), h)
 				if err != nil {
 					return err
@@ -1876,11 +1968,11 @@ nothing; it makes no GitHub call.`,
 				if len(k.Providers) == 0 {
 					k, legacy = a.resolveUsage(cmd.Context(), k)
 				}
-				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, "")
+				v = a.executionCapacity(st, sessions, k, h, caps.Resources, a.executionReadings(cmd.Context(), k), legacy, builds, append(slices.Clone(exclude), hostUnoffered(caps)...), startKind(review, ofSelfHosted), harnessAuto, model)
 			} else if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
-				v = a.resolveProvidersCapacity(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted)).withLocal(st, liveCap).stopped(a, st.Stop)
+				v = a.resolveProvidersCapacityForModel(cmd.Context(), st, sessions, liveCap, builds, exclude, startKind(review, ofSelfHosted), model).withLocal(st, liveCap).stopped(a, st.Stop)
 			} else {
-				c := countAgents(st, sessions, a.now)
+				c := countAgents(st, sessions, a.now, a.cfg)
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
 			}
@@ -1907,6 +1999,9 @@ nothing; it makes no GitHub call.`,
 			}
 			if v.Choice != nil {
 				p("choice: %s", v.Choice.line())
+				if v.Choice.Decision != "" {
+					p("decision: %s", v.Choice.Decision)
+				}
 			}
 			if len(v.Parked) > 0 {
 				p("parked: %s", strings.Join(v.Parked, ", "))
@@ -1924,6 +2019,9 @@ nothing; it makes no GitHub call.`,
 	}
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the verdict for a start that builds, which waits for a free build slot")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; default local")
+	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "the verdict for a review start, using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "the verdict for the review of a self-hosted model's work: no self-hosted provider")
 	c.Flags().StringSliceVar(&exclude, excludeFlag, nil, "exclude a choice by model, harness/model, provider or harness (repeatable or comma-separated)")
@@ -1936,7 +2034,7 @@ nothing; it makes no GitHub call.`,
 // of a self-hosted model's work, excludeFlag excludes choices.
 const (
 	buildsFlag             = "builds"
-	reviewFlag             = "review"
+	reviewFlag             = taskKindReview
 	reviewOfSelfHostedFlag = "review-of-self-hosted"
 	excludeFlag            = "exclude"
 )
@@ -1979,6 +2077,7 @@ func newPick(v *capacityView) *pickView {
 }
 
 func (a *app) capacityPickCmd() *cobra.Command {
+	var model string
 	var review, ofSelfHosted bool
 	c := &cobra.Command{
 		Use:   "pick [--review | --review-of-self-hosted]",
@@ -1986,8 +2085,9 @@ func (a *app) capacityPickCmd() *cobra.Command {
 		Long: `Print the one start capacity's decision allows now, as "<harness> <model>",
 or "none". The decision is the one agents start without --harness, the
 supervisor loop's reviewers and its next starts take: the eligible subscription
-furthest behind its even 7-day pace, with configured order breaking ties and
-self-hosted choices used when no subscription is eligible. Each eligible choice
+with the most 7-day budget left per hour until its reset (remaining percent /
+hours to reset), with configured order breaking ties and self-hosted choices
+used when no subscription is eligible. Each eligible choice
 has a configured provider and a free slot under its running-session ceiling,
 5-hour and 7-day windows under their stop percent, and 7-day use not ahead of
 the even pace of its window, with the
@@ -1995,13 +2095,20 @@ machine's headroom as a hard gate and capacity.ceiling bounding the
 subscription providers together. A review may use capacity.reviewHeadroom extra subscription sessions above
 the worker ceiling; machine guards and provider window stops still apply. --review-of-self-hosted decides the reviewer of a pull request a
 self-hosted model's worker wrote: no choice on a self-hosted provider. --json
-prints the pick with every choice's reason and eligible subscription's distance
-behind pace, each provider's windows and
+prints the pick with every choice's reason and eligible subscription's remaining
+budget per hour (rate) and distance behind pace, each provider's windows and
 verdict, and the headroom. Exit 0 either way; reads only.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			a.selectionKind = strings.TrimSpace(a.selectionKind)
+			if a.selectionKind == taskKindReview {
+				review = true
+			}
+			if a.selectionAuthor != "" && !review && !ofSelfHosted {
+				return usageErr(authorNeedsReview)
+			}
 			kind := startKind(review, ofSelfHosted)
-			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, "")
+			v, err := a.startCapacityForAuto(cmd.Context(), false, nil, kind, model)
 			if err != nil {
 				return err
 			}
@@ -2013,6 +2120,9 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&model, "model", "", "filter capacity.choices to a model")
+	c.Flags().StringVar(&a.selectionKind, "kind", "", "task kind for model policy (default: worker, or review with --review)")
+	c.Flags().StringVar(&a.selectionAuthor, authorModelFlag, "", "model that wrote the reviewed change; exclude its configured family")
 	c.Flags().BoolVar(&review, reviewFlag, false, "decide a review start using reserved review headroom")
 	c.Flags().BoolVar(&ofSelfHosted, reviewOfSelfHostedFlag, false, "decide the reviewer of a self-hosted model's work: no self-hosted provider")
 	return c
@@ -2020,9 +2130,14 @@ verdict, and the headroom. Exit 0 either way; reads only.`,
 
 // gateStart judges capacity's verdict v for a start: room lets it through
 // (nothing to say), none refuses it (exit 3, the verdict's guards named)
-// unless force, which lets it through and returns the verdict overridden
-// for the event log.
+// unless force, which overrides capacity for the event log. Model policy
+// and the desk's stop remain refusals, including SSH reservation rechecks.
 func gateStart(v *capacityView, force bool) (string, error) {
+	for _, b := range v.Blocks {
+		if strings.HasPrefix(b, modelPolicyPrefix) {
+			return "", refused("%s", b)
+		}
+	}
 	switch {
 	case v.Stopped != "":
 		return "", refused("%s", v.verdict())
@@ -2091,9 +2206,35 @@ func (v *capacityView) forTarget(k config.Capacity, harness, model string) *capa
 }
 
 func (v *capacityView) forPoolTarget(k config.Capacity, harness, model string) *capacityView {
-	if v == nil || v.Stopped != "" || v.reviewLimitReached || harness == harnessAuto || len(v.Providers) == 0 {
+	if v == nil || v.Stopped != "" || harness == harnessAuto {
 		return v
 	}
+	task := cmp.Or(k.TaskKind, workerRole)
+	if k.TaskKind == "" && v.Review {
+		task = taskKindReview
+	}
+	policy := k.TaskPolicies[task]
+	if policy.MinClass > 0 || policy.MaxCost > 0 || policy.DifferentFamily || k.AuthorModel != "" || v.Review && k.TaskPolicies[taskKindReview].DifferentFamily {
+		known := slices.ContainsFunc(k.Choices, func(ch config.Choice) bool {
+			return ch.Harness == harness && choiceModelMatches(ch, model)
+		})
+		if !known {
+			v.Room, v.Blocks = 0, []string{"model policy: target has no configured capability, cost or family metadata"}
+			return v
+		}
+	}
+	if v.Choice != nil {
+		for _, cand := range v.Choice.Candidates {
+			if cand.Harness == harness && choiceModelMatches(config.Choice{Harness: cand.Harness, Model: cand.Model}, model) && strings.HasPrefix(cand.Reason, modelPolicyPrefix) {
+				v.Room, v.Blocks = 0, []string{cand.Reason}
+				return v
+			}
+		}
+	}
+	if v.reviewLimitReached || len(v.Providers) == 0 {
+		return v
+	}
+
 	prov, bucket := resolveAgentProviderBucket(k, harness, model)
 	pv := v.Providers[prov]
 	if pv == nil {
@@ -2248,7 +2389,7 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 	if len(liveCap.Providers) > 0 || len(liveCap.Choices) > 0 {
 		return a.resolveProvidersCapacityForModel(ctx, st, sessions, liveCap, builds, exclude, kind, wantModel).withLocal(st, liveCap).stopped(a, st.Stop), nil
 	}
-	c := countAgents(st, sessions, a.now)
+	c := countAgents(st, sessions, a.now, a.cfg)
 	k, u := a.resolveUsage(ctx, liveCap)
 	return newStartCapacity(c, k, a.readHeadroom(ctx, k, a.watchSwap()), builds, kind).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop), nil
 }
@@ -2256,18 +2397,26 @@ func (a *app) startCapacityForAuto(ctx context.Context, builds bool, exclude []s
 func choicesHaveModel(choices []config.Choice, model string) bool {
 	m := strings.TrimSpace(model)
 	return slices.ContainsFunc(choices, func(ch config.Choice) bool {
-		return strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m)
+		return choiceModelMatches(ch, m)
 	})
 }
 
 func filterChoiceModel(k config.Capacity, model string) config.Capacity {
 	m := strings.TrimSpace(model)
+	if k.AuthorFamily == "" {
+		for _, ch := range k.Choices {
+			if choiceModelMatches(ch, k.AuthorModel) {
+				k.AuthorFamily = ch.Family
+				break
+			}
+		}
+	}
 	if m == "" || len(k.Choices) == 0 {
 		return k
 	}
 	var filtered []config.Choice
 	for _, ch := range k.Choices {
-		if strings.EqualFold(strings.TrimSpace(ch.Model), m) || ompChoiceModel(ch, m) {
+		if choiceModelMatches(ch, m) {
 			filtered = append(filtered, ch)
 		}
 	}
@@ -2295,7 +2444,7 @@ func (w *watcher) keepSwap(r *swapReading) {
 func (w *watcher) capacity(ctx context.Context, st *state.State, sessions []*claude.Session) {
 	live := w.liveCapacity()
 	k, u := w.currentUsage(live, w.now)
-	c := countAgents(st, sessions, w.now)
+	c := countAgents(st, sessions, w.now, w.cfg)
 	busy := len(c.Busy)
 	// A configured capacity.ceiling of 0 keeps the line silent even when
 	// the derived ceiling is positive (a self-hosted provider's own ceiling

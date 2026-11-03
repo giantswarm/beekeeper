@@ -343,11 +343,13 @@ type Park struct {
 	ReviewHead string `json:"reviewHead,omitempty"`
 	// PostMerge is work remaining after merge; nil preserves older parks.
 	// An explicit empty string lets the loop close the task without a wake.
-	PostMerge *string   `json:"postMerge,omitempty"`
-	By        Party     `json:"by"`
-	At        time.Time `json:"at"`
-	On        string    `json:"on,omitempty"`
-	Waits     string    `json:"waits"`
+	PostMerge *string `json:"postMerge,omitempty"`
+	// Worktree is the local git worktree root the caller parked from.
+	Worktree string    `json:"worktree,omitempty"`
+	By       Party     `json:"by"`
+	At       time.Time `json:"at"`
+	On       string    `json:"on,omitempty"`
+	Waits    string    `json:"waits"`
 	// Resumable is when the watch saw On settle; Answer is what settled it,
 	// a person's answer word for word or the pull request's state.
 	Resumable time.Time `json:"resumable,omitzero"`
@@ -359,6 +361,13 @@ type Park struct {
 	rest rest
 }
 
+// WorkerProblems keeps finding receipts after the watch drains its reports.
+type WorkerProblems struct {
+	Task       string    `json:"task"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	Findings   []string  `json:"findings"`
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
@@ -366,10 +375,13 @@ type Agent struct {
 	// Its reachability and lifecycle are stored on the matching Start.
 	Execution  *execution.Ref `json:"execution,omitempty"`
 	Registered time.Time      `json:"registered"`
-	Task       string         `json:"task,omitempty"`
-	AssignedAt time.Time      `json:"assignedAt,omitzero"`
-	IdleSince  time.Time      `json:"idleSince,omitzero"`
-	LastTask   string         `json:"lastTask,omitempty"`
+	// ActivityAt is the latest explicit roster activity (note, wake or resume).
+	ActivityAt       time.Time       `json:"activityAt,omitzero"`
+	Task             string          `json:"task,omitempty"`
+	AssignedAt       time.Time       `json:"assignedAt,omitzero"`
+	IdleSince        time.Time       `json:"idleSince,omitzero"`
+	LastTask         string          `json:"lastTask,omitempty"`
+	ReportedProblems *WorkerProblems `json:"reportedProblems,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -564,6 +576,9 @@ type Timer struct {
 	// daily, weekdays (Monday to Friday) or weekly. Such a timer stays open
 	// until marked done.
 	Repeat string `json:"repeat,omitempty"`
+	// Held is what kept a due timer from firing at its time (a beekeeper
+	// stop), said when it fires late; a re-armed timer starts without it.
+	Held string `json:"held,omitempty"`
 
 	rest rest
 }
@@ -821,7 +836,24 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
-	rest      rest
+	// PendingPublication is the last publication request whose bundle
+	// reached the coordinator before publication failed. Cleared once
+	// published.
+	PendingPublication *ExecutionPendingPublication `json:"pendingPublication,omitempty"`
+	// RecoveredTransfer is the last publication bundle digest the
+	// coordinator attempted to recover automatically.
+	RecoveredTransfer string `json:"recoveredTransfer,omitempty"`
+	// StartUnsent says no start request of this reservation has left the
+	// coordinator yet, so the host holds no journal of it. A reservation
+	// recorded before this field existed reads false: maybe sent.
+	StartUnsent bool `json:"startUnsent,omitempty"`
+	// StartSentAt is when the coordinator last sent its start request.
+	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// ReleasedAt is when a reservation the host never acknowledged was
+	// given up, ReleaseReason why: it holds no host or desk slot since.
+	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
+	ReleaseReason string    `json:"releaseReason,omitempty"`
+	rest          rest
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -830,6 +862,17 @@ type ExecutionPublication struct {
 	Branch string    `json:"branch"`
 	Head   string    `json:"head"`
 	URL    string    `json:"url,omitempty"`
+}
+
+// ExecutionPendingPublication is an unpushed publication request whose
+// bundle transfer is stored on the coordinator.
+type ExecutionPendingPublication struct {
+	At           time.Time `json:"at"`
+	Head         string    `json:"head"`
+	BundleDigest string    `json:"bundleDigest"`
+	Title        string    `json:"title,omitempty"`
+	Body         string    `json:"body,omitempty"`
+	LastError    string    `json:"lastError,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -843,11 +886,18 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.Released() {
+		return true
+	}
 	if r.StopRequest != nil && !r.Observation.StopAcknowledged {
 		return false
 	}
 	return r.Observation.StopAcknowledged || r.Observation.ProcessState == execution.Exited || r.Observation.ProcessState == execution.Failed
 }
+
+// Released says the reservation was given up before its host acknowledged
+// a start: no process of it can exist.
+func (r *ExecutionRecord) Released() bool { return !r.ReleasedAt.IsZero() }
 
 // Archive is the desktop session of an agent that left the roster while
 // its archive could not be done (its CLI ran a turn, no steward recorded
@@ -996,6 +1046,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
+	// LabIdle records when a configured kind lab was first seen unleased.
+	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is
 	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
@@ -1006,6 +1058,9 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
+	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// They grant no start permissions; Starts remains the authorization ledger.
+	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
 	// session no roster entry names), one per session, its By: the watch
 	// settles and resumes them as it does a roster agent's.
@@ -1073,10 +1128,11 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// WorkerReports are the reports workers finished with (agents idle
-	// --done) that the supervisor's watch has not printed yet.
+	// WorkerReports are mid-task findings and idle reports that the
+	// supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
+	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
@@ -1090,8 +1146,44 @@ type State struct {
 	// Stop is the stop of every start, wake, revive, import and merge
 	// (beekeeper stop) while it stands; beekeeper resume lifts it.
 	Stop *Stop `json:"stop,omitempty"`
+	// HostPins are the execution hosts beekeeper updated (agents hosts
+	// update): the release each runs and the policy digest its starts are
+	// pinned to, or why it is held.
+	HostPins []HostPin `json:"hostPins,omitempty"`
 
 	rest rest
+}
+
+// HostPin is an execution host's release and the policy digest beekeeper
+// recorded when it last updated the host, in place of a hand-kept
+// agents.hosts digest, and the hold of a host whose update failed.
+type HostPin struct {
+	Selector     string           `json:"selector"`
+	Identity     execution.HostID `json:"identity"`
+	Version      string           `json:"version,omitempty"`
+	PolicyDigest string           `json:"policyDigest,omitempty"`
+	PinnedAt     time.Time        `json:"pinnedAt,omitzero"`
+	// Tried is the last update attempt, which paces the retries.
+	Tried time.Time `json:"tried,omitzero"`
+	// Held is why the host takes no start: its update to HeldVersion
+	// failed, since HeldAt. The next successful update lifts it.
+	Held        string    `json:"held,omitempty"`
+	HeldAt      time.Time `json:"heldAt,omitzero"`
+	HeldVersion string    `json:"heldVersion,omitempty"`
+	// Reported says the supervisor loop handed the hold on as its finding.
+	Reported bool `json:"reported,omitempty"`
+
+	rest rest
+}
+
+// HostPin is the pin of the execution host selector, nil for none.
+func (st *State) HostPin(selector string) *HostPin {
+	for i := range st.HostPins {
+		if st.HostPins[i].Selector == selector {
+			return &st.HostPins[i]
+		}
+	}
+	return nil
 }
 
 // Stop is a standing beekeeper stop: who stopped the machine's sessions,
@@ -1245,10 +1337,15 @@ func (e *StaleWriterError) Unwrap() error { return e.Load }
 
 // Budget is one reading of the GitHub core budget.
 type Budget struct {
-	Remaining int       `json:"remaining"`
-	Limit     int       `json:"limit"`
-	Reset     time.Time `json:"reset"`
-	At        time.Time `json:"at"`
+	Identity   string             `json:"identity,omitempty"`
+	Login      string             `json:"login,omitempty"`
+	ETag       string             `json:"etag,omitempty"`
+	Identities map[string]Budget  `json:"identities,omitempty"`
+	Windows    map[string]GraphQL `json:"windows,omitempty"`
+	Remaining  int                `json:"remaining"`
+	Limit      int                `json:"limit"`
+	Reset      time.Time          `json:"reset"`
+	At         time.Time          `json:"at"`
 	// GraphQL is the last reading of the GraphQL limit; nil before the
 	// first.
 	GraphQL *GraphQL `json:"graphql,omitempty"`
@@ -1258,9 +1355,14 @@ type Budget struct {
 
 // GraphQL is one reading of the GitHub GraphQL limit.
 type GraphQL struct {
-	Remaining int `json:"remaining"`
-	Limit     int `json:"limit"`
-	// Reset is when a refusal ends; zero when GitHub named no time.
+	BlockedBy []string `json:"blockedBy,omitempty"`
+	Identity  string   `json:"identity,omitempty"`
+	Login     string   `json:"login,omitempty"`
+	Err       string   `json:"error,omitempty"`
+	Remaining int      `json:"remaining"`
+	Limit     int      `json:"limit"`
+	// Reset is when the window the reading counts resets and a refusal
+	// ends; zero when GitHub named no time.
 	Reset time.Time `json:"reset,omitzero"`
 	// Refused is GitHub's words while it refused GraphQL calls.
 	Refused   string    `json:"refused,omitempty"`
@@ -1273,7 +1375,7 @@ type GraphQL struct {
 // Blocks says the reading's refusal still holds at now: one without a
 // reset holds until a reading says otherwise.
 func (g *GraphQL) Blocks(now time.Time) bool {
-	return g != nil && g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset))
+	return g != nil && (len(g.BlockedBy) > 0 || g.Refused != "" && (g.Reset.IsZero() || now.Before(g.Reset)))
 }
 
 // The phases of a Merge.
@@ -1414,6 +1516,11 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+}
+
+// NoteLookup is the optional complete history of a store that retains closed notes.
+type NoteLookup interface {
+	LookupNote(int) (*Note, *Event, error)
 }
 
 // NoteHistory is the optional history of a store that retains central note
@@ -1828,21 +1935,27 @@ func (s *FileStore) Events(n int, keep func(Event) bool) ([]Event, error) {
 	}
 	defer func() { _ = f.Close() }()
 	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
+	reader := bufio.NewReader(f)
+	for {
+		// A record can contain a complete note and answer of any length.
+		line, readErr := reader.ReadBytes('\n')
 		var e Event
 		// A write lost to an unclean shutdown leaves NUL bytes, and the next
 		// append lands right behind them on the same line.
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			out = append(out, e)
+			if n > 0 && len(out) > n {
+				out = out[len(out)-n:]
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out, nil
+		}
+		if readErr != nil {
+			return out, readErr
 		}
 	}
-	if n > 0 && len(out) > n {
-		out = out[len(out)-n:]
-	}
-	return out, sc.Err()
 }
 
 // Follow returns every event keep accepts, oldest first. It remembers under

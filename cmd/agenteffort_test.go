@@ -13,10 +13,13 @@ import (
 const (
 	testEffortHigh = "high"
 	testEffortLow  = "low"
+	testEffortMax  = "max"
+	testScanRule   = "^scan"
+	testScanName   = "scan deps"
 )
 
 func TestEffortBackgroundLaunchAndRecord(t *testing.T) {
-	for _, level := range []string{"", testEffortLow, "medium", testEffortHigh, "xhigh", "max"} {
+	for _, level := range []string{"", testEffortLow, "medium", testEffortHigh, "xhigh", testEffortMax} {
 		t.Run("level="+level, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = tableMachine{plat.Machine}
@@ -96,5 +99,55 @@ func TestEffortLoopStartDefault(t *testing.T) {
 	call = r.called(agentsName, agentStartName)
 	if strings.Count(strings.Join(call, " "), effortFlag) != 1 || call[len(call)-1] != testEffortLow {
 		t.Fatalf("explicit effort overridden: %q", call)
+	}
+}
+
+func TestEffortRulePrecedence(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Agents.Models = []config.AgentModelRule{
+		{Match: testScanRule, Kind: taskKindReview, Effort: "xhigh"},
+		{Match: testScanRule, Effort: testEffortHigh},
+	}
+	for _, tc := range []struct{ name, kind, flag, want string }{
+		{testScanName, workerRole, "", testEffortHigh},
+		{testScanName, taskKindReview, "", "xhigh"},
+		{testScanName, workerRole, testEffortLow, testEffortLow},
+		{"fix", workerRole, "", ""},
+	} {
+		got, err := a.startEffort(tc.name, tc.kind, tc.flag)
+		if err != nil || got != tc.want {
+			t.Errorf("%+v: got %q, %v", tc, got, err)
+		}
+	}
+	if _, err := a.startEffort("fix", workerRole, "extreme"); err == nil {
+		t.Fatal("invalid flag accepted")
+	}
+	a.cfg.Guide.Effort = testEffortMax
+	if got := a.sessionEffort(agentStart{name: "scan guide", role: guideName}); got != testEffortMax {
+		t.Fatalf("guide effort: %q", got)
+	}
+	if got := a.sessionEffort(agentStart{name: testScanName, role: workerRole}); got != testEffortHigh {
+		t.Fatalf("rule effort: %q", got)
+	}
+}
+
+func TestEffortLoopYieldsToRule(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.Effort = testEffortHigh
+	r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: testScanRule, Kind: taskKindReview, Effort: testEffortLow}}
+	l := &supervisorLoop{a: r.a}
+	if _, err := l.run(t.Context(), agentsName, agentStartName, "scan-review", "brief", "--"+reviewFlag); err != nil {
+		t.Fatal(err)
+	}
+	if call := r.called(agentsName, agentStartName); slices.Contains(call, effortFlag) {
+		t.Fatalf("loop default masked the matching rule: %q", call)
+	}
+	r.calls = nil
+	if _, err := l.run(t.Context(), agentsName, agentStartName, "scan-worker", "brief"); err != nil {
+		t.Fatal(err)
+	}
+	call := r.called(agentsName, agentStartName)
+	if i := slices.Index(call, effortFlag); i < 0 || call[i+1] != testEffortHigh {
+		t.Fatalf("worker without a rule lost the loop default: %q", call)
 	}
 }

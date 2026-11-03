@@ -502,12 +502,14 @@ func TestSkipKind(t *testing.T) {
 		"assigned to sam":                        kindAssigned,
 		"3 of 4 blockers open":                   kindBlocked,
 		"held by its Status Blocked, set 2026-10-02 after its last blocker closed 2026-10-01: it holds until the Status changes": kindBlocked,
-		"no activity since 2026-01-01":                                                      kindStale,
-		`needs lease agentlab-1, held by "Lab holder"`:                                      kindLease,
-		"sub-issue of epic o/r#8, in planning (Up Next)":                                    kindPlanning,
-		"epic in planning (Up Next), no plan pull request names it: its planning session's": kindPlanning,
-		"board fields unknown: projectItems: Resource limits for this query exceeded.":      kindUnknown,
-		"sub-issues unknown: issue.subIssues: Resource limits for this query exceeded.":     kindUnknown,
+		"no activity since 2026-01-01":                                                                                   kindStale,
+		`needs lease agentlab-1, held by "Lab holder"`:                                                                   kindLease,
+		"sub-issue of epic o/r#8, in planning (Up Next)":                                                                 kindPlanning,
+		"epic in planning (Up Next), no plan pull request names it: its planning session's":                              kindPlanning,
+		`epic Backlog, not scheduled for planning: no plan and no go, board move o/r#9 "Up Next" schedules its planning`: kindPlanning,
+		"sub-issue of epic o/r#9, not scheduled for planning (Backlog)":                                                  kindPlanning,
+		"board fields unknown: projectItems: Resource limits for this query exceeded.":                                   kindUnknown,
+		"sub-issues unknown: issue.subIssues: Resource limits for this query exceeded.":                                  kindUnknown,
 		oldBacklog:                            kindOrder,
 		"no step of board.order offers Inbox": kindOrder,
 		"blocker cleared takes items with recorded blockers, it has none": kindOrder,
@@ -768,7 +770,7 @@ func TestPrintNextFields(t *testing.T) {
 	if doc["skipped_by"] == nil {
 		t.Errorf("--fields drops skipped_by:\n%s", out.String())
 	}
-	if err := checkFields([]string{fieldRef, "title", "url", "step", "priorityOf"}); err != nil {
+	if err := checkFields([]string{fieldRef, "title", "url", "step", "epic"}); err != nil {
 		t.Error(err)
 	}
 	if err := checkFields([]string{fieldRef, "nope"}); err == nil || !strings.Contains(err.Error(), "--fields nope: no such field") || !strings.Contains(err.Error(), "ref,url,title") {
@@ -905,5 +907,129 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 	want := []string{"wk: t/w#wk n/lab#1 t/w#2", "pl: t/w#pl n/lab#1 t/w#2", "bz: t/w#bz n/lab#1 t/w#2"}
 	if !slices.Equal(got, want) {
 		t.Errorf("serving work:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// board next --skip passes over the items it names, so a scan walks every
+// free candidate by repeating the call each pick names, and a second call
+// after a skip offers a different candidate.
+func TestNextSkipWalksTheFreeCandidates(t *testing.T) {
+	listed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	running := state.Party{Session: "s1", Name: workerOne}
+	st := &state.State{Records: []state.Record{{Session: running, Issue: idleRef, At: listed.Add(-time.Hour)}}}
+	sc := pickScope{me: state.Party{Session: "me"}, alive: func(state.Party) bool { return true }, listed: listed}
+	fresh := func() []board.Candidate {
+		cands := boardCandidates(5)
+		cands[3].Skip = oldBacklog
+		return cands
+	}
+	var picks []string
+	var skip []string
+	for range 10 {
+		cands := fresh()
+		skipAsked(cands, skip)
+		res := nextFree(st, cands, sc)
+		if res.Pick == nil {
+			break
+		}
+		picks = append(picks, res.Pick.Ref)
+		skip = nextSkip(skip, res.Pick)
+	}
+	all := fresh()
+	if want := []string{all[0].Ref, all[2].Ref, all[4].Ref}; !slices.Equal(picks, want) {
+		t.Errorf("walked %v, want %v", picks, want)
+	}
+	cands := fresh()
+	refs, err := skipRefs([]string{"https://github.com/O/R/issues/1", idleRef, " " + all[2].Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipAsked(cands, refs)
+	res := nextFree(st, cands, sc)
+	if res.Pick == nil || res.Pick.Ref != all[4].Ref || res.SkippedBy[kindAsked] != 2 || res.Skipped[0].Skip != skipAskedReason {
+		t.Errorf("pick %v, skipped by %v, skipped %+v", res.Pick, res.SkippedBy, res.Skipped)
+	}
+	if skipKind(res.Skipped[1].Skip) != kindServed {
+		t.Errorf("a served item --skip names keeps its reason: %q", res.Skipped[1].Skip)
+	}
+	res.NextSkip = nextSkip(refs, res.Pick)
+	var out strings.Builder
+	if err := (&app{out: &out}).printNext(res, len(cands), nextView{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "  next candidate: board next --skip O/R#1," + idleRef + ",o/r#3,o/r#5\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, out.String())
+	}
+	if _, err := skipRefs([]string{scratchRepo}); err == nil {
+		t.Error("--skip o/r names no issue, accepted")
+	}
+}
+
+func TestBoardRankLogsCallerAndWritesPosition(t *testing.T) {
+	rc := (&app{}).boardRankCmd()
+	for _, subcmd := range append([]string{rc.Name()}, rc.Aliases...) {
+		t.Run(subcmd, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
+			a.as = agentOne
+
+			var sawPosition bool
+			was := boardGH
+			boardGH = func(_ context.Context, args ...string) ([]byte, error) {
+				q := args[len(args)-1]
+				for _, a := range args {
+					if strings.HasPrefix(a, "query=") {
+						q = a
+					}
+				}
+				switch {
+				case strings.Contains(q, "fields(first:50)"):
+					return []byte(`{"data":{"repositoryOwner":{"projectV2":{"id":"P1","fields":{"nodes":[{"id":"FS","name":"Status","options":[{"id":"O1","name":"In Progress"}]}]}}}}}`), nil
+				case strings.Contains(q, "projectItems"):
+					return []byte(`{"data":{"repository":{"issue":{"id":"I1","title":"One","state":"OPEN","projectItems":{"nodes":[{"id":"IT1","project":{"id":"P1"}}]}}}}} `), nil
+				case strings.Contains(q, "updateProjectV2ItemPosition"):
+					sawPosition = true
+					return []byte(`{"data":{"updateProjectV2ItemPosition":{"items":{"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"o/r"}}}]}}}}`), nil
+				}
+				t.Fatalf("unexpected gh call: %v", args)
+				return nil, nil
+			}
+			t.Cleanup(func() { boardGH = was })
+
+			var out strings.Builder
+			a.out = &out
+			c := a.boardCmd()
+			c.SetOut(&out)
+			c.SetErr(&out)
+			c.SetArgs([]string{subcmd, refOne, "--top"})
+			if err := c.Execute(); err != nil {
+				t.Fatalf("board %s failed: %v", subcmd, err)
+			}
+			if !sawPosition {
+				t.Fatal("expected updateProjectV2ItemPosition mutation")
+			}
+			evs, err := a.store.Events(5, nil)
+			if err != nil || len(evs) != 1 || evs[0].Verb != "board.rank" || evs[0].By.Name != agentOne {
+				t.Fatalf("expected board.rank event by %s, got %+v (err=%v)", agentOne, evs, err)
+			}
+		})
+	}
+}
+
+func TestBoardRankRefusesAnonymousWrites(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
+	a.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+
+	var out strings.Builder
+	a.out = &out
+	c := a.boardCmd()
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs([]string{"order", refOne, "--top"})
+	err := c.Execute()
+	if err == nil || Code(err) != ExitRefused {
+		t.Fatalf("expected exit 3 (refused), got %v", err)
 	}
 }

@@ -63,22 +63,39 @@ func fillLive(st *state.State) []string {
 }
 
 // holds reports whether the pause still defers a board read: its interval
-// runs, capacity is as it was and no agent it saw live has since been done
-// or removed. An agent joining makes no room and keeps it.
+// runs and nothing it saw changed (changed).
 func (p fillPause) holds(now time.Time, capacity string, live []string) bool {
-	if !now.Before(p.until) || capacity != p.capacity {
-		return false
+	return now.Before(p.until) && !p.changed(capacity, live)
+}
+
+// changed reports whether capacity is not as it was or an agent the pause
+// saw live has since been done or removed. An agent joining makes no room
+// and changes nothing.
+func (p fillPause) changed(capacity string, live []string) bool {
+	if capacity != p.capacity {
+		return true
 	}
 	for _, name := range p.live {
 		if !slices.Contains(live, name) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
+// fillBackoff is how many times the refill's pause doubles over
+// consecutive unproductive board reads: at most 4 × supervisor.fillRetryEvery.
+const fillBackoff = 2
+
+// pauseFill defers the refill's next board read by supervisor.fillRetryEvery,
+// doubled for each unproductive read before it since the last start or
+// change (fillBackoff), so an empty board is walked less and less often.
 func (l *supervisorLoop) pauseFill(capacity string, live []string) {
-	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.now.Add(l.a.cfg.Supervisor.FillRetryEvery.Duration)}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	every := l.a.cfg.Supervisor.FillRetryEvery.Duration << min(l.fillEmpty, fillBackoff)
+	l.fillEmpty++
+	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.timeNow().Add(every)}
 }
 
 func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
@@ -159,6 +176,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
+		if l.pauseForReexec() {
+			return nil
+		}
 		cap := l.fillCapacity(ctx)
 		if cap == nil {
 			return nil // a gate refusal is never a reason to start
@@ -168,9 +188,15 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return err
 		}
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
-		if !l.fillPause.holds(l.a.now, capacity, alive) {
+		l.mu.Lock()
+		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
+			if !l.fillPause.until.IsZero() && l.fillPause.changed(capacity, alive) {
+				l.fillEmpty = 0 // a change may make room: the backoff starts over
+			}
 			l.fillPause = fillPause{}
 		}
+		paused := !l.fillPause.until.IsZero()
+		l.mu.Unlock()
 		pause := func() { l.pauseFill(capacity, alive) }
 		room := l.fillRoom(cap)
 		if room <= 0 {
@@ -182,7 +208,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if started >= limit {
 			return nil
 		}
-		if !l.fillPause.until.IsZero() {
+		if paused {
 			return nil
 		}
 		next, err := l.nextItem(ctx)
@@ -222,5 +248,8 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		attempts[next.Ref]++
 		startedHere[next.Ref] = true
+		l.mu.Lock()
+		l.fillEmpty = 0
+		l.mu.Unlock()
 	}
 }

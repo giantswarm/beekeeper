@@ -118,9 +118,37 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err := a.refuseStopped(st, "waking "+q); err != nil {
 		return err
 	}
-	ag, _, err := a.wakeParty(st, q)
+	ag, rostered, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
+	}
+	// Reserve the local entry before delivering a wake so retirement cannot
+	// race a turn's startup. A failed delivery restores the previous age.
+	if rostered && ag.Execution == nil {
+		err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			for i := range st.Agents {
+				if st.Agents[i].Is(ag.Party) {
+					st.Agents[i].ActivityAt = a.now.UTC()
+					return nil, nil
+				}
+			}
+			return nil, refused("%s left the roster before its wake", ag.Name)
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err != nil {
+				_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+					for i := range st.Agents {
+						if st.Agents[i].Is(ag.Party) && st.Agents[i].ActivityAt.Equal(a.now) {
+							st.Agents[i].ActivityAt = ag.ActivityAt
+						}
+					}
+					return nil, nil
+				})
+			}
+		}()
 	}
 	if ag.Execution != nil {
 		return a.enqueueExecutionWake(ctx, by, ag, msg, nil)
@@ -427,7 +455,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message as its next turn\n", ag.Name)
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
 	return err
 }
 

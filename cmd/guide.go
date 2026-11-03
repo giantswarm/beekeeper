@@ -488,13 +488,13 @@ func (a *app) guideHandoverCmd() *cobra.Command {
 		Long: `Print the guide's hand-over: the guide and its context in tokens, an open
 relay and the queue. --prompt prints the successor's session prompt instead:
 the configured instructions (guide.skill's bare slash command, "/guide you
-take over …", or guide.instructions), the
-priorities and holds read from GitHub and the epics with their plans (as
-beekeeper handover --section priorities shows them; a failed read is shown
-as not read),
+take over …", or a reference to guide.instructions), the
+board holds read from GitHub and the epics with their plans (as
+beekeeper handover --section board-holds and --section epics show them; a
+failed read is shown as not read),
 the queue, an open relay and the commands that read the live values; no
-other live value. Both carry the desk's standing
-instructions in full: standing.md in the state directory. A caller that has read
+other live value. The prompt references the desk's standing instructions
+file; the ordinary hand-over carries standing.md in full. A caller that has read
 the hand-over before gets only what changed; --full prints everything.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -513,7 +513,7 @@ the hand-over before gets only what changed; --full prints everything.`,
 				return err
 			}
 			if prompt {
-				return a.printGuidePrompt(r, q, s, a.prioritiesHandover(cmd.Context(), st.Notes))
+				return a.printGuidePrompt(r, q, s, a.boardHoldsHandover(cmd.Context(), st.Notes))
 			}
 			sv := readHolder(r, sessions, a.now, a.cfg.Guide.RestartGrace.Duration)
 			head := "No guide is recorded."
@@ -555,13 +555,14 @@ func (a *app) relayLine(rl role, r state.Role) string {
 var guideLiveCommands = [][2]string{
 	{"beekeeper guide watch", "one line per new decision, waiting session, answer and guide relay: the source of a Monitor"},
 	{"beekeeper guide next", "the one decision to ask now, due first; the next after its note answer"},
-	{"beekeeper guide queue", "the decisions waiting on the person now"},
+	{"beekeeper guide queue --full", "the decisions waiting on the person now, in full"},
+	{"beekeeper handover --full", "all live desk state and recent history"},
 	{"beekeeper guide status", "the guide and its context against guide.relayAt"},
-	{"beekeeper priority", "the priority list now, with each epic's hold"},
+	{"beekeeper board next", "the board's next item and epics in board order"},
 	{"beekeeper log --verb note.", "the notes filed, answered and closed"},
 }
 
-func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, pv *prioritiesView) error {
+func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, bv *boardHoldsView) error {
 	intro, err := a.roleInstructions(guideRole, r)
 	if err != nil {
 		return err
@@ -569,18 +570,21 @@ func (a *app) printGuidePrompt(r state.Role, q []queueItem, s string, pv *priori
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 	p("%s\n", intro)
 	p("## Pending state, %s\n", a.stamp(a.now))
-	promptStanding(p, s)
-	a.promptPriorities(p, pv)
+	if s != "" {
+		section(p, "Standing instructions", false, "")
+		p("Read and follow %q.\n", a.standingPath())
+	}
+	a.promptBoard(p, bv)
 	if section(p, "Decisions waiting on the person", len(q) == 0, "None open.") {
 		for _, it := range q {
-			p("- %s", a.queueText(it))
+			p("- %s", truncate(a.queueText(it), 320))
 		}
 		p("")
 	}
 	if l := a.relayLine(guideRole, r); section(p, "Relay", l == "", "None open.") {
 		p("%s\n", l)
 	}
-	p("## Live values\n\nRead them when you need them; this prompt holds none:\n")
+	p("## Live values\n\nRead details when needed; earlier history stays in `beekeeper handover --full`:\n")
 	for _, c := range guideLiveCommands {
 		p("- `%s`: %s", c[0], c[1])
 	}
@@ -656,6 +660,10 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	// Outside the lock: the transcript's context and the log's answers.
 	c := roleContext(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
 	q := quietness{checked: c > 0, context: c, relayAt: a.cfg.Guide.RelayAt}
+	idleQ := quietness{}
+	if !q.checked {
+		idleQ = idleRoleReading(guideRole.get(st), sessions, a.now, a.cfg.Guide.RelayAt, a.guideDues)
+	}
 	problems, err := a.store.Follow("guide-problems", func(e state.Event) bool { return e.Verb == loopFileVerb })
 	if err != nil {
 		return nil, err
@@ -675,12 +683,17 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 			lines = append(lines, fmt.Sprintf("GUIDE RESTARTED: %q, %s; it keeps the role", e.By.Name, e.Detail))
 		}
 		rl, re := guideRole.fireRelay(st, a.now)
-		dl, de := guideRole.fireRelayDue(st, q, a.guideDues, a.now)
 		pl, pf := guideProblemLines(st, problems)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
 		lines = append(lines, pl...)
 		fed = fed || pf
-		lines = append(append(append(lines, rl...), dl...), fl...)
+		lines = append(append(lines, rl...), fl...)
+		reading := q
+		if !reading.checked && len(lines) > 0 {
+			reading = idleQ
+		}
+		dl, de := guideRole.fireRelayDue(st, reading, a.guideDues, a.now)
+		lines = append(lines, dl...)
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
 	}

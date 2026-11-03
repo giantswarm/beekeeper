@@ -18,15 +18,16 @@ import (
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 const (
-	inProgress = "In Progress ⛏️"
-	blocked    = "Blocked / Waiting ⛔️"
-	upNext     = "Up Next ➡️"
-	backlog    = "Backlog 📦"
-	epic       = "Epic 🎯"
-	bug        = "Bug 🐞"
-	upNextEpic = "Up Next epic"
-	bugStep    = "bug"
-	typedNext  = "up next"
+	boardItemsQuery = "items(first:"
+	inProgress      = "In Progress ⛏️"
+	blocked         = "Blocked / Waiting ⛔️"
+	upNext          = "Up Next ➡️"
+	backlog         = "Backlog 📦"
+	epic            = "Epic 🎯"
+	bug             = "Bug 🐞"
+	upNextEpic      = "Up Next epic"
+	bugStep         = "bug"
+	typedNext       = "up next"
 	// backlogStep is the name of the order's Backlog step.
 	backlogStep = "Backlog"
 )
@@ -243,9 +244,13 @@ func TestBlockersClosedIsTheLastCloseOfEveryBlocker(t *testing.T) {
 	at := func(d int) *time.Time { t := days(d); return &t }
 	j := func(total int, closed ...*time.Time) issueJSON {
 		var i issueJSON
-		i.Deps.TotalBlockedBy = total
+		i.BlockedBy.TotalCount = total
 		for _, c := range closed {
-			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c})
+			state := stateOpen
+			if c != nil {
+				state = stateClosed
+			}
+			i.BlockedBy.Nodes = append(i.BlockedBy.Nodes, blockerNode{ClosedAt: c, depRef: depRef{State: state}})
 		}
 		return i
 	}
@@ -371,10 +376,9 @@ const metaJSON = `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"n
 {"id":"FT","name":"Team","options":[{"id":"t1","name":"X 🐝"},{"id":"t2","name":"Y"}]}]}}}}}`
 
 func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
-	if strings.Contains(q, "ProjectV2Owner{login}") {
-		f.t.Fatalf("ProjectV2Owner has no login field in GitHub GraphQL; use User and Organization inline fragments: %s", q)
-	}
+	checkedQuery(f.t, q)
 	f.queries = append(f.queries, q)
 	f.repos = append(f.repos, github.Repo(ctx))
 	vars := map[string]string{}
@@ -394,7 +398,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}
@@ -403,10 +407,10 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 			page = 1
 		}
 		return []byte(f.pages[page]), nil
-	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search(")):
+	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search(")):
 		return []byte(f.extrasBy(q)), nil
-	case strings.Contains(q, "subIssues(first:50)") || strings.Contains(q, "search("):
-		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:50){nodes{...I projectItems(`) ||
+	case strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search("):
+		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:3){nodes{...I projectItems(`) ||
 			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
 			f.t.Errorf("extras query %s", q)
 		}
@@ -558,7 +562,7 @@ const labIssue7 = "teemow/lab#7"
 
 // homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
-	st := "null"
+	st := jsonNull
 	if status != "" {
 		st = fmt.Sprintf(`{"name":%q}`, status)
 	}
@@ -795,7 +799,7 @@ func TestClosesAsksInBatches(t *testing.T) {
 	}
 	// Each request's first ref closes o/r#1; a request holds closesBatch refs.
 	if len(queries) != 3 || strings.Count(queries[0], "repository(") != closesBatch || strings.Count(queries[2], "repository(") != 1 ||
-		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{"o/r#1"}) {
+		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{ref1}) {
 		t.Errorf("%d queries, closes %v", len(queries), got)
 	}
 }
@@ -805,7 +809,95 @@ const (
 	engineIssue7   = "org/engine#7"
 	addIssue7      = "add I7 to P"
 	issue7OffBoard = `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[]}}}}}`
+	teamX          = "X 🐝"
+	ref1           = "o/r#1"
+	ref2           = "o/r#2"
+	ref3           = "o/r#3"
+	ref4           = "o/r#4"
 )
+
+func TestStatusThenBoardOrderDecide(t *testing.T) {
+	// Every step has workScope: it is read and ignored, Status and board
+	// order alone decide.
+	o, err := ResolveOrder([]config.BoardStep{
+		{Name: inProgress, Status: []string{inProgress}, WorkScope: true},
+		{Name: upNext, Status: []string{upNext}, WorkScope: true},
+		{Name: backlogStep, Status: []string{backlog}, WorkScope: true},
+	}, statuses, []string{epic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := func(n int, status string) Item {
+		return Item{Ref: fmt.Sprintf("o/r#%d", n), OnBoard: true, Status: status, Created: days(5), Updated: days(1), Parent: "o/r#99"}
+	}
+	// The board's items in its position order, the statuses mixed.
+	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
+		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
+	}}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
+	var got []string
+	for _, c := range cands {
+		if c.Skip != "" {
+			t.Errorf("%s skipped: %s", c.Ref, c.Skip)
+		}
+		got = append(got, c.Ref)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("order %v, want %v (Status, then the board's order)", got, want)
+	}
+}
+
+func TestSnapshotParentReadsItemsAndSubIssues(t *testing.T) {
+	snap := &Snapshot{Items: []Item{
+		{Ref: ref1, Parent: issue9, SubIssues: []Item{{Ref: ref2}, {Ref: ref3, Parent: ref1}}},
+	}}
+	for ref, want := range map[string]string{ref1: issue9, "O/R#2": ref1, ref3: ref1, ref4: ""} {
+		if got := snap.Parent(ref); got != want {
+			t.Errorf("Parent(%s) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+func TestRankAnchorPlacesFollowUpIssueAfterOriginOnBoard(t *testing.T) {
+	ctx := context.Background()
+	c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+	c.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		q := args[3]
+		switch {
+		case strings.Contains(q, "fields(first:50)"):
+			return []byte(metaJSON), nil
+		case strings.Contains(q, "projectItems"):
+			if slices.Contains(args, "n=1") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"EPIC1","projectItems":{"nodes":[{"id":"I1","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=12") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB12","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[{"id":"IS12","project":{"id":"P"},"status":{"name":"In Progress ⛏️"}}]}}}}} `), nil
+			}
+			if slices.Contains(args, "n=13") {
+				return []byte(`{"data":{"repository":{"issue":{"id":"SUB13","parent":{"number":1,"repository":{"nameWithOwner":"o/r"}},"projectItems":{"nodes":[]}}}}}`), nil
+			}
+			return []byte(`{"data":{"repository":{"issue":{"id":"NEW","body":"","projectItems":{"nodes":[]}}}}}`), nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", q)
+	}
+
+	// 1. An issue filed from o/r#12 (on the board) anchors right after o/r#12.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#12"); err != nil || got != "o/r#12" {
+		t.Fatalf("RankAnchor(filed from o/r#12) = %q, %v; want o/r#12", got, err)
+	}
+
+	// 2. An issue filed from o/r#13 (a sub-issue not on the board under epic o/r#1)
+	// anchors right after its parent epic o/r#1 on the board.
+	if got, err := c.RankAnchor(ctx, "org/engine#51", "o/r#13"); err != nil || got != ref1 {
+		t.Fatalf("RankAnchor(filed from sub-issue o/r#13) = %q, %v; want %s", got, err, ref1)
+	}
+
+	// 3. A general issue with no origin on the board returns "".
+	if got, err := c.RankAnchor(ctx, "org/engine#52", ""); err != nil || got != "" {
+		t.Fatalf("RankAnchor(general issue) = %q, %v; want empty", got, err)
+	}
+}
 
 func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
 	ctx := context.Background()
@@ -873,5 +965,67 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
 		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
+	}
+}
+
+// Every candidate source uses the current blocker list even when the summary
+// still describes the previous dependency state.
+func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
+			state, summary := stateClosed, 1
+			if open {
+				state, summary = "OPEN", 0
+			}
+			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
+			f := &fakeGH{t: t, pages: []string{
+				`{"data":{"repositoryOwner":{"projectV2":{"items":{"nodes":[` +
+					node(inProgress, `{"name":"Epic 🎯"}`, issue(2, `,"subIssuesSummary":{"total":1,"completed":0}`)) + "," +
+					node(upNext, "null", issue(4, deps)) + `]}}}}}`,
+			}, extras: `{"data":{"e0":{"issue":{"subIssues":{"nodes":[` + issue(20, deps) + `]}}},"s2":{"nodes":[` + issue(30, deps) + `]}}}`}
+			// This fixture's epic is at index 0 rather than fakeGH's index 1.
+			f.extrasBy = func(string) string { return f.extras }
+			b := readBoard()
+			snap, err := (&Client{GH: f.run, Board: b}).Read(context.Background(), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]Candidate{}
+			for _, c := range Rank(snap, b, now) {
+				got[c.Ref] = c
+			}
+			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
+				c, ok := got[ref]
+				if !ok {
+					t.Fatalf("missing candidate %s: %+v", ref, got)
+				}
+				wantOpen := 0
+				if open {
+					wantOpen = 1
+				}
+				if c.Blockers != 1 || c.OpenBlockers != wantOpen || (c.Skip != "") != open {
+					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
+				}
+			}
+			if len(f.queries) != 3 {
+				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			}
+			for _, q := range f.queries {
+				if strings.Contains(q, "issueDependenciesSummary") {
+					t.Errorf("read requests stale summary: %s", q)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
+	var j issueJSON
+	j.BlockedBy.TotalCount = 2
+	closed := days(1)
+	j.BlockedBy.Nodes = []blockerNode{{ClosedAt: &closed, depRef: depRef{State: stateClosed}}}
+	it := j.item()
+	if it.Blockers != 2 || it.OpenBlockers != 1 || !it.BlockersClosed.IsZero() {
+		t.Fatalf("incomplete blockers: %+v", it)
 	}
 }

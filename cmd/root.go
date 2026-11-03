@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -99,9 +100,12 @@ func Main() int {
 }
 
 type app struct {
+	selectionKind      string
+	selectionAuthor    string
 	executionTransport func(execution.Host) execution.Transport
 	executionProbe     func(context.Context, execution.Host) (execution.Capabilities, error)
 	executionRuntime   func() (*execution.Server, error)
+	executionUpdate    func(context.Context, execution.Host, string) (execution.HostUpdate, error)
 	executionRequestID string
 	cfgPath            string
 	// loadedCfg is the configuration file loadConfig read; liveCapacity
@@ -115,10 +119,15 @@ type app struct {
 	cfg   *config.Config
 	store state.Store
 	now   time.Time
-	out   io.Writer
+	// loopNow advances the long-running supervisor clock without mutating now
+	// while actions from earlier passes still use the app.
+	loopNow *atomic.Pointer[time.Time]
+	out     io.Writer
 
 	// kindClusters lists the running kind clusters; nil asks docker.
 	kindClusters func() ([]string, error)
+	// labDocker replaces Docker calls in lifecycle tests.
+	labDocker func(context.Context, ...string) ([]byte, error)
 	// labDirs maps the labs agentlab knows to their directories; nil asks
 	// agentlab list.
 	labDirs func() (map[string]string, error)
@@ -219,7 +228,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	pf := root.PersistentFlags()
 	pf.StringVar(&a.cfgPath, configFlag, "", "configuration file (default $XDG_CONFIG_HOME/beekeeper/config.yaml, or $BEEKEEPER_CONFIG)")
-	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session")
+	pf.StringVar(&a.as, "as", "", "act as this person or script instead of the calling Claude Code session; agents park, idle and desktop act as the registered agent of this name")
 	pf.BoolVar(&a.json, "json", false, "print JSON")
 	pf.StringVar(&a.executionRequestID, "request-id", "", "idempotency key for a managed remote note, park or report retry")
 
@@ -233,7 +242,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.priorityCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
+	for _, c := range []*cobra.Command{a.leaseCmd(), a.holdCmd(), a.lanesCmd(), a.boardCmd(), a.browseCmd(), a.proofCmd(), a.onHost(a.personCmd(), sandbox.OpPerson, brokeredCallTimeout+time.Minute)} {
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
@@ -360,7 +369,7 @@ func (a *app) sessions() ([]*claude.Session, *proc.Table, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return discover(a.cfg, t, a.now), t, nil
+	return discover(a.cfg, t, a.timeNow()), t, nil
 }
 
 // discover returns the running sessions of every harness.
@@ -414,6 +423,16 @@ func clock(now, t time.Time) string {
 		return t.Format("15:04")
 	}
 	return t.Format("Jan 2 15:04")
+}
+
+// clockZone is clock with the local zone's name: "08:30 CET". A timer's
+// due time and the time it fired or started are read side by side, so
+// both carry the zone they are in.
+func clockZone(now, t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return clock(now, t) + " " + t.Local().Format("MST")
 }
 
 // untilTime parses "15:30" (the next such local time) or a duration ("2h").
@@ -497,4 +516,23 @@ func (a *app) versionCmd() *cobra.Command {
 			return err
 		},
 	}
+}
+
+// timeNow returns the supervisor clock, or the command's fixed observation time.
+func (a *app) timeNow() time.Time {
+	if a.loopNow != nil {
+		if now := a.loopNow.Load(); now != nil {
+			return *now
+		}
+	}
+	return a.now
+}
+
+// snapshotAtNow gives helpers that use a command's fixed time an observation
+// that stays stable while subsequent supervisor passes advance their clock.
+func (a *app) snapshotAtNow() *app {
+	snapshot := *a
+	snapshot.now = a.timeNow()
+	snapshot.loopNow = nil
+	return &snapshot
 }

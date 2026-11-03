@@ -14,7 +14,7 @@ type ControlLedger struct {
 
 func controlOperation(op string) bool {
 	switch op {
-	case ControlNote, ControlPark, ControlReport, "handover", "event":
+	case ControlNote, ControlPark, ControlResume, ControlReport, "problem", "handover", "event":
 		return true
 	}
 	return false

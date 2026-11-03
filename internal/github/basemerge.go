@@ -1,6 +1,7 @@
 package github
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,13 +32,25 @@ type comparison struct {
 	MergeBase struct {
 		SHA string `json:"sha"`
 	} `json:"merge_base_commit"`
-	Commits []struct {
-		SHA     string `json:"sha"`
-		Parents []struct {
-			SHA string `json:"sha"`
-		} `json:"parents"`
-	} `json:"commits"`
-	Files []compareFile `json:"files"`
+	Commits []comparisonCommit `json:"commits"`
+	Files   []compareFile      `json:"files"`
+}
+
+// comparisonCommit is one commit a comparison lists, with its parents.
+type comparisonCommit struct {
+	SHA     string `json:"sha"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+// complete says why c, a comparison of the base with to, may list fewer
+// commits than to has past the base, "" when it lists them all.
+func complete(c comparison, to string) string {
+	if c.AheadBy > len(c.Commits) || len(c.Commits) >= compareCommits {
+		return fmt.Sprintf("%s has %d commits past the base, more than the comparison lists", short(to), c.AheadBy)
+	}
+	return ""
 }
 
 // compareFile is one file a comparison changes.
@@ -67,8 +80,9 @@ func compare(ctx context.Context, gh GH, repo, from, to string) (comparison, err
 // why or why not. It does when head
 //
 //   - only merges base into approved: approved is an ancestor of head (no
-//     rebase, no force push), every commit head adds to approved is a
-//     merge, and the change head makes against its merge base with base is
+//     rebase, no force push), every commit head adds to approved that the
+//     base lacks is a merge (the base's own commits a merge brings in are
+//     the base's), and the change head makes against its merge base with base is
 //     the one approved makes against its own: the same files, each with
 //     the same hunks adding and removing the same lines (context and
 //     positions may move with the base). A file without a patch (binary,
@@ -95,18 +109,8 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 		return false, "", err
 	}
 	rebased := added.Status == compareDiverged
-	switch {
-	case added.Status != compareAhead && !rebased:
+	if added.Status != compareAhead && !rebased {
 		return false, fmt.Sprintf("%s is %s of the approved head %s, not ahead", short(head), added.Status, short(approved)), nil
-	case !rebased && (added.AheadBy > len(added.Commits) || len(added.Commits) >= compareCommits):
-		return false, fmt.Sprintf("%s adds %d commits to %s, more than the comparison lists", short(head), added.AheadBy, short(approved)), nil
-	}
-	if !rebased {
-		for _, c := range added.Commits {
-			if len(c.Parents) < 2 {
-				return false, fmt.Sprintf("%s adds commit %s, which is no merge", short(head), short(c.SHA)), nil
-			}
-		}
 	}
 	was, err := compare(ctx, gh, repo, base, approved)
 	if err != nil {
@@ -115,6 +119,31 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 	now, err := compare(ctx, gh, repo, base, head)
 	if err != nil {
 		return false, "", err
+	}
+	// own are the commits head adds to the pull request: the commits of
+	// head the base lacks that approved lacks too. The base's own commits a
+	// merge brings in are no change of the pull request's.
+	var own []comparisonCommit
+	if !rebased {
+		if why := complete(was, approved); why != "" {
+			return false, why, nil
+		}
+		if why := complete(now, head); why != "" {
+			return false, why, nil
+		}
+		approvedHas := map[string]bool{}
+		for _, c := range was.Commits {
+			approvedHas[c.SHA] = true
+		}
+		for _, c := range now.Commits {
+			if approvedHas[c.SHA] {
+				continue
+			}
+			if len(c.Parents) < 2 {
+				return false, fmt.Sprintf("%s adds commit %s, which is no merge", short(head), short(c.SHA)), nil
+			}
+			own = append(own, c)
+		}
 	}
 	unpatched, differ, why := sameChange(was.Files, now.Files)
 	if why != "" {
@@ -158,7 +187,7 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 	if rebased {
 		return true, fmt.Sprintf("%s rebases the approved head %s onto %s, resolving its conflicts in %s", short(head), short(approved), base, strings.Join(differ, ", ")), nil
 	}
-	for _, c := range added.Commits {
+	for _, c := range own {
 		if ok, err := mergesBase(ctx, gh, repo, base, c.Parents); err != nil {
 			return false, "", err
 		} else if !ok {
@@ -172,23 +201,27 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 // between approved's change to it and the base's since (moved), "" when it
 // is: every line head's patch adds or removes beyond approved's is a line
 // approved's or the base's patch of the file adds or removes, whichever
-// side the resolution kept. A file without a patch on either side, or one
-// the base left alone, had no conflict to resolve.
+// side the resolution kept, or exactly combines non-overlapping edits to
+// a shared original line. A file without a patch on either side, or one the base left alone,
+// had no conflict to resolve.
 func resolved(approved, head compareFile, moved []compareFile) string {
-	i := slices.IndexFunc(moved, func(f compareFile) bool { return f.Name == head.Name || f.Previous == head.Name })
+	name := cmp.Or(head.Name, approved.Name)
+	i := slices.IndexFunc(moved, func(f compareFile) bool { return f.Name == name || f.Previous == name })
 	switch {
 	case i < 0:
-		return head.Name + " adds or removes other lines, and the base did not change it since"
-	case approved.Patch == "" || head.Patch == "" || moved[i].Patch == "":
-		return head.Name + " has no patch to compare, and the base changed it since"
+		return name + " adds or removes other lines, and the base did not change it since"
+	case approved.Patch == "" || head.Name != "" && head.Patch == "" || moved[i].Patch == "":
+		return name + " has no patch to compare, and the base changed it since"
 	}
+	approvedLines := lineChanges(approved.Patch)
+	baseLines := lineChanges(moved[i].Patch)
 	sides := map[string]bool{}
 	left := map[string]int{}
-	for _, l := range lineChanges(approved.Patch) {
+	for _, l := range approvedLines {
 		sides[l[1:]] = true
 		left[l]++
 	}
-	for _, l := range lineChanges(moved[i].Patch) {
+	for _, l := range baseLines {
 		sides[l[1:]] = true
 	}
 	for _, l := range lineChanges(head.Patch) {
@@ -196,11 +229,112 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 			left[l]--
 			continue
 		}
-		if !sides[l[1:]] {
-			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", head.Name, strings.TrimSpace(l))
+		if !sides[l[1:]] && (l[0] != '+' || !mergedLine(l[1:], approvedLines, baseLines)) {
+			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", name, strings.TrimSpace(l))
 		}
 	}
 	return ""
+}
+
+// mergedLine accepts only the exact composition of non-overlapping edits to
+// a shared original line. Comparing complete byte sequences preserves literals,
+// punctuation and whitespace; token membership cannot prove an edit survived.
+func mergedLine(line string, approved, base []string) bool {
+	for _, original := range approved {
+		if original[0] != '-' || !slices.Contains(base, original) {
+			continue
+		}
+		for _, a := range approved {
+			if a[0] != '+' {
+				continue
+			}
+			for _, b := range base {
+				if b[0] != '+' {
+					continue
+				}
+				if merged, ok := combineLineEdits(original[1:], a[1:], b[1:]); ok && merged == line {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+type lineEdit struct {
+	start, end int
+	text       string
+}
+
+// lineEdits uses a longest common subsequence to describe actual byte edits.
+// Large lines fail closed rather than allocate an unbounded quadratic table.
+func lineEdits(original, changed string) ([]lineEdit, bool) {
+	if len(original) > 1024 || len(changed) > 1024 {
+		return nil, false
+	}
+	width := len(changed) + 1
+	lcs := make([]int, (len(original)+1)*width)
+	for i := len(original) - 1; i >= 0; i-- {
+		for j := len(changed) - 1; j >= 0; j-- {
+			if original[i] == changed[j] {
+				lcs[i*width+j] = 1 + lcs[(i+1)*width+j+1]
+			} else {
+				lcs[i*width+j] = max(lcs[(i+1)*width+j], lcs[i*width+j+1])
+			}
+		}
+	}
+	var edits []lineEdit
+	for i, j := 0, 0; i < len(original) || j < len(changed); {
+		if i < len(original) && j < len(changed) && original[i] == changed[j] {
+			i++
+			j++
+			continue
+		}
+		start, from := i, j
+		for i < len(original) || j < len(changed) {
+			if i < len(original) && j < len(changed) && original[i] == changed[j] {
+				break
+			}
+			if j < len(changed) && (i == len(original) || lcs[i*width+j+1] > lcs[(i+1)*width+j]) {
+				j++
+			} else {
+				i++
+			}
+		}
+		edits = append(edits, lineEdit{start, i, changed[from:j]})
+	}
+	return edits, true
+}
+
+func combineLineEdits(original, a, b string) (string, bool) {
+	left, ok := lineEdits(original, a)
+	if !ok {
+		return "", false
+	}
+	right, ok := lineEdits(original, b)
+	if !ok {
+		return "", false
+	}
+	// Even boundary insertions are ambiguous: require a separating original
+	// byte between distinct edits from different sides.
+	for _, l := range left {
+		for _, r := range right {
+			if l.start <= r.end && r.start <= l.end {
+				return "", false
+			}
+		}
+	}
+	edits := append(left, right...)
+	slices.SortFunc(edits, func(a, b lineEdit) int { return cmp.Compare(a.start, b.start) })
+	var out strings.Builder
+	pos := 0
+	for _, edit := range edits {
+		out.WriteString(original[pos:edit.start])
+		out.WriteString(edit.text)
+		pos = edit.end
+	}
+	out.WriteString(original[pos:])
+	return out.String(), true
 }
 
 // lineChanges are a patch's added and removed lines, each with its sign.
@@ -240,14 +374,16 @@ func sameChange(was, now []compareFile) (unpatched, differ []string, why string)
 	if len(was) >= compareFiles || len(now) >= compareFiles {
 		return nil, nil, fmt.Sprintf("%d files, at the comparison's cap", max(len(was), len(now)))
 	}
-	if len(was) != len(now) {
+	if len(now) > len(was) {
 		return nil, nil, fmt.Sprintf("%d changed files, not %d", len(now), len(was))
 	}
 	byName := map[string]compareFile{}
 	for _, f := range was {
 		byName[f.Name] = f
 	}
+	seen := map[string]bool{}
 	for _, f := range now {
+		seen[f.Name] = true
 		w, ok := byName[f.Name]
 		switch {
 		case !ok:
@@ -258,6 +394,11 @@ func sameChange(was, now []compareFile) (unpatched, differ []string, why string)
 			unpatched = append(unpatched, f.Name)
 		case w.Patch == "" || f.Patch == "" || !slices.Equal(changedLines(w.Patch), changedLines(f.Patch)):
 			differ = append(differ, f.Name)
+		}
+	}
+	for _, w := range was {
+		if !seen[w.Name] {
+			differ = append(differ, w.Name)
 		}
 	}
 	return unpatched, differ, ""
@@ -303,4 +444,46 @@ func hunkCounts(header string) string {
 		return "1"
 	}
 	return "@@ -" + count(f[1]) + " +" + count(f[2])
+}
+
+// ChangedPast lists the files whose change head makes against base differs
+// from the one reviewed made: added or removed from the pull request's
+// change, changed in status or name, or adding or removing other lines (a
+// file without a patch: another blob). It is the change a review of
+// reviewed did not see, the base's own changes left out; a comparison at
+// the compare API's caps proves nothing and is an error.
+func ChangedPast(ctx context.Context, gh GH, repo, base, reviewed, head string) ([]string, error) {
+	was, err := compare(ctx, gh, repo, base, reviewed)
+	if err != nil {
+		return nil, err
+	}
+	now, err := compare(ctx, gh, repo, base, head)
+	if err != nil {
+		return nil, err
+	}
+	if n := max(len(was.Files), len(now.Files)); n >= compareFiles {
+		return nil, fmt.Errorf("the change of %s or %s against %s lists %d files, at the comparison's cap", short(reviewed), short(head), base, n)
+	}
+	byName := map[string]compareFile{}
+	for _, f := range was.Files {
+		byName[f.Name] = f
+	}
+	var out []string
+	for _, f := range now.Files {
+		w, ok := byName[f.Name]
+		delete(byName, f.Name)
+		switch {
+		case !ok, w.Status != f.Status, w.Previous != f.Previous:
+		case w.Patch == "" && f.Patch == "" && w.SHA == f.SHA:
+			continue
+		case w.Patch != "" && f.Patch != "" && slices.Equal(changedLines(w.Patch), changedLines(f.Patch)):
+			continue
+		}
+		out = append(out, f.Name)
+	}
+	for name := range byName {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }

@@ -3,20 +3,38 @@ package cmd
 import (
 	"cmp"
 	"fmt"
+	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
 const effortFlag = "--effort"
 
-func (a *app) startSelection(kind, model, level string) (config.AgentModel, error) {
-	entry := a.cfg.Agents.Models[kind]
-	entry.Model = cmp.Or(model, entry.Model)
-	entry.Effort = cmp.Or(level, entry.Effort)
-	if !config.ValidEffort(entry.Effort) {
-		return entry, usageErr("invalid effort %q: low, medium, high, xhigh, max", entry.Effort)
+// startEffort resolves a start's effort: the flag, else the first matching
+// agents.models rule; empty keeps the harness default.
+func (a *app) startEffort(name, kind, level string) (string, error) {
+	level = strings.TrimSpace(level)
+	if level == "" && a.cfg != nil {
+		level = a.cfg.Agents.EffortFor(name, kind)
 	}
-	return entry, nil
+	if !config.ValidEffort(level) {
+		return level, usageErr("invalid effort %q: low, medium, high, xhigh, max", level)
+	}
+	return level, nil
+}
+
+// sessionEffort is a session's effort as startAgent launches it: the start's,
+// else its role's, else the first matching agents.models rule.
+func (a *app) sessionEffort(sp agentStart) string {
+	if sp.effort != "" {
+		return sp.effort
+	}
+	if sp.role == guideName {
+		if e := strings.TrimSpace(a.cfg.Guide.Effort); e != "" {
+			return e
+		}
+	}
+	return a.cfg.Agents.EffortFor(sp.name, cmp.Or(sp.kind, sp.role))
 }
 
 func effortFlags(level string) []string {

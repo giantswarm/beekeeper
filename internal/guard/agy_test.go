@@ -28,6 +28,7 @@ const (
 	nbPathField      = "NotebookPath"
 	newSourceField   = "NewSource"
 	sendInputAction  = "send_input"
+	inputField       = "Input"
 )
 
 type agyDecision struct {
@@ -694,7 +695,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 
 	// Create `./agy/` in the repository root holding a guarded tool, a script
 	// that invokes it, and a secret file.
-	agyDir := filepath.Join(dir, "agy")
+	agyDir := filepath.Join(dir, agyHarness)
 	if err := os.MkdirAll(agyDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +713,7 @@ func TestAgyBareCommandWordAndEscapedBackticks(t *testing.T) {
 	// `agy` that invokes the guarded helper, to verify a bare command word
 	// `agy` without a `/` is never resolved against cwd.
 	fileDir := initGitRepo(t, "feat-branch", "https://github.com/giantswarm/beekeeper.git")
-	if err := os.WriteFile(filepath.Join(fileDir, "agy"), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
+	if err := os.WriteFile(filepath.Join(fileDir, agyHarness), []byte("#!/bin/sh\n"+helper+"\n"), 0o755); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
 
@@ -1013,7 +1014,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 		if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 			actionField: sendInputAction,
 			taskIDField: "t1",
-			"Input":     badInput,
+			inputField:  badInput,
 		}); d.Decision != decisionDeny {
 			t.Errorf("manage_task send_input %q: got %+v, want deny", badInput, d)
 		}
@@ -1021,7 +1022,7 @@ func TestAgyToolMappingsAndSessionConsistency(t *testing.T) {
 	if d := decideAgyCall(t, h, dir, manageTaskTool, map[string]any{
 		actionField: sendInputAction,
 		taskIDField: "t1",
-		"Input":     "go test ./internal/...",
+		inputField:  "go test ./internal/...",
 	}); d.Decision != decisionAsk || d.Overwrite != nil {
 		t.Errorf("manage_task send_input benign build: got %+v, want ask without Overwrite", d)
 	}

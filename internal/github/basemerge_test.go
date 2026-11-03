@@ -3,20 +3,26 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const (
-	bmRepo     = "giantswarm/beekeeper"
-	bmApproved = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	bmHead     = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	bmMain     = "cccccccccccccccccccccccccccccccccccccccc"
-	bmFork     = "dddddddddddddddddddddddddddddddddddddddd"
-	modified   = "modified"
-	statusKey  = "status"
-	png        = "c.png"
-	otherLines = "a.go adds or removes other lines"
+	bmRepo             = "giantswarm/beekeeper"
+	bmApproved         = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	bmHead             = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	bmMain             = "cccccccccccccccccccccccccccccccccccccccc"
+	bmFork             = "dddddddddddddddddddddddddddddddddddddddd"
+	modified           = "modified"
+	statusKey          = "status"
+	png                = "c.png"
+	otherLines         = "a.go adds or removes other lines"
+	aGo                = "a.go"
+	bGo                = "b.go"
+	dGo                = "d.go"
+	statusAdded        = "added"
+	resolvingConflictA = "resolving its conflicts in a.go"
 )
 
 // bmCommit is a commit of a comparison with its parents.
@@ -66,8 +72,8 @@ func (c compareAnswers) gh(t *testing.T) GH {
 // line in a.go, b.go untouched since, and a binary c.png.
 func approvedChange() []compareFile {
 	return []compareFile{
-		{Name: "a.go", Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx"},
-		{Name: "b.go", Status: "added", SHA: "b1", Patch: "@@ -0,0 +1 @@\n+b"},
+		{Name: aGo, Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx"},
+		{Name: bGo, Status: statusAdded, SHA: "b1", Patch: "@@ -0,0 +1 @@\n+b"},
 		{Name: png, Status: modified, SHA: "c1"},
 	}
 }
@@ -80,7 +86,7 @@ func TestApprovalCovers(t *testing.T) {
 	// main changed a.go's first line to "newer" and line 50 from x to y;
 	// resolved is a.go after the conflict on its first line, the approved
 	// "new" kept against main's "newer".
-	mainChangedA := []compareFile{{Name: "a.go", Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}}
+	mainChangedA := []compareFile{{Name: aGo, Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+newer\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-x\n+y\n ctx"}}
 	resolved := func() []compareFile {
 		f := approvedChange()
 		f[0].SHA, f[0].Patch = "a3", "@@ -1,3 +1,3 @@\n ctx\n-newer\n+new\n ctx"
@@ -94,12 +100,18 @@ func TestApprovalCovers(t *testing.T) {
 	}
 	for name, c := range map[string]struct {
 		added map[string]any
+		was   []compareFile
 		now   []compareFile
 		// base is what main changed between the approved head's merge
 		// base (bmFork) and the head's (bmMain); nil: z.go alone.
 		base []compareFile
 		// holds is whether main holds the merged parent bmMain.
 		holds bool
+		// own are the commits of head past main beyond the approved
+		// head's (nil: the ones added lists), ownBy how many there are
+		// (0: as many as own lists).
+		own   []bmCommit
+		ownBy int
 		want  bool
 		why   string
 	}{
@@ -107,7 +119,7 @@ func TestApprovalCovers(t *testing.T) {
 		"a merge of main and an unchanged blob without a patch": {added: merge, now: approvedChange(), want: true},
 		"a merge resolving a conflict with main's change": {
 			added: merge, now: resolved(), base: mainChangedA, holds: true,
-			want: true, why: "resolving its conflicts in a.go",
+			want: true, why: resolvingConflictA,
 		},
 		// The worker kept the approved a.go (git checkout --ours): a
 		// conflict resolved its way.
@@ -118,7 +130,7 @@ func TestApprovalCovers(t *testing.T) {
 				f[0].Patch = "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx\n@@ -50,3 +50,3 @@\n ctx\n-y\n+x\n ctx"
 				return f
 			}(),
-			base: mainChangedA, holds: true, want: true, why: "resolving its conflicts in a.go",
+			base: mainChangedA, holds: true, want: true, why: resolvingConflictA,
 		},
 		"a resolved conflict of a merge of another branch": {
 			added: merge, now: resolved(), base: mainChangedA,
@@ -153,10 +165,41 @@ func TestApprovalCovers(t *testing.T) {
 			added: commitsOf(compareAhead, 2, commitOf(bmMain, bmApproved), commitOf(bmHead, bmMain, bmMain)),
 			now:   moved, why: "which is no merge",
 		},
+		// A merge of main lists main's own commits since the approved
+		// head's merge base too: they are main's, not the pull request's.
+		"a merge of main bringing main's own commits": {
+			added: commitsOf(compareAhead, 2, commitOf(bmMain, bmFork), commitOf(bmHead, bmApproved, bmMain)),
+			own:   []bmCommit{commitOf(bmHead, bmApproved, bmMain)},
+			now:   moved, want: true, why: "only merges main",
+		},
+		"a merge of main with a commit of its own after it": {
+			added: commitsOf(compareAhead, 3, commitOf(bmMain, bmFork), commitOf(bmFork, bmApproved, bmMain), commitOf(bmHead, bmFork)),
+			own:   []bmCommit{commitOf(bmFork, bmApproved, bmMain), commitOf(bmHead, bmFork)},
+			now:   moved, why: "adds commit bbbbbbb, which is no merge",
+		},
 		"a rebase onto main": {added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: moved, want: true, why: "rebases the approved head"},
 		"a rebase resolving a conflict with main's change": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA,
 			want: true, why: "rebases the approved head aaaaaaa onto main, resolving its conflicts in a.go",
+		},
+		"a rebase resolving a conflict by combining both sides of a line": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			was: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", cloneSource, workspace); err != nil {\n ctx"},
+			}, approvedChange()[1:]...),
+			now: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a3", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", source, repository); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", cloneSource, repository); err != nil {\n ctx"},
+			}, approvedChange()[1:]...),
+			base: []compareFile{
+				{Name: aGo, Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", source, repository); err != nil {\n ctx"},
+			},
+			want: true, why: resolvingConflictA,
+		},
+		"a rebase resolving a conflict by keeping main's version of a file": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			now:   approvedChange()[1:],
+			base:  mainChangedA,
+			want:  true, why: resolvingConflictA,
 		},
 		"a rebase with another change": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: unreviewed(), base: mainChangedA,
@@ -177,9 +220,9 @@ func TestApprovalCovers(t *testing.T) {
 			why: "c.png has no patch to compare, and the base changed it",
 		},
 		"a head behind the approved one":          {added: commitsOf("behind", 0), now: moved, why: "behind"},
-		"more commits than listed":                {added: commitsOf(compareAhead, 2, commitOf(bmHead, bmApproved, bmMain)), now: moved, why: "more than the comparison lists"},
+		"more commits than listed":                {added: merge, ownBy: 3, now: moved, why: "more than the comparison lists"},
 		"a conflict resolved in a file main kept": {added: merge, now: resolved(), why: otherLines + ", and the base did not change it"},
-		"a change the merge carries":              {added: merge, now: append(approvedChange(), compareFile{Name: "d.go", Status: "added", SHA: "d1", Patch: "+d"}), why: "4 changed files, not 3"},
+		"a change the merge carries":              {added: merge, now: append(approvedChange(), compareFile{Name: dGo, Status: statusAdded, SHA: "d1", Patch: "+d"}), why: "4 changed files, not 3"},
 		"a binary the merge changed": {
 			added: merge,
 			now: func() []compareFile {
@@ -199,10 +242,26 @@ func TestApprovalCovers(t *testing.T) {
 			if c.holds {
 				holds = commitsOf(compareIdentical, 0)
 			}
+			own := c.own
+			if own == nil {
+				own, _ = c.added["commits"].([]bmCommit)
+			}
+			wasFiles := c.was
+			if wasFiles == nil {
+				wasFiles = approvedChange()
+			}
+			approvedCommit := commitOf(bmApproved, bmFork)
+			was := filesOf(bmFork, wasFiles)
+			was["commits"], was["ahead_by"] = []bmCommit{approvedCommit}, 1
+			now := filesOf(bmMain, c.now)
+			now["commits"], now["ahead_by"] = append([]bmCommit{approvedCommit}, own...), 1+len(own)
+			if c.ownBy > 0 {
+				now["ahead_by"] = 1 + c.ownBy
+			}
 			gh := compareAnswers{
 				bmApproved + "..." + bmHead: c.added,
-				"main..." + bmApproved:      filesOf(bmFork, approvedChange()),
-				"main..." + bmHead:          filesOf(bmMain, c.now),
+				"main..." + bmApproved:      was,
+				"main..." + bmHead:          now,
 				bmFork + "..." + bmMain:     filesOf("", base),
 				bmApproved + "...main":      commitsOf(compareDiverged, 0),
 				bmMain + "...main":          holds,
@@ -234,5 +293,74 @@ func TestSameChangeAtTheCapProvesNothing(t *testing.T) {
 	}
 	if _, _, why := sameChange(files, files); !strings.Contains(why, "cap") {
 		t.Errorf("sameChange at the cap = %q", why)
+	}
+}
+
+func TestChangedPast(t *testing.T) {
+	approved := approvedChange()
+	// head: a.go's same change moved by main, b.go fixed, c.png as it
+	// was, and a new test file; d.go left the pull request's change.
+	was := append(approvedChange(), compareFile{Name: dGo, Status: statusAdded, SHA: "d1", Patch: "+d"})
+	now := []compareFile{
+		{Name: aGo, Status: modified, SHA: "a2", Patch: "@@ -10,3 +10,3 @@\n other\n-old\n+new\n ctx"},
+		{Name: bGo, Status: statusAdded, SHA: "b2", Patch: "@@ -0,0 +1,2 @@\n+b\n+fixed"},
+		approved[2],
+		{Name: "b_test.go", Status: statusAdded, SHA: "t1", Patch: "+test"},
+	}
+	gh := compareAnswers{"main..." + bmApproved: filesOf(bmFork, was), "main..." + bmHead: filesOf(bmMain, now)}.gh(t)
+	got, err := ChangedPast(context.Background(), gh, bmRepo, "main", bmApproved, bmHead)
+	if want := []string{bGo, "b_test.go", dGo}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("ChangedPast = %v, %v; want %v", got, err, want)
+	}
+	capped := compareAnswers{"main..." + bmApproved: filesOf(bmFork, was), "main..." + bmHead: filesOf(bmMain, make([]compareFile, compareFiles))}.gh(t)
+	if _, err := ChangedPast(context.Background(), capped, bmRepo, "main", bmApproved, bmHead); err == nil || !strings.Contains(err.Error(), "cap") {
+		t.Errorf("ChangedPast at the cap = %v, want an error", err)
+	}
+}
+
+func TestResolvedPreservesEdits(t *testing.T) {
+	const (
+		originalGuard   = "return enabled && checked"
+		authorizedGuard = "return enabled && authorized"
+		auditedGuard    = "return enabled && audited"
+	)
+	patch := func(before, after string) compareFile {
+		return compareFile{Name: aGo, Patch: "@@ -1 +1 @@\n-" + before + "\n+" + after}
+	}
+	for name, tc := range map[string]struct {
+		original, approved, base, head string
+		want                           bool
+	}{
+		"dropped guards": {
+			originalGuard, authorizedGuard,
+			auditedGuard, "return enabled", false,
+		},
+		"invented guard combination": {
+			originalGuard, authorizedGuard,
+			auditedGuard, "return enabled && authorized && audited", false,
+		},
+		"disjoint edits retained": {
+			originalGuard, "return active && checked",
+			auditedGuard, "return active && audited", true,
+		},
+		"disjoint edit partially dropped": {
+			originalGuard, "return active && checked",
+			auditedGuard, "return active && audit", false,
+		},
+		"literal whitespace changed": {
+			`return "a b" + old`, `return "a b" + approved`,
+			`return "a b" + audited`, `return "ab" + approved`, false,
+		},
+		"approved side retained": {
+			originalGuard, authorizedGuard,
+			auditedGuard, authorizedGuard, true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			why := resolved(patch(tc.original, tc.approved), patch(tc.base, tc.head), []compareFile{patch(tc.original, tc.base)})
+			if (why == "") != tc.want {
+				t.Fatalf("resolved rejection = %q, want acceptance %v", why, tc.want)
+			}
+		})
 	}
 }
