@@ -19,8 +19,11 @@ const (
 	FeedbackComment       = "comment"
 )
 
-// changesRequested is the state of a review that requests changes.
-const changesRequested = "CHANGES_REQUESTED"
+// The states of a review that approves and one that requests changes.
+const (
+	stateApproved    = "APPROVED"
+	changesRequested = "CHANGES_REQUESTED"
+)
 
 // maxNamedFeedback bounds the items the refusal's reason names; the
 // document lists all of them.
@@ -92,7 +95,7 @@ func DeskVerdict(body string) string {
 	first = strings.ToLower(strings.TrimRight(strings.TrimSpace(first), ".!"))
 	switch {
 	case strings.HasSuffix(first, ": approved"):
-		return "APPROVED"
+		return stateApproved
 	case strings.HasSuffix(first, ": changes requested"):
 		return changesRequested
 	}
@@ -249,7 +252,7 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 			if deskVerdict.State == "" || !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
 				deskVerdict = r
 			}
-			if vState == "APPROVED" {
+			if vState == stateApproved {
 				if v, ok := verdict[login]; ok && !r.SubmittedAt.Before(v.SubmittedAt) {
 					verdict[login] = r
 				}
@@ -259,7 +262,7 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 			}
 			continue
 		}
-		if r.State == "APPROVED" && !r.User.automation() && (strings.EqualFold(r.User.Login, caller) || r.member()) && deskVerdict.State != "" && !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
+		if r.State == stateApproved && !r.User.automation() && (strings.EqualFold(r.User.Login, caller) || r.member()) && deskVerdict.State != "" && !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
 			deskVerdict = r
 		}
 		answered(r.User, r.SubmittedAt)
@@ -268,13 +271,13 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		}
 		login := strings.ToLower(r.User.Login)
 		switch r.State {
-		case "APPROVED", changesRequested, "DISMISSED":
+		case stateApproved, changesRequested, "DISMISSED":
 			if v, ok := verdict[login]; !ok || !r.SubmittedAt.Before(v.SubmittedAt) {
 				verdict[login] = r
 			}
 		}
 		switch r.State {
-		case "APPROVED":
+		case stateApproved:
 			if r.SubmittedAt.After(approved[login]) {
 				approved[login] = r.SubmittedAt
 			}

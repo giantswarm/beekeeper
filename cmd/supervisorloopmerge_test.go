@@ -771,7 +771,7 @@ func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
 func TestMergeHeadAuthorityTrustsOnlyDeskAndMemberVerdicts(t *testing.T) {
 	r := newLoopRig(t)
 	p := superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: []superloop.Review{
-		{ID: "R1", Author: "mallory", Head: loopFixed, Verdict: superloop.Approved, Body: "Review: approved", At: time.Now()},
+		{ID: "R1", Author: "mallory", Head: loopFixed, Verdict: superloop.Approved, Body: loopApproved, At: time.Now()},
 	}}
 	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || !strings.Contains(why, "no approved desk review") {
 		t.Fatalf("outsider approval: %q, %v; want a refusal", why, err)
@@ -781,7 +781,7 @@ func TestMergeHeadAuthorityTrustsOnlyDeskAndMemberVerdicts(t *testing.T) {
 		t.Fatalf("member approval: %q, %v; want authorized", why, err)
 	}
 	p.Reviews = []superloop.Review{
-		{ID: "R1", Author: loopDesk, Head: loopFixed, Verdict: superloop.Approved, Body: "Review: approved", At: time.Now().Add(-time.Minute)},
+		{ID: "R1", Author: loopDesk, Head: loopFixed, Verdict: superloop.Approved, Body: loopApproved, At: time.Now().Add(-time.Minute)},
 		{ID: "R2", Author: "mallory", Head: loopFixed, Verdict: superloop.ChangesRequested, Body: "Review: changes requested", At: time.Now()},
 	}
 	if why, _, err := r.a.checkMergeHeadAuthority(t.Context(), nil, p, loopFixed); err != nil || why != "" {

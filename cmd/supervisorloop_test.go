@@ -49,6 +49,10 @@ const (
 	loopDesk     = "desk"
 	loopTeamB    = "team-b"
 	loopReviewer = "Review r 7 r1"
+	// loopApproved is a desk review's approving body, loopIssueTask the
+	// task of a worker on the issue the rig's pull request closes.
+	loopApproved  = "Review: approved"
+	loopIssueTask = "Work https://github.com/o/r/issues/10"
 )
 
 // loopRig is a loop's app over a scratch store, with the beekeeper commands
@@ -2196,7 +2200,7 @@ func TestLoopRelaysTheOwningTeamsReview(t *testing.T) {
 	r.park(t, loopPR, parkedAt)
 	r.pass(t)
 	r.pull.Reviews = []superloop.Review{
-		{ID: "R1", Author: loopDesk, Head: loopHead, Body: "Review: approved", At: parkedAt.Add(time.Second)},
+		{ID: "R1", Author: loopDesk, Head: loopHead, Body: loopApproved, At: parkedAt.Add(time.Second)},
 		{ID: "R2", Author: "bob", Member: true, Head: loopHead, Verdict: superloop.Approved, Body: "LGTM, thanks", At: parkedAt.Add(time.Second)},
 	}
 	r.pass(t)
@@ -3248,7 +3252,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		}
 		st.Agents = []state.Agent{{
 			Party: me,
-			Task:  "Work https://github.com/o/r/issues/10",
+			Task:  loopIssueTask,
 		}}
 		return nil, nil
 	}); err != nil {
@@ -3300,7 +3304,7 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -3344,7 +3348,7 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 	r.sshLoopHost(t, true)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

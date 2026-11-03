@@ -20,6 +20,8 @@ const (
 	guidePerson = "pat"
 	// mergeAnswer is the label of an escalation's releasing option.
 	mergeAnswer = "Merge"
+	// deskAuthor is the login the desk opens its pull requests as.
+	deskAuthor = "alice"
 )
 
 var (
@@ -1509,14 +1511,14 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 	)
 	in := Input{
 		Now:  t0.Add(OverlapWait + time.Minute),
-		Desk: Desk{Authors: []string{"alice"}},
+		Desk: Desk{Authors: []string{deskAuthor}},
 		Workers: []Worker{
 			{Name: "beekeeper 42", Serves: prLow, ParkedOn: "giantswarm/beekeeper#43", ParkedAt: t0, Waits: "waiting on #43"},
 			{Name: "beekeeper 43", Serves: "giantswarm/beekeeper#43", ParkedOn: prLow, ParkedAt: t0, Waits: "waiting on #42"},
 		},
 		Pulls: map[string]Pull{
-			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: "alice", State: Open, Head: head1},
-			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: "alice", State: Open, Head: head2},
+			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: deskAuthor, State: Open, Head: head1},
+			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: deskAuthor, State: Open, Head: head2},
 		},
 	}
 	acts := Plan(in)
