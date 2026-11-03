@@ -55,6 +55,10 @@ const (
 	loopStageVerb    = "supervisor.stage"
 	loopUnstageVerb  = "supervisor.unstage"
 	loopFailureVerb  = "supervisor.failure"
+	// loopOwnerlessVerb logs since when an open pull request has had no
+	// live owner ("[<ref>] since <time>"), and its end ("[<ref>] owned"),
+	// so a restarted loop's sweep keeps the stretch.
+	loopOwnerlessVerb = "supervisor.ownerless"
 )
 
 // loopEventVerbs are the events the loop's rules act on.
@@ -152,7 +156,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences,updatedAt")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -218,9 +222,10 @@ type loopPullJSON struct {
 	Closes []struct {
 		URL string `json:"url"`
 	} `json:"closingIssuesReferences"`
-	Draft       bool   `json:"isDraft"`
-	Mergeable   string `json:"mergeable"`
-	MergeState  string `json:"mergeStateStatus"`
+	Updated     time.Time `json:"updatedAt"`
+	Draft       bool      `json:"isDraft"`
+	Mergeable   string    `json:"mergeable"`
+	MergeState  string    `json:"mergeStateStatus"`
 	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -341,6 +346,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
 	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p.Updated = j.Updated
 	for _, issue := range j.Closes {
 		if r, ok := parseRef(issue.URL); ok {
 			p.Closes = append(p.Closes, refName(r))
@@ -483,6 +489,26 @@ its key first in the detail):
             review of the owning team and no approval of theirs: a decision
             for guide.person (note add, options Override and Wait); the loop
             leaves it alone until the person answers
+  sweep     an open, non-draft pull request of the desk (gh search prs by
+            the desk's logins in github.allowedOrgs, listed every 5 minutes,
+            tracked or not) with no live owner for superloop.OrphanWait
+            (15m) since it was first seen so (logged as
+            supervisor.ownerless, kept across restarts) and since the
+            loop's last act on it. A live owner is an agent on the roster
+            parked on it for its own sake, serving or parked on it or an
+            issue it closes, named for it ("<repo> <n>"), the one the loop
+            acts for, or its reviewer; a saved review park and a worker
+            waiting on it for another pull request are none. It gets a fixer
+            (agents start under its worker's name) for a head that
+            conflicts, is red, carries an unfixed changes request, or is
+            behind a base its merge does not update (no devctl
+            --update-branch, no merge.admin); the merge go again for a green
+            head whose go was given and never carried out; a reviewer for
+            a green head awaiting its review (a worker to take it over once
+            its reviews are used). Running checks wait; an open escalation
+            or ownership question is the person's. One action per stretch,
+            at most superloop.MaxSweeps (2) per head, then a leave for the
+            guide
   override  the person's answer Override (the option, or a bare override):
             that one pull request is the desk's from then on, reviewed and
             given the go as its own team's; any other answer goes to the
@@ -693,6 +719,10 @@ type supervisorLoop struct {
 	// pulls reuses unchanged PR observations between passes. A new park,
 	// answer or reviewer report invalidates them before planning.
 	pulls map[string]loopPullObservation
+	// openPulls are the desk's open pull requests the sweep last listed,
+	// at openPullsAt.
+	openPulls   []string
+	openPullsAt time.Time
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -1099,6 +1129,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
+		if !ag.Done {
+			w.Mentions = namedRefs(ag.Task, a.cfg.Board.Owner)
+		}
 		if w.Serves == "" && ag.Park != nil && ag.Park.ReviewHead == "" {
 			w.Serves = loopTaskServes(ag, w.ParkedOn)
 		}
@@ -1122,6 +1155,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
 			Started:         false,
 			Serves:          rp.Serves,
+			Saved:           true,
 		})
 	}
 	for _, n := range st.Notes {
@@ -1138,6 +1172,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	claims, stages, stageDetail := map[string]loopClaim{}, map[string]bool{}, map[string]string{}
+	ownerless := map[string]time.Time{}
 	failures := map[string]loopFailure{}
 	stuckFiled := map[string]time.Time{}
 	for _, e := range taken {
@@ -1155,6 +1190,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		key, rest, ok := keyed(e.Detail)
 		switch {
 		case !ok:
+		case e.Verb == loopOwnerlessVerb:
+			if since, err := time.Parse(time.RFC3339Nano, strings.TrimPrefix(rest, ownerlessSince)); err == nil {
+				ownerless[key] = since
+			} else {
+				delete(ownerless, key)
+			}
 		case e.Verb == loopClaimVerb:
 			claims[key] = loopClaim{at: e.At, target: rest}
 		case e.Verb == loopClaimEndVerb:
@@ -1211,8 +1252,14 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
-	if len(tracked) > 0 && !l.ownership(ctx, &in.Desk) {
+	// The sweep reads the desk's open pull requests that nothing tracks:
+	// one whose worker ended without a park, or never parked, has no other
+	// way into a pass.
+	swept := l.sweepPulls(ctx, in, tracked)
+	if len(tracked)+len(swept) > 0 && !l.ownership(ctx, &in.Desk) {
 		tracked = nil
+	} else {
+		tracked = append(tracked, swept...)
 	}
 	for _, ref := range tracked {
 		if !a.parkIsPull(ctx, st, ref) {
@@ -1260,7 +1307,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			if !ok {
 				continue
 			}
-			ref, head, ok := strings.Cut(tuple, "@")
+			ref, _, ok := strings.Cut(tuple, "@")
+			head := superloop.KeyHead(key)
 			p, present := in.Pulls[ref]
 			if !ok || !present || p.State != superloop.Merged || p.Head != head {
 				continue
@@ -1316,6 +1364,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if l.pauseForReexec() {
 		return nil
+	}
+	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless); err != nil {
+		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if !l.dryRun {
