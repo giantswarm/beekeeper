@@ -579,27 +579,8 @@ type Lane struct {
 	Failed []state.Failed `json:"failed,omitempty"`
 }
 
-// ComparePriority orders board priority ranks: a smaller positive rank (1 is
-// first) goes before a larger one, and any ranked merge goes before an
-// unranked one (0).
-func ComparePriority(a, b int) int {
-	switch {
-	case a == b || a <= 0 && b <= 0:
-		return 0
-	case a <= 0:
-		return 1
-	case b <= 0:
-		return -1
-	case a < b:
-		return -1
-	default:
-		return 1
-	}
-}
-
 // Queue returns the lane's running and settling merges and the waiting
-// ones in turn order: a settled outside merge first, then by board priority
-// and join order.
+// ones in turn order: a settled outside merge first, then by join order.
 func Queue(st *state.State, lane string) Lane {
 	q := Lane{Name: lane, Waiting: []state.Merge{}}
 	for i := range st.Merges {
@@ -620,16 +601,13 @@ func Queue(st *state.State, lane string) Lane {
 	if n := len(q.AllSettling); n > 0 {
 		q.Settling = q.AllSettling[n-1]
 	}
-	turn, prio := promoteTurns(st, q.Waiting)
+	turn := promoteTurns(st, q.Waiting)
 	slices.SortStableFunc(q.Waiting, func(a, b state.Merge) int {
 		if a.Outside != b.Outside {
 			if a.Outside {
 				return -1
 			}
 			return 1
-		}
-		if c := ComparePriority(prio(a), prio(b)); c != 0 {
-			return c
 		}
 		if c := turn(a).Compare(turn(b)); c != 0 {
 			return c
@@ -652,42 +630,28 @@ func Queue(st *state.State, lane string) Lane {
 
 func isPromote(m state.Merge) bool { return m.PR == 0 }
 
-// promoteTurns gives each waiting merge the time and priority it takes its
-// place in the lane by. While a tool-release window is open, a waiting
-// promotion of the tool's repository goes before every waiting merge of that
-// repository: the merges wait for the window, which closes only once the
-// stable release is promoted and installed, so a promotion queued behind one
-// would wait for the merge that waits for it. Any other merge keeps its own
-// priority and join time.
-func promoteTurns(st *state.State, waiting []state.Merge) (func(state.Merge) time.Time, func(state.Merge) int) {
+// promoteTurns gives each waiting merge the time it takes its place in the
+// lane by. While a tool-release window is open, a waiting promotion of the
+// tool's repository goes before every waiting merge of that repository: the
+// merges wait for the window, which closes only once the stable release is
+// promoted and installed, so a promotion queued behind one would wait for the
+// merge that waits for it. Any other merge keeps its join time.
+func promoteTurns(st *state.State, waiting []state.Merge) func(state.Merge) time.Time {
 	open := slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Tool != "" })
 	var first time.Time
-	best := 0
 	if open {
 		for _, m := range waiting {
-			if m.Repo == ToolRepo && !isPromote(m) {
-				if first.IsZero() || m.Joined.Before(first) {
-					first = m.Joined
-				}
-				if ComparePriority(m.Priority, best) < 0 {
-					best = m.Priority
-				}
+			if m.Repo == ToolRepo && !isPromote(m) && (first.IsZero() || m.Joined.Before(first)) {
+				first = m.Joined
 			}
 		}
 	}
-	turn := func(m state.Merge) time.Time {
+	return func(m state.Merge) time.Time {
 		if open && m.Repo == ToolRepo && isPromote(m) && !first.IsZero() && first.Before(m.Joined) {
 			return first
 		}
 		return m.Joined
 	}
-	prio := func(m state.Merge) int {
-		if open && m.Repo == ToolRepo && isPromote(m) && best > 0 && ComparePriority(best, m.Priority) < 0 {
-			return best
-		}
-		return m.Priority
-	}
-	return turn, prio
 }
 
 // failedFor is how long a failed attempt stays on its lane without a next
@@ -835,18 +799,11 @@ func SessionTurn(st *state.State, me state.Merge, most int, present func(state.M
 		switch {
 		case m.Phase == state.Running && Runs(m, alive):
 			running = append(running, m)
-		case m.Phase == state.Waiting && present(m) && free(st, m, present):
-			if c := ComparePriority(m.Priority, me.Priority); c < 0 || c == 0 && m.Joined.Before(me.Joined) {
-				earlier = append(earlier, m)
-			}
+		case m.Phase == state.Waiting && m.Joined.Before(me.Joined) && present(m) && free(st, m, present):
+			earlier = append(earlier, m)
 		}
 	}
-	slices.SortStableFunc(earlier, func(a, b state.Merge) int {
-		if c := ComparePriority(a.Priority, b.Priority); c != 0 {
-			return c
-		}
-		return a.Joined.Compare(b.Joined)
-	})
+	slices.SortStableFunc(earlier, func(a, b state.Merge) int { return a.Joined.Compare(b.Joined) })
 	slots := most - len(running)
 	if slots <= 0 {
 		return running, nil, false
