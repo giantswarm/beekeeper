@@ -105,6 +105,7 @@ type priorityGH struct {
 	// labelled are the ranked epics the team label finds, issue → rank:
 	// those with another Team are missing from the Team's query.
 	labelled map[int]int
+	itemTeam string
 	kind     string // the Kind of the issue set reads
 	offBoard bool   // the issue's projectItems name no item of the board
 	// added is the Kind of the item addProjectV2ItemById answers, "" a new
@@ -147,7 +148,7 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"x"}}}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(priorityMetaJSON), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		ranked, team := f.ranked, teamX
 		switch vars["q"] {
 		case `is:open team:"X" kind:"Epic 🎯"`:
@@ -179,7 +180,11 @@ func (f *priorityGH) run(_ context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "projectItems") && f.offBoard:
 		return []byte(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[]}}}}}`), nil
 	case strings.Contains(q, "projectItems"):
-		return []byte(fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I%s","project":{"id":"P"},"status":{"name":"Backlog 📦"},"kind":{"name":%q},"team":{"name":"X 🐝"}}]}}}}}`, vars["n"], f.kind)), nil
+		team := teamX
+		if f.itemTeam != "" {
+			team = f.itemTeam
+		}
+		return []byte(fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[{"id":"I%s","project":{"id":"P"},"status":{"name":"Backlog 📦"},"kind":{"name":%q},"team":{"name":%q}}]}}}}}`, vars["n"], f.kind, team)), nil
 	case strings.Contains(q, "issue(number:$n){...I}"):
 		n := 0
 		_, _ = fmt.Sscan(vars["n"], &n)
@@ -267,7 +272,7 @@ func TestSetPriorityInsertsAndRenumbers(t *testing.T) {
 			}
 			// Only the items named are read, besides the ranked epics.
 			for _, q := range f.queries {
-				if strings.Contains(q, "items(first:100") && !strings.Contains(q, "priority:fieldValueByName") {
+				if strings.Contains(q, boardItemsQuery) && !strings.Contains(q, "priority:fieldValueByName") {
 					t.Errorf("a board read beside the priority list: %s", q)
 				}
 			}
@@ -387,7 +392,7 @@ func TestRankAnchorPlacesBlockingOrFollowUpIssueAfterHighRankedItem(t *testing.T
 		switch {
 		case strings.Contains(q, "fields(first:50)"):
 			return []byte(priorityMetaJSON), nil
-		case strings.Contains(q, "items(first:100"):
+		case strings.Contains(q, boardItemsQuery):
 			return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[
 				{"id":"I1","priority":{"number":1},"status":{"name":"In Progress ⛏️"},"team":{"name":"X 🐝"},"content":{"number":1,"url":"https://github.com/o/r/issues/1","title":"epic 1","state":"OPEN","repository":{"nameWithOwner":"o/r"},"blockedBy":{"nodes":[{"number":50,"state":"OPEN","repository":{"nameWithOwner":"org/engine"}}]}}},{"id":"I2","priority":{"number":2},"status":{"name":"Up Next ➡️"},"team":{"name":"X 🐝"},"content":{"number":2,"url":"https://github.com/o/r/issues/2","title":"epic 2","state":"OPEN","repository":{"nameWithOwner":"o/r"}}}]}}}}}`), nil
 		case strings.Contains(q, "projectItems"):
@@ -414,5 +419,78 @@ func TestRankAnchorPlacesBlockingOrFollowUpIssueAfterHighRankedItem(t *testing.T
 	// last ranked epic (o/r#2) instead of at the bottom of the board.
 	if got, err := c.RankAnchor(ctx, "org/engine#52", ""); err != nil || got != ref2 {
 		t.Fatalf("RankAnchor(general issue) = %q, %v; want %s", got, err, ref2)
+	}
+}
+
+// Both desks see the same shared Priority numbers. Stale labels expose the
+// other team's epics to each search, but neither reads nor writes those ranks.
+func TestPrioritiesAndRenumberingAreTeamScoped(t *testing.T) {
+	x, y := map[int]int{1: 1, 2: 2}, map[int]int{3: 1, 4: 2}
+	for _, team := range []string{teamX, "Y"} {
+		t.Run(team, func(t *testing.T) {
+			own, other, ref := x, y, ref2
+			if team == "Y" {
+				own, other, ref = y, x, ref4
+			}
+			f := &priorityGH{t: t, ranked: own, labelled: other}
+			c := priorityClient(f)
+			if team == "Y" {
+				c.Board.Team = "Y"
+				c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+					args = slices.Clone(args)
+					for i := range args {
+						args[i] = strings.ReplaceAll(args[i], `team:"Y"`, `team:"X"`)
+						args[i] = strings.ReplaceAll(args[i], `label:"team/y"`, `label:"team/x"`)
+					}
+					b, err := f.run(ctx, args...)
+					text := strings.ReplaceAll(string(b), `"Y"`, `"Z"`)
+					text = strings.ReplaceAll(text, teamX, "Y")
+					return []byte(text), err
+				}
+			}
+			list, err := c.Priorities(context.Background())
+			if err != nil || len(list) != 2 {
+				t.Fatalf("list = %+v, %v", list, err)
+			}
+			// board next uses this same list's ranks to annotate candidates.
+			cands := []Candidate{{Item: Item{Ref: ref1}}, {Item: Item{Ref: ref3}}}
+			Annotate(cands, list.Ranks(), func(string) string { return "" })
+			if (cands[0].Priority > 0) != (team == teamX) || (cands[1].Priority > 0) != (team == "Y") {
+				t.Fatalf("cross-team board next annotations: %+v", cands)
+			}
+			before := maps.Clone(other)
+			if _, err := c.SetPriority(context.Background(), ref, 1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.SetPriority(context.Background(), ref, 0); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(before, other) {
+				t.Fatalf("other team's ranks changed: %v -> %v", before, other)
+			}
+		})
+	}
+}
+
+func TestSetPriorityRefusesAnotherTeamsEpic(t *testing.T) {
+	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, kind: epic, itemTeam: "Y"}
+	_, err := priorityClient(f).SetPriority(context.Background(), issue5, 1)
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "belongs to Team Y") || len(f.mutations) != 0 {
+		t.Fatalf("SetPriority = %v, writes %v", err, f.mutations)
+	}
+}
+
+func TestPrioritiesKeepLabelFallbackWithoutATeam(t *testing.T) {
+	f := &priorityGH{t: t, ranked: map[int]int{1: 1}, labelled: map[int]int{2: 2}}
+	// An empty Team name is treated as unset, like a null Team field.
+	c := priorityClient(f)
+	c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+		b, err := f.run(ctx, args...)
+		return []byte(strings.ReplaceAll(string(b), `"name":"Y"`, `"name":""`)), err
+	}
+	list, err := c.Priorities(context.Background())
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list = %+v, %v", list, err)
 	}
 }
