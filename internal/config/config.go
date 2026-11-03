@@ -1314,7 +1314,9 @@ func (p Provider) WithServeMode(r ServeModeReading) Provider {
 // Choice is one (harness, model) candidate in Capacity.Choices for
 // `agents start --harness auto` and `beekeeper capacity`.
 type Choice struct {
-	// Kinds limits this choice to task kinds; empty permits all kinds.
+	// Kinds limits this choice to task kinds; empty permits all kinds, but
+	// a choice on a self-hosted provider takes task kind worker (code
+	// changes) only when Kinds lists it.
 	Kinds  []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
 	Class  int      `yaml:"class,omitempty" json:"class,omitempty"`
 	Cost   float64  `yaml:"cost,omitempty" json:"cost,omitempty"`

@@ -467,7 +467,10 @@ standby successors. The supervisor loop uses the same model policy for its
 workers and reviewers.
 
 `capacity.choices` can describe model class, relative cost, allowed task kinds,
-family and weekly review reserve. `capacity.taskPolicies` constrains task kinds;
+family and weekly review reserve; a choice on a self-hosted provider takes code
+changes (kind `worker`) only when its `kinds` list it. Every start, the loop's
+included, picks the eligible subscription first and a self-hosted choice only
+when no subscription is eligible. `capacity.taskPolicies` constrains task kinds;
 `--kind` selects the policy for both capacity and starts. Review starts can use
 `--author-model` to require another model family. Capacity JSON explains the
 choice and rejections; successful starts record the model and reason.

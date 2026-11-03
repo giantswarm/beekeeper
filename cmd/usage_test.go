@@ -2455,6 +2455,7 @@ const selfHostedRawCfg = `capacity:
       model: local-model/worker-model
       provider: local-model
       skipPace: true
+      kinds: [worker]
 omp:
   model: local-model/worker-model
 `
@@ -2703,6 +2704,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
       model: local-model/worker-model
       provider: local-model
       skipPace: true
+      kinds: [worker]
 omp:
   model: local-model/worker-model
 `
@@ -2812,7 +2814,7 @@ func TestSelfHostedProviderServeMode(t *testing.T) {
         full: 2
         tiny: 1
   choices:
-    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true, kinds: [worker]}
 omp:
   model: local-model/worker-model
 `
@@ -3303,7 +3305,7 @@ func loadOnlySelfHosted(t *testing.T, cfgPath string, ceiling int, choices bool)
 	raw := onlySelfHostedRaw
 	if choices {
 		raw += `  choices:
-    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true}
+    - {harness: omp, model: local-model/worker-model, provider: local-model, skipPace: true, kinds: [worker]}
 `
 	}
 	raw += `omp:

@@ -2714,6 +2714,45 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	}
 }
 
+// A Claude choice a host runs and a self-hosted omp choice no host runs:
+// with no host room, leaving Claude to the hosts must not make the
+// self-hosted model the local pick while the subscription is eligible
+// (the local verdict picks Claude), so the start waits; only when no
+// subscription is eligible (the local verdict picks the self-hosted choice
+// itself) does the local start take it.
+func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
+	const selfHosted = "local"
+	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
+	verdict := func(provider string) string { return `{"room": 1, "choice": {"provider": "` + provider + `"}}` }
+	for _, eligible := range []bool{true, false} {
+		r := hostsFirstRig(t, choices, func(host bool, exclude []string) string {
+			switch {
+			case host:
+				return loopNoRoomJSON
+			case len(exclude) > 0 || !eligible:
+				return verdict(selfHosted)
+			}
+			return verdict(claudeComm)
+		})
+		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
+		r.pass(t)
+		r.pass(t)
+		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		if eligible {
+			if start != nil {
+				t.Errorf("an eligible subscription: the loop started %v on the self-hosted choice", start)
+			}
+			continue
+		}
+		if start == nil {
+			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
+		}
+		if slices.Contains(start, loopHostFlag) {
+			t.Errorf("a full host took the start: %v", start)
+		}
+	}
+}
+
 // The same mixed queue with a host that has room: the start goes there, as
 // hostsFirst prefers, and names no exclusion.
 func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
