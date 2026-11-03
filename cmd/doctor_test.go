@@ -687,3 +687,55 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 		t.Fatalf("stopped = %v, want %v", stopped, want)
 	}
 }
+
+// The doctor flags a running supervisor loop whose binary version is older
+// than the installed binary, and stays silent once the loop runs the installed
+// version.
+func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	oldInstalled, oldVerOf, oldRunningVer := installedLoopBinary, loopVersionOf, loopRunningVersion
+	t.Cleanup(func() {
+		installedLoopBinary = oldInstalled
+		loopVersionOf = oldVerOf
+		loopRunningVersion = oldRunningVer
+	})
+	loopRunningVersion = func() string { return testLoopNewVer }
+	installedBin := filepath.Join(t.TempDir(), "beekeeper")
+	if err := os.WriteFile(installedBin, []byte("installed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installedLoopBinary = func() (string, error) { return installedBin, nil }
+	loopVersionOf = func(_ context.Context, path string) string {
+		if path == installedBin {
+			return testLoopNewVer
+		}
+		return ""
+	}
+	pid := os.Getpid()
+	if err := a.store.WriteFile(loopPIDFile, pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rep.staleLoop, "stale supervisor loop: pid ") || !strings.Contains(rep.staleLoop, "runs "+testLoopOldVer+" while "+testLoopNewVer+" is installed") {
+		t.Fatalf("staleLoop = %q, want stale supervisor loop %s vs %s", rep.staleLoop, testLoopOldVer, testLoopNewVer)
+	}
+
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopNewVer}); err != nil {
+		t.Fatal(err)
+	}
+	installedLoopBinary = os.Executable
+	rep, err = a.doctor(t.Context(), doctorRun{by: watchParty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.staleLoop != "" {
+		t.Fatalf("staleLoop on current binary = %q, want empty", rep.staleLoop)
+	}
+}

@@ -264,6 +264,9 @@ type doctorReport struct {
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
 	stale []*proc.Process
+	// staleLoop is the line when the supervisor loop runs an older binary
+	// than the installed one.
+	staleLoop string
 	// sameTitles are the titles more than one live session carries.
 	sameTitles []sameTitle
 	// ungated are the devctl merges and promotions running with no beekeeper
@@ -294,7 +297,11 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
-	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
+	rep.staleLoop = a.staleLoopLine(ctx)
+	loopPID := a.loopPID()
+	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), func(p *proc.Process) bool {
+		return isWatch(p) || (rep.staleLoop != "" && p.PID == loopPID)
+	})
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
@@ -793,6 +800,9 @@ faults but remedying none.`,
 			for _, w := range rep.stale {
 				lines = append(lines, staleLine(w))
 			}
+			if rep.staleLoop != "" {
+				lines = append(lines, rep.staleLoop)
+			}
 			for _, d := range rep.sameTitles {
 				lines = append(lines, "same title: "+d.String())
 			}
@@ -913,6 +923,7 @@ func (w *watcher) doctor(ctx context.Context) {
 			w.check(key, true, "DOCTOR %s", staleLine(s))
 		}
 		w.clearMissing("doctor-stale ", stale)
+		w.check("doctor-stale-loop", rep.staleLoop != "", "DOCTOR %s", rep.staleLoop)
 	}()
 }
 

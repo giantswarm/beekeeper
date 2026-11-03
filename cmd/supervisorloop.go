@@ -674,6 +674,11 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// bin is the loop's running executable, checked at quiet points so an
+	// install replaces this process as soon as no claim is in flight.
+	bin          replaceable
+	reexecuted   bool
+	reexecFailed bool
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
@@ -784,6 +789,10 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer func() { _ = a.store.WriteFile(loopPIDFile, 0) }()
+	if err := a.writeLoopVersion(); err != nil {
+		return err
+	}
+	defer a.clearLoopVersion()
 	out := a.out
 	a.out = &loopOutput{out: out}
 	defer func() { a.out = out }()
@@ -802,16 +811,70 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 	}
 	for {
 		a.now = time.Now()
+		l.reexecuted = false
+		l.reexecFailed = false
 		if err := l.pass(ctx); err != nil {
+			if reexec, rerr := l.reexec(ctx); rerr != nil {
+				return rerr
+			} else if reexec {
+				if once {
+					return nil
+				}
+				continue
+			}
 			return err
+		}
+		if _, rerr := l.reexec(ctx); rerr != nil {
+			return rerr
 		}
 		if once {
 			return nil
 		}
+		if l.reexecuted {
+			continue
+		}
+		if !l.waitNextPass(ctx) {
+			return nil
+		}
+	}
+}
+
+// waitNextPass waits for LoopInterval, ctx.Done(), or a replaced binary so
+// an external self-update during the idle sleep triggers re-execution
+// without waiting the full LoopInterval on the old binary.
+func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
+	d := l.a.cfg.Supervisor.LoopInterval.Duration
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	const checkEvery = time.Second
+	if d <= checkEvery {
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-time.After(a.cfg.Supervisor.LoopInterval.Duration):
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+	ticker := time.NewTicker(checkEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		case <-ticker.C:
+			b := l.bin
+			if b == nil {
+				b = loopBinary()
+				l.bin = b
+			}
+			if b != nil && b.Replaced() && !l.reexecFailed {
+				return true
+			}
 		}
 	}
 }
@@ -846,7 +909,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.now.UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun, bin: loopBinary()}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -859,28 +922,54 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	return l, nil
 }
 
+// reexec re-executes the loop on the binary installed over its path at a
+// quiet point (no claim in flight). It returns true when the replacement
+// binary was executed, so the caller ends the pass on the old binary.
+func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
+	if l == nil || l.dryRun || l.reexecuted || l.reexecFailed {
+		return false, nil
+	}
+	b := l.bin
+	if b == nil {
+		b = loopBinary()
+		l.bin = b
+	}
+	if b == nil || !b.Replaced() {
+		return false, nil
+	}
+	if _, err := fmt.Fprintln(l.a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
+		return false, err
+	}
+	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
+		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
+	}
+	l.timerActs.Wait()
+	wasWatching := l.stopWatch != nil
+	if wasWatching {
+		l.stopWatch()
+		l.stopWatch = nil
+	}
+	if err := b.Exec(); err != nil {
+		l.reexecFailed = true
+		l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+		if wasWatching {
+			l.stopWatch = l.a.startLoopWatch(ctx)
+		}
+		return false, nil
+	}
+	l.reexecuted = true
+	_ = l.a.writeLoopVersion()
+	return true, nil
+}
+
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a
 	l.boardNone = nil
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
-		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
-			return err
-		}
-		if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
-			l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
-		}
-		l.timerActs.Wait()
-		if l.stopWatch != nil {
-			l.stopWatch()
-			l.stopWatch = nil
-		}
-		if err := b.Exec(); err != nil {
-			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
-			l.stopWatch = a.startLoopWatch(ctx)
-		}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
 	}
 	if !l.dryRun {
 		if err := l.watchConditions(ctx); err != nil {
@@ -920,6 +1009,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
+		if reexec, err := l.reexec(ctx); err != nil || reexec {
+			return err
 		}
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
@@ -1021,6 +1113,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			claims[key] = loopClaim{at: e.At, target: rest}
 		case e.Verb == loopClaimEndVerb:
 			delete(claims, key)
+			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 			stageDetail[key] = rest
@@ -1052,7 +1145,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	for _, e := range answers {
-		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) && an.unverified(answerQuery{Note: an.ID, About: an.About}, a.central, a.now) == "" {
+		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) {
 			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
 		}
 	}
@@ -1150,6 +1243,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.releaseAt = a.now
 		in.Release = l.newerRelease(ctx)
 	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
+	}
 	planned := map[string]bool{}
 	for _, act := range append(superloop.Plan(in), orphanedReviewClaims(claims, in)...) {
 		if act.Kind == superloop.KindFile || act.Kind == superloop.KindDone {
@@ -1175,6 +1271,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				if err := l.record(act, what); err != nil {
 					return err
 				}
+				if reexec, err := l.reexec(ctx); err != nil || reexec {
+					return err
+				}
 				continue
 			}
 		}
@@ -1184,26 +1283,46 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 					return err
 				}
 			}
+			if reexec, err := l.reexec(ctx); err != nil || reexec {
+				return err
+			}
 			continue
 		}
 		what, err := l.act(ctx, st, act)
 		switch {
 		case errors.Is(err, errLoopLater):
+			if reexec, err := l.reexec(ctx); err != nil || reexec {
+				return err
+			}
 			continue
 		case err != nil:
 			if err := l.failed(act, failures[act.Key], err); err != nil {
 				return err
 			}
+			if reexec, err := l.reexec(ctx); err != nil || reexec {
+				return err
+			}
 			continue
 		}
-		if err := l.record(act, what); err != nil {
+		if act.Kind != superloop.KindGo || what != loopWorkerMergeGo {
+			if err := l.record(act, what); err != nil {
+				return err
+			}
+		}
+		if reexec, err := l.reexec(ctx); err != nil || reexec {
 			return err
 		}
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
 	}
 	if !l.dryRun {
 		if err := l.roster(ctx, planned); err != nil {
 			return err
 		}
+	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
 	}
 	return l.fill(ctx, st, claims, in.Taken)
 }
@@ -1311,7 +1430,7 @@ func would(act superloop.Action) string {
 func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
 	kind := act.Kind
-	if kind == superloop.KindGo {
+	if kind == superloop.KindGo && !strings.HasPrefix(what, loopWorkerMergeGo) {
 		kind = superloop.KindMerge
 	}
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
@@ -1399,11 +1518,24 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 	case superloop.KindReview, superloop.KindNext:
 		done = logged(verbStart, opens)
 	case superloop.KindGo:
-		p, err := readLoopPull(ctx, act.Ref)
-		if err != nil {
-			return "", false, err
+		var p superloop.Pull
+		if !l.stages[act.Key+" repair"] {
+			var err error
+			p, err = readLoopPull(ctx, act.Ref)
+			if err != nil {
+				return "", false, err
+			}
+			if p.State == superloop.Merged && p.Head == act.Head {
+				done = true
+				break
+			}
 		}
-		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens) || logged(verbStart, opens)
+		if logged("agents.wake", opens) || logged(verbStart, opens) {
+			if !l.stages[act.Key+" repair"] && p.State == superloop.Open && p.Head == act.Head && p.Green && !pullNeedsBranchRepair(p) {
+				return fmt.Sprintf("%s before an interruption: %s, as the log shows", loopWorkerMergeGo, c.target), true, nil
+			}
+			done = true
+		}
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed, superloop.KindOwner:
 		done = logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
@@ -2003,6 +2135,15 @@ Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/b
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
+const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{{else}}Repair{{end}} the branch for {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
+
+{{.Task}}
+
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
+If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
+`
+
 const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
 
 {{.Task}}
@@ -2038,6 +2179,9 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		return err
 	}
 	tmpl := defaultFixerBrief
+	if act.Kind == superloop.KindGo {
+		tmpl = defaultRepairBrief
+	}
 	branch := ""
 	head := act.Head
 	if act.Kind == superloop.KindEnd {
