@@ -130,7 +130,13 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 		return true, "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
 	if _, err := runGit(ctx, tmpDir, "-c", "user.name=Beekeeper", "-c", "user.email=beekeeper@giantswarm.io", gitMerge, "--no-ff", "--no-edit", head); err != nil {
-		return true, "branch conflicts with its base", github.SquashNotApplicable
+		// Only unmerged index entries prove a branch conflict. Git can fail
+		// because the checker cannot write, start a hook or create a commit.
+		unmerged, readErr := runGit(ctx, tmpDir, "diff", "--name-only", "--diff-filter=U")
+		if readErr == nil && strings.TrimSpace(string(unmerged)) != "" {
+			return true, "branch conflicts with its base", github.SquashNotApplicable
+		}
+		return true, mergeValidationUnavailable("creating merge result: %v", err), github.SquashTooling
 	}
 	reason, code := runReviewedMergeChecks(ctx, tmpDir, mb, p.Base, head)
 	return true, reason, code
