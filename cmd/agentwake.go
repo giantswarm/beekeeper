@@ -451,7 +451,7 @@ func (a *app) wakeCodex(by state.Party, ag state.Agent, id, msg string) error {
 		return err
 	}
 	_ = a.store.Record(event(by, "agents.wake", "%s: written to its codex inbox", ag.Name))
-	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): written to its inbox, it runs the message as its next turn\n", ag.Name)
+	_, err := fmt.Fprintf(a.out, "wake: %s runs (codex): queued for its next PreToolUse hook during the current turn, or its next turn when idle; if no further tool call occurs, delivery waits until the current turn ends (remaining duration unknown)\n", ag.Name)
 	return err
 }
 

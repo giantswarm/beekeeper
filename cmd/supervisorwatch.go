@@ -23,7 +23,7 @@ var runLoopWatch = func(ctx context.Context, w *watcher) error { return w.run(ct
 
 func (a *app) startLoopWatch(ctx context.Context) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	observing := *a
+	observing := *a.snapshotAtNow()
 	cfg := *a.cfg
 	cfg.Watch.BudgetEvery.Duration = max(30*time.Second, cfg.Watch.Interval.Duration)
 	observing.cfg = &cfg
@@ -249,7 +249,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 	// Maintenance must never take the loop (and its watch) down. Establish
 	// the hold before attempting any disk action, including failed writes.
 	if disk.Low {
-		l.startsHeld = true
+		l.holdStarts(true)
 		active[loopDiskKind] = disk.Writers
 		act := superloop.Action{Kind: loopDiskKind, Key: diskKey}
 		if at, ok := pruned[diskKey]; !ok {
@@ -274,23 +274,23 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			// floor; it lifts on its own once the watch reports recovery.
 			text := "Disk remains low after pruning; starts are held. Writers: " + disk.Writers
 			var holding diskHolding
-			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.now.Sub(holding.At) < time.Hour {
+			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.timeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text
 			}
 			text += ". Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
 			fileAct := superloop.Action{Kind: superloop.KindFile, Key: diskKey}
-			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.timeNow().UTC().Format(time.RFC3339), fileReportSeparator, text)
 			if err := l.record(fileAct, line); err != nil {
 				l.sayOnce(diskKey+" file", "SUPERVISOR DISK finding failed; starts remain held: %v", err)
 			}
 		}
 	}
-	stale := budgetAt.IsZero() || l.a.now.Sub(budgetAt) > max(3*l.a.cfg.Watch.Interval.Duration, time.Minute)
-	l.startsHeld = budgetHeld || stale || len(active) > 0
-	if l.startsHeld {
+	stale := budgetAt.IsZero() || l.a.timeNow().Sub(budgetAt) > max(3*l.a.cfg.Watch.Interval.Duration, time.Minute)
+	l.holdStarts(budgetHeld || stale || len(active) > 0)
+	if l.holdingStarts() {
 		l.sayOnce("watch-hold", "SUPERVISOR STARTS HELD: watch budget held=%t stale=%t; machine conditions %v", budgetHeld, stale, active)
 	} else {
-		delete(l.said, "watch-hold")
+		l.clearSaid("watch-hold")
 	}
 	return nil
 }

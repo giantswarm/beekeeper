@@ -91,9 +91,11 @@ const fillBackoff = 2
 // doubled for each unproductive read before it since the last start or
 // change (fillBackoff), so an empty board is walked less and less often.
 func (l *supervisorLoop) pauseFill(capacity string, live []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	every := l.a.cfg.Supervisor.FillRetryEvery.Duration << min(l.fillEmpty, fillBackoff)
 	l.fillEmpty++
-	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.now.Add(every)}
+	l.fillPause = fillPause{capacity: capacity, live: live, until: l.a.timeNow().Add(every)}
 }
 
 func (l *supervisorLoop) fillCapacity(ctx context.Context) *capacityView {
@@ -174,8 +176,8 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
-		if reexec, err := l.reexec(ctx); err != nil || reexec {
-			return err
+		if l.pauseForReexec() {
+			return nil
 		}
 		cap := l.fillCapacity(ctx)
 		if cap == nil {
@@ -186,12 +188,15 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 			return err
 		}
 		capacity, alive := fillCapacityKey(cap), fillLive(live)
-		if !l.fillPause.holds(l.a.now, capacity, alive) {
+		l.mu.Lock()
+		if !l.fillPause.holds(l.a.timeNow(), capacity, alive) {
 			if !l.fillPause.until.IsZero() && l.fillPause.changed(capacity, alive) {
 				l.fillEmpty = 0 // a change may make room: the backoff starts over
 			}
 			l.fillPause = fillPause{}
 		}
+		paused := !l.fillPause.until.IsZero()
+		l.mu.Unlock()
 		pause := func() { l.pauseFill(capacity, alive) }
 		room := l.fillRoom(cap)
 		if room <= 0 {
@@ -203,7 +208,7 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		if started >= limit {
 			return nil
 		}
-		if !l.fillPause.until.IsZero() {
+		if paused {
 			return nil
 		}
 		next, err := l.nextItem(ctx)
@@ -243,6 +248,8 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 		}
 		attempts[next.Ref]++
 		startedHere[next.Ref] = true
+		l.mu.Lock()
 		l.fillEmpty = 0
+		l.mu.Unlock()
 	}
 }
