@@ -166,7 +166,12 @@ func TestARelayRefusesATakenTitle(t *testing.T) {
 func TestAStartRefusesATakenTitle(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = ""
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = nil
+		// A run beekeeper started, which may take the role.
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "s7", Name: "Agent eleven"}, Mode: state.ModeBypass, Role: guideName})
+		return nil, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s7")
