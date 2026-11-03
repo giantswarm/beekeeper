@@ -400,6 +400,16 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			}
 		}
 		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+	case execution.ControlResume:
+		// The worker leaves its own park once its wait settled: nobody is
+		// woken, the line carries what settled it.
+		if ag.Park == nil {
+			return "", nil, refused("%q is not parked", ag.Name)
+		}
+		p := ag.Park
+		ag.Park = nil
+		return fmt.Sprintf("%s: your park ended, nobody is woken. %s", ag.Name, parkMessage(p, me.Name)),
+			[]state.Event{event(me, resumedEvent, "%s: it left its own park, nobody is woken: %s", ag.Name, parkedText(p, a.now))}, nil
 	case "problem":
 		var finding string
 		if err := execution.Decode(c.Data, &finding); err != nil {
