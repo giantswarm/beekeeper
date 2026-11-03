@@ -567,3 +567,21 @@ func TestMergeResultHostFailureIsTooling(t *testing.T) {
 		t.Fatalf("host failure blamed on PR: %d: %s", code, reason)
 	}
 }
+
+func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	repo.advanceMain(t, repo.head1)
+	hooks := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hooks, "pre-merge-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+		t.Fatal(err)
+	}
+	if _, err := runGit(t.Context(), repo.dir, "config", "core.hooksPath", hooks); err != nil {
+		t.Fatal(err)
+	}
+	r := newLoopRig(t)
+	r.a.cfg.Disk.Checkouts = []string{repo.dir}
+	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if code != github.SquashTooling || !strings.HasPrefix(reason, reasonMergeValidationUnavailable) {
+		t.Fatalf("checker hook failure blamed on branch: %d: %s", code, reason)
+	}
+}

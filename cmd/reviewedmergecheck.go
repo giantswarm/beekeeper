@@ -101,7 +101,7 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	}
 	mbOut, err := runGit(ctx, repoDir, "merge-base", baseSHA, head)
 	if err != nil {
-		return true, "branch conflicts with its base", github.SquashNotApplicable
+		return true, mergeValidationUnavailable("reading merge base: %v", err), github.SquashTooling
 	}
 	mb := strings.TrimSpace(string(mbOut))
 
