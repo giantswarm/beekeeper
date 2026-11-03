@@ -20,6 +20,8 @@ const (
 	guidePerson = "pat"
 	// mergeAnswer is the label of an escalation's releasing option.
 	mergeAnswer = "Merge"
+	// deskAuthor is the login the desk opens its pull requests as.
+	deskAuthor = "alice"
 )
 
 var (
@@ -1549,5 +1551,45 @@ func TestOverlapClosingIssuesMutual(t *testing.T) {
 	act = only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
 		t.Fatalf("missing owner: %+v", act)
+	}
+}
+
+// Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
+// planOverlap matches pull request refs and default pull worker names
+// case-insensitively.
+func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
+	t0 := time.Date(2026, 11, 3, 2, 0, 0, 0, time.UTC)
+	const (
+		prRef  = "GiantSwarm/Beekeeper#42"
+		prLow  = "giantswarm/beekeeper#42"
+		waitPR = "GiantSwarm/Beekeeper#43"
+	)
+	in := Input{
+		Now:  t0.Add(OverlapWait + time.Minute),
+		Desk: Desk{Authors: []string{deskAuthor}},
+		Workers: []Worker{
+			{Name: "beekeeper 42", Serves: prLow, ParkedOn: "giantswarm/beekeeper#43", ParkedAt: t0, Waits: "waiting on #43"},
+			{Name: "beekeeper 43", Serves: "giantswarm/beekeeper#43", ParkedOn: prLow, ParkedAt: t0, Waits: "waiting on #42"},
+		},
+		Pulls: map[string]Pull{
+			prRef:  {Ref: prRef, URL: "https://github.com/GiantSwarm/Beekeeper/pull/42", Author: deskAuthor, State: Open, Head: head1},
+			waitPR: {Ref: waitPR, URL: "https://github.com/GiantSwarm/Beekeeper/pull/43", Author: deskAuthor, State: Open, Head: head2},
+		},
+	}
+	acts := Plan(in)
+	var ownerAct *Action
+	for i := range acts {
+		if acts[i].Kind == KindOwner {
+			ownerAct = &acts[i]
+			break
+		}
+	}
+	if ownerAct == nil {
+		t.Fatalf("expected KindOwner action, got %+v", acts)
+	}
+	// The mutual wait orders #42 first: it gets the owner, #43 is blocked
+	// by it, whatever the case of the refs the workers serve and park on.
+	if ownerAct.Ref != prRef || ownerAct.Head != head1 || ownerAct.Block != waitPR {
+		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
 	}
 }

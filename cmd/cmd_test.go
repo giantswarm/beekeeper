@@ -307,11 +307,12 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
-	pull, ver, upd, wait, bc, accepts, infra, cand, rg := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard
+	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority
 	t.Cleanup(func() {
-		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard = pull, ver, upd, wait, bc, accepts, infra, cand, rg
+		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
 	})
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	toolCandidate = func(context.Context, time.Time) (string, error) { return "", nil }
 	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
 	devctlUpdate = func(context.Context) error { return nil }

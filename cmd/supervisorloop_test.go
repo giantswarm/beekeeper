@@ -50,6 +50,10 @@ const (
 	loopDesk     = "desk"
 	loopTeamB    = "team-b"
 	loopReviewer = "Review r 7 r1"
+	// loopApproved is a desk review's approving body, loopIssueTask the
+	// task of a worker on the issue the rig's pull request closes.
+	loopApproved  = "Review: approved"
+	loopIssueTask = "Work https://github.com/o/r/issues/10"
 )
 
 // loopRig is a loop's app over a scratch store, with the beekeeper commands
@@ -362,7 +366,7 @@ func (r *loopRig) passErr() error {
 
 // verdict has the round's reviewer post its verdict on head now.
 func (r *loopRig) verdict(id, head, verdict, body string) {
-	r.pull.Reviews = append(r.pull.Reviews, superloop.Review{ID: id, Head: head, Verdict: verdict, Body: body, At: time.Now()})
+	r.pull.Reviews = append(r.pull.Reviews, superloop.Review{ID: id, Author: loopDesk, Head: head, Verdict: verdict, Body: body, At: time.Now()})
 }
 
 // called is the call whose line starts with prefix.
@@ -2368,7 +2372,7 @@ func TestLoopRelaysTheOwningTeamsReview(t *testing.T) {
 	r.park(t, loopPR, parkedAt)
 	r.pass(t)
 	r.pull.Reviews = []superloop.Review{
-		{ID: "R1", Author: loopDesk, Head: loopHead, Body: "Review: approved", At: parkedAt.Add(time.Second)},
+		{ID: "R1", Author: loopDesk, Head: loopHead, Body: loopApproved, At: parkedAt.Add(time.Second)},
 		{ID: "R2", Author: "bob", Member: true, Head: loopHead, Verdict: superloop.Approved, Body: "LGTM, thanks", At: parkedAt.Add(time.Second)},
 	}
 	r.pass(t)
@@ -3460,7 +3464,7 @@ func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
 		}
 		st.Agents = []state.Agent{{
 			Party: me,
-			Task:  "Work https://github.com/o/r/issues/10",
+			Task:  loopIssueTask,
 		}}
 		return nil, nil
 	}); err != nil {
@@ -3512,7 +3516,7 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 			r := newLoopRig(t)
 			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -3583,5 +3587,47 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 	}
 	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(r.a.now) {
 		t.Fatalf("quiet episode continued: %+v", f)
+	}
+}
+
+// Regression test for after-the-fact review of https://github.com/giantswarm/beekeeper/pull/2164:
+// when ownOverlap records the board dependency and wakeOrStartFixer defers on
+// capacity (errLoopLater), the next pass must not repeat board unblock/block.
+func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
+	r.sshLoopHost(t, true)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: loopIssueTask, Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	capOut, capCode := "capacity full", 1
+	boardCalls := 0
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == loopBoard {
+			boardCalls++
+			return "", 0
+		}
+		if len(args) > 0 && args[0] == loopCapacity {
+			return capOut, capCode
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if boardCalls != 2 {
+		t.Fatalf("pass 1 board calls = %d, want 2 (unblock + block)", boardCalls)
+	}
+	if len(r.logged(t, "supervisor.owner")) != 0 {
+		t.Fatal("owner recorded before fixer started")
+	}
+	capOut, capCode = `{"room":1}`, 0
+	r.pass(t)
+	if boardCalls != 2 {
+		t.Fatalf("pass 2 repeated board calls: total = %d, want 2", boardCalls)
+	}
+	if len(r.logged(t, "supervisor.owner")) != 1 {
+		t.Fatalf("pass 2 did not finish owner assignment: %+v", r.logged(t, "supervisor.owner"))
 	}
 }

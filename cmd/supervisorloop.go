@@ -48,8 +48,13 @@ const loopStartVerb = "supervisor.loop"
 // loopClaimVerb logs an action the loop is about to take, before its side
 // effect; loopStageVerb a finished stage of a release; loopUnstageVerb a
 // stage found obsolete, which no later pass resumes.
+// loopGoVerb logs a merge go given to a worker, loopMergeVerb a merge the
+// loop ran itself.
 const (
 	loopClaimVerb    = "supervisor.claim"
+	loopGoVerb       = "supervisor." + superloop.KindGo
+	loopMergeVerb    = "supervisor." + superloop.KindMerge
+	loopEndVerb      = "supervisor." + superloop.KindEnd
 	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
@@ -1295,6 +1300,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
+		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
 		if p.State == superloop.Merged {
 			l.mu.Lock()
@@ -3576,13 +3582,23 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 }
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+	blockStage := act.Key + " blocked"
+	l.mu.Lock()
+	blocked := l.stages[blockStage]
+	l.mu.Unlock()
+	if act.Block != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
 		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
+		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
+			return "", err
+		}
+		l.mu.Lock()
+		l.stages[blockStage] = true
+		l.mu.Unlock()
 	}
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err

@@ -33,9 +33,10 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
+	old, login := readLoopPull, readDeskLogin
+	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
+	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
