@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
+
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
 - The hook's refusal of work in the guide's session no longer tells the guide to `SendMessage` the supervisor, which is the supervisor loop and no session a message reaches: it names the route that arrives, an issue in the work's owning repository put on the board with `beekeeper board move` (https://github.com/giantswarm/beekeeper/issues/1776).

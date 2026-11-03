@@ -2456,9 +2456,9 @@ func TestLoopFileNotePassesNoteAddCheck(t *testing.T) {
 
 // Each pass of the supervisor loop runs the doctor's roster and archive step:
 // done workers, settled reviewers, relieved role runs and stale idle entries
-// without a CLI leave the roster and have their background sessions stopped,
-// while active role holders, in-turn sessions and sessions the person started
-// stay.
+// without a CLI leave the roster; their background sessions are stopped but
+// a relieved role run's, which stays the person's to close, while active
+// role holders, in-turn sessions and sessions the person started stay.
 func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Agents.Mode = config.ModeBackground
@@ -2531,7 +2531,7 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 		slices.Sort(ids)
 		return ids
 	}
-	if got, want := stopped(), []string{reviewer.Session[:8], guide3.Session[:8], staleIdle.Session[:8]}; !slices.Equal(got, want) {
+	if got, want := stopped(), []string{reviewer.Session[:8], staleIdle.Session[:8]}; !slices.Equal(got, want) {
 		t.Fatalf("stopped on first pass = %v, want %v", got, want)
 	}
 	st, err := r.a.store.Read()
@@ -2546,7 +2546,8 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 		t.Fatalf("roster after first pass = %v, want %v", roster, want)
 	}
 
-	// Their turns end: doneWorker leaves the roster and both doneWorker and guide4 stop.
+	// Their turns end: doneWorker leaves the roster and stops; the relieved
+	// guide4 stays.
 	*calls = nil
 	r.sessions = []*claude.Session{
 		{PID: 101, ID: doneWorker.Session, Name: doneWorker.Name, Background: true},
@@ -2556,7 +2557,7 @@ func TestLoopRunsTheDoctorsRosterAndArchiveStepEveryPass(t *testing.T) {
 	}
 	r.inTurn = func(state.Party) bool { return false }
 	r.pass(t)
-	if got, want := stopped(), []string{doneWorker.Session[:8], guide4.Session[:8]}; !slices.Equal(got, want) {
+	if got, want := stopped(), []string{doneWorker.Session[:8]}; !slices.Equal(got, want) {
 		t.Fatalf("stopped on second pass = %v, want %v", got, want)
 	}
 	st, err = r.a.store.Read()

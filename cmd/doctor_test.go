@@ -608,11 +608,11 @@ func TestCheckCodexSkills(t *testing.T) {
 	}
 }
 
-// The doctor stops the background sessions of finished workers, relieved role
-// runs (whether still on the roster or already removed by their relay) and
-// stale idle entries without a CLI, while leaving active role holders and
-// sessions the person started running.
-func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
+// The doctor stops the background sessions of finished workers and stale
+// idle entries without a CLI, while leaving active role holders, relieved
+// role runs (the person's to close) and sessions the person started
+// running.
+func TestDoctorStopsFinishedBackgroundSessionsNotRelievedGuides(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -662,7 +662,9 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 		}
 	}
 	slices.Sort(stopped)
-	if want := []string{doneWorker.Session[:8], relievedGuide.Session[:8]}; !slices.Equal(stopped, want) {
+	// The relieved guide's session stays the person's to close
+	// (https://github.com/giantswarm/beekeeper/issues/2195).
+	if want := []string{doneWorker.Session[:8]}; !slices.Equal(stopped, want) {
 		t.Fatalf("stopped = %v, want %v", stopped, want)
 	}
 }

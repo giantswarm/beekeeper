@@ -165,21 +165,22 @@ func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	for _, ar := range st.Archives {
 		hosts = append(hosts, ar.Host)
 	}
-	if !slices.Equal(hosts, []string{supA.HostSession, done.HostSession}) || !st.DoneSeeded {
+	// The relieved run supA stays the person's: never seeded.
+	if !slices.Equal(hosts, []string{done.HostSession}) || !st.DoneSeeded {
 		t.Fatalf("seeded %v", hosts)
 	}
 	idle := func(state.Party) bool { return false }
-	if p := planArchives(st, record, idle, archiveNow.Add(time.Hour)); !strings.Contains(p[1].wait, "quiet a day") {
-		t.Errorf("an hour on: %s", p[1])
+	if p := planArchives(st, record, idle, archiveNow.Add(time.Hour)); !strings.Contains(p[0].wait, "quiet a day") {
+		t.Errorf("an hour on: %s", p[0])
 	}
-	if p := planArchives(st, record, idle, active.Add(reseedQuiet)); p[1].wait != "" || p[1].drop != "" {
-		t.Errorf("a quiet day on: %s", p[1])
+	if p := planArchives(st, record, idle, active.Add(reseedQuiet)); p[0].wait != "" || p[0].drop != "" {
+		t.Errorf("a quiet day on: %s", p[0])
 	}
 	shown := func(string) (*claude.Record, bool) {
 		return &claude.Record{LastFocusedAt: active.Add(reseedQuiet).UnixMilli()}, true
 	}
-	if p := planArchives(st, shown, idle, active.Add(reseedQuiet+time.Hour)); !strings.Contains(p[1].wait, "quiet a day") {
-		t.Errorf("shown meanwhile: %s", p[1])
+	if p := planArchives(st, shown, idle, active.Add(reseedQuiet+time.Hour)); !strings.Contains(p[0].wait, "quiet a day") {
+		t.Errorf("shown meanwhile: %s", p[0])
 	}
 	st.Archives = nil
 	if seedArchives(st, record, reseed, archiveNow); len(st.Archives) != 0 {
@@ -266,39 +267,67 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 	}
 }
 
-// A relay's successor taking the role owes the relieved run's archive,
-// which the doctor asks for once the run's CLI runs no turn; the holder's
-// own session, and a run no relay relieved, stay.
-func TestRelievedRunIsArchived(t *testing.T) {
+// A relay's successor taking the role owes no archive of the relieved run:
+// its session stays the person's to close, and the start message says how.
+// An archive owed before the fix is owed no longer; the doctor neither
+// seeds nor reseeds one (https://github.com/giantswarm/beekeeper/issues/2195).
+func TestRelievedRunStaysThePersons(t *testing.T) {
 	st := handOverState()
-	st.Starts = []state.Start{{Party: supA}, {Party: supB}}
+	st.Starts = []state.Start{{Party: supA, Role: guideName}, {Party: supB}}
 	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Archives) != 0 {
-		t.Fatalf("owed before the successor took the role: %+v", st.Archives)
-	}
 	msg, _, err := guideRole.start(st, supB, true, false, relayNow.Add(time.Minute))
-	if err != nil || !strings.Contains(msg, "archives its desktop session local_A once its CLI runs no turn") {
+	if err != nil || !strings.Contains(msg, "stays in the person's session list until they archive it") {
 		t.Fatalf("start: %q, %v", msg, err)
 	}
-	if len(st.Archives) != 1 || st.Archives[0].Host != "local_A" {
-		t.Fatalf("archives %+v", st.Archives)
+	if len(st.Archives) != 0 {
+		t.Fatalf("archives %+v, want none owed", st.Archives)
 	}
-	inTurn := func(state.Party) bool { return true }
-	if p := planArchives(st, unarchived, inTurn, relayNow.Add(2*time.Minute)); p[0].wait == "" {
-		t.Errorf("in a turn: %s", p[0])
+	if st.Starts[1].Role != guideName {
+		t.Errorf("the successor's start has role %q, want %q", st.Starts[1].Role, guideName)
 	}
+	if !keepsRole(st, supB) || !keepsRole(st, supA) {
+		t.Errorf("keepsRole: holder %v, relieved %v", keepsRole(st, supB), keepsRole(st, supA))
+	}
+	// Once its relief is forgotten, its start still keeps it.
+	st.Guide.Relieved = nil
+	if !keepsRole(st, supA) {
+		t.Error("keepsRole: relieved run whose relief was dropped")
+	}
+	// An archive owed by an earlier version is dropped, never asked for.
+	st.Archives = []state.Archive{{Party: supA, Host: "local_A", Why: "relieved"}}
 	idle := func(state.Party) bool { return false }
-	if p := planArchives(st, unarchived, idle, relayNow.Add(2*time.Minute)); p[0].wait != "" || p[0].drop != "" {
-		t.Errorf("idle: %s", p[0])
+	if p := planArchives(st, unarchived, idle, relayNow.Add(3*time.Minute)); !strings.Contains(p[0].drop, "the person closes it") {
+		t.Errorf("owed: %s", p[0])
 	}
-	if !roleKeeps(st, supB) || roleKeeps(st, supA) {
-		t.Errorf("roleKeeps: holder %v, relieved %v", roleKeeps(st, supB), roleKeeps(st, supA))
+	st.Archives, st.FinishedSeeded, st.DoneSeeded = nil, false, false
+	seedArchives(st, unarchived, func(*state.State, state.Start) (time.Time, bool) { return time.Time{}, true }, relayNow)
+	if slices.ContainsFunc(st.Archives, func(ar state.Archive) bool { return ar.Party.Is(supA) }) {
+		t.Errorf("seeded %+v", st.Archives)
 	}
-	// The relieved run supervises again: its archive is owed no longer.
-	st.Guide = &state.Role{Holder: &state.Supervisor{Party: supA}}
-	if p := planArchives(st, unarchived, idle, relayNow.Add(3*time.Minute)); !strings.Contains(p[0].drop, "role") {
-		t.Errorf("holding again: %s", p[0])
+}
+
+// A guide taken over after a crash or a reboot, its session gone without a
+// relay, stays the person's too: its start took the role.
+func TestTakenOverGuideStaysThePersons(t *testing.T) {
+	// Names that are no role's runs: only the start says they guided.
+	old := state.Party{Session: "gA", HostSession: "local_gA", Name: "desk guide"}
+	next := state.Party{Session: "gB", HostSession: "local_gB", Name: "desk guide again"}
+	st := &state.State{Starts: []state.Start{{Party: old}, {Party: next}}}
+	if keepsRole(st, old) {
+		t.Fatal("keepsRole before it guided")
+	}
+	if _, _, err := guideRole.start(st, old, false, false, relayNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := guideRole.start(st, next, false, false, relayNow.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if holdsRole(st, old) || !keepsRole(st, old) {
+		t.Errorf("taken over: holds %v, keeps %v", holdsRole(st, old), keepsRole(st, old))
+	}
+	if _, why := (&app{}).archivableRecord(st, old); !strings.Contains(why, "the person closes it") {
+		t.Errorf("archivable: %q", why)
 	}
 }

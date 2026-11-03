@@ -488,7 +488,7 @@ func openRelayTo(st *state.State, p state.Party, now time.Time) bool {
 func (a *app) backgroundStartsToStop(ctx context.Context, st *state.State, sessions []*claude.Session, busy func(state.Party) bool) []state.Party {
 	var candidates []state.Start
 	for _, s := range st.Starts {
-		if !s.Background || s.Session == "" || roleKeeps(st, s.Party) || openRelayTo(st, s.Party, a.now) {
+		if !s.Background || s.Session == "" || keepsRole(st, s.Party) || openRelayTo(st, s.Party, a.now) {
 			continue
 		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party) }) {
@@ -537,7 +537,7 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 	var archive []state.Party
 	for _, c := range removed {
 		lines = append(lines, fmt.Sprintf("took %q off the roster: %s", c.agent.Name, c.why))
-		if c.archive || !roleKeeps(st, c.agent.Party) {
+		if c.archive || !keepsRole(st, c.agent.Party) {
 			archive = append(archive, c.agent.Party)
 		}
 	}
