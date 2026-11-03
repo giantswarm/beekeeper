@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -505,5 +506,64 @@ func TestMergeResultUnreadableGateCannotDelegateAnUnsafeMerge(t *testing.T) {
 	}
 	if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
 		t.Fatalf("unsafe merge go: %+v", evs)
+	}
+}
+
+func TestMergeCheckIgnoresHostLocale(t *testing.T) {
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+	out, err := runMergeCheckCmd(t.Context(), t.TempDir(), "sh", "-c", `test "$LC_ALL" = C && test "$LANGUAGE" = C`)
+	if err != nil {
+		t.Fatalf("host locale reached check: %v: %s", err, out)
+	}
+}
+
+func TestMergeCheckEnvironmentFailures(t *testing.T) {
+	for name, args := range map[string][]string{
+		"missing":      {"beekeeper-test-nonexistent-command"},
+		"signal":       {"sh", "-c", "kill -KILL $$"},
+		"disk":         {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
+		"resource":     {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
+		"test failure": {"sh", "-c", "echo '--- FAIL: TestRegression'; exit 1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := runMergeCheckCmd(t.Context(), t.TempDir(), args[0], args[1:]...)
+			if err == nil || errors.Is(err, errMergeCheckEnvironment) != (name != "test failure") {
+				t.Fatalf("wrong failure classification: %v", err)
+			}
+		})
+	}
+}
+
+func TestMergeCheckHostFailureDoesNotRequestBranchRepair(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.answer = func(args []string) (string, int) {
+		if len(args) > 0 && args[0] == gateCmdName {
+			doc := github.SquashDoc{Route: reviewedMergeRoute, Repo: loopMergeRepo, Number: 7, HeadSha: loopHead, Reason: mergeValidationUnavailable("host resources exhausted")}
+			body, _ := json.Marshal(doc)
+			return string(body), github.SquashTooling
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if call := r.called(agentsName, agentWakeName, loopWorker); call != nil {
+		t.Fatalf("host failure blamed on branch: %v", call)
+	}
+}
+
+func TestMergeResultHostFailureIsTooling(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	lintDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(lintDir, "golangci-lint"), []byte("#!/bin/sh\necho 'write: no space left on device'\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", lintDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	reason, code := runReviewedMergeChecks(t.Context(), repo.dir, repo.base, mainBranch, repo.head2)
+	if code != github.SquashTooling || !strings.HasPrefix(reason, reasonMergeValidationUnavailable) {
+		t.Fatalf("host failure blamed on PR: %d: %s", code, reason)
 	}
 }

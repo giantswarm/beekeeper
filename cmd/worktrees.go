@@ -170,7 +170,7 @@ func (a *app) liveFolders(now time.Time) ([]string, error) {
 // index.
 func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	c := proc.Command(proc.Background(ctx), "git", append([]string{"-C", dir}, args...)...)
-	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	c.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C", "LANGUAGE=C")
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
 	out, err := c.Output()
