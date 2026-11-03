@@ -103,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `watch` discovers codex, omp and agy runners as well as Claude Code sessions, so a running worker no longer produces false `AGENTS STOPPED` and `SESSION ENDED` alerts. Stopped workers of those harnesses get an `agents wake` command instead of a Claude desktop link ([https://github.com/giantswarm/beekeeper/issues/1965](https://github.com/giantswarm/beekeeper/issues/1965)).
 
+- Record and deliver mid-task findings with `agents problem`, deduplicating findings repeated at idle within the same worker assignment (https://github.com/giantswarm/beekeeper/issues/952).
 - Allow UI-only permissions section expansion, collapse and tab clicks without an App or permission in the summary, after verifying the clicked ref’s role and label in a current page read; permission changes and grant submissions retain their record checks (https://github.com/giantswarm/beekeeper/issues/927).
 
 ### Changed
