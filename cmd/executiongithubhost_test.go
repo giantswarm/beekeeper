@@ -105,6 +105,28 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		}
 	}
 
+	// A rerun uses the authenticated coordinator, without asking for a token
+	// or executing CI clients on this host. Keep the coordinator's exit code.
+	originalCallback := s.Callback
+	s.Callback = func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
+		var req execution.CallbackRequest
+		var rerun executionRerunRequest
+		if execution.Decode(raw, &req) != nil || req.Operation != executionRerun || !execution.VerifyCallback(req, r.ControlKey) || execution.Decode(req.Payload, &rerun) != nil || rerun.PR != 2224 {
+			t.Fatal("wrong rerun callback")
+		}
+		return json.Marshal(execution.WireResponse{Protocol: execution.Protocol, RequestID: req.RequestID, Ref: r.Ref, Payload: mustExecutionJSON(t, executionRerunResult{Output: "rerun outcome", ErrorOutput: "login required", Code: 8})})
+	}
+	var rerunOut, rerunErr bytes.Buffer
+	rerunCommand := a.executionRerunCmd()
+	rerunCommand.SetArgs([]string{"2224"})
+	rerunCommand.SetOut(&rerunOut)
+	rerunCommand.SetErr(&rerunErr)
+	rerunCommand.SilenceErrors, rerunCommand.SilenceUsage = true, true
+	if err := rerunCommand.ExecuteContext(context.Background()); err == nil || Code(err) != 8 || rerunOut.String() != "rerun outcome" || rerunErr.String() != "login required" {
+		t.Fatalf("rerun lost coordinator outcome: %v, %q, %q", err, rerunOut.String(), rerunErr.String())
+	}
+	s.Callback = originalCallback
+
 	// Only a PR takes the execution branch: gh issue create has no --head.
 	wantWrite = true
 	for _, args := range [][]string{{workerGitHubIssueGroup, workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {"pr", workerGitHubCreate, loopRepoFlag, workerGitHubPrivateRepo, titleFlag, remoteMCPFixture}, {workerGitHubIssueGroup, workerGitHubClose, "1", loopRepoFlag, workerGitHubPrivateRepo}} {

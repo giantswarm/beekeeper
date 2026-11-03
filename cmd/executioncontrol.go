@@ -109,6 +109,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		return json.NewEncoder(output).Encode(reply)
 	}
+	if req.Operation == executionRerun {
+		value, callErr := a.executionCIRerun(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	if req.Operation == execution.MCPList || req.Operation == execution.MCPCall {
 		value, callErr := a.executionMCP(ctx, host, req)
 		if callErr != nil {

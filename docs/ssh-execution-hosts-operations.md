@@ -940,3 +940,22 @@ GitHub App owned by the organization, authorizing each coordinator through devic
 flow, updating coordinator and execution hosts, and proving multi-worker GitHub
 access live. After that proof, retire the previous worker-access App and delete
 its private key from the coordinator secret store.
+
+## Rerun failed CI without a new commit
+
+From a GitHub-enabled execution's workspace, run
+`beekeeper agents rerun <pull-request-number>`. The authenticated callback
+asks the coordinator to run `devctl pr rerun` for the execution's repository.
+Only a PR on that execution's assigned branch is accepted. Stopped, completed,
+expired-lease and GitHub-held executions cannot request a rerun.
+
+The coordinator needs its own CircleCI login with Write access. CI credentials
+stay there; the worker receives devctl's output, diagnostics and exit code
+(including authentication-required exit 8). The command starts failed-workflow
+reruns without waiting for completion. Read the failure first and use this for
+transient CI failures; code failures still need a fix. A lost callback reply is
+not proof that no rerun started: inspect CI before trying again.
+
+The generated CircleCI configuration invokes `architect/go-build`; retrying a
+transient Rekor signing failure inside that job belongs in the architect orb,
+not an edit to Beekeeper's generated workflow files.
