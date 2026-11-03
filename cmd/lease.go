@@ -527,7 +527,7 @@ func (a *app) claimHeld(st *state.State, me state.Party, sessions []*claude.Sess
 	q := lease.Pending(st, cur.Env, true, a.now, a.cfg.GrantTTL.Duration)
 	if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(me) }); i >= 0 {
 		return &claimRefusal{res: cur.Env, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s",
-			i+1, v.Name, cur.Env, clock(a.now, v.SinceTime()), v.Purpose)}
+			i+1, v.Name, cur.Env, clock(a.now, v.SinceTime()), v.Purpose+a.leaseOverrun(cur))}
 	}
 	return &claimRefusal{res: cur.Env, why: a.heldBy(v).Error()}
 }
