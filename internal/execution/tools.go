@@ -59,7 +59,7 @@ func (s *Server) requiredTools() (map[string]string, error) {
 	slices.Sort(repos)
 	for _, repo := range repos {
 		p := filepath.Join(s.Config.Repositories[repo], "go.mod")
-		b, err := os.ReadFile(p) //nolint:gosec // operator-configured source checkout
+		b, err := readRegular(p, MaxWire)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -173,4 +173,20 @@ func (s *Server) toolPath(env []string) []string {
 		return out
 	}
 	return append(out, "PATH="+strings.Join(dirs, string(filepath.ListSeparator)))
+}
+
+// checkWorkspaceTools checks the committed source, rather than assuming a
+// preseeded checkout has the same go.mod as the requested ref.
+func (s *Server) checkWorkspaceTools(ctx context.Context, workspace string) error {
+	copy := *s
+	copy.Config = s.Config
+	copy.Config.Repositories = map[string]string{"workspace/source": workspace}
+	_, missing, err := copy.probeTools(ctx)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return toolsError(missing)
+	}
+	return nil
 }

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -107,7 +106,7 @@ func TestLoopMergeEndDeclaresRemainingWork(t *testing.T) {
 }
 
 func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
-	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "behind", "conflict"} {
+	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict"} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
@@ -117,8 +116,6 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 				}
 			}
 			switch scenario {
-			case "behind":
-				r.pull.MergeState = "BEHIND"
 			case "conflict":
 				r.pull.Mergeable = "CONFLICTING"
 			case "moved":
@@ -147,7 +144,7 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 
 func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: "rebase"}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
@@ -178,18 +175,19 @@ func TestLoopMergeDoesNotGrantWorkerAuthority(t *testing.T) {
 	}
 }
 
-func TestReviewedAdminMergeRefusesANonStrictBehindBase(t *testing.T) {
+func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	r := newLoopRig(t)
-	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
+	r.a.cfg.Merge.Methods = map[string]string{loopMergeRepo: mergeMethodRebase}
 	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
 		t.Fatal(err)
 	}
-	was := readReviewedBehind
-	t.Cleanup(func() { readReviewedBehind = was })
-	readReviewedBehind = func(_ context.Context, _ superloop.Pull) (int, error) { return 1, nil }
+	// The base requires up-to-date branches and the desk merges without
+	// --admin: only a base merge would bring the branch up to date, which a
+	// rebase merge cannot take.
+	r.pull.MergeState = mergeStateBehind
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
-		t.Fatalf("behind admin merge: %+v %v", doc, r.cmds)
+		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)
 	}
 }
 
@@ -260,31 +258,6 @@ func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T
 		}
 		wake := r.called(agentsName, agentWakeName, loopWorker)
 		if wake == nil || strings.Contains(wake[3], "Repair the branch") || !strings.Contains(wake[3], "devctl pr merge o/r 7") || !strings.Contains(wake[3], loopHead) {
-			t.Fatalf("worker was not directed to merge approved head: %v\n%s", r.calls, r.out)
-		}
-		evs := r.logged(t, "supervisor.go")
-		if len(evs) != 1 || !recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead) {
-			t.Fatalf("worker merge go not granted: %+v", evs)
-		}
-	})
-
-	t.Run("behind check failure triggers session merge go", func(t *testing.T) {
-		r := newLoopRig(t)
-		r.a.cfg.Merge.DevctlOwners = []string{"o"}
-		r.park(t, loopPR, time.Now())
-		r.pass(t)
-		r.verdict("R1", loopHead, superloop.Approved, "")
-		was := readReviewedBehind
-		t.Cleanup(func() { readReviewedBehind = was })
-		readReviewedBehind = func(context.Context, superloop.Pull) (int, error) {
-			return 0, context.DeadlineExceeded
-		}
-		r.pass(t)
-		if r.called("note", loopAdd) != nil {
-			t.Fatalf("broken merge step asked the person: %v", r.calls)
-		}
-		wake := r.called(agentsName, agentWakeName, loopWorker)
-		if wake == nil || !strings.Contains(wake[3], "devctl pr merge o/r 7") || !strings.Contains(wake[3], loopHead) {
 			t.Fatalf("worker was not directed to merge approved head: %v\n%s", r.calls, r.out)
 		}
 		evs := r.logged(t, "supervisor.go")

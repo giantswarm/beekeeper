@@ -140,3 +140,24 @@ func TestExecutionRulesRefuseKnownCredentialStoresBeforeRead(t *testing.T) {
 		t.Fatal("configured credential glob was ignored")
 	}
 }
+
+func TestExecutionMCPGuardOnlyAdmitsCoordinator(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		h := Hook{ExecutionMCP: enabled}
+		for _, tool := range []string{"mcp__coordinator__fixture__echo", "mcp__other__echo"} {
+			wantDenied := !enabled || tool == "mcp__other__echo"
+			raw := executionEvent(tool, map[string]any{}, workspace)
+			if got := executionDenied(h.DecideExecution(raw, executionFixture, workspace, nil)); got != wantDenied {
+				t.Fatalf("claude tool %s enabled %v: %s", tool, enabled, h.DecideExecution(raw, executionFixture, workspace, nil))
+			}
+			raw = executionCodexEvent(tool, map[string]any{}, executionThread, workspace)
+			if got := executionCodexDenied(t, h.DecideExecutionCodex(raw, executionThread, workspace, nil)); got != wantDenied {
+				t.Fatalf("codex tool %s enabled %v: %s", tool, enabled, h.DecideExecutionCodex(raw, executionThread, workspace, nil))
+			}
+		}
+	}
+}
