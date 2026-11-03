@@ -1663,17 +1663,89 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 	}
 }
 
-// A loop whose binary was replaced runs on the installed one.
+// A loop whose binary was replaced runs on the installed one at its next quiet
+// point (with no claim in flight), before running later actions in the same
+// pass on the old binary, and supervisor status reports the new version within
+// one loop round.
 func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	r := newLoopRig(t)
+	oldVer := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = oldVer })
+	runningVer := "0.175.0-rc.23"
+	loopRunningVersion = func() string { return runningVer }
+
 	r.pass(t)
 	if r.execs != 0 {
 		t.Fatal("re-executed an unreplaced binary")
 	}
 	r.replaced = true
+	runningVer = "0.175.0-rc.24"
 	r.pass(t)
 	if r.execs != 1 {
 		t.Errorf("re-executions %d", r.execs)
+	}
+
+	// When self-update installs a newer release mid-pass while another action
+	// (such as a worker's done triggering board next) is queued in the same
+	// pass, the loop re-executes as soon as the release claim settles rather
+	// than running subsequent actions on the old binary.
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Work {{.URL}}.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a.cfg.Supervisor.WorkerBrief = brief
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.OmpHarness, Model: loopQwen}}
+	r.a.now = r.a.now.Add(2 * time.Hour)
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: fix it", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	installed := false
+	boardCallsBeforeReexec := 0
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return loopNewRelease, ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+			r.replaced = true
+			runningVer = testLoopNewVer
+			return "", 0
+		}
+		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && r.replaced {
+			boardCallsBeforeReexec++
+		}
+		return "", 0
+	}
+
+	// Check supervisorStatus inside a single loop pass after self-update re-executes.
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.a.store.WriteFile(loopPIDFile, 0) })
+	if err := r.a.writeLoopVersion(); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !installed || r.execs != 2 || !l.reexecuted {
+		t.Fatalf("installed=%v execs=%d reexecuted=%v", installed, r.execs, l.reexecuted)
+	}
+	if boardCallsBeforeReexec != 0 {
+		t.Fatalf("ran %d board next calls on the replaced binary before re-executing", boardCallsBeforeReexec)
+	}
+	var statusOut bytes.Buffer
+	statusApp := *r.a
+	statusApp.out = &statusOut
+	if err := statusApp.supervisorStatus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOut.String(), testLoopNewVer) {
+		t.Fatalf("supervisor status after self-update pass = %q, want %s", statusOut.String(), testLoopNewVer)
 	}
 }
 

@@ -677,8 +677,22 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 			wg.Go(func() { w.watchMailbox(ctx) })
 		}
 	}
-	wg.Go(func() { w.loop(ctx, interval, true, w.upgradeCycle) })
+	wg.Go(func() {
+		w.loop(ctx, interval, true, func(ctx context.Context) {
+			if w.loopOwned {
+				if _, replaced := w.replacedBinary(os.Getpid()); replaced {
+					return
+				}
+			}
+			w.upgradeCycle(ctx)
+		})
+	})
 	w.loop(ctx, interval, false, func(ctx context.Context) {
+		if w.loopOwned {
+			if _, replaced := w.replacedBinary(os.Getpid()); replaced {
+				return
+			}
+		}
 		w.poll(ctx)
 		if req := w.restartDue(); req != nil {
 			w.checkInstalledGate(ctx, req.Binary)
