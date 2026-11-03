@@ -41,17 +41,25 @@ func (c *Client) Unblock(ctx context.Context, ref, by string) (*Held, error) {
 }
 
 // depNode is an issue or a pull request as a hold reads it: its type, and
-// for an issue its node id, state and recorded blockers. The blockers are
-// read as the list, which a mutation's answer and the next read show at
-// once; the issue's issueDependenciesSummary follows them seconds later.
+// for an issue its node id, state and recorded blockers. A pull request that
+// closes an issue resolves to that issue. The blockers are read as the list,
+// which a mutation's answer and the next read show at once; the issue's
+// issueDependenciesSummary follows them seconds later.
 type depNode struct {
-	Type      string `json:"__typename"`
-	ID        string `json:"id"`
-	State     string `json:"state"`
+	Type       string `json:"__typename"`
+	ID         string `json:"id"`
+	State      string `json:"state"`
+	Number     int    `json:"number"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 	BlockedBy struct {
 		TotalCount int      `json:"totalCount"`
 		Nodes      []depRef `json:"nodes"`
 	} `json:"blockedBy"`
+	Closing struct {
+		Nodes []*depNode `json:"nodes"`
+	} `json:"closingIssuesReferences"`
 }
 
 // depRef is a recorded blocker of an issue.
@@ -102,6 +110,7 @@ func (c *Client) hold(ctx context.Context, ref, by string, block bool) (*Held, e
 	if err != nil {
 		return nil, err
 	}
+	it, h.Ref = closingIssue(it, h.Ref)
 	if why := notIssue(it, h.Ref, "a hold is recorded on an issue"); why != "" {
 		return nil, &Refusal{why}
 	}
@@ -109,8 +118,12 @@ func (c *Client) hold(ctx context.Context, ref, by string, block bool) (*Held, e
 	if err != nil {
 		return nil, err
 	}
+	blocker, h.By = closingIssue(blocker, h.By)
 	if why := notIssue(blocker, h.By, "a blocker is an issue; a hold on a review or a person is the item's Status Blocked / Waiting plus a decision for that person"); why != "" {
 		return nil, &Refusal{why}
+	}
+	if strings.EqualFold(h.Ref, h.By) {
+		return nil, &Refusal{h.Ref + " cannot be blocked by itself"}
 	}
 	h.ByOpen = blocker.node.State == stateOpen
 	recorded := slices.ContainsFunc(it.node.BlockedBy.Nodes, func(x depRef) bool {
@@ -127,6 +140,7 @@ func (c *Client) hold(ctx context.Context, ref, by string, block bool) (*Held, e
 	var r map[string]*struct {
 		Issue *depNode `json:"issue"`
 	}
+	ctx = github.ActingOn(ctx, refRepo(h.Ref))
 	err = c.graphql(ctx, &r, `mutation($i:ID!,$b:ID!){`+mutation+`(input:{issueId:$i,blockingIssueId:$b}){issue{`+depFields+` `+blockersField+`}}}`,
 		vars{"i": it.node.ID, "b": blocker.node.ID})
 	p, ok := partialOf(err)
@@ -159,7 +173,7 @@ func (c *Client) depNode(ctx context.Context, owner, repo string, n int, extra s
 			Item *depNode `json:"issueOrPullRequest"`
 		} `json:"repository"`
 	}
-	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{`+depFields+` `+extra+`}}}}`,
+	err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{`+depFields+` `+extra+`} ...on PullRequest{closingIssuesReferences(first:1){nodes{__typename `+depFields+` number repository{nameWithOwner} `+extra+`}}}}}}`,
 		vars{"o": owner, "r": repo, "n": n})
 	p, ok := partialOf(err)
 	if !ok {
@@ -174,6 +188,24 @@ func (c *Client) depNode(ctx context.Context, owner, repo string, n int, extra s
 		return resolved{}, fmt.Errorf("%s/%s#%d: %w", owner, repo, n, err)
 	}
 	return out, nil
+}
+
+// closingIssue resolves a pull request to the first issue it closes, when it
+// closes one; a pull request that closes none stays a pull request so notIssue
+// refuses it.
+func closingIssue(x resolved, ref string) (resolved, string) {
+	if x.node == nil || x.node.Type != "PullRequest" || len(x.node.Closing.Nodes) == 0 || x.node.Closing.Nodes[0] == nil {
+		return x, ref
+	}
+	c := *x.node.Closing.Nodes[0]
+	if c.Type == "" {
+		c.Type = "Issue"
+	}
+	x.node = &c
+	if c.Repository.NameWithOwner != "" && c.Number > 0 {
+		ref = fmt.Sprintf("%s#%d", c.Repository.NameWithOwner, c.Number)
+	}
+	return x, ref
 }
 
 // notIssue says why x, read for ref, is no issue a hold takes: a pull

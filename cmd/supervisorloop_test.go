@@ -3033,3 +3033,64 @@ func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board.Owner = "o"
+	r.a.cfg.Board.Project = 1
+	oldRefStates, oldHead := refStates, parkReviewHead
+	t.Cleanup(func() { refStates, parkReviewHead = oldRefStates, oldHead })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, p := range refs {
+			out[p] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return out, nil
+	}
+	parkReviewHead = func(string) string { return "" }
+
+	me := state.Party{Name: "worker A", Session: "session-a"}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = []state.ReviewPark{
+			{On: loopPR, Agent: "worker B", ReviewHead: loopHead, Serves: "o/r#70", At: r.a.now.Add(-5 * time.Minute)},
+		}
+		st.Agents = []state.Agent{{
+			Party: me,
+			Task:  "Work https://github.com/o/r/issues/10",
+		}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Worker A plain-parks on PR B (loopPR) because PR B overlaps its task;
+	// this must not delete PR B's ReviewParks entry or steal its Serves.
+	if _, err := r.a.park(me, loopPR, "waiting on overlapping PR"); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rp, ok := st.ReviewParkFor(loopPR); !ok || rp.Agent != "worker B" {
+		t.Fatalf("plain waiter overwrote ReviewParks[%s]: %+v", loopPR, st.ReviewParks)
+	}
+	// PR B's owner is now gone: next loop pass sees worker A waiting on PR B,
+	// records o/r#10 blocked by o/r#7 and starts an owner for PR B.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called("board", "block", "o/r#10", "--by", loopPR); c == nil {
+		t.Fatalf("expected board block o/r#10 --by %s, got calls %v\n%s", loopPR, r.calls, r.out)
+	}
+	owner := superloop.PullWorkerName(loopPR)
+	if start := r.called(agentsName, agentStartName, owner); start == nil {
+		t.Fatalf("expected agents start %s, got calls %v\n%s", owner, r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.owner"); len(evs) != 1 || !strings.Contains(evs[0].Detail, loopURL) {
+		t.Fatalf("expected supervisor.owner logged, got %+v", evs)
+	}
+}

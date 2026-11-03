@@ -1333,3 +1333,122 @@ func TestTwoMergedPullsDoNotRetireTheWorkerOfAThird(t *testing.T) {
 		t.Fatalf("pending review lost: %+v", acts)
 	}
 }
+
+func TestWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
+	const prB = "o/r#8"
+	const prBURL = "https://github.com/o/r/pull/8"
+	workers := []Worker{{
+		Name:     "worker A",
+		Serves:   "o/r#5",
+		ParkedOn: prB,
+		ParkedAt: t0,
+		Waits:    "overlap with o/r#8",
+		Started:  true,
+	}}
+	if got := Tracked(workers, nil, nil, Desk{}); !slices.Equal(got, []string{prB}) {
+		t.Fatalf("Tracked = %v, want [%s]", got, prB)
+	}
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(time.Minute),
+		Pulls: map[string]Pull{
+			prB: {Ref: prB, URL: prBURL, State: Open, Head: head1, Green: true},
+		},
+	}
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != prB || act.Agent != "r 8" || act.Block != "o/r#5" || act.Head != head1 {
+		t.Fatalf("owner action = %+v, want Ref=%s Agent=r 8 Block=o/r#5 Head=%s", act, prB, head1)
+	}
+	// Once taken, the same head and park do not start a second owner.
+	in.Taken = taken(t, t1, act)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("repeated owner action after taken: %+v", got)
+	}
+}
+
+func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
+	const prB = "o/r#8"
+	const prBURL = "https://github.com/o/r/pull/8"
+	workers := []Worker{
+		{
+			Name:            "r 8",
+			ParkedOn:        prB,
+			ParkedAt:        t0,
+			ReviewRequested: true,
+			ParkedHead:      head1,
+		},
+		{
+			Name:     "worker A",
+			Serves:   "o/r#5",
+			ParkedOn: prB,
+			ParkedAt: t0.Add(time.Minute),
+			Waits:    "overlap with o/r#8",
+			Started:  true,
+		},
+	}
+	// PR B is waiting on CI (Green: false, no red checks), so no review starts yet.
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(15 * time.Minute),
+		Pulls: map[string]Pull{
+			prB: {Ref: prB, URL: prBURL, State: Open, Head: head1, Green: false},
+		},
+	}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("before 30m: got %+v, want no action", got)
+	}
+	// After 30 minutes with no progress on PR B, the wait escalates to the loop,
+	// which gives PR B an owner.
+	in.Now = t0.Add(time.Minute + OverlapWait)
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != prB || act.Agent != "r 8" || act.Block != "o/r#5" || !strings.Contains(act.Message, "no progress") {
+		t.Fatalf("after 30m: got %+v", act)
+	}
+}
+
+func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
+	const prA, prB = "o/r#5", "o/r#8"
+	const prBURL = "https://github.com/o/r/pull/8"
+	workers := []Worker{
+		{
+			Name:     "worker A",
+			Serves:   prA,
+			ParkedOn: prB,
+			ParkedAt: t0,
+			Waits:    "overlap with o/r#8",
+			Started:  true,
+		},
+		{
+			Name:     "worker B",
+			Serves:   prB,
+			ParkedOn: prA,
+			ParkedAt: t0,
+			Waits:    "overlap with o/r#5",
+			Started:  true,
+		},
+	}
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(time.Minute),
+		Rank: func(ref string) int {
+			switch ref {
+			case prA:
+				return 1
+			case prB:
+				return 2
+			}
+			return 0
+		},
+		Pulls: map[string]Pull{
+			prA: {Ref: prA, URL: "https://github.com/o/r/pull/5", State: Open, Head: head1, Green: true},
+			prB: {Ref: prB, URL: prBURL, State: Open, Head: head2, Green: true},
+		},
+	}
+	// prA ranks ahead of prB (rank 1 vs 2): worker A is woken to own prA first,
+	// and prB is recorded blocked by prA.
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != prA || act.Block != prB || act.Agent != "worker A" {
+		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=worker A", act, prA, prB)
+	}
+}
+

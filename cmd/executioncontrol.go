@@ -384,10 +384,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			v.PostMerge = nil
 		}
 		if v.On != "" {
-			if rp, ok := st.ReviewParkFor(v.On); ok {
+			if rp, ok := st.ReviewParkFor(v.On); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, ag.Name) || rp.Party.Is(me)) {
 				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
+				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 			}
-			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {

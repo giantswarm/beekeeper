@@ -240,10 +240,10 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		if i >= 0 {
 			self = st.Agents[i].Party
 			if on != "" {
-				if rp, ok := st.ReviewParkFor(on); ok {
+				if rp, ok := st.ReviewParkFor(on); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, st.Agents[i].Name) || rp.Party.Is(self)) {
 					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
+					st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 				}
-				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 			}
 			st.Agents[i].Park = park
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
