@@ -611,6 +611,15 @@ plain waits and off-roster sessions keep the normal watcher lifecycle. A closed 
 or a merged pull request whose served issue remains open or unreadable, wakes its worker to
 continue or verify the task rather than leaving it parked.
 
+An ended worker's saved review park still lets the loop request a fixer when that
+parked head conflicts with its base or fails CI. The saved park alone does not
+keep the worker's board item served after the worker ends. This recovery requires
+a tracked pull and saved review ownership; it does not discover every open pull
+or recover every ownerless In Progress item. The broader 15-minute orphan sweep
+remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
+pulls without saved review metadata and stale serve records from relieved or
+off-roster sessions.
+
 The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
 The receipt binds its active local note, session, thread, displayed head, selected option and
 verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
