@@ -95,7 +95,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Caller, error) {
 	}
 	c := Caller{Email: strings.ToLower(claims.Email), Groups: claims.Groups}
 	if org := v.cfg.OrganizationGroups(); !slices.ContainsFunc(org, c.In) {
-		return Caller{}, refused("%s is not a member of %s: %s", c.Email, strings.Join(org, " or "), carries(c.Groups))
+		return Caller{}, refused("%s is not a member of %s: %s; ask an administrator to check your organization membership and serve.organization/serve.organizations against these groups, then sign in again through muster", c.Email, strings.Join(org, " or "), carries(c.Groups))
 	}
 	for _, g := range v.cfg.TeamGroups() {
 		if c.In(g) {
