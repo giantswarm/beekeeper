@@ -364,9 +364,13 @@ type watcher struct {
 	// first reading, which said none.
 	refusedSince time.Time
 	lastBudget   time.Time
-	scopeOOM     int64
-	sessions     map[string]*claude.Session
-	seenKills    map[string]bool
+	// lastKindSpend is when the day's spend per task kind was last summed,
+	// kindSumming set while a sum runs.
+	lastKindSpend time.Time
+	kindSumming   atomic.Bool
+	scopeOOM      int64
+	sessions      map[string]*claude.Session
+	seenKills     map[string]bool
 	// reported are the stale leases said once.
 	reported map[string]bool
 	// notifier sends the events that need a person (--notify); nil prints only.
@@ -624,6 +628,8 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		w.sample(ctx)
 		w.lastSweep = time.Now() // swept here, not in the poll's background
 		w.exposures()
+		w.lastKindSpend = w.clk().Now() // summed here, not in the poll's background
+		w.kindSpending(w.lastKindSpend)
 		w.poll(ctx)
 		w.stand.inflight.Wait() // a successor's start outlives no watch
 		w.timerActs.Wait()      // nor a timer's wake or command
@@ -1478,6 +1484,11 @@ func (w *watcher) poll(ctx context.Context) {
 	if now.Sub(w.lastBudget) >= th.BudgetEvery.Duration {
 		w.lastBudget = now
 		w.inFlight(ctx, th.Interval.Duration, &w.budgeting, func(ctx context.Context) { w.budget(ctx, now) })
+	}
+	if now.Sub(w.lastKindSpend) >= w.readEvery(kindSpendEvery) {
+		w.lastKindSpend = now
+		// the day's transcripts are read whole: the poll does not wait
+		w.inFlight(ctx, 0, &w.kindSumming, func(context.Context) { w.kindSpending(now) })
 	}
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now

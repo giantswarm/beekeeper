@@ -474,6 +474,16 @@ choice and rejections; successful starts record the model and reason.
 See [the task model policy](docs/development.md#task-model-policy) and
 [example configuration](docs/examples/config.yaml).
 
+## Task kinds
+
+`agents.kinds` names kinds of agents by name regexp, each with `maxBusy`,
+`minInterval` and `dailySpend`; a name several kinds match is held by each.
+`beekeeper capacity` prints `no start <kind>: <reason>` for a kind at a cap,
+and `agents start` refuses a start of its agents with that reason, exit 3,
+`--force` included. `beekeeper sessions --by kind` prints a day's starts,
+hours and spend per kind, and the watch prints `SPEND <kind>` once a day when
+a kind passes its `dailySpend`. See [task kinds](docs/development.md#task-kinds).
+
 ## The model server
 
 The host's model servers (ollama, and Lemonade Server where `lemonade.url` is set) keep a

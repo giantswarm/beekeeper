@@ -235,6 +235,10 @@ agents:                     # the hand-over of registered agents
   model: ""                 # the model of a session beekeeper starts when the start names none; empty: Claude Code's default
   requireModel: false       # true refuses a start with no resolved model (exit 3)
   models: []                # first matching name regexp and optional kind wins; --model overrides
+  kinds: []                 # task kinds by name regexp; every matching kind's caps hold a start (exit 3), capacity says "no start <kind>: <reason>"
+  # kinds:
+  #   - {name: filer, match: '^filer', maxBusy: 1, minInterval: 1h, dailySpend: 20}   # one filer at a time, one an hour; SPEND filer past $20 a day
+  #   - {name: meta, match: '^(filer|scan|closer|brief)', maxBusy: 2}                  # meta workers together
   # models:
   #   - {match: '^scan', kind: audit, model: claude-opus-5-5}
   #   - {match: '^scan', model: claude-sonnet-5-5}

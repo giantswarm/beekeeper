@@ -63,6 +63,9 @@ type capacityView struct {
 	// Local is capacity.local.ceiling against the busy agents this machine
 	// runs; nil while it is unset or the verdict is an execution host's.
 	Local *localView `json:"local,omitempty"`
+	// KindBlocks are the task kinds (agents.kinds) at a cap: a start of
+	// one of their agents is refused whatever the verdict.
+	KindBlocks []kindBlock `json:"kindBlocks,omitempty"`
 }
 
 // localView is the coordinator machine's own cap (capacity.local.ceiling):
@@ -1930,6 +1933,13 @@ the ceiling, or what blocks one, each guard that refuses named; while
 beekeeper stop stands it is "no start: beekeeper is stopped …" with the
 stop's reason. agents
 start judges its start the same way, --builds marking one that builds.
+
+A task kind of agents.kinds (agents by name regexp) at a cap gets a line
+after the verdict, "no start <kind>: <reason>": as many of its agents
+busy as its maxBusy, or its last recorded start less than its
+minInterval ago. agents start refuses a start of one of its agents with
+that reason, exit 3, whatever the verdict and --force; a name several
+kinds match is held by each. --json has them in "kindBlocks".
 capacity reads the roster, the sessions and the machine and changes
 nothing; it makes no GitHub call.`,
 		Args: cobra.NoArgs,
@@ -1976,6 +1986,7 @@ nothing; it makes no GitHub call.`,
 				k, u := a.resolveUsage(cmd.Context(), liveCap)
 				v = newStartCapacity(c, k, a.readHeadroom(cmd.Context(), k, a.watchSwap()), builds, startKind(review, ofSelfHosted)).withUsage(u, a.now).withLocal(st, liveCap).stopped(a, st.Stop)
 			}
+			v.KindBlocks = kindBlocks(a.cfg, st, sessions, a.cfg.Agents.Kinds, a.now)
 			if a.json {
 				return a.printJSON(struct {
 					*capacityView
@@ -2014,6 +2025,9 @@ nothing; it makes no GitHub call.`,
 			}
 			p("%s", v.Headroom.line())
 			p("%s", v.verdict())
+			for _, b := range v.KindBlocks {
+				p("%s", b.line())
+			}
 			return nil
 		},
 	}
