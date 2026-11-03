@@ -33,9 +33,8 @@ type DeskReviewResult struct {
 	By           Party     `json:"by"`
 }
 
-// ReviewPark records a pull request whose worker parked for a desk review and
-// ended so its slot and workspace could be freed while the loop runs the
-// review, merges on approval or starts a fresh fixer worker on changes.
+// ReviewPark retains each proven pull-request review request independently
+// of the worker's current park and roster lifetime.
 type ReviewPark struct {
 	On         string         `json:"on"`
 	At         time.Time      `json:"at"`
