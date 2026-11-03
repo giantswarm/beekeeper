@@ -186,3 +186,48 @@ func TestTurnDone(t *testing.T) {
 		t.Error("a missing transcript or no path proves a turn ended")
 	}
 }
+
+func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := []string{
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Merge?"}]}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions: \"Merge?\"=\"Merge\" user's notes: \"please wait for CI first\". You can now continue with the user's answers in mind."}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"annotations":{"Merge?":{"notes":"please wait for CI first"}}}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q2","content":"ignored timeout"}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"afkTimeoutMs":5000}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:07Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q3","content":"User has answered your questions: \"Approach?\"=\"Option A\" user's notes: \"keep the existing flag\"."}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:08Z","message":{"role":"user","content":"also update the docs"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userTexts []string
+	for _, turn := range turns {
+		if turn.Role == "user" {
+			userTexts = append(userTexts, turn.Text)
+		}
+	}
+	want := []string{
+		"Merge — please wait for CI first",
+		"Option A — keep the existing flag",
+		"also update the docs",
+	}
+	if len(userTexts) != len(want) {
+		t.Fatalf("user turns = %q, want %q", userTexts, want)
+	}
+	for i := range want {
+		if userTexts[i] != want[i] {
+			t.Errorf("user turn[%d] = %q, want %q", i, userTexts[i], want[i])
+		}
+	}
+
+	sinceTurns, err := UserTurnsSince(path, time.Date(2026, 10, 5, 10, 0, 7, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sinceTurns) != 2 || sinceTurns[0].Text != "Option A — keep the existing flag" || sinceTurns[1].Text != "also update the docs" {
+		t.Fatalf("UserTurnsSince = %+v", sinceTurns)
+	}
+}

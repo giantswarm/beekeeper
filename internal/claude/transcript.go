@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -120,13 +121,16 @@ type entry struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
 }
 
 type block struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Name    string          `json:"name"`
+	Input   json.RawMessage `json:"input"`
+	IsError bool            `json:"is_error"`
+	Content json.RawMessage `json:"content"`
 }
 
 func parseTurn(line []byte) (Turn, bool) {
@@ -165,6 +169,11 @@ func parseTurns(line []byte, tools bool) []Turn {
 				calls = append(calls, Turn{At: e.Timestamp, Role: RoleTool, Text: ToolGist(b.Name, b.Input)})
 			}
 		}
+		if e.Type == roleUser && len(text) == 0 {
+			if ans := askUserTurnText(e.ToolUseResult, blocks); ans != "" {
+				text = append(text, ans)
+			}
+		}
 	}
 	var out []Turn
 	joined := strings.TrimSpace(strings.Join(text, "\n"))
@@ -172,6 +181,204 @@ func parseTurns(line []byte, tools bool) []Turn {
 		out = append(out, Turn{At: e.Timestamp, Role: e.Type, Text: joined})
 	}
 	return append(out, calls...)
+}
+
+// UserTurnsSince returns the user turns (including question-dialog answers)
+// in the tail window of path whose timestamp is not before since (or whose
+// timestamp is zero after an entry at or after since).
+func UserTurnsSince(path string, since time.Time) ([]Turn, error) {
+	turns, err := Tail(path, 0)
+	if err != nil {
+		return nil, err
+	}
+	var out []Turn
+	after := since.IsZero()
+	for _, t := range turns {
+		if !t.At.IsZero() {
+			after = !t.At.Before(since)
+		}
+		if after && t.Role == roleUser {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// askUserTurnText extracts a person's AskUserQuestion answer (the selected
+// option plus any notes or free text, verbatim) from a user entry's
+// toolUseResult or tool_result blocks.
+func askUserTurnText(raw json.RawMessage, blocks []block) string {
+	if s := askToolUseResultText(raw); s != "" {
+		return s
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == blockToolResult && !b.IsError {
+			if s := askToolResultBlockText(resultText(b.Content)); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func askToolUseResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var r struct {
+		Questions []struct {
+			Question string `json:"question"`
+		} `json:"questions"`
+		Answers      map[string]string          `json:"answers"`
+		Annotations  map[string]json.RawMessage `json:"annotations"`
+		Notes        json.RawMessage            `json:"notes"`
+		Response     string                     `json:"response"`
+		AFKTimeoutMs int                        `json:"afkTimeoutMs"`
+		FollowUp     bool                       `json:"followUp"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.AFKTimeoutMs > 0 || r.FollowUp {
+		return ""
+	}
+	if len(r.Answers) == 0 && len(r.Annotations) == 0 && len(r.Notes) == 0 && strings.TrimSpace(r.Response) == "" {
+		return ""
+	}
+	var keys []string
+	seen := map[string]bool{}
+	for _, q := range r.Questions {
+		if q.Question != "" && !seen[q.Question] {
+			seen[q.Question] = true
+			keys = append(keys, q.Question)
+		}
+	}
+	var extraKeys []string
+	for k := range r.Answers {
+		if !seen[k] {
+			seen[k] = true
+			extraKeys = append(extraKeys, k)
+		}
+	}
+	for k := range r.Annotations {
+		if !seen[k] {
+			seen[k] = true
+			extraKeys = append(extraKeys, k)
+		}
+	}
+	slices.Sort(extraKeys)
+	keys = append(keys, extraKeys...)
+	notesByQ, topNotes := parseDialogNotes(r.Notes)
+	var parts []string
+	for _, k := range keys {
+		annNotes, unanswered := parseDialogAnnotation(r.Annotations[k])
+		if unanswered != "" {
+			continue
+		}
+		ans := strings.TrimSpace(r.Answers[k])
+		if ans == "(notes only)" {
+			ans = ""
+		}
+		note := joinDialogParts(annNotes, notesByQ[k])
+		if part := joinOptionAndNote(ans, note); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	for _, extra := range []string{topNotes, strings.TrimSpace(r.Response)} {
+		if extra == "" || slices.Contains(parts, extra) {
+			continue
+		}
+		if len(parts) == 1 && !strings.Contains(parts[0], " — ") {
+			parts[0] = joinOptionAndNote(parts[0], extra)
+		} else {
+			parts = append(parts, extra)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func parseDialogAnnotation(raw json.RawMessage) (notes, unanswered string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s), ""
+	}
+	var ann struct {
+		Notes      string `json:"notes"`
+		Unanswered string `json:"unanswered"`
+	}
+	if json.Unmarshal(raw, &ann) == nil {
+		return strings.TrimSpace(ann.Notes), strings.TrimSpace(ann.Unanswered)
+	}
+	return "", ""
+}
+
+func parseDialogNotes(raw json.RawMessage) (byQuestion map[string]string, single string) {
+	if len(raw) == 0 {
+		return nil, ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return nil, strings.TrimSpace(s)
+	}
+	var m map[string]string
+	if json.Unmarshal(raw, &m) == nil {
+		return m, ""
+	}
+	return nil, ""
+}
+
+func joinDialogParts(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func joinOptionAndNote(ans, note string) string {
+	ans, note = strings.TrimSpace(ans), strings.TrimSpace(note)
+	switch {
+	case ans == "":
+		return note
+	case note == "" || ans == note || strings.HasSuffix(ans, " — "+note):
+		return ans
+	default:
+		return ans + " — " + note
+	}
+}
+
+var askResultPair = regexp.MustCompile(`"[^"]*"=(?:"([^"]*)"|\(no option selected\))(?:\s+selected preview:\n.*?)?(?:\s+(?:user's\s+)?notes:\s*(.+))?$`)
+
+func askToolResultBlockText(s string) string {
+	s = strings.TrimSpace(s)
+	if rest, ok := strings.CutPrefix(s, "The user responded:"); ok {
+		return strings.TrimSpace(rest)
+	}
+	for _, frame := range []struct{ prefix, suffix string }{
+		{"Your questions have been answered: ", ". You can now continue with these answers in mind."},
+		{"User has answered your questions: ", ". You can now continue with the user's answers in mind."},
+		{"The user answered: ", ". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say."},
+	} {
+		body, ok := strings.CutPrefix(s, frame.prefix)
+		if !ok {
+			continue
+		}
+		body = strings.TrimSuffix(strings.TrimSpace(body), frame.suffix)
+		body = strings.TrimSuffix(strings.TrimSpace(body), ".")
+		if m := askResultPair.FindStringSubmatch(strings.TrimSpace(body)); m != nil {
+			ans := strings.TrimSpace(m[1])
+			if ans == "(notes only)" {
+				ans = ""
+			}
+			note := strings.Trim(strings.TrimSpace(m[2]), `"`)
+			return joinOptionAndNote(ans, note)
+		}
+		return strings.TrimSpace(body)
+	}
+	return ""
 }
 
 // turnEndReasons are the stop reasons that close a turn: the model answered

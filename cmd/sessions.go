@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -813,11 +814,11 @@ func (a *app) runningNamed(sessions []*claude.Session, q string, now time.Time) 
 	return s, nil
 }
 
-// sessionTail reads the last n turns of the running session q names (by
-// sessionNamed's rule) among sessions from its harness's transcript; with
-// tools, the tool calls are turns too.
+// sessionTail reads the last n turns of the session q names (running, or an
+// ended session whose transcript is on disk) from its harness's transcript;
+// with tools, the tool calls are turns too.
 func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools bool, now time.Time) ([]claude.Turn, error) {
-	s, err := a.runningNamed(sessions, q, now)
+	s, err := a.tailSession(sessions, q, now)
 	if err != nil {
 		return nil, err
 	}
@@ -831,15 +832,253 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	return h.Tail(s.Transcript, n)
 }
 
+func (a *app) tailSession(sessions []*claude.Session, q string, now time.Time) (*claude.Session, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	s, absent, nameErr := sessionNamed(sessions, st, q, now)
+	if nameErr == nil {
+		if s.Transcript != "" {
+			return s, nil
+		}
+		if tr, h := a.partyTranscript(s.Party(), sessions); tr != "" {
+			cp := *s
+			cp.Transcript, cp.Harness = tr, cmp.Or(cp.Harness, h)
+			return &cp, nil
+		}
+		if absent != "" {
+			return nil, refused("%s", absent)
+		}
+		return s, nil
+	}
+	if ended, ok := a.endedSessionNamed(sessions, st, q); ok {
+		return ended, nil
+	}
+	return nil, nameErr
+}
+
+// partyTranscript locates the transcript on disk for session p across Claude
+// Code (desktop records, project folders, or the state directory) and the
+// non-Claude harnesses.
+func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, harness string) {
+	if s, ok := claude.Live(running, p); ok && s.Transcript != "" {
+		return s.Transcript, s.Harness
+	}
+	if a.cfg == nil {
+		return "", ""
+	}
+	if h, id, ok := harnessForHost(p.HostSession); ok {
+		for _, e := range h.Ended(a.cfg, running, time.Time{}) {
+			if (e.ID == id || p.Session != "" && e.ID == p.Session || e.HostID == p.HostSession) && e.Transcript != "" {
+				return e.Transcript, e.Harness
+			}
+		}
+	}
+	claudeFile := func(id, cwd string) string {
+		if id == "" || strings.ContainsAny(id, `/\*?[`) {
+			return ""
+		}
+		if a.cfg.Claude.ProjectsDir != "" {
+			if tr := claude.Transcript(a.cfg, id, cwd); tr != "" {
+				return tr
+			}
+		}
+		if a.cfg.StateDir != "" {
+			if tr := filepath.Join(a.cfg.StateDir, id+".jsonl"); fileExists(tr) {
+				return tr
+			}
+		}
+		return ""
+	}
+	recordTranscript := func(r *claude.Record) string {
+		cwd := cmp.Or(r.Cwd, r.OriginCwd)
+		for _, id := range []string{p.Session, r.CLISessionID} {
+			if tr := claudeFile(id, cwd); tr != "" {
+				return tr
+			}
+		}
+		for i := len(r.PriorCLISessionIDs) - 1; i >= 0; i-- {
+			if tr := claudeFile(r.PriorCLISessionIDs[i], cwd); tr != "" {
+				return tr
+			}
+		}
+		return ""
+	}
+	if p.HostSession != "" {
+		if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok {
+			if tr := recordTranscript(r); tr != "" {
+				return tr, ""
+			}
+		}
+	}
+	if p.Session != "" {
+		if tr := claudeFile(p.Session, ""); tr != "" {
+			return tr, ""
+		}
+		if r := claude.ByCLI(a.cfg)[p.Session]; r != nil {
+			if tr := recordTranscript(r); tr != "" {
+				return tr, ""
+			}
+		}
+	}
+	for _, h := range harnesses {
+		for _, e := range h.Ended(a.cfg, running, time.Time{}) {
+			if (p.Session != "" && e.ID == p.Session || p.HostSession != "" && e.HostID == p.HostSession) && e.Transcript != "" {
+				return e.Transcript, e.Harness
+			}
+		}
+	}
+	return "", ""
+}
+
+var asGuideRun = regexp.MustCompile(`\bas (Guide run \d+)\b`)
+
+// endedSessionNamed resolves q among ended sessions (past guide runs, session
+// records, desktop records and ended harness sessions) whose transcript is on
+// disk.
+func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q string) (*claude.Session, bool) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return nil, false
+	}
+	type candidate struct {
+		s     *claude.Session
+		names []string
+	}
+	var list []*candidate
+	byTranscript := map[string]*candidate{}
+	addSession := func(s *claude.Session, names ...string) {
+		if s == nil || s.Transcript == "" {
+			return
+		}
+		c, ok := byTranscript[s.Transcript]
+		if !ok {
+			cp := *s
+			c = &candidate{s: &cp}
+			byTranscript[s.Transcript] = c
+			list = append(list, c)
+		} else {
+			if c.s.ID == "" {
+				c.s.ID = s.ID
+			}
+			if c.s.HostID == "" {
+				c.s.HostID = s.HostID
+			}
+			if s.LastActive.After(c.s.LastActive) {
+				c.s.LastActive = s.LastActive
+			}
+		}
+		for _, n := range append([]string{s.Name}, names...) {
+			if n = strings.TrimSpace(n); n != "" && !slices.ContainsFunc(c.names, func(o string) bool { return strings.EqualFold(o, n) }) {
+				c.names = append(c.names, n)
+				if c.s.Name == "" {
+					c.s.Name = n
+				}
+			}
+		}
+	}
+	addParty := func(p state.Party, at time.Time, names ...string) {
+		tr, h := a.partyTranscript(p, running)
+		if tr == "" {
+			return
+		}
+		if at.IsZero() {
+			if fi, err := os.Stat(tr); err == nil {
+				at = fi.ModTime()
+			}
+		}
+		addSession(&claude.Session{ID: p.Session, HostID: p.HostSession, Name: p.Name, Transcript: tr, Harness: h, LastActive: at}, names...)
+	}
+	if st != nil {
+		r := st.GuideRole()
+		if r.Holder != nil {
+			var names []string
+			if r.Run > 0 {
+				names = append(names, guideRole.runName(r.Run))
+			}
+			addParty(r.Holder.Party, r.Holder.Since, names...)
+		}
+		if r.Relay != nil {
+			addParty(r.Relay.From, r.Relay.At)
+			addParty(r.Relay.To, r.Relay.At)
+		}
+		for _, rf := range r.Relieved {
+			addParty(rf.Party, cmp.Or(rf.Taken, rf.At))
+		}
+		for _, rec := range st.Records {
+			addParty(rec.Session, cmp.Or(rec.Ended, rec.At))
+		}
+	}
+	if evs, err := a.store.Events(0, nil); err == nil {
+		for _, e := range evs {
+			if e.By.Session == "" && e.By.HostSession == "" {
+				continue
+			}
+			var extra []string
+			if e.Verb == "guide.start" {
+				if m := asGuideRun.FindStringSubmatch(e.Detail); m != nil {
+					extra = append(extra, m[1])
+				}
+			}
+			addParty(e.By, e.At, extra...)
+		}
+	}
+	if a.cfg != nil {
+		for _, rec := range claude.AllRecords(a.cfg) {
+			addParty(rec.Party(), rec.LastSeen(), rec.Title)
+		}
+		for _, h := range harnesses {
+			for _, e := range h.Ended(a.cfg, running, time.Time{}) {
+				addSession(e, e.Name)
+			}
+		}
+		if tr, h := a.partyTranscript(state.Party{Session: q, Name: q}, running); tr != "" {
+			addSession(&claude.Session{ID: q, Name: q, Transcript: tr, Harness: h}, q)
+		}
+	}
+	lq := strings.ToLower(q)
+	bare := strings.ToLower(strings.TrimSpace(titleSuffix.ReplaceAllString(q, "")))
+	var idHits, whole, part []*candidate
+	for _, c := range list {
+		if c.s.ID == q || c.s.HostID == q {
+			idHits = append(idHits, c)
+			continue
+		}
+		switch {
+		case slices.ContainsFunc(c.names, func(n string) bool {
+			ln := strings.ToLower(n)
+			return ln == lq || bare != "" && ln == bare
+		}):
+			whole = append(whole, c)
+		case slices.ContainsFunc(c.names, func(n string) bool { return strings.Contains(strings.ToLower(n), lq) }):
+			part = append(part, c)
+		}
+	}
+	hits := idHits
+	if len(hits) == 0 {
+		hits = whole
+	}
+	if len(hits) == 0 && len(part) == 1 {
+		hits = part
+	}
+	if len(hits) == 0 {
+		return nil, false
+	}
+	slices.SortStableFunc(hits, func(a, b *candidate) int { return b.s.LastActive.Compare(a.s.LastActive) })
+	return hits[0].s, true
+}
+
 func (a *app) tailCmd() *cobra.Command {
 	var n int
 	c := &cobra.Command{
 		Use:   "tail <session>",
 		Short: "Print a session's last turns: what it said and what it was told",
 		Long: `Print the last turns of a session's transcript, without tool calls and tool
-results: its own words, the person's and its peers' messages. The session is
-a name (or a unique part of it): its desktop title or, for a registered agent,
-its roster name; or a session id or a PID.`,
+results: its own words, the person's (including question-dialog answers and
+notes) and its peers' messages. The session is a name (or a unique part of
+it): its desktop title, its roster name, or a past guide run's name; or a
+session id or a PID.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			raw, _, err := a.sessions()
