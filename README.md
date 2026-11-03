@@ -3514,6 +3514,16 @@ it stay. Keys that reference each other (a `store://` age identity and `secret.s
 the same call; an editor saving them one after the other is the edit that can leave a window
 between them. `config set` runs on a file that no longer loads, to repair it.
 
+A temporary change has an owner and an end: `beekeeper config set --until <time|owner/repo#n>
+--reason "<why>" -- <key> <value>…` records an override with each key's value before (or that the
+file had none). `config overrides` and `beekeeper handover` list the overrides in effect. Once the
+time comes, or the issue or pull request closes (read every 5 minutes, held under the GitHub
+budget floor), the watch or the supervisor loop says so and restores the values before; the event
+log records `config.override` at the set, `config.override.end` and `config.restored` at the end.
+A key that changed since the override set it is not restored: `guide.person` gets a decision note,
+answered with `config restore <id> --force` (the values before) or `config keep <id>` (the current
+ones). A key another override in effect set is taken over, with that override's value before.
+
 The organisation and desk keys, and their defaults:
 
 | Key | Default | What it sets |

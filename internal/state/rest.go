@@ -105,6 +105,8 @@ type (
 	plainAgent         Agent
 	plainImportWait    ImportWait
 	plainNote          Note
+	plainOverride      Override
+	plainOverrideKey   OverrideKey
 	plainTimer         Timer
 	plainRecord        Record
 	plainClaim         Claim
@@ -186,10 +188,18 @@ func (v *Note) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*pl
 func (v Note) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainNote(v), v.rest) }
 func (v *Timer) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainTimer)(v), &v.rest) }
 func (v Timer) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainTimer(v), v.rest) }
-func (v *Record) UnmarshalJSON(b []byte) error    { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
-func (v Record) MarshalJSON() ([]byte, error)     { return encodeKeeping(plainRecord(v), v.rest) }
-func (v *Claim) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }
-func (v Claim) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainClaim(v), v.rest) }
+func (v *Override) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainOverride)(v), &v.rest)
+}
+func (v Override) MarshalJSON() ([]byte, error) { return encodeKeeping(plainOverride(v), v.rest) }
+func (v *OverrideKey) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainOverrideKey)(v), &v.rest)
+}
+func (v OverrideKey) MarshalJSON() ([]byte, error) { return encodeKeeping(plainOverrideKey(v), v.rest) }
+func (v *Record) UnmarshalJSON(b []byte) error     { return decodeKeeping(b, (*plainRecord)(v), &v.rest) }
+func (v Record) MarshalJSON() ([]byte, error)      { return encodeKeeping(plainRecord(v), v.rest) }
+func (v *Claim) UnmarshalJSON(b []byte) error      { return decodeKeeping(b, (*plainClaim)(v), &v.rest) }
+func (v Claim) MarshalJSON() ([]byte, error)       { return encodeKeeping(plainClaim(v), v.rest) }
 func (v *AlertOwner) UnmarshalJSON(b []byte) error {
 	return decodeKeeping(b, (*plainAlertOwner)(v), &v.rest)
 }

@@ -1067,6 +1067,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+		l.settleOverrides(ctx, st)
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
