@@ -120,8 +120,8 @@ func TestTheSweepGivesAFixerToABrokenHead(t *testing.T) {
 		f    func(*Pull)
 		want string
 	}{
-		"conflicting": {func(p *Pull) { p.Mergeable = "CONFLICTING" }, "conflicts with"},
-		"dirty":       {func(p *Pull) { p.MergeState = "DIRTY"; p.Green = false }, "conflicts with"},
+		"conflicting": {func(p *Pull) { p.Mergeable = mergeableConflicting }, "conflicts with"},
+		"dirty":       {func(p *Pull) { p.MergeState = mergeStateDirty; p.Green = false }, "conflicts with"},
 		"red":         {func(p *Pull) { p.Green = false; p.Red = []Check{{Name: lintCheck, URL: lintURL}} }, lintCheck + " " + lintURL},
 		"behind":      {func(p *Pull) { p.MergeState = "BEHIND" }, "is behind"},
 	} {
@@ -184,7 +184,7 @@ func TestTheSweepRerunsAGoNeverCarriedOut(t *testing.T) {
 // Each stretch without an owner gets one action; a head the sweep gave
 // MaxSweeps owners goes to the guide, once.
 func TestTheSweepStartsOncePerStretchAndGivesUp(t *testing.T) {
-	conflicting := func(p *Pull) { p.Mergeable = "CONFLICTING" }
+	conflicting := func(p *Pull) { p.Mergeable = mergeableConflicting }
 	in := sweepInput(with(pull(head1, true), conflicting), OrphanWait)
 	first := only(t, Plan(in), KindRework)
 	in.Taken = taken(t, in.Now, first)
