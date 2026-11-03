@@ -182,12 +182,22 @@ func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
 		t.Errorf("a second pass took %+v", got)
 	}
 	// A base merge needs no park since the round: the merge's own update of
-	// a behind branch, or the worker's, carries no change of the worker's.
+	// a behind branch, or the worker's, carries no change of the worker's,
+	// even when the worker was woken to resolve a conflict and has not
+	// parked again.
 	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
 	if a := only(t, Plan(in), KindGo); a.Head != head2 {
 		t.Errorf("go on a base merge after an earlier park = %+v", a)
 	}
+	in = Input{Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if a := only(t, Plan(in), KindGo); a.Head != head2 || a.Agent != worker {
+		t.Errorf("go on a base merge without a parked worker = %+v", a)
+	}
 	in.BaseMerged = baseMerged(false)
+	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
+		t.Errorf("a new head without a parked worker got %+v", got)
+	}
+	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
 	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
 		t.Errorf("a new head with an earlier park got %+v", got)
 	}
@@ -495,8 +505,23 @@ func TestForwardedFindingsGetTheGoOnTheFixedHead(t *testing.T) {
 		t.Errorf("a fixed head with red checks got %+v", got)
 	}
 	in.Pulls = pull(head2, true, changes)
-	if g := only(t, Plan(in), KindGo); g.Head != head2 {
+	g := only(t, Plan(in), KindGo)
+	if g.Head != head2 {
 		t.Errorf("go = %+v", g)
+	}
+	// If the fixed head later conflicts with main and the worker rebases or
+	// merges main into it, the new head gets its go once green, without a
+	// new review or a new park.
+	in.Taken = append(in.Taken, taken(t, t0.Add(3*time.Hour), g)...)
+	in.Workers = nil
+	in.BaseMerged = func(p Pull, from string) bool { return from == head2 && p.Head == head3 }
+	in.Pulls = pull(head3, false, changes)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a rebased fixed head with pending checks got %+v", got)
+	}
+	in.Pulls = pull(head3, true, changes)
+	if g2 := only(t, Plan(in), KindGo); g2.Head != head3 || g2.Agent != worker {
+		t.Errorf("go on rebased fixed head = %+v", g2)
 	}
 }
 
@@ -1331,5 +1356,155 @@ func TestTwoMergedPullsDoNotRetireTheWorkerOfAThird(t *testing.T) {
 	i := slices.IndexFunc(acts, func(a Action) bool { return a.Kind == KindReview && a.Ref == current })
 	if i < 0 {
 		t.Fatalf("pending review lost: %+v", acts)
+	}
+}
+
+const (
+	overlapPRB    = "o/r#8"
+	overlapPRBURL = "https://github.com/o/r/pull/8"
+	overlapPRA    = "o/r#5"
+	overlapWaiter = "worker A"
+	overlapOwnerB = "r 8"
+)
+
+func TestWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
+	workers := []Worker{{
+		Name:     overlapWaiter,
+		Serves:   overlapPRA,
+		ParkedOn: overlapPRB,
+		ParkedAt: t0,
+		Waits:    "waiting on overlapping pull request",
+		Started:  true,
+	}}
+	if got := Tracked(workers, nil, nil, Desk{}); !slices.Equal(got, []string{overlapPRB}) {
+		t.Fatalf("Tracked = %v, want [%s]", got, overlapPRB)
+	}
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(time.Minute),
+		Pulls: map[string]Pull{
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head1, Green: true},
+		},
+	}
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRB || act.Agent != overlapOwnerB || act.Block != overlapPRA || act.Head != head1 {
+		t.Fatalf("owner action = %+v, want Ref=%s Agent=%s Block=%s Head=%s", act, overlapPRB, overlapOwnerB, overlapPRA, head1)
+	}
+	// Once taken, the same head and park do not start a second owner.
+	in.Taken = taken(t, t1, act)
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("repeated owner action after taken: %+v", got)
+	}
+}
+
+func TestOverlapWaitEscalatesAfter30MinutesOfNoProgress(t *testing.T) {
+	workers := []Worker{
+		{
+			Name:            overlapOwnerB,
+			ParkedOn:        overlapPRB,
+			ParkedAt:        t0,
+			ReviewRequested: true,
+			ParkedHead:      head1,
+		},
+		{
+			Name:     overlapWaiter,
+			Serves:   overlapPRA,
+			ParkedOn: overlapPRB,
+			ParkedAt: t0.Add(time.Minute),
+			Waits:    "waiting on stalled overlap",
+			Started:  true,
+		},
+	}
+	// PR B is waiting on CI (Green: false, no red checks), so no review starts yet.
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(15 * time.Minute),
+		Pulls: map[string]Pull{
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head1, Green: false},
+		},
+	}
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("before 30m: got %+v, want no action", got)
+	}
+	// After 30 minutes with no progress on PR B, the wait escalates to the loop,
+	// which gives PR B an owner.
+	in.Now = t0.Add(time.Minute + OverlapWait)
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRB || act.Agent != overlapOwnerB || act.Block != overlapPRA || !strings.Contains(act.Message, "no progress") {
+		t.Fatalf("after 30m: got %+v", act)
+	}
+}
+
+func TestOverlappingPullsOrderedByBoardRankGivesFirstALiveOwner(t *testing.T) {
+	workers := []Worker{
+		{
+			Name:     overlapWaiter,
+			Serves:   overlapPRA,
+			ParkedOn: overlapPRB,
+			ParkedAt: t0,
+			Waits:    "overlap with o/r#8",
+			Started:  true,
+		},
+		{
+			Name:     "worker B",
+			Serves:   overlapPRB,
+			ParkedOn: overlapPRA,
+			ParkedAt: t0,
+			Waits:    "overlap with o/r#5",
+			Started:  true,
+		},
+	}
+	in := Input{
+		Workers: workers,
+		Now:     t0.Add(time.Minute),
+		Rank: func(ref string) int {
+			switch ref {
+			case overlapPRA:
+				return 1
+			case overlapPRB:
+				return 2
+			}
+			return 0
+		},
+		Pulls: map[string]Pull{
+			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", State: Open, Head: head1, Green: true},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, State: Open, Head: head2, Green: true},
+		},
+	}
+	// overlapPRA ranks ahead of overlapPRB (rank 1 vs 2): worker A is woken to own
+	// overlapPRA first, and overlapPRB is recorded blocked by overlapPRA.
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != overlapWaiter {
+		t.Fatalf("ranked overlap action = %+v, want Ref=%s Block=%s Agent=%s", act, overlapPRA, overlapPRB, overlapWaiter)
+	}
+}
+
+func TestOverlapClosingIssuesMutualSameRank(t *testing.T) {
+	in := Input{
+		Now:  t0.Add(time.Minute),
+		Rank: func(string) int { return 1 },
+		Workers: []Worker{
+			{Name: "issue worker A", Serves: "o/r#101", ParkedOn: overlapPRB, ParkedAt: t0, Started: true},
+			{Name: "issue worker B", Serves: "o/r#102", ParkedOn: overlapPRA, ParkedAt: t0, Started: true},
+		},
+		Pulls: map[string]Pull{
+			overlapPRA: {Ref: overlapPRA, URL: "https://github.com/o/r/pull/5", Closes: []string{"o/r#101"}, State: Open, Head: head1},
+			overlapPRB: {Ref: overlapPRB, URL: overlapPRBURL, Closes: []string{"o/r#102"}, State: Open, Head: head2},
+		},
+	}
+	act := only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRA || act.Block != overlapPRB || act.Agent != "issue worker A" || act.Head != head1 {
+		t.Fatalf("mutual issue workers: %+v", act)
+	}
+	// An active issue worker is the live PR owner, even with a different name.
+	in.Workers[0].ParkedOn = ""
+	if got := Plan(in); len(got) != 0 {
+		t.Fatalf("active closing-issue owner missed: %+v", got)
+	}
+	// Once that owner leaves, the ordinary missing-owner acceptance still holds.
+	in.Workers = in.Workers[1:]
+	act = only(t, Plan(in), KindOwner)
+	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
+		t.Fatalf("missing owner: %+v", act)
 	}
 }
