@@ -2144,15 +2144,10 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
-	// ReviewRounds is how many review rounds asking for changes `supervisor
-	// loop` runs for a pull request (default 1): after the last one's
-	// request for changes the worker fixes them and merges on the loop's go
-	// without another review. An approved round is none of them: a new head
-	// after an approval gets its own review only for a change the approval
-	// does not cover (more than a merge of the base, its conflicts'
-	// resolution or a rebase). Never more than two reviews start for one
-	// pull request, whatever this says: a third need is a decision for
-	// guide.person.
+	// ReviewRounds is retained for configuration compatibility and reporting
+	// (default 1). It never releases a head without an approving review.
+	// Every new head gets one independent review, except a proven base-only
+	// update of an approved head, which remains covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next

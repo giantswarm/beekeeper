@@ -410,13 +410,10 @@ its key first in the detail):
   review    an agent parked from its pull request's worktree at its
             published HEAD (agents park --on owner/repo#n), with every
             check on the head green, for the
-            first round; a second (superloop.MaxReviews, 2, whatever
-            happens) only for a new head the worker parked on after an
-            approval with a change the approval does not cover (below), or
-            after the last round's findings were forwarded and the worker
-            parked again on a new head while a change-request round is left
-            (supervisor.reviewRounds, default 1, the fixes of one review
-            get the go without another): a reviewer starts
+            first round and for each new head the last approval does not
+            cover, including fixes after changes requested. There is one
+            review per head; supervisor.reviewRounds never releases an
+            unapproved head. A reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), using reserved review headroom; a worker on a
@@ -466,26 +463,10 @@ its key first in the detail):
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
   rework    the worker parked again after the forward on the head the
-            findings were about with no change-request round left
-            (supervisor.reviewRounds counts the rounds that asked for
-            changes; an approved head is none), or, rounds left or not, on
-            a head that only brings the base into it, which carries no
-            fixes: the worker is told to fix them and push (agents wake),
-            once for each such park; its new green head gets the next
-            round, or the merge go once none is left. Review and rework
-            stay in the loop: no merge question goes to guide.person
-  go        (past the reviews) a green head the worker parked on after
-            superloop.MaxReviews reviews, the last approving, whose change
-            differs from the approved head's (compare API, the base's own
-            changes left out) only in test files (_test.go, testdata/) and
-            files a review's findings name: the desk's rule is one review,
-            then the fixes and the merge, so the merge go, with no note
-  escalate  a head that would need a review past superloop.MaxReviews (an
-            approved second review, then a change past its findings and
-            tests, or a comparison GitHub cuts short): a decision for
-            guide.person (note add, options Merge and Rework) naming the
-            files past the findings, once per head; no third reviewer
-            starts
+            findings were about, or a head that only brings the base into
+            it: tell the worker to fix them and push, once per park. Its
+            new green head gets its own review. Exhausted rounds never
+            authorize a merge or send a merge question to guide.person
   answer    the person answered an escalation (beekeeper answer --note):
             an answer that releases it (the
             Merge option, or words to merge that refuse nothing) is the
@@ -2119,7 +2100,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return l.ownOverlap(ctx, st, act)
 	case superloop.KindEscalate:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
-			fmt.Sprintf("the loop starts at most %d reviews of a pull request, and head %s changes more than the base since the last one: only a person lets it merge without another review; the loop gives the merge go for that head on an answer that releases it", superloop.MaxReviews, shortSHA(act.Head)),
+			fmt.Sprintf("legacy review escalation for head %s; new heads now get their own independent review", shortSHA(act.Head)),
 			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
 			return "", err
 		}
