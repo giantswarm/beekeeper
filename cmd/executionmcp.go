@@ -46,7 +46,7 @@ func (a *app) executionMCPCmd() *cobra.Command {
 			return refused("coordinator MCP is not enabled for this execution")
 		}
 		policy, err := s.InstalledPolicy()
-		if err != nil || policy.Digest() != j.Request.PolicyDigest {
+		if err != nil || policy.Digest() != j.BoundPolicy() {
 			return refused("execution policy changed before MCP proxy startup")
 		}
 		co, ok := s.Config.Coordinators[j.Request.Coordinator]

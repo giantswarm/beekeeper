@@ -243,7 +243,7 @@ func TestReviewedMergeUpdatesAgainWhenTheBaseMovesDuringTheWait(t *testing.T) {
 			if doc.ExitCode != 0 || !slices.Equal(b.updates, []string{"expected_head_sha=" + loopHead, "expected_head_sha=" + loopFixed}) {
 				t.Fatalf("second update: %+v, updates %v, commands %v", doc, b.updates, b.cmds)
 			}
-			if len(m) != 1 || !slices.Contains(m[0], moved) || slices.Contains(m[0], loopFixed) {
+			if len(m) != 1 || !slices.Contains(m[0], moved) || slices.Contains(m[0], loopFixed) || slices.Contains(m[0], "--admin") {
 				t.Fatalf("merged a stale head: %v", m)
 			}
 		})

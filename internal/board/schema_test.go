@@ -270,8 +270,8 @@ func TestCheckSchemaPassesTheBoardsQueries(t *testing.T) {
 		"an item":      `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){id projectItems(first:50){nodes{` + itemFields + `}}}}}`,
 		"an added one": `mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{` + itemFields + `}}}`,
 		"the board": `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
-items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{` + priorityFields + `
-content{...I ` + blockerFields + `}}}}}}}` + issueFields,
+items(first:80,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{` + boardFields + `
+content{...I}}}}}}}` + issueFields,
 		"a state": `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){__typename ...on Issue{state} ...on PullRequest{state}}}}`,
 	} {
 		if err := checkSchema(q); err != nil {
