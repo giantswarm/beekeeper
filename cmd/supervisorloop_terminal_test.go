@@ -10,6 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const loopBoardMove = "move"
+
 func TestLoopSettlesReportWithoutRefOnce(t *testing.T) {
 	r := newLoopRig(t)
 	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbReport, "%s: finished maintenance", loopWorker)); err != nil {
@@ -36,7 +38,7 @@ func TestLoopSettlesNonIssueIntakeOnce(t *testing.T) {
 	}
 	moves := 0
 	r.answer = func(args []string) (string, int) {
-		if slices.Equal(args, []string{loopBoard, "move", "org/engine#89", "backlog", "--intake"}) {
+		if slices.Equal(args, []string{loopBoard, loopBoardMove, "org/engine#89", "backlog", "--intake"}) {
 			moves++
 			return "beekeeper: org/engine#89 is no issue: Could not resolve to an Issue with the number of 89.", ExitRefused
 		}

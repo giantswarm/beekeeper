@@ -156,7 +156,7 @@ func logs(args []string) (state.Event, bool) {
 		return event(loopParty, "agents.remove", "%s", args[2]), true
 	case args[0] == "note" && args[1] == loopAdd:
 		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
-	case args[0] == loopBoard && args[1] == "move":
+	case args[0] == loopBoard && args[1] == loopBoardMove:
 		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
 	case args[0] == loopBoard && args[1] == "rank":
 		return event(loopParty, "board.rank", "%s: %s %s", args[2], args[3], args[len(args)-1]), true
