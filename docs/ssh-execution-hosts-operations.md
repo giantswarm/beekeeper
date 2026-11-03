@@ -247,7 +247,7 @@ its own view of the machine.
 
 ## omp on an execution host
 
-The host catalogue may list `omp` alongside `claude` and `codex`. Configure
+The host catalogue may list `omp` alongside `claude`, `codex` and `agy`. Configure
 `agents.execution.harnesses.omp` on the host with an absolute `executable`, an
 exact installed `version` in `>= 18.14.2, < 19.0.0`, and `configDir` naming
 that host's own `PI_CODING_AGENT_DIR`. Never copy a coordinator credential
