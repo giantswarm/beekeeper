@@ -712,9 +712,24 @@ func TestParsePromoteCandidate(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", raw, c, ok, want)
 		}
 	}
-	for _, raw := range []string{"not json", `{"repositories":[]}`, `{"repositories":[{},{}]}`} {
+	for _, raw := range []string{
+		"not json",
+		`{"repositories":[]}`,
+		`{"repositories":[{},{}]}`,
+		`{"repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`,
+		`{"repositories":[{"repository":"o/r","candidate":"v0.49.1-rc.2","state":"failed","message":"reading the commit status of v0.49.1-rc.2: dial tcp: connection refused"}]}`,
+	} {
 		if _, ok := ParsePromoteCandidate([]byte(raw)); ok {
 			t.Errorf("%s parsed", raw)
+		}
+	}
+	for raw, want := range map[string]string{
+		`{"reason":"1 of 1 repositories not promoted: o/r (failed)","repositories":[{"repository":"o/r","state":"failed","message":"reading the repository: dial tcp: connection refused"}]}`: "reading the repository: dial tcp: connection refused",
+		`{"reason":"unknown flag: --bad","repositories":[]}`: "unknown flag: --bad",
+		"{": "",
+	} {
+		if got := PromoteFailure([]byte(raw)); got != want {
+			t.Errorf("%s: PromoteFailure = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -800,6 +815,7 @@ func TestParseReleaseWait(t *testing.T) {
 		{"tag pipeline failed", `{"verdict":"ci_failed","reason":"push failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "push failed", true},
 		{"a status failed", `{"verdict":"status_failed","reason":"ci/x failed","tag":"v1.4.0"}`, Outcome{Merged: true, Release: waitedTag, ReleaseFailed: true}, "ci/x failed", true},
 		{"timed out", `{"verdict":"timeout","reason":"30m","tag":"v1.4.0"}`, Outcome{Merged: true, Unconfirmed: true}, "30m", true},
+		{"no release", `{"verdict":"no_release","reason":"no version bump"}`, Outcome{Merged: true, NoRelease: true}, "no version bump", true},
 		{"no document", ``, Outcome{}, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -861,5 +877,26 @@ func TestParseReleaseWaitNoRelease(t *testing.T) {
 	o, _, ok := ParseReleaseWait([]byte(`{"verdict":"no_release","reason":"no bump"}`))
 	if !ok || !o.Merged || !o.NoRelease || o.Unconfirmed {
 		t.Errorf("%+v, %v", o, ok)
+	}
+}
+
+// A merge GitHub judged settles from its merge time when it is recorded
+// after it; any other outcome, or a merge time after the record (clock
+// skew), settles from the record time.
+func TestSettlesFrom(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		out  Outcome
+		want time.Time
+	}{
+		{"merged before the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(-time.Hour)}), now.Add(-time.Hour)},
+		{"merged after the record", Judged(github.Pull{State: github.Merged, MergedAt: now.Add(time.Second)}), now},
+		{"not merged", Judged(github.Pull{State: github.Closed, MergedAt: now.Add(-time.Hour)}), now},
+		{"devctl's document", Outcome{Merged: true, Release: "v1.0.0"}, now},
+	} {
+		if got := c.out.SettlesFrom(now); !got.Equal(c.want) {
+			t.Errorf("%s: settles from %s, want %s", c.name, got, c.want)
+		}
 	}
 }

@@ -17,6 +17,9 @@ import (
 
 const checkoutMetadata = ".git"
 
+// whyCheckout keeps data holding a git checkout.
+const whyCheckout = "contains a checkout"
+
 // InUse reports whether a candidate contains a live reference, including
 // references reached through a symlink. A reference to a parent alone does
 // not make all its children busy.
@@ -55,7 +58,7 @@ func Disposable(dir string, cutoff time.Time) (int64, string, error) {
 	}
 	if fi.Mode().IsRegular() {
 		if fi.Name() == checkoutMetadata {
-			return 0, "contains a checkout", nil
+			return 0, whyCheckout, nil
 		}
 		if !cutoff.IsZero() && fi.ModTime().After(cutoff) {
 			return 0, "recently used", nil
@@ -71,7 +74,7 @@ func Disposable(dir string, cutoff time.Time) (int64, string, error) {
 			return err
 		}
 		if d.Name() == checkoutMetadata {
-			why = "contains a checkout"
+			why = whyCheckout
 			return fs.SkipAll
 		}
 		fi, err := d.Info()

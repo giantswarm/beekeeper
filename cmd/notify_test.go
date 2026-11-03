@@ -42,8 +42,8 @@ func notifyingWatch(t *testing.T, dir string, standby bool) (*watcher, *desktop,
 	}
 	var out bytes.Buffer
 	d := &desktop{}
-	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: relayNow}, standby: standby, last: map[string]time.Time{}, reported: map[string]bool{},
-		readHeadroom: func(context.Context, *swapReading) *headroom { return tight() }}
+	w := (&app{cfg: cfg, store: store, out: &out, now: relayNow}).newWatcher(standby, false)
+	w.readHeadroom = func(context.Context, *swapReading) *headroom { return tight() }
 	w.notifier = notify.New(cfg.Notify.Policy(), dir, d, func(l string) { w.emitNow("notify", "%s", l) })
 	w.doctoring.Store(true) // background maintenance is not under test in this output fixture
 	t.Cleanup(func() {
@@ -83,90 +83,14 @@ func TestWatchNotifiesEachDueOnceAcrossWatches(t *testing.T) {
 	}
 }
 
-func TestSupervisorGoneNotifiesOnceAndEndsStandby(t *testing.T) {
-	dir := t.TempDir()
-	unit, du, out := notifyingWatch(t, dir, true)
-	sup, ds, _ := notifyingWatch(t, dir, false)
-	st := pendingState()
-	st.Supervisor = &state.Supervisor{Party: four, Since: relayNow.Add(-time.Hour)}
-	if err := unit.store.Update(func(s *state.State) ([]state.Event, error) { *s = *st; return nil, nil }); err != nil {
-		t.Fatal(err)
-	}
-	live := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}}
-	unit.pending(context.Background(), live)
-	if len(du.sent) != 0 || strings.Contains(out.String(), "TIMER") {
-		t.Fatalf("a standby watch fired the supervisor's timer: %s %+v", out, du.sent)
-	}
-	// The supervisor's session ends: once the restart grace has passed, one
-	// line per watch and one critical notification; the standby watch
-	// reports the pending itself from the first poll that misses the
-	// supervisor.
-	poll := func(at time.Duration, sessions []*claude.Session) {
-		unit.now, sup.now = relayNow.Add(at), relayNow.Add(at)
-		unit.pending(context.Background(), sessions)
-		sup.pending(context.Background(), sessions)
-	}
-	gone := func() (n int) {
-		for _, m := range append(du.sent, ds.sent...) {
-			if m.Summary == "beekeeper: no supervisor, claims gated" && m.Urgency == notify.Critical && strings.Contains(m.Body, `"Agent four"`) {
-				n++
-			}
-		}
-		return n
-	}
-	poll(0, nil)
-	poll(20*time.Second, nil)
-	// A CLI back within the grace (30s) is a restart: nothing to say.
-	poll(22*time.Second, live)
-	if strings.Contains(out.String(), "SUPERVISOR") || gone() != 0 {
-		t.Fatalf("a restart within the grace was said:\n%s", out)
-	}
-	poll(25*time.Second, nil)
-	poll(45*time.Second, nil)
-	if strings.Contains(out.String(), "SUPERVISOR GONE") {
-		t.Fatalf("gone within the grace:\n%s", out)
-	}
-	poll(2*time.Minute, nil)
-	poll(3*time.Minute, nil)
-	poll(10*time.Minute, nil)
-	if gone() != 1 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 || !strings.Contains(out.String(), "claims stay gated") {
-		t.Fatalf("no-supervisor: %d notifications, lines:\n%s", gone(), out)
-	}
-	if !strings.Contains(out.String(), "TIMER: #1") {
-		t.Errorf("the standby watch leaves the timer to a supervisor that is gone:\n%s", out)
-	}
-	// While it lasts, again after notify.repeat, still one line.
-	poll(2*time.Minute+30*time.Minute, nil)
-	poll(3*time.Minute+30*time.Minute, nil)
-	if gone() != 2 || strings.Count(out.String(), "SUPERVISOR GONE") != 1 {
-		t.Fatalf("repeat: %d notifications, lines:\n%s", gone(), out)
-	}
-	// Its CLI back: one line, and no more notifications.
-	poll(40*time.Minute, live)
-	poll(41*time.Minute, live)
-	poll(80*time.Minute, live)
-	if strings.Count(out.String(), "SUPERVISOR BACK: \"Agent four\"") != 1 || gone() != 2 {
-		t.Fatalf("back: %d notifications, lines:\n%s", gone(), out)
-	}
-	// Supervision ended on purpose: nothing to say.
-	if err := unit.store.Update(func(s *state.State) ([]state.Event, error) { s.Supervisor = nil; return nil, nil }); err != nil {
-		t.Fatal(err)
-	}
-	poll(90*time.Minute, nil)
-	poll(95*time.Minute, nil)
-	if strings.Count(out.String(), "SUPERVISOR") != 2 || gone() != 2 {
-		t.Fatalf("after supervisor stop: %d notifications, lines:\n%s", gone(), out)
-	}
-}
-
 func TestStatusBar(t *testing.T) {
 	for _, c := range []struct {
 		v    statusView
 		want string
 	}{
-		{statusView{}, "beekeeper\t-\t0\t0\t0\t0/0"},
-		{statusView{Supervisor: "night\twatch", SupervisorLive: true, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3, Busy: 3, Floor: 5, Ceiling: 10}, "beekeeper\tnight watch\t2\t1\t3\t3/5"},
-		{statusView{Supervisor: "run 11", Floor: 5}, "beekeeper\t!run 11\t0\t0\t0\t0/5"},
+		{statusView{}, "beekeeper\t!loop\t0\t0\t0\t0/0"},
+		{statusView{SupervisorLoop: 42, Leases: []string{"a", "b"}, Holds: []string{"merges"}, Due: 3, Busy: 3, Ceiling: 10}, "beekeeper\tloop\t2\t1\t3\t3/10"},
+		{statusView{Ceiling: 5}, "beekeeper\t!loop\t0\t0\t0\t0/5"},
 	} {
 		if got := c.v.bar(); got != c.want {
 			t.Errorf("bar() = %q, want %q", got, c.want)
@@ -200,6 +124,22 @@ func TestLiftedUpgradeHoldShowsWhoLiftedIt(t *testing.T) {
 	v := statusView{Holds: []string{portalLane}, Lifted: []string{"upgrade:gazelle/cicddev by Supervisor run 17"}}
 	if got := v.line(); !strings.Contains(got, "1 hold ("+portalLane+"); 1 lifted (upgrade:gazelle/cicddev by Supervisor run 17)") {
 		t.Errorf("status line %q", got)
+	}
+}
+
+func TestStaleUpgradeHoldIsMarked(t *testing.T) {
+	st := &state.State{Holds: []state.Hold{
+		{Target: "upgrade:test/stalled", Reason: "upgrade test/stalled ? → 35.1.1", At: relayNow.Add(-25 * time.Hour)},
+		{Target: "upgrade:gazelle/cicddev", Reason: "upgrade gazelle/cicddev 35.0.0 → 36.0.0", At: relayNow.Add(-time.Hour)},
+	}}
+	var out bytes.Buffer
+	a := &app{out: &out, now: relayNow}
+	a.printHolds(a.activeHolds(st))
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 3 ||
+		!regexp.MustCompile(`upgrade:test/stalled +active, stale +the upgrade ends `).MatchString(lines[1]) ||
+		!regexp.MustCompile(`upgrade:gazelle/cicddev +active +the upgrade ends `).MatchString(lines[2]) {
+		t.Errorf("hold list:\n%s", out.String())
 	}
 }
 

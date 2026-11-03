@@ -158,9 +158,8 @@ func TestMergeSkillNamesTheSquashSubject(t *testing.T) {
 	}
 }
 
-// A code scan's finding is raised on main and names where it was raised,
-// and the supervisor dispatches one only once that is the head: a scan of
-// a stale clone reports what main fixed long ago.
+// A code scan's finding is raised on main and names where it was raised: a
+// scan of a stale clone reports what main fixed long ago.
 func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	gh := words(Skill("github"))
@@ -168,13 +167,6 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 		if !strings.Contains(gh, want) {
 			t.Errorf("the github skill does not say %q", want)
 		}
-	}
-	raw, err := Skills.ReadFile(SkillsDir + "/supervise/references/scheduling.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(words(string(raw)), "a code scan's finding only once the commit it names is the default branch's head") {
-		t.Error("the supervisor's scheduling does not check a scan finding's commit against the head")
 	}
 }
 
@@ -214,11 +206,11 @@ func TestGatedMergeLinesUpdateTheBranch(t *testing.T) {
 	}
 }
 
-// The role skills load only from a prompt that opens with their bare slash
-// command (handover --prompt, a successor's first prompt, the person), so a
-// worker's skill listing never carries them.
+// The role skill loads only from a prompt that opens with its bare slash
+// command (guide handover --prompt, a successor's first prompt, the
+// person), so a worker's skill listing never carries it.
 func TestRoleSkillsAreHiddenFromTheModel(t *testing.T) {
-	for _, name := range []string{"supervise", "guide"} {
+	for _, name := range []string{"guide"} {
 		front, _, _ := strings.Cut(strings.TrimPrefix(string(SkillFile(name)), "---\n"), "\n---\n")
 		if !slices.Contains(strings.Split(front, "\n"), "disable-model-invocation: true") {
 			t.Errorf("%s/SKILL.md lacks disable-model-invocation: true:\n%s", name, front)

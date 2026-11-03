@@ -44,10 +44,9 @@ func TestHandoversDue(t *testing.T) {
 	// run.
 	agents[8].Task, agents[9].Task = countTask, countTask
 	st := &state.State{
-		Agents:     agents,
-		Supervisor: &state.Supervisor{Party: party("sup")},
-		Relieved:   []state.Relief{{Party: party("relieved")}},
-		Merges:     []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
+		Agents: agents,
+		Guide:  &state.Role{Holder: &state.Supervisor{Party: party("sup")}, Relieved: []state.Relief{{Party: party("relieved")}}},
+		Merges: []state.Merge{{Repo: scratchRepo, PR: 1, By: party("merging"), Phase: state.Running, PID: 42}},
 	}
 	var sessions []*claude.Session
 	for _, id := range ids[:7] { // "gone" and the parked ones do not run

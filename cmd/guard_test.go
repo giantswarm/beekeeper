@@ -37,6 +37,13 @@ func TestMain(m *testing.M) {
 	// Nor does an answer reach GitHub: every thread but unknownThread is a
 	// private one to it; a test that reads the comments stubs its own.
 	boardGH = (&answerGH{}).run
+	// Nor does an execution host wait for the release the test binary was
+	// built as: the coordinator is a development build, and a test of the
+	// host updates names its own release.
+	coordinatorVersion = func() string { return "dev" }
+	// Nor does an answer read where it runs: the person types it at
+	// their terminal; a test that wants a session stubs its own.
+	answerSeat = func(*app) (string, bool) { return "", true }
 	// Nor does a claim: every issue's thread is an empty one of its own; a
 	// test of the claims keeps its own.
 	claimGH = claimtest.New().GH
@@ -720,6 +727,18 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 	okRes := runCodex(t, inRoot, "Bash", map[string]any{hookTypeCommand: "git status"})
 	if len(okRes) != 0 {
 		t.Errorf("ordinary command: got %v, want {}", okRes)
+	}
+
+	// exec_command with workdir resolves relative --body-file against workdir (and enters scope via workdir).
+	if err := os.WriteFile(filepath.Join(inRoot, "PR_BODY.md"), []byte("Closes https://github.com/giantswarm/beekeeper/issues/1874\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wdRes := runCodex(t, outRoot, "exec_command", map[string]any{
+		"cmd":     `gh pr create --repo giantswarm/beekeeper --title "fix: workdir" --body-file PR_BODY.md`,
+		"workdir": inRoot,
+	})
+	if len(wdRes) != 0 {
+		t.Errorf("exec_command with workdir and valid PR_BODY.md: got %v, want {}", wdRes)
 	}
 }
 

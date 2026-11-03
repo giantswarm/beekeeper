@@ -42,7 +42,7 @@ func TestAgentDirRoleFolders(t *testing.T) {
 	a.cfg.Agents.Dir = filepath.Join(base, "workers")
 	a.cfg.Agents.Roots = []string{filepath.Join(base, "worktrees")}
 	a.cfg.Guide.Dir = filepath.Join(a.cfg.Agents.Dir, "desk")
-	a.cfg.Supervisor.Dir = filepath.Join(base, "supervision")
+	a.cfg.Guide.Dir = filepath.Join(base, "supervision")
 	for _, rl := range roles {
 		t.Run(rl.name, func(t *testing.T) {
 			dir := rl.cfg(a.cfg).Dir
@@ -88,7 +88,7 @@ func TestSuccessorStartsInRoleFolder(t *testing.T) {
 			if rl.name == guideName {
 				a.cfg.Guide.Dir = dir
 			} else {
-				a.cfg.Supervisor.Dir = dir
+				a.cfg.Guide.Dir = dir
 			}
 			name := rl.runName(2)
 			calls := stubBackground(t, "backgrounded · "+bgShortID+" · "+name+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: name})

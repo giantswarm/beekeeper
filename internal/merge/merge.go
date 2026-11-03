@@ -245,20 +245,45 @@ func ParsePromoteDocument(raw []byte) (Outcome, bool) {
 	return o, true
 }
 
+// stateFailed is devctl release promote's repository state for a failed read
+// or dispatch.
+const stateFailed = "failed"
+
 // ParsePromoteCandidate reads the candidate of devctl release promote
 // --dry-run's JSON document for one repository: the release candidate a
 // promotion would dispatch now, "" when there is none. ok is false when the
-// document names no single repository.
+// document names no single repository or its read failed (state "failed").
 func ParsePromoteCandidate(raw []byte) (candidate string, ok bool) {
 	var doc struct {
 		Repositories []struct {
 			Candidate string `json:"candidate"`
+			State     string `json:"state"`
 		} `json:"repositories"`
 	}
-	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 {
+	if json.Unmarshal(raw, &doc) != nil || len(doc.Repositories) != 1 || doc.Repositories[0].State == stateFailed {
 		return "", false
 	}
 	return doc.Repositories[0].Candidate, true
+}
+
+// PromoteFailure is the failure diagnostic of devctl release promote's JSON
+// document: the failed repository's message, or the envelope's reason when
+// there is none. "" when the document names neither.
+func PromoteFailure(raw []byte) string {
+	var doc struct {
+		Reason       string `json:"reason"`
+		Repositories []struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+		} `json:"repositories"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	if len(doc.Repositories) == 1 && doc.Repositories[0].State == stateFailed && doc.Repositories[0].Message != "" {
+		return doc.Repositories[0].Message
+	}
+	return doc.Reason
 }
 
 // owned are the subcommands of devctl that block until an outcome, which
@@ -318,13 +343,30 @@ type Outcome struct {
 	// State is a promotion's state in devctl release promote's document
 	// (dispatched, nothing_to_promote, not_built, …), empty for a merge.
 	State string
+	// MergedAt is when GitHub reports the pull request merged, zero unless
+	// GitHub judged the run (Judged).
+	MergedAt time.Time
 }
 
 // Judged is the outcome of a run that ended without its document or by a
 // signal (exit 128+n): GitHub's state of the pull request decides whether it
 // merged, never the exit code, and a merge's release is unconfirmed.
 func Judged(p github.Pull) Outcome {
-	return Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	o := Outcome{Merged: p.State == github.Merged, Unconfirmed: p.State == github.Merged}
+	if o.Merged {
+		o.MergedAt = p.MergedAt.UTC()
+	}
+	return o
+}
+
+// SettlesFrom is when a merge recorded at now settles its lane from: GitHub's
+// merge time when the run was recorded after it (a hung merge dropped or
+// recorded late), now otherwise.
+func (o Outcome) SettlesFrom(now time.Time) time.Time {
+	if o.Merged && !o.MergedAt.IsZero() && o.MergedAt.Before(now) {
+		return o.MergedAt
+	}
+	return now
 }
 
 // NeedsJudging says whether a run's outcome is GitHub's to decide: devctl
@@ -359,6 +401,8 @@ func ParseDocument(raw []byte) (Outcome, bool) {
 			o.NoRelease = true
 		case "ci_failed":
 			o.Release, o.ReleaseFailed = doc.Release.Tag, true
+		case "unconfirmed":
+			o.Unconfirmed = true
 		}
 	}
 	return o, true
@@ -564,7 +608,7 @@ type Lane struct {
 }
 
 // Queue returns the lane's running and settling merges and the waiting
-// ones in turn order: a settled outside merge first, then in join order.
+// ones in turn order: a settled outside merge first, then by join order.
 func Queue(st *state.State, lane string) Lane {
 	q := Lane{Name: lane, Waiting: []state.Merge{}}
 	for i := range st.Merges {
@@ -709,6 +753,31 @@ func ServerError(doc []byte) bool {
 		Reason   string `json:"reason"`
 	}
 	return json.Unmarshal(doc, &d) == nil && d.ExitCode == 7 && serverError.MatchString(d.Reason)
+}
+
+// NoRunsHint is what to do about a head whose workflows never ran
+// (NoRuns): GitHub started none for its commit, which the base-merge commit
+// of --update-branch can be, and no wait makes them start.
+const NoRunsHint = "the head has no GitHub Actions run: GitHub started no workflow for its commit (the base-merge commit of --update-branch can get none), and no wait starts them; push an empty commit to the branch (git commit --allow-empty) or close and reopen the pull request, wait for its checks, then run the same merge again"
+
+// NoRuns says whether devctl's document ended its wait on checks that never
+// reported (exit 4: required_missing or no_checks) while the head carries no
+// GitHub Actions run, a check run of a workflow: the head's workflows never
+// started, which a retrigger fixes and another wait does not (NoRunsHint).
+func NoRuns(doc []byte) bool {
+	type check struct {
+		Source   string `json:"source"`
+		Workflow string `json:"workflow"`
+	}
+	var d struct {
+		ExitCode int     `json:"exitCode"`
+		Verdict  string  `json:"verdict"`
+		Checks   []check `json:"checks"`
+	}
+	if json.Unmarshal(doc, &d) != nil || d.ExitCode != 4 || (d.Verdict != "required_missing" && d.Verdict != "no_checks") {
+		return false
+	}
+	return !slices.ContainsFunc(d.Checks, func(c check) bool { return c.Source == "check_run" && c.Workflow != "" })
 }
 
 // Present says whether a waiting merge holds its place against the arrived

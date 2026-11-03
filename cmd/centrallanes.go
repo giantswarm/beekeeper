@@ -22,7 +22,11 @@ const centralEvery = 15 * time.Second
 // central instance names refuses the merge, as a local hold does; an
 // unreachable central instance refuses it with ExitCentral.
 func (g *gateRun) centralTurn() (string, error) {
-	if g.centralWhy != "" && time.Since(g.centralAsked) < centralEvery {
+	every := centralEvery
+	if ttl := g.cfg.Merge.QueueTTL.Duration; ttl > 0 {
+		every = min(every, ttl/2)
+	}
+	if g.centralWhy != "" && time.Since(g.centralAsked) < every {
 		return g.centralWhy, nil
 	}
 	var t laneTurn

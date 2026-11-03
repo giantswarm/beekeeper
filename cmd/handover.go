@@ -23,55 +23,45 @@ type handoverSection struct {
 
 func (a *app) handoverCmd() *cobra.Command {
 	var events int
-	var prompt, full bool
+	var full bool
 	var only string
 	c := &cobra.Command{
 		Use:   "handover",
-		Short: "Everything the next supervisor needs, from the live state",
-		Long: `Print the hand-over as Markdown: the supervisor and its context in tokens,
+		Short: "Everything on the desk, from the live state",
+		Long: `Print the hand-over as Markdown: whether the supervisor loop runs,
 the running sessions and what each is on, leases and grant queues, holds,
-the merge lanes, registered agents, session records, the priorities and
-holds, the board's epics in planning and past their go with their plans
-(each plan's URL, state and head), the standing instructions (standing.md in the state directory, in
-full),
+the merge lanes, registered agents, session records, the board holds, the
+board's epics in planning and past their go with their plans (each plan's URL,
+state and head), the standing instructions (standing.md in the state directory,
+in full),
 open notes with their defaults, the decisions answered
-since the last relay, timers, what the alert watch reads and the latest
-events. Everything comes
-from the state and the machine, so a successor (or the same supervisor
-after a restart) reads it instead of a prose brief.
+within 72 hours, timers, what the alert watch reads and the latest
+events. Everything comes from the state and the machine, so a reader acts
+on it instead of a prose brief.
 
-It shows what a successor acts on in its first minutes: the notes the
+It shows what a reader acts on first: the notes the
 guide serves (those for guide.person and for the guide) are one line, the
 records of sessions ended over an hour ago are one line (an agent the roster
 keeps, parked for one, stays listed), and the answered
-decisions are those since the predecessor's start, with a count of the
-others answered within 72 hours.
+decisions are those of the last day, with a count of the others answered
+within 72 hours.
 --section <name> prints one section with everything it holds: ` + "`" + `--section
 notes` + "`" + ` every open note, ` + "`" + `--section records` + "`" + ` every record, ` + "`" + `--section
 answers` + "`" + ` every decision answered within 72 hours.
 
-The priorities and holds are read from GitHub with the read board next
-makes: the priority list (the board's Priority field) by rank, each epic
-with its Status, its plan line and its hold, then every held board item
-with what holds it: its open blockers (board block), its Status set after
-they closed, or the open decision that holds it (note add --holds) with its
-person. A failed read is shown as not read, never filled from the state.
-
---prompt prints the successor's session prompt instead: the configured
-instructions (supervisor.skill's bare slash command, "/supervise you take
-over …", or supervisor.instructions), the scope
-(supervisor.scope), the pending state as selected above, the priorities
-and holds and the epics with their plans, and the commands that read the
-live values. It carries no other live value: no version, memory figure or
-pull request state.
+The board holds are read from GitHub with the read board next makes: every
+held board item with what holds it: its open blockers (board block), its
+Status set after they closed, or the open decision that holds it (note add
+--holds) with its person. A failed read is shown as not read, never filled
+from the state.
 
 A caller that has read the hand-over before gets only what changed since:
 the lines that are new or changed, the keys of those gone, or one "no
-change" line. --full prints everything; --prompt, --section and --json are
-always complete.`,
+change" line. --full prints everything; --section and --json are always
+complete.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			v, err := a.collect(!prompt) // the prompt names no session's current work
+			v, err := a.collect(true)
 			if err != nil {
 				return err
 			}
@@ -83,7 +73,7 @@ always complete.`,
 			if err != nil {
 				return err
 			}
-			ans, err := a.handoverAnswers(v.st)
+			ans, err := a.handoverAnswers()
 			if err != nil {
 				return err
 			}
@@ -93,12 +83,9 @@ always complete.`,
 			if err != nil {
 				return err
 			}
-			pv := a.prioritiesHandover(cmd.Context(), v.st.Notes)
-			if prompt {
-				return a.printPrompt(cmd.Context(), v, l, al, ans, pv)
-			}
-			ep := pv.epicsView()
-			if pv != nil && pv.Error != "" {
+			bv := a.boardHoldsHandover(cmd.Context(), v.st.Notes)
+			ep := bv.epicsView()
+			if bv != nil && bv.Error != "" {
 				ep = a.epicsHandover(cmd.Context()) // the epics need no board.order
 			}
 			if a.json {
@@ -109,14 +96,14 @@ always complete.`,
 					Lanes      []laneView      `json:"lanes"`
 					Agents     []agentView     `json:"agents"`
 					Records    []state.Record  `json:"records"`
-					Priorities *prioritiesView `json:"priorities,omitempty"`
+					BoardHolds *boardHoldsView `json:"board_holds,omitempty"`
 					Epics      *epicsView      `json:"epics,omitempty"`
 					Notes      []state.Note    `json:"notes"`
 					Answered   []answered      `json:"answered"`
 					Timers     []state.Timer   `json:"timers"`
 					Alerts     *alertsView     `json:"alerts"`
 					Events     []state.Event   `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, pv, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
@@ -138,7 +125,7 @@ always complete.`,
 					}
 					a.printLiveRecords(v.st, v.st.Records, v.raw)
 				}},
-				{"priorities", "Priorities and holds", func(bool) { a.printPrioritiesHandover(pv) }},
+				{"board-holds", "Board holds", func(bool) { a.printBoardHoldsHandover(bv) }},
 				{"epics", "Epics", func(bool) { a.printEpicsHandover(ep) }},
 				{"standing", "Standing instructions", func(bool) { a.printStanding(standing) }},
 				{"notes", "Open notes", func(all bool) {
@@ -195,13 +182,12 @@ always complete.`,
 	}
 	fullFlag(c, &full)
 	c.Flags().IntVar(&events, "events", 20, "how many of the latest events to include")
-	c.Flags().BoolVar(&prompt, "prompt", false, "print the successor's session prompt: instructions, scope and the pending state")
 	c.Flags().StringVar(&only, "section", "", "print one section with everything it holds: "+handoverSections)
 	return c
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, priorities, epics, standing, notes, answers, timers, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, alerts, events"
 
 // epicsView is the board's epics in planning and past their go with their
 // plans, or why they were not read; nil without a board.
@@ -246,20 +232,13 @@ func sectionKeys(sections []handoverSection) string {
 	return strings.Join(keys, ", ")
 }
 
-// printSupervisor says who supervises and an open relay.
+// printSupervisor says whether the supervisor loop runs.
 func (a *app) printSupervisor(v *view) {
-	p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
-	switch {
-	case v.Supervisor == nil:
-		p("No supervisor is recorded.")
-	case v.Supervisor.Live:
-		p("Supervisor: %q since %s%s.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since), v.Supervisor.contextText())
-	default:
-		p("Supervisor: %q since %s, its session is gone.", v.Supervisor.Name, clock(a.now, v.Supervisor.Since))
+	if v.SupervisorLoop > 0 {
+		_, _ = fmt.Fprintf(a.out, "Supervisor: the supervisor loop runs (PID %d).\n", v.SupervisorLoop)
+		return
 	}
-	if r := v.st.Relay; r.Open(a.now) {
-		p("Relayed to %q until %s: its `beekeeper supervisor start` takes the role.", r.To.Name, clock(a.now, r.Expires))
-	}
+	_, _ = fmt.Fprintf(a.out, "Supervisor: the supervisor loop does not run (%s).\n", loopServiceHint())
 }
 
 // eventText is one event of the log in a line.

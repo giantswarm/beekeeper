@@ -2,43 +2,135 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	"github.com/google/go-github/v93/github"
+
+	deskgithub "github.com/giantswarm/beekeeper/internal/github"
 )
+
+// githubToken uses the shared gh login resolver; tests replace it without credentials.
+var githubToken = deskgithub.Token
 
 // Bound candidate reads when tags have no published, signed binary. A normal
 // lookup uses two small requests, independent of the release history's size.
 const maxReleaseCandidates = 8
 const emptyRefAttempts = 3
 
+// errIncompleteLookup is a lookup that read maxReleaseCandidates tags
+// without a signed binary: GitHub answered, so it is no question of being
+// online.
+var errIncompleteLookup = errors.New("refusing an incomplete lookup")
+
 type githubSource struct {
 	selfupdate.Source // retain the upstream asset downloader
 	api               *github.Client
 	prereleases       bool
+	current           string
+	commit            string
+	skipped           bool
+}
+
+type releaseCandidate struct {
+	tag     string
+	version *semver.Version
+	sha     string
+}
+
+type baseKey struct {
+	major, minor, patch uint64
+}
+
+type rcRef struct {
+	version *semver.Version
+	sha     string
+}
+
+type candidateSet struct {
+	candidates   []releaseCandidate
+	newestRC     map[baseKey]rcRef
+	latestRC     rcRef
+	latestStable rcRef
+	stableSHAs   map[string]bool
+	tagSHA       map[string]string
+	olderTagSHAs map[string]bool
 }
 
 func newGitHubSource(prereleases bool) (selfupdate.Source, error) {
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+	var opts []github.ClientOptionsFunc
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		token, _ = githubToken(ctx)
+		cancel()
+	}
+	if token != "" {
+		opts = append(opts, github.WithAuthToken(token))
+	}
+	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{APIToken: token})
 	if err != nil {
 		return nil, err
-	}
-	var opts []github.ClientOptionsFunc
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		opts = append(opts, github.WithAuthToken(token))
 	}
 	client, err := github.NewClient(opts...)
 	if err != nil {
 		return nil, err
 	}
-	return &githubSource{Source: source, api: client, prereleases: prereleases}, nil
+	return &githubSource{
+		Source:      source,
+		api:         client,
+		prereleases: prereleases,
+		current:     currentVersion(),
+		commit:      currentCommit(),
+	}, nil
+}
+
+// tagSource lists exactly one release, the tag's, signed binary or not: the
+// validator refuses one without its bundle.
+type tagSource struct {
+	selfupdate.Source // retain the upstream asset downloader
+	api               *github.Client
+	tag               string
+}
+
+// newGitHubTagSource is the source of release tag alone, authenticated as
+// newGitHubSource is.
+func newGitHubTagSource(tag string) (selfupdate.Source, error) {
+	s, err := newGitHubSource(true)
+	if err != nil {
+		return nil, err
+	}
+	g := s.(*githubSource)
+	return &tagSource{Source: g.Source, api: g.api, tag: tag}, nil
+}
+
+func (s *tagSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	owner, repo, err := repository.GetSlug()
+	if err != nil {
+		return nil, err
+	}
+	release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, s.tag)
+	if response != nil && response.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if release.GetDraft() || release.GetTagName() != s.tag {
+		return nil, nil
+	}
+	return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
 }
 
 func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
@@ -65,37 +157,47 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 			break
 		}
 	}
-	type candidate struct {
-		tag     string
-		version *semver.Version
-	}
-	candidates := make([]candidate, 0, len(refs))
-	for _, ref := range refs {
-		tag := strings.TrimPrefix(ref.GetRef(), "refs/tags/")
-		version, err := semver.NewVersion(tag)
-		if err != nil || (!s.prereleases && version.Prerelease() != "") {
+	set := s.collectCandidates(refs)
+	runningSHA := s.runningSHA(set.tagSHA)
+	staleSHAs := make(map[string]bool)
+	// Why each candidate was passed over, for an incomplete lookup's error.
+	var skipped []string
+	skip := optionsFrom(ctx).Skip
+	checked := 0
+	for _, candidate := range set.candidates {
+		if skip != nil && (skip(candidate.tag) || skip("v"+strings.TrimPrefix(candidate.tag, "v"))) {
+			s.skipped = true
 			continue
 		}
-		candidates = append(candidates, candidate{tag, version})
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].version.Equal(candidates[j].version) {
-			return candidates[i].tag < candidates[j].tag
+		if checked == maxReleaseCandidates {
+			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags (%s); %w", maxReleaseCandidates, strings.Join(skipped, "; "), errIncompleteLookup)
 		}
-		return candidates[i].version.GreaterThan(candidates[j].version)
-	})
-	for i, candidate := range candidates {
-		if i == maxReleaseCandidates {
-			return nil, fmt.Errorf("no signed binary found in the newest %d eligible release tags; refusing an incomplete lookup", maxReleaseCandidates)
+		checked++
+		stale, err := s.isStaleCandidate(ctx, owner, repo, candidate, set, runningSHA, staleSHAs)
+		if err != nil {
+			return nil, err
+		}
+		if stale != "" {
+			if candidate.sha != "" {
+				staleSHAs[candidate.sha] = true
+			}
+			skipped = append(skipped, candidate.tag+": "+stale)
+			continue
 		}
 		release, response, err := s.api.Repositories.GetReleaseByTag(ctx, owner, repo, candidate.tag)
 		if response != nil && response.StatusCode == http.StatusNotFound {
+			skipped = append(skipped, candidate.tag+": no release")
 			continue
 		} // tag without a release
 		if err != nil {
 			return nil, err
 		}
-		if release.GetDraft() || (!s.prereleases && release.GetPrerelease()) {
+		if release.GetDraft() {
+			skipped = append(skipped, candidate.tag+": a draft release")
+			continue
+		}
+		if !s.prereleases && release.GetPrerelease() {
+			skipped = append(skipped, candidate.tag+": a pre-release")
 			continue
 		}
 		if release.GetTagName() != candidate.tag {
@@ -113,6 +215,192 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 		if binary && bundle {
 			return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
 		}
+		if !binary {
+			skipped = append(skipped, candidate.tag+": no "+name)
+		} else {
+			skipped = append(skipped, candidate.tag+": no "+name+".bundle")
+		}
 	}
 	return nil, nil
+}
+
+func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet {
+	newestRC := make(map[baseKey]rcRef)
+	rcSHAs := make(map[baseKey]map[string]*semver.Version)
+	allRCSHAs := make(map[string]*semver.Version)
+	var latestRC rcRef
+	tagSHA := make(map[string]string, len(refs))
+	olderTagSHAs := make(map[string]bool)
+	currentVer, _ := semver.NewVersion(s.current)
+	raw := make([]releaseCandidate, 0, len(refs))
+	for _, ref := range refs {
+		tag := strings.TrimPrefix(ref.GetRef(), "refs/tags/")
+		version, err := semver.NewVersion(tag)
+		if err != nil {
+			continue
+		}
+		sha := ref.GetObject().GetSHA()
+		if sha != "" {
+			tagSHA[tag] = sha
+			if currentVer != nil && version.LessThan(currentVer) {
+				olderTagSHAs[sha] = true
+			}
+		}
+		if version.Prerelease() != "" && sha != "" {
+			bk := baseKey{version.Major(), version.Minor(), version.Patch()}
+			if rcSHAs[bk] == nil {
+				rcSHAs[bk] = make(map[string]*semver.Version)
+			}
+			if prev := rcSHAs[bk][sha]; prev == nil || version.GreaterThan(prev) {
+				rcSHAs[bk][sha] = version
+			}
+			if prev := allRCSHAs[sha]; prev == nil || version.GreaterThan(prev) {
+				allRCSHAs[sha] = version
+			}
+			if cur := newestRC[bk]; cur.version == nil || version.GreaterThan(cur.version) {
+				newestRC[bk] = rcRef{version: version, sha: sha}
+			}
+			if latestRC.version == nil || version.GreaterThan(latestRC.version) {
+				latestRC = rcRef{version: version, sha: sha}
+			}
+		}
+		if !s.prereleases && version.Prerelease() != "" {
+			continue
+		}
+		raw = append(raw, releaseCandidate{tag: tag, version: version, sha: sha})
+	}
+	stableSHAs := make(map[string]bool)
+	promotedBase := make(map[baseKey]bool)
+	var latestStable rcRef
+	validRaw := make([]releaseCandidate, 0, len(raw))
+	for _, c := range raw {
+		if c.version.Prerelease() == "" && c.sha != "" {
+			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
+			if rc, ok := newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
+				if rcVer := rcSHAs[bk][c.sha]; rcVer != nil && rcVer.LessThan(rc.version) {
+					continue
+				}
+			}
+			// A running release never follows a pre-release: a later base's
+			// release candidate leaves the releases before it eligible.
+			if s.prereleases && latestRC.version != nil && latestRC.sha != "" && !sameCommit(c.sha, latestRC.sha) && c.version.LessThan(latestRC.version) {
+				if rcVer := allRCSHAs[c.sha]; rcVer != nil && rcVer.LessThan(latestRC.version) {
+					continue
+				}
+			}
+			stableSHAs[c.sha] = true
+			if rc, ok := newestRC[bk]; !ok || sameCommit(c.sha, rc.sha) {
+				promotedBase[bk] = true
+			}
+			if latestStable.version == nil || c.version.GreaterThan(latestStable.version) {
+				latestStable = rcRef{version: c.version, sha: c.sha}
+			}
+		}
+		validRaw = append(validRaw, c)
+	}
+	candidates := make([]releaseCandidate, 0, len(validRaw))
+	for _, c := range validRaw {
+		if c.version.Prerelease() != "" && c.sha != "" && c.tag != s.current {
+			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
+			if stableSHAs[c.sha] || promotedBase[bk] {
+				continue
+			}
+		}
+		candidates = append(candidates, c)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].version.Equal(candidates[j].version) {
+			return candidates[i].tag < candidates[j].tag
+		}
+		return candidates[i].version.GreaterThan(candidates[j].version)
+	})
+	return candidateSet{
+		candidates:   candidates,
+		newestRC:     newestRC,
+		latestRC:     latestRC,
+		latestStable: latestStable,
+		stableSHAs:   stableSHAs,
+		tagSHA:       tagSHA,
+		olderTagSHAs: olderTagSHAs,
+	}
+}
+
+// isStaleCandidate says why candidate c is behind a commit the lookup must
+// not go back from, "" when it is not.
+func (s *githubSource) isStaleCandidate(ctx context.Context, owner, repo string, c releaseCandidate, set candidateSet, runningSHA string, staleSHAs map[string]bool) (string, error) {
+	if c.sha == "" {
+		return "", nil
+	}
+	if c.version.Prerelease() == "" {
+		bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
+		if rc, ok := set.newestRC[bk]; ok && rc.sha != "" && !sameCommit(c.sha, rc.sha) {
+			if why, err := s.behindWhy(ctx, owner, repo, rc, c.sha); why != "" || err != nil {
+				return why, err
+			}
+		}
+		// Only a running pre-release follows the newest release candidate:
+		// on a release, the newest release is the latest whatever
+		// pre-releases a later base has.
+		if s.prereleases && set.latestRC.sha != "" && !set.stableSHAs[set.latestRC.sha] && !sameCommit(c.sha, set.latestRC.sha) {
+			if why, err := s.behindWhy(ctx, owner, repo, set.latestRC, c.sha); why != "" || err != nil {
+				return why, err
+			}
+		}
+	} else if set.latestStable.sha != "" && !staleSHAs[set.latestStable.sha] && !set.olderTagSHAs[set.latestStable.sha] && !sameCommit(c.sha, set.latestStable.sha) && (runningSHA == "" || !sameCommit(c.sha, runningSHA)) {
+		if why, err := s.behindWhy(ctx, owner, repo, set.latestStable, c.sha); why != "" || err != nil {
+			return why, err
+		}
+	}
+	if runningSHA != "" && !sameCommit(c.sha, runningSHA) {
+		if set.olderTagSHAs[c.sha] {
+			return "at the commit of a release older than this one", nil
+		}
+		return s.behindWhy(ctx, owner, repo, rcRef{sha: runningSHA}, c.sha)
+	}
+	return "", nil
+}
+
+// behindWhy says that head is behind ref's commit, "" when it is not.
+func (s *githubSource) behindWhy(ctx context.Context, owner, repo string, ref rcRef, head string) (string, error) {
+	behind, err := s.isBehind(ctx, owner, repo, ref.sha, head)
+	if err != nil || !behind {
+		return "", err
+	}
+	if ref.version == nil {
+		return "behind the running commit " + shortSHA(ref.sha), nil
+	}
+	return "behind " + ref.version.Original() + " at " + shortSHA(ref.sha), nil
+}
+
+// shortSHA is a commit's abbreviation for a message.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+func (s *githubSource) runningSHA(tagSHA map[string]string) string {
+	if s.commit != "" && s.commit != "unknown" {
+		return s.commit
+	}
+	return tagSHA[s.current]
+}
+
+func (s *githubSource) isBehind(ctx context.Context, owner, repo, base, head string) (bool, error) {
+	if base == "" || head == "" || sameCommit(base, head) {
+		return false, nil
+	}
+	comp, resp, err := s.api.Repositories.CompareCommits(ctx, owner, repo, base, head, nil)
+	if resp != nil && resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return comp.GetStatus() == "behind", nil
+}
+
+func sameCommit(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
