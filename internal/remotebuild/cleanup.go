@@ -41,6 +41,17 @@ func (r Runner) remember(root, host, name string) error {
 	return os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o600)
 }
 
+// physicalRoot is root cleaned and, where it exists, with its symlinks
+// resolved, so a finished worktree matches its record whichever spelling
+// (macOS's /var and /private/var) either names it by.
+func physicalRoot(root string) string {
+	root = filepath.Clean(root)
+	if physical, err := filepath.EvalSymlinks(root); err == nil {
+		return physical
+	}
+	return root
+}
+
 // Sweep retires this machine's builders for missing or explicitly finished
 // worktrees. Busy builders keep their journal and retry on the next sweep.
 // It never lists or deletes another machine's jobs, or touches shared caches.
@@ -59,11 +70,7 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 	}
 	done := map[string]bool{}
 	for _, root := range finished {
-		root = filepath.Clean(root)
-		if physical, e := filepath.EvalSymlinks(root); e == nil {
-			root = physical
-		}
-		done[root] = true
+		done[physicalRoot(root)] = true
 	}
 	var errs []error
 	for _, entry := range entries {
@@ -103,7 +110,7 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 				return fmt.Errorf("invalid builder ownership record %s", name)
 			}
 			_, statErr := os.Stat(rec.Root)
-			if !done[rec.Root] && !errors.Is(statErr, os.ErrNotExist) {
+			if !done[physicalRoot(rec.Root)] && !errors.Is(statErr, os.ErrNotExist) {
 				return statErr
 			}
 			if dryRun {
