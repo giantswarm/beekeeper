@@ -38,15 +38,17 @@ func (e Endpoint) Validate() error {
 // beekeeper recorded when it last updated the host (agents hosts update),
 // or, for a host it never updated, the entry's own deprecated value.
 type Host struct {
-	Endpoint         `yaml:",inline"`
-	Identity         HostID            `yaml:"identity" json:"identity"`
-	WorkspaceRoot    string            `yaml:"workspaceRoot" json:"workspaceRoot"`
-	Repositories     map[string]string `yaml:"repositories" json:"repositories"`
-	Harnesses        []string          `yaml:"harnesses" json:"harnesses"`
-	PolicyDigest     string            `yaml:"policyDigest" json:"policyDigest"`
-	MaxBusy          int               `yaml:"maxBusy" json:"maxBusy"`
-	ConnectTimeout   string            `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
-	OperationTimeout string            `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
+	Endpoint      `yaml:",inline"`
+	Identity      HostID            `yaml:"identity" json:"identity"`
+	WorkspaceRoot string            `yaml:"workspaceRoot" json:"workspaceRoot"`
+	Repositories  map[string]string `yaml:"repositories" json:"repositories"`
+	// RepositoryOrgs admits coordinator-bundled repositories without a source mapping.
+	RepositoryOrgs   []string `yaml:"repositoryOrgs,omitempty" json:"repositoryOrgs,omitempty"`
+	Harnesses        []string `yaml:"harnesses" json:"harnesses"`
+	PolicyDigest     string   `yaml:"policyDigest" json:"policyDigest"`
+	MaxBusy          int      `yaml:"maxBusy" json:"maxBusy"`
+	ConnectTimeout   string   `yaml:"connectTimeout,omitempty" json:"connectTimeout,omitempty"`
+	OperationTimeout string   `yaml:"operationTimeout,omitempty" json:"operationTimeout,omitempty"`
 }
 
 // Supports reports whether the operator lists harness for this host.
@@ -73,7 +75,7 @@ func (h Host) Validate() error {
 	if err := h.Endpoint.Validate(); err != nil {
 		return err
 	}
-	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 || len(h.Harnesses) == 0 {
+	if !ValidIdentity(string(h.Identity)) || !HostPath(h.WorkspaceRoot) || h.WorkspaceRoot == "/" || !ValidDigest(h.PolicyDigest) || h.MaxBusy < 1 || len(h.Repositories) == 0 && len(h.RepositoryOrgs) == 0 || len(h.Harnesses) == 0 {
 		return errors.New("host requires identity, policy digest (beekeeper agents hosts update records it), workspace root, repositories, maxBusy and harnesses (claude, codex, agy)")
 	}
 	seen := map[string]bool{}
@@ -82,6 +84,9 @@ func (h Host) Validate() error {
 			return errors.New("host harnesses must be distinct entries of claude, codex and agy")
 		}
 		seen[name] = true
+	}
+	if err := validateRepositoryOrgs(h.RepositoryOrgs); err != nil {
+		return err
 	}
 	for repo, p := range h.Repositories {
 		if !repoPattern.MatchString(repo) || !HostPath(p) {
@@ -290,6 +295,14 @@ func (t SSHTransport) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	err := t.Call(ctx, inspectOperation, r, nil, &x)
 	if err == nil && x.Handle.Ref != r {
 		err = errors.New("observation identity mismatch")
+	}
+	return x, err
+}
+func (t SSHTransport) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Observation, error) {
+	var x Observation
+	err := t.Call(ctx, rebindOperation, r, q, &x)
+	if err == nil && (x.Handle.Ref != r || x.PolicyDigest != q.To) {
+		err = errors.New("policy rebind is not acknowledged")
 	}
 	return x, err
 }

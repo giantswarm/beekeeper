@@ -618,3 +618,49 @@ func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
 		t.Fatalf("installation left temporary files: %v", entries)
 	}
 }
+
+func TestCanaryRefusesBadBinaryAndSkipsRelease(t *testing.T) {
+	setup(t, running, &fakeSource{
+		releases: []selfupdate.SourceRelease{release(latestV)},
+		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte("its bundle")},
+	})
+	exe, content := installed(t)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+
+	skipped := map[string]bool{}
+	var canariedPath, canariedVersion, canariedBytes string
+	ctx := WithOptions(context.Background(), Options{
+		Canary: func(_ context.Context, path, version string) error {
+			canariedPath, canariedVersion = path, version
+			b, err := os.ReadFile(filepath.Clean(path))
+			if err != nil {
+				return err
+			}
+			canariedBytes = string(b)
+			// The running executable is still the old one while the canary runs.
+			assertUnchanged(t, exe, content)
+			skipped[version] = true
+			return errors.New("canary budget --gate failed")
+		},
+		Skip: func(tag string) bool { return skipped[tag] },
+	})
+
+	res, err := Run(ctx, io.Discard, false)
+	if err == nil || !strings.Contains(err.Error(), "canary budget --gate failed") || res.Updated {
+		t.Fatalf("Run() = %+v, %v; want canary failure without updating", res, err)
+	}
+	if canariedPath == "" || canariedVersion != latestV || canariedBytes != newBinary {
+		t.Fatalf("canary saw path=%q version=%q bytes=%q", canariedPath, canariedVersion, canariedBytes)
+	}
+	assertUnchanged(t, exe, content)
+
+	// Once skipped, --check and a second update both skip that release.
+	var out bytes.Buffer
+	res, err = Run(ctx, &out, true)
+	if err != nil || res.Newer {
+		t.Fatalf("Run(check) after skip = %+v, %v", res, err)
+	}
+	if !strings.Contains(out.String(), "is the latest release") {
+		t.Errorf("check output after skip:\n%s", out.String())
+	}
+}

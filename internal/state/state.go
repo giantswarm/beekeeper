@@ -835,6 +835,13 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
+	// PendingPublication is the last publication request whose bundle
+	// reached the coordinator before publication failed. Cleared once
+	// published.
+	PendingPublication *ExecutionPendingPublication `json:"pendingPublication,omitempty"`
+	// RecoveredTransfer is the last publication bundle digest the
+	// coordinator attempted to recover automatically.
+	RecoveredTransfer string `json:"recoveredTransfer,omitempty"`
 	// StartUnsent says no start request of this reservation has left the
 	// coordinator yet, so the host holds no journal of it. A reservation
 	// recorded before this field existed reads false: maybe sent.
@@ -854,6 +861,17 @@ type ExecutionPublication struct {
 	Branch string    `json:"branch"`
 	Head   string    `json:"head"`
 	URL    string    `json:"url,omitempty"`
+}
+
+// ExecutionPendingPublication is an unpushed publication request whose
+// bundle transfer is stored on the coordinator.
+type ExecutionPendingPublication struct {
+	At           time.Time `json:"at"`
+	Head         string    `json:"head"`
+	BundleDigest string    `json:"bundleDigest"`
+	Title        string    `json:"title,omitempty"`
+	Body         string    `json:"body,omitempty"`
+	LastError    string    `json:"lastError,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -1386,9 +1404,10 @@ type Merge struct {
 	Output string `json:"output,omitempty"`
 	Phase  string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
-	Joined  time.Time `json:"joined"`
-	Seen    time.Time `json:"seen"`
-	Started time.Time `json:"started,omitzero"`
+	Joined   time.Time `json:"joined"`
+	Priority int       `json:"priority,omitempty"`
+	Seen     time.Time `json:"seen"`
+	Started  time.Time `json:"started,omitzero"`
 	// Finished and Exit are when and how the merge's run ended.
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`

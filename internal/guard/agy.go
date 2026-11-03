@@ -118,7 +118,9 @@ func (h Hook) DecideSandboxAgy(input []byte) []byte {
 
 // DecideAgy reads an agy PreToolUse JSON event from input, runs the Hook's
 // checks on it, and returns the response in agy's PreToolUse JSON format.
-func (h Hook) DecideAgy(input []byte) []byte {
+func (h Hook) DecideAgy(input []byte) (out []byte) {
+	h.beginCheck("agy adapter")
+	defer h.recoverDecision(&out, DenyAgy)
 	ev, origCmd, errReason := h.parseAgy(input)
 	if errReason != "" {
 		return DenyAgy(errReason)
@@ -126,8 +128,11 @@ func (h Hook) DecideAgy(input []byte) []byte {
 	if ev.ToolName == "" {
 		return PassAgy()
 	}
+	h.beginCheck("freshLabs")
 	h.freshLabs(ev)
-	raw := h.labProxy(ev, h.decide(ev))
+	raw := h.decide(ev)
+	h.beginCheck("labProxy")
+	raw = h.labProxy(ev, raw)
 	if len(raw) == 0 {
 		return PassAgy()
 	}
@@ -137,20 +142,20 @@ func (h Hook) DecideAgy(input []byte) []byte {
 	if json.Unmarshal(raw, &wrapper) != nil {
 		return PassAgy()
 	}
-	out := wrapper.Output
-	if out.PermissionDecision == decisionDeny {
-		return DenyAgy(out.Reason)
+	decision := wrapper.Output
+	if decision.PermissionDecision == decisionDeny {
+		return DenyAgy(decision.Reason)
 	}
-	if ev.ToolName == bashTool && origCmd != "" && out.UpdatedInput != nil {
-		if newCmd, ok := out.UpdatedInput[commandKey].(string); ok && newCmd != "" && newCmd != origCmd {
+	if ev.ToolName == bashTool && origCmd != "" && decision.UpdatedInput != nil {
+		if newCmd, ok := decision.UpdatedInput[commandKey].(string); ok && newCmd != "" && newCmd != origCmd {
 			return answerAgy(agyOutput{
 				Decision:  decisionAllow,
 				Overwrite: map[string]any{"CommandLine": newCmd},
 			})
 		}
 	}
-	if ev.ToolName == SendMessageTool && out.UpdatedInput != nil {
-		if newTo, ok := out.UpdatedInput["to"].(string); ok && newTo != "" {
+	if ev.ToolName == SendMessageTool && decision.UpdatedInput != nil {
+		if newTo, ok := decision.UpdatedInput["to"].(string); ok && newTo != "" {
 			return answerAgy(agyOutput{
 				Decision:  decisionAllow,
 				Overwrite: map[string]any{"Recipient": newTo},
