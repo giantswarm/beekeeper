@@ -11,38 +11,36 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// The relay board's kinds, its step, the default of the decision that
-// holds an item, and a JSON null.
+// The relay board's kinds, its step, and the default of the decision that
+// holds an item.
 const (
 	kindEpic     = "Epic"
 	relayStep    = "work"
 	relayDefault = "it waits"
-	jsonNull     = "null"
 )
 
-// relayIssue is an issue of the relay board: its board fields, its rank (0
-// for none) and its open blocker (0 for none).
+// relayIssue is an issue of the relay board: its board fields and its open
+// blocker (0 for none).
 type relayIssue struct {
 	n           int
 	title, kind string
 	status      string
-	rank        int
 	blocker     int
 }
 
-// relayBoard is the board the relay test reads: two ranked epics, the top
-// one blocked by an open issue, an unranked task, and an item a decision
-// holds Blocked / Waiting, which no step of the order reads.
+// relayBoard is the board the relay test reads: two epics, the second one
+// blocked by an open issue, a task, and an item a decision holds Blocked /
+// Waiting, which no step of the order reads.
 var relayBoard = []relayIssue{
-	{n: 1, title: "Epic one", kind: kindEpic, status: holdWorking, rank: 2},
-	{n: 2, title: "Epic two", kind: kindEpic, status: holdWorking, rank: 1, blocker: 9},
+	{n: 1, title: "Epic one", kind: kindEpic, status: holdWorking},
+	{n: 2, title: "Epic two", kind: kindEpic, status: holdWorking, blocker: 9},
 	{n: 3, title: "Task three", kind: "Feature", status: holdUpNext},
 	{n: 7, title: "Task seven", kind: "Feature", status: holdBlocked},
 }
 
 // relayGH answers the board reads of board next and the hand-over over
-// relayBoard: the fields, the items of a query's statuses and kinds, and
-// the priority list. Anything else fails the read.
+// relayBoard: the fields and the items of a query's statuses and kinds.
+// Anything else fails the read.
 func relayGH(_ context.Context, args ...string) ([]byte, error) {
 	q, vs := args[3], map[string]string{}
 	for _, a := range args[4:] {
@@ -60,7 +58,7 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 			return strings.Join(out, ",")
 		}
 		return fmt.Appendf(nil, `{"data":{"repositoryOwner":{"projectV2":{"id":"P","fields":{"nodes":[
-{"id":"FS","name":"Status","options":[%s]},{"id":"FK","name":"Kind","options":[%s]},{"id":"FP","name":"Priority","dataType":"NUMBER"}]}}}}}`,
+{"id":"FS","name":"Status","options":[%s]},{"id":"FK","name":"Kind","options":[%s]}]}}}}}`,
 			opts(holdStatuses...), opts(kindEpic, "Feature")), nil
 	case strings.Contains(q, "items(first:"):
 		var nodes []string
@@ -77,18 +75,15 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 }
 
 func (is relayIssue) node() string {
-	priority, blockedBy, blockers := jsonNull, "", 0
-	if is.rank > 0 {
-		priority = fmt.Sprintf(`{"number":%d,"updatedAt":"2026-10-01T00:00:00Z","creator":{"login":"teemow"}}`, is.rank)
-	}
+	blockedBy, blockers := "", 0
 	if is.blocker > 0 {
 		blockers = 1
 		blockedBy = fmt.Sprintf(`{"closedAt":null,"number":%d,"state":"OPEN","repository":{"nameWithOwner":"o/r"}}`, is.blocker)
 	}
-	return fmt.Sprintf(`{"id":"IT%d","status":{"name":%q,"updatedAt":"2026-10-01T00:00:00Z"},"kind":{"name":%q},"priority":%s,
+	return fmt.Sprintf(`{"id":"IT%d","status":{"name":%q,"updatedAt":"2026-10-01T00:00:00Z"},"kind":{"name":%q},
 "content":{"number":%d,"url":"https://github.com/o/r/issues/%d","title":%q,"state":"OPEN","createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-01T00:00:00Z",
 "repository":{"nameWithOwner":"o/r"},"labels":{"nodes":[]},"assignees":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},
-"parent":null,"blockedBy":{"totalCount":%d,"nodes":[%s]}}}`, is.n, is.status, is.kind, priority, is.n, is.n, is.title, blockers, blockedBy)
+"parent":null,"blockedBy":{"totalCount":%d,"nodes":[%s]}}}`, is.n, is.status, is.kind, is.n, is.n, is.title, blockers, blockedBy)
 }
 
 // promptSection is the part of a prompt from the heading title to the next
@@ -119,12 +114,11 @@ func runIn(a *app, c interface {
 	return out.String(), err
 }
 
-// A guide relay keeps the priorities and the holds without a note: the
-// successor's prompt carries the ranked epics with their holds and plans and
-// every held item with what holds it, read from GitHub as the predecessor's
-// was, and its first board next walks the same order past the same holds.
-// Nothing is filed for it.
-func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
+// A guide relay keeps the epics and the board holds without a note: the
+// successor's prompt carries the epics with their plans and every held item
+// with what holds it, read from GitHub as the predecessor's was, and its first
+// board next walks the same order past the same holds. Nothing is filed for it.
+func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
 	now := time.Now()
@@ -187,22 +181,17 @@ func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	a.now = time.Now()
 	after, afterNext := prompt(), next()
 
-	held := promptSection(t, after, "Priorities and holds")
+	held := promptSection(t, after, "Board holds")
 	for _, want := range []string{
-		"1. o/r#2 Epic two (" + holdWorking + "): no plan pull request names it, no go recorded; held: blocked by o/r#9; 1 of 1 blockers open",
-		"2. o/r#1 Epic one (" + holdWorking + "): no plan pull request names it, no go recorded",
 		"- o/r#7 (" + holdBlocked + "): decision #1 for Pat: ship o/r#7 now? (back to " + holdUpNext + " once it closes)",
 		"- o/r#2 Epic two (" + holdWorking + "): held: blocked by o/r#9; 1 of 1 blockers open",
 	} {
 		if !strings.Contains(held, want) {
-			t.Errorf("the successor's priorities and holds lack %q:\n%s", want, held)
+			t.Errorf("the successor's board holds lack %q:\n%s", want, held)
 		}
 	}
-	if strings.Index(held, "1. o/r#2") > strings.Index(held, "2. o/r#1") {
-		t.Errorf("the ranks are out of order:\n%s", held)
-	}
-	if was := promptSection(t, before, "Priorities and holds"); was != held {
-		t.Errorf("the relay changed the priorities and holds:\nbefore:\n%s\nafter:\n%s", was, held)
+	if was := promptSection(t, before, "Board holds"); was != held {
+		t.Errorf("the relay changed the board holds:\nbefore:\n%s\nafter:\n%s", was, held)
 	}
 	if epics := promptSection(t, after, "Epics"); !strings.Contains(epics, "o/r#1 Epic one ("+holdWorking+"): no plan pull request names it") {
 		t.Errorf("the successor's epics lack o/r#1's plan line:\n%s", epics)
@@ -211,9 +200,9 @@ func TestARelayKeepsThePrioritiesAndHoldsWithoutANote(t *testing.T) {
 	if afterNext != beforeNext {
 		t.Errorf("the successor's board next differs:\nbefore:\n%s\nafter:\n%s", beforeNext, afterNext)
 	}
-	// The priority list orders nothing: o/r#1 is first on the board, the
-	// held o/r#2 after it, counted with the skips.
-	for _, want := range []string{"skipped: 1 in all: blocked 1", refOne, "priority 2"} {
+	// Board order decides: o/r#1 is first on the board, the held o/r#2 after
+	// it, counted with the skips.
+	for _, want := range []string{"skipped: 1 in all: blocked 1", refOne} {
 		if !strings.Contains(afterNext, want) {
 			t.Errorf("the successor's board next lacks %q:\n%s", want, afterNext)
 		}
