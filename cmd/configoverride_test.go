@@ -17,6 +17,10 @@ import (
 const (
 	overrideIssue   = "o/r#7"
 	overrideIssueGH = "gh api repos/o/r/issues/7 --jq .state"
+	overrideClosed  = "closed"
+	overrideReason  = "--reason"
+	overrideAs      = "--as"
+	overrideTTL     = "20m"
 )
 
 // overrideRig is a configuration file with its state directory, the
@@ -38,7 +42,7 @@ func newOverrideRig(t *testing.T, raw string) *overrideRig {
 	}
 	t.Setenv("BEEKEEPER_CONFIG", cfg)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	r := &overrideRig{t: t, cfg: cfg, issue: "open"}
+	r := &overrideRig{t: t, cfg: cfg, issue: noteStatusOpen}
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if cmd != overrideIssueGH {
 			t.Errorf("unexpected check %q", cmd)
@@ -110,7 +114,7 @@ func (r *overrideRig) verbs() []string {
 // it is in effect.
 func TestOverrideUntilIssueRestoredWhenItCloses(t *testing.T) {
 	r := newOverrideRig(t, "github:\n  floor: 500 # the floor\n")
-	if _, err := execute(t, "config", "set", "--until", "https://github.com/o/r/issues/7", "--reason", "merge batch", "--as", "tester",
+	if _, err := execute(t, "config", "set", untilFlag, "https://github.com/o/r/issues/7", overrideReason, "merge batch", overrideAs, "tester",
 		"--", "github.floor", "-1", "capacity.local.ceiling", "8"); err != nil {
 		t.Fatalf("set = %v", err)
 	}
@@ -138,7 +142,7 @@ func TestOverrideUntilIssueRestoredWhenItCloses(t *testing.T) {
 	if v, _ := r.get("github.floor"); v != "-1" {
 		t.Errorf("floor = %q while the issue is open", v)
 	}
-	r.issue = "closed"
+	r.issue = overrideClosed
 	if lines := r.tick(now.Add(time.Minute)); len(lines) != 0 {
 		t.Errorf("checked again within timerEvery: lines %q", lines)
 	}
@@ -167,7 +171,7 @@ func TestOverrideUntilIssueRestoredWhenItCloses(t *testing.T) {
 // An override with a time ends when it comes.
 func TestOverrideUntilTimeRestoredWhenItComes(t *testing.T) {
 	r := newOverrideRig(t, "grantTTL: 20m\n")
-	if _, err := execute(t, "config", "set", "grantTTL", "1h", "--until", "2h", "--reason", "long review", "--as", "tester"); err != nil {
+	if _, err := execute(t, "config", "set", "grantTTL", "1h", untilFlag, "2h", overrideReason, "long review", overrideAs, "tester"); err != nil {
 		t.Fatalf("set = %v", err)
 	}
 	if lines := r.tick(time.Now().Add(time.Hour)); len(lines) != 0 {
@@ -176,7 +180,7 @@ func TestOverrideUntilTimeRestoredWhenItComes(t *testing.T) {
 	if lines := r.tick(time.Now().Add(3 * time.Hour)); len(lines) != 2 || !strings.Contains(lines[1], "grantTTL 20m") {
 		t.Errorf("past its time: lines %q", lines)
 	}
-	if v, _ := r.get("grantTTL"); v != "20m" {
+	if v, _ := r.get("grantTTL"); v != overrideTTL {
 		t.Errorf("grantTTL = %q, want 20m", v)
 	}
 }
@@ -185,13 +189,13 @@ func TestOverrideUntilTimeRestoredWhenItComes(t *testing.T) {
 // a note, which config keep answers and closes.
 func TestOverrideChangedSinceAsksThePerson(t *testing.T) {
 	r := newOverrideRig(t, "grantTTL: 20m\n")
-	if _, err := execute(t, "config", "set", "grantTTL", "1h", "--until", overrideIssue, "--reason", "long review", "--as", "tester"); err != nil {
+	if _, err := execute(t, "config", "set", "grantTTL", "1h", untilFlag, overrideIssue, overrideReason, "long review", overrideAs, "tester"); err != nil {
 		t.Fatalf("set = %v", err)
 	}
 	if _, err := execute(t, "config", "set", "grantTTL", "2h"); err != nil {
 		t.Fatalf("plain set = %v", err)
 	}
-	r.issue = "closed"
+	r.issue = overrideClosed
 	lines := r.tick(time.Now().Add(time.Minute))
 	if len(lines) != 2 || !strings.Contains(lines[1], "NEEDS A DECISION") || !strings.Contains(lines[1], "grantTTL is 2h, the override set 1h") || !strings.Contains(lines[1], "asks pat") {
 		t.Errorf("lines %q", lines)
@@ -206,10 +210,10 @@ func TestOverrideChangedSinceAsksThePerson(t *testing.T) {
 	if lines := r.tick(time.Now().Add(time.Hour)); len(lines) != 0 {
 		t.Errorf("a decision asked once: lines %q", lines)
 	}
-	if _, err := execute(t, "config", "restore", "1", "--as", "tester"); Code(err) != ExitRefused {
+	if _, err := execute(t, "config", "restore", "1", overrideAs, "tester"); Code(err) != ExitRefused {
 		t.Errorf("restore without --force = exit %d (%v), want refused", Code(err), err)
 	}
-	if _, err := execute(t, "config", "keep", "1", "--as", "tester"); err != nil {
+	if _, err := execute(t, "config", "keep", "1", overrideAs, "tester"); err != nil {
 		t.Fatalf("keep = %v", err)
 	}
 	if st := r.state(); len(st.Overrides) != 0 || len(st.Notes) != 0 {
@@ -225,18 +229,18 @@ func TestOverrideChangedSinceAsksThePerson(t *testing.T) {
 func TestOverrideTakesOverAKey(t *testing.T) {
 	r := newOverrideRig(t, "grantTTL: 20m\n")
 	for _, v := range []string{"1h", "2h"} {
-		if _, err := execute(t, "config", "set", "grantTTL", v, "--until", "1h", "--reason", "review "+v, "--as", "tester"); err != nil {
+		if _, err := execute(t, "config", "set", "grantTTL", v, untilFlag, "1h", overrideReason, "review "+v, overrideAs, "tester"); err != nil {
 			t.Fatalf("set %s = %v", v, err)
 		}
 	}
 	st := r.state()
-	if len(st.Overrides) != 1 || st.Overrides[0].ID != 2 || st.Overrides[0].Keys[0].Previous != "20m" {
+	if len(st.Overrides) != 1 || st.Overrides[0].ID != 2 || st.Overrides[0].Keys[0].Previous != overrideTTL {
 		t.Fatalf("overrides = %+v", st.Overrides)
 	}
-	if _, err := execute(t, "config", "restore", "2", "--as", "tester"); err != nil {
+	if _, err := execute(t, "config", "restore", "2", overrideAs, "tester"); err != nil {
 		t.Fatalf("restore = %v", err)
 	}
-	if v, _ := r.get("grantTTL"); v != "20m" {
+	if v, _ := r.get("grantTTL"); v != overrideTTL {
 		t.Errorf("grantTTL = %q, want 20m", v)
 	}
 }
@@ -245,16 +249,21 @@ func TestOverrideTakesOverAKey(t *testing.T) {
 // --until. A refused set leaves no override.
 func TestOverrideUsage(t *testing.T) {
 	r := newOverrideRig(t, "")
-	for _, args := range [][]string{
-		{"grantTTL", "1h", "--until", "1h"},
-		{"grantTTL", "1h", "--reason", "why"},
-		{"grantTTL", "1h", "--until", "someday", "--reason", "why"},
+	set := func(value string, flags ...string) error {
+		_, err := execute(t, append([]string{configName, "set", overrideAs, "tester", "grantTTL", value}, flags...)...)
+		return err
+	}
+	why := []string{overrideReason, "why"}
+	for _, flags := range [][]string{
+		{untilFlag, "1h"},
+		why,
+		append([]string{untilFlag, "someday"}, why...),
 	} {
-		if _, err := execute(t, append([]string{"config", "set", "--as", "tester"}, args...)...); Code(err) != ExitUsage {
-			t.Errorf("%q = exit %d (%v), want usage", args, Code(err), err)
+		if err := set("1h", flags...); Code(err) != ExitUsage {
+			t.Errorf("%q = exit %d (%v), want usage", flags, Code(err), err)
 		}
 	}
-	if _, err := execute(t, "config", "set", "grantTTL", "soon", "--until", "1h", "--reason", "why", "--as", "tester"); Code(err) != ExitRefused {
+	if err := set("soon", append([]string{untilFlag, "1h"}, why...)...); Code(err) != ExitRefused {
 		t.Errorf("an invalid value = exit %d (%v), want refused", Code(err), err)
 	}
 	if v, ok := r.get("grantTTL"); ok {
