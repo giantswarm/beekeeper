@@ -243,13 +243,18 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 	switch {
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(largeMeta), nil
-	case strings.Contains(q, "items(first:100"):
+	case strings.Contains(q, boardItemsQuery):
 		all := b.items()
 		if strings.Contains(vars["q"], "kind:") {
 			all = all[:b.progress+b.planning]
 		}
 		page, _ := strconv.Atoi(vars["c"])
-		end := min(len(all), page+100)
+		size := connectionSize.FindStringSubmatch(q)
+		first, err := strconv.Atoi(size[1])
+		if err != nil {
+			b.t.Fatal(err)
+		}
+		end := min(len(all), page+first)
 		next := ""
 		if end < len(all) {
 			next = fmt.Sprintf(`"hasNextPage":true,"endCursor":"%d"`, end)
@@ -298,7 +303,7 @@ func (b *largeBoard) run(_ context.Context, args ...string) ([]byte, error) {
 // formula: the walk of board next reads it once. Each epic's sub-issues are
 // read by a page of its own size: a page of 50 for every epic cost this
 // board of 426 candidates 92 points, 53 of them for sub-issue slots no epic
-// filled; the read stays below 40.
+// filled. With current-blocker reads and 80-item issue pages, it costs 37.
 func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 	b := &largeBoard{t: t, progress: 40, planning: 10, tail: 255, subs: 6, open: 4, ranked: 20}
 	c := &Client{GH: b.run, Board: b.order(), Plans: []string{plansRepo}}
@@ -308,7 +313,7 @@ func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 	}
 	cands := Rank(snap, b.order(), now)
 	t.Logf("%d candidates: %d requests, %d GraphQL points", len(cands), len(b.queries), b.cost)
-	if len(cands) < 426 {
+	if len(cands) != 426 {
 		t.Fatalf("the fixture offers %d candidates, want a large order", len(cands))
 	}
 	subs := 0
@@ -325,8 +330,8 @@ func TestReadOfALargeBoardCostsLittleGraphQL(t *testing.T) {
 			}
 		}
 	}
-	if b.cost > 41 {
-		t.Errorf("one read costs %d GraphQL points, want at most 41", b.cost)
+	if b.cost > 40 {
+		t.Errorf("one read costs %d GraphQL points, want at most 40", b.cost)
 	}
 }
 

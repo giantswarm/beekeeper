@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -493,10 +494,15 @@ Register it in ~/.claude/settings.json:
   "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 
-And in ~/.gemini/config/hooks.json for agy:
+And in ~/.gemini/config/hooks.json for agy, where PreInvocation lists the
+commands themselves and PreToolUse matchers with their commands (agy
+rejects the whole entry when a PreInvocation item is a matcher):
 
-  {"beekeeper": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
+  {"beekeeper": {
+    "PreInvocation": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook preinvocation", "timeout": 30}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
 
 And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 
@@ -1043,6 +1049,9 @@ func (a *app) firstReads(session, repo string) bool {
 
 // loadConfig reads the configuration without opening the state.
 func (a *app) loadConfig() error {
+	if home := os.Getenv(execution.EnvHome); filepath.IsAbs(home) {
+		_ = os.Setenv("HOME", filepath.Clean(home))
+	}
 	path, err := config.Path(a.cfgPath)
 	if err != nil {
 		return err
