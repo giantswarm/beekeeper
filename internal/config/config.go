@@ -756,9 +756,10 @@ const (
 
 // Names of the built-in cache entries.
 const (
-	DiskCacheGo      = "go-build"
-	DiskCacheSccache = "sccache"
-	DiskCacheTmp     = "beekeeper-tmp"
+	DiskCacheGo          = "go-build"
+	DiskCacheSccache     = "sccache"
+	DiskCacheTmp         = "beekeeper-tmp"
+	DiskCacheTranscripts = "transcripts"
 )
 
 // DiskCache is one cache policy of the disk step. Path is absolute (or
@@ -788,7 +789,7 @@ func (d DiskCache) MaxBytes() int64 { return int64(d.MaxGiB * (1 << 30)) }
 
 // Builtin reports whether name is one of beekeeper's own cache entries.
 func (DiskCache) Builtin(name string) bool {
-	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp
+	return name == DiskCacheGo || name == DiskCacheSccache || name == DiskCacheTmp || name == DiskCacheTranscripts
 }
 
 // BuildOutput is explicitly disposable output of the task in Worktree.

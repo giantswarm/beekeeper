@@ -30,6 +30,12 @@ func tabsTranscript(t *testing.T, texts ...string) string {
 	return p
 }
 
+// The tab a browse turn's group was made with and the fresh tab it created.
+const (
+	anchorTab = "806748780"
+	strayTab  = "806748785"
+)
+
 // The results of a browse turn that replaced its group's first tab with a
 // fresh one: the close dissolved the group and stranded the fresh tab.
 var (
@@ -45,13 +51,13 @@ var (
 // longer open; a tab outside the group the last result lists is stray.
 func TestReadTabs(t *testing.T) {
 	tabs := ReadTabs(tabsTranscript(t, groupMade, freshTab, freshTab))
-	if !slices.Equal(tabs.Opened, []string{"806748780", "806748785"}) || tabs.Anchor != "806748780" ||
-		!slices.Equal(tabs.Reachable(), []string{"806748780", "806748785"}) || len(tabs.Stray()) != 0 {
+	if !slices.Equal(tabs.Opened, []string{anchorTab, strayTab}) || tabs.Anchor != anchorTab ||
+		!slices.Equal(tabs.Reachable(), []string{anchorTab, strayTab}) || len(tabs.Stray()) != 0 {
 		t.Errorf("tabs of a group with a fresh tab = %+v", tabs)
 	}
 	tabs = ReadTabs(tabsTranscript(t, groupMade, freshTab, firstClose, groupAgain, lastClose))
-	if !slices.Equal(tabs.Open(), []string{"806748785"}) || tabs.Anchor != "806748787" ||
-		len(tabs.Reachable()) != 0 || !slices.Equal(tabs.Stray(), []string{"806748785"}) {
+	if !slices.Equal(tabs.Open(), []string{strayTab}) || tabs.Anchor != "806748787" ||
+		len(tabs.Reachable()) != 0 || !slices.Equal(tabs.Stray(), []string{strayTab}) {
 		t.Errorf("tabs after the first tab closed first = %+v", tabs)
 	}
 	tabs = ReadTabs(tabsTranscript(t, groupMade, "Closed tab 806748780. Group is now empty (auto-removed). \n\nTab Context:\n- Available tabs:\n"))

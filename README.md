@@ -33,6 +33,15 @@ read GitHub and post the public review required for merge authorization.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
+[`beekeeper transcripts`](docs/transcripts.md) collects every session's transcript across
+all harnesses (`claude`, `agy`, `codex`, `omp`) and hosts (the coordinator and SSH
+execution hosts) into `<stateDir>/transcripts`, masking secret values from the scan index
+and credential token rules and preserving structured dialog answers (`AskUserQuestion`) as
+searchable user turns across running and ended sessions. The guide reads and searches all
+transcripts; a worker reads and searches its own transcript and the transcripts of workers
+on the same repository by default, and can request expiring cross-repository or
+cross-session access from the guide (`beekeeper transcripts request` / `beekeeper transcripts grant`).
+
 ## Install
 
 `beekeeper install` installs the supervisor loop, the desk's supervisor,

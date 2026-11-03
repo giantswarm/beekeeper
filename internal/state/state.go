@@ -902,6 +902,13 @@ type ExecutionRecord struct {
 	StartUnsent bool `json:"startUnsent,omitempty"`
 	// StartSentAt is when the coordinator last sent its start request.
 	StartSentAt time.Time `json:"startSentAt,omitzero"`
+	// TranscriptCollected says the ended execution's stream log is
+	// persisted to the transcript store to EOF; until then its host
+	// reconciliation keeps collecting it, also after Settled.
+	TranscriptCollected bool `json:"transcriptCollected,omitempty"`
+	// TranscriptError is why the last pull of the execution's transcript
+	// failed, empty once one succeeded.
+	TranscriptError string `json:"transcriptError,omitempty"`
 	// ReleasedAt is when a reservation the host never acknowledged was
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
@@ -1213,6 +1220,48 @@ type State struct {
 	// update): the release each runs and the policy digest its starts are
 	// pinned to, or why it is held.
 	HostPins []HostPin `json:"hostPins,omitempty"`
+	// TranscriptGrants are the guide's expiring grants of wider transcript
+	// access to workers.
+	TranscriptGrants []TranscriptGrant `json:"transcriptGrants,omitempty"`
+	// TranscriptRequests are open worker requests for wider transcript
+	// access awaiting the guide's grant.
+	TranscriptRequests  []TranscriptRequest `json:"transcriptRequests,omitempty"`
+	NextTranscriptGrant int                 `json:"nextTranscriptGrant,omitempty"`
+
+	rest rest
+}
+
+// TranscriptGrant is the guide's expiring authorization for a worker to read
+// and search transcripts beyond its own repository.
+type TranscriptGrant struct {
+	ID      int       `json:"id"`
+	To      Party     `json:"to"`
+	Repo    string    `json:"repo,omitempty"`
+	Session string    `json:"session,omitempty"`
+	All     bool      `json:"all,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	By      Party     `json:"by"`
+	At      time.Time `json:"at"`
+	Expires time.Time `json:"expires"`
+
+	rest rest
+}
+
+// Active reports whether the grant holds at now.
+func (g TranscriptGrant) Active(now time.Time) bool {
+	return g.Expires.IsZero() || now.Before(g.Expires)
+}
+
+// TranscriptRequest is a worker's request to the guide for wider transcript
+// access (another session, another repository, or all transcripts).
+type TranscriptRequest struct {
+	ID      int       `json:"id"`
+	By      Party     `json:"by"`
+	Repo    string    `json:"repo,omitempty"`
+	Session string    `json:"session,omitempty"`
+	All     bool      `json:"all,omitempty"`
+	Reason  string    `json:"reason"`
+	At      time.Time `json:"at"`
 
 	rest rest
 }

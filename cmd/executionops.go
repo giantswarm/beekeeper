@@ -300,7 +300,7 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	}
 	var indices []int
 	for i, s := range st.Starts {
-		if r := s.Execution; r != nil && !r.HostJournalMissing && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
+		if r := s.Execution; r != nil && !r.HostJournalMissing && r.Selector == selector && (executionNeedsSync(st, r) || executionTranscriptPending(r) || a.hasUnrecoveredPublication(r)) {
 			indices = append(indices, i)
 		}
 	}
@@ -348,6 +348,15 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		r := st.Starts[idx].Execution
 		ref := r.Handle.Ref
 		if !executionNeedsSync(st, r) {
+			if executionTranscriptPending(r) {
+				opCtx, cancel := withTimeout(ctx)
+				transcriptErr := a.syncRemoteExecutionTranscriptByRef(opCtx, ref)
+				cancel()
+				if isUnreachable(transcriptErr) {
+					failures = append(failures, transcriptErr.Error())
+					break
+				}
+			}
 			if st.Stop == nil && r.StopRequest == nil && a.hasUnrecoveredPublication(r) {
 				opCtx, cancel := withTimeout(ctx)
 				_, _, pubErr := a.recoverExecutionPublication(opCtx, ref, true)
@@ -470,6 +479,15 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 				break
 			}
 		} else if syncErr == nil {
+			// Settling ends the reconciliation of the execution itself; its
+			// transcript stays pending (executionTranscriptPending) until
+			// its log is persisted to EOF.
+			opCtx, cancel = withTimeout(ctx)
+			transcriptErr := a.syncRemoteExecutionTranscriptByRef(opCtx, ref)
+			cancel()
+			if isUnreachable(transcriptErr) {
+				failures = append(failures, transcriptErr.Error())
+			}
 			_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
 				if rec, _ := executionRecord(current, ref); rec != nil && rec.Terminal() {
 					rec.Settled = true
@@ -538,7 +556,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 	for _, s := range st.Starts {
 		if r := s.Execution; r != nil {
 			startsByHost[r.Selector]++
-			if !r.HostJournalMissing && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
+			if !r.HostJournalMissing && (executionNeedsSync(st, r) || executionTranscriptPending(r) || w.hasUnrecoveredPublication(r)) {
 				if !slices.Contains(selectors, r.Selector) {
 					selectors = append(selectors, r.Selector)
 				}

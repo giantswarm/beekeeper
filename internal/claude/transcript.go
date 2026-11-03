@@ -530,6 +530,16 @@ func ToolGist(name string, input json.RawMessage) string {
 				return name + ": " + first
 			}
 		}
+		if qs, ok := in["questions"].([]any); ok {
+			for _, item := range qs {
+				if m, ok := item.(map[string]any); ok {
+					if q, ok := m["question"].(string); ok && strings.TrimSpace(q) != "" {
+						first, _, _ := strings.Cut(strings.TrimSpace(q), "\n")
+						return name + ": " + first
+					}
+				}
+			}
+		}
 	}
 	return name
 }
