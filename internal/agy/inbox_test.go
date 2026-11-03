@@ -263,6 +263,14 @@ func TestHelperMockAgy(t *testing.T) {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			os.Exit(1)
 		}
+		if mode == "quota-429-exit" {
+			// agy closes its stream, then prints its error and exits:
+			// stdout's EOF comes before the stderr line Run must not lose.
+			_ = os.Stdout.Close()
+			time.Sleep(50 * time.Millisecond)
+			_, _ = fmt.Fprintln(os.Stderr, `AGY_ERROR: {"short_error":"Individual quota reached for this model, resets in 4h46m32s","error_code":429,"status":"RESOURCE_EXHAUSTED","retryable":false}`)
+			os.Exit(1)
+		}
 
 		if turnNum == 1 && signalFile != "" {
 			// Signal the test that tool_call_1 has completed inside turn 1.
@@ -588,6 +596,16 @@ func readTestTranscript(t *testing.T, path string) []transcriptEntry {
 }
 
 func TestRunDetectsAndEndsMidTurnQuota429(t *testing.T) {
+	testRunQuota429(t, "quota-429-hang")
+}
+
+// The AGY_ERROR line agy prints after its stdout closed is still read.
+func TestRunReadsQuota429AfterStdoutEOF(t *testing.T) {
+	testRunQuota429(t, "quota-429-exit")
+}
+
+func testRunQuota429(t *testing.T, mode string) {
+	t.Helper()
 	stateDir := t.TempDir()
 	agentID := "agent-quota-429"
 	convID := "conv-quota-429"
@@ -602,7 +620,7 @@ func TestRunDetectsAndEndsMidTurnQuota429(t *testing.T) {
 	t.Setenv("MOCK_AGY_STATE_DIR", stateDir)
 	t.Setenv("MOCK_AGY_TRANSCRIPT", transcriptPath)
 	t.Setenv("MOCK_AGY_CONV_ID", convID)
-	t.Setenv("MOCK_AGY_MODE", "quota-429-hang")
+	t.Setenv("MOCK_AGY_MODE", mode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

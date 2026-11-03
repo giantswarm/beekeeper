@@ -55,6 +55,10 @@ type agyErrorPayload struct {
 	Retryable  bool   `json:"retryable"`
 }
 
+// drainWait bounds how long Run waits for agy's output pipes to reach EOF
+// after it exited or was killed.
+const drainWait = 5 * time.Second
+
 var resetsInPattern = regexp.MustCompile(`(?i)\bresets in\s+([0-9hms.]+)`)
 
 func parseResetsIn(s string) time.Duration {
@@ -479,6 +483,36 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		busy = true
 	}
 
+	// drain waits for both readers to reach EOF before cmd.Wait closes
+	// their pipes, so no line agy wrote last (its AGY_ERROR) is lost. Only
+	// a descendant holding a pipe open past drainWait gets it closed under
+	// its reader.
+	drain := func(events <-chan streamEvent, stderrDone <-chan struct{}) {
+		timer := time.NewTimer(drainWait)
+		defer timer.Stop()
+		for events != nil || stderrDone != nil {
+			select {
+			case _, ok := <-events:
+				if !ok {
+					events = nil
+				}
+			case <-stderrDone:
+				stderrDone = nil
+			case <-timer.C:
+				_ = stdoutPipe.Close()
+				_ = stderrPipe.Close()
+				if events != nil {
+					for range events {
+					}
+				}
+				if stderrDone != nil {
+					<-stderrDone
+				}
+				return
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-quotaCh:
@@ -486,9 +520,7 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
-			_ = stdoutPipe.Close()
-			_ = stderrPipe.Close()
-			<-stderrDone
+			drain(events, stderrDone)
 			_ = cmd.Wait()
 			_ = fifo.Close()
 			qerr := getQuotaErr()
@@ -497,8 +529,8 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		case ev, ok := <-events:
 			if !ok {
 				_ = stdinPipe.Close()
+				drain(nil, stderrDone)
 				err := cmd.Wait()
-				<-stderrDone
 				_ = fifo.Close()
 				if qerr := getQuotaErr(); qerr != nil {
 					_ = WriteQuotaError(inbox, qerr)

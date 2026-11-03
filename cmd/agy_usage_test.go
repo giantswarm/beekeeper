@@ -13,6 +13,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const agyUsageSample = "Gemini Models\tWeekly Limit Remaining\t51%\t2026-11-03T09:23:51Z\n" +
@@ -244,7 +245,24 @@ func TestAgyQuotaExhaustedBucketAndLaggingUsage(t *testing.T) {
 	}
 }
 
-func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
+// The quota-stopped worker of the quota tests and its task.
+const (
+	quotaTestWorker = "beekeeper 2150"
+	quotaTestTask   = "Work https://github.com/giantswarm/beekeeper/issues/2150"
+)
+
+// quotaFixture is a desk whose agy session name hit a quota 429 and still
+// holds task.
+type quotaFixture struct {
+	cfg     *config.Config
+	store   *state.FileStore
+	t0      time.Time
+	startID string
+	party   state.Party
+}
+
+func newQuotaFixture(t *testing.T, name, task, issue string) quotaFixture {
+	t.Helper()
 	dir, cfgPath := isolateUsageTestEnv(t)
 	briefTpl := filepath.Join(dir, "worker-brief.md")
 	if err := os.WriteFile(briefTpl, []byte("Work {{.URL}}\n"), 0o600); err != nil {
@@ -277,55 +295,49 @@ supervisor:
 	if err != nil {
 		t.Fatal(err)
 	}
-	t0 := time.Date(2026, 10, 28, 0, 30, 0, 0, time.UTC)
-	startID := "quota-worker-1"
-	workerParty := state.Party{HostSession: agy.HostPrefix + startID, Name: "beekeeper 2150"}
+	f := quotaFixture{cfg: cfg, store: store, t0: time.Date(2026, 10, 28, 0, 30, 0, 0, time.UTC), startID: "quota-worker-1"}
+	f.party = state.Party{HostSession: agy.HostPrefix + f.startID, Name: name}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts = append(st.Starts, state.Start{
-			Party:   workerParty,
-			Harness: agy.Harness,
-			Model:   testModelOpus46,
-			At:      t0,
-		})
-		st.Agents = append(st.Agents, state.Agent{
-			Party:      workerParty,
-			Harness:    agy.Harness,
-			Model:      testModelOpus46,
-			Task:       "Work https://github.com/giantswarm/beekeeper/issues/2150",
-			Registered: t0,
-			AssignedAt: t0,
-			ActivityAt: t0,
-		})
-		st.Records = append(st.Records, state.Record{
-			Session: workerParty,
-			Issue:   "giantswarm/beekeeper#2150",
-			By:      workerParty,
-			At:      t0,
-		})
+		st.Starts = append(st.Starts, state.Start{Party: f.party, Harness: agy.Harness, Model: testModelOpus46, At: f.t0})
+		st.Agents = append(st.Agents, state.Agent{Party: f.party, Harness: agy.Harness, Model: testModelOpus46, Task: task, Registered: f.t0, AssignedAt: f.t0, ActivityAt: f.t0})
+		st.Records = append(st.Records, state.Record{Session: f.party, Issue: issue, By: f.party, At: f.t0})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	inbox := agy.InboxPath(cfg.StateDir, startID)
-	if err := agy.WriteQuotaError(inbox, &agy.QuotaError{
+	if err := agy.WriteQuotaError(agy.InboxPath(cfg.StateDir, f.startID), &agy.QuotaError{
 		ShortError: "Individual quota reached for this model, resets in 4h46m32s",
 		ErrorCode:  429,
 		Status:     "RESOURCE_EXHAUSTED",
 		ResetsIn:   4*time.Hour + 46*time.Minute + 32*time.Second,
-		At:         t0,
+		At:         f.t0,
 		Model:      testModelOpus46,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return f
+}
 
+// loop is a supervisor loop over f whose beekeeper runs answer with run.
+func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []string) (string, int, error)) *supervisorLoop {
+	t.Helper()
+	a := &app{cfg: f.cfg, store: f.store, out: out, now: f.t0.Add(time.Minute)}
+	origRun := beekeeperRun
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
+	t.Cleanup(func() { beekeeperRun = origRun })
+	return &supervisorLoop{a: a, said: map[string]bool{}}
+}
+
+func TestAgyQuotaWorkerSlotFreedAndTaskRequeued(t *testing.T) {
+	f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
+	cfg, store, t0 := f.cfg, f.store, f.t0
 	st, err := store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Slot is immediately freed in countAgents and countProviderAgents even before staleAfter (24h).
 	c := countAgents(st, nil, t0.Add(time.Minute), cfg)
-	if len(c.Busy) != 0 || len(c.Gone) != 1 || !strings.HasPrefix(c.Gone[0], "beekeeper 2150") {
+	if len(c.Busy) != 0 || len(c.Gone) != 1 || !strings.HasPrefix(c.Gone[0], quotaTestWorker) {
 		t.Fatalf("countAgents = %+v, want 0 busy and 1 gone", c)
 	}
 	pa := countProviderAgents(st, nil, cfg.Capacity, t0.Add(time.Minute), cfg)
@@ -344,25 +356,26 @@ supervisor:
 	}
 
 	var out bytes.Buffer
-	a := &app{cfg: cfg, cfgPath: cfgPath, store: store, out: &out, now: t0.Add(time.Minute)}
-	l := &supervisorLoop{a: a}
-
-	origRun := beekeeperRun
 	var runCalls [][]string
-	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
-		runCalls = append(runCalls, slices.Clone(args))
+	l := f.loop(t, &out, func(args []string) (string, int, error) {
+		runCalls = append(runCalls, args)
 		return "started replacement\n", 0, nil
-	}
-	defer func() { beekeeperRun = origRun }()
-
+	})
 	if err := l.recoverQuota(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "SUPERVISOR QUOTA beekeeper 2150:") || !strings.Contains(out.String(), "re-queuing giantswarm/beekeeper#2150 on another choice") {
 		t.Fatalf("recoverQuota output = %q", out.String())
 	}
-	if len(runCalls) != 1 || !slices.Contains(runCalls[0], "start") || !slices.Contains(runCalls[0], "beekeeper 2150") || !slices.Contains(runCalls[0], "auto") {
+	if len(runCalls) != 1 || !slices.Contains(runCalls[0], "start") || !slices.Contains(runCalls[0], quotaTestWorker) || !slices.Contains(runCalls[0], "auto") || slices.Contains(runCalls[0], "--review") {
 		t.Fatalf("recoverQuota runCalls = %v", runCalls)
+	}
+	brief, err := os.ReadFile(runCalls[0][slices.Index(runCalls[0], quotaTestWorker)+1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(brief), quotaTestTask) || !strings.Contains(string(brief), "Continue your existing task:") {
+		t.Fatalf("replacement brief = %q", brief)
 	}
 	after, err := store.Read()
 	if err != nil {
@@ -373,5 +386,113 @@ supervisor:
 	}
 	if len(after.Records) != 1 || after.Records[0].Ended.IsZero() {
 		t.Fatalf("records after recoverQuota = %+v, want ended", after.Records)
+	}
+	if _, err := os.Stat(agy.QuotaPath(cfg.StateDir, f.startID)); !os.IsNotExist(err) {
+		t.Fatalf("quota marker after replacement: %v, want removed", err)
+	}
+}
+
+// A held or refused replacement start keeps the entry, its records and its
+// quota marker, so the next pass re-queues the task.
+func TestAgyQuotaRequeueKeepsTaskUntilStarted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		held bool
+		code int
+	}{
+		{name: "held", held: true},
+		{name: "refused", code: ExitRefused},
+		{name: "failed", code: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
+			st, err := f.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			var runCalls [][]string
+			l := f.loop(t, &out, func(args []string) (string, int, error) {
+				runCalls = append(runCalls, args)
+				return "no room\n", tc.code, nil
+			})
+			l.startsHeld = tc.held
+			if err := l.recoverQuota(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			if tc.held != (len(runCalls) == 0) {
+				t.Fatalf("runCalls = %v, held %v", runCalls, tc.held)
+			}
+			after, err := f.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(after.Agents) != 1 || !after.Agents[0].Is(f.party) || after.Agents[0].Task == "" {
+				t.Fatalf("agents = %+v, want the quota-stopped entry kept", after.Agents)
+			}
+			if len(after.Records) != 1 || !after.Records[0].Ended.IsZero() {
+				t.Fatalf("records = %+v, want open", after.Records)
+			}
+			if agyQuotaError(f.cfg, after.Agents[0]) == nil {
+				t.Fatal("quota marker removed, want kept for the next pass")
+			}
+			if strings.Contains(out.String(), "re-queuing") {
+				t.Fatalf("output = %q, want no re-queue reported", out.String())
+			}
+
+			// The next pass with room starts the replacement and frees it.
+			runCalls = nil
+			l.startsHeld = false
+			tc.code = 0
+			if err := l.recoverQuota(context.Background(), after); err != nil {
+				t.Fatal(err)
+			}
+			if len(runCalls) != 1 {
+				t.Fatalf("second pass runCalls = %v", runCalls)
+			}
+			if after, err = f.store.Read(); err != nil {
+				t.Fatal(err)
+			}
+			if len(after.Agents) != 0 {
+				t.Fatalf("agents after second pass = %+v, want empty", after.Agents)
+			}
+		})
+	}
+}
+
+// A reviewer the loop started that hits a quota 429 restarts as the
+// reviewer of its round, with its round's brief and the review flags.
+func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
+	const ref = "giantswarm/beekeeper#2153"
+	name := superloop.ReviewerName(ref, 2)
+	f := newQuotaFixture(t, name, "Review https://github.com/giantswarm/beekeeper/pull/2153 at head abc", ref)
+	key := "review " + ref + "@abc"
+	if err := f.store.Record(about(event(loopParty, loopClaimVerb, "[%s] %s", key, name), ref)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var runCalls [][]string
+	l := f.loop(t, &out, func(args []string) (string, int, error) {
+		runCalls = append(runCalls, args)
+		return `{"room":1}` + "\n", 0, nil
+	})
+	brief, err := l.brief("", "Review {{.URL}} at {{.Head}}\n", key, briefData{URL: "https://github.com/giantswarm/beekeeper/pull/2153", Head: "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := f.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.recoverQuota(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(runCalls, func(args []string) bool { return slices.Contains(args, "start") })
+	if i < 0 {
+		t.Fatalf("runCalls = %v, want a start", runCalls)
+	}
+	start := runCalls[i]
+	if !slices.Contains(start, name) || !slices.Contains(start, brief) || !slices.Contains(start, "--review") || !slices.Contains(start, "--"+reviewOfSelfHostedFlag) {
+		t.Fatalf("reviewer restart = %v, want %q with brief %s, --review and --%s", start, name, brief, reviewOfSelfHostedFlag)
 	}
 }
