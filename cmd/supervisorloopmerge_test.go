@@ -405,7 +405,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 	}
 	r.a.cfg.Supervisor.WorkerBrief = brief
 	r.a.cfg.Supervisor.FillRetryEvery.Duration = 5 * time.Minute
-	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "test-model"}}
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "parallel-test-model"}}
 	r.a.cfg.Board = config.Board{Owner: "o", Project: 1, TidyEvery: config.Duration{Duration: time.Minute}, EscalateEvery: config.Duration{Duration: -1}}
 
 	const (
@@ -458,7 +458,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 				return `{"ceiling":1,"room":0}`, 0
 			}
 			return `{"ceiling":1,"room":1}`, 0
-		case len(args) >= 2 && args[0] == loopBoard && args[1] == "next":
+		case len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext:
 			return `{"pick":{"ref":"o/s#10","url":"https://github.com/o/s/issues/10"}}`, 0
 		case len(args) >= 3 && args[0] == agentsName && args[1] == agentStartName:
 			if slices.Contains(args, "--review") {

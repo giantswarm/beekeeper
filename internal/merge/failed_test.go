@@ -84,10 +84,11 @@ func TestQueueOrdersWaitingMergesByPriority(t *testing.T) {
 	}
 	// Across two free lanes for the same party under a 1-slot cap, SessionTurn
 	// gives the slot to the rank-1 merge ahead of an earlier rank-2 merge.
+	const otherLane = "o/priority-lane"
 	sameParty := state.Party{Name: "supervisor-loop"}
 	crossLane := &state.State{Merges: []state.Merge{
-		{Repo: "o/r", PR: 3, Lane: "o/r", By: sameParty, Phase: state.Waiting, Joined: now.Add(-time.Minute), Priority: 2},
-		{Repo: "o/s", PR: 4, Lane: "o/s", By: sameParty, Phase: state.Waiting, Joined: now, Priority: 1},
+		{Repo: failedRepo, PR: 3, Lane: failedRepo, By: sameParty, Phase: state.Waiting, Joined: now.Add(-time.Minute), Priority: 2},
+		{Repo: otherLane, PR: 4, Lane: otherLane, By: sameParty, Phase: state.Waiting, Joined: now, Priority: 1},
 	}}
 	_, _, okRank1 := SessionTurn(crossLane, crossLane.Merges[1], 1, allow, alive)
 	_, first, okRank2 := SessionTurn(crossLane, crossLane.Merges[0], 1, allow, alive)
