@@ -41,15 +41,16 @@ const (
 
 var brokeredAgentsOps = []string{agentStartName, agentWakeName, agentResumeName}
 
-// The lab operations of lease up and lease down, and the lease command's
+// The lab operations of lease up, down and resume, and the lease command's
 // name.
 const (
 	labUp     = "up"
 	labDown   = "down"
+	labResume = "resume"
 	leaseName = "lease"
 )
 
-var labOps = []string{labUp, labDown}
+var labOps = []string{labUp, labDown, labResume}
 
 // inSandbox reports whether this process runs in the agent sandbox and is
 // not the broker's call itself.
@@ -299,11 +300,11 @@ func brokeredPersonArgv(req sandbox.Request, _ bool) ([]string, error) {
 	return req.Args, nil
 }
 
-// brokeredLabArgv is the command line of a brokered lab creation or
-// teardown: lease up or lease down of the lab.
+// brokeredLabArgv is the command line of a brokered lab creation,
+// teardown or restart: lease up, down or resume of the lab.
 func brokeredLabArgv(req sandbox.Request, _ bool) ([]string, error) {
 	if len(req.Args) != 1 || !slices.Contains(labOps, req.Args[0]) {
-		return nil, errors.New("the sandbox broker runs beekeeper lease up and lease down only")
+		return nil, errors.New("the sandbox broker runs beekeeper lease up, down and resume only")
 	}
 	if !resourceName.MatchString(req.Resource) {
 		return nil, fmt.Errorf("%q is not a resource", req.Resource)

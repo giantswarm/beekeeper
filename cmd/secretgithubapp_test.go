@@ -15,11 +15,14 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
+
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
+	dryAppSkeleton = "kind: Secret\nmetadata: {name: app}\n"
 	codeFlag       = "--code"
 	conversionCode = "a1b2c3d4e5f6"
 	// a key's lines without PEM armour: the command writes what GitHub
@@ -65,7 +68,7 @@ func fakeConversion(t *testing.T, webhook string) *int {
 func githubAppConfig(a *app, repo string) string {
 	file := filepath.Join(repo, "installations", fixtureOrg, "secrets", "github-app-secret.yaml")
 	_ = os.MkdirAll(filepath.Dir(file), 0o750)
-	a.cfg.Apps.Secrets = map[string]config.AppSecret{fixtureOrg: {File: file, Name: "github-app", Namespace: "team-agents"}}
+	a.cfg.Apps.Secrets = map[string]config.AppSecret{fixtureOrg: {File: file, Name: githubAppOp, Namespace: "team-agents"}}
 	return file
 }
 
@@ -185,7 +188,7 @@ func TestSecretGitHubAppRefusesAFileThatIsNoSecret(t *testing.T) {
 	if _, err := runSecret(a, githubAppOp, "absent", codeFlag, conversionCode); Code(err) != ExitRefused || !strings.Contains(err.Error(), "is absent") {
 		t.Errorf("an absent file without a Secret's name = %v", err)
 	}
-	a.cfg.Apps.Secrets["nodir"] = config.AppSecret{File: filepath.Join(repo, "nowhere", "secret.yaml"), Name: "github-app", Namespace: "team-agents"}
+	a.cfg.Apps.Secrets["nodir"] = config.AppSecret{File: filepath.Join(repo, "nowhere", "secret.yaml"), Name: githubAppOp, Namespace: "team-agents"}
 	if _, err := runSecret(a, githubAppOp, "nodir", codeFlag, conversionCode); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no directory") {
 		t.Errorf("a file in an absent directory = %v", err)
 	}
@@ -229,5 +232,224 @@ func TestConvertManifestNamesGitHubsRefusal(t *testing.T) {
 	_, err := convertManifest(context.Background(), conversionCode)
 	if err == nil || !strings.HasPrefix(err.Error(), "the conversion: ") || strings.Contains(err.Error(), conversionCode) {
 		t.Errorf("an unreachable API = %v, want the cause without the code", err)
+	}
+}
+
+// The dry form must work with an inaccessible vault and never touch a
+// credential tool, the conversion endpoint, the target or the audit log.
+func TestSecretGitHubAppDryRun(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprint(jsonOutput), func(t *testing.T) {
+			a, tools, repo := secretApp(t)
+			file := githubAppConfig(a, repo)
+			id, err := age.GenerateX25519Identity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			recipient := id.Recipient().String()
+			rules := "creation_rules:\n  - age: " + recipient + "\n    encrypted_regex: ^(data|stringData)$\n"
+			if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Public metadata and opaque ciphertext: no decryptable identity exists.
+			body := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: github-app\n  namespace: team-agents\nsops:\n  age:\n    - recipient: " + recipient + "\n  mac: ENC[unread]\n"
+			if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			a.cfg.Secret.TokenFile = filepath.Join(repo, "unavailable-token")
+			a.cfg.Secret.Session = true
+			a.cfg.Secret.AgeIdentities = []config.AgeIdentity{{Recipient: recipient, Ref: "op://Shared/missing/identity"}}
+			calls := fakeConversion(t, "")
+			a.json = jsonOutput
+			before, err := a.store.Events(0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Even a supplied code is ignored and never consumed.
+			out, err := runSecret(a, githubAppOp, testDryRunFlag, fixtureOrg, codeFlag, conversionCode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{file, githubAppOp, a.cfg.Apps.Secrets[fixtureOrg].Namespace, recipient, "stringData.private-key", "stringData.client-secret", "stringData.webhook-secret"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("output lacks %q: %s", want, out)
+				}
+			}
+			noSecret(t, "dry run", out)
+			if strings.Contains(out, conversionCode) {
+				t.Fatal("output contains manifest code")
+			}
+			after, err := a.store.Events(0, nil)
+			if err != nil || len(before) != len(after) {
+				t.Fatalf("dry run wrote events: %v", err)
+			}
+			raw, err := os.ReadFile(file) //nolint:gosec // the test’s scratch target
+			if err != nil || string(raw) != body {
+				t.Fatalf("dry run changed target: %v", err)
+			}
+			if len(tools.Calls) != 0 || *calls != 0 {
+				t.Fatalf("dry run called tools %v or GitHub %d times", tools.Calls, *calls)
+			}
+			if _, err := os.Stat(filepath.Join(a.cfg.StateDir, "scan", "key")); !os.IsNotExist(err) {
+				t.Fatalf("dry run created fingerprint key: %v", err)
+			}
+			a.out = &bytes.Buffer{}
+			if _, err := runSecret(a, githubAppOp, fixtureOrg, testDryRunFlag); err != nil {
+				t.Fatalf("dry run without code: %v", err)
+			}
+		})
+	}
+}
+
+func TestSecretGitHubAppDryRunMissingParts(t *testing.T) {
+	for _, tc := range []struct{ name, body, rules, want string }{
+		{name: "missing-installation", want: "names no Secret"},
+		{name: "file", want: "target Secret:"},
+		{name: "rules", body: dryAppSkeleton, want: "no .sops.yaml"},
+		{name: "unmatched", body: dryAppSkeleton, rules: "creation_rules:\n  - path_regex: nowhere\n", want: "no creation rule"},
+		{name: "recipient", body: dryAppSkeleton, rules: "creation_rules:\n  - age: invalid\n", want: "no valid age recipient"},
+		{name: "wrong-kind", body: "kind: ConfigMap\n", want: "no Kubernetes Secret"},
+		{name: "missing-name", body: "kind: Secret\n", want: "no metadata.name"},
+		{name: "malformed", body: "[" + secretValue, want: "no YAML mapping"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, tools, repo := secretApp(t)
+			file := githubAppConfig(a, repo)
+			if tc.name == "missing-installation" {
+				a.cfg.Apps.Secrets = nil
+			}
+			if tc.body != "" {
+				if err := os.WriteFile(file, []byte(tc.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Remove(filepath.Join(repo, ".sops.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			if tc.rules != "" {
+				if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte(tc.rules), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := fakeConversion(t, "")
+			out, err := runSecret(a, githubAppOp, testDryRunFlag, fixtureOrg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+			noSecret(t, "dry run refusal", fmt.Sprint(out, err))
+			if len(tools.Calls) != 0 || *calls != 0 {
+				t.Fatal("dry run invoked a credential tool or GitHub")
+			}
+			if tc.body == "" {
+				if _, err := os.Stat(file); !os.IsNotExist(err) {
+					t.Fatal("dry run created target")
+				}
+			}
+		})
+	}
+}
+
+func TestGitHubAppDryRunVaultRouting(t *testing.T) {
+	a := &app{}
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{githubAppOp, testDryRunFlag, fixtureOrg}, true},
+		{[]string{githubAppOp, fixtureOrg, testDryRunFlag + "=true"}, true},
+		{[]string{githubAppOp, fixtureOrg, "--dry-run=false"}, false},
+		{[]string{githubAppOp, fixtureOrg, testDryRunFlag, "--dry-run=false"}, false},
+		{[]string{githubAppOp, codeFlag, testDryRunFlag, fixtureOrg}, false},
+		{[]string{githubAppOp, "--", testDryRunFlag}, false},
+	} {
+		if got := a.githubAppDryRun(tc.args); got != tc.want {
+			t.Errorf("%v: dry run %v, want %v", tc.args, got, tc.want)
+		}
+		if tc.want && (a.secretNeedsVault("", tc.args) || a.secretNeedsBroker(tc.args)) {
+			t.Errorf("%v needs credentials", tc.args)
+		}
+	}
+}
+
+func TestSecretGitHubAppDryRunEncryptionAndReplace(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	file := githubAppConfig(a, repo)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesFile := filepath.Join(repo, ".sops.yaml")
+	rules := "creation_rules:\n  - age: " + id.Recipient().String() + "\n    encrypted_regex: "
+	body := "kind: Secret\nmetadata: {name: app}\ndata:\n  private-key: ENC[unread]\nsops:\n  mac: ENC[unread]\n"
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		rule    string
+		replace bool
+		want    string
+	}{
+		{"^data$", true, "would stay plaintext"},
+		{"^(data|stringData)$", false, "holds private-key already"},
+		{"^(data|stringData)$", true, ""},
+	} {
+		if err := os.WriteFile(rulesFile, []byte(rules+tc.rule+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{githubAppOp, fixtureOrg, testDryRunFlag}
+		if tc.replace {
+			args = append(args, "--replace")
+		}
+		a.out = &bytes.Buffer{}
+		out, err := runSecret(a, args...)
+		if tc.want == "" {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("got %v, want %q", err, tc.want)
+		}
+		noSecret(t, "dry run", fmt.Sprint(out, err))
+	}
+	if len(tools.Calls) != 0 {
+		t.Fatalf("dry run invoked tools: %v", tools.Calls)
+	}
+	raw, err := os.ReadFile(file) //nolint:gosec // the test’s scratch target
+	if err != nil || string(raw) != body {
+		t.Fatalf("dry run changed target: %v", err)
+	}
+}
+
+func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
+	a, tools, repo := secretApp(t)
+	file := githubAppConfig(a, repo)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules:\n  - age: "+id.Recipient().String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(dryAppSkeleton), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(repo, "no-state")
+	cfgPath := filepath.Join(repo, "config.yaml")
+	cfg := "stateDir: " + stateDir + "\napps:\n  secrets:\n    example:\n      file: " + file + "\n"
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := New()
+	c.SetArgs([]string{"--" + configFlag, cfgPath, "secret", githubAppOp, testDryRunFlag, fixtureOrg})
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("dry run created state directory: %v", err)
+	}
+	if len(tools.Calls) != 0 {
+		t.Fatalf("dry run invoked tools: %v", tools.Calls)
 	}
 }
