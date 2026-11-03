@@ -119,6 +119,10 @@ or "wake turn running".`,
 CLIs, a claude started inside another session, is refused with the name of
 that parent session, whose ids it inherits and whose entry stays as it is.
 
+Workers launched by agents start are already registered. Repeating register
+acknowledges their existing entry without changing their task or identity.
+Their agents park commands use that same identity without an extra flag.
+
 --harness names the harness a session runs on when it is not Claude Code
 (omp, agy, codex) and agents start did not start it: beekeeper has no
 message route to such a session, so agents resume and the watch never wake
@@ -133,6 +137,19 @@ leaves its own park with agents resume, no agent named.`,
 			me, err := a.caller()
 			if err != nil {
 				return err
+			}
+			if _, _, started := harnessForHost(me.HostSession); started {
+				st, err := a.store.Read()
+				if err != nil {
+					return err
+				}
+				for _, ag := range st.Agents {
+					if ag.Is(me) {
+						_, err := fmt.Fprintf(a.out, "already registered as %s by agents start; continue your task without registering again\n", ag.Name)
+						return err
+					}
+				}
+				return refused("this started worker has no roster entry: ask the supervisor to restore its registration")
 			}
 			if me.Session == "" {
 				return refused("an agent is a Claude Code session: run this inside one, without --as")
