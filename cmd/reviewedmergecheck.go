@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -30,14 +31,16 @@ var reviewedMergeCheck = checkReviewedMerge
 
 // checkReviewedMergeResult verifies that merging head into p.Base is green
 // when p.Base has moved ahead of head, and re-checks desk stop and hold
-// policy after the check completes.
+// policy after the check completes. A non-zero code refuses the merge with
+// the reason; with code 0 a non-empty reason is a note for the merge's
+// document: the validation could not run and the PR's own checks stand.
 func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, head string) (string, int) {
 	checked, reason, code := reviewedMergeCheck(ctx, a, p, head)
 	if code != 0 {
 		return reason, code
 	}
 	if !checked {
-		return "", 0
+		return reason, 0
 	}
 	st, err := a.store.Read()
 	if err != nil {
@@ -56,27 +59,40 @@ func (a *app) checkReviewedMergeResult(ctx context.Context, p superloop.Pull, he
 
 const reasonMergeValidationUnavailable = "merge-result validation unavailable"
 
+// mergeValidationUnavailable is the refusal naming the condition that failed.
+func mergeValidationUnavailable(format string, args ...any) string {
+	return reasonMergeValidationUnavailable + ": " + fmt.Sprintf(format, args...)
+}
+
 // checkReviewedMerge builds p.Base + head in a detached worktree when p.Base
 // is not already an ancestor of head, and runs lint and tests on the affected
-// Go packages of the combined tree.
+// Go packages of the combined tree. A repository with no local checkout is
+// not validated: the reason says so with code 0, and the PR's own green
+// checks stand, as for a base that is already an ancestor of head.
 func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head string) (bool, string, int) {
-	if p.Base == "" || head == "" {
-		return false, reasonMergeValidationUnavailable, github.SquashTooling
+	if p.Base == "" {
+		return false, mergeValidationUnavailable("pull request %s has no base branch", p.Ref), github.SquashTooling
+	}
+	if head == "" {
+		return false, mergeValidationUnavailable("pull request %s has no reviewed head", p.Ref), github.SquashTooling
 	}
 	ref, ok := parseRef(p.Ref)
 	if !ok {
-		return false, reasonMergeValidationUnavailable, github.SquashTooling
+		return false, mergeValidationUnavailable("pull request reference %q does not parse", p.Ref), github.SquashTooling
 	}
-	repoDir := a.findReviewedRepoDir(ctx, ref.Repo)
+	repoDir, searched := a.findReviewedRepoDir(ctx, ref.Repo)
 	if repoDir == "" {
-		return false, reasonMergeValidationUnavailable, github.SquashTooling
+		return false, fmt.Sprintf("merge-result validation skipped: no checkout of %s in %s; the pull request's own checks stand", ref.Repo, strings.Join(searched, ", ")), 0
 	}
 	baseSHA, err := fetchReviewedMergeRefs(ctx, repoDir, p.Base, head, ref.N)
 	if err != nil {
 		return false, "fetching merge-result refs: " + err.Error(), github.SquashTooling
 	}
-	if baseSHA == "" || !hasReviewedCommit(ctx, repoDir, head) {
-		return false, reasonMergeValidationUnavailable, github.SquashTooling
+	if baseSHA == "" {
+		return false, mergeValidationUnavailable("base %s did not resolve in %s", p.Base, repoDir), github.SquashTooling
+	}
+	if !hasReviewedCommit(ctx, repoDir, head) {
+		return false, mergeValidationUnavailable("reviewed head %s is not in %s", shortSHA(head), repoDir), github.SquashTooling
 	}
 	// When the current base is already an ancestor of head, the PR's own
 	// green checks already verified the merge result.
@@ -121,11 +137,13 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 }
 
 // findReviewedRepoDir locates a local git checkout or worktree whose origin
-// remote matches repo (owner/name).
-func (a *app) findReviewedRepoDir(ctx context.Context, repo string) string {
+// remote matches repo (owner/name), and lists the folders it searched. The
+// folders of agents.dir and agents.roots are configured with a leading ~/,
+// which is expanded here as agentDir does.
+func (a *app) findReviewedRepoDir(ctx context.Context, repo string) (string, []string) {
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok || owner == "" || name == "" {
-		return ""
+		return "", nil
 	}
 	var roots []string
 	roots = append(roots, a.cfg.Disk.Checkouts...)
@@ -138,14 +156,16 @@ func (a *app) findReviewedRepoDir(ctx context.Context, repo string) string {
 		if r == "" {
 			continue
 		}
+		r = filepath.Clean(homePath(r))
 		candidates = append(candidates, r, filepath.Join(r, name), filepath.Join(r, owner, name))
 	}
+	candidates = slices.Compact(candidates)
 	for _, d := range candidates {
 		if matchesReviewedRepo(ctx, d, repo) {
-			return d
+			return d, candidates
 		}
 	}
-	return ""
+	return "", candidates
 }
 
 func matchesReviewedRepo(ctx context.Context, dir, repo string) bool {
@@ -232,9 +252,15 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 	}
 	lintArgs = append(lintArgs, pkgs...)
 	if out, err := runMergeCheckCmd(ctx, worktreeDir, "golangci-lint", lintArgs...); err != nil {
+		if errors.Is(err, errMergeCheckTimeout) {
+			return mergeValidationUnavailable("%v", err), github.SquashTooling
+		}
 		return fmt.Sprintf("merge result (%s + %s) failed golangci-lint: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 	if out, err := runMergeCheckCmd(ctx, worktreeDir, "go", goTestSubcmd, "./..."); err != nil {
+		if errors.Is(err, errMergeCheckTimeout) {
+			return mergeValidationUnavailable("%v", err), github.SquashTooling
+		}
 		return fmt.Sprintf("merge result (%s + %s) failed go test: %s", baseBranch, shortSHA(head), summarizeMergeCheckOutput(out)), github.SquashRed
 	}
 
@@ -433,14 +459,28 @@ func hasGoFiles(dir string) bool {
 
 const goTestSubcmd = "test"
 
+// mergeCheckTimeout bounds one merge-result check command: a check that
+// cannot finish refuses the merge rather than holding the lane and the
+// machine.
+var mergeCheckTimeout = 30 * time.Minute
+
 func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, mergeCheckTimeout)
+	defer cancel()
 	var buf bytes.Buffer
 	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed toolchain command in temporary worktree
 	c.Dir = dir
 	c.Stdout, c.Stderr = &buf, &buf
+	mergeCheckGroup(c)
+	c.WaitDelay = 5 * time.Second
 	err := c.Run()
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("%w: %s after %s", errMergeCheckTimeout, name, mergeCheckTimeout)
+	}
 	return buf.String(), err
 }
+
+var errMergeCheckTimeout = errors.New("merge-result check timed out")
 
 func summarizeMergeCheckOutput(out string) string {
 	var kept []string

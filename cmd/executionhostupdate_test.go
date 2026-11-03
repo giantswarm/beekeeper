@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -125,7 +126,8 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	h := &hostInstall{answer: want}
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
+
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
 	if !slices.Equal(h.installs, []string{hostNewRelease}) || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
@@ -169,22 +171,48 @@ func TestHostSelfUpdateHoldsAReleaseThatDoesNotPrepare(t *testing.T) {
 func TestHostSelfUpdateChangesNothingWhileExecutionsRun(t *testing.T) {
 	a, r := executionTestApp(t)
 	s := hostUpdateServer(t, a, hostOldRelease)
-	j := execution.Journal{Phase: execution.Running, Handle: execution.Handle{Ref: r.Ref}}
+	j := execution.Journal{Phase: execution.Running, Request: r, Digest: r.Digest(), Handle: execution.Handle{Ref: r.Ref, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}}
 	b, err := json.Marshal(j)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Root, uuid.NewString()+".json"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Root, string(r.Ref.Execution)+".json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := &hostInstall{}
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
-	if got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
+	if !slices.Equal(got.Executions, []execution.Ref{r.Ref}) || got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
+
 		t.Fatalf("self-update answered %+v, want busy and unchanged", got)
 	}
 	if len(h.installs) != 0 {
 		t.Errorf("installed %v while an execution runs", h.installs)
+	}
+}
+
+// An execution between turns, a parked worker's waiting for its wake, does
+// not hold the host's update back.
+func TestHostSelfUpdateGoesAheadUnderAnExecutionBetweenTurns(t *testing.T) {
+	a, r := executionTestApp(t)
+	s := hostUpdateServer(t, a, hostOldRelease)
+	j := execution.Journal{Phase: execution.Running, Ready: true, Request: r, Digest: r.Digest(), Handle: execution.Handle{Ref: r.Ref, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}}
+	b, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(r.Ref.Execution)+".json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := execution.Digest([]byte("prepared by the new release"))
+	h := &hostInstall{answer: execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}}
+	stubHostInstall(t, h)
+	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
+	if got.Busy != 0 || got.Error != "" || got.PolicyDigest != digest || got.Version != hostNewRelease {
+		t.Fatalf("self-update answered %+v, want the new release", got)
+	}
+	if !slices.Equal(h.installs, []string{hostNewRelease}) {
+		t.Errorf("installed %v, want %s", h.installs, hostNewRelease)
 	}
 }
 
@@ -375,6 +403,140 @@ func TestHostsUpdateDrainsAHostWithExecutions(t *testing.T) {
 	}
 }
 
+// A parked worker's execution between turns does not hold its host back:
+// the host updates under it, and the coordinator rebinds it to the policy it
+// pins. An execution in a turn, or one between turns of a worker that is not
+// parked, still drains the host.
+func TestHostsUpdateGoesAheadUnderAParkedWorkerBetweenTurns(t *testing.T) {
+	a, _ := sshStartTestApp(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	old := a.cfg.Agents.Hosts[sshTestSelector].PolicyDigest
+	digest := execution.Digest([]byte("prepared under a parked worker"))
+	calls := stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){sshTestSelector: pinnedAnswer(sshTestSelector, digest)})
+	ref := execution.Ref{Host: sshTestSelector, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
+	handle := execution.Handle{Ref: ref, Unit: execution.UnitName(ref)}
+	between := execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true, PolicyDigest: old, HostPolicyDigest: old}
+	record := func(o execution.Observation, park *state.Park) {
+		t.Helper()
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: state.Party{Name: hostFixtureWorker}, Execution: &state.ExecutionRecord{Selector: sshTestSelector, Handle: handle, Phase: execution.Running, Observation: o}}}
+			st.Agents = []state.Agent{{Party: state.Party{Name: hostFixtureWorker}, Execution: &ref, Task: sshTestTask, Park: park}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inTurn := between
+	inTurn.InTurn = true
+	queued := between
+	queued.Messages = []execution.Delivery{{Envelope: execution.Envelope{ID: uuid.NewString(), Sequence: 1}, Stage: execution.Stored}}
+	for name, c := range map[string]struct {
+		o    execution.Observation
+		park *state.Park
+	}{
+		"in a turn":              {inTurn, &state.Park{}},
+		"a wake waits":           {queued, &state.Park{}},
+		"between turns, no park": {between, nil},
+	} {
+		record(c.o, c.park)
+		*calls = nil
+		if _, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector); Code(err) != ExitRefused || !strings.Contains(err.Error(), hostDrainsWord) || len(*calls) != 0 {
+			t.Fatalf("%s: %v, calls %v", name, err, *calls)
+		}
+	}
+	record(between, &state.Park{})
+	*calls = nil
+	var rebinds []execution.PolicyRebind
+	fake := &testExecutionTransport{}
+	fake.inspect = func(_ context.Context, r execution.Ref) (execution.Observation, error) {
+		o := between
+		o.HostPolicyDigest = digest
+		return o, nil
+	}
+	fake.rebind = func(_ context.Context, r execution.Ref, q execution.PolicyRebind) (execution.Observation, error) {
+		rebinds = append(rebinds, q)
+		o := between
+		o.PolicyDigest, o.HostPolicyDigest = q.To, digest
+		return o, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	out, err := runAgents(a, "hosts", hostUpdateCmdName, sshTestSelector)
+	if err != nil || len(*calls) != 1 || !strings.Contains(out, "1 executions between turns rebound") {
+		t.Fatalf("a parked worker between turns: %s, %v, calls %v", out, err, *calls)
+	}
+	if len(rebinds) != 1 || rebinds[0] != (execution.PolicyRebind{From: old, To: digest}) {
+		t.Fatalf("rebinds %+v, want %s -> %s", rebinds, old, digest)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin := st.HostPin(sshTestSelector); pin == nil || pin.Version != hostNewRelease || pin.PolicyDigest != digest {
+		t.Fatalf("pin %+v", pin)
+	}
+	if o := st.Starts[0].Execution.Observation; o.PolicyDigest != digest {
+		t.Errorf("the rebound execution's observation %+v", o)
+	}
+}
+
+// A host that does not follow the coordinator for more than one release is
+// handed on once, with why; one release behind is not, and an update that
+// catches up clears it.
+func TestSupervisorLoopReportsAHostBehindForMoreThanOneRelease(t *testing.T) {
+	r := newLoopRig(t)
+	withCoordinatorVersion(t, hostNewRelease)
+	r.a.cfg.Agents.Hosts = map[string]config.ExecutionHost{hostFixtureDraining: {Endpoint: execution.Endpoint{SSH: hostFixtureDraining + ".example", Executable: sshTestExecutable, Config: sshTestConfig}, Identity: execution.HostID(hostFixtureDraining), WorkspaceRoot: hostFixtureWorkspaces, Repositories: map[string]string{sshTestRepository: hostFixtureSource}, Harnesses: []string{claudeComm}, MaxBusy: 1}}
+	ref := execution.Ref{Host: hostFixtureDraining, Execution: execution.ExecutionID(uuid.NewString()), Generation: 1}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Name: hostFixtureWorker}, Execution: &state.ExecutionRecord{Selector: hostFixtureDraining, Handle: execution.Handle{Ref: ref}, Phase: execution.Running, Observation: execution.Observation{ProcessState: execution.Running, Ready: true, InTurn: true}}})
+		st.HostPins = append(st.HostPins, state.HostPin{Selector: hostFixtureDraining, Identity: execution.HostID(hostFixtureDraining), Version: hostOldRelease})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	pass := func() {
+		t.Helper()
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.updateHosts(context.Background(), st)
+	}
+	behind := func() []state.Event {
+		t.Helper()
+		findings, err := r.a.store.Events(0, func(e state.Event) bool {
+			return e.Verb == "supervisor."+superloop.KindFile && strings.Contains(e.Detail, "host-behind")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return findings
+	}
+	pass()
+	pass()
+	if n := len(behind()); n != 0 {
+		t.Fatalf("%d findings for a host one release behind", n)
+	}
+	withCoordinatorVersion(t, "v0.7.0")
+	pass()
+	pass()
+	findings := behind()
+	if len(findings) != 1 || !strings.Contains(findings[0].Detail, hostFixtureWorker) || !strings.Contains(findings[0].Detail, hostNewRelease) || !strings.Contains(findings[0].Detail, "v0.7.0") || !strings.Contains(findings[0].Detail, "in a turn") {
+		t.Fatalf("behind findings %+v", findings)
+	}
+	if strings.Count(r.out.String(), "SUPERVISOR HOST BEHIND") != 1 {
+		t.Fatalf("loop said:\n%s", r.out.String())
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin := st.HostPin(hostFixtureDraining); pin.Behind != hostNewRelease || !pin.BehindReported {
+		t.Fatalf("pin %+v", pin)
+	}
+}
+
 func TestHostsUpdateRefusesADevelopmentBuildWhichGatesNoStart(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	withCoordinatorVersion(t, "dev")
@@ -493,7 +655,7 @@ func TestReleaseVersionIsATagNotABuild(t *testing.T) {
 		"v0.174.0+dirty":                            false,
 		"v0.174.0-rc.1; true":                       false,
 	} {
-		if got := releaseVersion(v); got != want {
+		if got := releaseVersion(v); !reflect.DeepEqual(got, want) {
 			t.Errorf("releaseVersion(%q) = %v, want %v", v, got, want)
 		}
 	}
@@ -507,7 +669,7 @@ func TestHostSelfUpdateInstallsTheCoordinatorsLookup(t *testing.T) {
 	stubHostInstall(t, h)
 	// A field a newer coordinator sends is no reason to refuse.
 	given := []byte(`{"tag":"` + hostNewRelease + `","later":true}`)
-	if got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, given); got != want {
+	if got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, given); !reflect.DeepEqual(got, want) {
 		t.Fatalf("self-update answered %+v, want %+v", got, want)
 	}
 	if !slices.Equal(h.given, []string{hostNewRelease}) || len(h.installs) != 0 {

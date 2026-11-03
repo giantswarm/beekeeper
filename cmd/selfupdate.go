@@ -155,10 +155,14 @@ reset. A development build (version dev) is refused.`,
 					configured := a.loadConfig() == nil
 					if configured {
 						if restarted, rerr := a.restartReplaced(w, res.Path, t, false); rerr == nil {
-							stale = slices.DeleteFunc(stale, func(p *proc.Process) bool { return slices.Contains(restarted, p) })
+							stale = slices.DeleteFunc(stale, func(s staleBinary) bool { return slices.Contains(restarted, s.Process) })
 						}
 					}
-					_, _ = fmt.Fprint(w, leftBehind(stale, res.Current, res.Latest))
+					left := make([]*proc.Process, len(stale))
+					for i, s := range stale {
+						left[i] = s.Process
+					}
+					_, _ = fmt.Fprint(w, leftBehind(left, res.Current, res.Latest))
 					if configured {
 						restartBrokerOn(cmd.Context(), w, res.Path, started, t, false, a.cfg.Secret.Session)
 					} else {

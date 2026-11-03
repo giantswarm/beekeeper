@@ -221,7 +221,8 @@ func (a *app) staleLoopLine(ctx context.Context) string {
 	}
 	installedVer := normalizeLoopVersion(loopRunningVersion())
 	if installed, err := installedLoopBinary(); err == nil && installed != "" {
-		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || replacedBinary(os.Getpid()) {
+		_, selfReplaced := replacedBinary(os.Getpid())
+		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || selfReplaced {
 			if v := loopVersionOf(ctx, installed); v != "" {
 				installedVer = v
 			}
@@ -233,7 +234,7 @@ func (a *app) staleLoopLine(ctx context.Context) string {
 			return fmt.Sprintf("stale supervisor loop: pid %d runs %s while %s is installed; it re-executes the installed binary at its next quiet point, or restart %s", pid, loopVer, installedVer, loopUnit)
 		}
 	}
-	if replacedBinary(pid) {
+	if _, replaced := replacedBinary(pid); replaced {
 		if loopVer != "" && installedVer != "" {
 			return fmt.Sprintf("stale supervisor loop: pid %d runs %s from a binary an install replaced (%s installed); it re-executes the installed binary at its next quiet point, or restart %s", pid, loopVer, installedVer, loopUnit)
 		}
