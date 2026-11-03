@@ -405,7 +405,7 @@ func TestWorkerGitHubConcurrentExecutionCompletion(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"login": "fixture"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": remoteMCPFixture})
 	}))
 	defer server.Close()
 	prevWeb, prevAPI := githubWeb, githubAPI
