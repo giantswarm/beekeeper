@@ -241,7 +241,7 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 		}
 	}
 	// Serialize admission across executions as well as retries of one start.
-	admission := flock.New(filepath.Join(s.Root, "admission.lock"))
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
 	ok, err = admission.TryLockContext(ctx, 20*time.Millisecond)
 	if err != nil || !ok {
 		return Handle{}, errors.New("host admission is busy")
@@ -334,15 +334,18 @@ func (s *Server) room(ctx context.Context, own Ref) error {
 	return nil
 }
 
-// Quiesce holds the host's admission, so that no execution starts until
-// release, and counts the executions that still run. An update replaces the
-// binary and the policy every running execution is pinned to: it goes ahead
-// only at zero, before release.
+// Quiesce holds the host's admission, so that no execution starts and no
+// turn begins until release, and counts the executions that are in a turn or
+// may begin one on their own. An update replaces the binary and the policy
+// every running execution is pinned to: it goes ahead only at zero, before
+// release. An execution between turns (a parked worker waiting for its wake)
+// does not hold it back: its next turn begins only after release, on the
+// updated host, once the coordinator rebinds it to the prepared policy.
 func (s *Server) Quiesce(ctx context.Context) (busy int, release func(), err error) {
 	if err := ownedDirectory(s.Root); err != nil {
 		return 0, nil, err
 	}
-	admission := flock.New(filepath.Join(s.Root, "admission.lock"))
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
 	wait, cancel := context.WithTimeout(ctx, quiesceWait)
 	defer cancel()
 	ok, err := admission.TryLockContext(wait, 20*time.Millisecond)
@@ -350,24 +353,77 @@ func (s *Server) Quiesce(ctx context.Context) (busy int, release func(), err err
 		return 0, nil, errors.New("host admission is busy")
 	}
 	release = func() { _ = admission.Unlock() }
-	if busy, err = s.busy(ctx, Ref{}); err != nil {
+	if busy, err = s.count(ctx, Ref{}, false); err != nil {
 		release()
 		return 0, nil, err
 	}
 	return busy, release, nil
 }
 
+// admissionLock is the host's admission: a start, a turn's beginning and an
+// update take it in turn.
+const admissionLock = "admission.lock"
+
 // quiesceWait bounds Quiesce's wait for a start that holds the admission.
 var quiesceWait = 30 * time.Second
 
+// turnAdmissionWait bounds a turn's wait for the admission; turnRetry is when
+// a turn that did not get it tries again.
+var (
+	turnAdmissionWait = 2 * time.Second
+	turnRetry         = 5 * time.Second
+)
+
+// beginTurn records the next turn's beginning (f, on the journal) under the
+// host's admission, so that an update's Quiesce sees the turn or the turn
+// sees the updated host, never a turn that begins halfway through an
+// install. begun is false while the admission is held: the message stays
+// stored and the caller tries again after turnRetry.
+func (s *Server) beginTurn(ctx context.Context, r Ref, f func(*Journal) error) (begun bool, err error) {
+	admission := flock.New(filepath.Join(s.Root, admissionLock))
+	wait, cancel := context.WithTimeout(ctx, turnAdmissionWait)
+	defer cancel()
+	if ok, err := admission.TryLockContext(wait, 20*time.Millisecond); err != nil || !ok {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, nil
+	}
+	defer func() { _ = admission.Unlock() }()
+	return true, s.update(ctx, r, f)
+}
+
+// betweenTurns says the execution runs, accepted its first task and waits
+// for a wake: no turn runs, none is stored to begin and no delivery is
+// uncertain.
+func (j Journal) betweenTurns() bool {
+	if j.Phase != Running || !j.Ready || j.InTurn || j.StopRequest != nil || j.StopAcknowledged || j.Completed {
+		return false
+	}
+	for _, d := range j.Messages.Entries {
+		if d.Stage == Stored || d.Stage == Uncertain {
+			return false
+		}
+	}
+	return true
+}
+
 // busy counts the executions other than own that run or may run.
 func (s *Server) busy(ctx context.Context, own Ref) (int, error) {
-	refs, err := s.BusyExecutions(ctx, own)
+	return s.count(ctx, own, true)
+}
+
+func (s *Server) count(ctx context.Context, own Ref, idle bool) (int, error) {
+	refs, err := s.busyExecutions(ctx, own, idle)
 	return len(refs), err
 }
 
 // BusyExecutions names every journal-backed execution that blocks an update.
 func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
+	return s.busyExecutions(ctx, own, false)
+}
+
+func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
 	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
 	if err != nil {
 		return nil, err
@@ -385,7 +441,7 @@ func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 		if err != nil {
 			return nil, err
 		}
-		if j.Handle.Ref == own || j.StopAcknowledged {
+		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
 			continue
 		}
 		if j.Phase == Exited || j.Phase == Failed {
