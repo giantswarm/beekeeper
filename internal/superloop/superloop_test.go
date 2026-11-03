@@ -896,11 +896,11 @@ func TestAnAnswerKeepingAnEscalationGoesToTheWorker(t *testing.T) {
 		if got := Plan(in); len(got) != 0 {
 			t.Errorf("%q: told twice or escalated again: %+v", words, got)
 		}
-		// The reworked head carries the fixes: the merge go.
+		// The reworked head needs its own review.
 		in.Workers = parked(t0.Add(5 * time.Hour))
 		in.Pulls = pull(head2, true, in.Pulls[pr].Reviews...)
-		if g := only(t, Plan(in), KindGo); g.Head != head2 {
-			t.Errorf("%q: go = %+v", words, g)
+		if g := only(t, Plan(in), KindReview); g.Head != head2 {
+			t.Errorf("%q: review = %+v", words, g)
 		}
 	}
 }
