@@ -107,7 +107,7 @@ func TestInventoryOverSSHWire(t *testing.T) {
 	if _, err := transport.SyncControl(ctx, missing); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sync missing error=%v", err)
 	}
-	if _, err := transport.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "stop"}); !errors.Is(err, ErrNotFound) {
+	if _, err := transport.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "missing stop"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stop missing error=%v", err)
 	}
 	// Pre-inventory hosts return os.ErrNotExist text without reply.Code on sync-control and stop.
@@ -133,7 +133,7 @@ func TestInventoryOverSSHWire(t *testing.T) {
 	if _, err := legacy.SyncControl(ctx, missing); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("legacy sync missing error=%v", err)
 	}
-	if _, err := legacy.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "stop"}); !errors.Is(err, ErrNotFound) {
+	if _, err := legacy.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "legacy stop"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("legacy stop missing error=%v", err)
 	}
 }

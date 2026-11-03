@@ -131,7 +131,7 @@ func TestMissingJournalSettlesPendingStopWithoutAcknowledgement(t *testing.T) {
 				case "pending-stop":
 					st.Starts[0].Execution.StopRequest = &execution.StopRequest{ID: "stop-missing", Reason: "stop"}
 				case "desk-stop":
-					st.Stop = &state.Stop{Reason: "desk stop"}
+					st.Stop = &state.Stop{Reason: "operator desk stop"}
 				}
 				return nil, nil
 			}); err != nil {
@@ -198,7 +198,7 @@ func TestPreInventoryHostUpgradeUnblocksMissingJournalReconciliation(t *testing.
 		return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}, nil
 	}
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: "2.1.290"}, Resources: execution.Resources{ObservedAt: a.now, AvailableMiB: 1 << 16}}, nil
+		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: hostFixtureClaudeVersion}, Resources: execution.Resources{ObservedAt: a.now, AvailableMiB: 1 << 16}}, nil
 	}
 	// Before the host upgrades, Missing returns ErrUnsupported so unit state cannot be confirmed yet.
 	if err := a.syncExecutionHost(context.Background(), sshTestSelector); err == nil {
