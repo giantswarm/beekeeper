@@ -426,6 +426,11 @@ be stopped. An unreachable host retains its reservation and task; reachability
 is reported separately from the last process evidence. An acknowledgement of
 termination is retained even if the subsequent inspection disconnects. Stopping
 a process does not mark its task complete or remove its workspace.
+Inspection, including acknowledgement of a lease-expired unit, also preserves
+the workspace, its execution-owned Git repository and source bundle. Recover
+unpublished commits and local edits at the workspace path printed by `inspect`;
+stopping and repeating a stop do not authorize deletion. These retained files
+continue to consume disk until separately preserved and deliberately removed.
 
 Capped runs verify their worker identity, installed policy and live coordinator
 authority before taking a slot. Their scopes stop with the verified owned

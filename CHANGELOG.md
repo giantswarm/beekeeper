@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stopping or inspecting an expired SSH execution preserves its workspace, Git metadata and source artifacts, including unpublished commits and local edits. Termination acknowledgement no longer authorizes irreversible workspace deletion (https://github.com/giantswarm/beekeeper/issues/2175).
+
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
 - A rebound SSH execution keeps its coordinator MCP on resumed turns: the host-side MCP proxy checks the host policy against the execution's bound policy, as publication, merge and capped runs do, instead of refusing against the start request's original digest.
 
