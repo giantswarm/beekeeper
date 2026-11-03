@@ -182,12 +182,22 @@ func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
 		t.Errorf("a second pass took %+v", got)
 	}
 	// A base merge needs no park since the round: the merge's own update of
-	// a behind branch, or the worker's, carries no change of the worker's.
+	// a behind branch, or the worker's, carries no change of the worker's,
+	// even when the worker was woken to resolve a conflict and has not
+	// parked again.
 	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
 	if a := only(t, Plan(in), KindGo); a.Head != head2 {
 		t.Errorf("go on a base merge after an earlier park = %+v", a)
 	}
+	in = Input{Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if a := only(t, Plan(in), KindGo); a.Head != head2 || a.Agent != worker {
+		t.Errorf("go on a base merge without a parked worker = %+v", a)
+	}
 	in.BaseMerged = baseMerged(false)
+	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
+		t.Errorf("a new head without a parked worker got %+v", got)
+	}
+	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
 	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
 		t.Errorf("a new head with an earlier park got %+v", got)
 	}
@@ -495,8 +505,23 @@ func TestForwardedFindingsGetTheGoOnTheFixedHead(t *testing.T) {
 		t.Errorf("a fixed head with red checks got %+v", got)
 	}
 	in.Pulls = pull(head2, true, changes)
-	if g := only(t, Plan(in), KindGo); g.Head != head2 {
+	g := only(t, Plan(in), KindGo)
+	if g.Head != head2 {
 		t.Errorf("go = %+v", g)
+	}
+	// If the fixed head later conflicts with main and the worker rebases or
+	// merges main into it, the new head gets its go once green, without a
+	// new review or a new park.
+	in.Taken = append(in.Taken, taken(t, t0.Add(3*time.Hour), g)...)
+	in.Workers = nil
+	in.BaseMerged = func(p Pull, from string) bool { return from == head2 && p.Head == head3 }
+	in.Pulls = pull(head3, false, changes)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a rebased fixed head with pending checks got %+v", got)
+	}
+	in.Pulls = pull(head3, true, changes)
+	if g2 := only(t, Plan(in), KindGo); g2.Head != head3 || g2.Agent != worker {
+		t.Errorf("go on rebased fixed head = %+v", g2)
 	}
 }
 
@@ -1481,5 +1506,47 @@ func TestOverlapClosingIssuesMutualSameRank(t *testing.T) {
 	act = only(t, Plan(in), KindOwner)
 	if act.Ref != overlapPRA || act.Agent != PullWorkerName(overlapPRA) {
 		t.Fatalf("missing owner: %+v", act)
+	}
+}
+
+func TestPlanOrdersPullActionsByBoardPriority(t *testing.T) {
+	const (
+		prLow  = "o/r#7"
+		prHigh = "o/r#8"
+		prNone = "o/r#6"
+	)
+	in := Input{
+		Workers: []Worker{
+			{Name: "w-none", ParkedOn: prNone, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
+			{Name: "w-low", ParkedOn: prLow, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
+			{Name: "w-high", ParkedOn: prHigh, ParkedAt: t0, ReviewRequested: true, ParkedHead: head1},
+		},
+		Pulls: map[string]Pull{
+			prNone: {Ref: prNone, URL: "https://github.com/o/r/pull/6", State: Open, Head: head1, Green: true, Priority: 0,
+				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
+			prLow: {Ref: prLow, URL: "https://github.com/o/r/pull/7", State: Open, Head: head1, Green: true, Priority: 2,
+				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
+			prHigh: {Ref: prHigh, URL: "https://github.com/o/r/pull/8", State: Open, Head: head1, Green: true, Priority: 1,
+				Reviews: []Review{{ID: "R1", Head: head1, Verdict: Approved, At: t1}}},
+		},
+		Taken: []Taken{
+			{Key: reviewKey(prNone, head1), Kind: KindReview, Ref: prNone, Agent: "w-none", At: t0},
+			{Key: reviewKey(prLow, head1), Kind: KindReview, Ref: prLow, Agent: "w-low", At: t0},
+			{Key: reviewKey(prHigh, head1), Kind: KindReview, Ref: prHigh, Agent: "w-high", At: t0},
+		},
+	}
+	var refs []string
+	var prios []int
+	for _, a := range Plan(in) {
+		if a.Kind == KindGo {
+			refs = append(refs, a.Ref)
+			prios = append(prios, a.Priority)
+		}
+	}
+	if want := []string{prHigh, prLow, prNone}; !slices.Equal(refs, want) {
+		t.Fatalf("go order = %v, want %v", refs, want)
+	}
+	if want := []int{1, 2, 0}; !slices.Equal(prios, want) {
+		t.Fatalf("go priorities = %v, want %v", prios, want)
 	}
 }

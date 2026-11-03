@@ -143,6 +143,8 @@ type Pull struct {
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
+	// Priority is the board priority rank (1 is highest, 0 is unranked).
+	Priority int
 }
 
 // Check is one check on a pull request's head: its name and the URL of its
@@ -476,6 +478,8 @@ type Action struct {
 	Note int
 	// Version is the release to install.
 	Version string
+	// Priority is the board priority rank (1 is highest, 0 is unranked).
+	Priority int
 }
 
 // Line is the action's log detail: its key first, then what it did.
@@ -541,10 +545,12 @@ type ledger struct {
 	escalated map[string]escalation
 	ended     map[string]bool
 	reviewer  map[string]string // a pull request's worker, from its last review
-	// goAgent is the worker the go for a pull request was given to; acts
-	// are when the loop acted on a pull request (a review, go, forward,
-	// escalation or end), oldest first.
+	// goAgent is the worker the go for a pull request was given to; goHead
+	// is the last head given a go and not superseded by a later review,
+	// forward, rework or escalation; acts are when the loop acted on a pull
+	// request (a review, go, forward, escalation or end), oldest first.
 	goAgent map[string]string
+	goHead  map[string]string
 	acts    map[string][]time.Time
 	// asked are the pull requests whose ownership the person was asked
 	// about, overridden the ones they let the desk take over.
@@ -556,7 +562,7 @@ type ledger struct {
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
+		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
@@ -567,9 +573,13 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			_, head, _ := strings.Cut(t.Key, "@")
 			l.rounds[t.Ref] = append(l.rounds[t.Ref], round{head: head, at: t.At})
 			l.reviewer[t.Ref] = t.Agent
+			delete(l.goHead, t.Ref)
 		case KindEscalate:
 			_, head, _ := strings.Cut(t.Key, "@")
 			l.escalated[t.Ref] = escalation{head: head, at: t.At}
+			delete(l.goHead, t.Ref)
+		case KindRework:
+			delete(l.goHead, t.Ref)
 		case KindEnd:
 			l.ended[t.Ref] = true
 		case KindOwnership:
@@ -584,6 +594,13 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 				}
 			}
 		case KindGo, KindForward, KindOwner:
+			if t.Kind == KindGo {
+				if _, head, ok := strings.Cut(t.Key, "@"); ok && head != "" {
+					l.goHead[t.Ref] = head
+				}
+			} else {
+				delete(l.goHead, t.Ref)
+			}
 			if t.Agent != "" {
 				l.reviewer[t.Ref] = t.Agent
 				if t.Kind == KindGo {
@@ -856,7 +873,21 @@ func Plan(in Input) []Action {
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
 	}
-	sort.Strings(refs)
+	slices.SortFunc(refs, func(a, b string) int {
+		pa, pb := in.Pulls[a].Priority, in.Pulls[b].Priority
+		switch {
+		case pa == pb || pa <= 0 && pb <= 0:
+			return strings.Compare(a, b)
+		case pa <= 0:
+			return 1
+		case pb <= 0:
+			return -1
+		case pa < pb:
+			return -1
+		default:
+			return 1
+		}
+	})
 	for _, ref := range refs {
 		p := in.Pulls[ref]
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
@@ -1141,7 +1172,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	if agent == "" || p.Head == "" {
 		return
 	}
-	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
+	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head, Priority: p.Priority}
 	switch o, reason, why := in.Desk.owner(p, l.overridden[ref]); o {
 	case nobodys:
 		leave(ref, p.URL, agent, reason, why)
@@ -1264,11 +1295,18 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// the person. A base merge needs no new park: it brings no
 		// change of the worker's. Any other head asks for a park
 		// since the round opened.
-		if !p.Green || !isParked {
+		if !p.Green {
 			return
 		}
 		if in.baseMerged(p, reviewed) {
 			add(goAction(in, base, fmt.Sprintf("review round %d approved head %s; head %s only brings %s into it", len(rs), short(reviewed), short(p.Head), baseName(p))))
+			return
+		}
+		if goHead := l.goHead[ref]; goHead != "" && !sameHead(goHead, reviewed) && !sameHead(goHead, p.Head) && in.baseMerged(p, goHead) {
+			add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(goHead), short(p.Head), baseName(p))))
+			return
+		}
+		if !isParked {
 			return
 		}
 		if !w.ParkedAt.After(last.at) {
@@ -1303,6 +1341,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			a.Key, a.Kind = fk, KindForward
 			a.Message = forwardMessage(p, *v, left)
 			add(a)
+			return
+		}
+		if goHead := l.goHead[ref]; !left && goHead != "" && !sameHead(goHead, reviewed) && !sameHead(goHead, p.Head) && p.Green && in.baseMerged(p, goHead) {
+			add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(goHead), short(p.Head), baseName(p))))
 			return
 		}
 		// The fixes count once the worker parked after the forward.

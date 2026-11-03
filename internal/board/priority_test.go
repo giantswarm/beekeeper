@@ -422,6 +422,28 @@ func TestRankAnchorPlacesBlockingOrFollowUpIssueAfterHighRankedItem(t *testing.T
 	}
 }
 
+func TestPrioritiesIssueRank(t *testing.T) {
+	prios := Priorities{
+		{Rank: 1, Ref: ref1, BlockedBy: []string{"org/engine#50"}},
+		{Rank: 2, Ref: ref2},
+	}
+	parents := map[string]string{ref3: ref2, "org/engine#51": "org/engine#50"}
+	parentOf := func(ref string) string { return parents[ref] }
+
+	if got := prios.IssueRank(ref1, parentOf); got != 1 {
+		t.Fatalf("IssueRank(%s) = %d, want 1", ref1, got)
+	}
+	if got := prios.IssueRank(ref3, parentOf); got != 2 {
+		t.Fatalf("IssueRank(%s) = %d, want 2", ref3, got)
+	}
+	if got := prios.IssueRank("org/engine#51", parentOf); got != 1 {
+		t.Fatalf("IssueRank(org/engine#51) = %d, want 1 via blocker parent", got)
+	}
+	if got := prios.IssueRank(ref4, parentOf); got != 0 {
+		t.Fatalf("IssueRank(%s) = %d, want 0", ref4, got)
+	}
+}
+
 // Both desks see the same shared Priority numbers. Stale labels expose the
 // other team's epics to each search, but neither reads nor writes those ranks.
 func TestPrioritiesAndRenumberingAreTeamScoped(t *testing.T) {

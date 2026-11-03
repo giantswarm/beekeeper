@@ -29,6 +29,7 @@ func TestLoopWatchFillForecastAloneNeverHoldsStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	for range 3 {
 		if err := l.pass(context.Background()); err != nil {
 			t.Fatal(err)
