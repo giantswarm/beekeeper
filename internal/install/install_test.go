@@ -986,7 +986,7 @@ func TestAgyHooksUnguarded(t *testing.T) {
 }
 
 func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
-	for _, exe := range []string{"/opt/bin/beekeeper", "/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+	for _, exe := range []string{"/opt/plain/beekeeper", "/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
 		t.Run(exe, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "hooks.json")
 			raw := AgyHook(exe)
