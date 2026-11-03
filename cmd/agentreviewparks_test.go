@@ -53,7 +53,7 @@ func TestLoopReviewsEveryPullOfSameWorker(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	const second = multiParkSecondPR
-	r.pulls[second] = superloop.Pull{Ref: second, URL: "https://github.com/o/r/pull/8", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	r.pulls[second] = superloop.Pull{Ref: second, URL: secondURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		ag := st.Agents[0]
 		ag.Park = &state.Park{On: second, At: time.Now(), ReviewHead: loopHead}
@@ -107,7 +107,7 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 			if len(st.ReviewParks) != 1 || st.ReviewParks[0].On != multiParkSecondPR || len(st.WorkerReports) != 0 || (roster && st.Agents[0].Done) {
 				t.Fatalf("ended task before second PR: %+v", st)
 			}
-			_, err = l.endMerged(t.Context(), st, superloop.Action{Key: "test-end-second", Kind: superloop.KindEnd, Ref: multiParkSecondPR, URL: "https://github.com/o/r/pull/8", Message: strings.ToLower(superloop.Merged)})
+			_, err = l.endMerged(t.Context(), st, superloop.Action{Key: "test-end-second", Kind: superloop.KindEnd, Ref: multiParkSecondPR, URL: secondURL, Message: strings.ToLower(superloop.Merged)})
 			if err != nil {
 				t.Fatal(err)
 			}
