@@ -207,7 +207,7 @@ func runReviewedMergeChecks(ctx context.Context, worktreeDir, mergeBase, baseBra
 		}
 	}
 	if _, err := exec.LookPath("golangci-lint"); err == nil {
-		lintArgs := []string{"run", "--max-issues-per-linter=0", "--max-same-issues=0"}
+		lintArgs := strings.Fields("run --max-issues-per-linter=0 --max-same-issues=0")
 		if !hasGolangCILintConfig(worktreeDir) {
 			lintArgs = append(lintArgs, "-E", "goconst,govet,gosec")
 		}
@@ -356,6 +356,13 @@ func goconstLiterals(n ast.Node, ignore map[*ast.BasicLit]bool) []*ast.BasicLit 
 		exprs = append(exprs, v.Results...)
 	case *ast.CaseClause:
 		exprs = append(exprs, v.List...)
+	case *ast.CompositeLit:
+		exprs = append(exprs, v.Elts...)
+	case *ast.KeyValueExpr:
+		exprs = append(exprs, v.Key)
+		if _, isIdent := v.Key.(*ast.Ident); !isIdent {
+			exprs = append(exprs, v.Value)
+		}
 	}
 	var out []*ast.BasicLit
 	for _, e := range exprs {
@@ -409,6 +416,8 @@ func hasGoFiles(dir string) bool {
 	return false
 }
 
+const goTestSubcmd = "test"
+
 // goTestArgsForPackage builds the `go test` invocation for pkg. Small packages
 // run their full test suite; huge packages (>30 *_test.go files, such as ./cmd)
 // compile all tests and run the tests in the changed files and their matching
@@ -421,7 +430,7 @@ func goTestArgsForPackage(worktreeDir, pkg string, changedFiles []string) []stri
 	absDir := filepath.Join(worktreeDir, filepath.FromSlash(relDir))
 	entries, err := os.ReadDir(absDir)
 	if err != nil {
-		return []string{"test", pkg}
+		return []string{goTestSubcmd, pkg}
 	}
 	var testFiles []string
 	for _, e := range entries {
@@ -430,13 +439,13 @@ func goTestArgsForPackage(worktreeDir, pkg string, changedFiles []string) []stri
 		}
 	}
 	if len(testFiles) <= 30 {
-		return []string{"test", pkg}
+		return []string{goTestSubcmd, pkg}
 	}
 	names := matchingTestFuncs(absDir, relDir, testFiles, changedFiles)
 	if len(names) == 0 {
-		return []string{"test", "-run", "^$", pkg}
+		return []string{goTestSubcmd, "-run", "^$", pkg}
 	}
-	return []string{"test", "-run", "^(" + strings.Join(names, "|") + ")$", pkg}
+	return []string{goTestSubcmd, "-run", "^(" + strings.Join(names, "|") + ")$", pkg}
 }
 
 func matchingTestFuncs(absDir, relDir string, testFiles, changedFiles []string) []string {

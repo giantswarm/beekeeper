@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	secondPR     = "o/r#8"
-	secondURL    = "https://github.com/o/r/pull/8"
-	secondWorker = "worker two"
+	secondPR          = "o/r#8"
+	secondURL         = "https://github.com/o/r/pull/8"
+	secondWorker      = "worker two"
+	testGuardBaseFile = "guard/base.go"
+	testGuardPR1File  = "guard/pr1.go"
+	testGuardPR2File  = "guard/pr2.go"
 )
 
 // mergeCheckRepo is a real git repository in a scratch directory backing
@@ -139,13 +142,13 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 	}{
 		"goconst across two PRs": {
 			baseFiles: map[string]string{
-				"guard/base.go": "package guard\n\nfunc Base() string { return \"ok\" }\n",
+				testGuardBaseFile: "package guard\n\nfunc Base() string { return \"ok\" }\n",
 			},
 			pr1Files: map[string]string{
-				"guard/pr1.go": "package guard\n\nfunc One(x string) bool {\n\tif x == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn x == \"agy-harness\" && Base() != \"\"\n}\n",
+				testGuardPR1File: "package guard\n\nfunc One(x string) bool {\n\tif x == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn x == \"agy-harness\" && Base() != \"\"\n}\n",
 			},
 			pr2Files: map[string]string{
-				"guard/pr2.go": "package guard\n\nfunc Two(y string) bool {\n\tif y == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn y == \"agy-harness\" && Base() != \"\"\n}\n",
+				testGuardPR2File: "package guard\n\nfunc Two(y string) bool {\n\tif y == \"agy-harness\" {\n\t\treturn true\n\t}\n\treturn y == \"agy-harness\" && Base() != \"\"\n}\n",
 			},
 			wantCheck: "goconst",
 		},
@@ -155,10 +158,10 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				"guard/cost_test.go": "package guard\n\nimport \"testing\"\n\nfunc TestBoardCostStayWithinBudget(t *testing.T) {\n\tif got := TotalCost(); got > 40 {\n\t\tt.Fatalf(\"cost %d exceeds budget 40\", got)\n\t}\n}\n",
 			},
 			pr1Files: map[string]string{
-				"guard/pr1.go": "package guard\n\nfunc init() { costA = 25 }\n",
+				testGuardPR1File: "package guard\n\nfunc init() { costA = 25 }\n",
 			},
 			pr2Files: map[string]string{
-				"guard/pr2.go": "package guard\n\nfunc init() { costB = 16 }\n",
+				testGuardPR2File: "package guard\n\nfunc init() { costB = 16 }\n",
 			},
 			wantCheck: "TestBoardCostStayWithinBudget",
 		},
@@ -168,22 +171,22 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 				"guard/cost_test.go": "package guard\n\nimport \"testing\"\n\nfunc TestBoardCostStayWithinBudget(t *testing.T) {\n\tif got := TotalCost(); got > 40 {\n\t\tt.Fatalf(\"cost %d exceeds budget 40\", got)\n\t}\n}\n",
 			},
 			pr1Files: map[string]string{
-				"guard/pr1.go": "package guard\n\nfunc init() { costA = 20 }\n",
+				testGuardPR1File: "package guard\n\nfunc init() { costA = 20 }\n",
 			},
 			pr2Files: map[string]string{
-				"guard/pr2.go": "package guard\n\nfunc init() { costB = 15 }\n",
+				testGuardPR2File: "package guard\n\nfunc init() { costB = 15 }\n",
 			},
 			wantCheck: "",
 		},
 		"conflicting PRs after first merge": {
 			baseFiles: map[string]string{
-				"guard/base.go": "package guard\n\nfunc Name() string { return \"initial\" }\n",
+				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"initial\" }\n",
 			},
 			pr1Files: map[string]string{
-				"guard/base.go": "package guard\n\nfunc Name() string { return \"from-pr-1\" }\n",
+				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"from-pr-1\" }\n",
 			},
 			pr2Files: map[string]string{
-				"guard/base.go": "package guard\n\nfunc Name() string { return \"from-pr-2\" }\n",
+				testGuardBaseFile: "package guard\n\nfunc Name() string { return \"from-pr-2\" }\n",
 			},
 			wantCheck: "conflicts with its base",
 		},
@@ -245,11 +248,8 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			// Route gate --reviewed-head for either PR #7 or PR #8 to reviewedMerge.
 			prevRun := beekeeperRun
 			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
-				clean := args
-				if len(clean) >= 2 && clean[0] == "--as" {
-					clean = clean[2:]
-				}
-				if len(clean) > 0 && clean[0] == gateCmdName && slices.Contains(clean, "8") {
+				if g := slices.Index(args, gateCmdName); g >= 0 && slices.Contains(args, "8") {
+					clean := args[g:]
 					r.calls = append(r.calls, clean)
 					idx := slices.Index(clean, "--reviewed-head")
 					doc := r.a.reviewedMerge(ctx, loopMergeRepo, 8, clean[idx+1])
