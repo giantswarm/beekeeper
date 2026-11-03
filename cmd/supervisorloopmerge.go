@@ -74,6 +74,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
+	if latestReviewRequestsChanges(p) {
+		return "", refused("a review requested changes; new supervisor approval required")
+	}
 	repair := func(code int, reason string) (string, error) {
 		_, _ = stopMerges(a.store, loopParty, func(m state.Merge) bool {
 			return m.Repo == ref.Repo && m.PR == ref.N && m.Phase == state.Waiting
@@ -197,6 +200,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
+	}
+	if latestReviewRequestsChanges(p) {
+		return "", refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
 		if reply.Reason != "" {
@@ -469,6 +475,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = "merge head moved or current CI is not green"
 		return doc
 	}
+	if latestReviewRequestsChanges(p) {
+		doc.ExitCode = github.SquashRefused
+		doc.Reason = "a review requested changes; new supervisor approval required"
+		return doc
+	}
 	if p.Draft || p.Mergeable == mergeableConflicting {
 		doc.Reason = "branch is draft or conflicts with its base"
 		return doc
@@ -591,6 +602,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.Reason = reasonMergeHeld
 			return doc
 		}
+		if latestReviewRequestsChanges(up) {
+			doc.ExitCode = github.SquashRefused
+			doc.Reason = "a review requested changes; new supervisor approval required"
+			return doc
+		}
 		p, merging = up, up.Head
 	}
 	var note string
@@ -675,6 +691,23 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// latestReviewRequestsChanges reports whether the latest review verdict on p
+// requests changes, overriding any earlier approval.
+func latestReviewRequestsChanges(p superloop.Pull) bool {
+	var latest superloop.Review
+	var found bool
+	for _, r := range p.Reviews {
+		if r.Verdict == "" {
+			continue
+		}
+		if !found || r.At.IsZero() || latest.At.IsZero() || !r.At.Before(latest.At) {
+			latest = r
+			found = true
+		}
+	}
+	return found && latest.Verdict == superloop.ChangesRequested
 }
 
 // readReviewedMergeQueue reads whether p's base branch has a GitHub merge

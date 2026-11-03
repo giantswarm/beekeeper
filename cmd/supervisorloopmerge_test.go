@@ -111,7 +111,7 @@ func TestLoopMergeEndDeclaresRemainingWork(t *testing.T) {
 }
 
 func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
-	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict"} {
+	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict", "changes-requested"} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
@@ -127,6 +127,11 @@ func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
 				r.pull.Head = loopFixed
 			case reviewedRedCase:
 				r.pull.Green = false
+			case "changes-requested":
+				r.pull.Reviews = []superloop.Review{
+					{ID: "r1", Head: loopHead, Verdict: superloop.Approved, At: time.Unix(100, 0)},
+					{ID: "r2", Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+				}
 			case reviewedStoppedCase:
 				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
 					t.Fatal(err)

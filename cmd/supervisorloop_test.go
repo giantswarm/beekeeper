@@ -45,7 +45,8 @@ const (
 	loopClassifier  = "classify"
 	loopNewRelease  = "v2.0.0 is newer than v1.0.0"
 	// loopDesk is the login the desk opens its pull requests as, loopTeamB
-	// another team, loopReviewer the reviewer of the rig's first round.
+	// another team, loopReviewer the reviewer of the rig's first round,
+	// superloop.ReviewerName(loopPR, 2) of its second round.
 	loopDesk     = "desk"
 	loopTeamB    = "team-b"
 	loopReviewer = "Review r 7 r1"
@@ -482,12 +483,19 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	if evs := r.logged(t, "supervisor.rework"); len(evs) != 1 {
 		t.Errorf("reworked twice for one park: %+v", evs)
 	}
-	// The fixed head needs its own independent review.
+	// The fixes pushed and parked on: the next review round starts, then
+	// its approval gives the merge go for the new head.
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
 	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no review for the fixed head: %v", r.calls)
+		t.Fatalf("no review of the fixed head: %v\n%s", r.calls, r.out)
+	}
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	wake = r.called(gateCmdName)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
+		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -678,7 +686,7 @@ func TestLoopReviewsFixesAfterExhaustedRounds(t *testing.T) {
 	}
 }
 
-func TestLoopReviewsTheFixedHead(t *testing.T) {
+func TestLoopReviewsTheFixedHeadBeforeGivingTheGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -687,12 +695,17 @@ func TestLoopReviewsTheFixedHead(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c == nil {
-		t.Errorf("no second review started: %v", c)
+	if c := r.called(agentsName, agentStartName); c == nil || c[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Fatalf("no second review started: %v", r.calls)
 	}
+	if wake := r.called(gateCmdName); wake != nil {
+		t.Fatalf("fixed head got merge go before approval: %v", wake)
+	}
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
 	wake := r.called(gateCmdName)
-	if wake != nil {
-		t.Errorf("unapproved head got a go: %v", r.calls)
+	if wake == nil || !slices.Contains(wake, loopFixed) {
+		t.Errorf("no go for the approved fixed head: %v", r.calls)
 	}
 }
 
@@ -1697,8 +1710,13 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if review := r.called(agentsName, agentStartName); review == nil || review[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Errorf("no review for the fixes: %v", r.calls)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Fatalf("no review for the fixes: %v", r.calls)
+	}
+	r.verdict("R2", loopFixed, superloop.Approved, "")
+	r.pass(t)
+	if wake := r.called(gateCmdName); wake == nil || !slices.Contains(wake, loopFixed) {
+		t.Errorf("no go for the fixes: %v", r.calls)
 	}
 }
 
