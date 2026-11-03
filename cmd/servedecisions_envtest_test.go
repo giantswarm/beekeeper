@@ -151,7 +151,7 @@ func TestEnvtestServeDecisions(t *testing.T) {
 	kim := e.as(t, e.token(t, "kim@example.com", teamGroup))
 	askText := func(text, forWho, due string) int {
 		args := map[string]any{paramText: text, paramFor: forWho, paramKind: noteDecision, paramAgent: anaAgent, paramHost: lab,
-			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", "options": []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
+			keyStatusQuo: noMuseLane, keyWhy: "only its owners pick its lane", paramOptions: []any{"portal: it rolls with backstage", "own: a lane of its own"}, "recommend": 2,
 			dueID: due, keyDefault: ownLane, paramRefs: []any{privateThread}}
 		id, _ := e.expect(t, ana, "note_add", args, false, "note #")["id"].(float64)
 		return int(id)

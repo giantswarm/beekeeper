@@ -885,7 +885,8 @@ func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, h
 			}
 		}
 		if a.cfg.StateDir != "" {
-			if tr := filepath.Join(a.cfg.StateDir, id+".jsonl"); fileExists(tr) {
+			tr := filepath.Join(a.cfg.StateDir, id+".jsonl")
+			if _, err := os.Stat(tr); err == nil { // #nosec G703 -- id carries no path separator (checked above), so the name stays inside the state directory
 				return tr
 			}
 		}
@@ -933,6 +934,11 @@ func (a *app) partyTranscript(p state.Party, running []*claude.Session) (path, h
 }
 
 var asGuideRun = regexp.MustCompile(`\bas (Guide run \d+)\b`)
+
+// guideStartVerb is the event a guide run logs when it takes the role
+// (cmd/relay.go builds it as the role's name plus ".start"); its Detail names
+// the run, so past guide runs are findable by their name.
+const guideStartVerb = "guide.start"
 
 // endedSessionNamed resolves q among ended sessions (past guide runs, session
 // records, desktop records and ended harness sessions) whose transcript is on
@@ -1016,7 +1022,7 @@ func (a *app) endedSessionNamed(running []*claude.Session, st *state.State, q st
 				continue
 			}
 			var extra []string
-			if e.Verb == "guide.start" {
+			if e.Verb == guideStartVerb {
 				if m := asGuideRun.FindStringSubmatch(e.Detail); m != nil {
 					extra = append(extra, m[1])
 				}

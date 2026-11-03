@@ -355,7 +355,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, ana, "list_agents", map[string]any{}, false, "ana@example.com")
 
 	snap := e.expect(t, ana, "snapshot", map[string]any{}, false, "== Agents")
-	for _, k := range []string{"leases", "holds", "lanes", "notes", "agents"} {
+	for _, k := range []string{"leases", "holds", "lanes", keyNotes, "agents"} {
 		if _, ok := snap[k]; !ok {
 			t.Errorf("snapshot lacks %s", k)
 		}

@@ -63,7 +63,7 @@ func TestTheWatchStopsARevivedPredecessor(t *testing.T) {
 	}
 	oldCLI := &claude.Session{PID: 1580801, ID: old.Session, HostID: old.HostSession, Name: name}
 	nextCLI := &claude.Session{PID: 2, ID: next.Session, HostID: next.HostSession, Name: name}
-	person := &claude.Session{PID: 3, ID: "own-notes", Name: "notes"}
+	person := &claude.Session{PID: 3, ID: "own-notes", Name: keyNotes}
 
 	left := w.stopRevived(t.Context(), []*claude.Session{oldCLI, nextCLI, person})
 	if len(*ended) != 1 || (*ended)[0] != oldCLI.PID {

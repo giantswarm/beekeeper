@@ -17,6 +17,19 @@ const (
 	dialogWorkerSession = "worker-session"
 	dialogMergeChoice   = "Merge"
 	dialogSessionKey    = "session_id"
+	// dialogMergeQuestion is the note's dialog question all three dialog
+	// fixtures ask, so an answer recorded for it matches everywhere.
+	dialogMergeQuestion = "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
+	dialogLabelKey      = "label"
+	dialogAnswersKey    = "answers"
+	dialogQuestionKey   = "question"
+	dialogQuestionsKey  = "questions"
+	dialogToolRespKey   = "tool_response"
+	// pastGuideName names the ended guide run the successor test tails,
+	// pastGuideCLI its CLI session and pastGuideHost its desktop host session.
+	pastGuideName = "Guide run 15"
+	pastGuideCLI  = "guide-15-cli"
+	pastGuideHost = "local_guide15"
 )
 
 func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
@@ -46,10 +59,10 @@ func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			q := "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
-			raw, _ := json.Marshal(map[string]any{"hook_event_name": guard.PostToolUseEvent, dialogSessionKey: dialogSession, transcriptToolName: guard.AskTool,
-				transcriptInputKey: map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": dialogMergeChoice}, map[string]any{"label": "Rework"}}}}},
-				"tool_response":    map[string]any{"answers": map[string]string{q: dialogMergeChoice}}})
+			q := dialogMergeQuestion
+			raw, _ := json.Marshal(map[string]any{transcriptHookEventKey: guard.PostToolUseEvent, dialogSessionKey: dialogSession, transcriptToolName: guard.AskTool,
+				transcriptInputKey: map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: q, paramOptions: []any{map[string]any{dialogLabelKey: dialogMergeChoice}, map[string]any{dialogLabelKey: "Rework"}}}}},
+				dialogToolRespKey:  map[string]any{dialogAnswersKey: map[string]string{q: dialogMergeChoice}}})
 			a.redactResult(raw)
 			// Use the real session identity, not a caller-supplied role name.
 			a.as = ""
@@ -134,13 +147,13 @@ func TestGuideDialogKeepsSelectedOptionAndNotesVerbatim(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			q := "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
+			q := dialogMergeQuestion
 			raw, _ := json.Marshal(map[string]any{
-				"hook_event_name":  guard.PostToolUseEvent,
-				dialogSessionKey:   dialogSession,
-				transcriptToolName: guard.AskTool,
-				transcriptInputKey: map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": opt1Label + " (Recommended)"}, map[string]any{"label": opt2Label}}}}},
-				"tool_response":    map[string]any{"answers": map[string]string{q: opt1Label + " (Recommended)"}, "annotations": map[string]any{q: map[string]string{"notes": userNotes}}},
+				transcriptHookEventKey: guard.PostToolUseEvent,
+				dialogSessionKey:       dialogSession,
+				transcriptToolName:     guard.AskTool,
+				transcriptInputKey:     map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: q, paramOptions: []any{map[string]any{dialogLabelKey: opt1Label + " (Recommended)"}, map[string]any{dialogLabelKey: opt2Label}}}}},
+				dialogToolRespKey:      map[string]any{dialogAnswersKey: map[string]string{q: opt1Label + " (Recommended)"}, "annotations": map[string]any{q: map[string]string{keyNotes: userNotes}}},
 			})
 			a.redactResult(raw)
 			a.as = ""
@@ -211,10 +224,10 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			q := "Merge https://github.com/o/private/pull/7 at abc1234? Status quo: reviewed. Why: review limit."
-			resp := map[string]any{"answers": map[string]string{q: opt1Label}}
+			q := dialogMergeQuestion
+			resp := map[string]any{dialogAnswersKey: map[string]string{q: opt1Label}}
 			if !tc.fromTranscript {
-				resp["annotations"] = map[string]any{q: map[string]string{"notes": userNotes}}
+				resp["annotations"] = map[string]any{q: map[string]string{keyNotes: userNotes}}
 			} else {
 				a.cfg.Claude.ProjectsDir = t.TempDir()
 				projDir := filepath.Join(a.cfg.Claude.ProjectsDir, "proj")
@@ -230,11 +243,11 @@ func TestGuideDialogRefusesOptionLabelOnlyWhenPersonWroteText(t *testing.T) {
 				}
 			}
 			raw, _ := json.Marshal(map[string]any{
-				"hook_event_name":  guard.PostToolUseEvent,
-				dialogSessionKey:   dialogSession,
-				transcriptToolName: guard.AskTool,
-				transcriptInputKey: map[string]any{"questions": []any{map[string]any{"question": q, "options": []any{map[string]any{"label": opt1Label}, map[string]any{"label": opt2Label}}}}},
-				"tool_response":    resp,
+				transcriptHookEventKey: guard.PostToolUseEvent,
+				dialogSessionKey:       dialogSession,
+				transcriptToolName:     guard.AskTool,
+				transcriptInputKey:     map[string]any{dialogQuestionsKey: []any{map[string]any{dialogQuestionKey: q, paramOptions: []any{map[string]any{dialogLabelKey: opt1Label}, map[string]any{dialogLabelKey: opt2Label}}}}},
+				dialogToolRespKey:      resp,
 			})
 			a.redactResult(raw)
 			a.as = ""
@@ -264,14 +277,14 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 	a.now = now
 	a.cfg.Claude.ProjectsDir = t.TempDir()
 	a.cfg.Claude.DesktopDir = t.TempDir()
-	pastGuide := state.Party{Session: "guide-15-cli", HostSession: "local_guide15", Name: "Guide run 15"}
+	pastGuide := state.Party{Session: pastGuideCLI, HostSession: pastGuideHost, Name: pastGuideName}
 	nextGuide := state.Party{Session: "guide-16-cli", HostSession: "local_guide16", Name: "Guide run 16"}
 
 	projDir := filepath.Join(a.cfg.Claude.ProjectsDir, "proj")
 	if err := os.MkdirAll(projDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	transcript := filepath.Join(projDir, "guide-15-cli.jsonl")
+	transcript := filepath.Join(projDir, pastGuideCLI+".jsonl")
 	lines := []string{
 		`{"type":"assistant","timestamp":"2026-10-30T13:55:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?"}]}}]}}`,
 		`{"type":"user","timestamp":"2026-10-30T13:55:10Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions."}]},"toolUseResult":{"answers":{"Which approach?":"Approach 1"},"annotations":{"Which approach?":{"notes":"keep the existing config path and do not rename the flag"}}}}`,
@@ -286,9 +299,9 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	recJSON, _ := json.Marshal(map[string]any{
-		"sessionId":      "local_guide15",
-		"cliSessionId":   "guide-15-cli",
-		"title":          "Guide run 15",
+		"sessionId":      pastGuideHost,
+		"cliSessionId":   pastGuideCLI,
+		"title":          pastGuideName,
 		"isArchived":     true,
 		"lastActivityAt": now.Add(-4 * time.Minute).UnixMilli(),
 	})
@@ -301,14 +314,14 @@ func TestSuccessorGuideReadsPersonsWordsFromPastGuideSession(t *testing.T) {
 		st.Agents = []state.Agent{{Party: nextGuide, Task: guideRole.duty}}
 		st.SetGuideRole(state.Role{Holder: &state.Supervisor{Party: nextGuide, Since: now}})
 		return []state.Event{
-			{At: now.Add(-10 * time.Minute), By: pastGuide, Verb: "guide.start", Detail: "as Guide run 15"},
-			{At: now, By: nextGuide, Verb: "guide.start", Detail: "as Guide run 16"},
+			{At: now.Add(-10 * time.Minute), By: pastGuide, Verb: guideStartVerb, Detail: "as " + pastGuideName},
+			{At: now, By: nextGuide, Verb: guideStartVerb, Detail: "as Guide run 16"},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, target := range []string{"Guide run 15", "guide-15-cli", "local_guide15"} {
+	for _, target := range []string{pastGuideName, pastGuideCLI, pastGuideHost} {
 		out.Reset()
 		c := a.tailCmd()
 		c.SetArgs([]string{target, "-n", "5"})
