@@ -44,7 +44,7 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 			continue
 		}
 		if n := hostExecutions(st, selector); n > 0 {
-			reason := fmt.Sprintf("%d executions are in a turn on it (%s); it updates to %s once they are between turns", n, strings.Join(hostExecutionNames(st, selector), ", "), version)
+			reason := fmt.Sprintf("%d executions are in a turn on it (%s); it updates to %s once they are between turns", n, strings.Join(drainingWorkerNames(st, selector), ", "), version)
 			l.sayOnce("host drains "+selector+" "+version, "SUPERVISOR HOST DRAINS %s: %s", selector, reason)
 			l.noteBehind(selector, version, reason)
 			continue
@@ -62,9 +62,9 @@ func (l *supervisorLoop) updateHosts(ctx context.Context, st *state.State) {
 	}
 }
 
-// hostExecutionNames names the workers whose executions hold the host
+// drainingWorkerNames names the workers whose executions hold the host
 // selector's update back (hostExecutions).
-func hostExecutionNames(st *state.State, selector string) []string {
+func drainingWorkerNames(st *state.State, selector string) []string {
 	var names []string
 	for i := range st.Starts {
 		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !parkedBetweenTurns(st, x) {
