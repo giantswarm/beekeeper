@@ -191,10 +191,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
-	prevCheck, prevQueue := reviewedMergeCheck, requireReviewedMergeQueue
-	t.Cleanup(func() { reviewedMergeCheck, requireReviewedMergeQueue = prevCheck, prevQueue })
+	prevCheck, prevQueue := reviewedMergeCheck, readReviewedMergeQueue
+	t.Cleanup(func() { reviewedMergeCheck, readReviewedMergeQueue = prevCheck, prevQueue })
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
-	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return nil }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
@@ -482,13 +482,12 @@ func TestLoopForwardsChangesThenReworksUnfixedFindings(t *testing.T) {
 	if evs := r.logged(t, "supervisor.rework"); len(evs) != 1 {
 		t.Errorf("reworked twice for one park: %+v", evs)
 	}
-	// The fixes pushed and parked on: the merge go for the new head.
+	// The fixed head needs its own independent review.
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	wake = r.called(gateCmdName)
-	if wake == nil || !slices.Contains(wake, loopFixed) {
-		t.Fatalf("no merge go for the fixed head: %v\n%s", r.calls, r.out)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Fatalf("no review for the fixed head: %v", r.calls)
 	}
 }
 
@@ -503,8 +502,7 @@ func TestAnAnswerToTheLoopsNoteWakesNoSession(t *testing.T) {
 }
 
 // A new head after an approval with a change of its own gets the second
-// review, whatever supervisor.reviewRounds says; a third need is one
-// decision for the person.
+// review, whatever supervisor.reviewRounds says; a third head also gets one.
 func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
@@ -522,31 +520,26 @@ func TestLoopReviewsANewHeadAfterAnApproval(t *testing.T) {
 		t.Fatalf("a new head after an approval escalated: %v", note)
 	}
 	start := r.called(agentsName, agentStartName)
-	if start == nil || start[2] != "Review r 7 r2" {
+	if start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no review of the new head: %v\n%s", r.calls, r.out)
 	}
 	if evs := r.logged(t, "supervisor.review"); len(evs) != 2 || !strings.Contains(evs[1].Detail, loopFixed) {
 		t.Errorf("review logged as %+v", evs)
 	}
 	// The second review approves, and the worker pushes a change of its
-	// own once more: no third reviewer, one decision for the person.
+	// own once more: the new head gets a third reviewer.
 	r.verdict("R2", loopFixed, superloop.Approved, "")
 	r.pass(t)
 	const own = "3333333333333333333333333333333333333333"
 	r.pull.Head = own
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start != nil {
-		t.Fatalf("a third review started: %v", start)
-	}
-	note := r.called("note", loopAdd)
-	if note == nil || !slices.Contains(note, loopPerson) || note[len(note)-1] != superloop.EscalationQuestion(loopURL, own) ||
-		!slices.ContainsFunc(note, func(s string) bool { return strings.HasPrefix(s, "Merge: ") }) {
-		t.Fatalf("no decision for the person: %v\n%s", r.calls, r.out)
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 3) {
+		t.Fatalf("no third review: %v", r.calls)
 	}
 	r.pass(t)
-	if c := r.called("note", loopAdd); c != nil {
-		t.Errorf("asked twice: %v", c)
+	if c := r.called(agentsName, agentStartName); c != nil {
+		t.Errorf("review started twice: %v", c)
 	}
 }
 
@@ -651,7 +644,41 @@ func TestLoopReviewsAHeadItCannotCompare(t *testing.T) {
 	}
 }
 
-func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
+// The planner must start the round the execution merge gate requires,
+// including after an approval, a second round's findings and a new fix.
+func TestLoopReviewsFixesAfterExhaustedRounds(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	r.pass(t)
+	r.verdict("R2", loopFixed, superloop.ChangesRequested, "Review: changes requested")
+	r.pass(t)
+	const fixedAgain = "3333333333333333333333333333333333333333"
+	r.pull.Head = fixedAgain
+	r.park(t, loopPR, time.Now().Add(2*time.Minute))
+	r.pass(t)
+	if c := r.called(agentsName, agentStartName); c == nil || c[2] != superloop.ReviewerName(loopPR, 3) {
+		t.Fatalf("no independent round for fixed head: %v", r.calls)
+	}
+	if r.called(gateCmdName) != nil {
+		t.Fatal("unreviewed fixed head got merge go")
+	}
+	r.pass(t)
+	if r.called(agentsName, agentStartName) != nil || r.called(gateCmdName) != nil {
+		t.Fatal("repeated review or premature go")
+	}
+	r.verdict("R3", fixedAgain, superloop.Approved, "")
+	r.pass(t)
+	if c := r.called(gateCmdName); c == nil || !slices.Contains(c, fixedAgain) {
+		t.Fatalf("approved head got no go: %v", r.calls)
+	}
+}
+
+func TestLoopReviewsTheFixedHead(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -660,12 +687,12 @@ func TestLoopGivesTheFixedHeadTheGoWithoutASecondReview(t *testing.T) {
 	r.pull.Head = loopFixed
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if c := r.called(agentsName, agentStartName); c != nil {
-		t.Errorf("a second review started: %v", c)
+	if c := r.called(agentsName, agentStartName); c == nil {
+		t.Errorf("no second review started: %v", c)
 	}
 	wake := r.called(gateCmdName)
-	if wake == nil || !slices.Contains(wake, loopFixed) {
-		t.Errorf("no go for the fixed head: %v", r.calls)
+	if wake != nil {
+		t.Errorf("unapproved head got a go: %v", r.calls)
 	}
 }
 
@@ -1423,6 +1450,133 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 	}
 }
 
+// A step failing the same way for half an hour reaches the guide once, as
+// GUIDE PROBLEM naming the step, the item and the error, across restarts.
+func TestLoopFilesAStepStuckOnOneItemOnce(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "invalid authorization identity", ExitUsage
+		}
+		return "", 0
+	}
+	r.pass(t)
+	r.pass(t)
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("filed before the failure lasted: %+v", evs)
+	}
+	// Backdate the episode and the retry, as half an hour of backoffs would.
+	failures := r.logged(t, loopFailureVerb)
+	key, detail, _ := keyed(failures[len(failures)-1].Detail)
+	var f loopFailure
+	if err := json.Unmarshal([]byte(detail), &f); err != nil {
+		t.Fatal(err)
+	}
+	f.Since = time.Now().Add(-loopStuckAfter - time.Minute)
+	f.RetryAt = time.Now().Add(-time.Second)
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(event(loopParty, loopFailureVerb, "[%s] %s", key, b)); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.pass(t)
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 {
+		t.Fatalf("filed %d times: %+v", len(evs), evs)
+	}
+	lines, _ := guideProblemLines(&state.State{}, evs)
+	if len(lines) != 1 || !strings.Contains(lines[0], "review step") || !strings.Contains(lines[0], loopPR) ||
+		!strings.Contains(lines[0], "invalid authorization identity") {
+		t.Fatalf("guide problem: %q", lines)
+	}
+}
+
+// The same failure of a step on a second item is stuck at once, and stays
+// one episode: filed once, again only after it ended and came back.
+func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now()
+	r.a.now = t0
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	cause := errors.New("invalid merge authorization identity")
+	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: refOne}
+	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: idleRef}
+	other := superloop.Action{Kind: superloop.KindReview, Key: "review " + loopPR, Ref: loopPR}
+	for _, act := range []superloop.Action{a, other} {
+		if err := l.failed(act, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("one item per step filed at once: %+v", evs)
+	}
+	r.a.now = t0.Add(time.Minute)
+	if err := l.failed(b, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if !failures[b.Key].Since.Equal(t0) {
+		t.Fatalf("the second item started its own episode: %v", failures[b.Key].Since)
+	}
+	for range 2 {
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, loopPR) {
+		t.Fatalf("filed: %+v", evs)
+	}
+	guide := &state.State{}
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 {
+		t.Fatalf("guide problem: %q", lines)
+	}
+	// Both go quiet, not taken; the same failure on one item later is a
+	// new episode, neither filed at once nor continuing the filed one, and
+	// filed once it lasts.
+	r.a.now = t0.Add(2 * time.Hour)
+	if err := l.failed(a, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if f := failures[a.Key]; !f.Since.Equal(r.a.now) || f.Count != 1 {
+		t.Fatalf("a quiet failure continued its episode: %+v", f)
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+		t.Fatalf("a new episode filed at once: %+v", evs)
+	}
+	for _, m := range []time.Duration{10, 20, 30} {
+		r.a.now = t0.Add(2*time.Hour + m*time.Minute)
+		if err := l.failed(a, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	evs = r.logged(t, loopFileVerb)
+	if len(evs) != 2 {
+		t.Fatalf("a new episode filed %d times in all", len(evs))
+	}
+	// The guide says the new episode too.
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 || !strings.Contains(lines[0], "o/r#1") || strings.Contains(lines[0], "o/r#2") {
+		t.Fatalf("the second episode's guide problem: %q", lines)
+	}
+}
+
 func TestLoopPutsAWorkersQuestionInTheGuidesQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, "", time.Now())
@@ -1515,7 +1669,7 @@ func TestLoopAnOldApprovalAuthorizesNoNewHead(t *testing.T) {
 	r.pull.Head = loopFixed // the head moved before the go
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != "Review r 7 r2" {
+	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
 		t.Fatalf("no second round for the new head: %v", r.calls)
 	}
 	r.pass(t)
@@ -1543,8 +1697,8 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if wake := r.called(gateCmdName); wake == nil || !slices.Contains(wake, loopFixed) {
-		t.Errorf("no go for the fixes: %v", r.calls)
+	if review := r.called(agentsName, agentStartName); review == nil || review[2] != superloop.ReviewerName(loopPR, 2) {
+		t.Errorf("no review for the fixes: %v", r.calls)
 	}
 }
 
@@ -2715,6 +2869,45 @@ func TestLoopHostsFirstStartsLocalOnlyKindsLocally(t *testing.T) {
 	}
 }
 
+// A Claude choice a host runs and a self-hosted omp choice no host runs:
+// with no host room, leaving Claude to the hosts must not make the
+// self-hosted model the local pick while the subscription is eligible
+// (the local verdict picks Claude), so the start waits; only when no
+// subscription is eligible (the local verdict picks the self-hosted choice
+// itself) does the local start take it.
+func TestLoopHostsFirstNeverDowngradesToASelfHostedChoice(t *testing.T) {
+	const selfHosted = "local"
+	choices := []config.Choice{{Harness: claudeComm, Model: bgModel}, {Harness: config.OmpHarness, Model: "local/qwen-fixture", Provider: selfHosted, Kinds: []string{workerRole}}}
+	verdict := func(provider string) string { return `{"room": 1, "choice": {"provider": "` + provider + `"}}` }
+	for _, eligible := range []bool{true, false} {
+		r := hostsFirstRig(t, choices, func(host bool, exclude []string) string {
+			switch {
+			case host:
+				return loopNoRoomJSON
+			case len(exclude) > 0 || !eligible:
+				return verdict(selfHosted)
+			}
+			return verdict(claudeComm)
+		})
+		r.a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 2}, selfHosted: {Kind: config.KindSelfHosted, Ceiling: 2}}
+		r.pass(t)
+		r.pass(t)
+		start := r.called(agentsName, agentStartName, repoName(sshTestRepository)+" 9")
+		if eligible {
+			if start != nil {
+				t.Errorf("an eligible subscription: the loop started %v on the self-hosted choice", start)
+			}
+			continue
+		}
+		if start == nil {
+			t.Fatalf("no subscription eligible: the self-hosted start waited: %v\n%s", r.calls, r.out)
+		}
+		if slices.Contains(start, loopHostFlag) {
+			t.Errorf("a full host took the start: %v", start)
+		}
+	}
+}
+
 // The same mixed queue with a host that has room: the start goes there, as
 // hostsFirst prefers, and names no exclusion.
 func TestLoopHostsFirstPrefersAHostWithRoomForAMixedQueue(t *testing.T) {
@@ -3334,5 +3527,43 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 				t.Fatalf("retry did not record success: %+v", got)
 			}
 		})
+	}
+}
+
+// Scheduled exponential backoff must not expire a continuously failing step.
+func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := r.a.now
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
+	for count := 1; count <= 7; count++ {
+		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+			t.Fatal(err)
+		}
+		f := failures[act.Key]
+		if f.Count != count || !f.Since.Equal(start) {
+			t.Fatalf("episode lost at retry %d: %+v", count, f)
+		}
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+		r.a.now = f.RetryAt
+		if r.a.now.IsZero() {
+			r.a.now = start.Add(time.Minute)
+		}
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+		t.Fatalf("filed %d times", len(evs))
+	}
+	r.a.now = failures[act.Key].RetryAt.Add(loopStuckRecent)
+	if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(r.a.now) {
+		t.Fatalf("quiet episode continued: %+v", f)
 	}
 }

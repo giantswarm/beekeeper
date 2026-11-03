@@ -22,6 +22,23 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// An omp agent starts where every harness starts: without --dir in
+// agents.dir, never in the caller's directory, and a --dir outside
+// agents.dir and agents.roots is refused before anything is read or run.
+func TestOmpStartRunsInTheAgentsDirectory(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "agents-home")
+	a := &app{cfg: &config.Config{StateDir: t.TempDir(), Agents: config.Agents{Dir: home, Roots: []string{t.TempDir()}}}}
+	err := a.startOmpAgent(context.Background(), agentStart{name: "w", role: workerRole})
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), home) {
+		t.Errorf("an omp start without --dir: %v, want it in agents.dir %s", err, home)
+	}
+	elsewhere := t.TempDir()
+	err = a.startOmpAgent(context.Background(), agentStart{name: "w", role: workerRole, dir: elsewhere})
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "agents run in") {
+		t.Errorf("an omp start in %s, outside agents.dir and agents.roots: %v", elsewhere, err)
+	}
+}
+
 // A wake of an omp agent goes to its inbox while its process reads it, and
 // is refused once none does: nothing resumes an omp agent.
 func TestWakeOmp(t *testing.T) {
@@ -189,7 +206,7 @@ func TestOmpStartNeedsVault(t *testing.T) {
 		},
 		Choices: []config.Choice{
 			{Harness: claudeComm, Model: testModelOpus47},
-			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness},
+			{Harness: omp.Harness, Model: sparkModel, Provider: omp.Harness, Kinds: []string{workerRole}},
 		},
 	}
 	stubSubscriptionUsage(a)
