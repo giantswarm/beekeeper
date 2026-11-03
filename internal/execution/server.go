@@ -42,6 +42,18 @@ type Journal struct {
 	// resumes it and the codex guard binds tool calls to it. Claude's
 	// conversation is the request's own identity and leaves it empty.
 	Thread string `json:"thread,omitempty"`
+	// Policy is the host policy a coordinator-approved rebind moved this
+	// execution onto; empty, it is the signed request's own policy.
+	Policy string `json:"policy,omitempty"`
+}
+
+// BoundPolicy is the policy digest the execution's host-side commands require
+// the host's prepared policy to match.
+func (j Journal) BoundPolicy() string {
+	if j.Policy != "" {
+		return j.Policy
+	}
+	return j.Request.PolicyDigest
 }
 
 // Server operates only on journals it created. It never discovers or adopts
@@ -189,7 +201,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
+	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -391,6 +403,10 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	}
 	o.Lease = j.Lease
 	o.Messages, o.MessageSequence = j.Messages.Status(), j.Messages.Sequence
+	o.PolicyDigest = j.BoundPolicy()
+	if p, err := s.InstalledPolicy(); err == nil {
+		o.HostPolicyDigest = p.Digest()
+	}
 	if j.StopAcknowledged {
 		o.ProcessState = Exited
 		return o, nil
@@ -479,6 +495,48 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	return Ack{ID: q.ID, Stage: Applied}, nil
 }
 
+// RebindPolicy binds a running execution to the host's prepared policy. The
+// coordinator sends it only for the policy pinned in its host catalog; the
+// host still requires a launched execution whose owned unit is active, that
+// exact prepared policy and the bound one it replaces, so a stale request, an
+// exited execution or an unprepared host fails closed.
+func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Observation, error) {
+	if !ValidDigest(q.From) || !ValidDigest(q.To) {
+		return Observation{}, errors.New("policy rebind needs the bound and the prepared policy digests")
+	}
+	if s.Launcher == nil {
+		return Observation{}, errors.New("policy rebind needs the host's service manager")
+	}
+	if err := s.update(ctx, r, func(j *Journal) error {
+		if j.StopRequest != nil || j.StopAcknowledged || j.Completed || j.Phase != Running && j.Phase != Activating {
+			return errors.New("only a running execution is rebound; this one is not launched, or it stopped, completed, exited or failed")
+		}
+		switch s.Launcher.State(ctx, j.Handle.Unit) {
+		case unitActive, Activating, "reloading":
+		default:
+			return errors.New("only a running execution is rebound; its owned unit is not active")
+		}
+		p, err := s.InstalledPolicy()
+		if err != nil {
+			return err
+		}
+		if p.Digest() != q.To {
+			return errors.New("policy rebind target is not the host's prepared policy")
+		}
+		if j.BoundPolicy() == q.To {
+			return nil
+		}
+		if j.BoundPolicy() != q.From {
+			return errors.New("policy rebind source is not the execution's bound policy")
+		}
+		j.Policy = q.To
+		return nil
+	}); err != nil {
+		return Observation{}, err
+	}
+	return s.Inspect(ctx, r)
+}
+
 func (s *Server) cleanWorkspace(r Ref) {
 	if s.Config.WorkspaceRoot != "" {
 		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
@@ -492,6 +550,10 @@ func (s *Server) cleanWorkspace(r Ref) {
 		srcDir := filepath.Dir(s.sourcePath(r))
 		if within(s.Root, srcDir) {
 			_ = worktrees.RemoveAll(srcDir)
+		}
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
 		}
 	}
 }
@@ -582,6 +644,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = Decode(req.Payload, &q)
 				if err == nil {
 					value, err = s.Stop(ctx, req.Ref, q)
+				}
+			case rebindOperation:
+				var q PolicyRebind
+				err = Decode(req.Payload, &q)
+				if err == nil {
+					value, err = s.RebindPolicy(ctx, req.Ref, q)
 				}
 			case "logs":
 				var q LogRequest

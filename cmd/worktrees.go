@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -88,27 +89,61 @@ func (a *app) worktreeMachine() (worktreeMachine, error) {
 		},
 		now: time.Now(),
 	}
+	live, err := a.liveFolders(m.now)
+	m.live = live
+	if err != nil {
+		return m, fmt.Errorf("no worktree removed: %w", err)
+	}
+	return m, nil
+}
+
+// hookLiveDirs is liveFolders for the hook: the folders it read, an
+// unreadable roster or process table leaving out only what it holds.
+func (a *app) hookLiveDirs() []string {
+	// The error is dropped on purpose: the hook fails open, so an unreadable
+	// process table never blocks a session's every rm or mv; the worktree
+	// trim fails closed on the same error.
+	w := *a
+	if w.store == nil {
+		store, err := state.Open(a.cfg.StateDir)
+		if err != nil {
+			return nil
+		}
+		w.store = store
+	}
+	live, _ := w.liveFolders(time.Now())
+	return live
+}
+
+// liveFolders are the folders every process, running session, unarchived
+// desktop session and unfinished roster agent works in: what the worktree
+// trim keeps and the hook refuses to move away (guard.Hook.LiveDirs). An
+// unreadable process table or roster is an error, with the folders read
+// before it.
+func (a *app) liveFolders(now time.Time) ([]string, error) {
+	var live []string
 	t, err := plat.Machine.Processes()
 	if err != nil {
-		return m, fmt.Errorf("no worktree removed: the process table: %w", err)
+		return nil, fmt.Errorf("the process table: %w", err)
 	}
 	for pid := range t.ByPID {
 		if d := t.Cwd(pid); d != "" {
-			m.live = append(m.live, d)
+			live = append(live, d)
 		}
 	}
-	for _, s := range discover(a.cfg, t, m.now) {
-		m.live = append(m.live, s.Cwd)
+	for _, s := range discover(a.cfg, t, now) {
+		live = append(live, s.Cwd)
 	}
 	records := claude.ByCLI(a.cfg)
 	for _, r := range records {
 		if !r.IsArchived {
-			m.live = append(m.live, r.Cwd, r.OriginCwd)
+			live = append(live, r.Cwd, r.OriginCwd)
 		}
 	}
+	live = slices.DeleteFunc(live, func(p string) bool { return p == "" })
 	st, err := a.store.Read()
 	if err != nil {
-		return m, fmt.Errorf("no worktree removed: roster unavailable: %w", err)
+		return live, fmt.Errorf("roster unavailable: %w", err)
 	}
 	for _, agent := range st.Agents {
 		if agent.Done || agent.Task == "" && agent.Park == nil {
@@ -116,20 +151,19 @@ func (a *app) worktreeMachine() (worktreeMachine, error) {
 		}
 		for _, start := range st.Starts {
 			if agent.Session != "" && start.Session == agent.Session || agent.HostSession != "" && start.HostSession == agent.HostSession {
-				m.live = append(m.live, start.Dir)
+				live = append(live, start.Dir)
 			}
 		}
 		if r := records[agent.Session]; r != nil {
-			m.live = append(m.live, r.Cwd, r.OriginCwd)
+			live = append(live, r.Cwd, r.OriginCwd)
 		}
 		if p := claude.Transcript(a.cfg, agent.Session, ""); p != "" {
 			if cwd, err := claude.TranscriptCwd(p); err == nil {
-				m.live = append(m.live, cwd)
+				live = append(live, cwd)
 			}
 		}
 	}
-	m.live = slices.DeleteFunc(m.live, func(p string) bool { return p == "" })
-	return m, nil
+	return slices.DeleteFunc(live, func(p string) bool { return p == "" }), nil
 }
 
 // runGit runs git in dir, without its optional locks: a look refreshes no

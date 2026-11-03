@@ -19,6 +19,7 @@ import (
 
 const publicationClaudeVersion = "2.1.291"
 const publicationExpiredLease = "expired publication lease"
+const publicationFixturePRURL = "https://github.com/giantswarm/beekeeper/pull/42"
 
 type publicationRig struct {
 	a                       *app
@@ -154,7 +155,7 @@ func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if rig.creates != 1 || result.URL != "https://github.com/giantswarm/beekeeper/pull/42" || result.Branch != executionBranch(rig.request.Ref) {
+	if rig.creates != 1 || result.URL != publicationFixturePRURL || result.Branch != executionBranch(rig.request.Ref) {
 		t.Fatal("creation retry duplicated PR or lost ownership", result)
 	}
 	head = rig.commit(t, "change.txt", "review fix\n")
@@ -218,6 +219,15 @@ func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
 	err = publicationGitFailure(context.Background(), []string{gitBundle, gitVerify, "/fixture/path"}, "unexpected text")
 	if err.Error() != "publication Git bundle verify failed: unclassified Git failure" {
 		t.Fatal(err)
+	}
+	for _, stderr := range []string{
+		"error: Repository lacks these prerequisite commits:\nerror: 39f79705b73f1f29590eb81d1b15f3aa0a1335eb",
+		"Fehler: Dem Repository fehlen folgende vorausgesetzte Commits:\nFehler: 39f79705b73f1f29590eb81d1b15f3aa0a1335eb",
+	} {
+		err = publicationGitFailure(context.Background(), []string{gitBundle, gitVerify, "/fixture/path"}, stderr)
+		if !strings.Contains(err.Error(), "lacks prerequisite commits") {
+			t.Fatalf("prerequisite failure not diagnosed (%q): %v", stderr, err)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -406,9 +416,10 @@ func TestExecutionPublicationCheckRejectsOlderHost(t *testing.T) {
 	}
 }
 
-func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
-	rig := newPublicationRig(t)
-	rig.commit(t, "change.txt", "host command\n")
+// ownedPublicationHost installs a prepared host whose journal owns the rig's
+// execution, for host-side publication commands run as that execution.
+func ownedPublicationHost(t *testing.T, rig *publicationRig) (s *execution.Server, j execution.Journal, root, bodyPath string) {
+	t.Helper()
 	root, rootErr := filepath.EvalSymlinks(t.TempDir())
 	if rootErr != nil {
 		t.Fatal(rootErr)
@@ -418,13 +429,13 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := execution.Endpoint{SSH: "publication-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	s = &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
 	digest, err := s.Prepare(s.Policy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	rig.request.PolicyDigest = digest
-	j := execution.Journal{Request: rig.request, Digest: rig.request.Digest(), Handle: execution.Handle{Ref: rig.request.Ref, Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID, Workspace: rig.workspace, Commit: rig.base}}
+	j = execution.Journal{Request: rig.request, Digest: rig.request.Digest(), Handle: execution.Handle{Ref: rig.request.Ref, Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID, Workspace: rig.workspace, Commit: rig.base}}
 	raw, err := json.Marshal(j)
 	if err != nil {
 		t.Fatal(err)
@@ -444,10 +455,17 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	bodyPath := filepath.Join(scratch, "pr.md")
+	bodyPath = filepath.Join(scratch, "pr.md")
 	if err := os.WriteFile(bodyPath, []byte("Resolve the fixture defect."), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return s, j, root, bodyPath
+}
+
+func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
+	rig := newPublicationRig(t)
+	rig.commit(t, "change.txt", "host command\n")
+	s, _, root, bodyPath := ownedPublicationHost(t, rig)
 	command := rig.a.executionPublishCmd()
 	var output bytes.Buffer
 	command.SetOut(&output)
@@ -513,6 +531,10 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	if err != nil || len(strings.Fields(parents)) != 3 {
 		t.Fatal("base synchronization did not create a divergent merge", err)
 	}
+	message, messageErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%B")
+	if messageErr != nil || message != "Merge upstream default branch" {
+		t.Fatalf("base synchronization must use a neutral merge message: %q (%v)", message, messageErr)
+	}
 	name, nameErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%cn")
 	email, emailErr := publishGit(context.Background(), rig.workspace, "log", "-1", "--format=%ce")
 	if nameErr != nil || emailErr != nil || name != fixtureName || email != fixtureEmail {
@@ -524,6 +546,57 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	command.SetArgs(nil)
 	if err := command.Execute(); err == nil {
 		t.Fatal("unowned process published")
+	}
+}
+
+// A host upgrade re-prepares its policy under a running execution that already
+// published. Its follow-up keeps failing closed until the execution is rebound
+// to the prepared policy, then publishes to the same owned PR.
+func TestExecutionPublicationFollowUpAfterHostPolicyRebind(t *testing.T) {
+	rig := newPublicationRig(t)
+	rig.commit(t, "change.txt", "before the host upgrade\n")
+	s, j, _, bodyPath := ownedPublicationHost(t, rig)
+	publish := func(args ...string) (executionPublicationResult, error) {
+		command := rig.a.executionPublishCmd()
+		var output bytes.Buffer
+		command.SetOut(&output)
+		command.SetArgs(args)
+		var result executionPublicationResult
+		if err := command.Execute(); err != nil {
+			return result, err
+		}
+		return result, json.Unmarshal(output.Bytes(), &result)
+	}
+	first, err := publish("--title", "fix: fixture before the host upgrade", "--body-file", bodyPath)
+	if err != nil || first.URL == "" {
+		t.Fatal("first publication failed", err)
+	}
+	// The rebind needs a launched execution whose owned unit is active.
+	j.Phase = execution.Running
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(j.Handle.Ref.Execution)+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.Launcher = &agyTestLauncher{states: map[string]string{j.Handle.Unit: unitActive}}
+	original := j.Request.PolicyDigest
+	s.Version = "publication-test-upgraded"
+	prepared, err := s.Prepare(s.Policy())
+	if err != nil || prepared == original {
+		t.Fatal("fixture upgrade did not change the prepared policy", err)
+	}
+	head := rig.commit(t, "follow-up.txt", "after the host upgrade\n")
+	if _, err := publish(); err == nil || !strings.Contains(err.Error(), "agents recover") {
+		t.Fatal("follow-up published under a changed policy, or its refusal names no recovery", err)
+	}
+	if _, err := s.RebindPolicy(context.Background(), j.Handle.Ref, execution.PolicyRebind{From: original, To: prepared}); err != nil {
+		t.Fatal(err)
+	}
+	followUp, err := publish()
+	if err != nil || followUp.URL != first.URL || followUp.Head != head || followUp.Branch != first.Branch || rig.creates != 1 {
+		t.Fatalf("rebound follow-up did not publish to the owned PR: %+v, %v", followUp, err)
 	}
 }
 
@@ -578,5 +651,180 @@ func TestExecutionPublicationRejectsBulletMessage(t *testing.T) {
 	err = coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
 	if err == nil || pushes != 0 || rig.created {
 		t.Fatalf("protected commit-message bullet escaped: rejected=%t pushes=%d created=%t", err != nil, pushes, rig.created)
+	}
+}
+
+func TestExecutionPublicationFromShallowPRWorkspaceAndSyncBase(t *testing.T) {
+	rig := newPublicationRig(t)
+	ctx := context.Background()
+	branch := executionBranch(rig.request.Ref)
+	prHead := rig.commit(t, "pr.txt", "initial PR commit\n")
+	if _, err := publishGit(ctx, rig.workspace, "push", rig.remote, prHead+":refs/heads/"+branch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishGit(ctx, rig.workspace, "reset", "--hard", rig.base); err != nil {
+		t.Fatal(err)
+	}
+	mainHead := rig.commit(t, "upstream.txt", "upstream change on main\n")
+	if _, err := publishGit(ctx, rig.workspace, "push", rig.remote, mainHead+":refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	rig.created = true
+
+	root, rootErr := filepath.EvalSymlinks(t.TempDir())
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	shallowWorkspace := filepath.Join(root, "shallow-worker")
+	if _, err := publishGit(ctx, root, "clone", "--depth", "1", "--branch", branch, "file://"+rig.remote, shallowWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishGit(ctx, shallowWorkspace, "config", "user.email", "fixture@example.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishGit(ctx, shallowWorkspace, "config", "user.name", "Fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if !isShallowWorkspace(ctx, shallowWorkspace) {
+		t.Fatal("expected shallow workspace fixture")
+	}
+	rig.workspace = shallowWorkspace
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := st.Starts[0].Execution
+		record.Handle.Commit = prHead
+		record.Handle.Workspace = shallowWorkspace
+		record.Request.GitRef = prHead
+		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: publicationFixturePRURL}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := execution.SigningKey(filepath.Join(root, "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := execution.Endpoint{SSH: "publication-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
+	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: hostFixtureClaude, Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	digest, err := s.Prepare(s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.request.PolicyDigest = digest
+	j := execution.Journal{Request: rig.request, Digest: rig.request.Digest(), Handle: execution.Handle{Ref: rig.request.Ref, Unit: execution.UnitName(rig.request.Ref), ConversationID: rig.request.ConversationID, Workspace: shallowWorkspace, Commit: prHead}}
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, string(j.Handle.Ref.Execution)+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.OwnUnit = func() string { return j.Handle.Unit }
+	s.Callback = func(ctx context.Context, _ []string, raw []byte) ([]byte, error) {
+		var out bytes.Buffer
+		err := rig.a.serveExecutionCoordinator(ctx, string(j.Handle.Ref.Host), bytes.NewReader(raw), &out)
+		return out.Bytes(), err
+	}
+	rig.a.executionRuntime = func() (*execution.Server, error) { return s, nil }
+	t.Setenv(execution.EnvID, string(j.Handle.Ref.Execution))
+	if err := os.MkdirAll(filepath.Join(shallowWorkspace, ".beekeeper-scratch"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	fixHead := rig.commit(t, "pr.txt", "review fix from shallow workspace\n")
+	command := rig.a.executionPublishCmd()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	if err := command.Execute(); err != nil {
+		t.Fatalf("publish review fix from shallow PR workspace failed: %v", err)
+	}
+	actual, err := publishGit(ctx, rig.remote, "rev-parse", "refs/heads/"+branch)
+	if err != nil || actual != fixHead {
+		t.Fatalf("remote branch head = %s (%v), want %s", actual, err, fixHead)
+	}
+
+	command = rig.a.executionPublishCmd()
+	command.SetArgs([]string{"--sync-base"})
+	command.SetOut(&bytes.Buffer{})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("--sync-base in shallow PR workspace failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(shallowWorkspace, "upstream.txt")); err != nil {
+		t.Fatalf("expected upstream.txt after --sync-base: %v", err)
+	}
+	mergedHead, err := publishGit(ctx, shallowWorkspace, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command = rig.a.executionPublishCmd()
+	command.SetOut(&bytes.Buffer{})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("publish after --sync-base in shallow PR workspace failed: %v", err)
+	}
+	actual, err = publishGit(ctx, rig.remote, "rev-parse", "refs/heads/"+branch)
+	if err != nil || actual != mergedHead {
+		t.Fatalf("remote branch head after --sync-base publish = %s (%v), want %s", actual, err, mergedHead)
+	}
+}
+
+func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
+	rig := newPublicationRig(t)
+	ctx := context.Background()
+	branch := executionBranch(rig.request.Ref)
+	prHead := rig.commit(t, "pr.txt", "initial PR commit\n")
+	if _, err := publishGit(ctx, rig.workspace, "push", rig.remote, prHead+":refs/heads/"+branch); err != nil {
+		t.Fatal(err)
+	}
+	rig.created = true
+	fixHead := rig.commit(t, "pr.txt", "stranded review fix\n")
+	p := rig.publication(t, fixHead)
+	digest := p.BundleDigest
+
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := st.Starts[0].Execution
+		record.Handle.Commit = prHead
+		record.Request.GitRef = prHead
+		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: publicationFixturePRURL}
+		record.Observation.ProcessState = execution.Exited
+		record.Settled = true
+		record.Lease.ExpiresAt = time.Now().Add(-time.Minute)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rig.a.hasUnrecoveredPublication(st.Starts[0].Execution) {
+		t.Fatal("expected unrecovered publication to be detected")
+	}
+
+	command := rig.a.executionPublishCmd()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetArgs([]string{string(rig.request.Ref.Execution)})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("coordinator recovery failed: %v", err)
+	}
+	var recovered executionPublicationResult
+	if json.Unmarshal(output.Bytes(), &recovered) != nil || recovered.URL != publicationFixturePRURL || recovered.Head != fixHead {
+		t.Fatalf("recovery output = %q, want PR URL and head %s", output.String(), fixHead)
+	}
+	actual, err := publishGit(ctx, rig.remote, "rev-parse", "refs/heads/"+branch)
+	if err != nil || actual != fixHead {
+		t.Fatalf("remote branch head after recovery = %s (%v), want %s", actual, err, fixHead)
+	}
+	st, err = rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := st.Starts[0].Execution
+	if rec.Published == nil || rec.Published.Head != fixHead || rec.RecoveredTransfer != digest {
+		t.Fatalf("unexpected execution record after recovery: published=%+v recovered=%q", rec.Published, rec.RecoveredTransfer)
+	}
+	if rig.a.hasUnrecoveredPublication(rec) {
+		t.Fatal("expected publication to be marked recovered")
 	}
 }

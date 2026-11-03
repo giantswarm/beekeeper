@@ -101,7 +101,7 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 	if pull.State != superloop.Open || pull.Head != use.Head || !pull.Green {
 		return refused("merge head moved or current CI is not green")
 	}
-	return a.authenticateExecutionReview(st, use, pull)
+	return a.authenticateExecutionReview(ctx, st, use, pull)
 }
 
 func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, repository string, pr int, head string, issuer state.Party) (execution.MergeAuthorization, error) {
@@ -215,7 +215,7 @@ func (a *app) executionMergeCmd() *cobra.Command {
 			return err
 		}
 		policy, policyErr := s.InstalledPolicy()
-		if policyErr != nil || policy.Digest() != j.Request.PolicyDigest || j.StopRequest != nil {
+		if policyErr != nil || policy.Digest() != j.BoundPolicy() || j.StopRequest != nil {
 			return refused("remote merge policy changed or execution stopped")
 		}
 		if !execution.SupportedHarness(j.Request.Harness) {

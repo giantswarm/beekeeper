@@ -20,20 +20,24 @@ import (
 const (
 	HarnessClaude    = "claude"
 	HarnessCodex     = "codex"
+	HarnessAgy       = "agy"
 	Preparing        = "preparing"
 	Activating       = "activating"
 	Applied          = "applied"
 	ControlNote      = "note"
 	ControlPark      = "park"
+	ControlResume    = "resume"
 	ControlReport    = "report"
 	unitActive       = "active"
 	unitInactive     = "inactive"
 	inspectOperation = "inspect"
+	rebindOperation  = "rebind-policy"
 	sshCommand       = "ssh"
 	authCommand      = "auth"
 	Protocol         = 1
 	EnvID            = "BEEKEEPER_EXECUTION_ID"
 	EnvCoordinator   = "BEEKEEPER_EXECUTION_COORDINATOR"
+	EnvHome          = "BEEKEEPER_EXECUTION_HOME"
 	MaxWire          = 1 << 20
 	MaxLog           = 256 << 10
 	Prepared         = "prepared"
@@ -66,7 +70,9 @@ var refPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_./-]*$`)
 
 // SupportedHarness names the harnesses with a remote adapter. Every other
 // harness starts on the coordinating machine only.
-func SupportedHarness(h string) bool { return h == HarnessClaude || h == HarnessCodex }
+func SupportedHarness(h string) bool {
+	return h == HarnessClaude || h == HarnessCodex || h == HarnessAgy
+}
 
 func ValidIdentity(s string) bool { return identityPattern.MatchString(s) && s != "." && s != ".." }
 
@@ -83,6 +89,8 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	GitHub         bool   `json:"github,omitempty"`
+	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
 	Messaging      bool   `json:"messaging,omitempty"`
 	Builds         bool   `json:"builds"`
@@ -125,7 +133,7 @@ func (r StartRequest) Validate() error {
 		return errors.New("invalid pinned execution source")
 	}
 	if !SupportedHarness(r.Harness) || !refPattern.MatchString(r.Model) || len(r.Model) > 256 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 256 || strings.ContainsAny(r.Name, "\x00\r\n") {
-		return errors.New("remote starts require harness claude or codex, an explicit model and a name")
+		return errors.New("remote starts require harness claude, codex or agy, an explicit model and a name")
 	}
 	if strings.TrimSpace(r.Prompt) == "" || len(r.Prompt) > 256<<10 || len(r.Task) > 1024 || !ValidDigest(r.PolicyDigest) {
 		return errors.New("invalid prompt, task or policy digest")
@@ -172,6 +180,31 @@ type Observation struct {
 	StopRequested    bool        `json:"stopRequested"`
 	StopAcknowledged bool        `json:"stopAcknowledged"`
 	LastError        string      `json:"lastError,omitempty"`
+	// PolicyDigest is the policy the execution's host-side commands are bound
+	// to; HostPolicyDigest is the host's prepared policy, empty when it is
+	// unprepared or stale. A difference leaves the unit running while its
+	// publication, merge and capped runs refuse until a policy rebind.
+	PolicyDigest     string `json:"policyDigest,omitempty"`
+	HostPolicyDigest string `json:"hostPolicyDigest,omitempty"`
+}
+
+// PolicyAvailable reports whether the execution's host-side commands accept
+// the host's prepared policy. Hosts that predate the fields report neither.
+func (o Observation) PolicyAvailable() bool {
+	return o.PolicyDigest == "" || o.PolicyDigest == o.HostPolicyDigest
+}
+
+// PolicyRebind moves a running execution from the policy it is bound to onto
+// the host's prepared policy, once the coordinator approved that policy.
+type PolicyRebind struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// PolicyRebinder is the optional host operation behind agents recover after
+// an approved host-policy update.
+type PolicyRebinder interface {
+	RebindPolicy(context.Context, Ref, PolicyRebind) (Observation, error)
 }
 
 // FailedContact preserves the last process evidence. A transport failure
@@ -277,6 +310,7 @@ func (r Resources) Validate(now time.Time) error {
 }
 
 type Capabilities struct {
+	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`
 	Identity     HostID            `json:"identity"`
