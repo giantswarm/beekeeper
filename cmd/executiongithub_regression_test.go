@@ -40,6 +40,12 @@ func TestExecutionGitHubWorkerReadsWithScopedCredential(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, string(r.Ref.Host)+"-"+string(r.Ref.Execution)+"-1.json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Issuance verifies the coordinator's current token rather than trusting
+	// a possibly stale per-execution ledger after refresh.
+	current, _ := json.Marshal(map[string]any{"current": ledger[r.Repository+"/read"]})
+	if err := os.WriteFile(filepath.Join(dir, "oauth.json"), current, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var result struct {
 		Token   string    `json:"token"`
 		Expires time.Time `json:"expires_at"`
