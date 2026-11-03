@@ -152,7 +152,7 @@ changes and the two features. beekeeper log records the same.`,
 		},
 	}
 	c.Flags().StringVar(&o.app, "app", "", "the App: its id, or its slug for a public App")
-	c.Flags().StringVar(&o.org, "org", "", "the organisation of the installation (default: apps.repo's owner)")
+	c.Flags().StringVar(&o.org, "org", "", "the organisation or user account of the installation (default: apps.repo's owner)")
 	c.Flags().StringSliceVar(&o.repos, "repos", nil, "the repositories of --org the installation is to reach, exactly")
 	c.Flags().StringVar(&o.token, "token", "", "with --repos, the reference of a fine-grained token with "+selectionPermission)
 	c.Flags().BoolVar(&o.suspend, "suspend", false, "suspend the installation, as the App")
@@ -335,12 +335,17 @@ func (a *app) reinstall(ctx context.Context, asApp, slug string, id int64, o ins
 	return res, nil
 }
 
-// orgInstallation is the App's installation on org, read as the App.
+// orgInstallation is the App's installation on an organisation or user, read as the App.
 func orgInstallation(ctx context.Context, asApp, org string) (installation, error) {
 	var inst installation
 	err := githubJSON(ctx, http.MethodGet, "/orgs/"+url.PathEscape(org)+"/installation", asApp, http.StatusOK, &inst)
 	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
-		return inst, fmt.Errorf("not installed on %s: it reaches none of its repositories", org)
+		// A personal account has no organisation installation endpoint.
+		// Keep the App JWT for the user lookup; other failures are not absence.
+		err = githubJSON(ctx, http.MethodGet, "/users/"+url.PathEscape(org)+"/installation", asApp, http.StatusOK, &inst)
+		if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+			return inst, fmt.Errorf("not installed on %s: it reaches none of its repositories", org)
+		}
 	}
 	return inst, err
 }

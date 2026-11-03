@@ -97,7 +97,7 @@ func seedArchives(st *state.State, record func(host string) (*claude.Record, boo
 	st.ArchivesSeeded, st.FinishedSeeded, st.DoneSeeded = true, true, true
 	for _, s := range st.Starts {
 		switch {
-		case s.HostSession == "" || s.Harness != "" || roleKeeps(st, s.Party),
+		case s.HostSession == "" || s.Harness != "" || keepsRole(st, s.Party),
 			slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party) }),
 			slices.ContainsFunc(st.Archives, func(x state.Archive) bool { return x.Host == s.HostSession }):
 			continue
@@ -140,13 +140,13 @@ func latest(a, b time.Time) time.Time {
 
 // reseedable says whether the reseed owes the archive of start s, and when
 // its transcript was last written: an agent that reported its work done
-// (agents.done) or a role's run a relay relieved, whose CLI does not run and
-// whose session no person typed in. done holds the sessions that reported
-// done; transcript finds a session's transcript.
+// (agents.done), whose CLI does not run and whose session no person typed
+// in; a role's relieved run stays the person's (keepsRole). done holds the
+// sessions that reported done; transcript finds a session's transcript.
 func reseedable(st *state.State, s state.Start, done map[string]bool, live func(state.Party) bool,
 	transcript func(id string) (string, bool),
 ) (time.Time, bool) {
-	if !done[s.Session] && !relieved(st, s.Party) || live(s.Party) {
+	if !done[s.Session] || keepsRole(st, s.Party) || live(s.Party) {
 		return time.Time{}, false
 	}
 	path, ok := transcript(s.Session)
@@ -200,8 +200,8 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 			o.drop = "the desktop has it archived"
 		case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(ar.Party) }):
 			o.drop = "it is on the roster again"
-		case roleKeeps(st, ar.Party):
-			o.drop = "it holds or held the guide's role, and no relay relieved it"
+		case keepsRole(st, ar.Party):
+			o.drop = "it holds or held the guide's role, and the person closes it"
 		case givenUp(ar, now) != "":
 			o.drop = "the doctor gives it up: " + givenUp(ar, now)
 		case busy(ar.Party):
