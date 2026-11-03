@@ -32,7 +32,7 @@ func TestStandbyRecordsAGuideGoneWithItsWatch(t *testing.T) {
 		turning: func(context.Context, string) bool { return false },
 		succeed: func(context.Context, role, state.Party) (state.Party, error) {
 			started.Add(1)
-			return state.Party{Session: "sG8", Name: "Guide run 8"}, nil
+			return state.Party{Session: "sG8", Name: guideEight}, nil
 		},
 	}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = rebootedGuide(); return nil, nil }); err != nil {
@@ -85,15 +85,15 @@ func TestOnlyABeekeeperRunTakesTheGuide(t *testing.T) {
 		st.Guide = rebootedGuide()
 		st.Guide.CLI.Gone = relayNow.Add(-time.Hour)
 		st.Starts = append(st.Starts,
-			state.Start{Party: state.Party{Session: "s5", Name: "Agent five"}, Mode: state.ModeBypass},
-			state.Start{Party: state.Party{Session: "s6", Name: "Guide run 8"}, Mode: state.ModeBypass, Role: guideName})
+			state.Start{Party: state.Party{Session: "s5", Name: agentFive}, Mode: state.ModeBypass},
+			state.Start{Party: state.Party{Session: "s6", Name: guideEight}, Mode: state.ModeBypass, Role: guideName})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	a.now = relayNow
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
-	for _, s := range []struct{ id, name string }{{"s4", "Guide run 8"}, {"s5", "Agent five"}} {
+	for _, s := range []struct{ id, name string }{{"s4", guideEight}, {"s5", agentFive}} {
 		t.Setenv("CLAUDE_CODE_SESSION_ID", s.id)
 		t.Setenv("CLAUDE_CODE_SESSION_NAME", s.name)
 		for _, takeOver := range []bool{false, true} {
@@ -103,7 +103,7 @@ func TestOnlyABeekeeperRunTakesTheGuide(t *testing.T) {
 		}
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s6")
-	t.Setenv("CLAUDE_CODE_SESSION_NAME", "Guide run 8")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", guideEight)
 	if err := a.runStart(context.Background(), guideRole, false); err != nil {
 		t.Fatalf("the guide run beekeeper started: %v", err)
 	}
@@ -161,8 +161,8 @@ func TestNewGuideRunRefusals(t *testing.T) {
 	a, _ := stubApp(t)
 	a.now = relayNow
 	a.as = personAsker
-	runLive(t, a, map[int]string{9: "Guide run 9"})
-	live := state.Party{Session: "s9", Name: "Guide run 9"}
+	runLive(t, a, map[int]string{9: guideNine})
+	live := state.Party{Session: "s9", Name: guideNine}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: live, Since: relayNow.Add(-time.Hour)}, Run: 9}
 		return nil, nil
@@ -173,7 +173,7 @@ func TestNewGuideRunRefusals(t *testing.T) {
 		t.Fatalf("a live guide: %v", err)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide.Holder.Party = state.Party{Session: "gone", Name: "Guide run 9"}
+		st.Guide.Holder.Party = state.Party{Session: holderGone, Name: guideNine}
 		st.Guide.Relay = &state.Relay{From: st.Guide.Holder.Party, To: state.Party{Name: "Guide run 10"}, At: relayNow, Expires: relayNow.Add(15 * time.Minute)}
 		return nil, nil
 	}); err != nil {

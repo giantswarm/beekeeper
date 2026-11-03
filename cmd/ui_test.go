@@ -136,7 +136,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	for _, l := range d.Leases.Held {
 		switch l.Resource {
 		case uiLab1:
-			gone = l.State == "gone" && l.Name == "gone-session" && l.Purpose == uiPurpose && !l.Since.IsZero()
+			gone = l.State == holderGone && l.Name == "gone-session" && l.Purpose == uiPurpose && !l.Since.IsZero()
 		case uiLab2:
 			person = l.State == "person" && l.Name == uiPerson
 		}
