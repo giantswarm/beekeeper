@@ -15,6 +15,11 @@ const (
 	harnessDefaultModel = "harness default"
 	authorNeedsReview   = "--author-model requires a review"
 	taskKindArg         = "--kind"
+	// selfHostedWorker is the reason a self-hosted choice without kinds
+	// takes no worker start.
+	selfHostedWorker = modelPolicyPrefix + " a self-hosted choice takes task kind " + workerRole + " only when its kinds list it"
+	// choiceRule is how a start's choice is made, for every start alike.
+	choiceRule = "eligible subscription with the most 7-day budget left per hour until its reset, lower configured cost then configured order breaking ties; a self-hosted choice only when no subscription is eligible"
 )
 
 func (a *app) ruleModel(name, kind string) string {
@@ -45,6 +50,11 @@ func modelPolicyReason(k config.Capacity, ch config.Choice, pv *providerView, bu
 	}
 	if len(ch.Kinds) > 0 && !slices.Contains(ch.Kinds, task) {
 		return "model policy: task kind " + task + " is not permitted"
+	}
+	// A self-hosted model writes code only where the desk says so: without
+	// kinds, it takes every kind but worker.
+	if len(ch.Kinds) == 0 && task == workerRole && k.Providers[ch.EffectiveProvider()].SelfHosted() {
+		return selfHostedWorker
 	}
 	p := k.TaskPolicies[task]
 	review := kind != forWorker || task == taskKindReview

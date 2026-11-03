@@ -124,9 +124,12 @@ unit still to start, and resume runs again once it is fixed. The capacity is wha
 changes capacity.ceiling. A wake timer that fell due
 during the stop fires at the watch's next poll.
 
-It starts no session: it names the sessions the stop ended, which wait for
+It starts no worker: it names the sessions the stop ended, which wait for
 a wake (beekeeper agents wake), and touches no session the person started.
-It prints what it lifted and restarted.`,
+It starts the guide when its session runs no CLI (a reboot, a crash): the
+next "Guide run N", as ` + "`beekeeper guide start --new`" + ` does, unless a run is
+starting already or no guide is recorded (guide stop). It prints what it
+lifted, restarted and started.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return a.resume(cmd.Context()) },
 	}
@@ -485,6 +488,16 @@ func (a *app) resume(ctx context.Context) error {
 	p("resume: capacity as configured: ceiling %d", a.cfg.Capacity.Ceiling)
 	if len(rec.Sessions) > 0 {
 		p("resume: the sessions the stop ended wait for a wake (beekeeper agents wake): %s", strings.Join(rec.Sessions, ", "))
+	}
+	for _, rl := range roles {
+		line, err := a.resumeRole(ctx, rl, me)
+		if err != nil {
+			p("resume: FAILED %v", err)
+			return fmt.Errorf("the stop is lifted, but the %s did not start (above): beekeeper %s start --new starts it", rl.name, rl.name)
+		}
+		if line != "" {
+			p("resume: %s", line)
+		}
 	}
 	return nil
 }

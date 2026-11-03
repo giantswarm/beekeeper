@@ -197,10 +197,10 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	}
 }
 
-func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
+func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
 	r := newLoopRig(t)
 	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring the two allowed review rounds.
+	// worker publishes heads requiring additional reviews.
 	r.command = func([]string) (string, int) { return "branch behind base", 1 }
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -215,19 +215,18 @@ func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
 	r.pull.Head = third
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if r.called("note", loopAdd) == nil {
-		t.Fatal("no escalation")
+	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
+		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
 	}
-	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
-	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, RelayedBy: verifyGuide, Answer: dialogMergeChoice, Note: 9}
-	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
-		t.Fatal(err)
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
+		t.Fatalf("no independent review for third head: %v", r.calls)
 	}
+	r.verdict("R3", third, superloop.Approved, "")
+
 	r.pass(t)
 	call := r.called(gateCmdName)
 	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("session answer did not release its head without answer verify: %v\n%s", r.calls, r.out)
+		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -729,11 +728,8 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 }
 
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
-// the loop's own exact-head merge claim is its go. A head that carries the
-// fixes of the last round's findings, which the planner sends to merge with
-// no further review, merges through reviewedMerge as it does through the
-// gate; a desk review requesting changes on that head refuses it.
-func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
+// an ownership claim is insufficient even when an older review was fixed.
+func TestReviewedMergeRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix planOverlap case matching")
 	r.pull.Head = loopFixed
@@ -741,8 +737,8 @@ func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
-	if doc.ExitCode != 0 || len(r.cmds) != 1 {
-		t.Fatalf("fixes-only go with the loop's claim: %+v cmds=%v, want a merge", doc, r.cmds)
+	if doc.ExitCode != github.SquashRefused || len(r.cmds) != 0 {
+		t.Fatalf("ownership claim alone: %+v cmds=%v, want refusal", doc, r.cmds)
 	}
 	if doc.RequestedBy != "supervisor loop (for "+loopWorker+")" {
 		t.Fatalf("RequestedBy = %q", doc.RequestedBy)
