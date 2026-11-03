@@ -866,3 +866,22 @@ execution lease expires also revokes its credentials. The managed command hooks 
 same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
 installation token cannot itself limit Contents writes to one branch. Hosts
 therefore still require the managed guards and owned execution identity.
+
+## Rerun failed CI without a new commit
+
+From a GitHub-enabled execution's workspace, run
+`beekeeper agents rerun <pull-request-number>`. The authenticated callback
+asks the coordinator to run `devctl pr rerun` for the execution's repository.
+Only a PR on that execution's assigned branch is accepted. Stopped, completed,
+expired-lease and GitHub-held executions cannot request a rerun.
+
+The coordinator needs its own CircleCI login with Write access. CI credentials
+stay there; the worker receives devctl's output, diagnostics and exit code
+(including authentication-required exit 8). The command starts failed-workflow
+reruns without waiting for completion. Read the failure first and use this for
+transient CI failures; code failures still need a fix. A lost callback reply is
+not proof that no rerun started: inspect CI before trying again.
+
+The generated CircleCI configuration invokes `architect/go-build`; retrying a
+transient Rekor signing failure inside that job belongs in the architect orb,
+not an edit to Beekeeper's generated workflow files.
