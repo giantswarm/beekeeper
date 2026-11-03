@@ -127,7 +127,6 @@ func TestHostSelfUpdateInstallsTheReleaseWhichPreparesItsOwnPolicy(t *testing.T)
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 	if !reflect.DeepEqual(got, want) {
-
 		t.Fatalf("self-update answered %+v, want the installed release's %+v", got, want)
 	}
 	if !slices.Equal(h.installs, []string{hostNewRelease}) || !slices.Equal(h.restarts, []string{sshTestExecutable}) {
@@ -183,7 +182,6 @@ func TestHostSelfUpdateChangesNothingWhileExecutionsRun(t *testing.T) {
 	stubHostInstall(t, h)
 	got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, nil)
 	if !slices.Equal(got.Executions, []execution.Ref{r.Ref}) || got.Busy != 1 || got.Error != "" || got.PolicyDigest != "" || got.Version != hostOldRelease {
-
 		t.Fatalf("self-update answered %+v, want busy and unchanged", got)
 	}
 	if len(h.installs) != 0 {
@@ -655,7 +653,7 @@ func TestReleaseVersionIsATagNotABuild(t *testing.T) {
 		"v0.174.0+dirty":                            false,
 		"v0.174.0-rc.1; true":                       false,
 	} {
-		if got := releaseVersion(v); !reflect.DeepEqual(got, want) {
+		if got := releaseVersion(v); got != want {
 			t.Errorf("releaseVersion(%q) = %v, want %v", v, got, want)
 		}
 	}

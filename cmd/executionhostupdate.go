@@ -132,7 +132,6 @@ anonymously.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) er
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(execution.HostUpdate{Protocol: execution.Protocol, Error: err.Error()})
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version, given))
-
 	}}
 	selfUpdate.Flags().StringVar(&version, hostVersionFlag, "", "the release to install, the coordinator's")
 	selfUpdate.Flags().IntVar(&protocol, "protocol", 0, "execution protocol")
