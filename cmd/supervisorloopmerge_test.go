@@ -201,10 +201,10 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	}
 }
 
-func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
+func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
 	r := newLoopRig(t)
 	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring the two allowed review rounds.
+	// worker publishes heads requiring additional reviews.
 	r.command = func([]string) (string, int) { return "branch behind base", 1 }
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
@@ -219,19 +219,18 @@ func TestLoopEscalationReleasesMergeWithoutAnswerVerify(t *testing.T) {
 	r.pull.Head = third
 	r.park(t, loopPR, time.Now().Add(2*time.Minute))
 	r.pass(t)
-	if r.called("note", loopAdd) == nil {
-		t.Fatal("no escalation")
+	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
+		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
 	}
-	n := state.Note{ID: 9, By: loopParty, Text: superloop.EscalationQuestion(loopURL, third)}
-	recorder := state.Party{Session: dialogSession, Name: verifyGuide}
-	rec := recordedAnswer{About: loopPR, By: loopPerson, Channel: channelSession, RelayedBy: verifyGuide, Answer: dialogMergeChoice, Note: 9}
-	if err := r.a.store.Record(answerEvent(recorder, &rec, &n)); err != nil {
-		t.Fatal(err)
+	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
+		t.Fatalf("no independent review for third head: %v", r.calls)
 	}
+	r.verdict("R3", third, superloop.Approved, "")
+
 	r.pass(t)
 	call := r.called(gateCmdName)
 	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("session answer did not release its head without answer verify: %v\n%s", r.calls, r.out)
+		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
 	}
 }
 

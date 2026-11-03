@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -24,12 +25,21 @@ type opClass struct {
 	name  string
 	match *regexp.Regexp
 	where string
+	// options says the class matches the note's options too, not only its
+	// question: an option set of "file it" or "who fixes it" is the ask.
+	options bool
 }
 
 // opClasses are the operational asks a worker's note may not put to a
 // person, in the order they are tried: each is the supervisor loop's or
 // the desk's own machinery, never a person's decision.
 var opClasses = []opClass{
+	{
+		name:    "defect",
+		match:   regexp.MustCompile(`(?i)\bwho\b[^.?!:]{0,30}\b(fix(es|ing)?|repairs?)\b|\b(file|open|create|raise|log|track|report)\b[^.?!:]{0,40}\b(defects?|bugs?|panics?|crash(es)?|regressions?)\b|\bplease track\b`),
+		where:   "a defect is a problem report, never a person's decision: the worker reports it with its evidence and owning repository (beekeeper agents problem \"<finding>\", or --problem with agents idle) and the guide files it; a broken main or gate is reported the same way while the worker carries on with independent work",
+		options: true,
+	},
 	{
 		name:  "review",
 		match: regexp.MustCompile(`(?i)^(please\s+)?review\b|\b(desk|independent) reviews?\b|\breviewers?\b|\b(arrange|start|request|trigger|staff|schedule|assign|kick off|get|need)\b[^.?!]{0,40}\breview`),
@@ -74,7 +84,8 @@ var opClasses = []opClass{
 var reserved = regexp.MustCompile(`(?i)\b(spend(s|ing)?|spent|costs?|costly|pay(s|ing)?|paid|prices?|pricing|budgets?|purchase[sd]?|buy(ing)?|invoices?|billing|eur|usd|euros?|dollars?|per (month|year)|monthly|yearly|annual|licen[cs]es?|contracts?|consent(s|ing)?|legal|accounts?|credentials?|secrets?|publish(es|ing)?\s+(the\s+)?(release|packages?|charts?|images?|artifacts?)|public(ly)?|production|customers?)\b|[$€£]\s?\d`)
 
 // operational is the class of d's question when it is an operational ask
-// (opClasses), and whether it is one. A note that links a plans
+// (opClasses), and whether it is one: its question, or for a class of
+// options one of its options' choices, matches. A note that links a plans
 // repository's pull request is the person's plan review, and a reserved
 // question (spending, consent, accounts, anything public or in production)
 // the person's own decision: neither is one.
@@ -89,6 +100,12 @@ func operational(d noteDraft, plans config.Plans) (opClass, bool) {
 	}
 	for _, c := range opClasses {
 		if c.match.MatchString(d.Question) {
+			return c, true
+		}
+		if c.options && slices.ContainsFunc(d.Options, func(o string) bool {
+			choice, _, _ := strings.Cut(o, ":")
+			return c.match.MatchString(choice)
+		}) {
 			return c, true
 		}
 	}

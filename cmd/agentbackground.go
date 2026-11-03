@@ -296,7 +296,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	if err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w", sp.name, err)
 	}
-	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Background: true}
+	s := state.Start{Party: state.Party{Session: id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Model: sp.model, Background: true, Role: startRole(sp.role)}
 	var reg registration
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -368,8 +368,8 @@ func (a *app) stopBackgroundStart(ctx context.Context, st *state.State, p state.
 	}
 	id := st.Starts[i].Session
 	short := id[:min(8, len(id))]
-	if roleKeeps(st, p) {
-		return fmt.Sprintf("its background session %s stays: it holds or held the guide's role, and no relay relieved it", short), true
+	if keepsRole(st, p) {
+		return fmt.Sprintf("its background session %s stays: it holds or held the guide's role, and the person closes it", short), true
 	}
 	if s, ok := a.runningTurn(p); ok {
 		return fmt.Sprintf("its background session %s stays: its CLI %d is in a turn", short, s.PID), true
@@ -431,7 +431,7 @@ func parkedResident(st *state.State, sessions []*claude.Session, t *proc.Table, 
 		if i := st.StartIndex(ag.Party); i < 0 || !st.Starts[i].Background {
 			continue
 		}
-		if roleKeeps(st, ag.Party) {
+		if keepsRole(st, ag.Party) {
 			continue
 		}
 		live, busy := false, false

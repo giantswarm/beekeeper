@@ -142,8 +142,7 @@ func TestAnOldVerdictAuthorizesNothing(t *testing.T) {
 	}
 }
 
-// A head that moved past an approval is a new review, whatever
-// supervisor.reviewRounds says: the cap counts change-request rounds.
+// Every new head beyond an approval gets its own review.
 func TestANewHeadAfterAnApprovalGetsItsOwnReview(t *testing.T) {
 	approved := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
@@ -418,49 +417,30 @@ func TestABaseMergeAfterAChangeRequestGetsNoGo(t *testing.T) {
 }
 
 // An approved head the worker moved past with more commits is reviewed
-// again, once: a change past MaxReviews is the person's decision (merge it
-// without a third review, or rework), asked once per head, whatever
-// supervisor.reviewRounds says.
-func TestAThirdReviewIsThePersonsDecision(t *testing.T) {
-	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, At: t1}
-	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2*time.Hour + time.Minute)}
-	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
-		Action{Key: forwardKey(pr, "R1"), Kind: KindForward, Ref: pr, Agent: worker})
-	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
-	in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 5, Person: guidePerson, Taken: acts}
-	a := only(t, Plan(in), KindEscalate)
-	if a.Head != head3 || a.Question != EscalationQuestion(prURL, head3) || !strings.Contains(a.Message, "2 reviews are used") {
-		t.Errorf("escalation = %+v", a)
-	}
-	// The answer carries an option's label: Merge releases, Rework not.
-	opts := EscalationOptions(head3)
-	labels := make([]string, len(opts))
-	for i, o := range opts {
-		labels[i], _, _ = strings.Cut(o, ":")
-	}
-	if len(labels) != 2 || labels[0] != mergeAnswer || !Releases(labels[0]) || Releases(labels[1]) {
-		t.Errorf("options %q", opts)
-	}
-	// Asked once: the next pass, and one with the person's answer still
-	// out, ask nothing again.
-	in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), a)...)
-	if got := Plan(in); len(got) != 0 {
-		t.Errorf("a second pass took %+v", got)
-	}
-	// The person releases it: the go for that head.
-	in.Answers = []Answer{{Ref: pr, Note: 9, Question: a.Question, Text: mergeAnswer, By: guidePerson, At: t0.Add(5 * time.Hour)}}
-	if g := only(t, Plan(in), KindGo); g.Head != head3 || !strings.Contains(g.Message, "note #9") {
-		t.Errorf("go = %+v", g)
-	}
-	// A rework answer goes to the worker; its next head is asked about
-	// again, never reviewed a third time.
-	in.Answers[0].Text = "Rework — split it out"
-	an := only(t, Plan(in), KindAnswer)
-	in.Taken = append(in.Taken, taken(t, t0.Add(6*time.Hour), an)...)
-	in.Workers = parked(t0.Add(7 * time.Hour))
-	in.Pulls = pull("4444444444444444444444444444444444444444", true, r1, r2)
-	if e := only(t, Plan(in), KindEscalate); e.Head != "4444444444444444444444444444444444444444" {
-		t.Errorf("escalation of the reworked head = %+v", e)
+// again, even when historical rounds and a legacy merge go are used up.
+func TestNewHeadAfterExhaustedRoundsGetsOneReview(t *testing.T) {
+	for _, verdict := range []string{Approved, ChangesRequested} {
+		r1 := Review{ID: "R1", Head: head1, Verdict: Approved, At: t1}
+		r2 := Review{ID: "R2", Head: head2, Verdict: verdict, At: t0.Add(2*time.Hour + time.Minute)}
+		acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+		acts = append(acts, taken(t, t0.Add(2*time.Hour),
+			Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker},
+			Action{Key: forwardKey(pr, "R2"), Kind: KindForward, Ref: pr, Agent: worker})...)
+		// A pre-upgrade go that the gate refused must not repeat.
+		acts = append(acts, taken(t, t0.Add(150*time.Minute), Action{Key: goKey(pr, head3), Kind: KindGo, Ref: pr, Agent: worker})...)
+		in := Input{Workers: parked(t0.Add(3 * time.Hour)), Pulls: pull(head3, true, r1, r2), Rounds: 1, Taken: acts}
+		review := only(t, Plan(in), KindReview)
+		if review.Head != head3 || review.Round != 3 {
+			t.Fatalf("review = %+v", review)
+		}
+		in.Taken = append(in.Taken, taken(t, t0.Add(4*time.Hour), review)...)
+		if got := Plan(in); len(got) != 0 {
+			t.Fatalf("duplicate review or go: %+v", got)
+		}
+		in.Pulls = pull(head3, true, r1, r2, Review{ID: "R3", Head: head3, Verdict: Approved, At: t0.Add(4*time.Hour + time.Minute)})
+		if g := only(t, Plan(in), KindGo); g.Head != head3 {
+			t.Fatalf("go = %+v", g)
+		}
 	}
 }
 
@@ -1335,11 +1315,8 @@ func TestPlanIntakesFiledIssuesBeforeStartingNext(t *testing.T) {
 	}
 }
 
-// The desk's standing rule is one review, then the fixes and the merge:
-// past MaxReviews, a head whose change beyond the approved one stays in
-// the files the reviews' findings name and tests gets the go with no
-// note; one that changes another file goes to the person, the file named.
-func TestAHeadPastTheReviewsThatOnlyFixesFindingsMerges(t *testing.T) {
+// File names in findings cannot stand in for approval of a new head.
+func TestAHeadPastTheReviewsGetsReviewedRegardlessOfFiles(t *testing.T) {
 	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "Review: changes requested\n- cmd/agentpark.go:12 drops the wait", At: t1}
 	r2 := Review{ID: "R2", Head: head2, Verdict: Approved, Body: "Review: approved\nnit: internal/state/state.go:40 could name the field", At: t0.Add(2*time.Hour + time.Minute)}
 	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker},
@@ -1352,8 +1329,8 @@ func TestAHeadPastTheReviewsThatOnlyFixesFindingsMerges(t *testing.T) {
 			asked = append(asked, reviewed+".."+p.Head)
 			return changed, nil
 		}}
-	g := only(t, Plan(in), KindGo)
-	if g.Head != head3 || !strings.Contains(g.Message, "the files of the reviews' findings and tests") || !slices.Equal(asked, []string{head2 + ".." + head3}) {
+	g := only(t, Plan(in), KindReview)
+	if g.Head != head3 || g.Round != 3 || len(asked) != 0 {
 		t.Errorf("go = %+v, compared %v", g, asked)
 	}
 	// Red checks: no go yet, and no note either.
@@ -1361,15 +1338,15 @@ func TestAHeadPastTheReviewsThatOnlyFixesFindingsMerges(t *testing.T) {
 	if got := Plan(in); len(got) != 0 {
 		t.Errorf("a red head past the reviews got %+v", got)
 	}
-	// A file no finding names: the person decides, told which file.
+	// A file no finding names also gets a review.
 	in.Pulls = pull(head3, true, r1, r2)
 	changed = append(changed, "cmd/board.go")
-	if e := only(t, Plan(in), KindEscalate); e.Head != head3 || !strings.Contains(e.Message, "it changes cmd/board.go, which no review finding names") {
+	if e := only(t, Plan(in), KindReview); e.Head != head3 || e.Round != 3 {
 		t.Errorf("escalation = %+v", e)
 	}
-	// A comparison GitHub cuts short proves nothing: the person decides.
+	// An unreadable file comparison cannot bypass the review.
 	in.ChangedPast = func(Pull, string) ([]string, error) { return nil, errors.New("at the comparison's cap") }
-	if e := only(t, Plan(in), KindEscalate); !strings.Contains(e.Message, "cannot be read: at the comparison's cap") {
+	if e := only(t, Plan(in), KindReview); e.Round != 3 {
 		t.Errorf("escalation = %+v", e)
 	}
 }
