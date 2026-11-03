@@ -741,7 +741,14 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { close(release); l.passActions.Wait(); l.mergeActions.Wait() }()
+			released := false
+			defer func() {
+				if !released {
+					close(release)
+				}
+				l.passActions.Wait()
+				l.mergeActions.Wait()
+			}()
 			pass := func() {
 				t.Helper()
 				done := make(chan error, 1)
@@ -777,6 +784,22 @@ func TestLoopSlowStartDoesNotBlockLaterPassMerge(t *testing.T) {
 			}
 			if got := starts.Load(); got != 1 {
 				t.Fatalf("slow start launched %d times, want 1", got)
+			}
+			// A binary replacement also must not block a pass behind the
+			// slow start. Re-execution happens only after the streams drain.
+			r.mu.Lock()
+			r.replaced = true
+			r.mu.Unlock()
+			pass()
+			if r.execs != 0 {
+				t.Fatal("re-executed while the start was still in flight")
+			}
+			close(release)
+			released = true
+			l.passActions.Wait()
+			l.mergeActions.Wait()
+			if reexec, err := l.reexec(t.Context()); err != nil || !reexec {
+				t.Fatalf("quiet re-execution = %v, %v", reexec, err)
 			}
 		})
 	}

@@ -176,6 +176,9 @@ func (l *supervisorLoop) fill(ctx context.Context, st *state.State, claims map[s
 	// A non-positive limit means the first fresh capacity read sets it.
 	limit := 0
 	for started := 0; ; started++ {
+		if l.pauseForReexec() {
+			return nil
+		}
 		cap := l.fillCapacity(ctx)
 		if cap == nil {
 			return nil // a gate refusal is never a reason to start

@@ -685,6 +685,11 @@ type supervisorLoop struct {
 	teamsAt time.Time
 	// dryRun prints a pass's transitions and takes none.
 	dryRun bool
+	// bin is the loop's running executable, checked at quiet points so an
+	// install replaces this process as soon as no claim is in flight.
+	bin          replaceable
+	reexecuted   bool
+	reexecFailed bool
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
@@ -807,6 +812,10 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 		return err
 	}
 	defer func() { _ = a.store.WriteFile(loopPIDFile, 0) }()
+	if err := a.writeLoopVersion(); err != nil {
+		return err
+	}
+	defer a.clearLoopVersion()
 	out := a.out
 	defer func() { a.out = out }()
 	if a.loopNow == nil {
@@ -838,16 +847,74 @@ func (a *app) runSupervisorLoop(ctx context.Context, once bool) error {
 			a.now = now
 		}
 		a.loopNow.Store(&now)
+		l.reexecuted = false
+		l.mu.Lock()
+		l.reexecFailed = false
+		l.mu.Unlock()
 		if err := l.pass(ctx); err != nil {
+			if reexec, rerr := l.reexec(ctx); rerr != nil {
+				return rerr
+			} else if reexec {
+				if once {
+					return nil
+				}
+				continue
+			}
 			return err
+		}
+		if _, rerr := l.reexec(ctx); rerr != nil {
+			return rerr
 		}
 		if once {
 			return nil
 		}
+		if l.reexecuted {
+			continue
+		}
+		if !l.waitNextPass(ctx) {
+			return nil
+		}
+	}
+}
+
+// waitNextPass waits for LoopInterval, ctx.Done(), or a replaced binary so
+// an external self-update during the idle sleep triggers re-execution
+// without waiting the full LoopInterval on the old binary.
+func (l *supervisorLoop) waitNextPass(ctx context.Context) bool {
+	d := l.a.cfg.Supervisor.LoopInterval.Duration
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	const checkEvery = time.Second
+	if d <= checkEvery {
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-time.After(a.cfg.Supervisor.LoopInterval.Duration):
+			return false
+		case <-timer.C:
+			return true
+		}
+	}
+	ticker := time.NewTicker(checkEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return true
+		case <-ticker.C:
+			b := l.bin
+			if b == nil {
+				b = loopBinary()
+				l.mu.Lock()
+				l.bin = b
+				l.mu.Unlock()
+			}
+			if b != nil && b.Replaced() && !l.reexecFailed {
+				return true
+			}
 		}
 	}
 }
@@ -887,7 +954,7 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun}
+	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun, bin: loopBinary()}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -900,6 +967,58 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	return l, nil
 }
 
+// reexec re-executes the loop on the binary installed over its path at a
+// quiet point (no claim in flight). It returns true when the replacement
+// binary was executed, so the caller ends the pass on the old binary.
+func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
+	if l == nil || l.dryRun || l.reexecuted || l.reexecFailed {
+		return false, nil
+	}
+	b := l.bin
+	if b == nil {
+		b = loopBinary()
+		l.mu.Lock()
+		l.bin = b
+		l.mu.Unlock()
+	}
+	if b == nil || !b.Replaced() {
+		return false, nil
+	}
+	l.mu.Lock()
+	busy := len(l.inFlight) > 0
+	l.mu.Unlock()
+	if busy {
+		return false, nil
+	}
+	l.mergeActions.Wait()
+	l.passActions.Wait()
+	if _, err := fmt.Fprintln(l.a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
+		return false, err
+	}
+	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
+		l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
+	}
+	l.timerActs.Wait()
+	wasWatching := l.stopWatch != nil
+	if wasWatching {
+		l.stopWatch()
+		l.stopWatch = nil
+	}
+	if err := b.Exec(); err != nil {
+		l.mu.Lock()
+		l.reexecFailed = true
+		l.mu.Unlock()
+		l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
+		if wasWatching {
+			l.stopWatch = l.a.startLoopWatch(ctx)
+		}
+		return false, nil
+	}
+	l.reexecuted = true
+	_ = l.a.writeLoopVersion()
+	return true, nil
+}
+
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
 	a := l.a.snapshotAtNow()
@@ -908,24 +1027,8 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	l.mu.Unlock()
 	// A release installed over the loop's path runs from here on: an old
 	// binary's saves are refused once the new one wrote the state.
-	if b := loopBinary(); b != nil && !l.dryRun && b.Replaced() {
-		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
-			return err
-		}
-		if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
-			l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
-		}
-		l.mergeActions.Wait()
-		l.passActions.Wait()
-		l.timerActs.Wait()
-		if l.stopWatch != nil {
-			l.stopWatch()
-			l.stopWatch = nil
-		}
-		if err := b.Exec(); err != nil {
-			l.sayOnce("reexec", "SUPERVISOR LOOP the new binary does not start (%v): carrying on", err)
-			l.stopWatch = a.startLoopWatch(ctx)
-		}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
 	}
 	if !l.dryRun {
 		if err := l.watchConditions(ctx); err != nil {
@@ -972,6 +1075,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
 			l.sayOnce("claims", "SUPERVISOR LOOP claims on GitHub: %v", err)
+		}
+		if reexec, err := l.reexec(ctx); err != nil || reexec {
+			return err
 		}
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
@@ -1214,6 +1320,12 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.releaseAt = a.timeNow()
 		in.Release = l.newerRelease(ctx)
 	}
+	if reexec, err := l.reexec(ctx); err != nil || reexec {
+		return err
+	}
+	if l.pauseForReexec() {
+		return nil
+	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if l.dryRun {
 		for _, act := range actions {
@@ -1363,6 +1475,9 @@ func (l *supervisorLoop) endInFlight(key string) {
 }
 
 func (l *supervisorLoop) execAction(ctx context.Context, st *state.State, claims map[string]loopClaim, failures map[string]loopFailure, act superloop.Action) error {
+	if l.pauseForReexec() {
+		return nil
+	}
 	// An earlier pass can finish after this pass took its snapshot.
 	l.mu.Lock()
 	done := l.completed[act.Key]
@@ -3692,4 +3807,13 @@ func (l *supervisorLoop) holdStarts(held bool) {
 	l.mu.Lock()
 	l.startsHeld = held
 	l.mu.Unlock()
+}
+
+// pauseForReexec lets outstanding streams drain without launching more work
+// on a replaced binary. Only the main loop calls reexec at the quiet point.
+func (l *supervisorLoop) pauseForReexec() bool {
+	l.mu.Lock()
+	b, failed := l.bin, l.reexecFailed
+	l.mu.Unlock()
+	return !failed && b != nil && b.Replaced()
 }
