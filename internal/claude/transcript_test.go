@@ -260,3 +260,22 @@ func TestTailAskUserQuestion(t *testing.T) {
 		t.Fatalf("Follow = %+v, want AskUserQuestion tool turn and user answer", followed)
 	}
 }
+
+func TestTailKeepsDialogAlongsideText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed?"}]}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"additional instruction"},{"type":"tool_result","tool_use_id":"q1","content":"The user responded: Wait"}]},"toolUseResult":{"answers":{"Proceed?":"Wait"},"notes":"build the button first"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 10)
+	if err != nil || len(turns) != 1 || turns[0].Text != "additional instruction\nWait — build the button first" {
+		t.Fatalf("Tail = %+v, %v", turns, err)
+	}
+	dialogs, err := DialogsSince(path, time.Time{})
+	if err != nil || len(dialogs) != 1 || dialogs[0].Text != "Wait — build the button first" {
+		t.Fatalf("DialogsSince = %+v, %v", dialogs, err)
+	}
+}

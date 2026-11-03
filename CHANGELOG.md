@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The guide's question dialog keeps the person's whole answer: the selected option with the notes or free text written beside it is recorded as `<label> — <notes>`, and an answer that records only the label is refused while that note's own dialog carried notes (the person's other turns in the guide session do not count). `beekeeper tail` shows question-dialog answers as the person's turns and finds a past guide run by its name (`Guide run <n>`) once its session ended (https://github.com/giantswarm/beekeeper/issues/2182).
 - The supervisor loop's sweep no longer refers to the removed review cap: main builds again, and a green head without a review gets a reviewer however many rounds it had (https://github.com/giantswarm/beekeeper/pull/2234, https://github.com/giantswarm/beekeeper/pull/2263).
 
 - Only beekeeper starts a guide run: `guide start` refuses a session beekeeper did not start as a guide run, `guide start --new` starts the next run from a terminal (in `guide.dir`, with the configured skill, model and mode) when the guide's session is gone or none is recorded, and `beekeeper resume` starts one when the guide's session runs no CLI. The standby watch and `guide status` record when the guide's CLI was first seen gone, so its restart grace runs out after a reboot or crash instead of starting anew on every read (https://github.com/giantswarm/beekeeper/issues/2205).
