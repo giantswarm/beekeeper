@@ -31,6 +31,13 @@ func ghMergeNeedsBranchRepair(reason string) bool {
 	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
 }
 
+// An admin suggestion is a desk configuration refusal, even when GitHub's
+// merge state also says BEHIND. It cannot be repaired by changing the branch.
+func ghMergeNeedsAdmin(reason string) bool {
+	lower := strings.ToLower(reason)
+	return strings.Contains(lower, "base branch policy") && strings.Contains(lower, "--admin")
+}
+
 // mergePull executes the planner's exact-head decision in the coordinator,
 // including for workers on an execution host. Failed or unreadable validation
 // never delegates a direct merge around the required server-side queue.
@@ -90,6 +97,17 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	for _, f := range st.Failed {
+		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && ghMergeNeedsAdmin(f.Reason) {
+			// An older gate may have recorded this as a branch failure.
+			// Drop only that failed attempt so the unchanged head can rejoin.
+			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+				merge.Retry(current, ref.Repo, ref.N)
+				return nil, nil
+			}); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && (f.Exit == github.SquashNotApplicable || f.Exit == github.SquashRed) {
 			return repair(f.Exit, cmp.Or(f.Reason, "merge failed in lane"))
 		}
@@ -142,6 +160,27 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	var reply github.SquashDoc
 	mutationResult := err == nil && json.NewDecoder(strings.NewReader(out)).Decode(&reply) == nil && reply.Route == reviewedMergeRoute && reply.Repo == ref.Repo && reply.Number == ref.N && reply.HeadSha == act.Head
+	policyReason := out
+	if mutationResult {
+		policyReason = reply.Reason
+	}
+	if ghMergeNeedsAdmin(policyReason) {
+		stage := act.Key + " admin configuration"
+		l.mu.Lock()
+		reported := l.stages[stage]
+		l.mu.Unlock()
+		if !reported {
+			message := fmt.Sprintf("SUPERVISOR MERGE CONFIGURATION REFUSED %s: check merge.admin for %s; retrying next round: %s", act.URL, ref.Repo, oneLine(policyReason))
+			if err := a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", stage, message), act.Ref)); err != nil {
+				return "", err
+			}
+			l.mu.Lock()
+			l.stages[stage] = true
+			l.mu.Unlock()
+			fmt.Fprintln(a.out, message)
+		}
+		return "", errLoopLater
+	}
 	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
 		return "", errLoopLater
 	}
@@ -540,6 +579,8 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if doc.Reason == "" {
 			doc.Reason = "merge head moved or current CI is not green"
 		}
+	case ghMergeNeedsAdmin(doc.Reason):
+		doc.ExitCode = github.SquashRefused
 	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
 		if doc.Reason == "" {

@@ -581,11 +581,18 @@ closures attributable without relying on that retention window.
 The supervisor loop executes a reviewed merge through `beekeeper gate --reviewed-head <sha>`.
 The gate keeps its queue, holds, readiness, review and settlement checks; its mutation child
 uses `gh pr merge --match-head-commit <sha> --delete-branch`. `merge.methods` maps repository
-names to `squash` (the default), `rebase`, or `merge`; `merge.admin` controls `--admin`.
+names to `squash` (the default), `rebase`, or `merge`. The coordinator never passes
+`--admin`, which bypasses the required server-side merge queue.
+A refusal that names the base branch policy and suggests `--admin` is a configuration
+refusal, including when the merge state is `BEHIND`. The loop reports it once per
+reviewed head, naming `merge.admin`, and retries on the next round without a worker
+wake, branch repair or another review. This never authorizes bypassing the server-side
+merge queue: the corrected policy must still admit its required checks.
+
 After approval only the merge moves the head. A branch that is only behind its base merges
 at the reviewed head as it stands: GitHub merges it onto the current base, with no branch
 update and no second CI run. Only a base that requires up-to-date branches refuses that
-merge (GitHub's merge state `BEHIND`); `merge.admin` passes the requirement. Without it, the
+merge (GitHub's merge state `BEHIND`). Unless the repository is in `merge.admin`, the
 mutation child updates the branch itself, once its authority, stop and hold checks pass:
 GitHub's update-branch
 merges the base into it, pinned to the reviewed head, and the child waits up to the squash
@@ -598,11 +605,9 @@ draft branch,
 red checks on the updated head or an updated head the approval does not cover go back to the
 worker for repair and another green published head. A restart reads GitHub before repeating
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
-not worker merge grants; when the pinned merge step fails on an open, green, approved head
-for a tooling or internal reason rather than branch repair or gate refusal, the loop falls
-back automatically to `beekeeper gate --limit 0 -- devctl pr merge <repo> <n>` and, if the
-pull request remains open at that green head, directs the worker session with an exact-head
-`supervisor.go` grant instead of asking a person. Merge goes never go through `answer verify`.
+not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
+the configuration refusal above retries each round. Neither grants a direct worker merge
+around queue validation. Merge goes never go through `answer verify`.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
