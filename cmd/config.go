@@ -11,9 +11,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+// configName is the config command's name.
+const configName = "config"
+
 func (a *app) configCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "config",
+		Use:   configName,
 		Short: "Check or edit the configuration",
 		Args:  cobra.NoArgs,
 		// The configuration it edits may not load: it is what config set
