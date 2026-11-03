@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -78,6 +79,9 @@ func TestLoopSweepsAnOwnerlessPullWithoutReviewMetadata(t *testing.T) {
 	}
 }
 
+// sweepRef is pull request n of o/r.
+func sweepRef(n int) string { return fmt.Sprintf("o/r#%d", n) }
+
 // A pull request a live agent's name or park owns is not read for the
 // sweep at all.
 func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
@@ -85,7 +89,7 @@ func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
 	listed := readOpenPulls
 	t.Cleanup(func() { readOpenPulls = listed })
 	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
-		return []string{"o/r#7", "o/r#8", "o/r#9", "o/r#10", "x/y#1"}, nil
+		return []string{loopPR, sweepRef(8), sweepRef(9), sweepRef(10), "x/y#1"}, nil
 	}
 	l, err := r.a.newSupervisorLoop(false)
 	if err != nil {
@@ -93,11 +97,11 @@ func TestSweepPullsSkipsTrackedAndOwnedPulls(t *testing.T) {
 	}
 	in := superloop.Input{Desk: superloop.Desk{Orgs: []string{"o"}, Authors: []string{loopDesk}}, Workers: []superloop.Worker{
 		{Name: "r 8"},
-		{Name: "someone", ParkedOn: "o/r#9"},
-		{Name: "gone", ParkedOn: "o/r#10", ReviewRequested: true, Saved: true},
+		{Name: "someone", ParkedOn: sweepRef(9)},
+		{Name: "left", ParkedOn: sweepRef(10), ReviewRequested: true, Saved: true},
 	}}
-	got := l.sweepPulls(context.Background(), in, []string{"o/r#7"})
-	if want := []string{"o/r#10"}; !slices.Equal(got, want) {
+	got := l.sweepPulls(context.Background(), in, []string{loopPR})
+	if want := []string{sweepRef(10)}; !slices.Equal(got, want) {
 		t.Errorf("sweep reads %v, want %v", got, want)
 	}
 }

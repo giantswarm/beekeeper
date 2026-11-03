@@ -100,7 +100,7 @@ func TestALiveOwnerKeepsTheSweepAway(t *testing.T) {
 	}
 	for name, w := range map[string]Worker{
 		"saved review park": {Name: worker, ReviewRequested: true, ParkedOn: pr, ParkedAt: t0, Saved: true, Serves: issue},
-		"waiter":            {Name: "other", ParkedOn: pr, ParkedAt: t0, Waits: "overlap with " + pr, Serves: "o/r#9"},
+		"overlap waiter":    {Name: "other", ParkedOn: pr, ParkedAt: t0, Waits: "overlap with " + pr, Serves: "o/r#9"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := sweepInput(pulls, OrphanWait)

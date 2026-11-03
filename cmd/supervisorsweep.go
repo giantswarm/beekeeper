@@ -28,7 +28,7 @@ var readOpenPulls = func(ctx context.Context, authors func() ([]string, error), 
 	}
 	var out []string
 	for _, login := range logins {
-		args := []string{"search", "prs", "--author", login, "--state", "open", "--limit", "200", "--json", "repository,number"}
+		args := append(strings.Fields("search prs --state open --limit 200 --json repository,number"), "--author", login)
 		for _, o := range orgs {
 			args = append(args, "--owner", o)
 		}
