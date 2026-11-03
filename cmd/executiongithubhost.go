@@ -64,7 +64,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if err != nil {
 					return err
 				}
-				request.Write = len(args) > 1 && (args[0] == "pr" || args[0] == workerGitHubIssueGroup) && (args[1] == workerGitHubCreate || args[1] == "edit" || args[1] == "comment")
+				request.Write = len(args) > 1 && ((args[0] == "pr" || args[0] == workerGitHubIssueGroup) && (args[1] == workerGitHubCreate || args[1] == "edit" || args[1] == "comment") || args[0] == "pr" && args[1] == taskKindReview)
 				// Mutation authority is never inferred from arbitrary API request bodies.
 				if len(args) > 1 && args[0] == "pr" && args[1] == gitMerge {
 					return refused("merges stay on the coordinator")

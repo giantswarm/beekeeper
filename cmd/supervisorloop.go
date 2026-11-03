@@ -3014,8 +3014,8 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement keeps reviewers on the coordinator, judged with their
-// review capacity flags. Workers use the placement rules below.
+// startPlacement applies host preferences to workers and GitHub-enabled
+// reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
 // zero value). Otherwise the local verdict (capacity --json, with the
@@ -3044,9 +3044,9 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// Execution hosts have no relayed GitHub read-and-review path. Keep
-	// reviewers on the coordinator, without reserving any choices for hosts.
-	if review {
+	// A remote reviewer needs the per-worker GitHub adapter to read the PR
+	// and post its review. Publication-only hosts cannot perform reviews.
+	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
 		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
