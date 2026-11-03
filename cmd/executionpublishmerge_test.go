@@ -26,7 +26,7 @@ func TestPublicationIdentityReadsExecutionHome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if out, err := exec.Command("git", "init", "-q", workspace).CombinedOutput(); err != nil {
+	if out, err := exec.Command("git", "init", "-q", workspace).CombinedOutput(); err != nil { //nolint:gosec // fixed git init of the test's own temporary directory
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	want := []string{
