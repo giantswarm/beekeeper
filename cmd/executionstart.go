@@ -191,7 +191,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// weighs those choices alone, so a choice it cannot run never shows as
 	// its room.
 	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
-	for _, name := range []string{claudeComm, codex.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
 		if !host.Supports(name) {
 			exclude = append(exclude, name)
 		}
@@ -228,17 +228,17 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 }
 
 // hostUnsupportedHarnesses are the harnesses an execution host has no
-// adapter for. Of the others, Claude Code and Codex, a host runs those its
-// catalogue entry lists (executionCapacity) and its check offers
+// adapter for. Of the others, Claude Code, Codex and Agy, a host runs those
+// its catalogue entry lists (executionCapacity) and its check offers
 // (hostUnoffered). hostRunsHarness is the other side, a harness some host
 // runs ("" is Claude Code).
-var hostUnsupportedHarnesses = []string{harnessAgy, omp.Harness}
+var hostUnsupportedHarnesses = []string{omp.Harness}
 
 // hostUnoffered are the remote harnesses a host's check did not offer: a
 // harness whose version, login or guard failed there is no choice on it.
 func hostUnoffered(caps execution.Capabilities) []string {
 	var out []string
-	for _, name := range []string{claudeComm, codex.Harness} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
 		if caps.Harnesses[name] == "" {
 			out = append(out, name)
 		}
@@ -247,7 +247,7 @@ func hostUnoffered(caps execution.Capabilities) []string {
 }
 
 // hostRunsHarness says whether one of hosts can run harness: Claude Code on
-// any host, as before, and Codex on a host whose entry lists it.
+// any host, as before, and Codex or Agy on a host whose entry lists it.
 func hostRunsHarness(harness string, hosts []execution.Host) bool {
 	h := strings.TrimSpace(harness)
 	if h == "" || h == claudeComm {
