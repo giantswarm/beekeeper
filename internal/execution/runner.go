@@ -105,6 +105,8 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		defer func() { stopLease(); <-leaseDone }()
 	}
 	switch j.Request.Harness {
+	case HarnessOmp:
+		return s.runOmp(ctx, ref, j)
 	case HarnessCodex:
 		return s.runCodex(ctx, ref, j)
 	case HarnessAgy:
