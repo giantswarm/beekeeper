@@ -95,6 +95,24 @@ PR's reviewer or an answer on its thread invalidates them immediately.
 `supervisor loop --dry-run` previews refill intent with read-only capacity
 and board queries and starts nothing.
 
+On the person's explicit emergency authorization, the current guide can run
+`beekeeper emergency on --reason "<their verbatim words>" --until 30m`, then
+`beekeeper emergency merge owner/repo 123`. The merge requires GitHub approval
+and matches the observed head; it bypasses desk review and the merge lane while
+GitHub branch protection still applies. `emergency hold set/lift`, `emergency
+start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
+use the same expiring grant. Every action and result records the quoted reason.
+`beekeeper emergency off` ends it early; a successor guide needs a new grant.
+Direct merge commands and other guide work remain guarded.
+
+Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
+pauses the loop's release installation without stopping reviews, merges or
+workers. Resume it with `beekeeper emergency auto-install resume --reason
+"<their words>"`. The pause persists across restarts, until explicitly resumed;
+`beekeeper emergency` shows both controls. An installation already running
+finishes; the pause prevents the next installation step. Manual self-update
+remains available.
+
 A worker whose reviewed pull request merges stays reachable for its release proof
 and final `agents idle --done` report. The loop retires an unreported worker only
 after `supervisor.postMergeWindow` (default `2h`) without activity, once its turn
