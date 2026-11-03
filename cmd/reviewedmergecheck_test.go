@@ -464,7 +464,7 @@ func TestMergeResultConfiguredLintFailure(t *testing.T) {
 	}
 }
 
-func TestMergeValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
+func TestMergeResultValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
 	r := newLoopRig(t)
 	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return fmt.Errorf("merge queue unavailable") }
 	r.park(t, loopPR, time.Now())
