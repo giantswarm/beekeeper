@@ -75,7 +75,7 @@ func TestExecutionAgyGuard(t *testing.T) {
 		missingThreadCase:          nil,
 		"workspacePath outside":    executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus}, executionThread, outside),
 		"workspacePath tilde":      executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus}, executionThread, "~/outside"),
-		"cwd outside":              executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus, agyCwdKey: outside}, executionThread, workspace),
+		cwdOutsideCaseName:         executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus, agyCwdKey: outside}, executionThread, workspace),
 		"cwd tilde":                executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus, agyCwdKey: "~/outside"}, executionThread, workspace),
 		"bash directoryPath out":   executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus, agyDirPathKey: outside}, executionThread, workspace),
 		"bash searchPath out":      executionAgyEvent("run_command", map[string]any{cmdLineKey: codexGitStatus, agyCwdKey: workspace, agySearchPathKey: outside}, executionThread, workspace),

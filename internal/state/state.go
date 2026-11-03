@@ -806,6 +806,10 @@ type Start struct {
 	// (agents.mode background): it has no desktop session, and its wakes go
 	// by its messaging, a stopped one's by claude --bg --resume.
 	Background bool `json:"background,omitempty"`
+	// Role is the relayed role the session took (guide). Once relieved or
+	// taken over, its session stays the person's to close: nothing stops or
+	// archives it.
+	Role string `json:"role,omitempty"`
 
 	rest rest
 }
@@ -1183,6 +1187,12 @@ type HostPin struct {
 	HeldVersion string    `json:"heldVersion,omitempty"`
 	// Reported says the supervisor loop handed the hold on as its finding.
 	Reported bool `json:"reported,omitempty"`
+	// Behind is the first coordinator release the host did not follow
+	// while it drained or waited; BehindReported says the supervisor loop
+	// handed on, once, that it stayed behind for more than that release.
+	// The next successful update clears both.
+	Behind         string `json:"behind,omitempty"`
+	BehindReported bool   `json:"behindReported,omitempty"`
 
 	rest rest
 }
