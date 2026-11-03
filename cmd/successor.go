@@ -131,9 +131,9 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 		return state.Party{}, "", err
 	}
 	rec, _ := claude.ReadRecord(a.cfg, desktopID(from))
-	var model string
+	model := strings.TrimSpace(rl.cfg(a.cfg).Model)
 	if rec != nil {
-		model = rec.Model
+		model = cmp.Or(model, rec.Model)
 	}
 	if dir == "" && rl.cfg(a.cfg).Dir == "" {
 		dir = a.cfg.Agents.Dir

@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
@@ -102,7 +103,15 @@ func (a *app) hookLiveDirs() []string {
 	// The error is dropped on purpose: the hook fails open, so an unreadable
 	// process table never blocks a session's every rm or mv; the worktree
 	// trim fails closed on the same error.
-	live, _ := a.liveFolders(time.Now())
+	w := *a
+	if w.store == nil {
+		store, err := state.Open(a.cfg.StateDir)
+		if err != nil {
+			return nil
+		}
+		w.store = store
+	}
+	live, _ := w.liveFolders(time.Now())
 	return live
 }
 

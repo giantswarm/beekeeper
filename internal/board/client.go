@@ -454,12 +454,15 @@ func (c *Client) items(ctx context.Context, q string) ([]Item, error) {
 				} `json:"projectV2"`
 			} `json:"repositoryOwner"`
 		}
+		// Three nested connections per issue make an 80-item page cost two
+		// GraphQL points; GitHub rounds a 100-item page up to three. Cursor
+		// traversal still reads every item.
 		vs := vars{"o": c.Board.Owner, "n": c.Board.Project, "q": q}
 		if cursor != "" {
 			vs["c"] = cursor
 		}
 		err := c.graphql(ctx, &r, `query($o:String!,$n:Int!,$q:String!,$c:String){repositoryOwner(login:$o){...on ProjectV2Owner{projectV2(number:$n){
-items(first:100,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
+items(first:80,after:$c,query:$q){pageInfo{hasNextPage endCursor} nodes{`+boardFields+`
 content{...I}}}}}}}`+issueFields, vs)
 		if err != nil {
 			return nil, err

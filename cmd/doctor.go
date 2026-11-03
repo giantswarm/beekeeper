@@ -264,6 +264,9 @@ type doctorReport struct {
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
 	stale []*proc.Process
+	// staleLoop is the line when the supervisor loop runs an older binary
+	// than the installed one.
+	staleLoop string
 	// sameTitles are the titles more than one live session carries.
 	sameTitles []sameTitle
 	// ungated are the devctl merges and promotions running with no beekeeper
@@ -293,7 +296,12 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), isWatch)
+	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
+	rep.staleLoop = a.staleLoopLine(ctx)
+	loopPID := a.loopPID()
+	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), func(p *proc.Process) bool {
+		return isWatch(p) || (rep.staleLoop != "" && p.PID == loopPID)
+	})
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
@@ -683,6 +691,9 @@ line:
   transient unit beekeeper-reopen-<id> that gives it its row and warms its
   CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
   such worker meanwhile;
+- releases leases whose local session ended, logging each release once;
+- stops configured kind labs after 15 minutes without a lease, preserving
+  their containers and data; the next successful claim starts them again;
 - probes each fault of doctor.faults (a probe exits 0 while the fault is
   absent) and runs the remedy of a failing one that may run unattended,
   or the faults named with --fault; a fault still failing is one note for
@@ -695,7 +706,8 @@ line:
 - with disk.prune: ask, trims the Go build cache once it is over
   doctor.goCacheMaxGiB (20), least recently used entries first, down to
   three quarters of the cap, while no go build runs or once it is past the
-  cap by a quarter (the watch does it every doctor.goCacheEvery, 1h, and
+  cap by a quarter, then waiting up to 5m for the beekeeper runs that hold
+  it, new runs behind it (the watch does it every doctor.goCacheEvery, 1h, and
   says GO CACHE with the size, the cap and the wait when the cache stayed
   over the cap that long, or a trim failed); each trim is logged
   (gocache.trim);
@@ -749,7 +761,9 @@ line:
   from the ones this binary embeds, with the plugin's version, the
   binary's and the commands that update it (beekeeper self-update does);
 - checks the agy PreInvocation and PreToolUse hooks in
-  ~/.gemini/config/hooks.json and the agy skills entry in
+  ~/.gemini/config/hooks.json, failing when agy would reject the beekeeper
+  entry (a PreInvocation item that is a matcher, a command hook without a
+  command), and the agy skills entry in
   ~/.gemini/config/skills.json (and the skill files it points at) when agy
   is installed.
 
@@ -783,6 +797,9 @@ faults but remedying none.`,
 			}
 			for _, w := range rep.stale {
 				lines = append(lines, staleLine(w))
+			}
+			if rep.staleLoop != "" {
+				lines = append(lines, rep.staleLoop)
 			}
 			for _, d := range rep.sameTitles {
 				lines = append(lines, "same title: "+d.String())
@@ -904,6 +921,7 @@ func (w *watcher) doctor(ctx context.Context) {
 			w.check(key, true, "DOCTOR %s", staleLine(s))
 		}
 		w.clearMissing("doctor-stale ", stale)
+		w.check("doctor-stale-loop", rep.staleLoop != "", "DOCTOR %s", rep.staleLoop)
 	}()
 }
 

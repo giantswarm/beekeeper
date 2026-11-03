@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -22,6 +24,35 @@ var runUpdate = update.Run
 
 // selfUpdateCmdName is the self-update command's name.
 const selfUpdateCmdName = "self-update"
+
+// verbSelfUpdateCanary is the event logged when a candidate release fails the
+// self-update canary and is skipped.
+const verbSelfUpdateCanary = "self-update.canary"
+
+// skippedReleasesFile records releases whose self-update canary failed so they
+// are skipped on later checks and updates.
+const skippedReleasesFile = "skipped-releases.json"
+
+// budgetGateArgs is the command that checks the GitHub budget and active gates.
+var budgetGateArgs = strings.Fields("budget --gate")
+
+// canaryChecks are the commands a candidate release must pass with the live
+// configuration before it replaces the running binary.
+var canaryChecks = [][]string{
+	{"version"},
+	budgetGateArgs,
+	strings.Fields("supervisor status"),
+	{"capacity"},
+}
+
+// runCanaryCheck runs one canary command on the staged binary at path and
+// returns its combined output; the tests replace it.
+var runCanaryCheck = func(ctx context.Context, path string, args ...string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := proc.Command(cctx, path, args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
 
 // syncPluginsFlag runs only the plugin sync of the binary installed at the
 // path, which a self-update hands over to.
@@ -100,7 +131,13 @@ is set. A development build (version dev) is refused.`,
 				w = io.Discard
 			}
 			started := time.Now()
-			res, err := runUpdate(cmd.Context(), w, check)
+			ctx := update.WithOptions(cmd.Context(), update.Options{
+				Canary: func(ctx context.Context, path, version string) error {
+					return a.canaryRelease(ctx, w, path, version)
+				},
+				Skip: a.isSkippedRelease,
+			})
+			res, err := runUpdate(ctx, w, check)
 			if a.json && res.Latest != "" {
 				if perr := a.printJSON(res); perr != nil {
 					return perr
@@ -205,4 +242,82 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
 	return len(p.Args) > 1 && (p.Args[1] == gateCmdName || p.Args[1] == mergeChildCmd)
+}
+
+func (a *app) selfUpdateStore() state.Store {
+	if a.store != nil {
+		return a.store
+	}
+	if a.cfg == nil || a.cfg.StateDir == "" {
+		_ = a.loadConfig()
+	}
+	var dir string
+	if a.cfg != nil && a.cfg.StateDir != "" {
+		dir = a.cfg.StateDir
+	} else if s := os.Getenv("XDG_STATE_HOME"); s != "" {
+		dir = filepath.Join(s, "beekeeper")
+	} else if h, err := os.UserHomeDir(); err == nil {
+		dir = filepath.Join(h, ".local", "state", "beekeeper")
+	}
+	if dir == "" {
+		return nil
+	}
+	s, err := state.Open(dir)
+	if err != nil {
+		return nil
+	}
+	a.store = s
+	return s
+}
+
+func (a *app) isSkippedRelease(tag string) bool {
+	s := a.selfUpdateStore()
+	if s == nil {
+		return false
+	}
+	var skipped map[string]string
+	found, err := s.ReadFile(skippedReleasesFile, &skipped)
+	if err != nil || !found {
+		return false
+	}
+	tag = "v" + strings.TrimPrefix(tag, "v")
+	return skipped[tag] != ""
+}
+
+func (a *app) skipRelease(version, why string) {
+	s := a.selfUpdateStore()
+	if s == nil {
+		return
+	}
+	version = "v" + strings.TrimPrefix(version, "v")
+	var skipped map[string]string
+	_, _ = s.ReadFile(skippedReleasesFile, &skipped)
+	if skipped == nil {
+		skipped = map[string]string{}
+	}
+	skipped[version] = why
+	_ = s.WriteFile(skippedReleasesFile, skipped)
+	_ = s.Record(event(state.Party{Name: selfUpdateCmdName}, verbSelfUpdateCanary, "skipping %s: %s", version, why))
+}
+
+func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
+	for _, check := range canaryChecks {
+		name := strings.Join(check, " ")
+		args := check
+		if a.cfgPath != "" {
+			args = append([]string{"--" + configFlag, a.cfgPath}, check...)
+		}
+		out, err := runCanaryCheck(ctx, path, args...)
+		if err != nil {
+			detail := oneLine(out)
+			if detail == "" {
+				detail = oneLine(err.Error())
+			}
+			why := fmt.Sprintf("canary %s failed: %s", name, detail)
+			a.skipRelease(version, why)
+			_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
+			return fmt.Errorf("skipping %s: %s", version, why)
+		}
+	}
+	return nil
 }
