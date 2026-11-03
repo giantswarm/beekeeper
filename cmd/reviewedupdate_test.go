@@ -79,7 +79,8 @@ func (b *behindRig) merges() [][]string {
 	return out
 }
 
-// An approved branch behind its base is brought up to date by the merge
+// An approved branch behind a base that requires up-to-date branches, which
+// the desk merges without --admin, is brought up to date by the merge
 // itself, pinned to the reviewed head, and the updated head merges once
 // every check the reviewed head had is green on it and the approval covers
 // it: nobody but the merge moves an approved head.
@@ -133,7 +134,7 @@ func TestReviewedMergeOfAnUpdatedBranchStopsShort(t *testing.T) {
 		"update refused": {github.SquashNotApplicable, "merge conflict", func(b *behindRig) {
 			b.command = func([]string) (string, int) { return "merge conflict", 1 }
 		}},
-		"stopped meanwhile": {github.SquashNotApplicable, reasonDeskStopped, func(b *behindRig) {
+		"stopped meanwhile": {github.SquashRefused, reasonDeskStopped, func(b *behindRig) {
 			b.onPause = func(int) {
 				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
 				if err := b.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
@@ -163,7 +164,8 @@ func TestReviewedMergeUpdatesNoBranchWithoutItsClaim(t *testing.T) {
 	}
 }
 
-// The loop's go on an approved head behind its base ends merged at the
+// The loop's go on an approved head behind a base that requires up-to-date
+// branches, which the desk merges without --admin, ends merged at the
 // updated head, without a repair wake or a new review: the merged head only
 // merges the base into the reviewed one.
 func TestLoopMergesAnApprovedBehindHeadAfterUpdatingIt(t *testing.T) {
@@ -192,13 +194,13 @@ func TestLoopMergesAnApprovedBehindHeadAfterUpdatingIt(t *testing.T) {
 
 // A base that moves on while the updated head's checks run leaves that head
 // behind: the merge updates again, pinned to it, and never merges a head
-// that lacks the current base, admin or not.
+// that lacks the current base where the base requires up-to-date branches
+// and the desk merges without --admin.
 func TestReviewedMergeUpdatesAgainWhenTheBaseMovesDuringTheWait(t *testing.T) {
 	const moved = "3333333333333333333333333333333333333333"
 	for _, late := range []bool{false, true} {
 		t.Run(fmt.Sprint("past the wait ", late), func(t *testing.T) {
 			b := newBehindRig(t)
-			b.a.cfg.Merge.Admin = []string{loopMergeRepo}
 			if late {
 				reviewedUpdateWait = time.Millisecond
 			}
@@ -240,7 +242,7 @@ func TestReviewedMergeUpdatesAgainWhenTheBaseMovesDuringTheWait(t *testing.T) {
 			if doc.ExitCode != 0 || !slices.Equal(b.updates, []string{"expected_head_sha=" + loopHead, "expected_head_sha=" + loopFixed}) {
 				t.Fatalf("second update: %+v, updates %v, commands %v", doc, b.updates, b.cmds)
 			}
-			if len(m) != 1 || !slices.Contains(m[0], moved) || slices.Contains(m[0], loopFixed) || !slices.Contains(m[0], "--admin") {
+			if len(m) != 1 || !slices.Contains(m[0], moved) || slices.Contains(m[0], loopFixed) {
 				t.Fatalf("merged a stale head: %v", m)
 			}
 		})
