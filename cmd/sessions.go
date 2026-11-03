@@ -600,6 +600,18 @@ func servedBy(st *state.State, p state.Party) state.Party {
 	return p
 }
 
+// rosterRole is the role st says me holds ("the guide", "the worker"), ""
+// when it says none.
+func rosterRole(st *state.State, me state.Party) string {
+	switch {
+	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
+		return "the guide"
+	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
+		return workerRole
+	}
+	return ""
+}
+
 // recordText says what a record's session serves.
 func recordText(r state.Record) string {
 	s := "serves " + r.Issue
