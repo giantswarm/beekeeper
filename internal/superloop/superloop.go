@@ -1159,6 +1159,13 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// asking a person, and never without one.
 		for i, rd := range slices.Backward(rs[:len(rs)-1]) {
 			if ev := p.verdict(rd, l.pushed(p)); ev != nil {
+				if ev.Verdict == ChangesRequested && (sameHead(ev.Head, p.Head) || in.baseMerged(p, ev.Head)) {
+					a := base
+					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+					a.Message = reworkMessage(p, ev.Head, cycles, rounds, false) + "\n\nThe review, word for word:\n\n" + ev.Body
+					add(a)
+					return
+				}
 				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, round %d %s head %s and the last reviewer finished without a verdict", len(rs), i+1, ev.Verdict, short(ev.Head))))
 				return
 			}

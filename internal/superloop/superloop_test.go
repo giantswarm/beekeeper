@@ -439,6 +439,36 @@ func TestPastTheReviewsWithoutAVerdictNoPersonIsAsked(t *testing.T) {
 	noQuestion(t, got)
 }
 
+// A verdictless review cannot erase earlier findings on an unchanged head
+// or on a head that only updates its base. Real fixes still get the loop's go.
+func TestVerdictlessReviewDoesNotMergeUnfixedEarlierFindings(t *testing.T) {
+	r1 := Review{ID: "R1", Head: head1, Verdict: ChangesRequested, Body: "fix the panic", At: t1}
+	acts := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
+	acts = append(acts, taken(t, t0.Add(2*time.Hour), Action{Key: reviewKey(pr, head2), Kind: KindReview, Ref: pr, Agent: worker})...)
+	done := Event{At: t0.Add(3 * time.Hour), Verb: VerbDone, Agent: ReviewerName(pr, 2)}
+	for _, tc := range []struct {
+		name     string
+		head     string
+		baseOnly bool
+		want     string
+	}{
+		{"unchanged findings", head1, false, KindRework},
+		{"base update only", head3, true, KindRework},
+		{"fixed findings", head3, false, KindGo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Input{Workers: parked(t0.Add(4 * time.Hour)), Pulls: pull(tc.head, true, r1), Rounds: 1, Person: guidePerson, Taken: acts, Events: []Event{done},
+				BaseMerged: func(Pull, string) bool { return tc.baseOnly }}
+			got := slices.DeleteFunc(Plan(in), func(a Action) bool { return a.Kind == KindDone })
+			a := only(t, got, tc.want)
+			if tc.want == KindRework && !strings.Contains(a.Message, r1.Body) {
+				t.Fatalf("rework lost the findings: %+v", a)
+			}
+			noQuestion(t, got)
+		})
+	}
+}
+
 // noQuestion fails when any of acts would put a question to a person.
 func noQuestion(t *testing.T, acts []Action) {
 	t.Helper()
