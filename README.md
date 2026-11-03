@@ -225,6 +225,10 @@ For parser development use synthetic test fixtures. A supervisor can grant an ex
 `transcript_path`, a missing ID or another session's grant; wildcard grants are ignored.
 Shell globs inside a granted fixture directory are conservatively refused; name the
 fixture files explicitly.
+Interpreter scripts that obtain a home or environment directory at runtime are
+also refused: the hook cannot resolve their file targets, including paths selected
+by globbing or by assembling a harness name. Use explicit file paths so ownership
+and fixture grants can be checked. Quoted source text in worktree edits remains data.
 A link inside a granted fixture directory cannot reach outside it. Grants should be
 removed when their session ends. This is a hook policy for recognized paths and shell
 scripts, alongside the agent sandbox's filesystem boundary.
