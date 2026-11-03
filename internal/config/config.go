@@ -2585,7 +2585,32 @@ var DefaultQuietSessions = []string{"test: *"}
 var DefaultIgnore = []string{"Watchdog"}
 
 // GitHub configures the budget reading.
+// WorkerGitHub is coordinator-only App authority. The private key is a vault
+// reference, never a value or a file copied to an execution host.
+type WorkerGitHub struct {
+	AppID         int64            `yaml:"appID"`
+	PrivateKey    string           `yaml:"privateKey"`
+	Installations map[string]int64 `yaml:"installations"`
+}
+
+func (w *WorkerGitHub) Validate() error {
+	if w == nil {
+		return nil
+	}
+	if w.AppID <= 0 || !strings.Contains(w.PrivateKey, "://") || strings.ContainsAny(w.PrivateKey, "\r\n") || len(w.Installations) == 0 {
+		return errors.New("github.workerApp requires appID, privateKey reference and owner installations")
+	}
+	for owner, id := range w.Installations {
+		if !execution.ValidIdentity(owner) || owner != strings.ToLower(owner) || id <= 0 {
+			return errors.New("github.workerApp.installations requires lowercase owners and positive installation IDs")
+		}
+	}
+	return nil
+}
+
 type GitHub struct {
+	WorkerApp *WorkerGitHub `yaml:"workerApp,omitempty"`
+
 	// Floor is the remaining core budget under which GitHub work stops.
 	Floor int `yaml:"floor"`
 	// UrgentBound is the budget an urgent merge keeps for itself under the
@@ -3706,6 +3731,9 @@ func (c *Config) validateEach(report func(error)) {
 		if !filepath.IsAbs(o.Path) || !filepath.IsAbs(o.Worktree) || filepath.Clean(o.Path) == string(filepath.Separator) || o.Path == o.Worktree || strings.HasPrefix(o.Worktree, filepath.Clean(o.Path)+string(filepath.Separator)) {
 			report(fmt.Errorf("disk.buildOutputs: output and owning worktree must be distinct absolute paths"))
 		}
+	}
+	if err := c.GitHub.WorkerApp.Validate(); err != nil {
+		report(err)
 	}
 	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
 		report(fmt.Errorf("agents.remoteMCP: %w", err))
