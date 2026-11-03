@@ -545,9 +545,11 @@ type watcher struct {
 	answersSince time.Time
 	// replaced says whether a process's binary was replaced, and its path;
 	// nil is platform.ProcessBinary. versionOf is the version a binary file
-	// reports; nil runs it.
-	replaced  func(pid int) (string, bool)
-	versionOf func(ctx context.Context, file string) string
+	// reports; nil runs it. gateOf runs budget --gate on an installed binary.
+	replaced    func(pid int) (string, bool)
+	versionOf   func(ctx context.Context, file string) string
+	gateOf      func(ctx context.Context, file string) error
+	gateChecked map[string]bool
 }
 
 // unavailable reports whether err is a platform part this build does not
@@ -690,6 +692,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 		}
 		w.poll(ctx)
 		if req := w.restartDue(); req != nil {
+			w.checkInstalledGate(ctx, req.Binary)
 			w.restartFor = req
 			cancel(errRestart)
 		}
@@ -1611,7 +1614,7 @@ func (w *watcher) exposures() {
 // budget probes the GitHub budget and says when it is under the floor and
 // when GitHub refuses GraphQL calls, with the callers drawing on it.
 func (w *watcher) budget(ctx context.Context, now time.Time) {
-	b, err := w.probeBudget(ctx)
+	b, err := readBudget(w.app, ctx)
 	if ctx.Err() == nil {
 		held := err != nil || b.Remaining < w.cfg.GitHub.Floor || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Remaining < w.cfg.GitHub.Floor || b.GraphQL.Blocks(now)
 		w.publishBudget(held)
@@ -1619,12 +1622,24 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:
-		w.fail("budget-error", "GitHub budget unknown: %v", err)
+		if l := w.fail("budget-error", "GitHub budget unknown: %v", err); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget unknown", l+"\nbeekeeper budget")
+		}
 	default:
 		w.clear("budget-error")
 		if l := w.check("budget", b.Remaining < w.cfg.GitHub.Floor, "GITHUB BUDGET %d of %d: hold GitHub work until %s",
 			b.Remaining, b.Limit, b.Reset.Local().Format("15:04")); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub budget under the floor", l+"\nbeekeeper budget")
+		}
+		graphqlLow := b.GraphQL != nil && !b.GraphQL.Blocks(now) && b.GraphQL.Remaining < w.cfg.GitHub.Floor
+		var gqlRemaining, gqlLimit int
+		var gqlReset string
+		if b.GraphQL != nil {
+			gqlRemaining, gqlLimit, gqlReset = b.GraphQL.Remaining, b.GraphQL.Limit, b.GraphQL.Reset.Local().Format("15:04")
+		}
+		if l := w.check("graphql-budget", graphqlLow, "GITHUB GRAPHQL BUDGET %d of %d: hold GitHub work until %s",
+			gqlRemaining, gqlLimit, gqlReset); l != "" {
+			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub GraphQL budget under the floor", l+"\nbeekeeper budget")
 		}
 		refused := b.GraphQL.Blocks(now)
 		var callers string
@@ -1950,16 +1965,18 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	signedIn := probeLogins(ctx, st.Notes)
 	probed := probeHoldLifts(ctx, st.Holds, w.now)
 	var over, kept []overtake
-	readRefs := func() error {
-		over, kept = w.overtakenNow(ctx, st)
-		return nil
-	}
-	if w.loopOwned {
-		if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
-			over, kept = nil, nil
+	if len(overtakeRefs(st)) > 0 {
+		readRefs := func() error {
+			over, kept = w.overtakenNow(ctx, st)
+			return nil
 		}
-	} else {
-		_ = readRefs()
+		if w.loopOwned {
+			if err := w.loopGitHub(ctx, "watch", readRefs); err != nil {
+				over, kept = nil, nil
+			}
+		} else {
+			_ = readRefs()
+		}
 	}
 	parks := w.settledParks(ctx, st)
 	if !w.chores {

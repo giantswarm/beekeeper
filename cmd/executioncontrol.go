@@ -176,11 +176,15 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			defer cancel()
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
+				if !publication.SyncBase && publicationCommit(publication.Head) && publication.BundleDigest != "" && len(publication.Title) <= 256 && len(publication.Body) <= 64<<10 {
+					r.PendingPublication = &state.ExecutionPendingPublication{Head: publication.Head, BundleDigest: publication.BundleDigest, Title: publication.Title, Body: publication.Body}
+				}
 				reply.Error = publishErr.Error()
 				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
+					r.PendingPublication = nil
 				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}
@@ -384,10 +388,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			v.PostMerge = nil
 		}
 		if v.On != "" {
-			if rp, ok := st.ReviewParkFor(v.On); ok {
+			if rp, ok := st.ReviewParkFor(v.On); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, ag.Name) || rp.Party.Is(me)) {
 				inheritReviewParkOnAgent(st, ag, rp, a.now.UTC())
+				st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 			}
-			st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, v.On) })
 		}
 		ag.Park = &state.Park{By: me, At: a.now.UTC(), On: v.On, Waits: oneLine(v.Waits), RefKind: kind, ReviewHead: reviewHead, PostMerge: v.PostMerge}
 		for i := range st.Records {
@@ -396,6 +400,16 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			}
 		}
 		return "park recorded on coordinator; " + parkReviewMode(reviewHead) + "; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now))}, nil
+	case execution.ControlResume:
+		// The worker leaves its own park once its wait settled: nobody is
+		// woken, the line carries what settled it.
+		if ag.Park == nil {
+			return "", nil, refused("%q is not parked", ag.Name)
+		}
+		p := ag.Park
+		ag.Park = nil
+		return fmt.Sprintf("%s: your park ended, nobody is woken. %s", ag.Name, parkMessage(p, me.Name)),
+			[]state.Event{event(me, resumedEvent, "%s: it left its own park, nobody is woken: %s", ag.Name, parkedText(p, a.now))}, nil
 	case "problem":
 		var finding string
 		if err := execution.Decode(c.Data, &finding); err != nil {
