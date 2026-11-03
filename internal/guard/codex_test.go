@@ -100,8 +100,8 @@ func TestCodexFailClosed(t *testing.T) {
 	// Panic inside a hook callback is recovered and fails closed.
 	panicHook := h
 	panicHook.Clusters = func() []string { panic("simulated callback panic") }
-	if d := decideCodexCmd(t, panicHook, featRepo, "kind create cluster"); d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "simulated callback panic") {
-		t.Errorf("panic recovery: got %+v, want deny naming panic", d)
+	if d := decideCodexCmd(t, panicHook, featRepo, "kind create cluster"); d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "PreToolUse check") {
+		t.Errorf("panic recovery: got %+v, want deny naming check", d)
 	}
 }
 
@@ -312,6 +312,7 @@ func TestCodexHomeAndAuthGuard(t *testing.T) {
 	for _, cmd := range []string{
 		`beekeeper note add --for "Supervisor" --ref giantswarm/beekeeper#1708 --due 12:30 --default "x" --status-quo "y" --why "z" "writes ~/.local/state/beekeeper/codex/home and ~/.codex/hooks.json"`,
 		`beekeeper log add "configured ~/.local/state/beekeeper/codex/home"`,
+		`beekeeper agents problem "probe failed on ~/.codex/hooks.json in giantswarm/beekeeper"`,
 		`beekeeper agents idle --done --report "PR ready: ~/.local/state/beekeeper/codex/home"`,
 		`beekeeper agents park --on giantswarm/beekeeper#1708 "waiting on ~/.codex/hooks.json"`,
 	} {
