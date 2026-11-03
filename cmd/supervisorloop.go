@@ -146,7 +146,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -209,6 +209,9 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
+	Closes []struct {
+		URL string `json:"url"`
+	} `json:"closingIssuesReferences"`
 	Draft       bool   `json:"isDraft"`
 	Mergeable   string `json:"mergeable"`
 	MergeState  string `json:"mergeStateStatus"`
@@ -332,6 +335,11 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
 	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	for _, issue := range j.Closes {
+		if r, ok := parseRef(issue.URL); ok {
+			p.Closes = append(p.Closes, refName(r))
+		}
+	}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -339,6 +347,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		if c.superseded(j.Rollup) {
 			continue
 		}
+		p.Checks = append(p.Checks, cmp.Or(c.Name, c.Context))
 		if !c.green() {
 			p.Green = false
 		}
@@ -649,6 +658,10 @@ type supervisorLoop struct {
 	// fillPause defers an unproductive board read until capacity changes,
 	// an agent is done or removed, or the configured retry interval passes.
 	fillPause fillPause
+	// fillEmpty counts the refill's unproductive board reads since its last
+	// start or a change that ended its pause; each one doubles the next
+	// pause, up to fillBackoff times.
+	fillEmpty int
 	// boardNone is this pass's empty or failed board next answer: every
 	// later start of the pass takes it instead of walking the board again.
 	boardNone *loopBoardNone
@@ -672,6 +685,9 @@ type supervisorLoop struct {
 	opens map[string]loopOpen
 	// merged are the merged pull requests read, by reference.
 	merged map[string]superloop.Pull
+	// pulls reuses unchanged PR observations between passes. A new park,
+	// answer or reviewer report invalidates them before planning.
+	pulls map[string]loopPullObservation
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -723,6 +739,17 @@ func loopServes(st *state.State, ag state.Agent) string {
 	}
 	if ref, ok := parseRef(r.Issue); ok {
 		return refName(ref)
+	}
+	return ""
+}
+
+func loopTaskServes(ag state.Agent, parkedOn string) string {
+	for _, task := range []string{ag.Task, ag.LastTask} {
+		if m := refURL.FindString(task); m != "" {
+			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
+				return refName(r)
+			}
+		}
 	}
 	return ""
 }
@@ -842,6 +869,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if _, err := fmt.Fprintln(a.out, "SUPERVISOR LOOP its binary was replaced: re-executing it"); err != nil {
 			return err
 		}
+		if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
+			l.sayOnce("installed-gate", "SUPERVISOR RELEASE FAILED: installed binary failed budget --gate (exit %d): %s", code, oneLine(out))
+		}
 		l.timerActs.Wait()
 		if l.stopWatch != nil {
 			l.stopWatch()
@@ -871,10 +901,21 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Wall-clock timer jobs keep running while GitHub observations are
+	// held. Board commands they invoke still share the query admission gate.
 	if !l.dryRun {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+	}
+	// A budget hold applies to observations too: reading every parked PR
+	// while starts are held still drains the shared GraphQL window.
+	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
+		return nil
+	}
+	delete(l.said, "graphql budget")
+	if !l.dryRun {
 		l.tidy(ctx, st)
 		l.updateHosts(ctx, st)
 		if err := a.syncClaims(ctx); err != nil {
@@ -882,6 +923,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := l.endReviewWorkers(ctx, st); err != nil {
 		return err
 	}
 	st, err = a.store.Read()
@@ -899,17 +947,52 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
+		ranks := map[string]int{}
+		in.Rank = func(ref string) int {
+			key := strings.ToLower(ref)
+			if r, ok := ranks[key]; ok {
+				return r
+			}
+			r, _ := readBoardRank(ctx, a, ref)
+			ranks[key] = r
+			return r
+		}
 	}
 	for _, ag := range st.Agents {
-		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, ag.Model), Started: st.StartIndex(ag.Party) >= 0}
+		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
-			w.ReviewRequested = ag.Park.ReviewHead != ""
-			w.ParkedHead = ag.Park.ReviewHead
+			w.ParkedOn, w.ParkedAt, w.Waits = loopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
+			if !shouldEndReviewWorker(st, ag) || l.dryRun {
+				w.ReviewRequested = ag.Park.ReviewHead != ""
+				w.ParkedHead = ag.Park.ReviewHead
+			}
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
+		if w.Serves == "" && ag.Park != nil && ag.Park.ReviewHead == "" {
+			w.Serves = loopTaskServes(ag, w.ParkedOn)
+		}
 		in.Workers = append(in.Workers, w)
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Name == rp.Agent || (ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On))
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+		})
 	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
@@ -938,6 +1021,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			claims[key] = loopClaim{at: e.At, target: rest}
 		case e.Verb == loopClaimEndVerb:
 			delete(claims, key)
+			in.Taken = slices.DeleteFunc(in.Taken, func(t superloop.Taken) bool { return t.Key == key })
 		case e.Verb == loopStageVerb:
 			stages[key] = true
 			stageDetail[key] = rest
@@ -969,7 +1053,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	for _, e := range answers {
-		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) && an.unverified(answerQuery{Note: an.ID, About: an.About}, a.central, a.now) == "" {
+		if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.For, a.cfg.Guide.Person) {
 			in.Answers = append(in.Answers, superloop.Answer{Ref: an.About, Note: an.ID, Question: an.Question, Text: an.Answer, By: an.For, At: an.At})
 		}
 	}
@@ -988,11 +1072,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = p
 			continue
 		}
-		p, err := readLoopPull(ctx, ref)
+		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
+			if errors.Is(err, errLoopLater) {
+				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
+				return nil
+			}
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
+		delete(l.said, "graphql allowance")
+		delete(l.said, "read "+ref)
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
@@ -1027,7 +1117,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
-	if len(l.postMerge) > 0 {
+	if len(l.postMerge) > 0 || superloop.HasOverlapWait(in.Workers, in.Taken, in.Answers) {
 		sessions, _, sessionErr := loopSessions(a)
 		for i, ag := range st.Agents {
 			if ag.Execution != nil {
@@ -1107,8 +1197,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := l.record(act, what); err != nil {
-			return err
+		if act.Kind != superloop.KindGo || what != loopWorkerMergeGo {
+			if err := l.record(act, what); err != nil {
+				return err
+			}
 		}
 	}
 	if !l.dryRun {
@@ -1210,6 +1302,8 @@ func would(act superloop.Action) string {
 		return fmt.Sprintf("put %s on the board in Backlog and rank it", act.URL)
 	case superloop.KindGo:
 		return "merge " + act.URL + " at " + act.Head
+	case superloop.KindOwner:
+		return fmt.Sprintf("give %s an owner (%s)", act.Ref, act.Agent)
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
@@ -1220,7 +1314,7 @@ func would(act superloop.Action) string {
 func (l *supervisorLoop) record(act superloop.Action, what string) error {
 	detail := superloop.Detail(act, what)
 	kind := act.Kind
-	if kind == superloop.KindGo {
+	if kind == superloop.KindGo && !strings.HasPrefix(what, loopWorkerMergeGo) {
 		kind = superloop.KindMerge
 	}
 	if err := l.a.store.Record(about(event(loopParty, "supervisor."+kind, "%s", detail), act.Ref)); err != nil {
@@ -1312,11 +1406,21 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		if err != nil {
 			return "", false, err
 		}
-		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens)
-	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
-		done = logged("agents.wake", opens)
+		if p.State == superloop.Merged && p.Head == act.Head {
+			done = true
+			break
+		}
+		if logged("agents.wake", opens) || logged(verbStart, opens) {
+			if p.State == superloop.Open && p.Head == act.Head && p.Green && !pullNeedsBranchRepair(p) {
+				return fmt.Sprintf("%s before an interruption: %s, as the log shows", loopWorkerMergeGo, c.target), true, nil
+			}
+			done = true
+		}
+	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed, superloop.KindOwner:
+		done = logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
-		done = logged("agents.wake", opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done })
+		done = logged("agents.wake", opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
+			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
 			logged("agents.remove", func(d string) bool { return d == c.target })
@@ -1455,13 +1559,15 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 	a := l.a
 	b := a.cfg.Board
 	if b.Owner == "" || b.Project == 0 || b.TidyEvery.Duration <= 0 || a.now.Sub(l.tidyAt) < b.TidyEvery.Duration ||
-		lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) {
+		boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
 		return
 	}
 	l.tidyAt = a.now
 	out, err := l.run(ctx, loopBoard, boardTidyName)
 	if err != nil {
-		l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		if !errors.Is(err, errLoopLater) {
+			l.sayOnce("board tidy", "SUPERVISOR BOARD TIDY FAILED: %v", err)
+		}
 		return
 	}
 	delete(l.said, "board tidy")
@@ -1472,7 +1578,9 @@ func (l *supervisorLoop) tidy(ctx context.Context, st *state.State) {
 		return
 	}
 	if out, err = l.run(ctx, loopBoard, boardEscalateName); err != nil {
-		l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
+		if !errors.Is(err, errLoopLater) {
+			l.sayOnce("board escalate", "SUPERVISOR BOARD ESCALATE FAILED: %v", err)
+		}
 		return
 	}
 	delete(l.said, "board escalate")
@@ -1525,6 +1633,10 @@ func (l *supervisorLoop) as(args ...string) []string {
 	return append(out, args...)
 }
 
+func isLoopGitHubHeldOutput(line string) bool {
+	return strings.Contains(line, "loop GitHub ") && strings.HasSuffix(line, ": "+errLoopLater.Error())
+}
+
 // run runs a beekeeper command as the loop; a non-zero exit is an error
 // with its output.
 func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error) {
@@ -1533,7 +1645,11 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 		return out, err
 	}
 	if code != 0 {
-		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, oneLine(out))}
+		line := oneLine(out)
+		if isLoopGitHubHeldOutput(line) {
+			return out, fmt.Errorf("beekeeper %s: %s: %w", strings.Join(args[:min(2, len(args))], " "), line, errLoopLater)
+		}
+		return out, &exitError{code: code, msg: fmt.Sprintf("beekeeper %s: exit %d: %s", strings.Join(args[:min(2, len(args))], " "), code, line)}
 	}
 	return out, nil
 }
@@ -1547,30 +1663,32 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 	case superloop.KindGo:
 		return l.mergePull(ctx, st, act)
 	case superloop.KindForward:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the review of %s asking for changes on %s forwarded", act.URL, act.Head), nil
 	case superloop.KindRed:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s at %s: red checks told: %s", act.URL, act.Head, redChecks(act.Key)), nil
 	case superloop.KindRework:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s at %s: the review's findings stand with no round left, rework told", act.URL, act.Head), nil
 	case superloop.KindAnswer:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the person's answer about %s told", act.URL), nil
 	case superloop.KindRelay:
-		if err := l.wake(ctx, act); err != nil {
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
+	case superloop.KindOwner:
+		return l.ownOverlap(ctx, st, act)
 	case superloop.KindEscalate:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
 			fmt.Sprintf("the loop starts at most %d reviews of a pull request, and head %s changes more than the base since the last one: only a person lets it merge without another review; the loop gives the merge go for that head on an answer that releases it", superloop.MaxReviews, shortSHA(act.Head)),
@@ -1772,10 +1890,242 @@ func (l *supervisorLoop) wake(ctx context.Context, act superloop.Action) error {
 	return err
 }
 
+func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
+	if ag.Park == nil || ag.Park.ReviewHead == "" || loopParkOn(ag.Park) == "" {
+		return false
+	}
+	k := st.StartIndex(ag.Party)
+	if k < 0 {
+		return false
+	}
+	if ag.Execution != nil {
+		return st.Starts[k].Execution != nil
+	}
+	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
+}
+
+func reviewParkServes(st *state.State, ag state.Agent, on string) string {
+	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
+		return s
+	}
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
+		if r, ok := parseRef(ref); ok {
+			return refName(r)
+		}
+	}
+	if rp, ok := st.ReviewParkFor(on); ok && rp.Serves != "" {
+		return rp.Serves
+	}
+	return ""
+}
+
+func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
+	for _, ag := range st.Agents {
+		if ag.Park == nil || ag.Park.ReviewHead == "" {
+			continue
+		}
+		on := loopParkOn(ag.Park)
+		if on == "" {
+			continue
+		}
+		if l.dryRun || !shouldEndReviewWorker(st, ag) {
+			continue
+		}
+		if loopInTurn(l.a, ag.Party) {
+			l.sayOnce("turn "+ag.Name, "SUPERVISOR DONE WAITS %s: its session runs a turn", ag.Name)
+			continue
+		}
+		var selector, model string
+		worktreeDir := ag.Park.Worktree
+		if k := st.StartIndex(ag.Party); k >= 0 {
+			model = st.Starts[k].Model
+			if st.Starts[k].Execution != nil {
+				selector = st.Starts[k].Execution.Selector
+			}
+			if worktreeDir == "" {
+				worktreeDir = st.Starts[k].Dir
+			}
+		}
+		rp := state.ReviewPark{
+			On:         on,
+			At:         ag.Park.At,
+			ReviewHead: ag.Park.ReviewHead,
+			Agent:      ag.Name,
+			Party:      ag.Party,
+			Execution:  ag.Execution,
+			Selector:   selector,
+			Model:      cmp.Or(ag.Model, model),
+			Serves:     reviewParkServes(st, ag, on),
+			PostMerge:  ag.Park.PostMerge,
+			Worktree:   worktreeDir,
+		}
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.UpsertReviewPark(rp)
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		if ref := ag.Execution; ref != nil {
+			if r, _ := executionRecord(st, *ref); r == nil || !r.Terminal() {
+				if _, err := l.run(ctx, agentsName, loopStop, ag.Name, "--reason", "supervisor loop: desk review requested"); err != nil {
+					l.sayOnce("stop "+ag.Name, "SUPERVISOR STOP FAILED %s: %v", ag.Name, err)
+					continue
+				}
+				if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+					if r, _ := executionRecord(current, *ref); r != nil {
+						r.Observation.StopAcknowledged = true
+						r.Observation.ProcessState = execution.Exited
+					}
+					return nil, nil
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := l.run(ctx, agentsName, loopRemove, ag.Name); err != nil {
+			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
+			continue
+		}
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.UpsertReviewPark(rp)
+			if i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) }); i >= 0 {
+				removeAgent(current, i)
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+		l.a.cleanRemovedWorktree(ctx, worktreeDir, ag.Park.ReviewHead)
+	}
+	return nil
+}
+
+func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+		return l.wake(ctx, act)
+	}
+	return l.startFixer(ctx, st, act)
+}
+
+const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{else}}Fix{{end}} the findings on {{.URL}} (branch {{.Branch}} at head {{.Head}} in {{.Repo}}).
+
+{{.Task}}
+
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
+`
+
+const defaultContinuationBrief = `{{if .ServesURL}}Continue {{.ServesURL}} after {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{else}}Continue the task for {{.URL}}{{if .Head}} ({{.Head}}){{end}} in {{.Repo}}.{{end}}
+
+{{.Task}}
+
+Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Complete the remaining work and finish with beekeeper agents idle --done --report and --problem.
+`
+
+func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if l.startsHeld {
+		return errLoopLater
+	}
+	r, ok := parseRef(act.Ref)
+	if !ok {
+		return refused("invalid pull request ref %q", act.Ref)
+	}
+	rp, hasRP := st.ReviewParkFor(act.Ref)
+	var servesURL, postMerge string
+	if hasRP {
+		if rp.Serves != "" && !strings.EqualFold(rp.Serves, act.Ref) {
+			servesURL = issueURL(rp.Serves)
+		}
+		if rp.PostMerge != nil {
+			postMerge = strings.TrimSpace(*rp.PostMerge)
+		}
+	}
+	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
+	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	if err != nil {
+		if errors.Is(err, errLoopLater) {
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			return errLoopLater
+		}
+		return err
+	}
+	tmpl := defaultFixerBrief
+	branch := ""
+	head := act.Head
+	if act.Kind == superloop.KindEnd {
+		tmpl = defaultContinuationBrief
+		merged := l.merged[act.Ref]
+		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
+		branch = cmp.Or(place.Ref, merged.Base, head)
+		if place.remote() && place.Ref == "" {
+			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
+		}
+	} else {
+		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+			branch = p.Branch
+		}
+		if branch == "" {
+			branch = fmt.Sprintf("pr-%d", r.N)
+		}
+		if place.remote() {
+			place.Ref = branch
+		}
+	}
+	brief, err := l.brief("", tmpl, act.Key, briefData{
+		URL:       act.URL,
+		Repo:      r.Repo,
+		Number:    r.N,
+		Head:      head,
+		Branch:    branch,
+		Worker:    act.Agent,
+		Task:      act.Message,
+		ServesURL: servesURL,
+		PostMerge: postMerge,
+	})
+	if err != nil {
+		return err
+	}
+	args := []string{agentsName, agentStartName, name, brief}
+	if len(l.a.cfg.Capacity.Choices) > 0 {
+		args = append(args, "--harness", harnessAuto)
+	}
+	if place.remote() {
+		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
+	}
+	args = append(args, place.excludeFlags()...)
+	if err := l.claim(act, name); err != nil {
+		return err
+	}
+	if _, err := l.run(ctx, args...); err != nil {
+		if Code(err) == ExitRefused && place.remote() {
+			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+				return nil
+			} else if !errors.Is(rerr, errLoopLater) {
+				return rerr
+			}
+		}
+		if Code(err) == ExitRefused {
+			return errLoopLater
+		}
+		return err
+	}
+	if hasRP && rp.Serves != "" {
+		if err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			if i := slices.IndexFunc(current.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }); i >= 0 {
+				inheritReviewParkOnAgent(current, &current.Agents[i], rp, l.a.now.UTC())
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // briefData is what a brief template renders.
 type briefData struct {
-	URL, Repo, Head, Worker, Task string
-	Number, Round                 int
+	URL, Repo, Head, Branch, Worker, Task, ServesURL, PostMerge string
+	Number, Round                                               int
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
@@ -1824,7 +2174,20 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err != nil {
 		return "", err
 	}
-	place, err := l.startPlacement(ctx, r.Repo, true, act.SelfHosted)
+	var authorFlags []string
+	if l.a.cfg.Capacity.TaskPolicies[taskKindReview].DifferentFamily {
+		st, err := l.a.store.Read()
+		if err != nil {
+			return "", err
+		}
+		if m := reviewAuthorModel(st, act); m != "" {
+			authorFlags = []string{"--" + authorModelFlag, m}
+		} else {
+			return "", refused("model policy: review requires the author's recorded model")
+		}
+	}
+	name := superloop.ReviewerName(act.Ref, act.Round)
+	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, authorFlags...)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
@@ -1832,8 +2195,8 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 		return "", err
 	}
-	name := superloop.ReviewerName(act.Ref, act.Round)
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
+	args = append(args, authorFlags...)
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The reviewer takes capacity's pick, decided as a worker's start
 		// is; a self-hosted model's work gets one on no self-hosted provider.
@@ -1876,6 +2239,45 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 func repoName(repo string) string {
 	_, name, _ := strings.Cut(repo, "/")
 	return name
+}
+
+func agentRecordedModel(st *state.State, ag state.Agent) string {
+	if ag.Model != "" {
+		return ag.Model
+	}
+	if k := st.StartIndex(ag.Party); k >= 0 {
+		return st.Starts[k].Model
+	}
+	return ""
+}
+
+func reviewAuthorModel(st *state.State, act superloop.Action) string {
+	for _, ag := range st.Agents {
+		if ag.Name == act.Agent {
+			if m := agentRecordedModel(st, ag); m != "" {
+				return m
+			}
+		}
+	}
+	if rp, ok := st.ReviewParkFor(act.Ref); ok {
+		if rp.Model != "" {
+			return rp.Model
+		}
+		if k := st.StartIndex(rp.Party); k >= 0 && st.Starts[k].Model != "" {
+			return st.Starts[k].Model
+		}
+	}
+	for _, rp := range st.ReviewParks {
+		if rp.Agent == act.Agent {
+			if rp.Model != "" {
+				return rp.Model
+			}
+			if k := st.StartIndex(rp.Party); k >= 0 && st.Starts[k].Model != "" {
+				return st.Starts[k].Model
+			}
+		}
+	}
+	return ""
 }
 
 // selfHostedModel reports whether model is a choice of a self-hosted
@@ -2000,11 +2402,21 @@ func (l *supervisorLoop) placesRemotely() bool {
 // choices no host has an adapter for, the host-run choices excluded (see
 // hostsFirstLocal). Without the preference the local machine attempts it,
 // whose own start gate makes it wait when it has none either.
-func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review, selfHosted bool) (startHost, error) {
+func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, review, selfHosted bool, extra ...string) (startHost, error) {
+	kind := workerRole
+	if review {
+		kind = taskKindReview
+	}
+	model := l.a.ruleModel(name, kind)
+	flags := startFlags(review, selfHosted)
+	if model != "" {
+		flags = append(flags, modelFlag, model)
+	}
+	flags = append(flags, extra...)
 	// Execution hosts have no relayed GitHub read-and-review path. Keep
 	// reviewers on the coordinator, without reserving any choices for hosts.
 	if review {
-		if !l.capacityRoom(ctx, startFlags(review, selfHosted)...) {
+		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -2013,10 +2425,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
-		// room.
+		// room. When agents.models selects a model, check its room before
+		// claiming the action.
+		if model != "" && !l.capacityRoom(ctx, flags...) {
+			return startHost{}, errLoopLater
+		}
 		return startHost{}, nil
 	}
-	flags := startFlags(review, selfHosted)
 	out, code, err := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
 	if err != nil || code != 0 {
 		return startHost{}, errLoopLater
@@ -2031,7 +2446,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 			l.sayOnce("host "+selector, "SUPERVISOR HOST FAILED %s: %v", selector, err)
 			continue
 		}
-		if _, ok := h.Repositories[repo]; !ok {
+		if !h.AdmitsRepository(repo) {
 			l.sayOnce("host "+selector+" "+repo, "SUPERVISOR HOST WAITS: %s maps no %s", selector, repo)
 			continue
 		}
@@ -2047,7 +2462,10 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 		return startHost{Selector: selector, Repo: repo, Ref: ref}, nil
 	}
 	if k.HostsFirst {
-		return l.hostsFirstLocal(ctx, flags, roomOpen(out), mapped)
+		return l.hostsFirstLocal(ctx, flags, model, roomOpen(out), mapped)
+	}
+	if model != "" && !roomOpen(out) {
+		return startHost{}, errLoopLater
 	}
 	return startHost{}, nil
 }
@@ -2059,14 +2477,14 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, repo string, review
 // the choices a host can run wait for one; the others start locally, the
 // host-run choices excluded from the start, while the local verdict
 // without them has room. Everything else waits.
-func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, localRoom, mapped bool) (startHost, error) {
+func (l *supervisorLoop) hostsFirstLocal(ctx context.Context, flags []string, model string, localRoom, mapped bool) (startHost, error) {
 	var hosts []execution.Host
 	for _, selector := range l.a.cfg.Supervisor.Hosts {
 		if h, err := l.a.executionHost(selector); err == nil {
 			hosts = append(hosts, h)
 		}
 	}
-	hosted, mixed := hostChoices(l.a.cfg.Capacity, hosts)
+	hosted, mixed := hostChoices(filterChoiceModel(l.a.cfg.Capacity, model), hosts)
 	if !mapped || len(hosted) == 0 {
 		if !localRoom {
 			return startHost{}, errLoopLater
@@ -2187,8 +2605,8 @@ func (l *supervisorLoop) nextItem(ctx context.Context) (*loopBoardItem, error) {
 
 // boardBudgetLow reports whether a board walk, which costs a large share of
 // the GraphQL budget, must wait: the REST budget is under floor until its
-// reset, GraphQL refuses, or the last GraphQL reading, taken within its
-// hourly window, is under floor.
+// reset, GraphQL refuses, or the last GraphQL reading is under floor until
+// its window resets (its reset, else an hour after the reading).
 func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 	if lowBudget(b, floor, now) {
 		return true
@@ -2197,7 +2615,16 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 		return false
 	}
 	g := b.GraphQL
-	return g.Blocks(now) || (g.Remaining < floor && now.Sub(g.At) < time.Hour)
+	if g.Blocks(now) {
+		return true
+	}
+	if g.Remaining >= floor {
+		return false
+	}
+	if !g.Reset.IsZero() {
+		return now.Before(g.Reset)
+	}
+	return now.Sub(g.At) < time.Hour
 }
 
 // readNextItem reads board next --json. With nothing free board next exits
@@ -2212,6 +2639,9 @@ func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, erro
 		return &exitError{code: code, msg: fmt.Sprintf("beekeeper %s next: exit %d: %s", loopBoard, code, oneLine(out))}
 	}
 	if code != 0 && code != ExitRefused {
+		if isLoopGitHubHeldOutput(oneLine(out)) {
+			return nil, errLoopLater
+		}
 		return nil, failed()
 	}
 	// The output is stdout and then stderr: the document is its first value.
@@ -2253,7 +2683,8 @@ type loopBoardItem struct {
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
-	place, err := l.startPlacement(ctx, r.Repo, false, false)
+	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR NEXT WAITS %s: no room for a start yet on any host", next.URL)
@@ -2265,7 +2696,6 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
 	args := []string{agentsName, agentStartName, name, brief}
 	if len(l.a.cfg.Capacity.Choices) > 0 {
 		// The start takes capacity's choice of harness and model, as a
@@ -2332,8 +2762,12 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 	}
 	if code == ExitOutdated {
 		if _, err := l.run(ctx, selfUpdateCmdName); err != nil {
+			_ = l.a.store.Record(event(loopParty, loopClaimEndVerb, "[%s] %v", act.Key, err))
 			return "", err
 		}
+	}
+	if out, code, err := beekeeperRun(ctx, l.as(budgetGateArgs...)...); err != nil || code != 0 {
+		return "", fmt.Errorf("%s installed, but budget --gate exits %d: %s", version, code, oneLine(out))
 	}
 	what := []string{version + " installed"}
 	broker, err := loopBroker(ctx)
@@ -2484,6 +2918,29 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 	return a.boardClient().RankAnchor(ctx, ref, from)
 }
 
+// readBoardRank resolves the priority rank of ref on the board (Client.RankOf).
+var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
+	return a.boardClient().RankOf(ctx, ref)
+}
+
+func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
+			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
+		}
+		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
+			return "", fmt.Errorf("record overlap dependency: %w", err)
+		}
+	}
+	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+		return "", err
+	}
+	if act.Block != "" {
+		return fmt.Sprintf("owner %q assigned to %s (%s blocked by %s)", act.Agent, cmp.Or(act.URL, act.Ref), act.Block, act.Ref), nil
+	}
+	return fmt.Sprintf("owner %q assigned to %s", act.Agent, cmp.Or(act.URL, act.Ref)), nil
+}
+
 // filedIssues reads the issues created by sessions active since the loop
 // started (Work.Created), with the item or pull request each session was
 // working on when it filed the issue.
@@ -2541,7 +2998,7 @@ func (l *supervisorLoop) filedIssues(st *state.State) []superloop.FiledIssue {
 // the priority list right after the high-ranked epic or item it blocks or
 // follows from.
 func (l *supervisorLoop) intakeIssue(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if lowBudget(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
+	if boardBudgetLow(st.Budget, l.a.cfg.GitHub.Floor, l.a.now) {
 		return "", errLoopLater
 	}
 	moveStage := act.Key + " move"
@@ -2676,7 +3133,9 @@ func (l *supervisorLoop) fireTimers(ctx context.Context, st *state.State) error 
 			acting = append(acting, t)
 		}
 	}
-	found := checkTimers(ctx, acting, a.now, lowBudget(st.Budget, a.cfg.GitHub.Floor, a.now) || a.resetFirst(st))
+	githubHeld := boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) ||
+		a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.now)
+	found := a.loopTimerChecks(ctx, acting, a.now, githubHeld || a.resetFirst(st))
 	// Avoid a write on every idle loop pass.
 	_, _, _, changed := settleTimersMatching(st, found, a.now, a.cfg.Supervisor.LoopInterval.Duration, timerActs)
 	if !changed {

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -365,9 +367,11 @@ the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
 call, naming the error.
-Every gh pr merge and gh api PUT of a pull request merge requires the
-supervisor loop's durable go for this worker and exact head, current green CI
-and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
+A merge of a merge.devctlOwners repository is the gate's devctl pr merge
+alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
+naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
+pull request merge requires the supervisor loop's durable go for this worker
+and exact head, current green CI and no desk hold. Pass --match-head-commit <full SHA> or -f sha=<full SHA>
 so GitHub enforces the checked head atomically. GraphQL merges and deferred
 auto-merges are refused; expose script merges as their own tool command.
 Successful preflight checks leave a merge.authorized event (not proof that
@@ -490,10 +494,15 @@ Register it in ~/.claude/settings.json:
   "PreToolUse": [{"matcher": "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "hooks": [{"type": "command",
     "command": "~/.go/bin/beekeeper hook pretooluse"}]}]
 
-And in ~/.gemini/config/hooks.json for agy:
+And in ~/.gemini/config/hooks.json for agy, where PreInvocation lists the
+commands themselves and PreToolUse matchers with their commands (agy
+rejects the whole entry when a PreInvocation item is a matcher):
 
-  {"beekeeper": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
-    "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
+  {"beekeeper": {
+    "PreInvocation": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook preinvocation", "timeout": 30}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command",
+      "command": "~/.go/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]}}
 
 And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 
@@ -513,16 +522,21 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				w = cmd.OutOrStdout()
 			}
 			defer func() {
-				if r := recover(); r != nil {
-					if isCodex {
-						_, _ = w.Write(guard.DenyCodex(fmt.Sprintf("Refused: internal panic in PreToolUse guard (%v); failing closed.", r)))
-						return
+				if recover() != nil {
+					reason := "Refused: internal panic in PreToolUse check setup; failing closed. See beekeeper log (hook.panic)."
+					if a.cfg != nil {
+						a.recordGuardPanic("setup", debug.Stack())
 					}
-					if isAgy {
-						_, _ = w.Write(guard.PassAgy())
+					switch {
+					case isCodex:
+						_, _ = w.Write(guard.DenyCodex(reason))
+					case isAgy:
+						_, _ = w.Write(guard.DenyAgy(reason))
+					default:
+						_ = json.NewEncoder(w).Encode(map[string]any{"hookSpecificOutput": map[string]string{"hookEventName": guard.PreToolUseEvent, "permissionDecision": "deny", "permissionDecisionReason": reason}})
 					}
 				}
-			}() // a broken hook must not block the tool call (codex fails closed)
+			}()
 			raw, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
 				if isCodex {
@@ -577,7 +591,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
+			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
@@ -585,13 +599,14 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    a.allowedApps, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
-				h.MergeGo = a.hookMergeGo
+				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
+				h.LiveDirs = a.hookLiveDirs
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}
@@ -1034,6 +1049,9 @@ func (a *app) firstReads(session, repo string) bool {
 
 // loadConfig reads the configuration without opening the state.
 func (a *app) loadConfig() error {
+	if home := os.Getenv(execution.EnvHome); filepath.IsAbs(home) {
+		_ = os.Setenv("HOME", filepath.Clean(home))
+	}
 	path, err := config.Path(a.cfgPath)
 	if err != nil {
 		return err
@@ -1170,4 +1188,13 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 		g.StoreDeny = append(g.StoreDeny, guard.StoreRule{Vault: r.Vault, Item: r.Item})
 	}
 	return g
+}
+
+// recordGuardPanic keeps stack traces in the event log, never tool responses.
+func (a *app) recordGuardPanic(check string, stack []byte) {
+	store, err := state.Open(a.cfg.StateDir)
+	if err != nil {
+		return
+	}
+	_ = store.Log(event(state.Party{Name: "hook"}, "hook.panic", "check %s\n%s", check, stack))
 }

@@ -906,7 +906,7 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run") //nolint:gosec // the merge tool, a checked repository
+	c := exec.CommandContext(ctx, merge.Tool, "release", "promote", repo, "--dry-run", "--progress") //nolint:gosec // the merge tool, a checked repository
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if candidate, ok := merge.ParsePromoteCandidate(out); ok {
@@ -915,7 +915,15 @@ var promoteCandidate = func(ctx context.Context, repo string) (string, error) {
 	if err == nil {
 		err = errors.New("no document")
 	}
-	return "", fmt.Errorf("%s release promote %s --dry-run: %w: %s", merge.Tool, repo, err, lastOf(stderr.String()))
+	// CommandContext reports a killed process rather than its deadline. Keep
+	// both causes, and use our buffer even when exec.ExitError has no Stderr.
+	if cause := ctx.Err(); cause != nil {
+		err = fmt.Errorf("%w (%w)", err, cause)
+	}
+	if tail := cmp.Or(lastOf(stderr.String()), merge.PromoteFailure(out)); tail != "" {
+		err = fmt.Errorf("%w: %s", err, tail)
+	}
+	return "", fmt.Errorf("%s release promote %s --dry-run: %w", merge.Tool, repo, err)
 }
 
 // outsideCheck is how often a merge waiting in a lane asks GitHub about the
@@ -2281,8 +2289,8 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 	if err != nil {
 		return state.Budget{}, err
 	}
-	if b := st.Budget; b != nil && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
-		return *b, nil
+	if b := st.Budget; b != nil && (len(b.Identities) > 0 || b.GraphQL == nil) && g.now.Sub(b.At) <= g.cfg.Merge.BudgetFresh.Duration && g.now.Before(b.Reset) {
+		return minimumGateBudget(*b, g.now)
 	}
 	var b github.Budget
 	err = g.readRetrying("the GitHub budget", func() (err error) {
@@ -2291,7 +2299,26 @@ func (g *gateRun) gateBudget() (state.Budget, error) {
 		b, err = readBudget(g.app, ctx)
 		return err
 	})
-	return state.Budget{Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}, err
+	if err != nil {
+		return state.Budget{}, err
+	}
+	reading := state.Budget{Identity: b.Identity, Remaining: b.Remaining, Limit: b.Limit, Reset: b.Reset}
+	if b.GraphQL != nil {
+		reading.GraphQL = storedGraphQL(b.GraphQL, g.now)
+	}
+	return minimumGateBudget(reading, g.now)
+}
+
+func minimumGateBudget(b state.Budget, now time.Time) (state.Budget, error) {
+	if g := b.GraphQL; g != nil {
+		if g.Err != "" || g.Blocks(now) {
+			return b, fmt.Errorf("GraphQL identity %s is unavailable (blocked by %s): %s %s", g.Identity, strings.Join(g.BlockedBy, ", "), g.Err, g.Refused)
+		}
+		if g.Remaining < b.Remaining {
+			b.Identity, b.Login, b.Remaining, b.Limit, b.Reset = g.Identity, g.Login, g.Remaining, g.Limit, g.Reset
+		}
+	}
+	return b, nil
 }
 
 // readBudget reads the GitHub budget afresh (probeBudget); a seam for the

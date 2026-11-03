@@ -12,6 +12,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -245,6 +246,138 @@ func TestResumeByHand(t *testing.T) {
 	want := resumer + " → " + agentOne + ": Your park on the supervisor's go is over: " + resumer + " resumed you by hand. Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q", *woke)
+	}
+}
+
+// resume runs agents resume as the calling session (agentOne) with args.
+func resume(t *testing.T, w *watcher, args ...string) error {
+	t.Helper()
+	c := w.agentResumeCmd()
+	c.SetArgs(args)
+	c.SetOut(w.out)
+	c.SetErr(w.out)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	return c.Execute()
+}
+
+// A parked agent leaves its own park once the wait settled: agents resume
+// without an agent, or naming itself, ends the park, wakes nobody and prints
+// what settled it.
+func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
+	for _, args := range [][]string{nil, {agentOne}} {
+		w := parkingWatch(t, nil)
+		woke := stubWakes(t)
+		if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+			t.Fatal(err)
+		}
+		answer(t, w)
+		w.pending(context.Background(), nil)
+		w.out.(*bytes.Buffer).Reset()
+		if err := resume(t, w, args...); err != nil {
+			t.Fatalf("resume %q: %v", args, err)
+		}
+		out := w.out.(*bytes.Buffer).String()
+		want := agentOne + ": your park ended, nobody is woken. Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer
+		if !strings.Contains(out, want) {
+			t.Errorf("resume %q said:\n%s\nwant %q", args, out, want)
+		}
+		if len(*woke) > 0 {
+			t.Errorf("resume %q woke %q", args, *woke)
+		}
+		if ag := agentOf(t, w); ag.Park != nil || ag.Task != parkTask {
+			t.Errorf("resume %q: task %q park %+v", args, ag.Task, ag.Park)
+		}
+		if err := resume(t, w, args...); err == nil || !strings.Contains(err.Error(), "is not parked") {
+			t.Errorf("second resume %q: %v", args, err)
+		}
+	}
+}
+
+// An agent of a harness beekeeper has no message route to (one that
+// registered itself with agents register --harness, not started under its
+// harness's host prefix) is never woken headless: its park line and the
+// watch's AGENT RESUMABLE say so, agents.autoResume leaves it resumable,
+// and agents resume by another ends its park and says so.
+func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
+	w := parkingWatch(t, nil)
+	w.cfg.Agents.AutoResume = true
+	woke := stubWakes(t)
+	w.as = ""
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-omp-rpc")
+	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
+	register := func(args ...string) error {
+		c := w.agentsCmd()
+		c.SetArgs(append([]string{"register"}, args...))
+		c.SetOut(w.out)
+		c.SetErr(w.out)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		return c.Execute()
+	}
+	if err := register("--harness", "pi"); Code(err) != ExitUsage {
+		t.Fatalf("register --harness pi: %v", err)
+	}
+	if err := register("--harness", omp.Harness); err != nil {
+		t.Fatal(err)
+	}
+	if ag := agentOf(t, w); ag.Harness != omp.Harness || ag.Session != "s-omp-rpc" || ag.Task != parkTask {
+		t.Fatalf("registered %+v", ag)
+	}
+	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, unroutedResume) || strings.Contains(out, "the watch resumes it") {
+		t.Errorf("park said:\n%s", out)
+	}
+	answer(t, w)
+	w.out.(*bytes.Buffer).Reset()
+	for range 2 {
+		w.pending(context.Background(), nil)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, `AGENT RESUMABLE "`+agentOne+`"`) || !strings.Contains(out, unroutedResume) ||
+		strings.Contains(out, "the watch resumes it") {
+		t.Errorf("watch said:\n%s", out)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park == nil || ag.Park.Resumable.IsZero() {
+		t.Fatalf("autoResume of an unrouted harness: woke %q park %+v", *woke, ag.Park)
+	}
+	w.out.(*bytes.Buffer).Reset()
+	if err := w.resumeParked(context.Background(), state.Party{Name: resumer}, agentOne); err != nil {
+		t.Fatal(err)
+	}
+	out := w.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, agentOne+": its park ended; it runs on omp, which beekeeper has no message route to, so nobody is woken") ||
+		!strings.Contains(out, parkAnswer) {
+		t.Errorf("resume said:\n%s", out)
+	}
+	if ag := agentOf(t, w); len(*woke) > 0 || ag.Park != nil {
+		t.Errorf("after the resume: woke %q park %+v", *woke, ag.Park)
+	}
+}
+
+// A session off the roster leaves its own park too, waking nobody.
+func TestOffRosterSessionLeavesItsOwnPark(t *testing.T) {
+	w := parkingWatch(t, nil)
+	woke := stubWakes(t)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = nil
+		st.Parks = []state.Park{{By: state.Party{Name: agentOne}, At: relayNow, Waits: "a reply on my branch"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(t, w); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, agentOne+": your park ended, nobody is woken.") {
+		t.Errorf("resume said:\n%s", out)
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*woke) > 0 || len(st.Parks) > 0 {
+		t.Errorf("woke %q parks %+v", *woke, st.Parks)
 	}
 }
 
@@ -550,5 +683,79 @@ func TestOffRosterParkRetainsReviewMode(t *testing.T) {
 		if len(st.Parks) != 1 || st.Parks[0].ReviewHead != head || st.Parks[0].RefKind != github.RefPullRequest || strings.Contains(line, "review request recorded") {
 			t.Fatalf("parks %+v, line %q", st.Parks, line)
 		}
+	}
+}
+
+func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
+	for _, exhausted := range []bool{false, true} {
+		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			w.loopOwned = true
+			w.cfg.GitHub.Floor = 2500
+			w.cfg.Agents.AutoResume = true
+			woke := stubWakes(t)
+			if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+				t.Fatal(err)
+			}
+			if exhausted {
+				if err := w.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{Reset: w.now.Add(time.Hour), Spent: loopGraphQLLimit}); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Budget = &state.Budget{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour), GraphQL: &state.GraphQL{Remaining: 4900, At: w.now, Reset: w.now.Add(time.Hour)}}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} // Otherwise GraphQL is unknown and must fail closed.
+			previous := readLoopGraphQLBudget
+			t.Cleanup(func() { readLoopGraphQLBudget = previous })
+			readLoopGraphQLBudget = func(*app, context.Context) (github.Budget, error) {
+				t.Fatal("local-note settlement probed GitHub under a held budget")
+				return github.Budget{}, nil
+			}
+			answer(t, w)
+			w.pending(t.Context(), nil)
+			if p := agentOf(t, w).Park; p == nil || p.Resumable.IsZero() || !strings.Contains(p.Answer, parkAnswer) {
+				t.Fatalf("answered local note did not become resumable: %+v", p)
+			}
+			w.pending(t.Context(), nil)
+			if len(*woke) != 1 || !strings.Contains((*woke)[0], parkAnswer) || agentOf(t, w).Park != nil {
+				t.Fatalf("answered local note did not wake once with answer: %v", *woke)
+			}
+		})
+	}
+}
+
+func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
+	w := parkingWatch(t, nil)
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park = &state.Park{At: w.now, On: refOne}
+		st.Parks = []state.Park{{By: offSession, At: w.now, On: refTwo}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := refStates
+	t.Cleanup(func() { refStates = prev })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		return map[github.PR]github.RefState{
+			refs[0]: {Kind: github.RefPullRequest, State: github.Merged},
+		}, errParkLookup
+	}
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := w.settledParks(t.Context(), st)
+	if len(settled) != 1 || settled[0].on != refOne {
+		t.Fatalf("partial batch result did not settle %s: %+v", refOne, settled)
+	}
+	st, err = w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Agents[0].Park == nil || st.Agents[0].Park.RefKind != github.RefPullRequest {
+		t.Fatalf("partial batch result did not cache RefKind: %+v", st.Agents[0].Park)
 	}
 }

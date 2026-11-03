@@ -28,6 +28,7 @@ type fakeDeps struct {
 }
 
 func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
+	checkSelectionSchema(f.t, args)
 	q := args[3]
 	checkedQuery(f.t, q)
 	f.repos = append(f.repos, github.Repo(ctx))
@@ -46,7 +47,7 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 		return n
 	}
 	// summary is the issue's blockers, as their list and as the summary
-	// board next reads.
+	// older readers used.
 	summary := func(key string) string {
 		var bs []string
 		for _, b := range f.blockers[key] {
@@ -93,17 +94,34 @@ func (f *fakeDeps) run(ctx context.Context, args ...string) ([]byte, error) {
 // openIssue and closedIssue are an issue's state as fakeDeps keeps it,
 // pr7 a pull request.
 const (
-	openIssue   = `{"state":"OPEN"}`
-	closedIssue = `{"state":"CLOSED"}`
-	pr7         = "o/r#7"
-	repoR       = "o/r"
+	openIssue      = `{"state":"OPEN"}`
+	closedIssue    = `{"state":"CLOSED"}`
+	pr7            = "o/r#7"
+	repoR          = "o/r"
+	issueQ3        = "o/q#3"
+	addBlockedR5Q3 = "addBlockedBy r#5 q#3"
 )
 
 func newFakeDeps(t *testing.T) *fakeDeps {
 	return &fakeDeps{t: t, blockers: map[string][]string{}, nodes: map[string]string{
-		"r#5": openIssue, "r#9": openIssue, "q#3": openIssue,
-		"r#7": `{"__typename":"PullRequest"}`,
+		"r#5":  openIssue,
+		"r#9":  openIssue,
+		"q#3":  openIssue,
+		"r#7":  `{"__typename":"PullRequest"}`,
+		"r#15": `{"__typename":"PullRequest","closingIssuesReferences":{"nodes":[{"__typename":"Issue","id":"ID:r#5","state":"OPEN","number":5,"repository":{"nameWithOwner":"o/r"},"blockedBy":{"totalCount":0,"nodes":[]}}]}}`,
+		"q#13": `{"__typename":"PullRequest","closingIssuesReferences":{"nodes":[{"__typename":"Issue","id":"ID:q#3","state":"OPEN","number":3,"repository":{"nameWithOwner":"o/q"},"blockedBy":{"totalCount":0,"nodes":[]}}]}}`,
 	}}
+}
+
+func TestBlockResolvesPullRequestsToClosingIssues(t *testing.T) {
+	f := newFakeDeps(t)
+	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
+	ctx := context.Background()
+	h, err := c.Block(ctx, "o/r#15", "o/q#13")
+	if err != nil || *h != (Held{Ref: issue5, By: issueQ3, ByOpen: true, Changed: true, Blockers: 1, OpenBlockers: 1}) ||
+		!slices.Equal(f.mutations, []string{addBlockedR5Q3}) {
+		t.Fatalf("Block(PR, PR) = %+v, %v; mutations %v", h, err, f.mutations)
+	}
 }
 
 func TestBlockAndUnblockRecordTheDependency(t *testing.T) {
@@ -173,15 +191,16 @@ func TestABlockedItemIsSkippedThenOfferedOnceItsBlockerCloses(t *testing.T) {
 	c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7}}
 	ctx := context.Background()
 	b := deskBoard()
-	// board next ranks the item as Read builds it: its blockers' summary
-	// from the issue, as GitHub answers it.
+	// Keep GitHub's summary stale while the dependency list changes.
+	f.lag = true
+	// Rank the same issue fragment the board, sub-issues and searches read.
 	rank := func() Candidate {
 		var r struct {
 			Repository struct {
 				Item issueJSON `json:"issueOrPullRequest"`
 			} `json:"repository"`
 		}
-		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...on Issue{issueDependenciesSummary{blockedBy totalBlockedBy}}}}}`,
+		if err := c.graphql(ctx, &r, `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issueOrPullRequest(number:$n){...I}}}`+issueFields,
 			vars{"o": "o", "r": "r", "n": 5}); err != nil {
 			t.Fatal(err)
 		}

@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+const (
+	gqlMutation = "mutation"
+	gqlQuery    = "query"
+)
+
 // abstractType is an interface or union of GitHub's GraphQL schema: the
 // fields a selection on it may take directly, and the object types it
 // stands for. A union has no fields but __typename.
@@ -170,8 +175,8 @@ func checkSchema(q string) error {
 				return fmt.Errorf("unbalanced } in %s", q)
 			}
 			stack = stack[:len(stack)-1]
-		case len(stack) == 0 && (tok == "query" || tok == "mutation"):
-			next = map[string]string{"query": "Query", "mutation": "Mutation"}[tok]
+		case len(stack) == 0 && (tok == gqlQuery || tok == gqlMutation):
+			next = map[string]string{gqlQuery: "Query", gqlMutation: "Mutation"}[tok]
 			if i+1 < len(toks) && toks[i+1] != "(" && toks[i+1] != "{" {
 				i++
 			}

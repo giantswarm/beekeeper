@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
@@ -429,6 +430,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 			}); err != nil {
 				return Observation{}, err
 			}
+			s.cleanWorkspace(r)
 			o.StopAcknowledged, o.ProcessState = true, Exited
 			return o, nil
 		}
@@ -463,6 +465,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
+		s.cleanWorkspace(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -488,6 +491,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
+	s.cleanWorkspace(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
 }
 
@@ -531,6 +535,27 @@ func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Obser
 		return Observation{}, err
 	}
 	return s.Inspect(ctx, r)
+}
+
+func (s *Server) cleanWorkspace(r Ref) {
+	if s.Config.WorkspaceRoot != "" {
+		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
+			parent := filepath.Join(root, string(r.Execution))
+			if within(root, parent) {
+				_ = worktrees.RemoveAll(parent)
+			}
+		}
+	}
+	if s.Root != "" {
+		srcDir := filepath.Dir(s.sourcePath(r))
+		if within(s.Root, srcDir) {
+			_ = worktrees.RemoveAll(srcDir)
+		}
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
+	}
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {
