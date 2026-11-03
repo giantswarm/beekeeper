@@ -18,7 +18,10 @@ import (
 
 func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
-	root := t.TempDir()
+	root, rootErr := filepath.EvalSymlinks(t.TempDir())
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
 	workspace := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
@@ -29,10 +32,10 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	}
 	cli := filepath.Join(root, "gh")
 	script := "#!/bin/sh\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n[ \"$GH_REPO\" = 'example/private' ] || exit 8\nprintf 'private issue proof\\n'\n"
-	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in this test's temporary directory
 		t.Fatal(err)
 	}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "fixture", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: r.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{r.Repository: workspace}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Tools: map[string]execution.ToolConfig{execution.ToolGitHub: {Executable: cli, Version: "2.80.0"}}, Coordinators: map[string]execution.Coordinator{r.Coordinator: {PublicKey: execution.PublicKey(key), Callback: execution.Endpoint{SSH: "coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}}}, MaxBusy: 1}}
+	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: remoteMCPFixture, Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: r.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{r.Repository: workspace}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: hostFixtureClaude, Version: publicationClaudeVersion}}, Tools: map[string]execution.ToolConfig{execution.ToolGitHub: {Executable: cli, Version: "2.80.0"}}, Coordinators: map[string]execution.Coordinator{r.Coordinator: {PublicKey: execution.PublicKey(key), Callback: execution.Endpoint{SSH: hostFixtureCoordinator, Executable: sshTestExecutable, Config: sshTestConfig}}}, MaxBusy: 1}}
 	digest, err := s.Prepare(s.Policy())
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +48,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	}
 	s.OwnUnit = func() string { return j.Handle.Unit }
 	calls := 0
-	wantRepo, wantWrite := "example/private", false
+	wantRepo, wantWrite := workerGitHubPrivateRepo, false
 	s.Callback = func(_ context.Context, _ []string, raw []byte) ([]byte, error) {
 		var req execution.CallbackRequest
 		if err := execution.Decode(raw, &req); err != nil {
@@ -62,7 +65,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	t.Setenv(execution.EnvID, string(r.Ref.Execution))
 	t.Setenv("GH_TOKEN", "unrelated-ambient-fixture")
 	var output bytes.Buffer
-	for _, args := range [][]string{{"issue", "view", "1", "--repo", "example/private"}, {"pr", "view", "2", "--repo", "example/private"}, {"pr", "checks", "2", "--repo", "example/private"}} {
+	for _, args := range [][]string{{"issue", "view", "1", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "view", "2", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "checks", "2", loopRepoFlag, workerGitHubPrivateRepo}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetOut(&output)
 		c.SetErr(&output)
@@ -76,7 +79,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal("host CLI proof failed or leaked credential")
 	}
 	c := a.executionGitHubCommands()[0]
-	c.SetArgs([]string{"pr", "merge", "2"})
+	c.SetArgs([]string{"pr", gitMerge, "2"})
 	c.SilenceErrors, c.SilenceUsage = true, true
 	if c.ExecuteContext(context.Background()) == nil || calls != 3 {
 		t.Fatal("merge reached token issuer")
@@ -85,14 +88,16 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	// and token in its environment, while local commands never ask for one.
 	git := filepath.Join(root, "git")
 	gitScript := "#!/bin/sh\nif [ \"$1\" = status ]; then [ -z \"$GH_TOKEN\" ] || exit 9; printf 'local git proof\\n'; exit 0; fi\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\nprintf 'host push proof\\n'\n"
-	if err := os.WriteFile(git, []byte(gitScript), 0o700); err != nil {
+	if err := os.WriteFile(git, []byte(gitScript), 0o700); err != nil { //nolint:gosec // executable fixture in this test's temporary directory
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", root+string(filepath.ListSeparator)+os.Getenv("PATH"))
+	previousGit := workerGitHubGitExecutable
+	workerGitHubGitExecutable = git
+	t.Cleanup(func() { workerGitHubGitExecutable = previousGit })
 	t.Setenv("GH_TOKEN", "")
 	wantRepo, wantWrite = r.Repository, true
 	gitCommand := a.executionGitHubCommands()[1]
-	gitCommand.SetArgs([]string{"push", "origin", "HEAD:refs/heads/main"})
+	gitCommand.SetArgs([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/main"})
 	gitCommand.SetOut(&output)
 	gitCommand.SetErr(&output)
 	gitCommand.SilenceErrors, gitCommand.SilenceUsage = true, true
@@ -100,14 +105,14 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal("foreign branch push reached issuer")
 	}
 	gitCommand = a.executionGitHubCommands()[1]
-	gitCommand.SetArgs([]string{"push", "origin", "HEAD:refs/heads/" + execution.GitHubBranch(r.Ref)})
+	gitCommand.SetArgs([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + execution.GitHubBranch(r.Ref)})
 	gitCommand.SetOut(&output)
 	gitCommand.SetErr(&output)
 	if err := gitCommand.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	gitCommand = a.executionGitHubCommands()[1]
-	gitCommand.SetArgs([]string{"status"})
+	gitCommand.SetArgs([]string{executionStatus})
 	gitCommand.SetOut(&output)
 	gitCommand.SetErr(&output)
 	if err := gitCommand.ExecuteContext(context.Background()); err != nil {
@@ -125,7 +130,7 @@ func TestWorkerGitHubGitCredentialHelperDoesNotEvaluateToken(t *testing.T) {
 		t.Skip("git unavailable")
 	}
 	const fixture = "fixture-$not_a_command-'quoted'"
-	command := exec.Command(git, "-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "credential", "fill")
+	command := exec.Command(git, "-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "credential", "fill") //nolint:gosec // resolved system git and a fixed fixture-only credential operation
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "GH_TOKEN=" + fixture, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0"}
 	command.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=example/repo.git\n\n")
 	out, err := command.Output()

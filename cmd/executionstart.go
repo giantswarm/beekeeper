@@ -440,11 +440,13 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 }
 
 func (a *app) executionFailure(ref execution.Ref, failure error) {
+	expiredGitHubLease := false
 	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		r, i := executionRecord(st, ref)
 		if r == nil {
 			return nil, nil
 		}
+		expiredGitHubLease = r.Request.GitHub && r.Request.LeaseRequired && (r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()))
 		wasUnconfirmed := r.Observation.Reachability == execution.Unreachable || r.Observation.LastError != ""
 		r.Observation = r.Observation.FailedContact(failure, time.Now().UTC())
 		if wasUnconfirmed {
@@ -452,6 +454,18 @@ func (a *app) executionFailure(ref execution.Ref, failure error) {
 		}
 		return []state.Event{event(st.Starts[i].By, "execution.unconfirmed", "%s: %s", st.Starts[i].Name, failure.Error())}, nil
 	})
+	if expiredGitHubLease {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := a.revokeWorkerGitHub(ctx, ref); err != nil {
+			_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if _, i := executionRecord(st, ref); i >= 0 {
+					return []state.Event{event(st.Starts[i].By, "execution.github-revocation-pending", "%s: %s", st.Starts[i].Name, err)}, nil
+				}
+				return nil, nil
+			})
+		}
+	}
 }
 
 func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observation) (saveErr error) {

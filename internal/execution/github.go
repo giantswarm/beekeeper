@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	GitHubOrigin      = "origin"
+	GitHubGitTool     = "git"
+	workerGitHubFetch = "fetch"
+)
+
 // GitHubBranch is the one upstream branch assigned to this execution.
 func GitHubBranch(ref Ref) string {
 	return fmt.Sprintf("beekeeper-execution/%s/%d", ref.Execution, ref.Generation)
@@ -26,9 +32,9 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 		return nil, err
 	}
 	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
-	for _, name := range []string{"gh", "git"} {
+	for _, name := range []string{"gh", GitHubGitTool} {
 		verb := "github-cli"
-		if name == "git" {
+		if name == GitHubGitTool {
 			verb = "github-git"
 		}
 		body := []byte("#!/bin/sh\nexec " + quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents " + verb + " -- \"$@\"\n")
@@ -36,7 +42,7 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 		if err := atomicFile(path, body); err != nil {
 			return nil, err
 		}
-		if err := os.Chmod(path, 0o700); err != nil {
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // executable dispatch script in the owned component directory
 			return nil, err
 		}
 	}
@@ -106,7 +112,7 @@ func ValidateWorkerPush(args []string, branch string) error {
 	if len(rest) > 0 && (rest[0] == "-u" || rest[0] == "--set-upstream") {
 		rest = rest[1:]
 	}
-	if len(rest) != 2 || rest[0] != "origin" || rest[1] != "HEAD:refs/heads/"+branch {
+	if len(rest) != 2 || rest[0] != GitHubOrigin || rest[1] != "HEAD:refs/heads/"+branch {
 		return errors.New("worker push requires origin HEAD:refs/heads/" + branch)
 	}
 	return nil
@@ -132,7 +138,7 @@ func GitHubGitVerb(args []string) string {
 // GitHubReadRepository scopes explicit read transports to their named repository.
 // Clone destinations and fetch refspecs stay client arguments, never authority.
 func GitHubReadRepository(args []string) (string, []string, bool) {
-	if len(args) == 0 || (args[0] != "clone" && args[0] != "fetch" && args[0] != "ls-remote" && args[0] != "pull") {
+	if len(args) == 0 || (args[0] != "clone" && args[0] != workerGitHubFetch && args[0] != "ls-remote" && args[0] != "pull") {
 		return "", args, false
 	}
 	for i, arg := range args[1:] {

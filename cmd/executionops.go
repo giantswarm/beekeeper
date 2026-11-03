@@ -63,7 +63,7 @@ func (a *app) inspectExecution(ctx context.Context, ref execution.Ref) (executio
 	return o, a.saveExecutionObservation(ref, o)
 }
 
-func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason string) error {
+func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason string) (stopErr error) {
 	// Intent is durable before contacting the host. An unreachable host never
 	// releases a reservation or clears a task. A released reservation has no
 	// host process to stop.
@@ -84,9 +84,13 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 	if err != nil {
 		return err
 	}
-	if revokeErr := a.revokeWorkerGitHub(ctx, ref); revokeErr != nil {
-		return revokeErr
-	}
+	// A GitHub outage must not prevent stopping the owned process. Cleanup
+	// still runs if host contact fails or exhausts the caller's deadline.
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		stopErr = errors.Join(stopErr, a.revokeWorkerGitHub(cleanup, ref))
+	}()
 	if released {
 		return nil
 	}

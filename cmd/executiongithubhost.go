@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,7 +14,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
+// The helper contains no credential; it expands the client-only environment.
+//
+//nolint:gosec // G101: a credential helper template, not a hardcoded token
 const workerGitHubCredentialHelper = `credential.https://github.com.helper=!f() { printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`
+
+// SSH execution hosts run Linux. Resolve git outside the worker-controlled
+// PATH; the test seam substitutes a fixture executable, never a runtime setting.
+var workerGitHubGitExecutable = "/usr/bin/git"
 
 func (a *app) executionGitHubCommands() []*cobra.Command {
 	commands := []*cobra.Command{}
@@ -40,16 +46,16 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			var binary string
 			needsToken := true
 			if name == "github-cli" {
-				if len(args) == 0 || args[0] == "auth" || args[0] == "alias" || args[0] == "extension" || args[0] == "search" {
+				if len(args) == 0 || args[0] == "auth" || args[0] == "alias" || args[0] == "extension" || args[0] == workerGitHubSearch {
 					return refused("worker gh requires a repository command")
 				}
 				request.Repository, err = execution.GitHubRepository(args, request.Repository)
 				if err != nil {
 					return err
 				}
-				request.Write = len(args) > 1 && args[0] == "pr" && (args[1] == "create" || args[1] == "edit" || args[1] == "comment")
+				request.Write = len(args) > 1 && args[0] == "pr" && (args[1] == workerGitHubCreate || args[1] == "edit" || args[1] == "comment")
 				// Mutation authority is never inferred from arbitrary API request bodies.
-				if len(args) > 1 && args[0] == "pr" && args[1] == "merge" {
+				if len(args) > 1 && args[0] == "pr" && args[1] == gitMerge {
 					return refused("merges stay on the coordinator")
 				}
 				if args[0] == "api" {
@@ -60,7 +66,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 						}
 					}
 				}
-				if request.Write && args[1] == "create" {
+				if request.Write && args[1] == workerGitHubCreate {
 					branch := execution.GitHubBranch(j.Handle.Ref)
 					for i, arg := range args {
 						if arg == "--head" || arg == "-H" {
@@ -79,22 +85,14 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if err := execution.ValidateWorkerPush(args, execution.GitHubBranch(j.Handle.Ref)); err != nil {
 					return refused("%v", err)
 				}
-				for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-					if strings.Contains(dir, string(filepath.Separator)+"github-bin"+string(filepath.Separator)) {
-						continue
-					}
-					candidate := filepath.Join(dir, "git")
-					if st, err := os.Stat(candidate); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
-						binary = candidate
-						break
-					}
-				}
+				binary = workerGitHubGitExecutable
+
 				if binary == "" {
 					return errors.New("host git executable unavailable")
 				}
 				verb := execution.GitHubGitVerb(args)
-				request.Write = verb == "push"
-				needsToken = verb == "push" || verb == "fetch" || verb == "pull" || verb == "ls-remote"
+				request.Write = verb == workerGitHubPush
+				needsToken = verb == workerGitHubPush || verb == "fetch" || verb == "pull" || verb == "ls-remote"
 				if needsToken && (len(args) == 0 || args[0] != verb) {
 					return refused("network git cannot override the owned workspace or configuration")
 				}
@@ -107,13 +105,13 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if !request.Write {
 					if repo, normalized, scoped := execution.GitHubReadRepository(args); scoped {
 						request.Repository, args, needsToken = repo, normalized, true
-					} else if needsToken && (len(args) < 2 || args[1] != "origin") {
+					} else if needsToken && (len(args) < 2 || args[1] != workerGitHubOrigin) {
 						return refused("worker network git names origin or an explicit GitHub repository URL")
 					}
 				}
 				if needsToken && !request.Write {
 					for _, arg := range args[1:] {
-						if strings.Contains(arg, "upload-pack") || strings.Contains(arg, "receive-pack") || arg == "-c" || arg == "--config" || strings.HasPrefix(arg, "--config=") {
+						if strings.Contains(arg, "upload-pack") || strings.Contains(arg, "receive-pack") || arg == "-c" || arg == workerGitHubConfigOption || strings.HasPrefix(arg, "--config=") {
 							return refused("worker network git cannot execute a custom transport command")
 						}
 					}

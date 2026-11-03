@@ -33,6 +33,19 @@ type workerGitHubRequest struct {
 	Write      bool   `json:"write"`
 }
 
+const (
+	workerGitHubConfigOption = "--config"
+	workerGitHubSearch       = "search"
+	workerGitHubRead         = "read"
+	workerGitHubWrite        = "write"
+	workerGitHubCreate       = "create"
+	workerGitHubPush         = "push"
+	workerGitHubOrigin       = "origin"
+)
+
+const workerGitHubRevokePath = "/installation/token"
+const workerGitHubReadSuffix = "/read"
+
 const workerGitHubIssue = "github-token"
 const workerGitHubRevoke = "github-revoke"
 const workerGitHubBudget = "github-budget"
@@ -60,6 +73,9 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 	r, _ := executionRecord(st, ref)
 	if r == nil || !r.Request.GitHub || r.Request.Coordinator != a.cfg.Identity.Host || r.StopRequest != nil || r.Terminal() || r.Completed || st.Stop != nil {
 		return errors.New("worker GitHub access revoked")
+	}
+	if r.Request.LeaseRequired && (r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now())) {
+		return errors.New("worker GitHub execution lease expired")
 	}
 	h, ok := a.cfg.Agents.Hosts[r.Selector]
 	if !ok || h.Identity != ref.Host {
@@ -148,7 +164,7 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 	if err != nil {
 		return nil, err
 	}
-	key := request.Repository + "/read"
+	key := request.Repository + workerGitHubReadSuffix
 	if request.Write {
 		key = request.Repository + "/write"
 	}
@@ -259,7 +275,7 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 }
 
 func revokeWorkerGitHubToken(ctx context.Context, token string) error {
-	resp, err := githubRequest(ctx, http.MethodDelete, "/installation/token", "Bearer "+token)
+	resp, err := githubRequest(ctx, http.MethodDelete, workerGitHubRevokePath, "Bearer "+token)
 	if err != nil {
 		return errors.New("worker GitHub revocation transport failed")
 	}
@@ -297,11 +313,11 @@ func (a *app) mintWorkerGitHub(ctx context.Context, request workerGitHubRequest)
 		if err != nil {
 			return errors.New("worker GitHub App signing failed")
 		}
-		permissions := map[string]string{"contents": "read", "issues": "read", "pull_requests": "read", "checks": "read", "actions": "read", "statuses": "read", "metadata": "read"}
+		permissions := map[string]string{"contents": workerGitHubRead, "issues": workerGitHubRead, "pull_requests": workerGitHubRead, "checks": workerGitHubRead, "actions": workerGitHubRead, "statuses": workerGitHubRead, "metadata": workerGitHubRead}
 		if request.Write {
-			permissions["contents"] = "write"
-			permissions["workflows"] = "write"
-			permissions["pull_requests"] = "write"
+			permissions["contents"] = workerGitHubWrite
+			permissions["workflows"] = workerGitHubWrite
+			permissions["pull_requests"] = workerGitHubWrite
 		}
 		body, _ := json.Marshal(map[string]any{"repositories": []string{repo}, "permissions": permissions})
 		endpoint := githubAPI + "/app/installations/" + strconv.FormatInt(app.Installations[owner], 10) + "/access_tokens"

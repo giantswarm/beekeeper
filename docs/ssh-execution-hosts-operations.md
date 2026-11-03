@@ -768,7 +768,8 @@ until five minutes before expiry and retains a private revocation ledger under
 its own state directory, outside scheduling state and event logs. Runner exit,
 completion, explicit stop and terminal inspection revoke credentials; a failed
 revocation retains the ledger and reports an error for retry. An unreachable
-host does not prevent coordinator revocation. The managed command hooks are the
+host does not prevent coordinator revocation; failed host contact after the
+execution lease expires also revokes its credentials. The managed command hooks are the
 same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
 installation token cannot itself limit Contents writes to one branch. Hosts
 therefore still require the managed guards and owned execution identity.
