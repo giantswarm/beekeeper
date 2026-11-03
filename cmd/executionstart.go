@@ -34,7 +34,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	if a.cfg.GitHub.WorkerApp != nil {
 		owner, _, _ := strings.Cut(strings.ToLower(o.Repository), "/")
-		if len(a.cfg.GitHub.AllowedOrgs) > 0 && !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
+		if !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 			return refused("task owner needs a github.allowedOrgs entry")
 		}
 	}

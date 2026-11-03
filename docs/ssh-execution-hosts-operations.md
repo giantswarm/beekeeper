@@ -758,7 +758,9 @@ github:
 ```
 
 The `refreshToken` field may name a 1Password reference (`op://<vault>/<item>/<field>`),
-a SOPS path (`sops://<file>#<path>`) or a credential-store entry (`store://<entry>`).
+or a SOPS path (`sops://<file>#<path>`). Read-only source references are rejected
+before authorization or refresh. If persisting a rotated refresh token fails,
+repeat `beekeeper agents hosts github-login` to restore authorization.
 Authorize the coordinator once through GitHub's OAuth device flow:
 
 ```sh
@@ -776,7 +778,8 @@ short-lived credential fetched over the authenticated SSH callback. Cross-repo
 calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Reads may
 reach any repository the user can access. Writes (`git push`, `gh pr create`,
 `gh pr edit`, `gh pr comment`, `gh issue create`, `gh issue edit`, `gh issue comment`)
-are restricted to owners in `github.allowedOrgs`, and a worker may work in and
+are restricted by the wrappers to owners in `github.allowedOrgs` (an empty list
+allows no writes or GitHub-enabled starts), and a worker may work in and
 open pull requests across multiple repositories in one task (using its primary
 workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner
 installs dispatch scripts for `gh` and `git` ahead of the pinned tools; scripts
@@ -797,18 +800,33 @@ redirect the transport. Inherited Git environment overrides are removed.
 Merges continue through the coordinator's review and exact-head authorization,
 never a worker's `gh pr merge`.
 
+The same write-capable user token serves reads and writes across repositories.
+It is not scoped by repository or by the wrapper's requested operation.
+`allowedOrgs` restricts managed wrapper commands, not the token itself: GitHub's
+actual authority boundary is the App's installations intersected with the
+user's permissions.
+
 GitHub user-to-server tokens expire after eight hours. The coordinator caches the
 current user token until five minutes before expiry and records issued tokens in
 a private per-execution ledger under its own state directory, outside scheduling
-state and event logs. Runner exit, completion, explicit stop and terminal
-inspection revoke the worker's credentials by rotating the coordinator's OAuth
-refresh token and persisting the new refresh token to the secret reference,
-immediately invalidating the previous access token at GitHub; a failed
-revocation retains the ledger and reports an error for retry. An unreachable
-host does not prevent coordinator revocation; failed host contact after the
-execution lease expires also revokes its credentials. Revocation works per
-device (rotating or revoking that coordinator's refresh token) and per user
-(revoking the GitHub App authorization in GitHub settings). The managed command
+state and event logs. Every issuance consults the coordinator cache so refresh
+never reissues a stale per-execution entry. Runner exit, completion, explicit
+stop and terminal inspection immediately deny further callbacks. Because the
+access token is shared, they rotate the coordinator's refresh token only when
+no other live GitHub-enabled execution remains. Until then a stopped worker's
+already-issued token remains valid; managed guards and host process termination
+remain necessary. The last execution rotates and persists the refresh token,
+invalidating the old access token at GitHub. Failed revocation retains the ledger
+and reports an error for retry. An unreachable host does not prevent coordinator
+revocation. Device-wide revocation rotates or revokes that coordinator's refresh
+token; user-wide revocation removes the App authorization in GitHub settings.
+The managed command
 hooks are the same policy boundary as the rest of SSH execution, not an OS
 sandbox: a GitHub token cannot itself limit Contents writes to one branch. Hosts
 therefore still require the managed guards and owned execution identity.
+
+Post-merge operations for this migration include creating/configuring one public
+GitHub App owned by the organization, authorizing each coordinator through device
+flow, updating coordinator and execution hosts, and proving multi-worker GitHub
+access live. After that proof, retire the previous worker-access App and delete
+its private key from the coordinator secret store.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -372,5 +373,179 @@ func TestWorkerGitHubRevocationFailureStillStopsHost(t *testing.T) {
 	tokens, err := readWorkerGitHub(path)
 	if err != nil || len(tokens) != 1 {
 		t.Fatal("failed revocation lost its retry ledger")
+	}
+}
+
+// Both executions are live together and GitHub invalidates old access tokens
+// on every refresh, matching the provider rather than just counting callbacks.
+func TestWorkerGitHubConcurrentExecutionCompletion(t *testing.T) {
+	a, first := workerGitHubTestApp(t)
+	second := first
+	second.Ref.Generation++
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := *st.Starts[0].Execution
+		record.Request = second
+		record.Handle.Ref = second.Ref
+		record.RequestDigest = second.Digest()
+		st.Starts = append(st.Starts, state.Start{Execution: &record})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rotations := 0
+	current := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == workerGitHubOAuthTokenPath {
+			rotations++
+			current = workerTokenFixture + strconv.Itoa(rotations)
+			writeTestOAuthToken(w, current, "ghr_next_fixture")
+			return
+		}
+		if req.Header.Get("Authorization") != "Bearer "+current {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "fixture"})
+	}))
+	defer server.Close()
+	prevWeb, prevAPI := githubWeb, githubAPI
+	githubWeb, githubAPI = server.URL, server.URL
+	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
+	request := workerGitHubRequest{Repository: first.Repository, Write: true}
+	var issued workerGitHubToken
+	for _, r := range []execution.StartRequest{first, second} {
+		if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &issued, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.revokeWorkerGitHub(context.Background(), first.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if rotations != 1 {
+		t.Fatal("completion invalidated another live execution's credential")
+	}
+	if err := coordinatorTestCall(t, a, second, workerGitHubIssue, request, &issued, false); err != nil {
+		t.Fatal(err)
+	}
+	var user struct{ Login string }
+	if err := githubJSON(context.Background(), http.MethodGet, "/user", "Bearer "+issued.Token, http.StatusOK, &user); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate refresh by another request. The second execution's ledger still
+	// has eight hours left but must no longer hand out its invalidated token.
+	if _, err := a.refreshWorkerGitHubToken(context.Background(), a.workerGitHubOAuthPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinatorTestCall(t, a, second, workerGitHubIssue, request, &issued, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := githubJSON(context.Background(), http.MethodGet, "/user", "Bearer "+issued.Token, http.StatusOK, &user); err != nil {
+		t.Fatal(err)
+	}
+	// A third live execution has never fetched a token. It must still
+	// trigger deferred revocation when it is the last one to finish.
+	third := second
+	third.Ref.Generation++
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		record := *st.Starts[1].Execution
+		record.Request = third
+		record.Handle.Ref = third.Ref
+		record.RequestDigest = third.Digest()
+		st.Starts = append(st.Starts, state.Start{Execution: &record})
+		st.Starts[1].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.revokeWorkerGitHub(context.Background(), second.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if rotations != 2 {
+		t.Fatal("rotation while an execution is still live")
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[2].Execution.Completed = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := a.revokeWorkerGitHub(context.Background(), third.Ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rotations != 3 {
+		t.Fatalf("last execution did not revoke shared authority: %d", rotations)
+	}
+}
+
+func TestWorkerGitHubSourceRefsRejectedBeforeNetwork(t *testing.T) {
+	a, _ := workerGitHubTestApp(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("read-only reference reached GitHub")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	prevWeb := githubWeb
+	githubWeb = server.URL
+	t.Cleanup(func() { githubWeb = prevWeb })
+	for _, ref := range []string{"store://worker", "file:///tmp/worker-token", "cmd://producer#token", "k8s://context/namespace/secret/name#token"} {
+		a.cfg.GitHub.WorkerApp.RefreshToken = ref
+		if err := a.authorizeWorkerGitHub(context.Background(), "", "", &bytes.Buffer{}); err == nil {
+			t.Fatal("source accepted for authorization")
+		}
+		if _, err := a.refreshWorkerGitHubToken(context.Background(), ""); err == nil {
+			t.Fatal("source accepted for refresh")
+		}
+	}
+}
+
+func TestWorkerGitHubEmptyAllowlistDeniesStarts(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	a.cfg.GitHub.AllowedOrgs = []string{}
+	a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{ClientID: workerGitHubClientIDFixture, RefreshToken: workerGitHubRefreshRef}
+	err := a.startSSHExecution(context.Background(), "fixture worker", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel, DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "github.allowedOrgs") {
+		t.Fatalf("empty allowlist permitted start: %v", err)
+	}
+}
+
+func TestWorkerGitHubEmptyAllowlistDeniesWrites(t *testing.T) {
+	a, r := workerGitHubTestApp(t)
+	a.cfg.GitHub.AllowedOrgs = []string{}
+	if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true}); err == nil {
+		t.Fatal("empty allowlist permitted writes")
+	}
+	if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
+	a, _ := workerGitHubTestApp(t)
+	previousRun := secretRun
+	secretRun = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "op" && len(args) > 1 && args[0] == "item" && (args[1] == "edit" || args[1] == "create") {
+			return nil, errors.New("fixture vault locked")
+		}
+		return previousRun(ctx, dir, env, stdin, name, args...)
+	}
+	t.Cleanup(func() { secretRun = previousRun })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTestOAuthToken(w, workerTokenFixture, "ghr_rotated_fixture")
+	}))
+	defer server.Close()
+	prevWeb := githubWeb
+	githubWeb = server.URL
+	t.Cleanup(func() { githubWeb = prevWeb })
+	_, err := a.refreshWorkerGitHubToken(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "authorization is lost") || !strings.Contains(err.Error(), "beekeeper agents hosts github-login") {
+		t.Fatalf("missing persistence recovery instructions: %v", err)
 	}
 }

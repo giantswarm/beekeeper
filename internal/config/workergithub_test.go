@@ -12,8 +12,17 @@ func TestWorkerGitHubConfigRequiresScopedAppAuthority(t *testing.T) {
 	if err := valid().Validate(); err != nil {
 		t.Fatal(err)
 	}
+	sops := valid()
+	sops.RefreshToken = "sops:///tmp/worker.sops.yaml#refresh_token"
+	if err := sops.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	for _, change := range []func(*WorkerGitHub){
 		func(w *WorkerGitHub) { w.ClientID = "" },
+		func(w *WorkerGitHub) { w.RefreshToken = "store://worker" },
+		func(w *WorkerGitHub) { w.RefreshToken = "plain:///tmp/token" },
+		func(w *WorkerGitHub) { w.RefreshToken = "cmd://token" },
+		func(w *WorkerGitHub) { w.RefreshToken = "kube://context/namespace/secret/key" },
 		func(w *WorkerGitHub) { w.ClientID = "invalid client id" },
 		func(w *WorkerGitHub) { w.RefreshToken = "raw-token-material" },
 		func(w *WorkerGitHub) { w.RefreshToken = "op://Shared/worker-app/refresh-token\ninjected" },

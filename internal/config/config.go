@@ -2598,6 +2598,20 @@ func (w *WorkerGitHub) Validate() error {
 	if !execution.ValidIdentity(w.ClientID) || !strings.Contains(w.RefreshToken, "://") || strings.ContainsAny(w.RefreshToken, "\r\n") {
 		return errors.New("github.workerApp requires clientID and refreshToken reference")
 	}
+	// The full reference is parsed at use sites. Config cannot import secret
+	// (its sandbox depends on config), but must reject read-only schemes here.
+	writable := false
+	if rest, ok := strings.CutPrefix(w.RefreshToken, "op://"); ok {
+		parts := strings.Split(rest, "/")
+		writable = len(parts) >= 3 && !slices.Contains(parts, "")
+	}
+	if rest, ok := strings.CutPrefix(w.RefreshToken, "sops://"); ok {
+		file, path, found := strings.Cut(rest, "#")
+		writable = found && file != "" && path != ""
+	}
+	if !writable {
+		return errors.New("github.workerApp.refreshToken must name a writable op:// or sops:// secret reference")
+	}
 	return nil
 }
 
