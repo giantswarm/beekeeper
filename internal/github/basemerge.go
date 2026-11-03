@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -236,25 +237,95 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", name, strings.TrimSpace(l))
 		}
 	}
-	droppedConflict := false
 	for _, l := range approvedLines {
-		if left[l] == 0 || l[0] != '-' {
-			continue
-		}
-		if !baseSides[l[1:]] {
+		if left[l] > 0 && l[0] == '-' && !baseSides[l[1:]] {
 			return fmt.Sprintf("%s drops %q, a line the base did not change", name, strings.TrimSpace(l))
 		}
-		droppedConflict = true
+	}
+	// A dropped line must belong to a change of approved's that overlaps
+	// one of the base's: lines are matched by content, so as many of a
+	// line's copies as head drops must lie in such a conflict.
+	baseBlocks := changeBlocks(moved[i].Patch)
+	inConflict := map[string]int{}
+	for _, b := range changeBlocks(approved.Patch) {
+		if !slices.ContainsFunc(baseBlocks, b.overlaps) {
+			continue
+		}
+		for _, l := range b.lines {
+			inConflict[l]++
+		}
 	}
 	for _, l := range approvedLines {
-		if left[l] == 0 || l[0] != '+' {
-			continue
-		}
-		if !baseSides[l[1:]] && !droppedConflict {
-			return fmt.Sprintf("%s drops %q, a line the base did not change", name, strings.TrimSpace(l))
+		if left[l] > inConflict[l] {
+			return fmt.Sprintf("%s drops %q, a line outside its conflict with the base", name, strings.TrimSpace(l))
 		}
 	}
 	return ""
+}
+
+// changeBlock is a run of a patch's added and removed lines without
+// context between them, at the lines [start, end) of the file before it.
+type changeBlock struct {
+	start, end int
+	lines      []string
+}
+
+// overlaps says whether two changes of the same file touch: they share a
+// line, or one inserts at or next to the other's lines, as git's merge
+// counts a conflict.
+func (b changeBlock) overlaps(o changeBlock) bool {
+	return b.start <= o.end && o.start <= b.end
+}
+
+// changeBlocks are a patch's changes with their positions; a line ahead
+// of any hunk header has none and lies outside every conflict.
+func changeBlocks(patch string) []changeBlock {
+	var out []changeBlock
+	n, known, open := 0, false, false
+	for l := range strings.SplitSeq(patch, "\n") {
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			n, known = hunkStart(l)
+			open = false
+		case strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+"):
+			if !known {
+				continue
+			}
+			if !open {
+				out = append(out, changeBlock{start: n, end: n})
+				open = true
+			}
+			b := &out[len(out)-1]
+			b.lines = append(b.lines, l)
+			if l[0] == '-' {
+				n++
+				b.end = n
+			}
+		case strings.HasPrefix(l, " "):
+			n++
+			open = false
+		}
+	}
+	return out
+}
+
+// hunkStart is the first line of the file before a hunk that its header
+// ("@@ -12,4 +12,5 @@") names: an insertion's ("@@ -20,0 +21,3 @@") is the
+// line after the one it follows. ok is false for a header without one.
+func hunkStart(header string) (int, bool) {
+	f := strings.Fields(header)
+	if len(f) < 3 || !strings.HasPrefix(f[1], "-") {
+		return 0, false
+	}
+	start, count, _ := strings.Cut(f[1][1:], ",")
+	n, err := strconv.Atoi(start)
+	if err != nil {
+		return 0, false
+	}
+	if count == "0" {
+		n++
+	}
+	return n, true
 }
 
 // lineChanges are a patch's added and removed lines, each with its sign.
