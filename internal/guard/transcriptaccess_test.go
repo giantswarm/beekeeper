@@ -372,6 +372,7 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		`node -e 'const os = require("os"); console.log(require("fs").readdirSync(os.homedir()))'`,
 		`node -e 'console.log(require("fs").readFileSync(process.env.HOME + "/.cl" + "aude/history.jsonl", "utf8"))'`,
 		"python3 <<'PY'\nfrom pathlib import Path\nprint(list(Path.home().rglob('*.jsonl')))\nPY",
+		`python3 <<< 'from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))'`,
 	} {
 		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") {
 			t.Errorf("runtime root passed: %s: %+v", command, d)
@@ -392,5 +393,8 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		if d := decide(t, h, filepath.Join(home, "worktree"), command, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("literal fixture/data refused: %s: %+v", command, d)
 		}
+	}
+	if d := decide(t, h, home, "cat <<'DATA'\nPath.home()\nprocess.env.HOME\nDATA", nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Errorf("here-document data refused: %+v", d)
 	}
 }
