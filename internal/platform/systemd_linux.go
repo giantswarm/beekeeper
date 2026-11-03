@@ -18,6 +18,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+
+	"github.com/giantswarm/beekeeper/internal/sshagent"
 )
 
 // Name is the platform this build runs on.
@@ -172,9 +174,16 @@ func runArgs(u Unit, quiet bool) []string {
 	if u.MaxRuntime > 0 {
 		args = append(args, "-p", "RuntimeMaxSec="+seconds(u.MaxRuntime))
 	}
+	// Resolve against this host before systemd imports its manager environment.
+	env := append(os.Environ(), u.Env...)
+	resolved := sshagent.Environment(env)
 	for _, e := range u.Env {
+		if strings.HasPrefix(e, "SSH_AUTH_SOCK=") {
+			continue
+		}
 		args = append(args, "--setenv="+e)
 	}
+	args = append(args, "--setenv="+resolved[len(resolved)-1])
 	return append(append(args, "--"), u.Argv...)
 }
 

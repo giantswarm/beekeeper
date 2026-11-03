@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/sshagent"
 )
 
 func newID() string         { return uuid.NewString() }
@@ -154,7 +156,7 @@ func cleanEnvironment(configDir, component string) []string {
 	if configDir != "" {
 		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	return out
+	return sshagent.Environment(out)
 }
 
 // pathWithFirst places dir first on path, dropping any later duplicate so
