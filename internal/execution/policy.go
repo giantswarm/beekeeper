@@ -464,21 +464,23 @@ func (s *Server) workerExecutable() error {
 
 // Probe runs no model call and returns no authentication values. Its output is
 // only metadata. No provider credential from the SSH login shell is inherited.
-func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error {
+func (s *Server) probe(ctx context.Context, name string, h HarnessConfig, readiness *HarnessReadiness) error {
 	switch name {
 	case HarnessCodex:
-		return s.probeCodex(ctx, h)
+		return s.probeCodex(ctx, h, readiness)
 	case HarnessAgy:
-		return s.probeAgy(ctx, h)
+		return s.probeAgy(ctx, h, readiness)
 	}
 	if name == HarnessOmp {
-		return s.probeOmp(ctx, h)
+		return s.probeOmp(ctx, h, readiness)
 	}
 	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
+		readiness.VersionCheck = probeFailed
 		return errors.New("unsupported or mismatched harness version/flags")
 	}
+	readiness.VersionCheck, readiness.Login = probePassed, probeFailed
 	raw, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, authCommand, "status")
 	if err != nil {
 		return errors.New("harness authentication is not ready; provision it on the execution host")
@@ -494,6 +496,7 @@ func (s *Server) probe(ctx context.Context, name string, h HarnessConfig) error 
 	if h.ConfigDir != "" && filepath.Clean(auth.ConfigDirectory) != filepath.Clean(h.ConfigDir) {
 		return errors.New("harness authentication belongs to another configuration directory")
 	}
+	readiness.Login = probePassed
 	return nil
 }
 
@@ -505,19 +508,23 @@ func (s *Server) codexEnvironment() []string {
 // probeCodex checks the pinned version and a ChatGPT subscription login in
 // the managed home. `login status` reports on stderr; only its first words
 // are compared, never printed: an API-key line can carry a masked key.
-func (s *Server) probeCodex(ctx context.Context, h HarnessConfig) error {
+func (s *Server) probeCodex(ctx context.Context, h HarnessConfig, readiness *HarnessReadiness) error {
 	if err := s.linkCodexLogin(); err != nil {
+		readiness.Login = probeFailed
 		return errors.New("codex login link in the managed home is unavailable")
 	}
 	version, err := s.command(ctx, "", s.codexEnvironment(), h.Executable, "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) != 2 || parts[0] != "codex-cli" || parts[1] != h.Version {
+		readiness.VersionCheck = probeFailed
 		return errors.New("unsupported or mismatched codex version")
 	}
+	readiness.VersionCheck, readiness.Login = probePassed, probeFailed
 	status, err := s.combined(ctx, "", s.codexEnvironment(), h.Executable, "login", "status")
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(status)), "Logged in using ChatGPT") {
 		return errors.New("execution host needs an independently provisioned Codex ChatGPT login: run `CODEX_HOME=<configDir> codex login --device-auth` on the host")
 	}
+	readiness.Login = probePassed
 	return nil
 }
 
@@ -558,8 +565,9 @@ func (s *Server) agyEnvironmentWithHome(home string) []string {
 
 // probeAgy checks the pinned version and an active agy OAuth login in the
 // managed home without making a model generation call.
-func (s *Server) probeAgy(ctx context.Context, h HarnessConfig) error {
+func (s *Server) probeAgy(ctx context.Context, h HarnessConfig, readiness *HarnessReadiness) error {
 	if err := s.linkAgyLogin(); err != nil {
+		readiness.Login = probeFailed
 		return errors.New("agy login link in the managed home is unavailable")
 	}
 	if err := s.agyHooksLoad(); err != nil {
@@ -581,12 +589,15 @@ func (s *Server) probeAgy(ctx context.Context, h HarnessConfig) error {
 		}
 	}
 	if err != nil || gotVer != h.Version {
+		readiness.VersionCheck = probeFailed
 		return errors.New("unsupported or mismatched agy version")
 	}
+	readiness.VersionCheck, readiness.Login = probePassed, probeFailed
 	modelsOut, err := s.combined(ctx, "", s.agyEnvironment(), h.Executable, "models")
 	if err != nil || !agyHasModels(string(modelsOut)) {
 		return errors.New("execution host needs an independently provisioned agy login: run `HOME=<configDir> agy` on the host")
 	}
+	readiness.Login = probePassed
 	return nil
 }
 

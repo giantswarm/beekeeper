@@ -147,7 +147,7 @@ func TestAgyProbeRefusesHooksAgyRejects(t *testing.T) {
 		t.Fatalf("agy rejects the managed hooks.json: %s", why)
 	}
 	h := f.s.Config.Harnesses[HarnessAgy]
-	if err := f.s.probe(ctx, HarnessAgy, h); err != nil {
+	if err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{}); err != nil {
 		t.Fatalf("probe of the prepared home: %v", err)
 	}
 	path := filepath.Join(f.s.agyConfigDir(), hooksJSONFile)
@@ -156,14 +156,14 @@ func TestAgyProbeRefusesHooksAgyRejects(t *testing.T) {
 	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := f.s.probe(ctx, HarnessAgy, h)
+	err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{})
 	if err == nil || !strings.Contains(err.Error(), "agy would reject the managed hooks.json and run unguarded") || !strings.Contains(err.Error(), `the "stale" entry`) {
 		t.Fatalf("probe of a rejected hooks.json: %v", err)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.probe(ctx, HarnessAgy, h); err == nil || !strings.Contains(err.Error(), "unreadable") {
+	if err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{}); err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("probe without hooks.json: %v", err)
 	}
 }
