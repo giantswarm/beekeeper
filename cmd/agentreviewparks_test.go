@@ -78,7 +78,7 @@ func TestLoopReviewsEveryPullOfSameWorker(t *testing.T) {
 
 func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 	for _, roster := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ended", true: "registered"}[roster], func(t *testing.T) {
+		t.Run(map[bool]string{false: "off roster", true: "registered"}[roster], func(t *testing.T) {
 			r := newLoopRig(t)
 			r.park(t, loopPR, time.Now())
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -99,13 +99,21 @@ func TestMergedPullKeepsOtherReviewRequests(t *testing.T) {
 			}
 			st, _ := r.a.store.Read()
 			l := &supervisorLoop{a: r.a, merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
-			_, err := l.endMerged(t.Context(), st, superloop.Action{Key: "test-end", Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: "merged"})
+			_, err := l.endMerged(t.Context(), st, superloop.Action{Key: "test-end", Kind: superloop.KindEnd, Ref: loopPR, URL: loopURL, Message: strings.ToLower(superloop.Merged)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			st, _ = r.a.store.Read()
 			if len(st.ReviewParks) != 1 || st.ReviewParks[0].On != multiParkSecondPR || len(st.WorkerReports) != 0 || (roster && st.Agents[0].Done) {
 				t.Fatalf("ended task before second PR: %+v", st)
+			}
+			_, err = l.endMerged(t.Context(), st, superloop.Action{Key: "test-end-second", Kind: superloop.KindEnd, Ref: multiParkSecondPR, URL: "https://github.com/o/r/pull/8", Message: strings.ToLower(superloop.Merged)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, _ = r.a.store.Read()
+			if len(st.ReviewParks) != 0 || len(st.WorkerReports) != 1 || (roster && !st.Agents[0].Done) {
+				t.Fatalf("last merge did not finish task: %+v", st)
 			}
 		})
 	}

@@ -273,6 +273,15 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			// The last completed ref may differ from the worker's current
+			// park when its PRs merge out of order. Finish that parked owner too.
+			for i := range current.Agents {
+				worker := &current.Agents[i]
+				if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
+					reportIdle(worker, l.a.timeNow())
+					worker.Done = true
+				}
+			}
 			endNotes(current, rp.Party, l.a.timeNow())
 			clearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
