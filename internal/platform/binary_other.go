@@ -14,5 +14,8 @@ func ProcessBinary(int) *Binary { return nil }
 // Replaced is false off Linux.
 func (*Binary) Replaced() bool { return false }
 
+// Replacement is none off Linux.
+func (*Binary) Replacement() (Install, bool) { return Install{}, false }
+
 // Exec does nothing off Linux.
 func (*Binary) Exec(...string) error { return nil }

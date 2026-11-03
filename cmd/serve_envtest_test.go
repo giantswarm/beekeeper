@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -275,8 +276,13 @@ func TestEnvtestServeBoundsTheBody(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	if !strings.Contains(string(raw), "request body too large") {
+	// The bound is mcpMaxBody's: the MCP library answers 413 naming it, an
+	// older one the MaxBytesReader's "request body too large".
+	if res.StatusCode != http.StatusRequestEntityTooLarge && !strings.Contains(string(raw), "request body too large") {
 		t.Errorf("an oversized body: HTTP %d %s", res.StatusCode, raw)
+	}
+	if res.StatusCode == http.StatusRequestEntityTooLarge && !strings.Contains(string(raw), strconv.Itoa(mcpMaxBody)) && !strings.Contains(string(raw), "request body too large") {
+		t.Errorf("an oversized body: HTTP 413 not naming the bound %d: %s", mcpMaxBody, raw)
 	}
 }
 

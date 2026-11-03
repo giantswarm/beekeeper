@@ -910,6 +910,14 @@ func TestServingWorkLeavesOutRolesIdleAgentsAndQuietSessionsNotBusy(t *testing.T
 	}
 }
 
+func TestBoardEndedReviewWorkerDoesNotServe(t *testing.T) {
+	st := &state.State{ReviewParks: []state.ReviewPark{{Agent: workerOne, Party: state.Party{Name: workerOne}, On: loopPR, Serves: refOne}}}
+	res := nextFree(st, boardCandidates(1), pickScope{alive: func(state.Party) bool { return false }})
+	if res.Pick == nil || res.Pick.Ref != refOne {
+		t.Fatalf("ended review worker claimed issue: %+v", res)
+	}
+}
+
 // board next --skip passes over the items it names, so a scan walks every
 // free candidate by repeating the call each pick names, and a second call
 // after a skip offers a different candidate.

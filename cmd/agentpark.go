@@ -103,7 +103,9 @@ by hand, also for a park without --on; run by the parked agent with no
 agent named, it ends its own park and wakes nobody.
 
 A park from the pull request's own worktree at its published HEAD records
-an independent review request. A worker on an SSH execution host parks from
+an independent review request, retained per pull request. Park from each
+PR worktree in turn; another park does not replace earlier review requests.
+A worker on an SSH execution host parks from
 its workspace: the coordinator checks the pull request against the
 execution's own published branch and the workspace's HEAD, and a park after
 a new publication asks for that head's review. Every other park (including one whose
@@ -221,7 +223,7 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			if len(postMerge) > 0 {
 				pm = postMerge[0]
 			}
-			if pm == "" && st.Agents[i].Park != nil && st.Agents[i].Park.PostMerge != nil && *st.Agents[i].Park.PostMerge != "" {
+			if pm == "" && st.Agents[i].Park != nil && strings.EqualFold(st.Agents[i].Park.On, on) && st.Agents[i].Park.PostMerge != nil && *st.Agents[i].Park.PostMerge != "" {
 				pm = *st.Agents[i].Park.PostMerge
 			}
 			if pm == "" {
@@ -244,10 +246,10 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			if on != "" {
 				if rp, ok := st.ReviewParkFor(on); ok && (reviewHead != "" || strings.EqualFold(rp.Agent, st.Agents[i].Name) || rp.Party.Is(self)) {
 					inheritReviewParkOnAgent(st, &st.Agents[i], rp, a.now.UTC())
-					st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, on) })
 				}
 			}
 			st.Agents[i].Park = park
+			recordAgentReviewPark(st, st.Agents[i])
 			name, counted, resume = st.Agents[i].Name, "counted parked, not busy", fmt.Sprintf("beekeeper agents resume %q", st.Agents[i].Name)
 		} else {
 			// A session off the roster parks too: the watch wakes it by

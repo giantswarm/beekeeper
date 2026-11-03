@@ -22,7 +22,9 @@ func (a *app) statusCmd() *cobra.Command {
 supervisor loop runs, the
 leases held, the holds in force, the notes and timers that are due and the
 busy agents against capacity.ceiling; while beekeeper
-stop stands, the line starts with STOPPED and the stop's reason.
+stop stands, the line starts with STOPPED and the stop's reason, while a
+"starts" hold stands (beekeeper hold set starts) with STARTS HELD, who set
+it, since when and why.
 
 --bar prints it for a desktop bar as one tab-separated row, the same shape
 as the rows of ` + "`free --summary`" + `, so one bar module reads both. The
@@ -80,6 +82,9 @@ type statusView struct {
 	// Stopped says the standing beekeeper stop, with its reason; empty
 	// without one.
 	Stopped string `json:"stopped,omitempty"`
+	// StartsHeld says the standing "starts" hold, with who set it and its
+	// reason; empty without one.
+	StartsHeld string `json:"startsHeld,omitempty"`
 	// Serving is the serving modes of the self-hosted providers: the mode
 	// each runs in with the sessions it sustains, and each node
 	// constraint held with the mode that stands while it holds.
@@ -99,6 +104,9 @@ func (a *app) status() (*statusView, error) {
 	v := &statusView{Leases: []string{}, Holds: []string{}, Due: dueCount(st, a.now), Ceiling: k.Ceiling}
 	if st.Stop != nil {
 		v.Stopped = a.stopText(st.Stop)
+	}
+	if h := startsHold(st, a.now); h != nil {
+		v.StartsHeld = a.startsHeldText(h)
 	}
 	sessions, _, err := a.sessions()
 	missing := platform.Missing(err)
@@ -183,6 +191,9 @@ func (v *statusView) line() string {
 	}
 	if len(v.VaultWaits) > 0 {
 		line += "; vault locked: " + list(len(v.VaultWaits), "call waits", "calls wait", v.VaultWaits)
+	}
+	if v.StartsHeld != "" {
+		line = "STARTS HELD: " + v.StartsHeld + "; " + line
 	}
 	if v.Stopped != "" {
 		line = "STOPPED: " + v.Stopped + "; " + line
