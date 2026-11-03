@@ -253,7 +253,7 @@ func activeExecution(st *state.State, ref execution.Ref) bool {
 }
 
 func executionNeedsSync(st *state.State, r *state.ExecutionRecord) bool {
-	if r == nil || r.Released() {
+	if r == nil || r.Released() || r.HostJournalMissing {
 		return false
 	}
 	if !r.Terminal() || r.Observation.Reachability != execution.Reachable {
@@ -296,9 +296,16 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	withTimeout := func(parent context.Context) (context.Context, context.CancelFunc) {
 		return context.WithTimeout(parent, timeout)
 	}
+	var failures []string
+	inventoryCtx, inventoryCancel := withTimeout(ctx)
+	inventoryErr := a.reconcileHostInventory(inventoryCtx, h)
+	inventoryCancel()
+	if inventoryErr != nil {
+		failures = append(failures, inventoryErr.Error())
+	}
 	var indices []int
 	for i, s := range st.Starts {
-		if r := s.Execution; r != nil && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
+		if r := s.Execution; r != nil && !r.HostJournalMissing && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
 			indices = append(indices, i)
 		}
 	}
@@ -316,7 +323,6 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		}
 		return 1
 	})
-	var failures []string
 	for _, idx := range indices {
 		if ctx.Err() != nil {
 			failures = append(failures, ctx.Err().Error())
@@ -380,6 +386,17 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 		opCtx, cancel = withTimeout(ctx)
 		_, syncErr := syncer.SyncControl(opCtx, ref)
 		cancel()
+		if errors.Is(syncErr, execution.ErrNotFound) {
+			missingCtx, missingCancel := withTimeout(ctx)
+			settled, missingErr := a.reconcileMissingExecution(missingCtx, h, ref)
+			missingCancel()
+			if missingErr != nil {
+				failures = append(failures, missingErr.Error())
+			}
+			if settled {
+				continue
+			}
+		}
 		if syncErr != nil {
 			a.executionFailure(ref, syncErr)
 			failures = append(failures, syncErr.Error())
@@ -405,6 +422,17 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 					a.executionFailure(ref, postErr)
 					err = postErr
 				}
+			}
+		}
+		if errors.Is(err, execution.ErrNotFound) {
+			missingCtx, missingCancel := withTimeout(ctx)
+			settled, missingErr := a.reconcileMissingExecution(missingCtx, h, ref)
+			missingCancel()
+			if missingErr != nil {
+				failures = append(failures, missingErr.Error())
+			}
+			if settled {
+				continue
 			}
 		}
 		if err != nil {
@@ -454,8 +482,16 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
 	selectors := []string{}
 	active := map[string]bool{}
+	// A host may retain a journal after the last coordinator record goes.
+	// Inventory must still run when Starts contains no executions at all.
+	if execution.ValidIdentity(w.cfg.Identity.Host) {
+		for selector := range w.cfg.Agents.Hosts {
+			selectors = append(selectors, selector)
+			active[executionSyncEmitPrefix+selector] = true
+		}
+	}
 	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
+		if r := s.Execution; r != nil && !r.HostJournalMissing && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
 			if !slices.Contains(selectors, r.Selector) {
 				selectors = append(selectors, r.Selector)
 			}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -131,8 +132,12 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 		return fail(err)
 	}
 	if busy > 0 {
+		refs, err := s.BusyExecutions(ctx, execution.Ref{})
 		release()
-		out.Busy = busy
+		if err != nil {
+			return fail(err)
+		}
+		out.Busy, out.Executions = len(refs), refs
 		return out
 	}
 	if s.Version == version {
@@ -197,7 +202,7 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	}
 	h = pinnedHost(st, selector, h)
 	if n := hostExecutions(st, selector); n > 0 {
-		return "", refused("execution host %s drains: %d executions run on it; it updates to %s once they end", selector, n, version)
+		return "", refused("execution host %s drains: %d executions run on it (%s); it updates to %s once they end", selector, n, strings.Join(hostExecutionNames(st, selector), ", "), version)
 	}
 	x, err := a.updateHost(ctx, h, version)
 	if err == nil && x.Busy > 0 {
@@ -236,7 +241,14 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	}
 	switch {
 	case errors.Is(err, errHostDrains):
-		return "", refused("execution host %s drains: %d executions run on it; it updates to %s once they end", selector, x.Busy, version)
+		var names []string
+		for _, ref := range x.Executions {
+			names = append(names, fmt.Sprintf("%s generation %d", ref.Execution, ref.Generation))
+		}
+		if len(names) == 0 {
+			names = append(names, "older host did not identify its executions; update its coordinator to reconcile inventory")
+		}
+		return "", refused("execution host %s drains: %d executions run on it (%s); it updates to %s once they end", selector, x.Busy, strings.Join(names, ", "), version)
 	case err != nil:
 		return "", refused("execution host %s is held, it takes no start: its update to %s failed: %v", selector, version, err)
 	}
@@ -291,4 +303,14 @@ func (a *app) admitExecution(selector string, h execution.Host) error {
 		return refused("execution host %s does not run this coordinator's %s yet, it takes no start until beekeeper agents hosts update %s pins it", selector, version, selector)
 	}
 	return nil
+}
+
+func hostExecutionNames(st *state.State, selector string) []string {
+	var names []string
+	for _, start := range st.Starts {
+		if x := start.Execution; x != nil && x.Selector == selector && !x.Terminal() {
+			names = append(names, fmt.Sprintf("%s [%s]", start.Name, x.Handle.Ref.Execution))
+		}
+	}
+	return names
 }

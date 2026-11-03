@@ -196,7 +196,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != "check" {
+	if op != "check" && op != "inventory" {
 		if err := ref.Validate(); err != nil {
 			return err
 		}
@@ -236,10 +236,10 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
-		if op == inspectOperation && reply.Code == "not-found" {
+		if (op == inspectOperation || op == "sync-control") && reply.Code == "not-found" {
 			return ErrNotFound
 		}
-		if reply.Code == "unsupported" {
+		if reply.Code == "unsupported" || ((op == "inventory" || op == "missing") && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
 		}
 		return errors.New(reply.Error)
@@ -344,6 +344,7 @@ type HostUpdate struct {
 	Version      string `json:"version,omitempty"`
 	PolicyDigest string `json:"policyDigest,omitempty"`
 	Busy         int    `json:"busy,omitempty"`
+	Executions   []Ref  `json:"executions,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
