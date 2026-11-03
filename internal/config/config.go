@@ -885,6 +885,11 @@ type Stop struct {
 	Units []string `yaml:"units"`
 }
 
+// ValidEffort reports whether a level is unset or a supported effort selector.
+func ValidEffort(level string) bool {
+	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
+}
+
 // Agents configures the hand-over of registered agents.
 type Agents struct {
 	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
@@ -998,23 +1003,39 @@ type AgentModelRule struct {
 	Match string `yaml:"match"`
 	Kind  string `yaml:"kind"`
 	Model string `yaml:"model"`
+	// Effort is the session's effort level (low, medium, high, xhigh, max);
+	// empty leaves it to a later rule or the harness default.
+	Effort string `yaml:"effort"`
 }
 
 // ModelFor returns the first matching nonempty model, then the desk-wide
 // fallback. A rule may leave the model unset for independent settings.
 func (a Agents) ModelFor(name, kind string) string {
 	for _, r := range a.Models {
-		if strings.TrimSpace(r.Model) == "" {
-			continue
-		}
-		if r.Kind != "" && r.Kind != kind {
-			continue
-		}
-		if re, err := regexp.Compile(r.Match); err == nil && re.MatchString(name) {
-			return strings.TrimSpace(r.Model)
+		if m := strings.TrimSpace(r.Model); m != "" && r.matches(name, kind) {
+			return m
 		}
 	}
 	return strings.TrimSpace(a.Model)
+}
+
+// EffortFor returns the first matching nonempty effort; empty keeps the
+// harness default.
+func (a Agents) EffortFor(name, kind string) string {
+	for _, r := range a.Models {
+		if e := strings.TrimSpace(r.Effort); e != "" && r.matches(name, kind) {
+			return e
+		}
+	}
+	return ""
+}
+
+func (r AgentModelRule) matches(name, kind string) bool {
+	if r.Kind != "" && r.Kind != kind {
+		return false
+	}
+	re, err := regexp.Compile(r.Match)
+	return err == nil && re.MatchString(name)
 }
 
 type ExecutionHost = execution.Host
@@ -2232,6 +2253,8 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
+	// Effort is the default for sessions started by the supervisor loop.
+	Effort string `yaml:"effort"`
 	// ReviewRounds is retained for configuration compatibility and reporting
 	// (default 1). It never releases a head without an approving review.
 	// Every new head gets one independent review, except a proven base-only
@@ -2347,6 +2370,8 @@ func (o Ownership) validateEach(report func(error)) {
 type Role struct {
 	// Model overrides the previous holder's model for every successor.
 	Model string `yaml:"model"`
+	// Effort is every successor's effort level; empty: the harness default.
+	Effort string `yaml:"effort"`
 	// Skill is the name of the skill the successor runs (guide).
 	Skill string `yaml:"skill"`
 	// Instructions is a file (~/ allowed) whose content opens the prompt
@@ -3802,7 +3827,15 @@ func (c *Config) validateEach(report func(error)) {
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
+	for key, level := range map[string]string{"guide.effort": c.Guide.Effort, "supervisor.effort": c.Supervisor.Effort} {
+		if !ValidEffort(level) {
+			report(fmt.Errorf("%s: invalid effort %q (low, medium, high, xhigh, max)", key, level))
+		}
+	}
 	for i, r := range c.Agents.Models {
+		if !ValidEffort(strings.TrimSpace(r.Effort)) {
+			report(fmt.Errorf("agents.models[%d].effort: invalid effort %q (low, medium, high, xhigh, max)", i, r.Effort))
+		}
 		if _, err := regexp.Compile(r.Match); err != nil {
 			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
 		}

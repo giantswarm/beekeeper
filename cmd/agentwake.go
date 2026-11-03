@@ -110,7 +110,8 @@ type wakeTarget struct {
 	name, id, host, dir, mode string
 	// model is the model the desktop recorded for the session's turns;
 	// empty: Claude Code's default.
-	model string
+	model  string
+	effort string
 	// profile is the profile a headless turn of one of beekeeper's starts
 	// runs under (its role's); empty: none.
 	profile string
@@ -379,6 +380,9 @@ func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) err
 // error when the desktop cannot run the turn (it does not run, the session
 // has no row, no steward took the send), whose turn then runs headless.
 func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm time.Duration) (string, error) {
+	if w.effort != "" {
+		return "", errors.New("explicit effort requires a headless turn")
+	}
 	if w.host == "" || !strings.HasPrefix(w.host, "local_") {
 		return "", errors.New("it has no desktop session")
 	}
@@ -513,6 +517,7 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 				w.model = s.Model
 			}
 			w.mode = s.Mode
+			w.effort = s.Effort
 			if w.dir == "" {
 				w.dir = s.Dir
 			}
@@ -639,6 +644,7 @@ func wakeArgv(bin string, w wakeTarget, msg string, profile ...string) []string 
 		// a person's site approval as the desktop's does
 		argv = append(argv, chromeFlag)
 	}
+	argv = append(argv, effortFlags(w.effort)...)
 	argv = append(argv, profile...)
 	return append(argv, "--", msg)
 }

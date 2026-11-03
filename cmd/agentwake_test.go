@@ -48,7 +48,7 @@ func TestResolveWake(t *testing.T) {
 	st := &state.State{Starts: []state.Start{
 		{Party: state.Party{Session: started}, Mode: state.ModeBypass, Dir: "/w"},
 		// started on sonnet, the desktop recorded its default model
-		{Party: state.Party{Session: onSonnet}, Mode: state.ModeBypass, Dir: "/w", Model: sonnetModel},
+		{Party: state.Party{Session: onSonnet}, Mode: state.ModeBypass, Dir: "/w", Model: sonnetModel, Effort: testEffortHigh},
 	}}
 
 	for _, tc := range []struct {
@@ -60,7 +60,7 @@ func TestResolveWake(t *testing.T) {
 		{state.Agent{Party: state.Party{Session: "cli-1", HostSession: "local_desk", Name: "Supervisor"}},
 			wakeTarget{name: "Supervisor", id: "cli-2", host: "local_desk", dir: "/d", mode: state.ModeBypass, model: "claude-opus-5-5"}},
 		{state.Agent{Party: state.Party{Session: onSonnet, HostSession: "local_st-2", Name: "sonnet worker"}},
-			wakeTarget{name: "sonnet worker", id: onSonnet, host: "local_st-2", dir: "/w", mode: state.ModeBypass, model: sonnetModel}},
+			wakeTarget{name: "sonnet worker", id: onSonnet, host: "local_st-2", dir: "/w", mode: state.ModeBypass, model: sonnetModel, effort: testEffortHigh}},
 		{state.Agent{Party: state.Party{Session: "bg", Name: "bg worker"}},
 			wakeTarget{name: "bg worker", id: "bg", dir: "/bg", mode: "acceptEdits"}},
 	} {

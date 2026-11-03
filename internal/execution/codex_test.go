@@ -223,11 +223,19 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
+	for _, level := range []string{"", "high"} {
+		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
+	}
+}
+
+func testCodexRunnerWakesWithEffort(t *testing.T, level string) {
+	t.Helper()
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
 	f, dir := codexFixture(t)
 	f.r.Messaging = true
+	f.r.Effort = level
 	ctx := startCodex(t, f)
 	done := make(chan error, 1)
 	go func() { done <- f.s.Run(ctx, f.r.Ref) }()
@@ -283,7 +291,17 @@ func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each call begins with the managed home; prompts may span lines.
-	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.codexHomeDir()+"|")[1:]
+	raw := string(calls)
+	if level != "" {
+		override := ` -c model_reasoning_effort="` + level + `"`
+		if strings.Count(raw, override) != 3 {
+			t.Fatalf("effort missing from first or wake turns: %s", raw)
+		}
+		raw = strings.ReplaceAll(raw, override, "")
+	} else if strings.Contains(raw, "model_reasoning_effort") {
+		t.Fatalf("default overridden: %s", raw)
+	}
+	turns := strings.Split(strings.TrimSpace(raw), f.s.codexHomeDir()+"|")[1:]
 	for i := range turns {
 		turns[i] = strings.TrimSpace(turns[i])
 	}

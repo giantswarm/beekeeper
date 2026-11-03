@@ -816,3 +816,39 @@ This cleanup history grants no permissions to the start or permission hooks.
 Ownership and roster protection both use Claude session IDs or normalized
 Codex, omp and agy host-session IDs; a hosted harness takes precedence over
 a launching Claude session inherited in the same environment.
+
+## Session effort
+
+An `agents.models` rule may carry `effort: low|medium|high|xhigh|max` beside
+or instead of its model; the first matching rule (same `match` and `kind`
+semantics as the model) with a nonempty effort selects it. Rules without an
+effort are skipped for effort, so model-only and effort-only rules compose.
+`agents start --effort <level>` overrides the rules, independently of
+`--model`. Without either, no effort option is sent and the harness keeps
+its own default. The `agents.start` event names the effort, or
+`harness default`.
+
+```yaml
+agents:
+  models:
+    - {match: "^(scan|file|draft|close)", effort: high}
+    - {match: ".", kind: review, model: opus, effort: xhigh}
+```
+
+Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
+`-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
+The selected model must support the level. agy has no session effort option:
+an effort from the flag or a rule is refused instead of silently ignored, on
+local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude
+and Codex starts carry effort in the owned execution request and reuse it for
+later turns.
+
+A Claude desktop-mode start with an effort runs its task headless, with its
+normal tool profile and sidebar import. Its wakes stay headless on that
+effort, since a desktop-spawned CLI cannot be given this override.
+Background starts keep Remote Control. Start records persist effort for
+wakes and handovers; no user settings file is changed.
+
+`guide.effort` selects the guide's session effort, ahead of the rules. The
+supervisor is a loop, so `supervisor.effort` is the default it passes to the
+sessions it starts; a matching rule's effort wins over it. Both are optional.

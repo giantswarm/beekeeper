@@ -10,6 +10,7 @@ import (
 
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,12 +31,15 @@ const (
 // one resumes the thread the journal recorded. The prompt is read from stdin.
 // Approvals and codex's own sandbox are off as for local workers; the
 // execution guard runs as the managed home's PreToolUse hook instead.
-func codexArgs(model, workspace, thread string) []string {
+func codexArgs(model, workspace, thread string, effort ...string) []string {
 	args := []string{"exec"}
 	if thread != "" {
 		args = append(args, "resume")
 	}
 	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model)
+	if len(effort) > 0 && effort[0] != "" {
+		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort[0]))
+	}
 	if thread == "" {
 		args = append(args, "-C", workspace)
 		return append(args, "-")
@@ -247,7 +251,7 @@ func (s *Server) codexEnd(ctx context.Context, ref Ref, phase, detail string) er
 // turn on any other thread is killed. onStart runs once, when the turn has
 // started on that thread, and its failure ends the turn.
 func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []string, log io.Writer, j Journal, prompt, thread string, onStart func() error) (string, bool, error) {
-	args := codexArgs(j.Request.Model, j.Handle.Workspace, thread)
+	args := codexArgs(j.Request.Model, j.Handle.Workspace, thread, j.Request.Effort)
 	if j.Request.MCP {
 		proxyArgs, _ := json.Marshal([]string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand})
 		command, _ := json.Marshal(s.Executable)
