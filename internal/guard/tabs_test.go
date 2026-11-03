@@ -12,6 +12,8 @@ import (
 // tabsCloseTool is the Chrome tool that closes a tab.
 const tabsCloseTool = "mcp__claude-in-chrome__tabs_close_mcp"
 
+const firstTabID = "806748780"
+
 // tabsTranscript writes a transcript of tool results with the texts.
 func tabsTranscript(t *testing.T, texts ...string) string {
 	t.Helper()
@@ -45,8 +47,8 @@ var (
 // longer open; a tab outside the group the last result lists is stray.
 func TestReadTabs(t *testing.T) {
 	tabs := ReadTabs(tabsTranscript(t, groupMade, freshTab, freshTab))
-	if !slices.Equal(tabs.Opened, []string{"806748780", "806748785"}) || tabs.Anchor != "806748780" ||
-		!slices.Equal(tabs.Reachable(), []string{"806748780", "806748785"}) || len(tabs.Stray()) != 0 {
+	if !slices.Equal(tabs.Opened, []string{firstTabID, "806748785"}) || tabs.Anchor != firstTabID ||
+		!slices.Equal(tabs.Reachable(), []string{firstTabID, "806748785"}) || len(tabs.Stray()) != 0 {
 		t.Errorf("tabs of a group with a fresh tab = %+v", tabs)
 	}
 	tabs = ReadTabs(tabsTranscript(t, groupMade, freshTab, firstClose, groupAgain, lastClose))
