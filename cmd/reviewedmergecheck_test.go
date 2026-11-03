@@ -463,3 +463,18 @@ func TestMergeResultConfiguredLintFailure(t *testing.T) {
 		t.Fatalf("got %d: %s", code, reason)
 	}
 }
+
+func TestMergeValidationFailureCannotDelegateAnUnsafeMerge(t *testing.T) {
+	r := newLoopRig(t)
+	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return fmt.Errorf("merge queue unavailable") }
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+	if len(r.cmds) != 0 {
+		t.Fatalf("merge submitted despite unavailable queue: %v", r.cmds)
+	}
+	if call := r.called(agentsName, agentWakeName, loopWorker); call != nil {
+		t.Fatalf("unsafe merge delegated: %v", call)
+	}
+}
