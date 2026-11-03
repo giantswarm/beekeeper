@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+
+	"github.com/giantswarm/beekeeper/internal/agyhooks"
 )
 
 type HarnessConfig struct {
@@ -537,6 +539,9 @@ func (s *Server) probeAgy(ctx context.Context, h HarnessConfig) error {
 	if err := s.linkAgyLogin(); err != nil {
 		return errors.New("agy login link in the managed home is unavailable")
 	}
+	if err := s.agyHooksLoad(); err != nil {
+		return err
+	}
 	version, err := s.command(ctx, "", s.agyEnvironment(), h.Executable, "--version")
 	parts := strings.Fields(string(version))
 	gotVer := ""
@@ -558,6 +563,20 @@ func (s *Server) probeAgy(ctx context.Context, h HarnessConfig) error {
 	modelsOut, err := s.combined(ctx, "", s.agyEnvironment(), h.Executable, "models")
 	if err != nil || !agyHasModels(string(modelsOut)) {
 		return errors.New("execution host needs an independently provisioned agy login: run `HOME=<configDir> agy` on the host")
+	}
+	return nil
+}
+
+// agyHooksLoad fails when agy would reject the managed hooks.json: agy drops
+// the whole file for one entry it rejects, and its workers would run with
+// no execution guard at all.
+func (s *Server) agyHooksLoad() error {
+	b, err := readRegular(filepath.Join(s.agyConfigDir(), hooksJSONFile), MaxWire)
+	if err != nil {
+		return errors.New("the managed agy hooks.json is unreadable; prepare the matching bundle")
+	}
+	if why := agyhooks.Rejects(b); why != "" {
+		return errors.New("agy would reject the managed hooks.json and run unguarded: " + why)
 	}
 	return nil
 }

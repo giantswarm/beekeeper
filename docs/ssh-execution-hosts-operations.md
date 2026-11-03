@@ -313,9 +313,10 @@ and a `hooks.json` in the `{"beekeeper":{"PreToolUse":[...]}}` format running
 files; tampering with any of them fails `hosts check` until a matching bundle
 is prepared again.
 
-`hosts check` verifies `agy --version`, probes login with `agy models` inside
-the managed home without a model call, and runs the `agy` execution guard
-conformance probe. The host advertises `agy` only when all three pass, and a
+`hosts check` verifies `agy --version`, refuses `agy` while `agy` would
+reject any entry of the managed `hooks.json` (it drops the whole file and
+would run unguarded), probes login with `agy models` inside the managed home
+without a model call, and runs the `agy` execution guard conformance probe. The host advertises `agy` only when all three pass, and a
 coordinator listing `agy` in the host's `harnesses` (`harnesses: [claude,
 codex, agy]`) starts `agy` workers there only when advertised.
 

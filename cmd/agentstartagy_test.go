@@ -277,6 +277,54 @@ func TestStartAgyAgentDeliversBriefAndConfirmsConversation(t *testing.T) {
 	}
 }
 
+// An agy start, and the preflight of a brokered one, refuse while agy's
+// hooks.json would load no beekeeper guard: nothing is recorded or started.
+func TestStartAgyAgentRefusesUnguardedHooks(t *testing.T) {
+	const model = "claude-opus-4-6-thinking"
+	writeFakeAgy(t, "Available models:\n  "+model+"\n")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sup-1")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", "supervisor")
+	orig := agyUnguarded
+	t.Cleanup(func() { agyUnguarded = orig })
+	agyUnguarded = func() string {
+		return "hooks.json: agy rejects the stale entry, so none of the file's hooks runs, beekeeper's neither (PreInvocation: command hook must specify 'command')"
+	}
+
+	dir := t.TempDir()
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: &config.Config{StateDir: dir}, store: store, now: time.Now(), out: &bytes.Buffer{}}
+	origLauncher := plat.Launcher
+	t.Cleanup(func() { plat.Launcher = origLauncher })
+	l := &agyTestLauncher{}
+	plat.Launcher = l
+
+	refusedUnguarded := func(err error) bool {
+		var e *exitError
+		return errors.As(err, &e) && e.code == ExitRefused && strings.Contains(e.msg, "agy would run without beekeeper's guard") && strings.Contains(e.msg, "the stale entry")
+	}
+	err = a.startAgyAgent(context.Background(), agentStart{name: testAgyWorker, brief: "brief text", task: testAgyTask, model: model, dir: dir})
+	if !refusedUnguarded(err) {
+		t.Fatalf("startAgyAgent = %v, want refused for the unguarded hooks", err)
+	}
+	if len(l.started) != 0 {
+		t.Errorf("started units = %v, want none", l.started)
+	}
+	if st, err := store.Read(); err != nil || len(st.Agents) != 0 || len(st.Starts) != 0 {
+		t.Errorf("state after refusal: agents %+v starts %+v (%v)", st.Agents, st.Starts, err)
+	}
+	if err := a.preflightStartTarget(context.Background(), harnessAgy, model, dir); !refusedUnguarded(err) {
+		t.Fatalf("preflightStartTarget = %v, want refused for the unguarded hooks", err)
+	}
+
+	agyUnguarded = func() string { return "" }
+	if err := a.preflightStartTarget(context.Background(), harnessAgy, model, dir); err != nil {
+		t.Fatalf("preflightStartTarget with guarded hooks: %v", err)
+	}
+}
+
 // When the agy unit exits before confirming the brief in its conversation,
 // startAgyAgent stops the unit, marks the roster entry undelivered, and
 // returns an error.

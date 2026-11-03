@@ -30,7 +30,10 @@ binary it runs from (or --binary):
     agy is installed the PreInvocation and PreToolUse hooks under
     "beekeeper" in ~/.gemini/config/hooks.json and the embedded skills in
     <stateDir>/skills registered under "entries" in
-    ~/.gemini/config/skills.json, merged into what is there;
+    ~/.gemini/config/skills.json, merged into what is there; install fails,
+    after every other step, while agy would reject any entry of that
+    hooks.json, its own or another's: agy then drops the whole file and runs
+    with no guard;
   - the standby service (beekeeper watch --standby, with --notify when
     watch.notify is true; off by default): a systemd user unit on Linux, a
     launch agent on macOS, enabled and started;

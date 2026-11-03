@@ -855,6 +855,136 @@ func TestAgyHooksNeverWritesThroughALink(t *testing.T) {
 	}
 }
 
+// staleAgyHooks is another tool's entry agy rejects, a matcher wrapper under
+// PreInvocation, beside a valid one: agy then drops the whole file.
+const staleAgyHooks = `{
+  "other-guard": {
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/other-guard", "timeout": 10}]}]
+  },
+  "stale": {
+    "PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale", "timeout": 10}]}]
+  }
+}
+`
+
+// agy rejects the whole hooks.json for any one entry it rejects, so the
+// doctor and install check every entry, not only beekeeper's: install still
+// writes its own entry, never rewrites another's, and fails after its other
+// steps; an agy start refuses while the file would load no guard.
+func TestAgyHooksRejectedByAnotherEntry(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	write(t, e.AgyHooks, staleAgyHooks)
+
+	const rejected = "agy rejects the stale entry, so none of the file's hooks runs, beekeeper's neither (PreInvocation: command hook must specify 'command')"
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, rejected) || !strings.Contains(got, "fix or remove that entry in ~/.gemini/config/hooks.json") {
+		t.Errorf("before install: CheckAgyHooks = %q", got)
+	}
+	if got := AgyHooksUnguarded(e.AgyHooks); !strings.Contains(got, rejected) {
+		t.Errorf("before install: AgyHooksUnguarded = %q", got)
+	}
+	err := Install(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), "agy would reject "+e.AgyHooks) || !strings.Contains(err.Error(), "the stale entry") {
+		t.Fatalf("Install = %v, want the rejected stale entry", err)
+	}
+	if !strings.Contains(out.String(), "add     ~/.gemini/config/hooks.json: beekeeper PreToolUse hook") ||
+		!strings.Contains(out.String(), "fail    ~/.gemini/config/hooks.json: "+rejected) {
+		t.Errorf("install output:\n%s", out)
+	}
+	if lines := strings.Split(strings.TrimSpace(out.String()), "\n"); !strings.HasPrefix(lines[len(lines)-1], "fail") {
+		t.Errorf("install failed before its last step:\n%s", out)
+	}
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &file); err != nil || !sameJSON(file["beekeeper"], AgyHook(e.Exe)) || !strings.Contains(string(file["stale"]), `"matcher"`) {
+		t.Errorf("hooks.json after install:\n%s", raw)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, rejected) {
+		t.Errorf("after install: CheckAgyHooks = %q", got)
+	}
+
+	// Dry run names the failure too, and changes nothing.
+	out.Reset()
+	e.DryRun = true
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "fail    ~/.gemini/config/hooks.json: "+rejected) {
+		t.Errorf("dry run output:\n%s", out)
+	}
+	e.DryRun = false
+
+	// Once the person fixes the stale entry, install, doctor and start pass.
+	delete(file, "stale")
+	fixed, _ := json.Marshal(file)
+	write(t, e.AgyHooks, string(fixed))
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("fixed: CheckAgyHooks = %q", got)
+	}
+	if got := AgyHooksUnguarded(e.AgyHooks); got != "" {
+		t.Errorf("fixed: AgyHooksUnguarded = %q", got)
+	}
+}
+
+// A hooks.json behind a link install never writes through: install keeps it
+// and fails on a rejected entry in its target, which the doctor names.
+func TestAgyHooksRejectedThroughALink(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	target := filepath.Join(home, "dotfiles", "hooks.json")
+	write(t, target, staleAgyHooks)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(e.AgyHooks), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, e.AgyHooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(context.Background(), e); err == nil || !strings.Contains(err.Error(), "the stale entry") {
+		t.Fatalf("Install = %v, want the rejected stale entry", err)
+	}
+	if !strings.Contains(out.String(), "; fix ~/dotfiles/hooks.json: agy loads none of its hooks until then") {
+		t.Errorf("install output:\n%s", out)
+	}
+	if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != staleAgyHooks {
+		t.Errorf("install wrote through the link:\n%s", raw)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "agy rejects the stale entry") || !strings.Contains(got, "in ~/dotfiles/hooks.json") {
+		t.Errorf("linked file: CheckAgyHooks = %q", got)
+	}
+}
+
+// An agy start needs beekeeper's guard loaded: a missing file, a missing
+// entry or one without the PreToolUse guard leaves agy unguarded.
+func TestAgyHooksUnguarded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.json")
+	if got := AgyHooksUnguarded(path); !strings.Contains(got, "is missing") {
+		t.Errorf("missing: %q", got)
+	}
+	write(t, path, priorAgyHooks)
+	if got := AgyHooksUnguarded(path); !strings.Contains(got, "lacks the beekeeper entry") {
+		t.Errorf("no beekeeper entry: %q", got)
+	}
+	write(t, path, `{"beekeeper": {"PreInvocation": [{"type": "command", "command": "/opt/bin/beekeeper hook preinvocation"}]}}`)
+	if got := AgyHooksUnguarded(path); !strings.Contains(got, "runs no `hook pretooluse --format agy` guard") {
+		t.Errorf("no guard: %q", got)
+	}
+	write(t, path, `{"beekeeper": `+string(AgyHook("/opt/bin/beekeeper"))+`}`)
+	if got := AgyHooksUnguarded(path); got != "" {
+		t.Errorf("guarded: %q", got)
+	}
+}
+
 const priorAgySkills = `{
   "inherits": [
     {
