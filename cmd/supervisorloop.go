@@ -1490,7 +1490,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	}
 
 	for _, act := range reviewActs {
-		launch(act.Key, func() error {
+		launch("review:"+act.Ref, func() error {
 			return l.execAction(ctx, st, claims, failures, act)
 		})
 	}
@@ -1546,7 +1546,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitionOrder := []string{}
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
-		key := "transition:" + cmp.Or(act.Agent, act.Key)
+		key := "transition:" + cmp.Or(act.Agent, act.Kind)
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
