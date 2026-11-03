@@ -12,8 +12,8 @@ import (
 
 // An approved, green branch that is only behind its base merges at the
 // reviewed head as it stands: no branch update, no wait for another CI run.
-// GitHub merges it onto the current base; only a base that requires
-// up-to-date branches refuses that, and the desk's admin merge passes it.
+// The merge queue tests it against the current base; admin configuration
+// must never bypass that server-side protection.
 func TestReviewedMergeMergesABehindBranchAsItStands(t *testing.T) {
 	for name, tc := range map[string]struct {
 		method string
@@ -23,11 +23,11 @@ func TestReviewedMergeMergesABehindBranchAsItStands(t *testing.T) {
 		// the base shows the commits the head lacks.
 		strict bool
 	}{
-		"admin passes the up-to-date requirement": {admin: true, strict: true},
-		"no up-to-date requirement":               {},
-		"no up-to-date requirement, admin":        {admin: true},
-		"rebase, admin":                           {method: mergeMethodRebase, admin: true, strict: true},
-		"rebase, no up-to-date requirement":       {method: mergeMethodRebase},
+		"admin configuration still uses queue": {admin: true, strict: true},
+		"no up-to-date requirement":            {},
+		"no up-to-date requirement, admin":     {admin: true},
+		"rebase, admin":                        {method: mergeMethodRebase, admin: true, strict: true},
+		"rebase, no up-to-date requirement":    {method: mergeMethodRebase},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newBehindRig(t)
@@ -55,8 +55,8 @@ func TestReviewedMergeMergesABehindBranchAsItStands(t *testing.T) {
 			if len(m) != 1 || !slices.Contains(m[0], "--match-head-commit") || !slices.Contains(m[0], loopHead) || b.lastMerged != loopHead {
 				t.Fatalf("merge of the reviewed head: %v", b.cmds)
 			}
-			if got := slices.Contains(m[0], "--admin"); got != tc.admin {
-				t.Fatalf("--admin %v, want %v: %v", got, tc.admin, m[0])
+			if slices.Contains(m[0], "--admin") {
+				t.Fatalf("queue bypassed: %v", m[0])
 			}
 			if tc.method != "" && !slices.Contains(m[0], "--"+tc.method) {
 				t.Fatalf("method %s lost: %v", tc.method, m[0])
