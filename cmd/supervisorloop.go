@@ -146,7 +146,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -209,6 +209,9 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
+	Closes []struct {
+		URL string `json:"url"`
+	} `json:"closingIssuesReferences"`
 	Draft       bool   `json:"isDraft"`
 	Mergeable   string `json:"mergeable"`
 	MergeState  string `json:"mergeStateStatus"`
@@ -332,6 +335,11 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
 	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	for _, issue := range j.Closes {
+		if r, ok := parseRef(issue.URL); ok {
+			p.Closes = append(p.Closes, refName(r))
+		}
+	}
 	for _, f := range j.Files {
 		p.Files = append(p.Files, f.Path)
 	}
@@ -735,6 +743,17 @@ func loopServes(st *state.State, ag state.Agent) string {
 	return ""
 }
 
+func loopTaskServes(ag state.Agent, parkedOn string) string {
+	for _, task := range []string{ag.Task, ag.LastTask} {
+		if m := refURL.FindString(task); m != "" {
+			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
+				return refName(r)
+			}
+		}
+	}
+	return ""
+}
+
 // loopOutput serializes loop transitions with asynchronous timer output.
 type loopOutput struct {
 	mu  sync.Mutex
@@ -928,11 +947,21 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
 		in.Filed = l.filedIssues(st)
+		ranks := map[string]int{}
+		in.Rank = func(ref string) int {
+			key := strings.ToLower(ref)
+			if r, ok := ranks[key]; ok {
+				return r
+			}
+			r, _ := readBoardRank(ctx, a, ref)
+			ranks[key] = r
+			return r
+		}
 	}
 	for _, ag := range st.Agents {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
-			w.ParkedOn, w.ParkedAt = loopParkOn(ag.Park), ag.Park.At
+			w.ParkedOn, w.ParkedAt, w.Waits = loopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
 			if !shouldEndReviewWorker(st, ag) || l.dryRun {
 				w.ReviewRequested = ag.Park.ReviewHead != ""
 				w.ParkedHead = ag.Park.ReviewHead
@@ -940,6 +969,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
+		if w.Serves == "" && ag.Park != nil && ag.Park.ReviewHead == "" {
+			w.Serves = loopTaskServes(ag, w.ParkedOn)
+		}
 		in.Workers = append(in.Workers, w)
 	}
 	for _, rp := range st.ReviewParks {
@@ -947,7 +979,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			continue
 		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Name == rp.Agent || (ag.Park != nil && strings.EqualFold(loopParkOn(ag.Park), rp.On))
+			return ag.Name == rp.Agent || (ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On))
 		}) {
 			continue
 		}
@@ -1084,7 +1116,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 	}
 	l.postMerge = superloop.ReleaseWorkers(in)
-	if len(l.postMerge) > 0 {
+	if len(l.postMerge) > 0 || superloop.HasOverlapWait(in.Workers, in.Taken, in.Answers) {
 		sessions, _, sessionErr := loopSessions(a)
 		for i, ag := range st.Agents {
 			if ag.Execution != nil {
@@ -1267,6 +1299,8 @@ func would(act superloop.Action) string {
 		return fmt.Sprintf("put %s on the board in Backlog and rank it", act.URL)
 	case superloop.KindGo:
 		return "merge " + act.URL + " at " + act.Head
+	case superloop.KindOwner:
+		return fmt.Sprintf("give %s an owner (%s)", act.Ref, act.Agent)
 	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
 		return "tell: " + truncate(oneLine(act.Message), 300)
 	}
@@ -1370,7 +1404,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			return "", false, err
 		}
 		done = p.State == superloop.Merged && p.Head == act.Head || logged("agents.wake", opens) || logged(verbStart, opens)
-	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed:
+	case superloop.KindForward, superloop.KindRework, superloop.KindAnswer, superloop.KindRelay, superloop.KindRed, superloop.KindOwner:
 		done = logged("agents.wake", opens) || logged(verbStart, opens)
 	case superloop.KindEnd:
 		done = logged("agents.wake", opens) || logged(verbStart, opens) || slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target && ag.Done }) ||
@@ -1641,6 +1675,8 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			return "", err
 		}
 		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
+	case superloop.KindOwner:
+		return l.ownOverlap(ctx, st, act)
 	case superloop.KindEscalate:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
 			fmt.Sprintf("the loop starts at most %d reviews of a pull request, and head %s changes more than the base since the last one: only a person lets it merge without another review; the loop gives the merge go for that head on an answer that releases it", superloop.MaxReviews, shortSHA(act.Head)),
@@ -2868,6 +2904,29 @@ func (l *supervisorLoop) toFile(_ context.Context, st *state.State, act superloo
 // after (Client.RankAnchor).
 var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (string, error) {
 	return a.boardClient().RankAnchor(ctx, ref, from)
+}
+
+// readBoardRank resolves the priority rank of ref on the board (Client.RankOf).
+var readBoardRank = func(ctx context.Context, a *app, ref string) (int, error) {
+	return a.boardClient().RankOf(ctx, ref)
+}
+
+func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
+			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
+		}
+		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
+			return "", fmt.Errorf("record overlap dependency: %w", err)
+		}
+	}
+	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+		return "", err
+	}
+	if act.Block != "" {
+		return fmt.Sprintf("owner %q assigned to %s (%s blocked by %s)", act.Agent, cmp.Or(act.URL, act.Ref), act.Block, act.Ref), nil
+	}
+	return fmt.Sprintf("owner %q assigned to %s", act.Agent, cmp.Or(act.URL, act.Ref)), nil
 }
 
 // filedIssues reads the issues created by sessions active since the loop
