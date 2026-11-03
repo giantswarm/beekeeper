@@ -19,8 +19,22 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const loopWorkerMergeGo = "merge go given"
+
+func pullNeedsBranchRepair(p superloop.Pull) bool {
+	return p.Draft || p.Mergeable == "CONFLICTING" || p.MergeState == "BEHIND"
+}
+
+func ghMergeNeedsBranchRepair(reason string) bool {
+	lower := strings.ToLower(reason)
+	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
+}
+
 // mergePull executes the planner's exact-head decision in the coordinator,
-// including for workers on an execution host. No worker gets a merge grant.
+// including for workers on an execution host. When the coordinator's pinned
+// merge step is broken on an open, green, approved head, it falls back
+// automatically to directing the worker session to merge that exact head,
+// never asking the person.
 func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act superloop.Action) (string, error) {
 	a := l.a
 	ref, ok := parseRef(act.Ref)
@@ -95,34 +109,52 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		}
 		return fmt.Sprintf("merged %s at %s (merge commit %s)", act.URL, p.Head, p.MergeCommit), nil
 	}
-	if err != nil {
-		return "", err
-	}
 	var reply github.SquashDoc
-	mutationResult := json.NewDecoder(strings.NewReader(out)).Decode(&reply) == nil && reply.Route == reviewedMergeRoute && reply.Repo == ref.Repo && reply.Number == ref.N && reply.HeadSha == act.Head
-	if code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult {
+	mutationResult := err == nil && json.NewDecoder(strings.NewReader(out)).Decode(&reply) == nil && reply.Route == reviewedMergeRoute && reply.Repo == ref.Repo && reply.Number == ref.N && reply.HeadSha == act.Head
+	if err == nil && (code == ExitGateQueued || code == ExitGateDuplicate && !mutationResult) {
 		return "", errLoopLater
 	}
-	if code == ExitGateUnread || code == ExitGateRefused {
+	if err == nil && (code == ExitGateUnread || code == ExitGateRefused) || mutationResult && code == github.SquashRefused {
+		if mutationResult && reply.Reason != "" {
+			out = reply.Reason
+		}
 		return "", refused("merge gate refused: %s", oneLine(out))
+	}
+	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
+		return "", refused("merge head moved or current CI is not green")
+	}
+	if mutationResult && code == github.SquashNotApplicable {
+		if reply.Reason != "" {
+			out = reply.Reason
+		}
+		// A confirmed open pull request needs repair. Recording this action after
+		// the wake or fixer start prevents repeated repair wakes for the same failed head.
+		act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s (exit %d): %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again. The supervisor performs the merge.", act.URL, act.Head, code, oneLine(out))
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+			return "", err
+		}
+		return "merge failed; branch repair requested", nil
+	}
+	if !pullNeedsBranchRepair(p) && act.Agent != "" && execRef == nil {
+		if err := l.record(act, loopWorkerMergeGo); err != nil {
+			return "", err
+		}
+		if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+			_ = a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", act.Key, err.Error()), act.Ref))
+			return "", err
+		}
+		return loopWorkerMergeGo, nil
+	}
+	if err != nil {
+		return "", err
 	}
 	if code == 0 {
 		return "", refused("merge command ended without a confirmed merge")
 	}
-	if !mutationResult || code != github.SquashNotApplicable && code != github.SquashRed {
-		return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
-	}
-	if reply.Reason != "" {
+	if mutationResult && reply.Reason != "" {
 		out = reply.Reason
 	}
-
-	// A confirmed open pull request needs repair. Recording this action after
-	// the wake or fixer start prevents repeated repair wakes for the same failed head.
-	act.Message = fmt.Sprintf("The supervisor could not merge %s at reviewed head %s (exit %d): %s. Repair the branch, push all fixes together, wait for green CI and park for desk review again. The supervisor performs the merge.", act.URL, act.Head, code, oneLine(out))
-	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
-		return "", err
-	}
-	return "merge failed; branch repair requested", nil
+	return "", refused("merge command failed (exit %d): %s", code, oneLine(out))
 }
 
 // endMerged closes tasks that explicitly declared no post-merge work and
@@ -274,12 +306,14 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		method = "squash"
 	}
 	if method != "squash" && method != mergeMethodRebase && method != superloop.KindMerge {
+		doc.ExitCode = github.SquashTooling
 		doc.Reason = "invalid configured merge method"
 		return doc
 	}
 	ref := fmt.Sprintf("%s#%d", repo, number)
 	p, err := readLoopPull(ctx, ref)
 	if err != nil {
+		doc.ExitCode = github.SquashTooling
 		doc.Reason = err.Error()
 		return doc
 	}
@@ -289,6 +323,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	if p.State != superloop.Open || p.Head != head || !p.Green {
+		doc.ExitCode = github.SquashRefused
 		doc.Reason = "merge head moved or current CI is not green"
 		return doc
 	}
@@ -310,11 +345,13 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	st, err := a.store.Read()
 	if err != nil {
+		doc.ExitCode = github.SquashTooling
 		doc.Reason = err.Error()
 		return doc
 	}
 	evs, logErr := a.store.Events(0, func(e state.Event) bool { return e.By == loopParty && e.Subject == ref })
 	if logErr != nil {
+		doc.ExitCode = github.SquashTooling
 		doc.Reason = "merge authority unreadable"
 		return doc
 	}
@@ -362,23 +399,28 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		use := execution.MergeUse{Ref: *execRef, Repository: repo, PR: number, Head: head}
 		record, _ := executionRecord(st, *execRef)
 		if record == nil {
+			doc.ExitCode = github.SquashRefused
 			doc.Reason = "execution stopped"
 			return doc
 		}
 		if err := a.authenticateExecutionReview(ctx, st, use, p); err != nil {
+			doc.ExitCode = github.SquashRefused
 			doc.Reason = err.Error()
 			return doc
 		}
 	}
 	if !claimed {
+		doc.ExitCode = github.SquashTooling
 		doc.Reason = "no pending exact-head supervisor merge claim"
 		return doc
 	}
 	if st.Stop != nil {
+		doc.ExitCode = github.SquashRefused
 		doc.Reason = reasonDeskStopped
 		return doc
 	}
 	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+		doc.ExitCode = github.SquashRefused
 		doc.Reason = reasonMergeHeld
 		return doc
 	}
@@ -396,10 +438,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			return doc
 		}
 		if st.Stop != nil {
+			doc.ExitCode = github.SquashRefused
 			doc.Reason = reasonDeskStopped
 			return doc
 		}
 		if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+			doc.ExitCode = github.SquashRefused
 			doc.Reason = reasonMergeHeld
 			return doc
 		}
@@ -411,9 +455,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
-	doc.ExitCode = code
 	if runErr != nil {
-		doc.ExitCode = github.SquashTooling
 		doc.Reason = runErr.Error()
 	}
 	p, err = readLoopPull(ctx, ref)
@@ -422,13 +464,26 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.Reason = err.Error()
 		return doc
 	}
-	if p.State == superloop.Merged && p.Head == merging {
+	switch {
+	case p.State == superloop.Merged && p.Head == merging:
 		doc.ExitCode = 0
 		doc.MergeCommitSha = p.MergeCommit
 		doc.Verdict = "merged"
-	} else if doc.ExitCode == 0 {
+	case p.State != superloop.Open || p.Head != merging || !p.Green:
+		doc.ExitCode = github.SquashRefused
+		if doc.Reason == "" {
+			doc.Reason = "merge head moved or current CI is not green"
+		}
+	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
-		doc.Reason = "merge not confirmed"
+		if doc.Reason == "" {
+			doc.Reason = "branch is draft, behind or conflicts with its base"
+		}
+	default:
+		doc.ExitCode = github.SquashTooling
+		if code == 0 && runErr == nil && doc.Reason == "" {
+			doc.Reason = "merge not confirmed"
+		}
 	}
 	return doc
 }
