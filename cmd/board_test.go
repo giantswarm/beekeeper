@@ -970,7 +970,7 @@ func TestBoardRankLogsCallerAndWritesPosition(t *testing.T) {
 		t.Run(subcmd, func(t *testing.T) {
 			a, _ := stubApp(t)
 			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 1
-			a.as = "Agent one"
+			a.as = agentOne
 
 			var sawPosition bool
 			was := boardGH
@@ -1008,8 +1008,8 @@ func TestBoardRankLogsCallerAndWritesPosition(t *testing.T) {
 				t.Fatal("expected updateProjectV2ItemPosition mutation")
 			}
 			evs, err := a.store.Events(5, nil)
-			if err != nil || len(evs) != 1 || evs[0].Verb != "board.rank" || evs[0].By.Name != "Agent one" {
-				t.Fatalf("expected board.rank event by Agent one, got %+v (err=%v)", evs, err)
+			if err != nil || len(evs) != 1 || evs[0].Verb != "board.rank" || evs[0].By.Name != agentOne {
+				t.Fatalf("expected board.rank event by %s, got %+v (err=%v)", agentOne, evs, err)
 			}
 		})
 	}
@@ -1026,7 +1026,7 @@ func TestBoardRankRefusesAnonymousWrites(t *testing.T) {
 	c := a.boardCmd()
 	c.SetOut(&out)
 	c.SetErr(&out)
-	c.SetArgs([]string{"rank", refOne, "--top"})
+	c.SetArgs([]string{"order", refOne, "--top"})
 	err := c.Execute()
 	if err == nil || Code(err) != ExitRefused {
 		t.Fatalf("expected exit 3 (refused), got %v", err)

@@ -558,19 +558,6 @@ type nextResult struct {
 	// NextSkip is the --skip of the call that offers the candidate after
 	// the pick: the skips asked for and the pick; none after a claim.
 	NextSkip []string `json:"next_skip,omitempty"`
-	// owners is who serves each item a session serves (nextFree's owners),
-	// by its lower-cased ref.
-	owners map[string]string
-}
-
-// walk is every candidate in the walk's order: the skipped above the pick,
-// the pick, every candidate behind it.
-func (res nextResult) walk() []board.Candidate {
-	out := slices.Clone(res.Skipped)
-	if res.Pick != nil {
-		out = append(out, *res.Pick)
-	}
-	return append(out, res.AfterPick...)
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -653,7 +640,7 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
 	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
-	res := nextResult{SkippedBy: map[string]int{}, owners: owners}
+	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
 		if ok {

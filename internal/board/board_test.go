@@ -799,7 +799,7 @@ func TestClosesAsksInBatches(t *testing.T) {
 	}
 	// Each request's first ref closes o/r#1; a request holds closesBatch refs.
 	if len(queries) != 3 || strings.Count(queries[0], "repository(") != closesBatch || strings.Count(queries[2], "repository(") != 1 ||
-		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{"o/r#1"}) {
+		len(got) != 3 || !slices.Equal(got["o/r#200"], []string{ref1}) {
 		t.Errorf("%d queries, closes %v", len(queries), got)
 	}
 }
