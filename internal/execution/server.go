@@ -496,7 +496,6 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 			}); err != nil {
 				return Observation{}, err
 			}
-			s.cleanWorkspace(r)
 			o.StopAcknowledged, o.ProcessState = true, Exited
 			return o, nil
 		}
@@ -514,6 +513,9 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	return o, nil
 }
 
+// Stop terminates only the owned process. Its workspace and source artifacts
+// remain at the journal's recorded paths: even a clean tree can contain
+// unpublished commits, and an acknowledged stop is not proof of task completion.
 func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if q.ID == "" || len(q.ID) > 128 || q.Reason == "" || len(q.Reason) > 1024 {
 		return Ack{}, errors.New("stop needs an idempotency key and reason")
@@ -531,7 +533,7 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
-		s.cleanWorkspace(r)
+		s.cleanStoppedRuntime(r)
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -557,8 +559,19 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
-	s.cleanWorkspace(r)
+	s.cleanStoppedRuntime(r)
 	return Ack{ID: q.ID, Stage: Applied}, nil
+}
+
+// Only the disposable MCP proxy home is runtime state. The workspace and
+// source bundle may contain unpublished work and are deliberately retained.
+func (s *Server) cleanStoppedRuntime(r Ref) {
+	if s.Root != "" {
+		mcpHome := s.agyMCPHomeDir(r)
+		if within(s.Root, mcpHome) {
+			_ = worktrees.RemoveAll(mcpHome)
+		}
+	}
 }
 
 // RebindPolicy binds a running execution to the host's prepared policy. The
@@ -601,27 +614,6 @@ func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Obser
 		return Observation{}, err
 	}
 	return s.Inspect(ctx, r)
-}
-
-func (s *Server) cleanWorkspace(r Ref) {
-	if s.Config.WorkspaceRoot != "" {
-		if root, err := filepath.EvalSymlinks(s.Config.WorkspaceRoot); err == nil && root == filepath.Clean(s.Config.WorkspaceRoot) {
-			parent := filepath.Join(root, string(r.Execution))
-			if within(root, parent) {
-				_ = worktrees.RemoveAll(parent)
-			}
-		}
-	}
-	if s.Root != "" {
-		srcDir := filepath.Dir(s.sourcePath(r))
-		if within(s.Root, srcDir) {
-			_ = worktrees.RemoveAll(srcDir)
-		}
-		mcpHome := s.agyMCPHomeDir(r)
-		if within(s.Root, mcpHome) {
-			_ = worktrees.RemoveAll(mcpHome)
-		}
-	}
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {
