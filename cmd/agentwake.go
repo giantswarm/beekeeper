@@ -589,12 +589,16 @@ func wakeRunning(ctx context.Context, id string) string {
 }
 
 // profiledWakeArgv is wakeArgv under w's profile, whose flag settings it
-// writes first.
+// writes first, with its security review on w's model (withReviewModel).
 func (a *app) profiledWakeArgv(ctx context.Context, bin string, w wakeTarget, msg string) ([]string, error) {
-	if w.profile == "" {
-		return wakeArgv(bin, w, msg), nil
+	var flags []string
+	if w.profile != "" {
+		var err error
+		if flags, err = a.profileFlags(ctx, w.profile); err != nil {
+			return nil, err
+		}
 	}
-	flags, err := a.profileFlags(ctx, w.profile)
+	flags, err := withReviewModel(w.model, flags)
 	if err != nil {
 		return nil, err
 	}

@@ -142,6 +142,16 @@ func sessionUnits(ctx context.Context, id string, stopping bool) []string {
 // no relay open, and starts its successor (standby watch).
 func (w *watcher) guideGone(ctx context.Context, st *state.State, sessions []*claude.Session) {
 	r := guideRole.get(st)
+	if goneUnrecorded(r, sessions) {
+		// The guide's own watch, which records its CLI, went with it: the
+		// standby records since when it is gone, or the grace would start
+		// anew on every poll and no successor would ever start.
+		_ = w.store.Update(func(st *state.State) ([]state.Event, error) {
+			_, evs := guideRole.observeCLI(st, sessions, w.now)
+			r = guideRole.get(st)
+			return evs, nil
+		})
+	}
 	sv := readHolder(r, sessions, w.now, w.cfg.Guide.RestartGrace.Duration)
 	if !sv.down() || relayPending(st, r, w.now) || w.firstTurn(ctx, st, r.Holder.Party) {
 		if sv.live {

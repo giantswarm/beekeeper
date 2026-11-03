@@ -50,11 +50,11 @@ func tasked(name string) state.Agent {
 // as an agent, two busy workers, a kept one, one a timer wakes, one waiting
 // on its person, an idle one, a done one and a guide run relieved since.
 func capacityRoster() (*state.State, []*claude.Session) {
-	guide, kept, woken, waits := tasked("Guide run 9"), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
+	guide, kept, woken, waits := tasked(guideNine), tasked("Judge"), tasked("BK 3"), tasked("BK 4")
 	kept.Keep = &state.Keep{Reason: "a person returns to it"}
 	done := tasked("BK 5")
 	done.Done = true
-	guideRun := tasked("Guide run 8")
+	guideRun := tasked(guideEight)
 	guideRun.Task = "the guide's role as Guide run 8"
 	st := &state.State{
 		Guide:  &state.Role{Holder: &state.Supervisor{Party: guide.Party}},
