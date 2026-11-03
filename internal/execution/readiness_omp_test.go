@@ -21,14 +21,14 @@ func TestOmpReadinessDistinguishesLoginAndGuardFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			report := readinessReport(t, caps, HarnessOmp)
-			wantLogin, wantGuard := "passed", "passed"
+			wantLogin, wantGuard := readinessPassed, readinessPassed
 			if failure == "logged-out" {
-				wantLogin, wantGuard = "failed", "not checked"
+				wantLogin, wantGuard = readinessFailed, readinessNotChecked
 			}
 			if failure == "extension-error" {
-				wantGuard = "failed"
+				wantGuard = readinessFailed
 			}
-			if report["version"] != fixtureOmpVersion || report["versionCheck"] != "passed" || report["login"] != wantLogin || report["guard"] != wantGuard {
+			if report["version"] != fixtureOmpVersion || report["versionCheck"] != readinessPassed || report["login"] != wantLogin || report["guard"] != wantGuard {
 				t.Fatalf("wrong readiness report: %v", report)
 			}
 			if (caps.Harnesses[HarnessOmp] != "") != (failure == "") {

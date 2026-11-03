@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+const (
+	readinessPassed     = "passed"
+	readinessFailed     = "failed"
+	readinessNotChecked = "not checked"
+)
+
 // Decode the wire report so this regression can also run against the base
 // without depending on the new Go field.
 func readinessReport(t *testing.T, caps Capabilities, harness string) map[string]string {
@@ -49,7 +55,7 @@ func TestHostReadinessDistinguishesLoginAndVersionFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 				result := readinessReport(t, caps, harness)
-				if result["version"] != version || result["versionCheck"] != wantVersion || result["login"] != wantLogin || result["guard"] != "passed" {
+				if result["version"] != version || result["versionCheck"] != wantVersion || result["login"] != wantLogin || result["guard"] != readinessPassed {
 					t.Fatalf("wrong readiness report: %v", result)
 				}
 				if (caps.Harnesses[harness] != "") != advertised {
@@ -59,17 +65,17 @@ func TestHostReadinessDistinguishesLoginAndVersionFailures(t *testing.T) {
 					t.Fatal("healthy Claude harness disappeared")
 				}
 			}
-			check("passed", "passed", true)
+			check(readinessPassed, readinessPassed, true)
 			if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			check("passed", "failed", false)
+			check(readinessPassed, readinessFailed, false)
 			// The managed environment intentionally drops arbitrary variables.
 			// Change the fake executable instead of injecting its version.
 			if err := os.WriteFile(filepath.Join(dir, harness), []byte("#!/bin/sh\necho '"+harness+" version 0.0.0'\n"), 0o700); err != nil { //nolint:gosec // test-owned executable fixture
 				t.Fatal(err)
 			}
-			check("failed", "not checked", false)
+			check(readinessFailed, readinessNotChecked, false)
 		})
 	}
 }
