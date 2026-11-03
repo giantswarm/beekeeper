@@ -14,6 +14,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	emergencyOpenState    = "OPEN"
+	emergencySetCommand   = "set"
+	emergencyPauseCommand = "pause"
+	emergencyViewCommand  = "view"
+)
+
 // emergencyGuide deliberately disallows --as: the grant belongs to a live
 // guide session, not to a caller who knows its display name.
 func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
@@ -120,7 +127,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			return usageErr("want owner/repo and a positive pull request number")
 		}
 		return a.runEmergency(fmt.Sprintf("merge https://github.com/%s/pull/%d", args[0], n), func() error {
-			raw, err := github.RunGH(cmd.Context(), "pr", "view", strconv.Itoa(n), "--repo", args[0], "--json", "state,isDraft,reviewDecision,headRefOid")
+			raw, err := github.RunGH(cmd.Context(), "pr", emergencyViewCommand, strconv.Itoa(n), "--repo", args[0], "--json", "state,isDraft,reviewDecision,headRefOid")
 			if err != nil {
 				return err
 			}
@@ -131,19 +138,19 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if err = json.Unmarshal(raw, &pr); err != nil {
 				return err
 			}
-			if pr.State != "OPEN" || pr.IsDraft || pr.ReviewDecision != "APPROVED" || pr.HeadRefOid == "" {
+			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != "APPROVED" || pr.HeadRefOid == "" {
 				return refused("emergency merge requires an approved, open, non-draft pull request")
 			}
 			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
 				return err
 			}
-			_, err = github.RunGH(cmd.Context(), "pr", "merge", strconv.Itoa(n), "--repo", args[0], "--squash", "--match-head-commit", pr.HeadRefOid)
+			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--squash", "--match-head-commit", pr.HeadRefOid)
 			return err
 		})
 	}}
 	hold := a.holdCmd()
 	for _, sub := range hold.Commands() {
-		if sub.Name() == "set" || sub.Name() == "lift" {
+		if sub.Name() == emergencySetCommand || sub.Name() == "lift" {
 			a.wrapEmergency(sub)
 		}
 	}
@@ -171,7 +178,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 	}, RunE: func(cmd *cobra.Command, args []string) error {
 		set := a.configCmd()
 		for _, sub := range set.Commands() {
-			if sub.Name() == "set" {
+			if sub.Name() == emergencySetCommand {
 				return a.runEmergency("capacity "+strings.Join(args, " "), func() error { return sub.RunE(cmd, args) })
 			}
 		}
@@ -179,7 +186,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 	}}
 	auto := &cobra.Command{Use: "auto-install", Short: "Pause or resume release auto-install without stopping the loop"}
 	var pauseReason string
-	for _, verb := range []string{"pause", "resume"} {
+	for _, verb := range []string{emergencyPauseCommand, agentResumeName} {
 		sub := &cobra.Command{Use: verb, Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 			if strings.TrimSpace(pauseReason) == "" {
 				return usageErr("--reason (the person's words) is required")
@@ -189,7 +196,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 				if err != nil {
 					return nil, err
 				}
-				st.AutoInstallPaused = verb == "pause"
+				st.AutoInstallPaused = verb == emergencyPauseCommand
 				return []state.Event{event(me, "auto-install."+verb, "person's words: %q", pauseReason)}, nil
 			})
 		}}
