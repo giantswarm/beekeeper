@@ -1091,6 +1091,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := l.recoverQuota(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
+	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
 	}

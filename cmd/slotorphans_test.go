@@ -174,6 +174,7 @@ func TestOrphanedScope(t *testing.T) {
 
 const (
 	legacyHolderMode     = "legacy"
+	scopeHolderKey       = "scope"
 	startedHolderKey     = "started"
 	startupDeadlineKey   = "startDeadline"
 	scopeReadFailureMode = "scope-read-error"
@@ -201,9 +202,9 @@ func TestWatchRecoversEmptySlotHolders(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = lock.Unlock() }()
-			rec := map[string]any{"pid": 100, "since": since.UTC().Format(time.RFC3339), kindScope: "memcap-100-000001", startedHolderKey: started, startupDeadlineKey: since}
+			rec := map[string]any{"pid": 100, "since": since.UTC().Format(time.RFC3339), scopeHolderKey: "memcap-100-000001", startedHolderKey: started, startupDeadlineKey: since}
 			if mode == legacyHolderMode {
-				delete(rec, kindScope)
+				delete(rec, scopeHolderKey)
 				delete(rec, startedHolderKey)
 				delete(rec, startupDeadlineKey)
 				if err := store.Log(state.Event{At: since.Add(time.Second), Verb: guard.VerbStart, Detail: liveSlotScope + " slot 1 max 1G: test"}); err != nil {
