@@ -289,6 +289,15 @@ spare too, or in a fresh `claude --resume <transcript>` when a new daemon serves
 `--resume` with flags of its own starts a copy instead of waking the session. The daemon exits
 once its last worker stops.
 
+`alerts snapshot` groups text rows by severity, team, alert name, cluster and namespace;
+rows with a namespace label append `namespace=<value>`. `alerts snapshot --json` returns
+an object with `lines` (the text view, including PagerDuty) and `installations`. Each
+installation carries `installation`, `reachable`, optional `why` and `noContext`, and
+an `alerts` array with every visible alert's full `labels` map. Ignored, silenced,
+inhibited and below-floor alerts follow the same filtering as the text view. This
+replaces the previous JSON array of formatted strings; scripts reading that array
+should read `lines` instead.
+
 The alert triage is tried on recorded answers: `alerts capture <dir>` a few times, readings apart,
 then `alerts replay <dir>...` with a scratch configuration whose `stateDir` holds a copy of the live
 `alerts.json` (and, for the owner hints, an `events.jsonl` with a `merged` event into a lane of the
