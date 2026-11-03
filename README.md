@@ -257,7 +257,11 @@ first and refuses, 77, only when it cannot, the lane untouched either way; a gat
 already ran leaves the run's document and exit code under `merges/` for the watch, which records
 the outcome from them at its next poll, so no lane keeps a running entry for a finished merge).
 `beekeeper doctor` (a `DOCTOR stale binary` line in the watch) lists each
-such process while it runs; a watch is named by `WATCH STALE`. A build without a release version
+such process while it runs, with the path and time of the install that replaced its binary; a
+watch is named by `WATCH STALE`. The path is read as the process itself resolves it (its own
+root). An install proven to precede the process start is excluded; an inode replacement
+inside the start timestamp's uncertain first second still counts. A call started from a
+second copy on the PATH, a re-executed gate call or one started after the install is not listed. A build without a release version
 (a development or release-candidate build) neither stamps the state nor is refused, and its saves
 keep what a newer release recorded: every object of `state.json` that carries per-entry data (the
 state itself, roster entries and their keep markers, notes, timers, grants, holds, lanes, session
