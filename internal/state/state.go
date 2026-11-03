@@ -361,6 +361,13 @@ type Park struct {
 	rest rest
 }
 
+// WorkerProblems keeps finding receipts after the watch drains its reports.
+type WorkerProblems struct {
+	Task       string    `json:"task"`
+	AssignedAt time.Time `json:"assignedAt,omitzero"`
+	Findings   []string  `json:"findings"`
+}
+
 // Agent is an empty session registered as spare capacity.
 type Agent struct {
 	Party
@@ -369,11 +376,12 @@ type Agent struct {
 	Execution  *execution.Ref `json:"execution,omitempty"`
 	Registered time.Time      `json:"registered"`
 	// ActivityAt is the latest explicit roster activity (note, wake or resume).
-	ActivityAt time.Time `json:"activityAt,omitzero"`
-	Task       string    `json:"task,omitempty"`
-	AssignedAt time.Time `json:"assignedAt,omitzero"`
-	IdleSince  time.Time `json:"idleSince,omitzero"`
-	LastTask   string    `json:"lastTask,omitempty"`
+	ActivityAt       time.Time       `json:"activityAt,omitzero"`
+	Task             string          `json:"task,omitempty"`
+	AssignedAt       time.Time       `json:"assignedAt,omitzero"`
+	IdleSince        time.Time       `json:"idleSince,omitzero"`
+	LastTask         string          `json:"lastTask,omitempty"`
+	ReportedProblems *WorkerProblems `json:"reportedProblems,omitempty"`
 	// Keep marks an idle entry kept on purpose (agents keep): the doctor
 	// never removes it for staleness nor archives its desktop session.
 	Keep *Keep `json:"keep,omitempty"`
@@ -827,6 +835,13 @@ type ExecutionRecord struct {
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
 	Published *ExecutionPublication `json:"published,omitempty"`
+	// PendingPublication is the last publication request whose bundle
+	// reached the coordinator before publication failed. Cleared once
+	// published.
+	PendingPublication *ExecutionPendingPublication `json:"pendingPublication,omitempty"`
+	// RecoveredTransfer is the last publication bundle digest the
+	// coordinator attempted to recover automatically.
+	RecoveredTransfer string `json:"recoveredTransfer,omitempty"`
 	// StartUnsent says no start request of this reservation has left the
 	// coordinator yet, so the host holds no journal of it. A reservation
 	// recorded before this field existed reads false: maybe sent.
@@ -846,6 +861,17 @@ type ExecutionPublication struct {
 	Branch string    `json:"branch"`
 	Head   string    `json:"head"`
 	URL    string    `json:"url,omitempty"`
+}
+
+// ExecutionPendingPublication is an unpushed publication request whose
+// bundle transfer is stored on the coordinator.
+type ExecutionPendingPublication struct {
+	At           time.Time `json:"at"`
+	Head         string    `json:"head"`
+	BundleDigest string    `json:"bundleDigest"`
+	Title        string    `json:"title,omitempty"`
+	Body         string    `json:"body,omitempty"`
+	LastError    string    `json:"lastError,omitempty"`
 }
 
 type ExecutionMessage struct {
@@ -1019,6 +1045,8 @@ func (st *State) Knows(p Party) bool {
 
 // State is the whole document.
 type State struct {
+	// LabIdle records when a configured kind lab was first seen unleased.
+	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is
 	// the supervisor loop, which holds no role record.
 	Guide *Role `json:"guide,omitempty"`
@@ -1099,8 +1127,8 @@ type State struct {
 	ReportPause *ReportPause `json:"reportPause,omitempty"`
 	// Writer is the newest beekeeper that saved the state.
 	Writer *Writer `json:"writer,omitempty"`
-	// WorkerReports are the reports workers finished with (agents idle
-	// --done) that the supervisor's watch has not printed yet.
+	// WorkerReports are mid-task findings and idle reports that the
+	// supervisor's watch has not printed yet.
 	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
 	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
 	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`

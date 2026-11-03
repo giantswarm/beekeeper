@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"maps"
@@ -754,6 +755,103 @@ func TestAgyHooksPreservesOtherNamedHooks(t *testing.T) {
 	}
 	if exists(e.AgyHooks) {
 		t.Errorf("uninstall left hooks.json it created")
+	}
+}
+
+// rejectedAgyHook is the beekeeper entry earlier installs wrote: its
+// PreInvocation item is a matcher entry, so agy refuses the whole entry
+// ("command hook must specify 'command'") and neither hook runs.
+const rejectedAgyHook = `{
+  "beekeeper": {
+    "PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook preinvocation", "timeout": 30}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]
+  }
+}
+`
+
+// The entry install writes for agy lists the PreInvocation command itself,
+// as agy reads that event, and PreToolUse as a matcher with its command; the
+// doctor fails on the entry earlier installs wrote, which agy rejects, and
+// install replaces it.
+func TestAgyHookIsTheShapeAgyAccepts(t *testing.T) {
+	var events struct {
+		PreInvocation []map[string]any `json:"PreInvocation"`
+		PreToolUse    []struct {
+			Matcher string           `json:"matcher"`
+			Hooks   []map[string]any `json:"hooks"`
+		} `json:"PreToolUse"`
+	}
+	if err := json.Unmarshal(AgyHook("/opt/bin/beekeeper"), &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events.PreInvocation) != 1 || events.PreInvocation[0]["type"] != "command" ||
+		events.PreInvocation[0]["command"] != "/opt/bin/beekeeper hook preinvocation" ||
+		events.PreInvocation[0]["matcher"] != nil || events.PreInvocation[0]["hooks"] != nil {
+		t.Errorf("PreInvocation = %v, want the one command itself", events.PreInvocation)
+	}
+	if len(events.PreToolUse) != 1 || events.PreToolUse[0].Matcher != "*" || len(events.PreToolUse[0].Hooks) != 1 ||
+		events.PreToolUse[0].Hooks[0]["command"] != "/opt/bin/beekeeper hook pretooluse --format agy" {
+		t.Errorf("PreToolUse = %+v, want matcher * with the guard", events.PreToolUse)
+	}
+
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	write(t, e.AgyHooks, rejectedAgyHook)
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "agy rejects the beekeeper entry") ||
+		!strings.Contains(got, "PreInvocation: command hook must specify 'command'") {
+		t.Errorf("rejected entry: CheckAgyHooks = %q", got)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "update  ~/.gemini/config/hooks.json: beekeeper PreToolUse hook") {
+		t.Errorf("install output:\n%s", out)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); got != "" {
+		t.Errorf("after install: CheckAgyHooks = %q, want empty", got)
+	}
+	raw, err := os.ReadFile(e.AgyHooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &file); err != nil || !sameJSON(file["beekeeper"], AgyHook(e.Exe)) {
+		t.Errorf("hooks.json after install:\n%s", raw)
+	}
+}
+
+// Install never writes agy's hooks.json through a link, as it never writes
+// skills.json through one: it keeps the link and its target, and the doctor
+// names the target to edit.
+func TestAgyHooksNeverWritesThroughALink(t *testing.T) {
+	home := t.TempDir()
+	f := &fakeSetup{}
+	e, out := env(t, home, f, f.run)
+	target := filepath.Join(home, "dotfiles", "hooks.json")
+	write(t, target, priorAgyHooks)
+	e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(e.AgyHooks), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, e.AgyHooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Clean(target)); string(raw) != priorAgyHooks {
+		t.Errorf("install wrote through the link:\n%s", raw)
+	}
+	if !symlink(e.AgyHooks) {
+		t.Errorf("install replaced the link")
+	}
+	if !strings.Contains(out.String(), "keep    ~/.gemini/config/hooks.json") || !strings.Contains(out.String(), "install never writes through a link") {
+		t.Errorf("install output:\n%s", out)
+	}
+	if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); !strings.Contains(got, "lacks the beekeeper PreToolUse hook; edit ~/dotfiles/hooks.json") {
+		t.Errorf("linked file: CheckAgyHooks = %q", got)
 	}
 }
 

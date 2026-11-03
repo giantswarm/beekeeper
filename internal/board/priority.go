@@ -178,8 +178,8 @@ func (n rankedNode) onto(e *RankedEpic) {
 
 // priorityFilters are the board queries of the epics the priority list can
 // hold: open, of the epic kinds, the team's by its Team field and, apart,
-// by its label (TeamLabel), which a label sync that moves the Team leaves
-// on the epic. A board without board.team has one query of every Team.
+// by its label (TeamLabel) when its Team is unset. A stale label cannot
+// override an explicit Team. A board without board.team has one query of every Team.
 func (c *Client) priorityFilters(kinds []string) []string {
 	kind := ""
 	if len(kinds) > 0 {
@@ -213,7 +213,7 @@ func (c *Client) TeamLabel() string {
 }
 
 // Priorities reads the priority list: the open epics (the epic gate's
-// kinds) of board.team, by their Team field or their team label, whose
+// kinds) of board.team, by their Team field or their label with no Team, whose
 // Priority field holds a rank, by rank and, within
 // one, in the board's order. A board without a Priority field has an empty
 // list. It is the one read every consumer of the priorities calls (board
@@ -234,10 +234,14 @@ func (c *Client) priorities(ctx context.Context, m *meta) (Priorities, error) {
 	if err != nil {
 		return nil, err
 	}
+	team, err := c.team(m)
+	if err != nil {
+		return nil, err
+	}
 	var out Priorities
 	seen := map[string]bool{}
 	for _, q := range c.priorityFilters(gate.Kind) {
-		if err := c.rankedPages(ctx, q, seen, &out); err != nil {
+		if err := c.rankedPages(ctx, q, team, seen, &out); err != nil {
 			return nil, err
 		}
 	}
@@ -247,7 +251,7 @@ func (c *Client) priorities(ctx context.Context, m *meta) (Priorities, error) {
 
 // rankedPages appends the ranked open epics of the board query q to out,
 // each item once (seen by its id).
-func (c *Client) rankedPages(ctx context.Context, q string, seen map[string]bool, out *Priorities) error {
+func (c *Client) rankedPages(ctx context.Context, q string, team *option, seen map[string]bool, out *Priorities) error {
 	for cursor := ""; ; {
 		var r struct {
 			Owner struct {
@@ -278,6 +282,11 @@ content{...I}}}}}}}`+priorityIssueFields, vs)
 		items := r.Owner.Project.Items
 		for _, n := range items.Nodes {
 			if !n.Content.open() || n.Priority == nil || n.Priority.Number < 1 || seen[n.ID] {
+				continue
+			}
+			// Team is authoritative; a stale label cannot bring another
+			// team's epic into this desk's ranks or renumbering writes.
+			if team != nil && n.Team != nil && n.Team.Name != "" && n.Team.Name != team.name {
 				continue
 			}
 			seen[n.ID] = true
@@ -476,6 +485,9 @@ func (c *Client) epicItem(ctx context.Context, m *meta, gate Gate, p *Prioritize
 	team, err := c.team(m)
 	if err != nil {
 		return RankedEpic{}, &Refusal{err.Error()}
+	}
+	if team != nil && item.Team != nil && item.Team.Name != "" && item.Team.Name != team.name {
+		return RankedEpic{}, &Refusal{fmt.Sprintf("%s belongs to Team %s, not board.team %s: only this team's priorities may change", p.Ref, item.Team.Name, team.name)}
 	}
 	p.Added = mv.Added
 	if item.Team == nil && team != nil {
@@ -726,4 +738,45 @@ func (c *Client) RankAnchor(ctx context.Context, ref, from string) (string, erro
 		}
 	}
 	return "", nil
+}
+
+// RankOf returns the priority rank of ref on the board (1 the top, 0 when
+// unranked): its own rank, the rank of the first issue it closes when ref is a
+// pull request, or the rank inherited from its nearest ranked ancestor epic.
+func (c *Client) RankOf(ctx context.Context, ref string) (int, error) {
+	owner, repo, n, err := Ref(ref)
+	if err != nil {
+		return 0, err
+	}
+	normRef := fmt.Sprintf("%s/%s#%d", owner, repo, n)
+	m, err := c.meta(github.ActingOn(ctx, owner+"/"+repo))
+	if err != nil {
+		return 0, err
+	}
+	list, err := c.priorities(ctx, m)
+	if err != nil || len(list) == 0 {
+		return 0, err
+	}
+	ranks := list.Ranks()
+	cur := normRef
+	for depth := range maxDepth {
+		if cur == "" {
+			return 0, nil
+		}
+		if r := ranks[strings.ToLower(cur)]; r > 0 {
+			return r, nil
+		}
+		_, parent, _, _, err := c.lookupOrigin(ctx, m, cur, false)
+		if err != nil {
+			if depth == 0 {
+				if closes, cerr := c.Closes(ctx, []string{cur}); cerr == nil && len(closes[strings.ToLower(cur)]) > 0 {
+					cur = closes[strings.ToLower(cur)][0]
+					continue
+				}
+			}
+			return 0, nil
+		}
+		cur = parent
+	}
+	return 0, nil
 }
