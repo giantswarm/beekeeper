@@ -475,7 +475,7 @@ func TestLoopParallelMergeDoesNotBlockReviewOrWorkerStart(t *testing.T) {
 
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{
-			Party: state.Party{Name: "worker two", Session: "s-two"},
+			Party: state.Party{Name: loopSecondWorker, Session: "s-two"},
 			Task:  "work " + reviewURL,
 			Park:  &state.Park{On: reviewPR, At: now.Add(time.Second), Waits: deskReviewWait, ReviewHead: loopHead},
 		})

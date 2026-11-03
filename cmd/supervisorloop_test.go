@@ -29,12 +29,13 @@ import (
 )
 
 const (
-	loopPR     = "o/r#7"
-	loopURL    = "https://github.com/o/r/pull/7"
-	loopHead   = "1111111111111111111111111111111111111111"
-	loopFixed  = "2222222222222222222222222222222222222222"
-	loopWorker = "worker one"
-	loopPerson = "pat"
+	loopPR           = "o/r#7"
+	loopURL          = "https://github.com/o/r/pull/7"
+	loopHead         = "1111111111111111111111111111111111111111"
+	loopFixed        = "2222222222222222222222222222222222222222"
+	loopWorker       = "worker one"
+	loopSecondWorker = "worker two"
+	loopPerson       = "pat"
 	// loopLocal is a self-hosted provider.
 	loopLocal = "local"
 	// loopQwen is a self-hosted model, loopPostInstall a post-install
@@ -2147,7 +2148,7 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	r.ownedBy("team-a")
 	r.park(t, loopPR, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopSecondWorker}, Task: "upstream",
 			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge", ReviewHead: loopHead}})
 		return nil, nil
 	}); err != nil {

@@ -201,7 +201,7 @@ func TestHeldLoopWithHealthyBudgetResumesReviewsAndMergeGosNextRound(t *testing.
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{
-			Party: state.Party{Name: "worker two"},
+			Party: state.Party{Name: loopSecondWorker},
 			Task:  "fix " + reviewURL,
 			Park:  &state.Park{On: reviewPR, At: r.a.now, Waits: deskReviewWait, ReviewHead: loopHead},
 		})
