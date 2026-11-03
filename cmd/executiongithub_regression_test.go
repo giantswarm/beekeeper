@@ -18,7 +18,7 @@ const workerProofTokenField = "token"
 func TestExecutionGitHubWorkerReadsWithScopedCredential(t *testing.T) {
 	a, r := executionTestApp(t)
 	a.cfg.Identity.Host = r.Coordinator
-	if err := yaml.Unmarshal([]byte("allowedOrgs: [giantswarm]\nworkerApp:\n  appID: 42\n  privateKey: op://Shared/worker-app/private-key\n  installations: {giantswarm: 42}\n"), &a.cfg.GitHub); err != nil {
+	if err := yaml.Unmarshal([]byte("allowedOrgs: [giantswarm]\nworkerApp:\n  clientID: Iv23liFixtureClientID\n  refreshToken: op://Shared/worker-app/refresh-token\n"), &a.cfg.GitHub); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal([]byte(`{"github":true}`), &r); err != nil {

@@ -216,6 +216,51 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal("real pushes did not request their scoped credentials")
 	}
 
+	// Secondary repository inside the owned workspace can push to its own
+	// execution branch and park on its PR for review.
+	secondRepo := "example/second"
+	secondDest := filepath.Join(root, "second-destination.git")
+	runGit(root, "init", "--bare", secondDest)
+	secondCheckout := filepath.Join(workspace, ".beekeeper-scratch", "second")
+	if err := os.MkdirAll(secondCheckout, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(secondCheckout, "init")
+	runGit(secondCheckout, "remote", "add", "origin", "https://github.com/"+secondRepo+".git")
+	runGit(secondCheckout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "second fixture")
+	secondHead := runGit(secondCheckout, "rev-parse", "HEAD")
+	shimSecond := "#!/bin/sh\nexec '" + realGit + "' -c 'protocol.file.allow=always' -c 'url.file://" + secondDest + ".insteadOf=https://github.com/" + secondRepo + ".git' \"$@\"\n"
+	if err := os.WriteFile(git, []byte(shimSecond), 0o700); err != nil { //nolint:gosec // executable local-only Git transport fixture
+		t.Fatal(err)
+	}
+	t.Chdir(secondCheckout)
+	wantRepo, wantWrite = secondRepo, true
+	pushSecond := a.executionGitHubCommands()[1]
+	pushSecond.SetArgs([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + execution.GitHubBranch(r.Ref)})
+	pushSecond.SetOut(&output)
+	pushSecond.SetErr(&output)
+	if err := pushSecond.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("secondary repo push: %v: %s", err, output.String())
+	}
+	if got := runGit(root, "--git-dir="+secondDest, "rev-parse", "refs/heads/"+execution.GitHubBranch(r.Ref)); got != secondHead {
+		t.Fatalf("secondary repo push head = %q, want %q", got, secondHead)
+	}
+	prevReviewGH := executionReviewGH
+	executionReviewGH = func(_ context.Context, _ ...string) ([]byte, error) {
+		return json.Marshal(map[string]any{"head": map[string]any{"ref": execution.GitHubBranch(r.Ref), "sha": secondHead, "repo": map[string]any{"full_name": secondRepo}}})
+	}
+	t.Cleanup(func() { executionReviewGH = prevReviewGH })
+	wsHead := a.executionWorkspaceHead(context.Background(), secondRepo+"#12")
+	if wsHead != secondHead {
+		t.Fatalf("executionWorkspaceHead = %q, want %q", wsHead, secondHead)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := executionReviewHead(context.Background(), st.Starts[0].Execution, secondRepo+"#12", wsHead); got != secondHead {
+		t.Fatalf("executionReviewHead = %q, want %q", got, secondHead)
+	}
 }
 
 func TestWorkerGitHubGitCredentialHelperDoesNotEvaluateToken(t *testing.T) {

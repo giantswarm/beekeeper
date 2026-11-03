@@ -56,8 +56,8 @@ func TestWorkerGitHubEnvironmentContainsDispatchOnly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(b), "agents github-") || strings.Contains(string(b), "GH_TOKEN=") {
-			t.Fatal("dispatch script embeds authentication")
+		if !strings.Contains(string(b), "BEEKEEPER_CONFIG=") || !strings.Contains(string(b), "agents github-") || strings.Contains(string(b), " --config ") || strings.Contains(string(b), "GH_TOKEN=") {
+			t.Fatal("dispatch script embeds authentication or leaks root flags into DisableFlagParsing commands")
 		}
 		info, _ := os.Stat(p)
 		if info.Mode().Perm() != 0o700 {

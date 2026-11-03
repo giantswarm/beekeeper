@@ -44,7 +44,7 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 		if name == GitHubGitTool {
 			verb = "github-git"
 		}
-		body := []byte("#!/bin/sh\nexec " + quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents " + verb + " -- \"$@\"\n")
+		body := []byte("#!/bin/sh\nBEEKEEPER_CONFIG=" + quote(s.ConfigPath) + " exec " + quote(s.Executable) + " agents " + verb + " -- \"$@\"\n")
 		path := filepath.Join(dir, name)
 		if err := atomicFile(path, body); err != nil {
 			return nil, err
