@@ -11,6 +11,13 @@ import (
 )
 
 const (
+	workerGitHubPush        = "push"
+	workerGitHubHeadPrefix  = "HEAD:refs/heads/"
+	workerGitHubRepoFlag    = "--repo"
+	workerGitHubBinDir      = "github-bin"
+	workerGitHubClone       = "clone"
+	workerGitHubHTTPSPrefix = "https://github.com/"
+
 	GitHubOrigin      = "origin"
 	GitHubGitTool     = "git"
 	workerGitHubFetch = "fetch"
@@ -27,7 +34,7 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 	if !j.Request.GitHub {
 		return env, nil
 	}
-	dir := filepath.Join(s.Root, "github-bin", string(j.Handle.Ref.Execution))
+	dir := filepath.Join(s.Root, workerGitHubBinDir, string(j.Handle.Ref.Execution))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -76,15 +83,15 @@ func GitHubRepository(args []string, fallback string) (string, error) {
 	repo := fallback
 	for i, arg := range args {
 		switch {
-		case arg == "--repo" || arg == "-R":
+		case arg == workerGitHubRepoFlag || arg == "-R":
 			if i+1 >= len(args) {
 				return "", errors.New("missing GitHub repository")
 			}
 			repo = args[i+1]
 		case strings.HasPrefix(arg, "--repo="):
 			repo = strings.TrimPrefix(arg, "--repo=")
-		case strings.HasPrefix(arg, "https://github.com/"):
-			parts := strings.Split(strings.TrimPrefix(arg, "https://github.com/"), "/")
+		case strings.HasPrefix(arg, workerGitHubHTTPSPrefix):
+			parts := strings.Split(strings.TrimPrefix(arg, workerGitHubHTTPSPrefix), "/")
 			if len(parts) >= 2 {
 				repo = strings.Join(parts[:2], "/")
 			}
@@ -96,7 +103,7 @@ func GitHubRepository(args []string, fallback string) (string, error) {
 		}
 	}
 	repo = strings.ToLower(repo)
-	if RepositoryIdentity("https://github.com/"+repo) != repo {
+	if RepositoryIdentity(workerGitHubHTTPSPrefix+repo) != repo {
 		return "", errors.New("invalid worker GitHub repository")
 	}
 	return repo, nil
@@ -105,14 +112,14 @@ func GitHubRepository(args []string, fallback string) (string, error) {
 func ValidateWorkerPush(args []string, branch string) error {
 	// No implicit refspec, tags, deletion, alternate remote, force or options
 	// that can widen the write. Ordinary fetch/status/commit remain regular git.
-	if len(args) == 0 || args[0] != "push" {
+	if len(args) == 0 || args[0] != workerGitHubPush {
 		return nil
 	}
 	rest := args[1:]
 	if len(rest) > 0 && (rest[0] == "-u" || rest[0] == "--set-upstream") {
 		rest = rest[1:]
 	}
-	if len(rest) != 2 || rest[0] != GitHubOrigin || rest[1] != "HEAD:refs/heads/"+branch {
+	if len(rest) != 2 || rest[0] != GitHubOrigin || rest[1] != workerGitHubHeadPrefix+branch {
 		return errors.New("worker push requires origin HEAD:refs/heads/" + branch)
 	}
 	return nil
@@ -138,13 +145,13 @@ func GitHubGitVerb(args []string) string {
 // GitHubReadRepository scopes explicit read transports to their named repository.
 // Clone destinations and fetch refspecs stay client arguments, never authority.
 func GitHubReadRepository(args []string) (string, []string, bool) {
-	if len(args) == 0 || (args[0] != "clone" && args[0] != workerGitHubFetch && args[0] != "ls-remote" && args[0] != "pull") {
+	if len(args) == 0 || (args[0] != workerGitHubClone && args[0] != workerGitHubFetch && args[0] != "ls-remote" && args[0] != "pull") {
 		return "", args, false
 	}
 	for i, arg := range args[1:] {
 		if repo := RepositoryIdentity(arg); repo != "" {
 			normalized := append([]string{}, args...)
-			normalized[i+1] = "https://github.com/" + repo + ".git"
+			normalized[i+1] = workerGitHubHTTPSPrefix + repo + ".git"
 			return repo, normalized, true
 		}
 	}

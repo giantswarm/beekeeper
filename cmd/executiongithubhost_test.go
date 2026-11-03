@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
+const workerGitHubTokenVerb = "token"
+
 func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
 	root, rootErr := filepath.EvalSymlinks(t.TempDir())
@@ -65,7 +67,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	t.Setenv(execution.EnvID, string(r.Ref.Execution))
 	t.Setenv("GH_TOKEN", "unrelated-ambient-fixture")
 	var output bytes.Buffer
-	for _, args := range [][]string{{"issue", "view", "1", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "view", "2", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "checks", "2", loopRepoFlag, workerGitHubPrivateRepo}} {
+	for _, args := range [][]string{{workerGitHubIssueGroup, "view", "1", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "view", "2", loopRepoFlag, workerGitHubPrivateRepo}, {"pr", "checks", "2", loopRepoFlag, workerGitHubPrivateRepo}} {
 		c := a.executionGitHubCommands()[0]
 		c.SetOut(&output)
 		c.SetErr(&output)
@@ -84,10 +86,20 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	if c.ExecuteContext(context.Background()) == nil || calls != 3 {
 		t.Fatal("merge reached token issuer")
 	}
+	for _, args := range [][]string{{loopRepoFlag, workerGitHubPrivateRepo, "auth", workerGitHubTokenVerb}, {"unknown-alias"}} {
+		denied := a.executionGitHubCommands()[0]
+		denied.SetArgs(args)
+		denied.SilenceErrors, denied.SilenceUsage = true, true
+		if denied.ExecuteContext(context.Background()) == nil || calls != 3 {
+			t.Fatal("alternate auth or alias path reached token issuer")
+		}
+	}
+
 	// The same dispatch path invokes git on the host, with the owned branch
 	// and token in its environment, while local commands never ask for one.
 	git := filepath.Join(root, "git")
-	gitScript := "#!/bin/sh\nif [ \"$1\" = status ]; then [ -z \"$GH_TOKEN\" ] || exit 9; printf 'local git proof\\n'; exit 0; fi\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\nprintf 'host push proof\\n'\n"
+	gitScript := "#!/bin/sh\nif [ \"$1\" = rev-parse ]; then exit 42; fi\nif [ \"$1\" = status ]; then [ -z \"$GH_TOKEN\" ] || exit 9; printf 'local git proof\\n'; exit 0; fi\n[ \"$GH_TOKEN\" = '" + workerTokenFixture + "' ] || exit 7\n" +
+		"if [ \"$GH_REPO\" = 'example/private' ]; then matched=0; for arg in \"$@\"; do [ \"$arg\" = 'remote.origin.url=https://github.com/example/private.git' ] && matched=1; done; [ \"$matched\" = 1 ] || exit 10; printf 'host read proof\\n'; else printf 'host push proof\\n'; fi\n"
 	if err := os.WriteFile(git, []byte(gitScript), 0o700); err != nil { //nolint:gosec // executable fixture in this test's temporary directory
 		t.Fatal(err)
 	}
@@ -118,8 +130,22 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	if err := gitCommand.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 4 || !strings.Contains(output.String(), "host push proof") || !strings.Contains(output.String(), "local git proof") {
-		t.Fatal("git did not separate local and credentialed commands")
+	wantRepo, wantWrite = workerGitHubPrivateRepo, false
+	gitCommand = a.executionGitHubCommands()[1]
+	gitCommand.SetArgs([]string{workerGitHubClone, "https://github.com/example/private.git", "copy"})
+	gitCommand.SetOut(&output)
+	gitCommand.SetErr(&output)
+	if err := gitCommand.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand = a.executionGitHubCommands()[1]
+	gitCommand.SetArgs([]string{"rev-parse", "--verify", "missing"})
+	gitCommand.SilenceErrors, gitCommand.SilenceUsage = true, true
+	if err := gitCommand.ExecuteContext(context.Background()); err == nil || Code(err) != 42 {
+		t.Fatal("client exit status was not preserved")
+	}
+	if calls != 5 || !strings.Contains(output.String(), "host push proof") || !strings.Contains(output.String(), "local git proof") || !strings.Contains(output.String(), "host read proof") {
+		t.Fatal("git did not separate local and scoped read/write commands")
 	}
 
 }

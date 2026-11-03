@@ -35,7 +35,7 @@ func TestExecutionGitHubWorkerReadsWithScopedCredential(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ledger := map[string]any{r.Repository + "/read": map[string]any{workerProofTokenField: "fixture-scoped-worker-credential", "expires_at": time.Now().Add(time.Hour)}}
+	ledger := map[string]any{r.Repository + "/read": map[string]any{workerProofTokenField: "fixture-scoped-worker-credential", "expires_at": time.Now().Add(time.Hour)}} //nolint:gosec // fake callback credential in a local test fixture, never a GitHub token
 	b, _ := json.Marshal(ledger)
 	if err := os.WriteFile(filepath.Join(dir, string(r.Ref.Host)+"-"+string(r.Ref.Execution)+"-1.json"), b, 0o600); err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +36,6 @@ type workerGitHubRequest struct {
 
 const (
 	workerGitHubConfigOption = "--config"
-	workerGitHubSearch       = "search"
 	workerGitHubRead         = "read"
 	workerGitHubWrite        = "write"
 	workerGitHubCreate       = "create"
@@ -45,6 +45,18 @@ const (
 
 const workerGitHubRevokePath = "/installation/token"
 const workerGitHubReadSuffix = "/read"
+
+const (
+	workerGitHubIssueGroup    = "issue"
+	workerGitHubAPIGroup      = "api"
+	workerGitHubRepoGroup     = "repo"
+	workerGitHubRunGroup      = "run"
+	workerGitHubWorkflowGroup = "workflow"
+	workerGitHubReleaseGroup  = "release"
+)
+
+const workerGitHubClone = "clone"
+const workerGitHubWindowsOS = "windows"
 
 const workerGitHubIssue = "github-token"
 const workerGitHubRevoke = "github-revoke"
@@ -193,7 +205,7 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 
 func readWorkerGitHub(path string) (map[string]workerGitHubToken, error) {
 	tokens := map[string]workerGitHubToken{}
-	b, err := os.ReadFile(filepath.Clean(path))
+	b, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // coordinator state path derived only from the authenticated, validated execution ref
 	if errors.Is(err, os.ErrNotExist) {
 		return tokens, nil
 	}
@@ -215,7 +227,7 @@ func writeWorkerGitHub(path string, tokens map[string]workerGitHubToken) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = os.Remove(f.Name()) }() //nolint:gosec // name returned by CreateTemp in the private coordinator ledger directory
 	if err = f.Chmod(0o600); err == nil {
 		_, err = f.Write(b)
 	}
@@ -229,12 +241,28 @@ func writeWorkerGitHub(path string, tokens map[string]workerGitHubToken) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), path)
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	} //nolint:gosec // temp and destination share the private coordinator directory, keyed by validated execution identity
+	// Persist the rename before a token is released to its worker. Windows
+	// cannot sync directory handles; execution hosts themselves require Linux.
+	if runtime.GOOS == workerGitHubWindowsOS {
+		return nil
+	}
+	dir, err := os.Open(filepath.Dir(path)) //nolint:gosec // same operator-owned ledger directory, never a worker-selected path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
+	if err := ref.Validate(); err != nil {
+		return errors.New("invalid worker GitHub credential identity")
+	}
 	path := a.workerGitHubPath(ref)
-	if _, err := os.Stat(filepath.Dir(path)); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Dir(path)); errors.Is(err, os.ErrNotExist) { //nolint:gosec // operator-owned coordinator state directory, not a worker-selected path
 		return nil
 	}
 	lock := flock.New(path + ".lock")

@@ -46,8 +46,13 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			var binary string
 			needsToken := true
 			if name == "github-cli" {
-				if len(args) == 0 || args[0] == "auth" || args[0] == "alias" || args[0] == "extension" || args[0] == workerGitHubSearch {
+				if len(args) == 0 {
 					return refused("worker gh requires a repository command")
+				}
+				switch args[0] {
+				case workerGitHubIssueGroup, "pr", workerGitHubAPIGroup, workerGitHubRepoGroup, workerGitHubRunGroup, workerGitHubWorkflowGroup, workerGitHubReleaseGroup:
+				default:
+					return refused("worker gh requires an explicit repository command; auth, aliases and global command overrides are unavailable")
 				}
 				request.Repository, err = execution.GitHubRepository(args, request.Repository)
 				if err != nil {
@@ -58,7 +63,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if len(args) > 1 && args[0] == "pr" && args[1] == gitMerge {
 					return refused("merges stay on the coordinator")
 				}
-				if args[0] == "api" {
+				if args[0] == workerGitHubAPIGroup {
 					for _, arg := range args[1:] {
 						lower := strings.ToLower(arg)
 						if strings.Contains(lower, "mutation") || strings.Contains(lower, "/merge") || lower == "post" || lower == "put" || lower == "patch" || lower == "delete" || lower == "--input" {
@@ -122,7 +127,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if needsToken {
 					// Remote URL is pinned for every network operation, not taken from a
 					// worker-editable .git/config. No helper or token is persisted there.
-					args = append([]string{"-c", "remote.origin.url=https://github.com/" + j.Request.Repository + ".git", "-c", "remote.origin.pushurl=https://github.com/" + j.Request.Repository + ".git", "-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
+					args = append([]string{"-c", "remote.origin.url=https://github.com/" + request.Repository + ".git", "-c", "remote.origin.pushurl=https://github.com/" + request.Repository + ".git", "-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
 				}
 
 			}
@@ -142,7 +147,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 					}
 				}
 				local.Dir, local.Env, local.Stdin, local.Stdout, local.Stderr = cwd, localEnv, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
-				return local.Run()
+				return workerGitHubCommandError(local.Run())
 			}
 			var token workerGitHubToken
 			if needsToken {
@@ -166,11 +171,25 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			}
 			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
 			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = j.Handle.Workspace, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
-			if err := child.Run(); err != nil {
-				return fmt.Errorf("worker GitHub command failed: %w", err)
-			}
-			return nil
+			return workerGitHubCommandError(child.Run())
 		}})
 	}
 	return commands
+}
+
+// Preserve client exit codes (for example git's 128 or gh's pending-check 8)
+// rather than collapsing every unsuccessful client command to exit 1.
+func workerGitHubCommandError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var status *exec.ExitError
+	if errors.As(err, &status) {
+		code := status.ExitCode()
+		if code < 1 {
+			code = ExitError
+		}
+		return &exitError{code: code, msg: err.Error()}
+	}
+	return fmt.Errorf("worker GitHub command failed: %w", err)
 }
