@@ -79,6 +79,72 @@ func TestWorkspaceStartsAtCoordinatorHeadWithStaleHost(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUnshallowsHostCheckoutWhenPinnedSourceIsComplete(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := filepath.Join(root, "upstream")
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := hostCommand(ctx, dir, os.Environ(), "git", args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "clone", f.source, upstream)
+	git(upstream, "config", "user.name", "Fixture")
+	git(upstream, "config", "user.email", "fixture@example.invalid")
+	for _, name := range []string{"second.txt", "third.txt"} {
+		if err := os.WriteFile(filepath.Join(upstream, name), []byte(name+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		git(upstream, "add", name)
+		git(upstream, "commit", "-m", "add "+name)
+	}
+	// Replace the host's mapped checkout with a shallow clone of an older commit.
+	shallowSource := filepath.Join(root, "shallow-source")
+	git("", "clone", "--depth", "1", "file://"+f.source, shallowSource)
+	git(shallowSource, "remote", "set-url", "origin", "https://github.com/"+f.r.Repository+".git")
+	f.s.Config.Repositories[f.r.Repository] = shallowSource
+	digest, err := f.s.Prepare(f.s.Policy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.r.PolicyDigest = digest
+
+	head := git(upstream, "rev-parse", "HEAD")
+	git(upstream, "update-ref", "refs/heads/execution-source", head)
+	bundle := filepath.Join(root, "source.bundle")
+	git(upstream, "bundle", "create", bundle, "refs/heads/execution-source")
+	data, err := readRegular(bundle, MaxSourceBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := f.s.sourcePath(f.r.Ref)
+	if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicFile(source, data); err != nil {
+		t.Fatal(err)
+	}
+	f.r.GitRef, f.r.SourceDigest = head, Digest(data)
+
+	handle, err := f.s.Start(ctx, f.r)
+	if err != nil {
+		t.Fatalf("prepare workspace from shallow host checkout: %v", err)
+	}
+	if got := git(handle.Workspace, "rev-parse", "--is-shallow-repository"); got != "false" {
+		t.Fatalf("provisioned workspace remained shallow: %s", got)
+	}
+	if got := git(handle.Workspace, "rev-list", "--count", "HEAD"); got != "3" {
+		t.Fatalf("provisioned workspace history count = %s, want 3", got)
+	}
+}
+
 func TestSourceChunksRejectConflictsAndPreserveRetries(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()

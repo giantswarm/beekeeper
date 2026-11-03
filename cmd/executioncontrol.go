@@ -176,11 +176,15 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			defer cancel()
 			result, publishErr := a.publishExecution(publishCtx, st, req.Ref, publication)
 			if publishErr != nil {
+				if !publication.SyncBase && publicationCommit(publication.Head) && publication.BundleDigest != "" && len(publication.Title) <= 256 && len(publication.Body) <= 64<<10 {
+					r.PendingPublication = &state.ExecutionPendingPublication{Head: publication.Head, BundleDigest: publication.BundleDigest, Title: publication.Title, Body: publication.Body}
+				}
 				reply.Error = publishErr.Error()
 				events = append(events, event(st.Starts[i].Party, "execution.publish-denied", "%s: %s", publication.Head, publishErr))
 			} else {
 				if !publication.SyncBase {
 					r.Published = &state.ExecutionPublication{At: a.now.UTC(), Branch: result.Branch, Head: result.Head, URL: result.URL}
+					r.PendingPublication = nil
 				}
 				events = append(events, event(st.Starts[i].Party, "execution.published", "%s at %s", result.URL, result.Head))
 			}

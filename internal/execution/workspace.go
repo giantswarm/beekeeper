@@ -47,7 +47,37 @@ func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, e
 	// checkout hooks must not execute before registration or inherit the
 	// operator's unrelated Git settings.
 	args = append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}, args...)
-	return s.command(ctx, dir, append(cleanEnvironment("", ""), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+	return s.command(ctx, dir, append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+}
+
+func (s *Server) unshallowWorkspaceRepository(ctx context.Context, repository, commit string) {
+	shallow := filepath.Join(repository, "shallow")
+	raw, err := os.ReadFile(filepath.Clean(shallow))
+	if err != nil {
+		return
+	}
+	if err := os.Remove(shallow); err != nil {
+		return
+	}
+	if _, err := s.git(ctx, repository, "rev-list", "--objects", commit); err != nil {
+		_ = atomicFile(shallow, raw)
+		return
+	}
+	refs, err := s.git(ctx, repository, "for-each-ref", "--format=%(refname)", "refs/heads")
+	if err != nil {
+		return
+	}
+	for ref := range strings.SplitSeq(strings.TrimSpace(string(refs)), "\n") {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || strings.HasPrefix(ref, "refs/heads/beekeeper-worker/") {
+			continue
+		}
+		if _, err := s.git(ctx, repository, "rev-list", "--objects", ref); err != nil {
+			_, _ = s.git(ctx, repository, "update-ref", ref, commit)
+		} else if _, err := s.git(ctx, repository, "merge-base", "--is-ancestor", ref, commit); err == nil {
+			_, _ = s.git(ctx, repository, "update-ref", ref, commit)
+		}
+	}
 }
 
 func (s *Server) workspace(ctx context.Context, j *Journal) error {
@@ -128,6 +158,7 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if j.Request.SourceDigest != "" && j.Handle.Commit != j.Request.GitRef {
 			return errors.New("source bundle does not match pinned commit")
 		}
+		s.unshallowWorkspaceRepository(ctx, repository, j.Handle.Commit)
 		// Keep writable Git metadata execution-owned, while giving the worker
 		// a real linked worktree and an execution-specific branch.
 		if _, err := s.git(ctx, repository, "worktree", "add", "-b", branch, "--", workspace, j.Handle.Commit); err != nil {
