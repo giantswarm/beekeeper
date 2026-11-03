@@ -75,6 +75,8 @@ func (d noteDraft) unrenderable(forWho string) []string {
 	return out
 }
 
+const recommendedSuffix = " (Recommended)"
+
 // answerText is an answer word for word: the chosen option's label, the
 // person's own words, or both.
 func answerText(n *state.Note, choice int, text string) (string, error) {
@@ -83,16 +85,91 @@ func answerText(n *state.Note, choice int, text string) (string, error) {
 		if text == "" {
 			return "", usageErr("an answer is an option (--choice), the person's own words, or both")
 		}
-		return text, nil
+		return normalizeOptionAnswer(n, text), nil
 	}
 	label, _, ok := n.Option(choice)
 	if !ok {
 		return "", usageErr("note #%d has no option %d (it has %d)", n.ID, choice, len(n.Options))
 	}
+	text = trimOptionPrefix(label, text, n.Options[choice-1])
 	if text == "" {
 		return label, nil
 	}
 	return label + " — " + text, nil
+}
+
+// trimOptionPrefix removes a leading option label (with or without
+// "(Recommended)" or its description) when text repeats the chosen option on
+// its own or before " — ".
+func trimOptionPrefix(label, text string, extraPrefixes ...string) string {
+	text = strings.TrimSpace(text)
+	base := strings.TrimSuffix(strings.TrimSpace(label), recommendedSuffix)
+	prefixes := append([]string{label, base + recommendedSuffix, base}, extraPrefixes...)
+	for _, p := range prefixes {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if text == p {
+			return ""
+		}
+		if rest, ok := strings.CutPrefix(text, p+" — "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return text
+}
+
+// normalizeOptionAnswer normalizes "<label> (Recommended)" or
+// "<label> (Recommended) — <notes>" (or the full "<label>: <desc> — <notes>")
+// to use n's option label when n's label carries no "(Recommended)".
+func normalizeOptionAnswer(n *state.Note, text string) string {
+	text = strings.TrimSpace(text)
+	if n == nil {
+		return text
+	}
+	for i, full := range n.Options {
+		label, _, _ := n.Option(i + 1)
+		base := strings.TrimSuffix(label, recommendedSuffix)
+		full = strings.TrimSpace(full)
+		for _, p := range []string{base + recommendedSuffix, full} {
+			if p == "" {
+				continue
+			}
+			if text == base+recommendedSuffix {
+				return label
+			}
+			if rest, ok := strings.CutPrefix(text, p+" — "); ok && strings.TrimSpace(rest) != "" {
+				return label + " — " + strings.TrimSpace(rest)
+			}
+		}
+	}
+	return text
+}
+
+// noteOptionLabel reports whether choice and words record only an option
+// label of n, without additional words from the person.
+func noteOptionLabel(n *state.Note, choice int, words string) (string, bool) {
+	if n == nil || len(n.Options) == 0 {
+		return "", false
+	}
+	w := strings.TrimSpace(words)
+	if choice > 0 {
+		label, _, ok := n.Option(choice)
+		if !ok || trimOptionPrefix(label, w, n.Options[choice-1]) != "" {
+			return "", false
+		}
+		return cmp.Or(w, label), true
+	}
+	for i, full := range n.Options {
+		label, _, _ := n.Option(i + 1)
+		base := strings.TrimSuffix(label, recommendedSuffix)
+		full = strings.TrimSpace(full)
+		if w == label || w == base || w == base+recommendedSuffix || w == full {
+			return w, true
+		}
+	}
+	return "", false
 }
 
 // defaultedEvent is the note.defaulted event of n closed at its due time.
