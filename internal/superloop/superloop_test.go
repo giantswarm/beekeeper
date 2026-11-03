@@ -182,12 +182,22 @@ func TestABaseMergeAfterAnApprovalGetsTheGo(t *testing.T) {
 		t.Errorf("a second pass took %+v", got)
 	}
 	// A base merge needs no park since the round: the merge's own update of
-	// a behind branch, or the worker's, carries no change of the worker's.
+	// a behind branch, or the worker's, carries no change of the worker's,
+	// even when the worker was woken to resolve a conflict and has not
+	// parked again.
 	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
 	if a := only(t, Plan(in), KindGo); a.Head != head2 {
 		t.Errorf("go on a base merge after an earlier park = %+v", a)
 	}
+	in = Input{Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(true)}
+	if a := only(t, Plan(in), KindGo); a.Head != head2 || a.Agent != worker {
+		t.Errorf("go on a base merge without a parked worker = %+v", a)
+	}
 	in.BaseMerged = baseMerged(false)
+	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
+		t.Errorf("a new head without a parked worker got %+v", got)
+	}
+	in = Input{Workers: parked(t0.Add(-time.Hour)), Pulls: pull(head2, true, approved), Rounds: 1, Taken: tk, BaseMerged: baseMerged(false)}
 	if got := Plan(in); slices.ContainsFunc(got, func(a Action) bool { return a.Kind == KindGo || a.Kind == KindReview }) {
 		t.Errorf("a new head with an earlier park got %+v", got)
 	}
@@ -495,8 +505,23 @@ func TestForwardedFindingsGetTheGoOnTheFixedHead(t *testing.T) {
 		t.Errorf("a fixed head with red checks got %+v", got)
 	}
 	in.Pulls = pull(head2, true, changes)
-	if g := only(t, Plan(in), KindGo); g.Head != head2 {
+	g := only(t, Plan(in), KindGo)
+	if g.Head != head2 {
 		t.Errorf("go = %+v", g)
+	}
+	// If the fixed head later conflicts with main and the worker rebases or
+	// merges main into it, the new head gets its go once green, without a
+	// new review or a new park.
+	in.Taken = append(in.Taken, taken(t, t0.Add(3*time.Hour), g)...)
+	in.Workers = nil
+	in.BaseMerged = func(p Pull, from string) bool { return from == head2 && p.Head == head3 }
+	in.Pulls = pull(head3, false, changes)
+	if got := Plan(in); len(got) != 0 {
+		t.Errorf("a rebased fixed head with pending checks got %+v", got)
+	}
+	in.Pulls = pull(head3, true, changes)
+	if g2 := only(t, Plan(in), KindGo); g2.Head != head3 || g2.Agent != worker {
+		t.Errorf("go on rebased fixed head = %+v", g2)
 	}
 }
 
