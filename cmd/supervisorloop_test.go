@@ -1450,6 +1450,133 @@ func TestLoopBacksOffIdenticalFailuresAcrossRestarts(t *testing.T) {
 	}
 }
 
+// A step failing the same way for half an hour reaches the guide once, as
+// GUIDE PROBLEM naming the step, the item and the error, across restarts.
+func TestLoopFilesAStepStuckOnOneItemOnce(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.answer = func(args []string) (string, int) {
+		if args[0] == agentsName && args[1] == agentStartName {
+			return "invalid authorization identity", ExitUsage
+		}
+		return "", 0
+	}
+	r.pass(t)
+	r.pass(t)
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("filed before the failure lasted: %+v", evs)
+	}
+	// Backdate the episode and the retry, as half an hour of backoffs would.
+	failures := r.logged(t, loopFailureVerb)
+	key, detail, _ := keyed(failures[len(failures)-1].Detail)
+	var f loopFailure
+	if err := json.Unmarshal([]byte(detail), &f); err != nil {
+		t.Fatal(err)
+	}
+	f.Since = time.Now().Add(-loopStuckAfter - time.Minute)
+	f.RetryAt = time.Now().Add(-time.Second)
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.store.Record(event(loopParty, loopFailureVerb, "[%s] %s", key, b)); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.pass(t)
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 {
+		t.Fatalf("filed %d times: %+v", len(evs), evs)
+	}
+	lines, _ := guideProblemLines(&state.State{}, evs)
+	if len(lines) != 1 || !strings.Contains(lines[0], "review step") || !strings.Contains(lines[0], loopPR) ||
+		!strings.Contains(lines[0], "invalid authorization identity") {
+		t.Fatalf("guide problem: %q", lines)
+	}
+}
+
+// The same failure of a step on a second item is stuck at once, and stays
+// one episode: filed once, again only after it ended and came back.
+func TestLoopFilesAStepFailingOnTwoItemsOncePerEpisode(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now()
+	r.a.now = t0
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	cause := errors.New("invalid merge authorization identity")
+	a := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#1 aaa", Ref: refOne}
+	b := superloop.Action{Kind: superloop.KindGo, Key: "go o/r#2 bbb", Ref: idleRef}
+	other := superloop.Action{Kind: superloop.KindReview, Key: "review " + loopPR, Ref: loopPR}
+	for _, act := range []superloop.Action{a, other} {
+		if err := l.failed(act, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 0 {
+		t.Fatalf("one item per step filed at once: %+v", evs)
+	}
+	r.a.now = t0.Add(time.Minute)
+	if err := l.failed(b, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if !failures[b.Key].Since.Equal(t0) {
+		t.Fatalf("the second item started its own episode: %v", failures[b.Key].Since)
+	}
+	for range 2 {
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evs := r.logged(t, loopFileVerb)
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "o/r#1, o/r#2") || strings.Contains(evs[0].Detail, loopPR) {
+		t.Fatalf("filed: %+v", evs)
+	}
+	guide := &state.State{}
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 {
+		t.Fatalf("guide problem: %q", lines)
+	}
+	// Both go quiet, not taken; the same failure on one item later is a
+	// new episode, neither filed at once nor continuing the filed one, and
+	// filed once it lasts.
+	r.a.now = t0.Add(2 * time.Hour)
+	if err := l.failed(a, failures, cause); err != nil {
+		t.Fatal(err)
+	}
+	if f := failures[a.Key]; !f.Since.Equal(r.a.now) || f.Count != 1 {
+		t.Fatalf("a quiet failure continued its episode: %+v", f)
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+		t.Fatalf("a new episode filed at once: %+v", evs)
+	}
+	for _, m := range []time.Duration{10, 20, 30} {
+		r.a.now = t0.Add(2*time.Hour + m*time.Minute)
+		if err := l.failed(a, failures, cause); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	evs = r.logged(t, loopFileVerb)
+	if len(evs) != 2 {
+		t.Fatalf("a new episode filed %d times in all", len(evs))
+	}
+	// The guide says the new episode too.
+	if lines, _ := guideProblemLines(guide, evs); len(lines) != 1 || !strings.Contains(lines[0], "o/r#1") || strings.Contains(lines[0], "o/r#2") {
+		t.Fatalf("the second episode's guide problem: %q", lines)
+	}
+}
+
 func TestLoopPutsAWorkersQuestionInTheGuidesQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, "", time.Now())
@@ -3399,5 +3526,43 @@ func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
 				t.Fatalf("retry did not record success: %+v", got)
 			}
 		})
+	}
+}
+
+// Scheduled exponential backoff must not expire a continuously failing step.
+func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := r.a.now
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
+	for count := 1; count <= 7; count++ {
+		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+			t.Fatal(err)
+		}
+		f := failures[act.Key]
+		if f.Count != count || !f.Since.Equal(start) {
+			t.Fatalf("episode lost at retry %d: %+v", count, f)
+		}
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+		r.a.now = f.RetryAt
+		if r.a.now.IsZero() {
+			r.a.now = start.Add(time.Minute)
+		}
+	}
+	if evs := r.logged(t, loopFileVerb); len(evs) != 1 {
+		t.Fatalf("filed %d times", len(evs))
+	}
+	r.a.now = failures[act.Key].RetryAt.Add(loopStuckRecent)
+	if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(r.a.now) {
+		t.Fatalf("quiet episode continued: %+v", f)
 	}
 }
