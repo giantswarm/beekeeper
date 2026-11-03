@@ -256,9 +256,8 @@ own. A terminal is the desk's login, not an identity: a process of the
 same user that hides its session can forge it, as it can write the log;
 central and slack carry the identity the central instance checked.
 
-A session that needs the person's word for a step (a merge) runs it and
-quotes its output there instead of asking the person to type in its
-conversation.`,
+A session that needs the person's word for a step runs it and quotes its
+output there instead of asking the person to type in its conversation.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if ref != "" {
