@@ -113,7 +113,7 @@ func TestSizeBytes(t *testing.T) {
 // A unit's informative ends never fail it: a stop as asked with
 // TermIsSuccess, and the stop-post's own end, a kill included.
 func TestRunArgsExpectedEndsSucceed(t *testing.T) {
-	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{workerTool}, TermIsSuccess: true, StopPost: detachStopPost, StopTimeout: time.Minute}, false), " ")
+	got := strings.Join(runArgs(Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, TermIsSuccess: true, StopPost: detachStopPost, StopTimeout: time.Minute}, false), " ")
 	for _, want := range []string{"SuccessExitStatus=143 SIGTERM", "ExecStopPost=-/bin/beekeeper agents reopen --detach local_x", "-- claude"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("systemd-run %s: no %q", got, want)
@@ -132,7 +132,7 @@ func TestRunArgsStopAndRuntimeBounds(t *testing.T) {
 		unit      Unit
 		want, not []string
 	}{
-		"a turn": {Unit{Name: "beekeeper-wake-x", Argv: []string{workerTool}, StopPost: detachStopPost, StopTimeout: time.Minute},
+		"a turn": {Unit{Name: "beekeeper-wake-x", Argv: []string{"claude"}, StopPost: detachStopPost, StopTimeout: time.Minute},
 			[]string{"-p TimeoutStopSec=60 "}, []string{"RuntimeMaxSec"}},
 		"a reopen": {Unit{Name: "beekeeper-reopen-x", Argv: []string{"beekeeper"}, MaxRuntime: 35 * time.Minute},
 			[]string{"-p RuntimeMaxSec=2100 "}, []string{"ExecStopPost", "TimeoutStopSec"}},
@@ -233,7 +233,7 @@ func TestRunArgsReplacesStaleSSHSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = listener.Close() }()
-	unit := Unit{Name: "worker", Argv: []string{workerTool}, Env: []string{"SSH_AUTH_SOCK=/stale-manager"}}
+	unit := Unit{Name: "worker", Argv: []string{"/bin/true"}, Env: []string{"SSH_AUTH_SOCK=/stale-manager"}}
 	args := runArgs(unit, false)
 	if !slices.Contains(args, "--setenv=SSH_AUTH_SOCK="+socket) || slices.Contains(args, "--setenv=SSH_AUTH_SOCK=/stale-manager") {
 		t.Fatalf("socket not replaced: %q", args)
