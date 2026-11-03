@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Codex execution workers receive workspace trust on the command line for first and resumed turns, keeping startup from rewriting the policy-bound managed configuration and invalidating the host (https://github.com/giantswarm/beekeeper/issues/2265).
+
 - A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
 
 - Start one independent review for each new unapproved pull-request head even after historical review rounds are exhausted; fixes no longer receive a merge go the exact-head execution gate cannot accept (https://github.com/giantswarm/beekeeper/issues/2247).
