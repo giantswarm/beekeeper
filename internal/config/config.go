@@ -715,6 +715,31 @@ type Disk struct {
 	// its default entries (DiskCacheGo, DiskCacheSccache, DiskCacheTmp): an
 	// entry of the same name changes them, mode off drops them.
 	Caches []DiskCache `yaml:"caches"`
+	// Holders is the lifecycle of the state home's holders (beekeeper disk
+	// holders): it lists them and what is eligible for removal, removing
+	// nothing.
+	Holders Holders `yaml:"holders"`
+}
+
+// Holders configures the listing of the state home's holders: each entry of
+// Root (default the parent of stateDir, ~/.local/state), and each entry of
+// its AsideDirs one by one. A holder unused for StaleAfter (default 72h), or
+// an aside entry kept past AsideRetention (default 168h), whose task is not
+// open and which no process uses, is eligible for removal; the watch says
+// STATE HOLDERS once the eligible ones reach WarnGiB (default 10; negative,
+// never), looking every Every (default 6h).
+type Holders struct {
+	Root           string   `yaml:"root"`
+	StaleAfter     Duration `yaml:"staleAfter"`
+	AsideRetention Duration `yaml:"asideRetention"`
+	// AsideDirs are the root's directories holding moved-aside material
+	// (default aside, moved-aside).
+	AsideDirs []string `yaml:"asideDirs"`
+	// Keep names the root's entries never eligible (model weights, costly
+	// to fetch again).
+	Keep    []string `yaml:"keep"`
+	WarnGiB int      `yaml:"warnGiB"`
+	Every   Duration `yaml:"every"`
 }
 
 // Cache modes of the disk step. Entries removes a root's direct children
@@ -3276,6 +3301,22 @@ func (c *Config) defaults() error {
 	}
 	setDur(&c.Disk.Every, time.Hour)
 	setInt(&c.Disk.SccacheMaxGiB, 10)
+	h := &c.Disk.Holders
+	// The state home is stateDir's parent; a stateDir right under the
+	// filesystem root is its own home, never the root itself.
+	root := filepath.Dir(c.StateDir)
+	if filepath.Clean(root) == string(filepath.Separator) {
+		root = c.StateDir
+	}
+	setStr(&h.Root, root)
+	h.Root = filepath.Clean(homePath(home, h.Root))
+	setDur(&h.StaleAfter, 72*time.Hour)
+	setDur(&h.AsideRetention, 7*24*time.Hour)
+	if h.AsideDirs == nil {
+		h.AsideDirs = []string{"aside", "moved-aside"}
+	}
+	setInt(&h.WarnGiB, 10)
+	setDur(&h.Every, 6*time.Hour)
 	for i, p := range c.Disk.Checkouts {
 		c.Disk.Checkouts[i] = filepath.Clean(homePath(home, p))
 	}
@@ -3792,6 +3833,17 @@ func (c *Config) validateEach(report func(error)) {
 	for _, n := range c.Disk.BuildDirs {
 		if n == "" || n == "." || filepath.IsAbs(n) || strings.Contains(n, "..") || strings.Contains(n, ".git") {
 			report(fmt.Errorf("disk.buildDirs: invalid directory %q", n))
+		}
+	}
+	if r := c.Disk.Holders.Root; r != "" && (!filepath.IsAbs(r) || filepath.Clean(r) == string(filepath.Separator)) {
+		report(fmt.Errorf("disk.holders.root: must be an absolute directory, not a filesystem root"))
+	}
+	if h := c.Disk.Holders; h.StaleAfter.Duration < 0 || h.AsideRetention.Duration < 0 || h.Every.Duration < 0 {
+		report(fmt.Errorf("disk.holders: staleAfter, asideRetention and every take no negative duration"))
+	}
+	for _, n := range append(slices.Clone(c.Disk.Holders.AsideDirs), c.Disk.Holders.Keep...) {
+		if n == "" || n == "." || strings.ContainsRune(n, filepath.Separator) || strings.Contains(n, "..") {
+			report(fmt.Errorf("disk.holders: %q is no entry name of the root", n))
 		}
 	}
 	validateDiskCachesEach(c.Disk.Caches, report)
