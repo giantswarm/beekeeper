@@ -17,6 +17,8 @@ import (
 )
 
 const workerGitHubTokenVerb = "token"
+const workerGitHubRevParse = "rev-parse"
+const workerGitHubMissingRef = "missing"
 
 func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
@@ -139,7 +141,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitCommand = a.executionGitHubCommands()[1]
-	gitCommand.SetArgs([]string{"rev-parse", "--verify", "missing"})
+	gitCommand.SetArgs([]string{workerGitHubRevParse, "--verify", workerGitHubMissingRef})
 	gitCommand.SilenceErrors, gitCommand.SilenceUsage = true, true
 	if err := gitCommand.ExecuteContext(context.Background()); err == nil || Code(err) != 42 {
 		t.Fatal("client exit status was not preserved")

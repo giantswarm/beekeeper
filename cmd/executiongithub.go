@@ -241,9 +241,9 @@ func writeWorkerGitHub(path string, tokens map[string]workerGitHubToken) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if err := os.Rename(f.Name(), path); err != nil {
+	if err := os.Rename(f.Name(), path); err != nil { //nolint:gosec // temp and destination share the private coordinator directory, keyed by validated execution identity
 		return err
-	} //nolint:gosec // temp and destination share the private coordinator directory, keyed by validated execution identity
+	}
 	// Persist the rename before a token is released to its worker. Windows
 	// cannot sync directory handles; execution hosts themselves require Linux.
 	if runtime.GOOS == workerGitHubWindowsOS {
