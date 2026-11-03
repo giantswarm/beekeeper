@@ -136,6 +136,10 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 		return out
 	}
 	if s.Version == version {
+		if err := s.ProvisionTools(ctx); err != nil {
+			release()
+			return fail(err)
+		}
 		release()
 		digest, err := s.Prepare(s.Policy())
 		if err != nil {
