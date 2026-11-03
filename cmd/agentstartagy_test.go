@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -329,6 +330,11 @@ func TestStartAgyAgentRefusesUnguardedHooks(t *testing.T) {
 // startAgyAgent stops the unit, marks the roster entry undelivered, and
 // returns an error.
 func TestStartAgyAgentMarksUndeliveredWhenUnitEndsBeforeBrief(t *testing.T) {
+	// This fixture starts a local unit, even when an SSH worker runs it.
+	t.Setenv(execution.EnvID, "")
+	t.Setenv(execution.EnvCoordinator, "")
+	t.Setenv(execution.EnvHome, "")
+
 	const model = "claude-opus-4-6-thinking"
 	writeFakeAgy(t, "Available models:\n  "+model+"\n")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sup-1")

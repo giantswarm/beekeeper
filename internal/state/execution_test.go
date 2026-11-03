@@ -20,6 +20,8 @@ func TestExecutionReservationNeedsTerminationEvidence(t *testing.T) {
 		{name: "failed coordinator attempt", record: ExecutionRecord{Phase: execution.Failed}},
 		{name: "unreachable running process", record: ExecutionRecord{Observation: execution.Observation{Reachability: execution.Unreachable, ProcessState: execution.Running}}},
 		{name: "unconfirmed stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: stopID}, Observation: execution.Observation{ProcessState: execution.Exited}}},
+		{name: "missing journal with inactive unit", record: ExecutionRecord{HostJournalMissing: true}, terminal: true},
+		{name: "missing journal with pending stop", record: ExecutionRecord{HostJournalMissing: true, StopRequest: &execution.StopRequest{ID: stopID}}, terminal: true},
 		{name: "acknowledged stop", record: ExecutionRecord{StopRequest: &execution.StopRequest{ID: stopID}, Observation: execution.Observation{StopAcknowledged: true}}, terminal: true},
 		{name: "confirmed exit", record: ExecutionRecord{Observation: execution.Observation{ProcessState: execution.Exited}}, terminal: true},
 		{name: "released before acknowledgement", record: ExecutionRecord{Phase: pending, ReleasedAt: time.Unix(1, 0)}, terminal: true},

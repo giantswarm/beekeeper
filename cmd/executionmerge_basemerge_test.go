@@ -21,10 +21,10 @@ import (
 func TestExecutionApprovalCoversTheMergesBaseUpdateAcrossARetry(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	// This fixture isolates authenticated approval inheritance, not Git/CI.
-	prevCheck, prevQueue := reviewedMergeCheck, requireReviewedMergeQueue
-	t.Cleanup(func() { reviewedMergeCheck, requireReviewedMergeQueue = prevCheck, prevQueue })
+	prevCheck, prevQueue := reviewedMergeCheck, readReviewedMergeQueue
+	t.Cleanup(func() { reviewedMergeCheck, readReviewedMergeQueue = prevCheck, prevQueue })
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
-	requireReviewedMergeQueue = func(context.Context, superloop.Pull) error { return nil }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	h0, h1 := use.Head, strings.Repeat("c", 40)
 	ref := fmt.Sprintf("%s#%d", use.Repository, use.PR)
 	approved := superloop.Review{ID: "independent-approval", Verdict: superloop.Approved}
