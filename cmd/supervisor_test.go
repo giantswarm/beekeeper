@@ -24,7 +24,7 @@ var (
 	supA   = state.Party{Session: "sA", HostSession: "local_A", Name: "Guide run 11"}
 	supB   = state.Party{Session: "sB", HostSession: "local_B", Name: guideRole.runName(12)}
 	agentC = state.Party{Session: "sC", Name: "Agent three"}
-	agentD = state.Party{Session: "sD", Name: "Agent five"}
+	agentD = state.Party{Session: "sD", Name: agentFive}
 )
 
 // handOverState is a desk whose guide is supA, with two grants queued.
