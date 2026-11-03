@@ -23,6 +23,7 @@ type messageStream struct {
 	done      chan struct{}
 	listening chan struct{}
 	started   bool
+	encode    func(Envelope, string) []byte
 }
 
 func (s *Server) openMessageStream(ctx context.Context, ref Ref) (*messageStream, error) {
@@ -49,6 +50,9 @@ func (m *messageStream) signal() {
 }
 
 func (m *messageStream) Start(r StartRequest) {
+	if m.encode == nil {
+		m.encode = userMessage
+	}
 	m.started = true
 	go func() {
 		defer close(m.listening)
@@ -65,7 +69,7 @@ func (m *messageStream) Start(r StartRequest) {
 		defer close(m.done)
 		defer func() { _ = m.writer.Close() }()
 		initial := Envelope{ID: r.RequestID, Text: r.Prompt}
-		if _, err := m.writer.Write(userMessage(initial, r.ConversationID)); err != nil {
+		if _, err := m.writer.Write(m.encode(initial, r.ConversationID)); err != nil {
 			return
 		}
 		m.signal()
@@ -120,7 +124,7 @@ func (m *messageStream) sendNext() error {
 	}
 	var next Envelope
 	var session string
-	err = m.s.update(m.ctx, m.ref, func(j *Journal) error {
+	begun, err := m.s.beginTurn(m.ctx, m.ref, func(j *Journal) error {
 		if j.Completed {
 			_ = m.writer.Close()
 			return nil
@@ -143,10 +147,16 @@ func (m *messageStream) sendNext() error {
 		j.InTurn, j.LastActive = true, m.s.now()
 		return nil
 	})
+	if err == nil && !begun {
+		// A host update holds the admission: the message stays stored
+		// and is sent once the update released it.
+		time.AfterFunc(turnRetry, m.signal)
+		return nil
+	}
 	if err != nil || next.ID == "" {
 		return err
 	}
-	_, err = m.writer.Write(userMessage(next, session))
+	_, err = m.writer.Write(m.encode(next, session))
 	return err
 }
 

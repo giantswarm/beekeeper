@@ -82,7 +82,7 @@ func TestHostConfigHarnesses(t *testing.T) {
 		"codex only":            {map[string]HarnessConfig{HarnessCodex: codex}, true},
 		"claude and codex":      {map[string]HarnessConfig{HarnessClaude: f.s.Config.Harnesses[HarnessClaude], HarnessCodex: codex}, true},
 		"none":                  {map[string]HarnessConfig{}, false},
-		"omp has no adapter":    {map[string]HarnessConfig{"omp": codex}, false},
+		"omp outside its range": {map[string]HarnessConfig{HarnessOmp: codex}, false},
 		"codex without login":   {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: codex.Version}}, false},
 		"codex below its range": {map[string]HarnessConfig{HarnessCodex: {Executable: codex.Executable, Version: "0.100.0", ConfigDir: codex.ConfigDir}}, false},
 		"codex relative binary": {map[string]HarnessConfig{HarnessCodex: {Executable: "codex", Version: codex.Version, ConfigDir: codex.ConfigDir}}, false},
@@ -98,7 +98,7 @@ func TestHostConfigHarnesses(t *testing.T) {
 	for _, test := range []struct {
 		harnesses []string
 		ok        bool
-	}{{[]string{HarnessClaude}, true}, {[]string{HarnessCodex}, true}, {[]string{HarnessClaude, HarnessCodex}, true}, {nil, false}, {[]string{"omp"}, false}, {[]string{HarnessCodex, HarnessCodex}, false}} {
+	}{{[]string{HarnessClaude}, true}, {[]string{HarnessCodex}, true}, {[]string{HarnessClaude, HarnessCodex}, true}, {nil, false}, {[]string{HarnessOmp}, true}, {[]string{HarnessCodex, HarnessCodex}, false}} {
 		h := Host{Endpoint: Endpoint{SSH: "host-a.example", Executable: "/usr/local/bin/beekeeper", Config: "/etc/beekeeper/worker.json"}, Identity: fixtureHost, WorkspaceRoot: "/srv/workspaces", Repositories: map[string]string{f.r.Repository: "/srv/source"}, Harnesses: test.harnesses, PolicyDigest: Digest([]byte("policy")), MaxBusy: 1}
 		if err := h.Validate(); (err == nil) != test.ok {
 			t.Fatalf("host harnesses %v: %v, want ok %v", test.harnesses, err, test.ok)
