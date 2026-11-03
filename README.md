@@ -251,6 +251,9 @@ owner. A running watch keeps the code it started with: every watch, `--once` inc
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
 `beekeeper self-update --check` exits 125 while a newer release is out. A running pre-release (a
 release candidate) is kept on the newest release candidate too; a release only takes releases.
+Both ask GitHub with `GH_TOKEN`, `GITHUB_TOKEN` or the gh login's token, never anonymously (a
+shared IP spends the anonymous limit): without a token they say so and stop, and a rate-limited
+lookup is named with its reset.
 
 An install leaves the older binaries already running on their old code until they end or are
 re-armed: the `agents start` of a worker started before it (its desktop reopen saves the state

@@ -172,6 +172,14 @@ and atomically rename it in the destination directory. Sudo never prompts;
 if it is unavailable or denied, the failure is reported and the host stays held. A release that does not prepare leaves the host held for a retry;
 one that does moves the host's watches and sandbox broker onto it, as
 `self-update` does.
+The coordinator looks the release up on GitHub itself, with its gh login (or
+`GH_TOKEN`, `GITHUB_TOKEN`), never anonymously, and sends the lookup to the host
+on the SSH command's standard input: the host downloads the binary and its
+bundle from the release's public download URLs and asks GitHub's API nothing,
+so a host without a GitHub login updates all the same, and no token leaves the
+coordinator. A lookup GitHub refuses holds the host, a rate limit named with
+its reset. A host whose installed release predates this looks the release up
+on its own once more.
 The coordinator then runs `hosts check` with the digest the host answered and
 records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.

@@ -14,7 +14,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
-	"github.com/google/go-github/v93/github"
 	"golang.org/x/mod/module"
 
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -33,8 +32,9 @@ const lookupTimeout = 15 * time.Second
 // ErrOutdated is what a check returns when a newer release exists.
 var ErrOutdated = errors.New("a newer beekeeper release is available")
 
-// Seams the tests replace: where releases come from (public GitHub,
-// authenticated with the environment or gh login when available; empty tag responses are retried),
+// Seams the tests replace: where releases come from (GitHub, authenticated
+// with the environment's token or the gh login, never anonymously; empty tag
+// responses are retried),
 // what a download must verify against
 // (the shared cosign validator: a CircleCI build of Repository, against the
 // Sigstore public-good trust root), the file the update replaces and the
@@ -150,9 +150,8 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		// Nothing has been downloaded.
 		return res, fmt.Errorf("the latest release of %s has no signature bundle for this platform's binary; refusing to install it: %w", Repository, err)
 	case err != nil:
-		var limited *github.RateLimitError
-		if errors.As(err, &limited) {
-			return res, fmt.Errorf("GitHub release lookup rate limit exceeded; resets at %s: %w", limited.Rate.Reset.UTC().Format(time.RFC3339), err)
+		if limit := rateLimit(err); limit != "" {
+			return res, fmt.Errorf("looking up the latest release of %s: %s: %w", Repository, limit, err)
 		}
 		if errors.Is(err, errIncompleteLookup) {
 			return res, fmt.Errorf("looking up the latest release of %s: %w", Repository, err)
@@ -225,10 +224,26 @@ func prerelease(current string) bool {
 // one. The verified download is staged beside the destination and renamed
 // over it atomically, with no backup or ownership-dependent hard link.
 func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
-	res := Result{Current: currentVersion(), Latest: version}
+	return installVersion(ctx, w, version, func() (selfupdate.Source, error) { return newTagSource(version) })
+}
+
+// releaseSemver is release version (a tag, "v0.3.0") parsed, or why it is
+// none.
+func releaseSemver(version string) (*semver.Version, error) {
 	want, err := semver.StrictNewVersion(strings.TrimPrefix(version, "v"))
 	if err != nil || !strings.HasPrefix(version, "v") {
-		return res, fmt.Errorf("%q is no release version (v<major>.<minor>.<patch>)", version)
+		return nil, fmt.Errorf("%q is no release version (v<major>.<minor>.<patch>)", version)
+	}
+	return want, nil
+}
+
+// installVersion installs release version, which newSource lists, as
+// InstallVersion says.
+func installVersion(ctx context.Context, w io.Writer, version string, newSource func() (selfupdate.Source, error)) (Result, error) {
+	res := Result{Current: currentVersion(), Latest: version}
+	want, err := releaseSemver(version)
+	if err != nil {
+		return res, err
 	}
 	if _, err := semver.NewVersion(res.Current); err != nil {
 		return res, fmt.Errorf("cannot update a development build (version %s) to a release: install %s by hand", res.Current, version)
@@ -236,7 +251,7 @@ func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, e
 	if version == res.Current {
 		return res, nil
 	}
-	source, err := newTagSource(version)
+	source, err := newSource()
 	if err != nil {
 		return res, fmt.Errorf("creating release source: %w", err)
 	}
@@ -251,6 +266,9 @@ func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, e
 	case errors.Is(err, selfupdate.ErrValidationAssetNotFound):
 		return res, fmt.Errorf("release %s of %s has no signature bundle for this platform's binary; refusing to install it: %w", version, Repository, err)
 	case err != nil:
+		if limit := rateLimit(err); limit != "" {
+			return res, fmt.Errorf("looking up release %s of %s: %s: %w", version, Repository, limit, err)
+		}
 		return res, fmt.Errorf("looking up release %s of %s: %w", version, Repository, err)
 	case !found || "v"+rel.Version() != version:
 		return res, fmt.Errorf("GitHub answered no release %s of %s that carries a binary for %s/%s", version, Repository, runtime.GOOS, runtime.GOARCH)
