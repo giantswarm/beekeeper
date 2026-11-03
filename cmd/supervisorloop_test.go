@@ -3567,3 +3567,59 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 		t.Fatalf("quiet episode continued: %+v", f)
 	}
 }
+
+// GitHub-enabled reviewers follow the same placement preferences as workers,
+// including Codex, and retain review and self-hosted capacity accounting.
+func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
+	branch := ghDefaultBranch
+	t.Cleanup(func() { ghDefaultBranch = branch })
+	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
+	for _, harness := range []string{claudeComm, "codex"} {
+		for _, first := range []bool{false, true} {
+			for _, localRoom := range []bool{false, true} {
+				for _, selfHosted := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/first=%t/local=%t/selfHosted=%t", harness, first, localRoom, selfHosted), func(t *testing.T) {
+						r := newLoopRig(t)
+						r.sshLoopHost(t, true)
+						r.a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{}
+						r.a.cfg.Supervisor.HostsFirst = first
+						r.a.cfg.Capacity.Choices[0].Harness = harness
+						h := r.a.cfg.Agents.Hosts[sshTestSelector]
+						h.Harnesses = []string{harness}
+						r.a.cfg.Agents.Hosts[sshTestSelector] = h
+						r.answer = func(args []string) (string, int) {
+							if args[0] == loopCapacity {
+								if !slices.Contains(args, "--review") || slices.Contains(args, "--"+reviewOfSelfHostedFlag) != selfHosted {
+									t.Fatalf("lost review capacity flags: %v", args)
+								}
+								if localRoom || slices.Contains(args, loopHostFlag) {
+									return loopRoomJSON, 0
+								}
+								return loopNoRoomJSON, 0
+							}
+							return "", 0
+						}
+						act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "remote-review", SelfHosted: selfHosted}
+						if _, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act); err != nil {
+							t.Fatal(err)
+						}
+						start := r.called(agentsName, agentStartName)
+						if start == nil {
+							t.Fatal("no reviewer started")
+						}
+						if slices.Contains(start, loopHostFlag) != (first || !localRoom) {
+							t.Fatalf("wrong placement: %v", start)
+						}
+						if first || !localRoom {
+							for _, want := range []string{sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+								if !slices.Contains(start, want) {
+									t.Fatalf("missing %s: %v", want, start)
+								}
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}

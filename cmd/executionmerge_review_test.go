@@ -433,3 +433,30 @@ func TestExecutionMergeCoordinatorNeedsTheFixHeadsApprovalAfterTheWorkerEnded(t 
 		t.Fatalf("coordinator merge of the approved fix head after the worker ended failed: %v", err)
 	}
 }
+
+func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	assignMergeReview(t, a, use, 1)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		round := executionReviewRound(st, use)
+		round.Reviewer.Host = "spaceage"
+		round.Reviewer.HostSession = "remote-review-session"
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.authenticateExecutionReview(context.Background(), st, use, *pull); err != nil {
+		t.Fatalf("authenticated remote review refused: %v", err)
+	}
+	forged := executionReviewRound(st, use).Reviewer
+	forged.HostSession = "another-remote-session"
+	forged.Session = "another-session"
+	if sameReviewSession(forged, executionReviewRound(st, use).Result.By) {
+		t.Fatal("another remote session authenticated as reviewer")
+	}
+}

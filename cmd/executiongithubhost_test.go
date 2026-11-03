@@ -97,6 +97,20 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 		}
 	}
 
+	// Reviews need a write-scoped credential for the task repository.
+	wantRepo, wantWrite = r.Repository, true
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\nprintf 'review posted\\n'\n"), 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	review := a.executionGitHubCommands()[0]
+	review.SetOut(&output)
+	review.SetErr(&output)
+	review.SetArgs([]string{"pr", "review", "2", "--comment", "--body", "Review: approved"})
+	if err := review.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantRepo, wantWrite = workerGitHubPrivateRepo, false
+
 	// The same dispatch path invokes git on the host, with the owned branch
 	// and token in its environment, while local commands never ask for one.
 	git := filepath.Join(root, "git")
@@ -115,7 +129,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	gitCommand.SetOut(&output)
 	gitCommand.SetErr(&output)
 	gitCommand.SilenceErrors, gitCommand.SilenceUsage = true, true
-	if gitCommand.ExecuteContext(context.Background()) == nil || calls != 3 {
+	if gitCommand.ExecuteContext(context.Background()) == nil || calls != 4 {
 		t.Fatal("foreign branch push reached issuer")
 	}
 	gitCommand = a.executionGitHubCommands()[1]
@@ -146,7 +160,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 	if err := gitCommand.ExecuteContext(context.Background()); err == nil || Code(err) != 42 {
 		t.Fatal("client exit status was not preserved")
 	}
-	if calls != 5 || !strings.Contains(output.String(), "host push proof") || !strings.Contains(output.String(), "local git proof") || !strings.Contains(output.String(), "host read proof") {
+	if calls != 6 || !strings.Contains(output.String(), "host push proof") || !strings.Contains(output.String(), "local git proof") || !strings.Contains(output.String(), "host read proof") {
 		t.Fatal("git did not separate local and scoped read/write commands")
 	}
 
@@ -212,7 +226,7 @@ func TestWorkerGitHubHostCLIUsesEphemeralCredential(t *testing.T) {
 			t.Fatal("push did not publish exactly the owned HEAD with scoped issuance")
 		}
 	}
-	if calls != 7 {
+	if calls != 8 {
 		t.Fatal("real pushes did not request their scoped credentials")
 	}
 
