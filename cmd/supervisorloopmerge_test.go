@@ -56,14 +56,14 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
-func TestLoopMergeRepairAndAdmin(t *testing.T) {
+func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
 	r.park(t, loopPR, time.Now())
 	r.pass(t)
 	r.verdict("R1", loopHead, superloop.Approved, "")
 	r.command = func(argv []string) (string, int) {
-		if !slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
+		if slices.Contains(argv, "--admin") || !slices.Contains(argv, loopHead) {
 			t.Fatalf("merge flags: %v", argv)
 		}
 		return "branch conflicts with base", 1
@@ -166,7 +166,7 @@ func TestReviewedMergeUsesConfiguredMethodAndGatePin(t *testing.T) {
 		t.Fatalf("merge %+v", doc)
 	}
 	argv := r.cmds[0]
-	for _, flag := range []string{"--rebase", "--admin", "--match-head-commit", loopHead} {
+	for _, flag := range []string{"--rebase", "--match-head-commit", loopHead} {
 		if !slices.Contains(argv, flag) {
 			t.Fatalf("missing %s in %v", flag, argv)
 		}
@@ -349,43 +349,19 @@ func TestLoopConflictHandsOffOnceAndMergesAfterRebaseWithoutNewReview(t *testing
 }
 
 func TestLoopMergeFallsBackAutomaticallyWhenReviewedMergeStepBreaks(t *testing.T) {
-	t.Run("gh pr merge tooling failure triggers session merge go", func(t *testing.T) {
+	t.Run("gh merge tooling failure cannot delegate a queue bypass", func(t *testing.T) {
 		r := newLoopRig(t)
 		r.a.cfg.Merge.DevctlOwners = []string{"o"}
 		r.park(t, loopPR, time.Now())
 		r.pass(t)
 		r.verdict("R1", loopHead, superloop.Approved, "")
-		r.command = func(argv []string) (string, int) {
-			if slices.Contains(argv, superloop.KindMerge) {
-				return "GraphQL: Resource not accessible by integration", 1
-			}
-			return "", 0
-		}
-		var grantedBeforeWake bool
-		r.answer = func(args []string) (string, int) {
-			if len(args) > 0 && args[0] == gateCmdName && !slices.Contains(args, "--reviewed-head") {
-				t.Fatalf("unpinned gate call: %v", args)
-			}
-			if len(args) >= 3 && args[0] == agentsName && args[1] == agentWakeName && args[2] == loopWorker {
-				evs := r.logged(t, "supervisor.go")
-				grantedBeforeWake = recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead)
-			}
-			return "", 0
-		}
+		r.command = func(argv []string) (string, int) { return "GraphQL: Resource not accessible by integration", 1 }
 		r.pass(t)
-		if !grantedBeforeWake {
-			t.Fatal("supervisor.go was not recorded before waking the worker")
+		if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
+			t.Fatalf("unsafe merge delegated: %v", wake)
 		}
-		if r.called("note", loopAdd) != nil {
-			t.Fatalf("broken merge step asked the person: %v", r.calls)
-		}
-		wake := r.called(agentsName, agentWakeName, loopWorker)
-		if wake == nil || strings.Contains(wake[3], "Repair the branch") || !strings.Contains(wake[3], "devctl pr merge o/r 7") || !strings.Contains(wake[3], loopHead) {
-			t.Fatalf("worker was not directed to merge approved head: %v\n%s", r.calls, r.out)
-		}
-		evs := r.logged(t, "supervisor.go")
-		if len(evs) != 1 || !recordedMergeGo(evs, state.Party{Name: loopWorker}, loopPR, loopHead) {
-			t.Fatalf("worker merge go not granted: %+v", evs)
+		if evs := r.logged(t, "supervisor.go"); len(evs) != 0 {
+			t.Fatalf("unsafe merge go: %+v", evs)
 		}
 	})
 
