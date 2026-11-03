@@ -222,8 +222,6 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		add(a)
 	case v != nil && v.Verdict == Approved && (sameHead(v.Head, p.Head) || in.baseMerged(p, v.Head)):
 		// planPull gives its go.
-	case len(rs) >= MaxReviews:
-		fix(fmt.Sprintf("its %d reviews are used and head %s has none: take it over", len(rs), short(p.Head)))
 	case reviewedHere || l.has(reviewKey(ref, p.Head)):
 		// A review of this head started and ended without a verdict.
 		review(sweepKey("review", ref, p.Head, since))

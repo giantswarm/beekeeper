@@ -219,7 +219,7 @@ func TestTheSweepStartsOncePerStretchAndGivesUp(t *testing.T) {
 }
 
 // A review the sweep started that ended without a verdict gets one more
-// round while one is left; an open escalation is the person's.
+// round; an open legacy escalation is the person's.
 func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	rv := Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: PullWorkerName(pr), Round: 1}
 	in := sweepInput(pull(head1, true), OrphanWait)
@@ -227,6 +227,13 @@ func TestTheSweepReviewsAgainAfterAVerdictlessRound(t *testing.T) {
 	a := only(t, Plan(in), KindReview)
 	if !IsSweep(a.Key) || a.Round != 2 || KeyHead(a.Key) != head1 {
 		t.Errorf("second review = %+v", a)
+	}
+	in.Taken = append(in.Taken, taken(t, t1, a)...)
+	in.Now = in.Now.Add(time.Hour)
+	in.Ownerless = map[string]time.Time{pr: in.Now.Add(-OrphanWait)}
+	a = only(t, Plan(in), KindReview)
+	if a.Round != 3 || KeyHead(a.Key) != head1 {
+		t.Errorf("third review = %+v", a)
 	}
 	esc := Action{Key: escalateKey(pr, head1), Kind: KindEscalate, Ref: pr, Agent: worker}
 	in.Taken = append(in.Taken, taken(t, t1, esc)...)
