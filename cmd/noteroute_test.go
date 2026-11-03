@@ -240,9 +240,19 @@ func TestWorkerDefectOptionsAreAProblemReport(t *testing.T) {
 	if st, _ := a.store.Read(); len(st.Notes) != 0 {
 		t.Errorf("filed: %+v", st.Notes)
 	}
-	// A consequence that names a defect is no defect ask: only the choice is.
-	d := noteDraft{Question: "Which API shape ships?", Options: []string{"Keep v1: the old bug stays for one release", "Take v2: clients migrate"}}
-	if c, ok := operational(d, config.Plans{}); ok {
-		t.Errorf("a decision whose consequence names a bug is operational: %+v", c)
+	// Scope and product decisions are no defect asks: "issue" and
+	// "failures" as bare nouns, or "open" and "report" as bare verbs, are
+	// ordinary words that pair with them; only a defect noun makes the ask.
+	for _, d := range []noteDraft{
+		// The commonest worker decision: do it here, or in a follow-up issue.
+		{Question: "Does the cleanup belong in this PR?", Options: []string{"Here: the PR grows by 200 lines", "Open a follow-up issue: the PR stays small"}},
+		{Question: "Should the weekly report list failures by host?"},
+		{Question: "Which of the open issues in the epic ships first?"},
+		// A consequence that names a defect is no defect ask: only the choice is.
+		{Question: "Which API shape ships?", Options: []string{"Keep v1: the old bug stays for one release", "Take v2: clients migrate"}},
+	} {
+		if c, ok := operational(d, config.Plans{}); ok {
+			t.Errorf("a decision that names no defect ask is operational (%s): %+v", d.Question, c)
+		}
 	}
 }

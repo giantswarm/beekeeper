@@ -36,7 +36,7 @@ type opClass struct {
 var opClasses = []opClass{
 	{
 		name:    "defect",
-		match:   regexp.MustCompile(`(?i)\bwho\b[^.?!:]{0,30}\b(fix(es|ing)?|repairs?)\b|\b(file|open|create|raise|log|track|report)\b[^.?!:]{0,40}\b(defects?|bugs?|panics?|crash(es)?|regressions?|issues?|failures?)\b|\bplease track\b`),
+		match:   regexp.MustCompile(`(?i)\bwho\b[^.?!:]{0,30}\b(fix(es|ing)?|repairs?)\b|\b(file|open|create|raise|log|track|report)\b[^.?!:]{0,40}\b(defects?|bugs?|panics?|crash(es)?|regressions?)\b|\bplease track\b`),
 		where:   "a defect is a problem report, never a person's decision: the worker reports it with its evidence and owning repository (beekeeper agents problem \"<finding>\", or --problem with agents idle) and the guide files it; a broken main or gate is reported the same way while the worker carries on with independent work",
 		options: true,
 	},
