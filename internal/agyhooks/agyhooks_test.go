@@ -15,6 +15,7 @@ const guard = `{
 // names no command; it accepts flat lifecycle commands and matchers with
 // commands under the tool events.
 func TestEntryRejects(t *testing.T) {
+	const invalidHookLists = "not an object of hook lists"
 	for _, c := range []struct {
 		name, raw, want string
 	}{
@@ -30,9 +31,9 @@ func TestEntryRejects(t *testing.T) {
 		{"a matcher without hooks", `{"PreToolUse": [{"matcher": "*"}]}`, "PreToolUse: a matcher without hooks"},
 		{"a flat command under PreToolUse", `{"PreToolUse": [{"type": "command", "command": "/usr/bin/true"}]}`, "PreToolUse: a matcher without hooks"},
 		{"a matcher hook without its command", `{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command"}]}]}`, "PreToolUse: command hook must specify 'command'"},
-		{"an event that is no list", `{"PreToolUse": {"matcher": "*"}}`, "not an object of hook lists"},
-		{"an entry that is no object", `"/usr/bin/true"`, "not an object of hook lists"},
-		{"null", `null`, "not an object of hook lists"},
+		{"an event that is no list", `{"PreToolUse": {"matcher": "*"}}`, invalidHookLists},
+		{"an entry that is no object", `"/usr/bin/true"`, invalidHookLists},
+		{"null", `null`, invalidHookLists},
 	} {
 		got := EntryRejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {

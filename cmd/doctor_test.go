@@ -488,7 +488,7 @@ func TestCheckAgyHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := strings.Replace(string(raw), "{", `{"stale": {"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]},`, 1)
-	if err := os.WriteFile(e.AgyHooks, []byte(stale), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".gemini", "config", "hooks.json"), []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkAgyHooks(home, exe, true); !strings.Contains(got, "agy rejects the stale entry, so none of the file's hooks runs, beekeeper's neither") {
