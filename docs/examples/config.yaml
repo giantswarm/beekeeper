@@ -33,6 +33,11 @@ identity:
 #     tokenFile: /var/run/secrets/klaus-gateway/token   # the default: the projected ServiceAccount token, audience klaus-gateway
 #     answerTool: x_beekeeper_note_answer    # the default: the muster tool an answer in Slack calls, as the person
 #     sendTool: x_beekeeper_send_message     # the default: the muster tool a reply in an agent's conversation calls, as the person
+#   identity:                                # serve's own Dex identity toward muster (the fleet watch's reads), never a ServiceAccount token
+#     connectorID: kubernetes                # the Dex connector that trusts the cluster's ServiceAccount issuer
+#     clientID: beekeeper                    # the public Dex client the RFC 8693 exchange is made as
+#     audience: dex-k8s-authenticator        # the Dex client the token is for (cross-client scope); empty: clientID
+#     tokenFile: /var/run/secrets/dex/token  # the default: the projected ServiceAccount token exchanged at serve.issuer's Dex
 # central:                  # the central instance (beekeeper serve behind muster): the shared installations' leases and the roster
 #   context: staging        # the muster context it is reached through, as the person (muster auth login --context staging)
 #   server: beekeeper       # the default: its name in muster, whose tools are x_<server>_<tool>
