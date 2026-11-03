@@ -21,6 +21,9 @@ import (
 //nolint:gosec // G101: a credential helper template, not a hardcoded token
 const workerGitHubCredentialHelper = `credential.https://github.com.helper=!f() { printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`
 
+const workerGitHubHead = "HEAD"
+const workerGitHubNoCredentialHelper = "credential.helper=" //nolint:gosec // G101: clears inherited Git helpers; contains no credential
+
 // SSH execution hosts run Linux. Resolve git outside the worker-controlled
 // PATH; the test seam substitutes a fixture executable, never a runtime setting.
 var workerGitHubGitExecutable = "/usr/bin/git"
@@ -129,7 +132,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				if needsToken {
 					// Remote URL is pinned for every network operation, not taken from a
 					// worker-editable .git/config. No helper or token is persisted there.
-					args = append([]string{"-c", "remote.origin.url=https://github.com/" + request.Repository + ".git", "-c", "remote.origin.pushurl=https://github.com/" + request.Repository + ".git", "-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
+					args = append([]string{"-c", "remote.origin.url=https://github.com/" + request.Repository + ".git", "-c", "remote.origin.pushurl=https://github.com/" + request.Repository + ".git", "-c", workerGitHubNoCredentialHelper, "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
 				}
 
 			}
@@ -254,13 +257,13 @@ func workerGitHubIsolatedPush(ctx context.Context, binary, workspace, repository
 			return nil, nil, nil, err
 		}
 	}
-	for name, contents := range map[string]string{"config": config, "HEAD": head + "\n"} {
+	for name, contents := range map[string]string{"config": config, workerGitHubHead: head + "\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil { //nolint:gosec // fixed config and HEAD names in a new private temporary repository
 			cleanup()
 			return nil, nil, nil, err
 		}
 	}
 	env = append(env, "GIT_DIR="+dir, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+strconv.Quote(filepath.Join(common, "objects")))
-	args := []string{"-c", "credential.helper=", "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "push.followTags=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "push", "--no-follow-tags", "https://github.com/" + repository + ".git", head + ":refs/heads/" + branch}
+	args := []string{"-c", workerGitHubNoCredentialHelper, "-c", workerGitHubCredentialHelper, "-c", "http.followRedirects=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "push.followTags=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "push", "--no-follow-tags", "https://github.com/" + repository + ".git", head + ":refs/heads/" + branch}
 	return args, env, cleanup, nil
 }
