@@ -76,7 +76,8 @@ func TestTimersOnOneReferenceShareOneCheck(t *testing.T) {
 // once, and closes.
 func TestConditionalTimerWakesItsAgentOnceItHolds(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.chores = true // a running watch, not --once
+	w.doctoring.Store(true) // the doctor is not under test; its goroutine outlives the watch
+	w.chores = true         // a running watch, not --once
 	merged := false
 	fakeRead(t, func(cmd string) ([]byte, error) {
 		if !strings.Contains(cmd, "repos/o/r/pulls/7") {

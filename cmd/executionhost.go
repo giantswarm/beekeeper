@@ -285,7 +285,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -387,7 +387,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -439,7 +439,30 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(caps)
+		// Keep the observed release and toolchain visible even when the
+		// coordinator release differs, so operators can diagnose the host.
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
+			return err
+		}
+		return checkHostRelease(caps.Version)
+	}})
+	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot provision host tools")
+		}
+		s, err := a.hostRuntime()
+		if err != nil {
+			return err
+		}
+		busy, release, err := s.Quiesce(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer release()
+		if busy > 0 {
+			return refused("execution host is busy; tool provisioning waits until executions end")
+		}
+		return s.ProvisionTools(cmd.Context())
 	}})
 	c.AddCommand(a.executionHostUpdateCmds()...)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
@@ -518,4 +541,12 @@ func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord
 		}
 	}
 	return nil, -1
+}
+
+func checkHostRelease(version string) error {
+	want := coordinatorVersion()
+	if releaseVersion(want) && version != want {
+		return refused("execution host runs %s, coordinator runs %s; run beekeeper agents hosts update <host>", version, want)
+	}
+	return nil
 }

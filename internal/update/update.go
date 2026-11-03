@@ -60,6 +60,60 @@ type Result struct {
 	Updated bool   `json:"updated"`
 }
 
+// Canary checks a verified candidate binary at path for version before it
+// replaces the installed executable. Returning an error keeps the current
+// executable in place.
+type Canary func(ctx context.Context, path, version string) error
+
+// Options configures a Run call through its context.
+type Options struct {
+	Canary Canary
+	Skip   func(tag string) bool
+}
+
+type optionsKey struct{}
+
+// WithOptions attaches opts to ctx for Run.
+func WithOptions(ctx context.Context, opts Options) context.Context {
+	return context.WithValue(ctx, optionsKey{}, opts)
+}
+
+// OptionsFrom returns the Options attached to ctx.
+func OptionsFrom(ctx context.Context) Options {
+	opts, _ := ctx.Value(optionsKey{}).(Options)
+	return opts
+}
+
+func optionsFrom(ctx context.Context) Options {
+	return OptionsFrom(ctx)
+}
+
+type skipSource struct {
+	selfupdate.Source
+	skip    func(string) bool
+	skipped bool
+}
+
+func (s *skipSource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	releases, err := s.Source.ListReleases(ctx, repository)
+	if g, ok := s.Source.(*githubSource); ok && g.skipped {
+		s.skipped = true
+	}
+	if err != nil || s.skip == nil {
+		return releases, err
+	}
+	kept := make([]selfupdate.SourceRelease, 0, len(releases))
+	for _, r := range releases {
+		tag := r.GetTagName()
+		if s.skip(tag) || s.skip("v"+strings.TrimPrefix(tag, "v")) {
+			s.skipped = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, nil
+}
+
 // Run looks up the latest release and, unless checkOnly, installs its binary
 // for this OS and architecture over the running executable once its bundle
 // verifies. A running pre-release looks among the pre-releases too, a
@@ -82,7 +136,9 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if err != nil {
 		return res, fmt.Errorf("creating release source: %w", err)
 	}
-	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: source, Validator: newValidator(), Prerelease: prerelease(res.Current)})
+	opts := optionsFrom(ctx)
+	filtered := &skipSource{Source: source, skip: opts.Skip}
+	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: filtered, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
 		return res, err
 	}
@@ -98,7 +154,14 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		if errors.As(err, &limited) {
 			return res, fmt.Errorf("GitHub release lookup rate limit exceeded; resets at %s: %w", limited.Rate.Reset.UTC().Format(time.RFC3339), err)
 		}
+		if errors.Is(err, errIncompleteLookup) {
+			return res, fmt.Errorf("looking up the latest release of %s: %w", Repository, err)
+		}
 		return res, fmt.Errorf("looking up the latest release of %s (is this machine online?): %w", Repository, err)
+	case !found && filtered.skipped:
+		res.Latest = res.Current
+		_, _ = fmt.Fprintf(w, "beekeeper %s is the latest release.\n", res.Current)
+		return res, nil
 	case !found:
 		return res, fmt.Errorf("GitHub answered no release of %s that carries a binary for %s/%s", Repository, runtime.GOOS, runtime.GOARCH)
 	}

@@ -51,13 +51,12 @@ func (a *app) boardCmd() *cobra.Command {
 		Long: `The project board of board.owner and board.project, the items of board.team.
 next applies the configured order (board.order) to the board's open items
 and the roster and prints the first free item with why it is picked; move
-sets an item's Status by the board's canonical names; rank sets an item's
-position on the board, which is the order next reads the items of each step
-in, under the person's priority list (beekeeper priority); block and
-unblock record and remove a hold on an item, a GitHub blocked-by
-dependency on another issue, which next reads; tidy moves closed items to
-Done and archives them after board.archiveAfter, which the supervisor loop
-runs every board.tidyEvery.`,
+sets an item's Status by the board's canonical names; rank (or order) sets
+an item's position on the board, which is the order next reads the items of
+each step in; block and unblock record and remove a hold on an item, a GitHub
+blocked-by dependency on another issue, which next reads; tidy moves closed
+items to Done and archives them after board.archiveAfter, which the supervisor
+loop runs every board.tidyEvery.`,
 	}
 	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
@@ -94,14 +93,9 @@ scheduled for planning: …", never offered through its sub-issues, and an
 issue whose nearest epic is one is skipped as "sub-issue of epic
 <owner/repo#n>, not scheduled for planning (Backlog)". Moving the epic to In
 Progress is the go: from then its open sub-issues are offered, in their
-order. The
-order is the steps' alone: their Status (board.order lists In Progress, then
-Up Next, then Backlog), and within a step the board's own order of its
-items. The person's priority list (beekeeper priority, the board's Priority
-field) neither orders nor gates anything: the pick only prints the rank of
-its epic, an issue's own or that of its nearest ranked ancestor through the
-sub-issue relation ("priority 2 of epic <owner/repo#n>", --json priority and
-priorityOf). A step's workScope is read and ignored. A plan is
+order. Priority is determined by issue Status and order on the board only:
+board.order lists In Progress, then Up Next, then Backlog, and within a step
+the board's own position order of its items. A step's workScope is read and ignored. A plan is
 the open or merged pull request of plans.repositories whose description
 names the epic; its state never gates. The first item that is free
 is picked: not served by a running session (a sessions serve record, a busy
@@ -122,15 +116,12 @@ an epic passes the same checks, and a serve record or task naming
 the epic covers it too ("…, on epic owner/repo#n"). A hold is a
 blocked-by (board block) or the Status Blocked / Waiting a decision sets on
 each of its --ref while it is open (note add --holds), skipped as "held:
-decision #<n> for <person> until it closes"; a priority is a board rank. A held item,
+decision #<n> for <person> until it closes"; a priority is a board move or a
+board reorder (board rank / board order). A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
 <owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
-<epic>, blocked by …". The epics of the priority list are read whatever their
-Team field says when they carry the team label (board.teamLabel), and a
-change of a ranked epic's rank or Team beekeeper did not write is a line
-"changed outside beekeeper: …" first (--json changed) and a board.changed
-event (see priority). A task names
+<epic>, blocked by …". A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
 board.owner, as a repository before a list ("beekeeper: #524, #525") or as
 a bare #n after the last repository it named ("beekeeper#173, #176"); a
@@ -155,15 +146,6 @@ resource limits; whatever GitHub still answers with an error is named, never
 read as absent: an item's missing fields as its missing ("<field>:
 <message>"), anything else on a line "unknown, GitHub answered with an
 error: …" and in --json's missing.
-
-An epic of the priority list that is not held, has a free item under it and
-has no session serving it or anything under it (a record, a busy or parked
-agent's task, a running session's work, as above) gets a line first, right
-after the changes: "EPIC UNSTAFFED priority <n> <epic URL> <title>: <k>
-free items under it and no session serves it, next <owner/repo#n>", in
---json as unstaffed. The supervisor owes such an epic a worker within the
-capacity verdict before it fills the remaining slots in the order. A claim
-prints none.
 
 --claim records the pick as the calling session's sessions serve record
 under the state lock, after checking again that nobody claimed it since:
@@ -207,8 +189,7 @@ pick; a name no candidate carries changes nothing. Without --claim the
 pick is followed by the call that offers the candidate after it, "next
 candidate: board next --skip <the skips and the pick>" (--json
 next_skip): a scan walks every free candidate by repeating that call
-alone, until exit 3 says none is left. An item skipped this way still
-counts as free for an unstaffed epic.`,
+alone, until exit 3 says none is left.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if view.limit < 0 {
@@ -239,9 +220,7 @@ counts as free for an unstaffed epic.`,
 			if err != nil {
 				return err
 			}
-			changed := a.rankChanges(cmd.Context(), cl, snap.Priorities)
 			cands := board.Rank(snap, a.cfg.Board, a.now)
-			board.Annotate(cands, snap.Priorities.Ranks(), snap.Parent)
 			listed := time.Now()
 			sessions, _, err := a.sessions()
 			if err != nil {
@@ -281,17 +260,12 @@ counts as free for an unstaffed epic.`,
 				}
 			} else {
 				res = nextFree(st, cands, sc)
-				ranks := snap.Priorities.Ranks()
-				res.Unstaffed = unstaffedEpics(snap.Priorities, res, func(ref string) string {
-					_, epic := ranks.Of(ref, snap.Parent)
-					return epic
-				})
 				res.NextSkip = nextSkip(skip, res.Pick)
 			}
 			if err != nil {
 				return err
 			}
-			res.Epics, res.Missing, res.Changed = snap.Epics(), snap.Missing, changed
+			res.Epics, res.Missing = snap.Epics(), snap.Missing
 			return a.printNext(res, len(cands), view)
 		},
 	}
@@ -583,92 +557,9 @@ type nextResult struct {
 	// Missing names what GitHub answered with an error and no candidate's
 	// missing holds, a search step's issues for one.
 	Missing []string `json:"missing,omitempty"`
-	// Changed are the changes of a ranked epic's Team or Priority that
-	// beekeeper did not write, since the last read of the priority list.
-	Changed []string `json:"changed,omitempty"`
-	// Unstaffed are the epics of the priority list with free work under
-	// them that no session serves (unstaffedEpics); none after a claim.
-	Unstaffed []unstaffedEpic `json:"unstaffed,omitempty"`
 	// NextSkip is the --skip of the call that offers the candidate after
 	// the pick: the skips asked for and the pick; none after a claim.
 	NextSkip []string `json:"next_skip,omitempty"`
-	// owners is who serves each item a session serves (nextFree's owners),
-	// by its lower-cased ref.
-	owners map[string]string
-}
-
-// unstaffedEpic is an epic of the priority list, not held, with free work
-// under it and no session serving it or anything under it: the supervisor
-// owes it a worker within the capacity verdict.
-type unstaffedEpic struct {
-	Rank  int    `json:"rank"`
-	Ref   string `json:"ref"`
-	URL   string `json:"url"`
-	Title string `json:"title"`
-	// Free is how many items under it are free, Next the first of them in
-	// the order.
-	Free int    `json:"free"`
-	Next string `json:"next"`
-}
-
-// line says the epic in one line, EPIC UNSTAFFED first.
-func (u unstaffedEpic) line() string {
-	plural := "s"
-	if u.Free == 1 {
-		plural = ""
-	}
-	return fmt.Sprintf("EPIC UNSTAFFED priority %d %s %s: %d free item%s under it and no session serves it, next %s",
-		u.Rank, u.URL, u.Title, u.Free, plural, u.Next)
-}
-
-// unstaffedEpics are the epics of list, held ones left out, that have a
-// free item of res under them (by the candidates' PriorityOf) while no
-// session serves the epic or anything under it: no candidate under it
-// skipped as served, and no owner's item ranked under it (epicOf, the
-// epic an item's rank is of, "" for none). A parked agent's item serves
-// its epic too: the epic has its worker, who waits.
-func unstaffedEpics(list board.Priorities, res nextResult, epicOf func(ref string) string) []unstaffedEpic {
-	all := res.walk()
-	served := map[string]bool{}
-	for ref := range res.owners {
-		if e := epicOf(ref); e != "" {
-			served[strings.ToLower(e)] = true
-		}
-	}
-	for _, c := range all {
-		if c.Skip != "" && c.PriorityOf != "" && skipKind(c.Skip) == kindServed {
-			served[strings.ToLower(c.PriorityOf)] = true
-		}
-	}
-	var out []unstaffedEpic
-	for _, e := range list {
-		if e.Held != "" || served[strings.ToLower(e.Ref)] {
-			continue
-		}
-		u := unstaffedEpic{Rank: e.Rank, Ref: e.Ref, URL: e.URL, Title: e.Title}
-		for _, c := range all {
-			if (c.Skip == "" || c.Skip == skipAskedReason) && strings.EqualFold(c.PriorityOf, e.Ref) {
-				if u.Free == 0 {
-					u.Next = c.Ref
-				}
-				u.Free++
-			}
-		}
-		if u.Free > 0 {
-			out = append(out, u)
-		}
-	}
-	return out
-}
-
-// walk is every candidate in the walk's order: the skipped above the pick,
-// the pick, every candidate behind it.
-func (res nextResult) walk() []board.Candidate {
-	out := slices.Clone(res.Skipped)
-	if res.Pick != nil {
-		out = append(out, *res.Pick)
-	}
-	return append(out, res.AfterPick...)
 }
 
 // The kinds of a skip reason, skipKind's words and skipped_by's keys.
@@ -751,7 +642,7 @@ func heldByDecision(notes []state.Note, it board.Item) string {
 // the epic.
 func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult {
 	owners := coverTitled(coverClosed(boardOwners(st, sc), sc.closes), titleOwners(st, sc), cands)
-	res := nextResult{SkippedBy: map[string]int{}, owners: owners}
+	res := nextResult{SkippedBy: map[string]int{}}
 	owned := func(ref string) string {
 		o, ok := owners[strings.ToLower(ref)]
 		if ok {
@@ -1063,12 +954,6 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 			return err
 		}
 	} else {
-		for _, l := range res.Changed {
-			_, _ = fmt.Fprintln(a.out, l)
-		}
-		for _, u := range res.Unstaffed {
-			_, _ = fmt.Fprintln(a.out, u.line())
-		}
 		if h := res.Held; h != nil {
 			_, _ = fmt.Fprintf(a.out, "this session %s: finish it, release it with sessions unserve %s, or claim with --replace\n", recordText(*h), h.Issue)
 		}
@@ -1104,11 +989,7 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 				w := a.table()
 				shown, more := firstN(free, view.limit)
 				for _, c := range shown {
-					line := fmt.Sprintf("  %s\t%s\t%s", c.Ref, truncate(c.Title, 50), c.Step)
-					if p := c.PriorityText(); p != "" {
-						line += "\t" + p
-					}
-					_, _ = fmt.Fprintln(w, line)
+					_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", c.Ref, truncate(c.Title, 50), c.Step)
 				}
 				_ = w.Flush()
 				if more > 0 {
@@ -1235,25 +1116,26 @@ anything is written. Exit 3 when refused.`,
 func (a *app) boardRankCmd() *cobra.Command {
 	var at board.Place
 	c := &cobra.Command{
-		Use:   "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
-		Short: "Change a board item's position: move it to the top, or before or after another item",
-		Long: `An item's position on the board orders work within each board.order step.
+		Use:     "rank <owner/repo#n|URL> --top | --before <issue> | --after <issue>",
+		Aliases: []string{"order"},
+		Short:   "Change a board item's position: move it to the top, or before or after another item",
+		Long: `An item's position on the board orders work within each board.order step:
+priority is determined by issue Status and order on the board only.
 board next walks the items in the board's position order, the order a view
 without a sort shows and a drag in it changes (the roadmap board's Epics and
-Backlogs views). rank moves the issue's item to the top of the board, right
-before or right after the item of another issue (updateProjectV2ItemPosition),
-and prints the neighbours the move names. An issue without an item on the
-board is added first, as move adds it, with board.team as its Team and no
-Status, whatever the owner of its repository (GitHub decides whether it may
-be added).
+Backlogs views). rank (or order) moves the issue's item to the top of the
+board, right before or right after the item of another issue
+(updateProjectV2ItemPosition), and prints the neighbours the move names. An
+issue without an item on the board is added first, as move adds it, with
+board.team as its Team and no Status, whatever the owner of its repository
+(GitHub decides whether it may be added).
 The other issue must be on the board already. Only the items named are read,
 never the board's items. Every GitHub call acts on the repository of the
 issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
 exist, another issue that has no item on the board, an item placed against itself.
-Any session may change positions; every move logs board.rank naming the caller.
-Outside a session, --as <name> identifies the caller; an anonymous call is refused.
-This command never writes epic Priority numbers. Only priority set and unset
-change those numbers, with --as naming a configured person.`,
+Any session (including the guide on the person's word) may change positions;
+every move logs board.rank naming the caller. Outside a session, --as <name>
+identifies the caller; an anonymous call is refused.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, r := range []string{args[0], at.Before, at.After} {

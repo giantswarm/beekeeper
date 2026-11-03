@@ -68,6 +68,7 @@ func TestLoopWatchFillForecastReleasesStartsWhenItStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	if err := l.pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +148,7 @@ func TestLoopWatchStaleBudgetHoldsStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	r.a.now = r.a.now.Add(time.Hour)
 	if err := l.watchConditions(context.Background()); err != nil {
 		t.Fatal(err)
@@ -176,6 +178,7 @@ func TestLoopWatchFreshMachineReadingClearsPreviousWatchPressure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	if err := l.watchConditions(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +203,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	for range 3 {
 		if err := l.pass(context.Background()); err != nil {
 			t.Fatalf("maintenance stopped pass: %v", err)
@@ -213,6 +217,7 @@ func TestLoopWatchDiskFailureKeepsPassAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	restarted.once = true // These checks inspect completed pass effects.
 	if err := restarted.pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +265,7 @@ func TestLoopWatchDiskFindingFailureKeepsPassAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	if err := l.pass(context.Background()); err != nil {
 		t.Fatal(err)
 	}

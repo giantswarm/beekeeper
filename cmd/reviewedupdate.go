@@ -30,10 +30,12 @@ var reviewedPause = func(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// updateReviewedBranch brings p, approved at head and behind its base, up to
+// updateReviewedBranch brings p, approved at head and behind a base that
+// requires up-to-date branches, which the desk merges without --admin, up to
 // date at merge time, as the gate's --update-branch does: GitHub merges the
 // base into the branch, pinned to the head it is at, so that nobody but the
-// merge moves an approved head. It then waits for the new head's checks,
+// merge moves an approved head. Any other behind branch merges as it stands,
+// with no update. It then waits for the new head's checks,
 // every check the approved head had and all of them green, and confirms that
 // the approval covers the new head (readBaseMerge). A base that moved on
 // meanwhile leaves that head behind again: it updates once more, pinned to

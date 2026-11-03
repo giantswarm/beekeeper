@@ -192,7 +192,7 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 			return err
 		}
 	}
-	place, err := l.startPlacement(ctx, r.Repo, review != nil, review != nil && review.selfHosted)
+	place, err := l.startPlacement(ctx, ag.Name, r.Repo, review != nil, review != nil && review.selfHosted)
 	if err != nil {
 		return err
 	}

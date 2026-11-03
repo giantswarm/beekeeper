@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,12 +29,13 @@ import (
 )
 
 const (
-	loopPR     = "o/r#7"
-	loopURL    = "https://github.com/o/r/pull/7"
-	loopHead   = "1111111111111111111111111111111111111111"
-	loopFixed  = "2222222222222222222222222222222222222222"
-	loopWorker = "worker one"
-	loopPerson = "pat"
+	loopPR           = "o/r#7"
+	loopURL          = "https://github.com/o/r/pull/7"
+	loopHead         = "1111111111111111111111111111111111111111"
+	loopFixed        = "2222222222222222222222222222222222222222"
+	loopWorker       = "worker one"
+	loopSecondWorker = "worker two"
+	loopPerson       = "pat"
 	// loopLocal is a self-hosted provider.
 	loopLocal = "local"
 	// loopQwen is a self-hosted model, loopPostInstall a post-install
@@ -51,6 +54,7 @@ const (
 // loopRig is a loop's app over a scratch store, with the beekeeper commands
 // and the pull request reads it makes faked.
 type loopRig struct {
+	mu    sync.Mutex
 	a     *app
 	out   *bytes.Buffer
 	calls [][]string
@@ -91,9 +95,15 @@ type loopRig struct {
 // loopFakeBinary is the loop's binary as the rig says it.
 type loopFakeBinary struct{ r *loopRig }
 
-func (b loopFakeBinary) Replaced() bool { return b.r.replaced }
+func (b loopFakeBinary) Replaced() bool {
+	b.r.mu.Lock()
+	defer b.r.mu.Unlock()
+	return b.r.replaced
+}
 
 func (b loopFakeBinary) Exec(...string) error {
+	b.r.mu.Lock()
+	defer b.r.mu.Unlock()
 	b.r.execs++
 	b.r.replaced = false
 	return nil
@@ -106,20 +116,27 @@ type rigStore struct {
 }
 
 func (s rigStore) Record(events ...state.Event) error {
-	if f := s.r.failRecord; f != nil && slices.ContainsFunc(events, f) {
+	s.r.mu.Lock()
+	f := s.r.failRecord
+	if f != nil && slices.ContainsFunc(events, f) {
 		s.r.failRecord = nil
+		s.r.mu.Unlock()
 		return errors.New("disk full")
 	}
+	s.r.mu.Unlock()
 	return s.Store.Record(events...)
 }
 
 func (s rigStore) Update(fn func(*state.State) ([]state.Event, error)) error {
 	return s.Store.Update(func(st *state.State) ([]state.Event, error) {
 		evs, err := fn(st)
+		s.r.mu.Lock()
 		if err == nil && s.r.failRecord != nil && slices.ContainsFunc(evs, s.r.failRecord) {
 			s.r.failRecord = nil
+			s.r.mu.Unlock()
 			return nil, errors.New("disk full")
 		}
+		s.r.mu.Unlock()
 		return evs, err
 	})
 }
@@ -174,6 +191,10 @@ func newLoopRig(t *testing.T) *loopRig {
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return nil, nil }
 	loopResumable = func(*app, *state.State, state.Agent) bool { return true }
 	r := &loopRig{out: &out}
+	prevCheck, prevQueue := reviewedMergeCheck, readReviewedMergeQueue
+	t.Cleanup(func() { reviewedMergeCheck, readReviewedMergeQueue = prevCheck, prevQueue })
+	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
+	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
 	t.Cleanup(func() { readReviewedBehind = wasBehind })
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
@@ -200,9 +221,22 @@ func newLoopRig(t *testing.T) *loopRig {
 	r.answer = func([]string) (string, int) { return "", 0 }
 	r.command = func(argv []string) (string, int) {
 		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
-			r.pull.State = superloop.Merged
-			r.pull.MergeCommit = loopFixed
-			r.lastMerged = r.pull.Head
+			r.mu.Lock()
+			repo := r.pullRepo()
+			if idx := slices.Index(argv, "--repo"); idx >= 0 && idx+1 < len(argv) {
+				repo = argv[idx+1]
+			}
+			ref := repo + "#" + argv[3]
+			if p, ok := r.pulls[ref]; ok {
+				p.State = superloop.Merged
+				p.MergeCommit = loopFixed
+				r.pulls[ref] = p
+			} else {
+				r.pull.State = superloop.Merged
+				r.pull.MergeCommit = loopFixed
+				r.lastMerged = r.pull.Head
+			}
+			r.mu.Unlock()
 		}
 		return "", 0
 	}
@@ -220,12 +254,16 @@ func newLoopRig(t *testing.T) *loopRig {
 		return nil, errors.New("no comparison in this rig")
 	}
 	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+		r.mu.Lock()
 		r.baseReads = append(r.baseReads, approved+".."+p.Head)
+		r.mu.Unlock()
 		return r.baseMerge(p, approved)
 	}
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	readTeams = func(context.Context, config.Ownership) (map[string]string, error) {
+		r.mu.Lock()
 		r.teamReads++
+		r.mu.Unlock()
 		return r.teams, r.teamsErr
 	}
 	loopInTurn = func(a *app, p state.Party) bool { return r.inTurn(p) || a.executionInTurn(p) }
@@ -236,12 +274,22 @@ func newLoopRig(t *testing.T) *loopRig {
 		if len(args) >= 2 && args[0] == "--as" {
 			args = args[2:]
 		}
+		r.mu.Lock()
 		r.calls = append(r.calls, args)
+		r.mu.Unlock()
 		o, code := r.answer(args)
-		if len(args) > 0 && args[0] == gateCmdName && code == 0 {
+		if len(args) > 0 && args[0] == gateCmdName && code == 0 && o == "" {
 			idx := slices.Index(args, "--reviewed-head")
 			if idx >= 0 && idx+1 < len(args) {
-				doc := r.a.reviewedMerge(context.Background(), r.pullRepo(), 7, args[idx+1])
+				repo := r.pullRepo()
+				pr := 7
+				if sep := slices.Index(args, "--"); sep >= 0 && sep+5 < len(args) {
+					repo = args[sep+4]
+					if n, err := strconv.Atoi(args[sep+5]); err == nil && n > 0 {
+						pr = n
+					}
+				}
+				doc := r.a.reviewedMerge(context.Background(), repo, pr, args[idx+1])
 				code = doc.ExitCode
 				b, _ := json.Marshal(doc)
 				o = string(b)
@@ -255,6 +303,8 @@ func newLoopRig(t *testing.T) *loopRig {
 		return o, code, nil
 	}
 	readLoopPull = func(_ context.Context, ref string) (superloop.Pull, error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 		if p, ok := r.pulls[ref]; ok {
 			return p, nil
 		}
@@ -264,8 +314,10 @@ func newLoopRig(t *testing.T) *loopRig {
 		return r.pull, nil
 	}
 	loopCommand = func(_ context.Context, stdin string, argv []string) (string, string, int, error) {
+		r.mu.Lock()
 		r.cmds = append(r.cmds, argv)
 		r.stdin = append(r.stdin, stdin)
+		r.mu.Unlock()
 		o, code := r.command(argv)
 		return o, r.stderr, code, nil
 	}
@@ -301,7 +353,9 @@ func (r *loopRig) pass(t *testing.T) {
 }
 
 func (r *loopRig) passErr() error {
+	r.mu.Lock()
 	r.calls = nil
+	r.mu.Unlock()
 	return r.a.runSupervisorLoop(context.Background(), true)
 }
 
@@ -312,6 +366,8 @@ func (r *loopRig) verdict(id, head, verdict, body string) {
 
 // called is the call whose line starts with prefix.
 func (r *loopRig) called(prefix ...string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, c := range r.calls {
 		if len(c) >= len(prefix) && slices.Equal(c[:len(prefix)], prefix) {
 			return c
@@ -1063,6 +1119,32 @@ func TestLoopInstallsANewerRelease(t *testing.T) {
 	}
 }
 
+func TestLoopReportsFailedGateAfterInstallAndClosesSkippedClaim(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
+	installed := false
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return "v2.0.0 is newer than v1.0.0: beekeeper self-update installs it", ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+			return "", 0
+		}
+		if slices.Equal(args, budgetGateArgs) {
+			return "GitHub budget under the floor", ExitRefused
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if len(r.cmds) != 0 || len(r.logged(t, "supervisor.release")) != 0 {
+		t.Fatalf("post-install or release succeeded despite failing gate: cmds=%v release=%v", r.cmds, r.logged(t, "supervisor.release"))
+	}
+	if !strings.Contains(r.out.String(), "budget --gate exits 3") {
+		t.Errorf("loop output missing gate failure:\n%s", r.out)
+	}
+}
+
 func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 	for name, c := range map[string]struct {
 		classifier []string
@@ -1249,6 +1331,7 @@ func TestLoopAndGuidePrintAProblemOnOneLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.once = true // These checks inspect completed pass effects.
 	act := superloop.Action{Key: "file test", Kind: superloop.KindFile, Agent: loopWorker}
 	text := "worker reported at now" + fileReportSeparator + report
 	if err := l.record(act, text); err != nil {
@@ -1637,17 +1720,95 @@ func TestLoopReleaseWaitsForTheBroker(t *testing.T) {
 	}
 }
 
-// A loop whose binary was replaced runs on the installed one.
+// A loop whose binary was replaced runs on the installed one at its next quiet
+// point (with no claim in flight), before running later actions in the same
+// pass on the old binary, and supervisor status reports the new version within
+// one loop round.
 func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	r := newLoopRig(t)
+	oldVer := loopRunningVersion
+	t.Cleanup(func() { loopRunningVersion = oldVer })
+	runningVer := "0.175.0-rc.23"
+	loopRunningVersion = func() string { return runningVer }
+
 	r.pass(t)
 	if r.execs != 0 {
 		t.Fatal("re-executed an unreplaced binary")
 	}
 	r.replaced = true
+	runningVer = "0.175.0-rc.24"
 	r.pass(t)
 	if r.execs != 1 {
 		t.Errorf("re-executions %d", r.execs)
+	}
+
+	// When self-update installs a newer release mid-pass while another action
+	// (such as a worker's done triggering board next) is queued in the same
+	// pass, the loop re-executes as soon as the release claim settles rather
+	// than running subsequent actions on the old binary.
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("Work {{.URL}}.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a.cfg.Supervisor.WorkerBrief = brief
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.OmpHarness, Model: loopQwen}}
+	r.a.now = r.a.now.Add(2 * time.Hour)
+	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: fix it", loopWorker)); err != nil {
+		t.Fatal(err)
+	}
+	installed := false
+	boardCallsBeforeReexec := 0
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return loopNewRelease, ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+			r.mu.Lock()
+			r.replaced = true
+			r.mu.Unlock()
+			runningVer = testLoopNewVer
+			return "", 0
+		}
+		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && (loopFakeBinary{r}).Replaced() {
+			boardCallsBeforeReexec++
+		}
+		return "", 0
+	}
+
+	// Check supervisorStatus inside a single loop pass after self-update re-executes.
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.once = true // Observe settled streams before the caller's quiet-point check.
+	if err := r.a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.a.store.WriteFile(loopPIDFile, 0) })
+	if err := r.a.writeLoopVersion(); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.reexec(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !installed || r.execs != 2 || !l.reexecuted {
+		t.Fatalf("installed=%v execs=%d reexecuted=%v", installed, r.execs, l.reexecuted)
+	}
+	if boardCallsBeforeReexec != 0 {
+		t.Fatalf("ran %d board next calls on the replaced binary before re-executing", boardCallsBeforeReexec)
+	}
+	var statusOut bytes.Buffer
+	statusApp := *r.a
+	statusApp.out = &statusOut
+	if err := statusApp.supervisorStatus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOut.String(), testLoopNewVer) {
+		t.Fatalf("supervisor status after self-update pass = %q, want %s", statusOut.String(), testLoopNewVer)
 	}
 }
 
@@ -2076,7 +2237,7 @@ func TestLoopDryRunTakesNothing(t *testing.T) {
 	r.ownedBy("team-a")
 	r.park(t, loopPR, time.Now())
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker two"}, Task: "upstream",
+		st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: loopSecondWorker}, Task: "upstream",
 			Park: &state.Park{On: "up/stream#1", At: time.Now(), Waits: "its merge", ReviewHead: loopHead}})
 		return nil, nil
 	}); err != nil {
@@ -3031,5 +3192,146 @@ func TestLoopFailureDelayGrowsToAnHour(t *testing.T) {
 		if got := loopFailureDelay(count); got != want {
 			t.Fatalf("delay after %d failures: %s, want %s", count, got, want)
 		}
+	}
+}
+
+// A look for a newer release that fails is said, once until a look
+// succeeds again, never taken for "this is the latest".
+func TestLoopSaysAFailedReleaseLookup(t *testing.T) {
+	r := newLoopRig(t)
+	failing := true
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && failing {
+			return "beekeeper: looking up the latest release: no signed binary found\n", ExitError
+		}
+		return "", 0
+	}
+	l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+	for range 2 {
+		if v := l.newerRelease(context.Background()); v != "" {
+			t.Fatalf("a failed look found %q", v)
+		}
+	}
+	const failed = "SUPERVISOR RELEASE LOOKUP FAILED: self-update --check exits 1: beekeeper: looking up the latest release: no signed binary found\n"
+	if r.out.String() != failed {
+		t.Fatalf("said %q, want %q once", r.out, failed)
+	}
+	// A look that succeeds clears it: the next failure is said again.
+	failing = false
+	l.newerRelease(context.Background())
+	failing = true
+	l.newerRelease(context.Background())
+	if r.out.String() != failed+failed {
+		t.Fatalf("said %q, want the failure again after a success", r.out)
+	}
+}
+
+func TestLoopWorkerAParksOnPRBWhoseOwnerIsGoneStartsOwnerForB(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Board.Owner = "o"
+	r.a.cfg.Board.Project = 1
+	oldRefStates, oldHead := refStates, parkReviewHead
+	t.Cleanup(func() { refStates, parkReviewHead = oldRefStates, oldHead })
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, p := range refs {
+			out[p] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return out, nil
+	}
+	parkReviewHead = func(string) string { return "" }
+
+	me := state.Party{Name: "worker A", Session: "session-a"}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = []state.ReviewPark{
+			{On: loopPR, Agent: "worker B", ReviewHead: loopHead, Serves: "o/r#70", At: r.a.now.Add(-5 * time.Minute)},
+		}
+		st.Agents = []state.Agent{{
+			Party: me,
+			Task:  "Work https://github.com/o/r/issues/10",
+		}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Worker A plain-parks on PR B (loopPR) because PR B overlaps its task;
+	// this must not delete PR B's ReviewParks entry or steal its Serves.
+	if _, err := r.a.park(me, loopPR, "waiting on overlapping PR"); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rp, ok := st.ReviewParkFor(loopPR); !ok || rp.Agent != "worker B" {
+		t.Fatalf("plain waiter overwrote ReviewParks[%s]: %+v", loopPR, st.ReviewParks)
+	}
+	// PR B's owner is now gone: next loop pass sees worker A waiting on PR B,
+	// records o/r#10 blocked by o/r#7 and starts an owner for PR B.
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = nil
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if c := r.called("board", "block", "o/r#10", "--by", loopPR); c == nil {
+		t.Fatalf("expected board block o/r#10 --by %s, got calls %v\n%s", loopPR, r.calls, r.out)
+	}
+	owner := superloop.PullWorkerName(loopPR)
+	if start := r.called(agentsName, agentStartName, owner); start == nil {
+		t.Fatalf("expected agents start %s, got calls %v\n%s", owner, r.calls, r.out)
+	}
+	if evs := r.logged(t, "supervisor.owner"); len(evs) != 1 || !strings.Contains(evs[0].Detail, loopURL) {
+		t.Fatalf("expected supervisor.owner logged, got %+v", evs)
+	}
+}
+
+func TestParseLoopPullClosingIssueAliases(t *testing.T) {
+	p, err := parseLoopPull(loopPR, []byte(`{"closingIssuesReferences":[{"url":"https://github.com/o/r/issues/101"},{"url":"https://github.com/o/other/issues/102"}]}`))
+	if err != nil || !slices.Equal(p.Closes, []string{"o/r#101", "o/other#102"}) {
+		t.Fatalf("closing issues = %v, %v", p.Closes, err)
+	}
+}
+
+func TestLoopOverlapDependencyFailureRetriesBeforeAssigningOwner(t *testing.T) {
+	for _, operation := range []string{"unblock", "block"} {
+		t.Run(operation, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Board.Owner, r.a.cfg.Board.Project = "o", 1
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: state.Party{Name: "waiting issue worker", Session: "overlap-session"}, Task: "Work https://github.com/o/r/issues/10", Park: &state.Park{On: loopPR, At: r.a.now, Waits: "overlapping PR"}}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopBoard && args[1] == operation {
+					return "dependency API unavailable", 1
+				}
+				return "", 0
+			}
+			r.pass(t)
+			if got := r.logged(t, "supervisor.owner"); len(got) != 0 {
+				t.Fatalf("dependency failure recorded as taken: %+v", got)
+			}
+			if got := r.logged(t, loopFailureVerb); len(got) != 1 || !strings.Contains(got[0].Detail, "dependency") {
+				t.Fatalf("dependency failure not reported: %+v", got)
+			}
+			if r.called(agentsName, agentStartName) != nil || r.called(agentsName, agentWakeName) != nil {
+				t.Fatalf("assigned owner before dependency confirmation: %v", r.calls)
+			}
+			if operation == "unblock" && r.called(loopBoard, "block") != nil {
+				t.Fatalf("continued after failed unblock: %v", r.calls)
+			}
+			r.answer = func([]string) (string, int) { return "", 0 }
+			r.pass(t)
+			if r.called(loopBoard, "block", "o/r#10", "--by", loopPR) == nil || r.called(agentsName, agentStartName, superloop.PullWorkerName(loopPR)) == nil {
+				t.Fatalf("retry did not record dependency then assign owner: %v", r.calls)
+			}
+			if got := r.logged(t, "supervisor.owner"); len(got) != 1 {
+				t.Fatalf("retry did not record success: %+v", got)
+			}
+		})
 	}
 }

@@ -23,6 +23,7 @@ type Config struct {
 	MaxPods          int               `yaml:"maxPods"`
 	PlacementTimeout time.Duration     `yaml:"placementTimeout"`
 	IdleTimeout      time.Duration     `yaml:"idleTimeout"`
+	Cache            Cache             `yaml:"cache"`
 }
 
 // Defaults returns operational defaults without choosing a cluster or image.
@@ -42,6 +43,7 @@ func (c Config) Defaults() Config {
 	if c.IdleTimeout == 0 {
 		c.IdleTimeout = time.Hour
 	}
+	c.Cache = c.Cache.defaults()
 	return c
 }
 
@@ -50,6 +52,9 @@ func (c Config) Validate() error {
 		return nil
 	}
 	c = c.Defaults()
+	if err := c.Cache.validate(); err != nil {
+		return err
+	}
 	if c.Kubeconfig == "" || c.Context == "" || len(validation.IsDNS1123Label(c.Namespace)) != 0 {
 		return errors.New("run.remote requires explicit kubeconfig, context and a valid namespace")
 	}

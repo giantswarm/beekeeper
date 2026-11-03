@@ -46,3 +46,13 @@ func TestExecutionHostReleaseCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestHostsCheckFlagsCoordinatorReleaseMismatch(t *testing.T) {
+	withCoordinatorVersion(t, hostNewRelease)
+	if err := checkHostRelease(hostOldRelease); err == nil {
+		t.Fatal("stale host release accepted")
+	}
+	if err := checkHostRelease(hostNewRelease); err != nil {
+		t.Fatal(err)
+	}
+}
