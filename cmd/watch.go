@@ -2127,6 +2127,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 			}
 			if gone {
 				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
+				if qerr := agyQuotaError(w.cfg, ag); qerr != nil {
+					hint = qerr.Error() + "; slot freed; doctor retires it and supervisor re-queues its task"
+				}
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}

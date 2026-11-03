@@ -433,78 +433,97 @@ work, which takes no choice on a self-hosted provider.`,
 			// The start gate: a verdict without room refuses the start
 			// before anything is recorded; --force goes through on record.
 			// A timer's start says what the gate did to it in the log.
-			gateFrom := time.Now()
-			over, v, err := a.startGateWithOptions(cmd.Context(), name, harness, model, builds, force, exclude, kind)
-			gateWait := time.Since(gateFrom)
-			if err != nil {
-				if byTimer {
-					a.recordTimerRefusal(name, tm, err)
+			autoPick := harness == harnessAuto
+			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			var timerLine string
+			for {
+				gateFrom := time.Now()
+				curHarness, curModel := harness, model
+				if autoPick {
+					curHarness, curModel = harnessAuto, ""
 				}
-				return err
-			}
-			if harness == harnessAuto {
-				ch, err := pickAutoChoice(v, force)
+				over, v, err := a.startGateWithOptions(cmd.Context(), name, curHarness, curModel, builds, force, exclude, kind)
+				gateWait := time.Since(gateFrom)
 				if err != nil {
+					if byTimer {
+						a.recordTimerRefusal(name, tm, err)
+					}
 					return err
 				}
-				if err := validateStartHarness(ch.Harness, mode); err != nil {
-					return err
-				}
-				if ch.Harness == omp.Harness {
-					// the pick names an omp model by its bare id: the
-					// broker and the start get the selector omp lists
-					ch.Model = a.ompQualified(ch.Model)
-				}
-				if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
-					return err
-				}
-				if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
-					if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
+				if autoPick {
+					ch, err := pickAutoChoice(v, force)
+					if err != nil {
 						return err
 					}
-					return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
+					if err := validateStartHarness(ch.Harness, mode); err != nil {
+						return err
+					}
+					if ch.Harness == omp.Harness {
+						// the pick names an omp model by its bare id: the
+						// broker and the start get the selector omp lists
+						ch.Model = a.ompQualified(ch.Model)
+					}
+					if err := a.preflightStartTarget(cmd.Context(), ch.Harness, ch.Model, dir); err != nil {
+						return err
+					}
+					if ch.Harness == omp.Harness && a.ompStartBrokered(ch.Model) {
+						if err := forwardBrokeredChoice(cmd, ch.Harness, ch.Model, ch.line()); err != nil {
+							return err
+						}
+						return a.agentsOnHost(cmd, []string{name, briefFile}, agentsBrokeredTimeout+time.Minute)
+					}
+					harness = ch.Harness
+					model = ch.Model
+					choiceLine = ch.line()
+				} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+					return err
 				}
-				harness = ch.Harness
-				model = ch.Model
-				choiceLine = ch.line()
-			} else if err := a.preflightStartTarget(cmd.Context(), harness, model, dir); err != nil {
+				if choiceLine != "" {
+					if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
+						return err
+					}
+				}
+				if over != "" {
+					by, err := a.caller()
+					if err != nil {
+						return err
+					}
+					if err := a.store.Record(event(by, verbStart, "%s: started over %s (--force)", name, over)); err != nil {
+						return err
+					}
+					if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
+						return err
+					}
+				}
+				// Every worker gets the shipped rules ahead of its task, whatever
+				// its harness.
+				if note := gapsNote(gaps); note != "" {
+					if _, err := fmt.Fprintln(a.out, note); err != nil {
+						return err
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, brief: baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
+				if byTimer {
+					if timerLine == "" {
+						var err error
+						timerLine, err = a.recordTimerStart(name, tm, gateWait)
+						if err != nil {
+							return err
+						}
+					}
+					sp.brief = timerLine + "\n\n" + sp.brief
+				}
+				h, _ := harnessByName(harness)
+				err = h.Start(cmd.Context(), a, sp)
+				var qerr *agy.QuotaError
+				if autoPick && errors.As(err, &qerr) {
+					_, _ = fmt.Fprintf(a.out, "quota exhausted on %s/%s (%v); re-queuing %s on another choice\n", harness, model, qerr, name)
+					exclude = append(exclude, harness+"/"+model)
+					continue
+				}
+				a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
 				return err
 			}
-			if choiceLine != "" {
-				if _, err := fmt.Fprintf(a.out, "choice: %s\n", choiceLine); err != nil {
-					return err
-				}
-			}
-			if over != "" {
-				by, err := a.caller()
-				if err != nil {
-					return err
-				}
-				if err := a.store.Record(event(by, verbStart, "%s: started over %s (--force)", name, over)); err != nil {
-					return err
-				}
-				if _, err := fmt.Fprintf(a.out, "started over %s (--force)\n", over); err != nil {
-					return err
-				}
-			}
-			// Every worker gets the shipped rules ahead of its task, whatever
-			// its harness.
-			if note := gapsNote(gaps); note != "" {
-				if _, err := fmt.Fprintln(a.out, note); err != nil {
-					return err
-				}
-			}
-			sp := agentStart{name: name, role: workerRole, brief: workerPrompt(taskPrompt(brief), gaps...), task: task, serves: briefIssue(brief), dir: dir, model: model, desktop: desktop, mode: mode}
-			if byTimer {
-				line, err := a.recordTimerStart(name, tm, gateWait)
-				if err != nil {
-					return err
-				}
-				sp.brief = line + "\n\n" + sp.brief
-			}
-			h, _ := harnessByName(harness)
-			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
-			return h.Start(cmd.Context(), a, sp)
 		},
 	}
 	c.Flags().StringVar(&nameFlag, "name", "", "the session's name (alternative to the first positional argument)")

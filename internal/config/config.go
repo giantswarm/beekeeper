@@ -1772,7 +1772,13 @@ func (p Provider) DeriveWithPace(fiveHour, sevenDay, pace *float64) (derived Pro
 	if (p.fiveHourMaxSet || p.FiveHourMax > 0) && fiveHour != nil && *fiveHour >= p.FiveHourMax {
 		ceiling = 0
 	}
+	if fiveHour != nil && *fiveHour >= 100 {
+		ceiling = 0
+	}
 	if (p.sevenDayMaxSet || p.SevenDayMax > 0) && sevenDay != nil && *sevenDay >= p.SevenDayMax {
+		ceiling = 0
+	}
+	if sevenDay != nil && *sevenDay >= 100 {
 		ceiling = 0
 	}
 	if fiveHour != nil && *fiveHour >= p.EffectiveHighPercent() {

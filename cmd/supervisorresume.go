@@ -1,16 +1,85 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 var loopResumePark = (*app).resumeParked
+
+// recoverQuota reports any local agy worker whose run ended with a quota
+// error, marks its bucket full until reset, frees its slot and re-queues its
+// task on another choice.
+func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) error {
+	if st.Stop != nil {
+		return nil
+	}
+	for _, ag := range st.Agents {
+		if ag.Done || ag.Task == "" || ag.Execution != nil || roleRun(st, ag.Party) {
+			continue
+		}
+		qerr := agyQuotaError(l.a.cfg, ag)
+		if qerr == nil {
+			continue
+		}
+		ref := cmp.Or(loopServes(st, ag), agentRef(st, ag.Name))
+		target := cmp.Or(ref, ag.Task)
+		if l.dryRun {
+			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+				return err
+			}
+			continue
+		}
+		startID := agyAgentStartID(ag)
+		_, model := agentHarnessModel(st, nil, ag)
+		l.a.recordAgyQuotaExhaustedForID(startID, model, qerr, l.a.now)
+		if startID != "" {
+			_ = l.a.endAgy(ctx, startID)
+		}
+		note, _, _ := l.a.lastNote(ag.Party, time.Time{})
+		err := l.a.store.Update(func(st *state.State) ([]state.Event, error) {
+			i := slices.IndexFunc(st.Agents, func(x state.Agent) bool { return x.Is(ag.Party) })
+			if i < 0 {
+				return nil, nil
+			}
+			for j := range st.Records {
+				if st.Records[j].Session.Is(ag.Party) {
+					st.Records[j].Ended, st.Records[j].Waits = l.a.now.UTC(), ""
+				}
+			}
+			removeAgent(st, i)
+			return []state.Event{
+				event(loopParty, "agents.gone", "%s: %s; task: %s; hand-over: %s", ag.Name, qerr.Error(), ag.Task, note),
+				event(loopParty, "supervisor.quota", "%s: %s; slot freed, task %s re-queued", ag.Name, qerr.Error(), target),
+			}, nil
+		})
+		if err != nil {
+			return err
+		}
+		l.fillPause = fillPause{}
+		l.fillEmpty = 0
+		l.boardNone = nil
+		if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR QUOTA %s: %s; slot freed, re-queuing %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
+			return err
+		}
+		if !l.startsHeld && l.a.cfg.Supervisor.WorkerBrief != "" {
+			if r, ok := parseRef(ref); ok {
+				brief, berr := l.brief(l.a.cfg.Supervisor.WorkerBrief, "", "quota "+ag.Name, briefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
+				if berr == nil {
+					_, _ = l.run(ctx, agentsName, agentStartName, ag.Name, brief, "--harness", harnessAuto)
+				}
+			}
+		}
+	}
+	return nil
+}
 
 // recoverParks repairs settled waits whose local worker no longer exists.
 // Discovery failure is not evidence that a worker ended. Managed executions

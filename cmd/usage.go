@@ -56,6 +56,198 @@ func usageHighBucketFile(name, bucket string) string {
 	return "usage-high-" + unsafeKey.ReplaceAllString(name, "_") + "-" + unsafeKey.ReplaceAllString(bucket, "_") + ".json"
 }
 
+func usageQuotaFile(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "usage-quota.json"
+	}
+	return "usage-quota-" + unsafeKey.ReplaceAllString(name, "_") + ".json"
+}
+
+func quotaFileForUsageFile(file string) string {
+	if file == usageFile {
+		return "usage-quota.json"
+	}
+	if rest, ok := strings.CutPrefix(file, "usage-"); ok {
+		if !strings.HasPrefix(rest, "high-") && !strings.HasPrefix(rest, "quota-") {
+			return "usage-quota-" + rest
+		}
+	}
+	return ""
+}
+
+type usageQuotaEntry struct {
+	At         time.Time `json:"at"`
+	ResetsAt   time.Time `json:"resetsAt"`
+	ShortError string    `json:"shortError,omitempty"`
+}
+
+type usageQuotaLedger struct {
+	Buckets   map[string]usageQuotaEntry `json:"buckets,omitempty"`
+	Processed map[string]time.Time       `json:"processed,omitempty"`
+}
+
+func applyQuotaForUsageFile(store state.Store, file string, r *usageReading, now time.Time) {
+	if store == nil || r == nil {
+		return
+	}
+	qf := quotaFileForUsageFile(file)
+	if qf == "" {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	var ledger usageQuotaLedger
+	found, err := store.ReadFile(qf, &ledger)
+	if err != nil || !found || len(ledger.Buckets) == 0 {
+		return
+	}
+	for _, bucket := range slices.Sorted(maps.Keys(ledger.Buckets)) {
+		entry := ledger.Buckets[bucket]
+		if entry.ResetsAt.IsZero() || !now.Before(entry.ResetsAt) {
+			continue
+		}
+		if bucket == "" {
+			r.FiveHour = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+			r.SevenDay = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+			continue
+		}
+		if r.Buckets == nil {
+			r.Buckets = map[string]usageBucket{}
+		}
+		b, exists := r.Buckets[bucket]
+		b.FiveHour = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+		b.SevenDay = &usageWindow{UsedPercent: 100, ResetsAt: entry.ResetsAt}
+		if !exists {
+			r.BucketOrder = append(r.BucketOrder, bucket)
+		}
+		r.Buckets[bucket] = b
+	}
+}
+
+func (a *app) recordAgyQuotaExhausted(model string, qerr *agy.QuotaError, now time.Time) {
+	a.recordAgyQuotaExhaustedForID("", model, qerr, now)
+}
+
+func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaError, now time.Time) {
+	if a == nil || a.store == nil || qerr == nil {
+		return
+	}
+	if now.IsZero() {
+		now = a.now
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	m := cmp.Or(strings.TrimSpace(model), strings.TrimSpace(qerr.Model))
+	k := a.liveCapacity()
+	prov, bucket := resolveAgentProviderBucket(k, agy.Harness, m)
+	if prov == "" {
+		prov = agy.Harness
+	}
+	if bucket == "" {
+		bucket = k.Providers[prov].BucketFor(m)
+	}
+	qf := usageQuotaFile(prov)
+	var ledger usageQuotaLedger
+	_, _ = a.store.ReadFile(qf, &ledger)
+	if id != "" && !qerr.At.IsZero() && ledger.Processed[id].Equal(qerr.At) {
+		return
+	}
+	base := now
+	if !qerr.At.IsZero() {
+		diff := now.Sub(qerr.At)
+		if diff >= -10*time.Minute && diff <= 10*time.Minute {
+			base = qerr.At
+		}
+	}
+	var resetsAt time.Time
+	if qerr.ResetsIn > 0 {
+		resetsAt = base.Add(qerr.ResetsIn).UTC()
+	} else {
+		var cached usageReading
+		if found, err := a.store.ReadFile(usageProviderFile(prov), &cached); err == nil && found {
+			if b, ok := cached.Buckets[bucket]; ok {
+				for _, w := range []*usageWindow{b.FiveHour, b.SevenDay} {
+					if w != nil && w.ResetsAt.After(base) && (resetsAt.IsZero() || w.ResetsAt.Before(resetsAt)) {
+						resetsAt = w.ResetsAt.UTC()
+					}
+				}
+			}
+		}
+		if resetsAt.IsZero() {
+			resetsAt = base.Add(5 * time.Hour).UTC()
+		}
+	}
+	if ledger.Buckets == nil {
+		ledger.Buckets = map[string]usageQuotaEntry{}
+	}
+	for bName, existing := range ledger.Buckets {
+		if existing.ResetsAt.IsZero() || !base.Before(existing.ResetsAt) {
+			delete(ledger.Buckets, bName)
+		}
+	}
+	if existing, ok := ledger.Buckets[bucket]; !ok || resetsAt.After(existing.ResetsAt) {
+		ledger.Buckets[bucket] = usageQuotaEntry{
+			At:         base.UTC(),
+			ResetsAt:   resetsAt,
+			ShortError: qerr.ShortError,
+		}
+	}
+	if id != "" && !qerr.At.IsZero() {
+		if ledger.Processed == nil {
+			ledger.Processed = map[string]time.Time{}
+		}
+		ledger.Processed[id] = qerr.At
+	}
+	_ = a.store.WriteFile(qf, ledger)
+}
+
+func (a *app) syncAgyQuotaForID(id, model string) {
+	if a == nil || a.cfg == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	qerr := agy.ReadQuotaError(a.cfg.StateDir, id)
+	if qerr == nil {
+		return
+	}
+	a.recordAgyQuotaExhaustedForID(id, model, qerr, a.now)
+}
+
+func (a *app) syncAgyQuotaFromState(st *state.State, now time.Time) {
+	if a == nil || a.cfg == nil || a.cfg.StateDir == "" {
+		return
+	}
+	if st == nil && a.store != nil {
+		st, _ = a.store.Read()
+	}
+	if st == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, ag := range st.Agents {
+		id := agyAgentStartID(ag)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if qerr := agy.ReadQuotaError(a.cfg.StateDir, id); qerr != nil {
+			_, model := agentHarnessModel(st, nil, ag)
+			a.recordAgyQuotaExhaustedForID(id, model, qerr, now)
+		}
+	}
+	for _, s := range st.Starts {
+		id, ok := strings.CutPrefix(s.HostSession, agy.HostPrefix)
+		if !ok || id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if qerr := agy.ReadQuotaError(a.cfg.StateDir, id); qerr != nil {
+			a.recordAgyQuotaExhaustedForID(id, s.Model, qerr, now)
+		}
+	}
+}
+
 // usageWindow is one subscription usage window (5-hour or 7-day).
 type usageWindow struct {
 	UsedPercent float64   `json:"usedPercent"`
@@ -817,6 +1009,7 @@ func (a *app) cachedProvidersCapacityAt(k config.Capacity, now time.Time, provid
 			errs = append(errs, name+": "+verr.Error())
 			continue
 		}
+		applyQuotaForUsageFile(a.store, usageProviderFile(name), &r, now)
 		pv := buildSingleProviderView(name, p, providerAgents{}, providerReadingResult{reading: r, ok: true}, now)
 		anySubscription = true
 		subDerivedCeiling += pv.Ceiling
@@ -863,6 +1056,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	if a.store != nil {
 		if found, err := a.store.ReadFile(file, &cached); err == nil && found && !cached.At.IsZero() && validateReadingAt(cached, u, now) == nil {
 			if !a.useCodexRolloutUsage(u, cached) && usageFresh(cached, u, now) {
+				applyQuotaForUsageFile(a.store, file, &cached, now)
 				return cached, nil
 			}
 			haveCached = true
@@ -879,6 +1073,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 		if haveCached && !slices.Equal(u.Command, config.DefaultCodexUsageCommand) &&
 			validateReadingAt(cached, u, now.Add(time.Since(started))) == nil {
 			cached.Fallback = err.Error()
+			applyQuotaForUsageFile(a.store, file, &cached, now)
 			return cached, nil
 		}
 		return usageReading{}, err
@@ -886,6 +1081,7 @@ func (a *app) resolveReading(ctx context.Context, file string, u config.Usage) (
 	if a.store != nil {
 		_ = a.store.WriteFile(file, r)
 	}
+	applyQuotaForUsageFile(a.store, file, &r, now)
 	return r, nil
 }
 
@@ -1282,6 +1478,7 @@ func (w *watcher) watchUsage(ctx context.Context, st *state.State, sessions []*c
 }
 
 func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st *state.State, sessions []*claude.Session) *usageView {
+	w.syncAgyQuotaFromState(st, w.now)
 	readings := map[string]providerReadingResult{}
 	if !w.chores {
 		for _, name := range k.ProviderNames() {
@@ -1330,6 +1527,7 @@ func (w *watcher) watchProvidersUsage(ctx context.Context, k config.Capacity, st
 						readings[name] = providerReadingResult{err: verr}
 					} else {
 						r.Fallback = uerr
+						applyQuotaForUsageFile(w.store, usageProviderFile(name), &r, w.now)
 						readings[name] = providerReadingResult{reading: r, ok: true}
 					}
 				}
