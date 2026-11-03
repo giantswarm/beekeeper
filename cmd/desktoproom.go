@@ -140,7 +140,8 @@ func roomFor(st *state.State, sessions []*claude.Session, t *proc.Table, now tim
 // roomRank ranks the desktop CLI of s for makeRoom: 0 a finished worker (off
 // the roster, or on it without a task) or a role's past run (pastRun: its
 // work ended with the relay), 1 a parked one. Its session stays, and the
-// desktop's send starts a CLI of it again. False: never ended, since it is
+// desktop's send starts a CLI of it again: a past run's stays the person's
+// to close, only its idle CLI makes room. False: never ended, since it is
 // not idle (endable), it holds or is to take a role, or it is busy on its
 // task.
 func roomRank(st *state.State, t *proc.Table, s *claude.Session, now time.Time) (int, bool) {
