@@ -522,7 +522,7 @@ func TestHostSelfUpdateRefusesALookupOfAnotherRelease(t *testing.T) {
 	stubHostInstall(t, h)
 	for name, given := range map[string]string{
 		"another release": `{"tag":"` + hostOldRelease + `"}`,
-		"no release":      `{"tag":`,
+		"a broken record": `{"tag":`,
 		"no tag":          `{"assets":[]}`,
 	} {
 		if got := a.hostSelfUpdate(context.Background(), execution.Protocol, hostNewRelease, []byte(given)); got.Error == "" {
@@ -563,10 +563,10 @@ func TestHostReleaseInputReadsWhatTheCoordinatorSends(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		"device":  {null, "", true},
-		"empty":   {strings.NewReader(""), "", true},
-		"release": {strings.NewReader(" {\"tag\":\"v0.6.0\"}\n"), `{"tag":"v0.6.0"}`, true},
-		"too big": {strings.NewReader(strings.Repeat(" ", execution.MaxWire+1)), "", false},
+		"a device":    {null, "", true},
+		"no input":    {strings.NewReader(""), "", true},
+		"a lookup":    {strings.NewReader(" {\"tag\":\"v0.6.0\"}\n"), `{"tag":"v0.6.0"}`, true},
+		"over limits": {strings.NewReader(strings.Repeat(" ", execution.MaxWire+1)), "", false},
 	} {
 		got, err := hostReleaseInput(tc.in)
 		if (err == nil) != tc.ok || string(got) != tc.want {

@@ -15,11 +15,18 @@ import (
 	"time"
 
 	"github.com/giantswarm/go-selfupdate"
+	"github.com/google/go-github/v93/github"
 )
 
 // downloadURL is the public download URL of asset name of release tag.
 func downloadURL(tag, name string) string {
 	return "https://github.com/" + Repository + "/releases/download/" + tag + "/" + name
+}
+
+// apiAsset is asset name of latestV as GitHub's API answers it.
+func apiAsset(id int64, name string) *github.ReleaseAsset {
+	size, url := 3, downloadURL(latestV, name)
+	return &github.ReleaseAsset{ID: &id, Name: &name, Size: &size, BrowserDownloadURL: &url}
 }
 
 func TestLookupVersionAsksWithTheLoginAndKeepsTheBinaries(t *testing.T) {
@@ -28,10 +35,8 @@ func TestLookupVersionAsksWithTheLoginAndKeepsTheBinaries(t *testing.T) {
 		if r.URL.Path != "/repos/"+Repository+"/releases/tags/"+latestV {
 			return 404, `{"message":"Not Found"}`, nil
 		}
-		data, _ := json.Marshal(map[string]any{"id": 7, "tag_name": latestV, "html_url": "https://github.com/" + Repository + "/releases/tag/" + latestV, "published_at": published, "assets": []map[string]any{
-			{"id": 1, "name": binaryName(), "size": 3, "browser_download_url": downloadURL(latestV, binaryName())},
-			{"id": 2, "name": binaryName() + ".bundle", "size": 4, "browser_download_url": downloadURL(latestV, binaryName()+".bundle")},
-			{"id": 3, "name": "checksums.txt", "browser_download_url": downloadURL(latestV, "checksums.txt")},
+		data, _ := json.Marshal(map[string]any{"id": 7, "tag_name": latestV, "html_url": "https://github.com/" + Repository + "/releases/tag/" + latestV, "published_at": published, "assets": []*github.ReleaseAsset{
+			apiAsset(1, binaryName()), apiAsset(2, binaryName()+".bundle"), apiAsset(3, "checksums.txt"),
 		}})
 		return 200, string(data), nil
 	})
