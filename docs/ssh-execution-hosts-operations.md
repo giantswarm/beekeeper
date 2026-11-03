@@ -172,6 +172,14 @@ and atomically rename it in the destination directory. Sudo never prompts;
 if it is unavailable or denied, the failure is reported and the host stays held. A release that does not prepare leaves the host held for a retry;
 one that does moves the host's watches and sandbox broker onto it, as
 `self-update` does.
+The coordinator looks the release up on GitHub itself, with its gh login (or
+`GH_TOKEN`, `GITHUB_TOKEN`), never anonymously, and sends the lookup to the host
+on the SSH command's standard input: the host downloads the binary and its
+bundle from the release's public download URLs and asks GitHub's API nothing,
+so a host without a GitHub login updates all the same, and no token leaves the
+coordinator. A lookup GitHub refuses holds the host, a rate limit named with
+its reset. A host whose installed release predates this looks the release up
+on its own once more.
 The coordinator then runs `hosts check` with the digest the host answered and
 records the release and digest in its state (`hostPins`): every start on the
 host is pinned to it. No configuration change and no person is involved.
@@ -383,9 +391,10 @@ and a `hooks.json` in the `{"beekeeper":{"PreToolUse":[...]}}` format running
 files; tampering with any of them fails `hosts check` until a matching bundle
 is prepared again.
 
-`hosts check` verifies `agy --version`, probes login with `agy models` inside
-the managed home without a model call, and runs the `agy` execution guard
-conformance probe. The host advertises `agy` only when all three pass, and a
+`hosts check` verifies `agy --version`, refuses `agy` while `agy` would
+reject any entry of the managed `hooks.json` (it drops the whole file and
+would run unguarded), probes login with `agy models` inside the managed home
+without a model call, and runs the `agy` execution guard conformance probe. The host advertises `agy` only when all three pass, and a
 coordinator listing `agy` in the host's `harnesses` (`harnesses: [claude,
 codex, agy]`) starts `agy` workers there only when advertised.
 
@@ -396,6 +405,23 @@ resumes stored wakes with `--conversation <id>`. Lease, publication, review,
 merge, stop and recovery follow the same contract as Claude and Codex. `agy`
 usage and pace stay on the coordinator: remote `agy` workers count against the
 `agy` provider ceiling, not the coordinator's local ceiling (`local.ceiling`).
+
+## Read each harness's readiness
+
+`beekeeper agents hosts check <host>` includes a `readiness` entry for each
+configured harness on a checked host. Each entry names its pinned `version`
+and reports `versionCheck`, `login` and `guard` as `passed`, `failed` or
+`not checked`. The version is the configured pin; `versionCheck: passed`
+confirms that the executable matched it. A failed version check leaves the
+login check `not checked`, rather than claiming a login failure.
+
+The guard result covers the installed policy and conformance check. For omp
+it also requires the actual harness to load the bound extension without a
+model prompt. If omp login fails, that extension check is `not checked`.
+Authentication output and credential values are never included. Only
+harnesses that pass every prerequisite appear in `harnesses`; `unavailable`
+retains the explanation for each refused harness. A host with no passing
+harness refuses the check and all starts.
 
 ## Start, inspect, and recover
 
@@ -420,17 +446,21 @@ host's physical guards. A host does not create another subscription budget.
 whose repository a host maps, and for which `capacity --host <selector>` has
 room, runs there pinned to the repository's default branch — while the
 coordinator is out of room, or always with `supervisor.hostsFirst`. A host's
-check weighs only the choices it can run (Claude Code, Codex, and Antigravity
-where configured and offered). `hostsFirst` prefers
+check weighs only the choices it can run (Claude Code, Codex, omp, and
+Antigravity where configured and offered). `hostsFirst` prefers
 hosts only for what a host can run: without room on any host a supported start
 waits, while a repository no host maps, or a choice of a harness no host has
-an adapter for (`omp`), starts on the coordinator within its local
+an adapter for, starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs, and
 waits instead when that exclusion alone would make a self-hosted choice the pick
 while a subscription is eligible. A desk
-without `capacity.choices` never places remotely. Reviewers stay on the
-coordinator even with `hostsFirst`: execution hosts have no relayed GitHub
-read-and-review path. A review waits when coordinator review capacity is full.
+without `capacity.choices` never places remotely. With `github.workerApp`
+configured, reviewers (including Codex) follow the same host preferences and
+retain review capacity accounting. The per-worker GitHub adapter reads the PR
+and gives `gh pr review` write access to the task repository; the coordinator
+authenticates the reviewer session, exact head and reported review before a
+merge. Without that adapter, reviewers stay on the coordinator and wait when
+coordinator review capacity is full.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
@@ -476,6 +506,11 @@ be stopped. An unreachable host retains its reservation and task; reachability
 is reported separately from the last process evidence. An acknowledgement of
 termination is retained even if the subsequent inspection disconnects. Stopping
 a process does not mark its task complete or remove its workspace.
+Inspection, including acknowledgement of a lease-expired unit, also preserves
+the workspace, its execution-owned Git repository and source bundle. Recover
+unpublished commits and local edits at the workspace path printed by `inspect`;
+stopping and repeating a stop do not authorize deletion. These retained files
+continue to consume disk until separately preserved and deliberately removed.
 
 Capped runs verify their worker identity, installed policy and live coordinator
 authority before taking a slot. Their scopes stop with the verified owned
@@ -811,58 +846,116 @@ confirmed and the record settles.
 
 ### Per-worker GitHub credentials
 
-The coordinator can issue GitHub App installation tokens separately for each
-execution, repository and permission level. Configure only the coordinator:
+The coordinator issues short-lived GitHub App user-to-server tokens (`ghu_...`)
+so every worker action runs as `<user> via <App>` within the authorizing user's
+own GitHub permissions. No GitHub App private key, client secret, refresh token
+or permanent GitHub login is installed on an execution host; worker tokens are
+never installation tokens. Configure only the coordinator:
 
 ```yaml
 github:
   allowedOrgs: [example]
   workerApp:
-    appID: 12345
-    privateKey: op://Shared/worker-app/private-key
-    installations:
-      example: 67890
+    clientID: Iv23liExampleClientID
+    refreshToken: op://Shared/worker-app/refresh-token
 ```
 
-The App needs Contents, Pull requests, Issues, Checks, Actions, Commit statuses
-and Metadata read access. Contents, Workflows and Pull requests write access are needed for
-the task repository. Its installation must include every repository workers
-need to research. The private-key reference is resolved in the coordinator;
-no App key, refresh token or permanent GitHub login is installed on a host.
-This configuration enables GitHub for newly started executions. Existing
-executions retain their recorded publication mode.
+The `refreshToken` field may name a 1Password reference (`op://<vault>/<item>/<field>`),
+or a SOPS path (`sops://<file>#<path>`). Read-only source references are rejected
+before authorization or refresh. If persisting a rotated refresh token fails,
+repeat `beekeeper agents hosts github-login` to restore authorization.
+Authorize the coordinator once through GitHub's OAuth device flow:
 
-In an enabled execution `gh issue view`, `gh pr view` and `gh pr checks` use a
+```sh
+beekeeper agents hosts github-login
+```
+
+The command prints the verification URL (`https://github.com/login/device`) and
+one-time user code, waits for authorization, verifies the resulting user-to-server
+token has expiration enabled, and writes the refresh token to the configured
+secret reference. This configuration enables GitHub for newly started executions.
+Existing executions retain their recorded publication mode.
+
+In an enabled execution `gh issue`, `gh pr` and `gh api` commands use a
 short-lived credential fetched over the authenticated SSH callback. Cross-repo
-calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Read tokens
-reach only the named repository in a configured owner. A write token reaches
-only the execution's task repository. Read-only Git clone, fetch and ls-remote
-operations may also name an explicit GitHub repository URL in those owners.
-The runner installs dispatch scripts for
-`gh` and `git` ahead of the pinned tools; scripts and journals contain no token.
-Only the launched GitHub client receives it, through its environment.
+calls name `--repo owner/repo`; `gh api` names `repos/owner/repo/...`. Reads may
+reach any repository the user can access. Writes (`git push`, `gh pr create`,
+`gh pr edit`, `gh pr comment`, `gh issue create`, `gh issue edit`, `gh issue comment`,
+`gh issue close`, `gh issue reopen`) are restricted by the wrappers to owners in
+`github.allowedOrgs` (an empty list allows no writes or GitHub-enabled starts). A
+write names one repository, as `--repo owner/repo` or a URL target, never two.
+Every other `gh` subcommand is refused unless the wrapper lists it as a read
+(`list`, `view`, `status`, `pr checks`, `pr diff`, `pr checkout`, `repo clone`,
+`run watch`, `run download`, `release download`, `release verify`, `release
+verify-asset`). `gh api` runs GET and HEAD only: `-f`/`-F` need an explicit
+`-X GET`, since gh otherwise sends POST, and `--input`, `--hostname` and
+GraphQL's POST are refused. A worker may work in and
+open pull requests across multiple repositories in one task (using its primary
+workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner
+installs dispatch scripts for `gh` and `git` ahead of the pinned tools; scripts
+and journals contain no token. Only the launched GitHub client receives it,
+through its environment.
 
-Push from the owned workspace with
-`git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
+Push from the owned workspace (or a secondary checkout under `.beekeeper-scratch`)
+with `git push origin HEAD:refs/heads/beekeeper-execution/<execution>/<generation>`,
 then open the PR with `gh pr create`. The adapter supplies that same head branch,
-and the coordinator verifies it against GitHub and the parked workspace commit
+and the coordinator verifies it against GitHub and the parked checkout commit
 before requesting desk review. Force pushes, other branches and alternate push
 remotes are refused. Local Git commands run without a credential. Network Git
 uses the pinned HTTPS origin and disables inherited credential helpers, global
 Git configuration, hooks and redirects. Authenticated pushes use a disposable
-bare repository with only the resolved workspace commit and object storage;
+bare repository with only the resolved checkout commit and object storage;
 workspace Git configuration and refs cannot add tags, mirror other branches or
 redirect the transport. Inherited Git environment overrides are removed.
-Merges continue through the coordinator's
-review and exact-head authorization, never a worker's `gh pr merge`.
+Merges continue through the coordinator's review and exact-head authorization,
+never a worker's `gh pr merge`.
 
-GitHub installation tokens expire after an hour. The coordinator caches them
-until five minutes before expiry and retains a private revocation ledger under
-its own state directory, outside scheduling state and event logs. Runner exit,
-completion, explicit stop and terminal inspection revoke credentials; a failed
-revocation retains the ledger and reports an error for retry. An unreachable
-host does not prevent coordinator revocation; failed host contact after the
-execution lease expires also revokes its credentials. The managed command hooks are the
-same policy boundary as the rest of SSH execution, not an OS sandbox: a GitHub
-installation token cannot itself limit Contents writes to one branch. Hosts
+The same write-capable user token serves reads and writes across repositories.
+It is not scoped by repository or by the wrapper's requested operation.
+`allowedOrgs` restricts managed wrapper commands, not the token itself: GitHub's
+actual authority boundary is the App's installations intersected with the
+user's permissions.
+
+GitHub user-to-server tokens expire after eight hours. The coordinator caches the
+current user token until five minutes before expiry and records issued tokens in
+a private per-execution ledger under its own state directory, outside scheduling
+state and event logs. Every issuance consults the coordinator cache so refresh
+never reissues a stale per-execution entry. Runner exit, completion, explicit
+stop and terminal inspection immediately deny further callbacks. Because the
+access token is shared, they rotate the coordinator's refresh token only when
+no other live GitHub-enabled execution remains. Until then a stopped worker's
+already-issued token remains valid; managed guards and host process termination
+remain necessary. The last execution rotates and persists the refresh token,
+invalidating the old access token at GitHub. Failed revocation retains the ledger
+and reports an error for retry. An unreachable host does not prevent coordinator
+revocation. Device-wide revocation rotates or revokes that coordinator's refresh
+token; user-wide revocation removes the App authorization in GitHub settings.
+The managed command
+hooks are the same policy boundary as the rest of SSH execution, not an OS
+sandbox: a GitHub token cannot itself limit Contents writes to one branch. Hosts
 therefore still require the managed guards and owned execution identity.
+
+Post-merge operations for this migration include creating/configuring one public
+GitHub App owned by the organization, authorizing each coordinator through device
+flow, updating coordinator and execution hosts, and proving multi-worker GitHub
+access live. After that proof, retire the previous worker-access App and delete
+its private key from the coordinator secret store.
+
+## Rerun failed CI without a new commit
+
+From a GitHub-enabled execution's workspace, run
+`beekeeper agents rerun <pull-request-number>`. The authenticated callback
+asks the coordinator to run `devctl pr rerun` for the execution's repository.
+Only a PR on that execution's assigned branch is accepted. Stopped, completed,
+expired-lease and GitHub-held executions cannot request a rerun.
+
+The coordinator needs its own CircleCI login with Write access. CI credentials
+stay there; the worker receives devctl's output, diagnostics and exit code
+(including authentication-required exit 8). The command starts failed-workflow
+reruns without waiting for completion. Read the failure first and use this for
+transient CI failures; code failures still need a fix. A lost callback reply is
+not proof that no rerun started: inspect CI before trying again.
+
+The generated CircleCI configuration invokes `architect/go-build`; retrying a
+transient Rekor signing failure inside that job belongs in the architect orb,
+not an edit to Beekeeper's generated workflow files.

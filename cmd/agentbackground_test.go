@@ -358,7 +358,7 @@ func TestBackgroundAgentAsksTheDaemon(t *testing.T) {
 func TestModeBackgroundRefusesDesktopAndOmp(t *testing.T) {
 	brief := filepath.Join(t.TempDir(), "brief.md")
 	writeFile(t, brief, "# a task\n")
-	for _, extra := range [][]string{{bgDesktopFlag}, {"--harness", "omp"}} {
+	for _, extra := range [][]string{{bgDesktopFlag}, {testHarnessFlag, "omp"}} {
 		a, _ := stubApp(t)
 		c := a.agentStartCmd()
 		c.SetArgs(append([]string{bgName, brief, modeFlag, config.ModeBackground}, extra...))

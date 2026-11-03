@@ -17,6 +17,7 @@ type shownNote struct {
 	state.Note
 	Status   string        `json:"status"`
 	Answer   string        `json:"answer,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
 	Closure  *state.Event  `json:"closure,omitempty"`
 	Delivery *noteDelivery `json:"delivery,omitempty"`
 }
@@ -24,11 +25,11 @@ type shownNote struct {
 func (a *app) noteShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use: "show <id>", Short: "Show one note in full, including its status and retained answer",
-		Long: `Show a note's full text, audience, status and retained answer, without truncation.
-With --json, print one object with the note's fields, status, answer and closure.
+		Long: `Show a note's full text, audience, status and retained answer or withdrawal reason, without truncation.
+With --json, print one object with the note's fields, status, answer, reason and closure.
 A bare number reads this machine's note, or the central instance's open note
 when only it has that number; <context>#<n> selects the central instance.
-Answered notes can be read while their answer event is retained. A central
+Answered or withdrawn notes can be read while their complete audit event is retained. A central
 store also retains closed notes for its history retention period. Expired
 history cannot be recovered.`,
 		Args: cobra.ExactArgs(1),
@@ -76,6 +77,9 @@ history cannot be recovered.`,
 					return err
 				}
 				m["status"] = local.Status
+				if local.Reason != "" {
+					m["reason"] = local.Reason
+				}
 				if local.Delivery != nil {
 					m["delivery"] = local.Delivery
 				}
@@ -105,6 +109,11 @@ history cannot be recovered.`,
 			}
 			if local.Default != "" {
 				if _, err := fmt.Fprintf(a.out, "default: %s\n", local.Default); err != nil {
+					return err
+				}
+			}
+			if local.Reason != "" {
+				if _, err := fmt.Fprintf(a.out, "reason: %s\n", local.Reason); err != nil {
 					return err
 				}
 			}
@@ -153,8 +162,12 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 		if n != nil {
 			shown = &shownNote{Note: *n, Status: noteStatusOpen, Closure: closure}
 			if closure != nil {
-				shown.Status = "closed"
+				shown.Status = noteStatusClosed
 				switch closure.Verb {
+				case noteDone:
+					if withdrawn := withdrawnNote(*closure); withdrawn != nil {
+						shown.Reason = withdrawn.Reason
+					}
 				case noteDefaulted:
 					shown.Status = "defaulted"
 				case answerRecorded:
@@ -169,13 +182,17 @@ func (a *app) retainedNote(id int) (*shownNote, error) {
 	}
 	evs, err := a.store.Events(1, func(e state.Event) bool {
 		an, ok := parseAnswered(e)
-		return ok && an.ID == id
+		withdrawn := withdrawnNote(e)
+		return ok && an.ID == id || withdrawn != nil && withdrawn.ID == id
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(evs) > 0 {
 		e := evs[len(evs)-1]
+		if withdrawn := withdrawnNote(e); withdrawn != nil {
+			return withdrawn, nil
+		}
 		an, _ := parseAnswered(e)
 		return &shownNote{Note: state.Note{ID: id, Text: an.Question, For: an.Audience, By: state.Party{Name: an.Asker}}, Status: closedAnswered, Answer: an.Answer, Closure: &e}, nil
 	}

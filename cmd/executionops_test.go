@@ -298,6 +298,9 @@ func (f *testExecutionTransport) Start(ctx context.Context, r execution.StartReq
 }
 
 func (f *testExecutionTransport) Logs(ctx context.Context, ref execution.Ref, q execution.LogRequest) (execution.LogPage, error) {
+	if f.logs == nil {
+		return execution.LogPage{}, errors.New("fixture transport has no logs")
+	}
 	return f.logs(ctx, ref, q)
 }
 

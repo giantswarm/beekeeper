@@ -95,17 +95,19 @@ func TestCall(t *testing.T) {
 }
 
 // A connection that stalls times the call out naming the stage and its
-// deadline; the next call connects afresh and is answered.
+// deadline; the next call connects afresh and is answered. Allow process
+// startup and TLS handshakes margin on busy CI runners; only the deliberately
+// stalled request should exhaust the deadline.
 func TestCallStalledConnection(t *testing.T) {
 	for method, stage := range map[string]string{"": "connect", "tools/call": "tool call"} {
 		t.Run(stage, func(t *testing.T) {
 			m, tr := centraltest.NewStalling(t, backend(t), "beekeeper", method)
 			central.SetBaseTransport(t, tr)
-			c, _ := clientOf(t, m.URL, "beekeeper", 500*time.Millisecond)
+			c, _ := clientOf(t, m.URL, "beekeeper", 5*time.Second)
 			ctx := context.Background()
 
 			var u *central.Unreachable
-			if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Reason != stage+" timed out (deadline 500ms)" {
+			if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Reason != stage+" timed out (deadline 5s)" {
 				t.Fatalf("stalled: %v, want Unreachable naming the %s stage and its deadline", err, stage)
 			}
 			if u.Sent != (method == "tools/call") {
@@ -150,7 +152,7 @@ func pagerDuty(t *testing.T) string {
 func TestPagerDutyReadStalledConnection(t *testing.T) {
 	m, tr := centraltest.NewStalling(t, pagerDuty(t), "pd", "tools/call")
 	central.SetBaseTransport(t, tr)
-	c, _ := clientOf(t, m.URL, "pd", 500*time.Millisecond)
+	c, _ := clientOf(t, m.URL, "pd", 5*time.Second)
 	var calls []error
 	r := alerts.PagerDutyReader{Services: []string{"PSVC"}, Call: func(ctx context.Context, tool string, args map[string]any) (string, error) {
 		text, err := c.Call(ctx, tool, args, nil)
@@ -160,7 +162,7 @@ func TestPagerDutyReadStalledConnection(t *testing.T) {
 	if ans := r.Read(context.Background(), nil); !ans.OK || len(ans.Incidents) != 0 {
 		t.Errorf("read = %+v, want no open incident", ans)
 	}
-	if len(calls) != 2 || calls[0] == nil || !strings.Contains(calls[0].Error(), "tool call timed out (deadline 500ms)") || calls[1] != nil {
+	if len(calls) != 2 || calls[0] == nil || !strings.Contains(calls[0].Error(), "tool call timed out (deadline 5s)") || calls[1] != nil {
 		t.Errorf("attempts %v, want the stalled tool call, then the answer", calls)
 	}
 }
@@ -170,8 +172,8 @@ const mailboxURI = "beekeeper://mailbox/ada@example.com"
 
 // subscriber is a beekeeper serve stand-in that serves subscriptions/listen
 // for mailboxURI alone, to the bearer a-token, and sends one update of it
-// on each acknowledged stream.
-func subscriber(t *testing.T) string {
+// when the test observes the acknowledged stream.
+func subscriber(t *testing.T, updates <-chan struct{}) string {
 	t.Helper()
 	type bearerKey struct{}
 	hooks := &mcpserver.Hooks{}
@@ -196,12 +198,22 @@ func subscriber(t *testing.T) string {
 	})
 	hooks.AddBeforeSubscriptionsListen(func(ctx context.Context, id any, _ *mcp.SubscriptionsListenRequest) {
 		session := mcpserver.ClientSessionFromContext(ctx)
+		if updates == nil {
+			return
+		}
 		go func() {
-			time.Sleep(50 * time.Millisecond)
-			session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
+			select {
+			case <-updates:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
 				Method: mcp.MethodNotificationResourceUpdated,
 				Params: mcp.NotificationParams{Meta: map[string]any{mcp.MetaKeySubscriptionID: id}, AdditionalFields: map[string]any{"uri": mailboxURI}},
-			}}
+			}}:
+			case <-ctx.Done():
+			}
 		}()
 	})
 	s := mcpserver.NewMCPServer("beekeeper", "test", mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(hooks))
@@ -214,23 +226,23 @@ func subscriber(t *testing.T) string {
 }
 
 func TestListen(t *testing.T) {
-	c, _ := client(t, subscriber(t))
+	updates := make(chan struct{})
+	c, _ := client(t, subscriber(t, updates))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ready, updated := make(chan struct{}, 1), make(chan string, 1)
+	events := make(chan string, 2)
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Listen(ctx, []string{mailboxURI}, func() { ready <- struct{}{} }, func(uri string) { updated <- uri })
+		done <- c.Listen(ctx, []string{mailboxURI}, func() { events <- "ready" }, func(uri string) { events <- uri })
 	}()
 	for _, want := range []string{"ready", mailboxURI} {
 		select {
-		case <-ready:
-			if want != "ready" {
-				t.Fatal("acknowledged twice")
+		case event := <-events:
+			if event != want {
+				t.Fatalf("event %q, want %s", event, want)
 			}
-		case uri := <-updated:
-			if uri != want {
-				t.Fatalf("updated %q, want %s", uri, want)
+			if event == "ready" {
+				close(updates)
 			}
 		case err := <-done:
 			t.Fatalf("Listen ended before %s: %v", want, err)
@@ -245,7 +257,7 @@ func TestListen(t *testing.T) {
 }
 
 func TestListenRefused(t *testing.T) {
-	c, _ := client(t, subscriber(t))
+	c, _ := client(t, subscriber(t, nil))
 	err := c.Listen(context.Background(), []string{"beekeeper://mailbox/bob@example.com"}, func() { t.Error("acknowledged") }, func(string) {})
 	var r *central.Refused
 	if !errors.As(err, &r) || !strings.Contains(r.Message, "another person") {

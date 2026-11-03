@@ -120,6 +120,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	}
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
 	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", streamJSONMode, "--verbose", "--append-system-prompt-file", filepath.Join(s.Root, "CLAUDE.md")}
+	if j.Request.Effort != "" {
+		args = append(args, "--effort", j.Request.Effort)
+	}
 	if j.Request.MCP {
 		config, err := json.Marshal(map[string]any{mcpServersKey: map[string]any{"coordinator": map[string]any{"command": s.Executable, "args": []string{configFlag, s.ConfigPath, agentsCommand, mcpProxyCommand}}}})
 		if err != nil {

@@ -104,7 +104,7 @@ func TestCentralEnvtest(t *testing.T) {
 	if code != ExitRefused || !strings.Contains(out, fmt.Sprintf("%s is held by %q", graveler, anaEmail+"/"+anaAgent)) || !strings.Contains(out, "e2e for #123") {
 		t.Errorf("pia's claim: exit %d, want %d naming ana's lease: %s", code, ExitRefused, out)
 	}
-	if out, code := pia.run("lease", "status", graveler); code != ExitRefused || !strings.Contains(out, anaAgent) {
+	if out, code := pia.run("lease", testStatusWord, graveler); code != ExitRefused || !strings.Contains(out, anaAgent) {
 		t.Errorf("pia's status: exit %d: %s", code, out)
 	}
 	if out, code := pia.run("lease", "list"); code != 0 || !strings.Contains(out, "central (muster context lab)") ||

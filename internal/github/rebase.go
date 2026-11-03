@@ -72,6 +72,14 @@ func UpdateByRebase(ctx context.Context, run GH, repo string, n int) error {
 	return err
 }
 
+// UpdateBranch merges repo#n's base into its head on GitHub's side (the
+// pull request's "Update branch"); an error carries GitHub's sentence (a
+// conflict, a head GitHub may not write).
+func UpdateBranch(ctx context.Context, run GH, repo string, n int) error {
+	_, err := run(ctx, "pr", "update-branch", strconv.Itoa(n), "--repo", repo)
+	return err
+}
+
 // MergeCommits are the commits of repo#n with more than one parent, oldest
 // first: a base merged into the branch, which a rebase merge would put on
 // the line's linear history. GitHub lists at most 250 commits of a pull

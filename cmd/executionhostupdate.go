@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -27,6 +29,10 @@ import (
 var (
 	coordinatorVersion = project.Version
 	installVersion     = update.InstallVersion
+	// lookupRelease is the coordinator's authenticated lookup of the
+	// release a host installs; installRelease the host's install of it.
+	lookupRelease  = update.LookupVersion
+	installRelease = update.InstallRelease
 	// runHostPrepare runs the release an update installed at path and
 	// returns its standard output: its answer, never its diagnostics.
 	runHostPrepare = func(ctx context.Context, path string, args ...string) ([]byte, error) {
@@ -87,7 +93,15 @@ fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
 once the coordinator runs a newer release, and retries a held host hourly.
-A development build pins no release.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+A development build pins no release.
+
+The coordinator looks the release up on GitHub itself, with the gh login
+(or GH_TOKEN, GITHUB_TOKEN) as every other GitHub call of beekeeper, never
+anonymously, and hands it to the host: the host downloads the binary and
+its bundle from the release's public download URLs and asks GitHub's API
+nothing, so a host without a GitHub login, whose anonymous API limit its IP
+may share, updates all the same. A lookup GitHub refuses holds the host,
+a rate limit named with its reset.`, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		line, err := a.updateExecutionHost(cmd.Context(), args[0])
 		if err != nil {
 			return err
@@ -105,17 +119,49 @@ release prepare its own policy. A release that does not prepare holds the
 host until a retry succeeds. The answer is one JSON line: the release, the
 policy digest, the executions still in a turn (busy, nothing changed) or
 the error. An execution between turns waits for the update: its next turn
-begins once the update released the host's admission.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version))
+begins once the update released the host's admission.
+
+The coordinator sends its lookup of the release on standard input: the
+binary and its bundle are downloaded from the release's public download
+URLs, which GitHub's API limits do not cover, and the host asks GitHub's API
+nothing. Without it (a terminal, or an empty input) the host looks the
+release up itself, with its own gh login or GH_TOKEN, GITHUB_TOKEN, never
+anonymously.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		given, err := hostReleaseInput(cmd.InOrStdin())
+		if err != nil {
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(execution.HostUpdate{Protocol: execution.Protocol, Error: err.Error()})
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version, given))
 	}}
 	selfUpdate.Flags().StringVar(&version, hostVersionFlag, "", "the release to install, the coordinator's")
 	selfUpdate.Flags().IntVar(&protocol, "protocol", 0, "execution protocol")
 	return []*cobra.Command{updateCmd, selfUpdate}
 }
 
+// hostReleaseInput is the coordinator's release lookup on the standard
+// input r of agents hosts self-update; nil from a terminal, which nobody
+// writes it to, and from an empty input.
+func hostReleaseInput(r io.Reader) ([]byte, error) {
+	if f, ok := r.(*os.File); ok {
+		if info, err := f.Stat(); err != nil || info.Mode()&os.ModeCharDevice != 0 {
+			return nil, nil
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, execution.MaxWire+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading the coordinator's release: %w", err)
+	}
+	if len(raw) > execution.MaxWire {
+		return nil, errors.New("the coordinator's release exceeds the limit")
+	}
+	return bytes.TrimSpace(raw), nil
+}
+
 // hostSelfUpdate is agents hosts self-update on an execution host. It always
-// answers, an error included, so that the coordinator reads why.
-func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) execution.HostUpdate {
+// answers, an error included, so that the coordinator reads why. given is
+// the coordinator's lookup of version (update.Release), nil for none: the
+// host then looks the release up itself.
+func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, given []byte) execution.HostUpdate {
 	out := execution.HostUpdate{Protocol: execution.Protocol}
 	fail := func(err error) execution.HostUpdate {
 		out.Error = err.Error()
@@ -126,6 +172,19 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 	}
 	if !releaseVersion(version) {
 		return fail(fmt.Errorf("%q is no release version", version))
+	}
+	install := func(ctx context.Context) (update.Result, error) { return installVersion(ctx, io.Discard, version) }
+	if len(given) > 0 {
+		// Not strict: the host runs the older release while it updates,
+		// and a newer coordinator may send more than it knows.
+		var rel update.Release
+		if err := json.Unmarshal(given, &rel); err != nil {
+			return fail(fmt.Errorf("the coordinator's release: %w", err))
+		}
+		if rel.Tag != version {
+			return fail(fmt.Errorf("the coordinator sent release %q, not %s", rel.Tag, version))
+		}
+		install = func(ctx context.Context) (update.Result, error) { return installRelease(ctx, io.Discard, rel) }
 	}
 	s, err := a.hostRuntime()
 	if err != nil {
@@ -163,7 +222,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string) 
 	// finds the installed policy stale and fails closed until the new
 	// release prepared it.
 	written := time.Now()
-	res, err := installVersion(ctx, io.Discard, version)
+	res, err := install(ctx)
 	release()
 	if err != nil {
 		return fail(err)
@@ -331,12 +390,21 @@ func (a *app) rebindHostExecutions(ctx context.Context, selector string, h execu
 
 }
 
-// updateHost has host h install and prepare release version.
+// updateHost has host h install and prepare release version, which the
+// coordinator looks up for it.
 func (a *app) updateHost(ctx context.Context, h execution.Host, version string) (execution.HostUpdate, error) {
-	if a.executionUpdate != nil {
-		return a.executionUpdate(ctx, h, version)
+	rel, err := lookupRelease(ctx, version)
+	if err != nil {
+		return execution.HostUpdate{}, err
 	}
-	return execution.UpdateHost(ctx, h, version, nil)
+	given, err := json.Marshal(rel)
+	if err != nil {
+		return execution.HostUpdate{}, err
+	}
+	if a.executionUpdate != nil {
+		return a.executionUpdate(ctx, h, version, given)
+	}
+	return execution.UpdateHost(ctx, h, version, given, nil)
 }
 
 func hostExecutionDrains(x *state.ExecutionRecord) bool {
