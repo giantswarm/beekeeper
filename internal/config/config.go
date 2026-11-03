@@ -931,6 +931,40 @@ type Agents struct {
 	Models []AgentModelRule `yaml:"models"`
 	// RequireModel refuses omission rather than using a harness default.
 	RequireModel bool `yaml:"requireModel"`
+	// Kinds are the desk's task kinds by name regexp, each with its own caps
+	// on starts; a name may match several (a filer kind and a meta kind
+	// over all meta workers), and every matching kind's caps hold.
+	Kinds []AgentKind `yaml:"kinds"`
+}
+
+// AgentKind is a task kind: the agents whose name Match matches, at most
+// MaxBusy of them busy at once, a start at most every MinInterval, and the
+// daily spend at which the watch says SPEND <kind>. A zero cap is none.
+type AgentKind struct {
+	Name        string   `yaml:"name"`
+	Match       string   `yaml:"match"`
+	MaxBusy     int      `yaml:"maxBusy"`
+	MinInterval Duration `yaml:"minInterval"`
+	// DailySpend is in USD for a day of the desk's time zone.
+	DailySpend float64 `yaml:"dailySpend"`
+}
+
+// Matches reports whether name is one of k's agents; an invalid regexp,
+// which validation refuses, matches none.
+func (k AgentKind) Matches(name string) bool {
+	re, err := regexp.Compile(k.Match)
+	return err == nil && re.MatchString(name)
+}
+
+// KindsOf returns the kinds whose regexp matches name, in their order.
+func (a Agents) KindsOf(name string) []AgentKind {
+	var out []AgentKind
+	for _, k := range a.Kinds {
+		if k.Matches(name) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // AgentModelRule selects a model for a named task before provider selection.
@@ -3694,6 +3728,23 @@ func (c *Config) validateEach(report func(error)) {
 		}
 		if strings.TrimSpace(r.Match) == "" {
 			report(fmt.Errorf("agents.models[%d]: match is required", i))
+		}
+	}
+	seenKinds := map[string]bool{}
+	for i, k := range c.Agents.Kinds {
+		if !profileNamePattern.MatchString(k.Name) {
+			report(fmt.Errorf("agents.kinds[%d].name: want letters, digits, - or _", i))
+		} else if seenKinds[k.Name] {
+			report(fmt.Errorf("agents.kinds[%d].name: %s is named twice", i, k.Name))
+		}
+		seenKinds[k.Name] = true
+		if strings.TrimSpace(k.Match) == "" {
+			report(fmt.Errorf("agents.kinds[%d]: match is required", i))
+		} else if _, err := regexp.Compile(k.Match); err != nil {
+			report(fmt.Errorf("agents.kinds[%d].match: %w", i, err))
+		}
+		if k.MaxBusy < 0 || k.MinInterval.Duration < 0 || k.DailySpend < 0 {
+			report(fmt.Errorf("agents.kinds[%d]: maxBusy, minInterval and dailySpend must not be negative", i))
 		}
 	}
 	for kind, p := range c.Capacity.TaskPolicies {

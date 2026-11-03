@@ -1156,6 +1156,18 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	case unknown:
 		return
 	}
+	if isParked && (p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY") {
+		if sameHead(w.ParkedHead, p.Head) {
+			a := base
+			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
+			a.Kind = KindRework
+			a.Message = fmt.Sprintf("%s at head %s conflicts with its base. Fetch origin, merge the base into the branch, resolve the conflicts, run focused checks and push, then wait for green CI and park again for desk review. Never force-push.", p.URL, short(p.Head))
+			if !l.has(a.Key) {
+				add(a)
+			}
+		}
+		return
+	}
 	planRed(l, p, w, isParked, add)
 	rs := l.rounds[ref]
 	// An escalation logged before its key named a head was on the

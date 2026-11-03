@@ -636,6 +636,15 @@ plain waits and off-roster sessions keep the normal watcher lifecycle. A closed 
 or a merged pull request whose served issue remains open or unreadable, wakes its worker to
 continue or verify the task rather than leaving it parked.
 
+An ended worker's saved review park still lets the loop request a fixer when that
+parked head conflicts with its base or fails CI. The saved park alone does not
+keep the worker's board item served after the worker ends. This recovery requires
+a tracked pull and saved review ownership; it does not discover every open pull
+or recover every ownerless In Progress item. The broader 15-minute orphan sweep
+remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
+pulls without saved review metadata and stale serve records from relieved or
+off-roster sessions.
+
 The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
 The receipt binds its active local note, session, thread, displayed head, selected option and
 verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
@@ -656,6 +665,36 @@ reads them in full, and `handover --full` retains live details and recent histor
 a large standing file, using a conservative 25,000-byte prompt budget (no more
 than 25,000 byte-level tokens). The role skill and project instructions loaded
 by the harness remain outside the generated prompt's budget.
+
+## Task kinds
+
+`agents.kinds` is a list of `{name, match, maxBusy, minInterval, dailySpend}`:
+`match` is a regexp over the agent's name, and every kind whose regexp matches
+holds a start, so a filer kind and a meta kind over filers and scans cap both.
+
+- `maxBusy` (0: none) counts the kind's busy agents as capacity counts them
+  (parked, waiting and idle agents hold no slot).
+- `minInterval` (0: none) is measured from the kind's last recorded start
+  (`state.starts`, kept 30 days), done or not.
+- `dailySpend` (USD, 0: none) is the day's figure at which the watch prints
+  `SPEND <kind>` once; the mark is kept in the watch's seen file, so a restarted
+  watch does not repeat it. The watch sums the day every 10 minutes off the poll.
+
+`beekeeper capacity` prints `no start <kind>: <reason>` after the verdict (and
+`kindBlocks` in `--json`). `agents start` checks the kinds before the start gate
+and again under `kinds.lock` in the state directory, which it holds until the
+start is recorded: concurrent starts of a kind are admitted one at a time, for
+every harness and for `--host` starts. A refusal is exit 3; `--force` does not
+pass a kind's cap. Hand-overs and role successors replace an agent and are not
+held.
+
+`beekeeper sessions --by kind [--day 2006-01-02] [--tz <zone>]` prints the day's
+starts, sessions, hours (each session's first to last request of the day) and
+spend per kind, priced from the whole transcripts as `beekeeper spend` prices
+them. Spend is attributed by the session id a Claude Code transcript's path
+names; transcripts of no recorded start of a kind's agent, or of harnesses whose
+files name no session beekeeper recorded (omp, agy, codex), are summed as "of no
+kind".
 
 ## Task model policy
 
