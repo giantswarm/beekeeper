@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,13 +119,15 @@ var publicationGitReasons = []struct{ match, reason string }{
 	{"Refusing to create empty bundle", "no commits to bundle beyond the base commit"},
 	{"empty bundle", "no commits to bundle beyond the base commit"},
 	{"couldn't find remote ref", "the requested Git ref does not exist in the remote repository"},
-	{"not a valid object name", "a required commit or ref is missing from local Git history"},
-	{"bad object", "a required commit or ref is missing from local Git history"},
-	{"bad revision", "a required commit or ref is missing from local Git history"},
-	{"unknown revision", "a required commit or ref is missing from local Git history"},
+	{"not a valid object name", publicationMissingHistoryReason},
+	{"bad object", publicationMissingHistoryReason},
+	{"bad revision", publicationMissingHistoryReason},
+	{"unknown revision", publicationMissingHistoryReason},
 	{"CONFLICT", "merging the upstream default branch produced conflicts"},
 	{"Automatic merge failed", "merging the upstream default branch produced conflicts"},
 }
+
+const publicationMissingHistoryReason = "a required commit or ref is missing from local Git history"
 
 // publicationGitFailure names the failed stage and a sanitized reason, never
 // the command's raw output, so an operator can tell an authorization barrier
@@ -458,8 +461,8 @@ func (a *app) findStrandedPublication(ctx context.Context, r *state.ExecutionRec
 	if err != nil {
 		return executionPublication{}, false
 	}
-	head, suffix, ok := strings.Cut(heads, " ")
-	if !ok || suffix != "HEAD" || !publicationCommit(head) || head == r.Published.Head || head == r.Handle.Commit {
+	head, ok := strings.CutSuffix(heads, " HEAD")
+	if !ok || !publicationCommit(head) || head == r.Published.Head || head == r.Handle.Commit {
 		return executionPublication{}, false
 	}
 	return executionPublication{Head: head, BundleDigest: digest}, true
@@ -548,7 +551,8 @@ func readPublicationBundle(path string) ([]byte, error) {
 
 func isShallowWorkspace(ctx context.Context, workspace string) bool {
 	out, err := publishGit(ctx, workspace, "rev-parse", "--is-shallow-repository")
-	return err == nil && out == "true"
+	ok, parseErr := strconv.ParseBool(out)
+	return err == nil && parseErr == nil && ok
 }
 
 func tryUnshallowWorkspace(ctx context.Context, workspace string, revs ...string) {
@@ -566,7 +570,7 @@ func tryUnshallowWorkspace(ctx context.Context, workspace string, revs ...string
 	}
 	args := append([]string{"rev-list", "--objects"}, revs...)
 	if _, err := publishGit(ctx, workspace, args...); err != nil {
-		_ = os.WriteFile(shallowPath, raw, 0o600)
+		_ = os.WriteFile(shallowPath, raw, 0o600) //nolint:gosec // shallow file inside the validated execution workspace git common dir
 	}
 }
 

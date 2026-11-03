@@ -19,6 +19,7 @@ import (
 
 const publicationClaudeVersion = "2.1.291"
 const publicationExpiredLease = "expired publication lease"
+const publicationFixturePRURL = "https://github.com/giantswarm/beekeeper/pull/42"
 
 type publicationRig struct {
 	a                       *app
@@ -154,7 +155,7 @@ func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if rig.creates != 1 || result.URL != "https://github.com/giantswarm/beekeeper/pull/42" || result.Branch != executionBranch(rig.request.Ref) {
+	if rig.creates != 1 || result.URL != publicationFixturePRURL || result.Branch != executionBranch(rig.request.Ref) {
 		t.Fatal("creation retry duplicated PR or lost ownership", result)
 	}
 	head = rig.commit(t, "change.txt", "review fix\n")
@@ -625,8 +626,8 @@ func TestExecutionPublicationFromShallowPRWorkspaceAndSyncBase(t *testing.T) {
 	if _, err := publishGit(ctx, shallowWorkspace, "config", "user.name", "Fixture"); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := publishGit(ctx, shallowWorkspace, "rev-parse", "--is-shallow-repository"); err != nil || got != "true" {
-		t.Fatalf("expected shallow workspace fixture, got %q (%v)", got, err)
+	if !isShallowWorkspace(ctx, shallowWorkspace) {
+		t.Fatal("expected shallow workspace fixture")
 	}
 	rig.workspace = shallowWorkspace
 	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -634,7 +635,7 @@ func TestExecutionPublicationFromShallowPRWorkspaceAndSyncBase(t *testing.T) {
 		record.Handle.Commit = prHead
 		record.Handle.Workspace = shallowWorkspace
 		record.Request.GitRef = prHead
-		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: "https://github.com/giantswarm/beekeeper/pull/42"}
+		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: publicationFixturePRURL}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -645,7 +646,7 @@ func TestExecutionPublicationFromShallowPRWorkspaceAndSyncBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := execution.Endpoint{SSH: "publication-coordinator.example", Executable: sshTestExecutable, Config: sshTestConfig}
-	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: "/usr/local/bin/claude", Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
+	s := &execution.Server{Root: filepath.Join(root, "execution"), Rules: []byte("fixture rules"), Version: "publication-test", Executable: sshTestExecutable, ConfigPath: sshTestConfig, Config: execution.HostConfig{Identity: rig.request.Ref.Host, RulesFile: filepath.Join(root, "rules.md"), WorkspaceRoot: filepath.Join(root, "workspaces"), Repositories: map[string]string{rig.request.Repository: filepath.Join(root, "source")}, Harnesses: map[string]execution.HarnessConfig{execution.HarnessClaude: {Executable: hostFixtureClaude, Version: publicationClaudeVersion}}, Coordinators: map[string]execution.Coordinator{rig.request.Coordinator: {PublicKey: execution.PublicKey(key), Callback: endpoint}}, MaxBusy: 1}}
 	digest, err := s.Prepare(s.Policy())
 	if err != nil {
 		t.Fatal(err)
@@ -724,7 +725,7 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 		record := st.Starts[0].Execution
 		record.Handle.Commit = prHead
 		record.Request.GitRef = prHead
-		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: "https://github.com/giantswarm/beekeeper/pull/42"}
+		record.Published = &state.ExecutionPublication{At: time.Now().UTC(), Branch: branch, Head: prHead, URL: publicationFixturePRURL}
 		record.Observation.ProcessState = execution.Exited
 		record.Settled = true
 		record.Lease.ExpiresAt = time.Now().Add(-time.Minute)
@@ -749,7 +750,7 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 		t.Fatalf("coordinator recovery failed: %v", err)
 	}
 	var recovered executionPublicationResult
-	if json.Unmarshal(output.Bytes(), &recovered) != nil || recovered.URL != "https://github.com/giantswarm/beekeeper/pull/42" || recovered.Head != fixHead {
+	if json.Unmarshal(output.Bytes(), &recovered) != nil || recovered.URL != publicationFixturePRURL || recovered.Head != fixHead {
 		t.Fatalf("recovery output = %q, want PR URL and head %s", output.String(), fixHead)
 	}
 	actual, err := publishGit(ctx, rig.remote, "rev-parse", "refs/heads/"+branch)
