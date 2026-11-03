@@ -1063,6 +1063,32 @@ func TestLoopInstallsANewerRelease(t *testing.T) {
 	}
 }
 
+func TestLoopReportsFailedGateAfterInstallAndClosesSkippedClaim(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.PostInstall = []string{loopPostInstall}
+	installed := false
+	r.answer = func(args []string) (string, int) {
+		if slices.Equal(args, selfUpdateCheck) && !installed {
+			return "v2.0.0 is newer than v1.0.0: beekeeper self-update installs it", ExitOutdated
+		}
+		if slices.Equal(args, []string{selfUpdateCmdName}) {
+			installed = true
+			return "", 0
+		}
+		if slices.Equal(args, []string{"budget", "--gate"}) {
+			return "GitHub budget under the floor", ExitRefused
+		}
+		return "", 0
+	}
+	r.pass(t)
+	if len(r.cmds) != 0 || len(r.logged(t, "supervisor.release")) != 0 {
+		t.Fatalf("post-install or release succeeded despite failing gate: cmds=%v release=%v", r.cmds, r.logged(t, "supervisor.release"))
+	}
+	if !strings.Contains(r.out.String(), "budget --gate exits 3") {
+		t.Errorf("loop output missing gate failure:\n%s", r.out)
+	}
+}
+
 func TestLoopSendsWhatItCannotPlaceToTheGuide(t *testing.T) {
 	for name, c := range map[string]struct {
 		classifier []string

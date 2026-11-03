@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/update"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -32,5 +40,97 @@ func TestLeftBehind(t *testing.T) {
 	}
 	if got := leftBehind(nil, "v0.107.0", "v0.107.1"); got != "" {
 		t.Errorf("none left behind said %q", got)
+	}
+}
+
+func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := emptyTestConfig(t, filepath.Join(dir, "config.yaml"))
+	t.Setenv("XDG_STATE_HOME", dir)
+
+	prevUpdate, prevCanary := runUpdate, runCanaryCheck
+	t.Cleanup(func() {
+		runUpdate = prevUpdate
+		runCanaryCheck = prevCanary
+	})
+
+	var ranChecks [][]string
+	failGate := true
+	runCanaryCheck = func(_ context.Context, path string, args ...string) (string, error) {
+		if path != "/tmp/staged-beekeeper" {
+			t.Fatalf("canary path = %q", path)
+		}
+		ranChecks = append(ranChecks, slices.Clone(args))
+		if failGate && slices.Equal(args, []string{"--config", cfgPath, "budget", "--gate"}) {
+			return "GitHub budget under the floor (app metadata unreadable)", errors.New("exit status 3")
+		}
+		return "ok", nil
+	}
+
+	installed := false
+	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
+		opts := update.OptionsFrom(ctx)
+		if opts.Skip != nil && opts.Skip("v0.3.0") {
+			return update.Result{Current: "v0.2.0", Latest: "v0.2.0"}, nil
+		}
+		if check {
+			return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true}, update.ErrOutdated
+		}
+		if opts.Canary == nil {
+			t.Fatal("self-update did not attach a canary to ctx")
+		}
+		if err := opts.Canary(ctx, "/tmp/staged-beekeeper", "v0.3.0"); err != nil {
+			return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true}, err
+		}
+		installed = true
+		return update.Result{Current: "v0.2.0", Latest: "v0.3.0", Newer: true, Updated: true, Path: "/bin/beekeeper"}, nil
+	}
+
+	var out bytes.Buffer
+	root := New()
+	root.SetArgs([]string{"--config", cfgPath, selfUpdateCmdName})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "budget --gate") || installed {
+		t.Fatalf("self-update on failing canary = %v, installed=%v", err, installed)
+	}
+
+	store, err := state.Open(filepath.Join(dir, "beekeeper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == verbSelfUpdateCanary })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || !strings.Contains(evs[0].Detail, "v0.3.0") || !strings.Contains(evs[0].Detail, "budget --gate") {
+		t.Fatalf("canary events = %+v", evs)
+	}
+
+	// Subsequent --check skips the failed release.
+	root = New()
+	root.SetArgs([]string{"--config", cfgPath, selfUpdateCmdName, "--check"})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("self-update --check after skip = %v", err)
+	}
+
+	// Verify all four canary checks run with --config when healthy.
+	ranChecks = nil
+	failGate = false
+	a := &app{cfgPath: cfgPath, store: store}
+	if err := a.canaryRelease(context.Background(), &out, "/tmp/staged-beekeeper", "v0.3.1"); err != nil {
+		t.Fatalf("canaryRelease on healthy release = %v", err)
+	}
+	wantChecks := [][]string{
+		{"--config", cfgPath, "version"},
+		{"--config", cfgPath, "budget", "--gate"},
+		{"--config", cfgPath, "supervisor", "status"},
+		{"--config", cfgPath, "capacity"},
+	}
+	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
+		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
 	}
 }

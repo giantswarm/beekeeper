@@ -39,12 +39,12 @@ mv -f -- "$dir/beekeeper" "$target"
 
 // installRelease normally writes beside the executable. A system installation
 // may need sudo for that directory; download and verification still run as the
-// update account, and sudo never prompts or downloads anything.
+// update account, and sudo never prompts or downloads anything. When a canary
+// is configured on ctx, the verified binary is staged and checked before it
+// replaces the target executable.
 func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
-	err := installVerified(ctx, up, rel, path)
-	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == windowsOS {
-		return err
-	}
+	canary := optionsFrom(ctx).Canary
+	version := "v" + strings.TrimPrefix(rel.Version(), "v")
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return err
@@ -53,17 +53,50 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	if err != nil {
 		return err
 	}
+	mode := info.Mode().Perm()
+	stageDir, err := os.MkdirTemp(filepath.Dir(target), ".beekeeper-update-*")
+	if err == nil {
+		defer func() { _ = os.RemoveAll(stageDir) }()
+		staged := filepath.Join(stageDir, filepath.Base(target))
+		if werr := os.WriteFile(staged, nil, mode); werr == nil {
+			err = installVerified(ctx, up, rel, staged)
+			if err == nil {
+				if canary != nil {
+					_ = os.Chmod(staged, mode|0o700)
+					if err := canary(ctx, staged, version); err != nil {
+						return err
+					}
+					_ = os.Chmod(staged, mode)
+				}
+				err = os.Rename(staged, target)
+				if err == nil {
+					return nil
+				}
+			}
+		} else {
+			err = fmt.Errorf("staging release: %w", werr)
+		}
+	}
+	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == windowsOS {
+		return err
+	}
 	dir, err := os.MkdirTemp("", "beekeeper-install-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	staged := filepath.Join(dir, filepath.Base(target))
-	if err := os.WriteFile(staged, nil, 0o600); err != nil {
+	if err := os.WriteFile(staged, nil, 0o700); err != nil {
 		return err
 	}
 	if err := installVerified(ctx, up, rel, staged); err != nil {
 		return fmt.Errorf("verifying staged release: %w", err)
 	}
-	return privilegedInstall(ctx, staged, target, strconv.FormatUint(uint64(info.Mode().Perm()), 8))
+	if canary != nil {
+		_ = os.Chmod(staged, 0o700)
+		if err := canary(ctx, staged, version); err != nil {
+			return err
+		}
+	}
+	return privilegedInstall(ctx, staged, target, strconv.FormatUint(uint64(mode), 8))
 }

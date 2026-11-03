@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -75,5 +76,23 @@ func TestStaleWatches(t *testing.T) {
 	got = poll(table(claudeCLI, self))
 	if !strings.Contains(got, "ENDED WATCH STALE beekeeper watch --notify (pid 100, session Supervisor 3)") || strings.Count(got, "\n") != 1 {
 		t.Errorf("a re-armed watch's end is not one ENDED line:\n%s", got)
+	}
+}
+
+func TestWatchReportsFailedGateAfterInstall(t *testing.T) {
+	const path = "/home/u/.go/bin/beekeeper"
+	var out bytes.Buffer
+	w := &watcher{app: &app{out: &out, cfg: &config.Config{}}, last: map[string]time.Time{}}
+	w.replaced = func(int) (string, bool) { return path, true }
+	w.versionOf = func(context.Context, string) string { return "v9.9.9" }
+	w.gateOf = func(context.Context, string) error {
+		return errors.New("GitHub budget under the floor")
+	}
+	tb := &proc.Table{ByPID: map[int]*proc.Process{
+		os.Getpid(): {PID: os.Getpid(), PPID: 1, Comm: "beekeeper", Args: []string{path, "watch"}},
+	}}
+	w.staleWatches(context.Background(), tb)
+	if !strings.Contains(out.String(), "WATCH GATE FAILED "+path+": budget --gate failed after install: GitHub budget under the floor") {
+		t.Fatalf("watch output missing gate failure:\n%s", out.String())
 	}
 }
