@@ -325,6 +325,10 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; post-merge work requested", nil
 		}
+		if l.otherReviewParks(rp.Party, act.Ref) {
+			clearReviewPark()
+			return "merged; other pull requests still await review or merge", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
@@ -341,6 +345,15 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			// The last completed ref may differ from the worker's current
+			// park when its PRs merge out of order. Finish that parked owner too.
+			for i := range current.Agents {
+				worker := &current.Agents[i]
+				if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
+					reportIdle(worker, l.a.timeNow())
+					worker.Done = true
+				}
+			}
 			endNotes(current, rp.Party, l.a.timeNow())
 			clearRecords(current, rp.Party)
 			report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
@@ -375,6 +388,9 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			return "", err
 		}
 		return "merged; post-merge work requested", nil
+	}
+	if l.otherReviewParks(ag.Party, act.Ref) {
+		return "merged; other pull requests still await review or merge", nil
 	}
 	// Do not finish a task serving other open work merely because one PR merged.
 	serves := loopServes(st, ag)

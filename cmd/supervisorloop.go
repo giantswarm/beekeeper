@@ -1109,7 +1109,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			continue
 		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Name == rp.Agent || (ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On))
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
 		}) {
 			continue
 		}
