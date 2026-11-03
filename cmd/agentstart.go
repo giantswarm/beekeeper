@@ -348,7 +348,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if dryRun {
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
-				return h.Start(cmd.Context(), a, sp)
+				return a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })
 			}
 			if repository != "" || gitRef != "" {
 				return usageErr("--repo and --ref require an SSH --host")
@@ -418,6 +418,14 @@ work, which takes no choice on a self-hosted provider.`,
 				task = briefTask(brief)
 			}
 			gaps := pluginGaps(cmd.Context())
+			// a task kind at its cap (agents.kinds) refuses a start and its
+			// dry run before the gate's waits; the start checks again under the kind lock
+			if err := a.kindGate(name); err != nil {
+				if byTimer && !dryRun {
+					a.recordTimerRefusal(name, tm, err)
+				}
+				return err
+			}
 			// The dry run is judged by the same start gate a real start is,
 			// and prints its verdict: the machine's guards — MemAvailable,
 			// swap, load, the kind labs — weigh on it as on any start, only
@@ -547,7 +555,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
-			if err := h.Start(cmd.Context(), a, sp); err != nil {
+			if err := a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) }); err != nil {
 				return err
 			}
 			by, err := a.caller()
