@@ -30,10 +30,10 @@ func (a *app) handoverCmd() *cobra.Command {
 		Short: "Everything on the desk, from the live state",
 		Long: `Print the hand-over as Markdown: whether the supervisor loop runs,
 the running sessions and what each is on, leases and grant queues, holds,
-the merge lanes, registered agents, session records, the priorities and
-holds, the board's epics in planning and past their go with their plans
-(each plan's URL, state and head), the standing instructions (standing.md in the state directory, in
-full),
+the merge lanes, registered agents, session records, the board holds, the
+board's epics in planning and past their go with their plans (each plan's URL,
+state and head), the standing instructions (standing.md in the state directory,
+in full),
 open notes with their defaults, the decisions answered
 within 72 hours, timers, what the alert watch reads and the latest
 events. Everything comes from the state and the machine, so a reader acts
@@ -49,12 +49,11 @@ within 72 hours.
 notes` + "`" + ` every open note, ` + "`" + `--section records` + "`" + ` every record, ` + "`" + `--section
 answers` + "`" + ` every decision answered within 72 hours.
 
-The priorities and holds are read from GitHub with the read board next
-makes: the priority list (the board's Priority field) by rank, each epic
-with its Status, its plan line and its hold, then every held board item
-with what holds it: its open blockers (board block), its Status set after
-they closed, or the open decision that holds it (note add --holds) with its
-person. A failed read is shown as not read, never filled from the state.
+The board holds are read from GitHub with the read board next makes: every
+held board item with what holds it: its open blockers (board block), its
+Status set after they closed, or the open decision that holds it (note add
+--holds) with its person. A failed read is shown as not read, never filled
+from the state.
 
 A caller that has read the hand-over before gets only what changed since:
 the lines that are new or changed, the keys of those gone, or one "no
@@ -84,9 +83,9 @@ complete.`,
 			if err != nil {
 				return err
 			}
-			pv := a.prioritiesHandover(cmd.Context(), v.st.Notes)
-			ep := pv.epicsView()
-			if pv != nil && pv.Error != "" {
+			bv := a.boardHoldsHandover(cmd.Context(), v.st.Notes)
+			ep := bv.epicsView()
+			if bv != nil && bv.Error != "" {
 				ep = a.epicsHandover(cmd.Context()) // the epics need no board.order
 			}
 			if a.json {
@@ -97,14 +96,14 @@ complete.`,
 					Lanes      []laneView      `json:"lanes"`
 					Agents     []agentView     `json:"agents"`
 					Records    []state.Record  `json:"records"`
-					Priorities *prioritiesView `json:"priorities,omitempty"`
+					BoardHolds *boardHoldsView `json:"board_holds,omitempty"`
 					Epics      *epicsView      `json:"epics,omitempty"`
 					Notes      []state.Note    `json:"notes"`
 					Answered   []answered      `json:"answered"`
 					Timers     []state.Timer   `json:"timers"`
 					Alerts     *alertsView     `json:"alerts"`
 					Events     []state.Event   `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, pv, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
@@ -126,7 +125,7 @@ complete.`,
 					}
 					a.printLiveRecords(v.st, v.st.Records, v.raw)
 				}},
-				{"priorities", "Priorities and holds", func(bool) { a.printPrioritiesHandover(pv) }},
+				{"board-holds", "Board holds", func(bool) { a.printBoardHoldsHandover(bv) }},
 				{"epics", "Epics", func(bool) { a.printEpicsHandover(ep) }},
 				{"standing", "Standing instructions", func(bool) { a.printStanding(standing) }},
 				{"notes", "Open notes", func(all bool) {
@@ -188,7 +187,7 @@ complete.`,
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, priorities, epics, standing, notes, answers, timers, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, alerts, events"
 
 // epicsView is the board's epics in planning and past their go with their
 // plans, or why they were not read; nil without a board.

@@ -831,6 +831,12 @@ type ExecutionRecord struct {
 	StopRequest     *execution.StopRequest             `json:"stopRequest,omitempty"`
 	ControlSequence uint64                             `json:"controlSequence,omitempty"`
 	ControlResults  map[string]execution.ControlResult `json:"controlResults,omitempty"`
+	// HostJournalMissing records confirmed journal absence AND an inactive
+	// owned unit. It settles a lost execution without fabricating a stop ack.
+	HostJournalMissing bool `json:"hostJournalMissing,omitempty"`
+	// HostJournalUnconfirmed records confirmed journal absence on a pre-inventory
+	// host whose unit state can be confirmed only after the host upgrades.
+	HostJournalUnconfirmed bool `json:"hostJournalUnconfirmed,omitempty"`
 	// Published is the execution's last publication (agents publish): its
 	// owned branch, the head it pushed and its pull request. Handle.Commit
 	// stays the commit the execution started from.
@@ -885,6 +891,9 @@ type ExecutionMessage struct {
 }
 
 func (r *ExecutionRecord) Terminal() bool {
+	if r.HostJournalMissing {
+		return true
+	}
 	if r.Released() {
 		return true
 	}
@@ -1404,10 +1413,9 @@ type Merge struct {
 	Output string `json:"output,omitempty"`
 	Phase  string `json:"phase"`
 	// Joined orders the queue; a rerun within the queue TTL keeps it.
-	Joined   time.Time `json:"joined"`
-	Priority int       `json:"priority,omitempty"`
-	Seen     time.Time `json:"seen"`
-	Started  time.Time `json:"started,omitzero"`
+	Joined  time.Time `json:"joined"`
+	Seen    time.Time `json:"seen"`
+	Started time.Time `json:"started,omitzero"`
 	// Finished and Exit are when and how the merge's run ended.
 	Finished time.Time `json:"finished,omitzero"`
 	Exit     int       `json:"exit,omitempty"`

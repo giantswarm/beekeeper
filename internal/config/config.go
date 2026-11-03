@@ -50,6 +50,8 @@ type Config struct {
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
+	// LeaseRound is the default round when a lease purpose names no duration (1h).
+	LeaseRound Duration `yaml:"leaseRound"`
 	// Identity is whose agents run here: every party this machine's
 	// commands record carries it.
 	Identity Identity `yaml:"identity"`
@@ -370,10 +372,7 @@ type Board struct {
 	// Team is the value of the board's Team field whose items are the
 	// desk's; empty, every item is.
 	Team string `yaml:"team"`
-	// TeamLabel is the issue label of the team's epics (default team/ and
-	// Team's first word, lower-cased: team/bumblebee): the priority list
-	// keeps a ranked epic that carries it whatever its Team field says, so
-	// a label sync that moves the Team never drops a rank.
+	// TeamLabel is read and ignored so an existing configuration loads.
 	TeamLabel string `yaml:"teamLabel"`
 	// People are the logins whose assigned items are free; an item
 	// assigned to anybody else is skipped.
@@ -464,8 +463,7 @@ type BoardStep struct {
 	// Search is a GitHub issue search whose open issues the step offers
 	// (oldest first) instead of board items.
 	Search string `yaml:"search"`
-	// WorkScope is read and ignored, so an existing configuration loads:
-	// the priority list no longer gates what a step offers.
+	// WorkScope is read and ignored so an existing configuration loads.
 	WorkScope bool `yaml:"workScope"`
 }
 
@@ -3240,6 +3238,7 @@ func (c *Config) defaults() error {
 	}
 	setStr(&c.LeaseDir, filepath.Join(c.StateDir, "leases"))
 	setDur(&c.GrantTTL, 30*time.Minute)
+	setDur(&c.LeaseRound, time.Hour)
 	if c.Identity.Host == "" {
 		if h, err := os.Hostname(); err == nil {
 			c.Identity.Host, _, _ = strings.Cut(h, ".")
@@ -3688,6 +3687,9 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	if c.LeaseRound.Duration < 0 {
+		report(errors.New("leaseRound: want a positive duration"))
+	}
 	for i, r := range c.Agents.Models {
 		if _, err := regexp.Compile(r.Match); err != nil {
 			report(fmt.Errorf("agents.models[%d].match: %w", i, err))
