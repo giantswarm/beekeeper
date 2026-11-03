@@ -201,8 +201,8 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 // between approved's change to it and the base's since (moved), "" when it
 // is: every line head's patch adds or removes beyond approved's is a line
 // approved's or the base's patch of the file adds or removes, whichever
-// side the resolution kept, or combines both sides' edits on that line in
-// order. A file without a patch on either side, or one the base left alone,
+// side the resolution kept, or exactly combines non-overlapping edits to
+// a shared original line. A file without a patch on either side, or one the base left alone,
 // had no conflict to resolve.
 func resolved(approved, head compareFile, moved []compareFile) string {
 	name := cmp.Or(head.Name, approved.Name)
@@ -229,125 +229,112 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 			left[l]--
 			continue
 		}
-		if !sides[l[1:]] && !mergedLine(l[1:], approvedLines, baseLines) {
+		if !sides[l[1:]] && (l[0] != '+' || !mergedLine(l[1:], approvedLines, baseLines)) {
 			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", name, strings.TrimSpace(l))
 		}
 	}
 	return ""
 }
 
-// mergedLine reports whether line is an ordered token merge of a changed
-// line in approved and a changed line in base that edit the same statement.
+// mergedLine accepts only the exact composition of non-overlapping edits to
+// a shared original line. Comparing complete byte sequences preserves literals,
+// punctuation and whitespace; token membership cannot prove an edit survived.
 func mergedLine(line string, approved, base []string) bool {
-	target := lineTokens(line)
-	if len(target) == 0 {
-		return false
-	}
-	for _, al := range approved {
-		a := lineTokens(al[1:])
-		if len(a) == 0 {
+	for _, original := range approved {
+		if original[0] != '-' || !slices.Contains(base, original) {
 			continue
 		}
-		for _, bl := range base {
-			b := lineTokens(bl[1:])
-			if len(b) == 0 || !sameStatement(a, b) {
+		for _, a := range approved {
+			if a[0] != '+' {
 				continue
 			}
-			if orderedTokenCover(target, a, b) {
-				return true
+			for _, b := range base {
+				if b[0] != '+' {
+					continue
+				}
+				if merged, ok := combineLineEdits(original[1:], a[1:], b[1:]); ok && merged == line {
+					return true
+				}
 			}
 		}
 	}
 	return false
 }
 
-// lineTokens splits a line into identifier/number tokens and single
-// non-whitespace punctuation characters.
-func lineTokens(s string) []string {
-	var out []string
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c == ' ' || c == '\t' || c == '\r' {
-			i++
-			continue
-		}
-		if isWordByte(c) {
-			j := i + 1
-			for j < len(s) && isWordByte(s[j]) {
-				j++
-			}
-			out = append(out, s[i:j])
-			i = j
-			continue
-		}
-		out = append(out, s[i:i+1])
-		i++
+type lineEdit struct {
+	start, end int
+	text       string
+}
+
+// lineEdits uses a longest common subsequence to describe actual byte edits.
+// Large lines fail closed rather than allocate an unbounded quadratic table.
+func lineEdits(original, changed string) ([]lineEdit, bool) {
+	if len(original) > 1024 || len(changed) > 1024 {
+		return nil, false
 	}
-	return out
-}
-
-func isWordByte(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-// sameStatement reports whether a and b share at least half of their tokens
-// in order, so only two versions of the same line can be merged.
-func sameStatement(a, b []string) bool {
-	shared, j := 0, 0
-	for _, tok := range a {
-		for k := j; k < len(b); k++ {
-			if b[k] == tok {
-				shared++
-				j = k + 1
+	width := len(changed) + 1
+	lcs := make([]int, (len(original)+1)*width)
+	for i := len(original) - 1; i >= 0; i-- {
+		for j := len(changed) - 1; j >= 0; j-- {
+			if original[i] == changed[j] {
+				lcs[i*width+j] = 1 + lcs[(i+1)*width+j+1]
+			} else {
+				lcs[i*width+j] = max(lcs[(i+1)*width+j], lcs[i*width+j+1])
+			}
+		}
+	}
+	var edits []lineEdit
+	for i, j := 0, 0; i < len(original) || j < len(changed); {
+		if i < len(original) && j < len(changed) && original[i] == changed[j] {
+			i++
+			j++
+			continue
+		}
+		start, from := i, j
+		for i < len(original) || j < len(changed) {
+			if i < len(original) && j < len(changed) && original[i] == changed[j] {
 				break
 			}
+			if j < len(changed) && (i == len(original) || lcs[i*width+j+1] > lcs[(i+1)*width+j]) {
+				j++
+			} else {
+				i++
+			}
 		}
+		edits = append(edits, lineEdit{start, i, changed[from:j]})
 	}
-	return shared*2 >= max(len(a), len(b))
+	return edits, true
 }
 
-// orderedTokenCover reports whether target is formed in order from tokens
-// of a and b.
-func orderedTokenCover(target, a, b []string) bool {
-	inf := len(b) + 1
-	dp := make([]int, len(a)+1)
-	for i := range dp {
-		dp[i] = inf
+func combineLineEdits(original, a, b string) (string, bool) {
+	left, ok := lineEdits(original, a)
+	if !ok {
+		return "", false
 	}
-	dp[0] = 0
-	for _, tok := range target {
-		next := make([]int, len(a)+1)
-		for i := range next {
-			next[i] = inf
-		}
-		for ia, ib := range dp {
-			if ib > len(b) {
-				continue
-			}
-			na := indexFrom(a, ia, tok)
-			nb := indexFrom(b, ib, tok)
-			if na >= 0 {
-				next[na+1] = min(next[na+1], ib)
-			}
-			if nb >= 0 {
-				next[ia] = min(next[ia], nb+1)
-			}
-			if na >= 0 && nb >= 0 {
-				next[na+1] = min(next[na+1], nb+1)
+	right, ok := lineEdits(original, b)
+	if !ok {
+		return "", false
+	}
+	// Even boundary insertions are ambiguous: require a separating original
+	// byte between distinct edits from different sides.
+	for _, l := range left {
+		for _, r := range right {
+			if l.start <= r.end && r.start <= l.end {
+				return "", false
 			}
 		}
-		dp = next
 	}
-	return slices.ContainsFunc(dp, func(ib int) bool { return ib <= len(b) })
-}
-
-func indexFrom(tokens []string, start int, want string) int {
-	for i := start; i < len(tokens); i++ {
-		if tokens[i] == want {
-			return i
-		}
+	edits := append(left, right...)
+	slices.SortFunc(edits, func(a, b lineEdit) int { return cmp.Compare(a.start, b.start) })
+	var out strings.Builder
+	pos := 0
+	for _, edit := range edits {
+		out.WriteString(original[pos:edit.start])
+		out.WriteString(edit.text)
+		pos = edit.end
 	}
-	return -1
+	out.WriteString(original[pos:])
+	return out.String(), true
 }
 
 // lineChanges are a patch's added and removed lines, each with its sign.

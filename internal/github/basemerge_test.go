@@ -317,3 +317,45 @@ func TestChangedPast(t *testing.T) {
 		t.Errorf("ChangedPast at the cap = %v, want an error", err)
 	}
 }
+
+func TestResolvedPreservesEdits(t *testing.T) {
+	patch := func(before, after string) compareFile {
+		return compareFile{Name: aGo, Patch: "@@ -1 +1 @@\n-" + before + "\n+" + after}
+	}
+	for name, tc := range map[string]struct {
+		original, approved, base, head string
+		want                           bool
+	}{
+		"dropped guards": {
+			"return enabled && checked", "return enabled && authorized",
+			"return enabled && audited", "return enabled", false,
+		},
+		"invented guard combination": {
+			"return enabled && checked", "return enabled && authorized",
+			"return enabled && audited", "return enabled && authorized && audited", false,
+		},
+		"disjoint edits retained": {
+			"return enabled && checked", "return active && checked",
+			"return enabled && audited", "return active && audited", true,
+		},
+		"disjoint edit partially dropped": {
+			"return enabled && checked", "return active && checked",
+			"return enabled && audited", "return active && audit", false,
+		},
+		"literal whitespace changed": {
+			`return "a b" + old`, `return "a b" + approved`,
+			`return "a b" + audited`, `return "ab" + approved`, false,
+		},
+		"approved side retained": {
+			"return enabled && checked", "return enabled && authorized",
+			"return enabled && audited", "return enabled && authorized", true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			why := resolved(patch(tc.original, tc.approved), patch(tc.base, tc.head), []compareFile{patch(tc.original, tc.base)})
+			if (why == "") != tc.want {
+				t.Fatalf("resolved rejection = %q, want acceptance %v", why, tc.want)
+			}
+		})
+	}
+}
