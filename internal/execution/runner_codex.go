@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // codexTurnFailure is the journal's reason for a turn that failed after its
@@ -151,7 +152,7 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			}
 			continue
 		}
-		if err := s.update(ctx, ref, func(j *Journal) error {
+		begun, err := s.beginTurn(ctx, ref, func(j *Journal) error {
 			if j.StopRequest != nil {
 				return errors.New("execution stopped before message delivery")
 			}
@@ -160,8 +161,20 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			}
 			j.InTurn, j.LastActive = true, s.now()
 			return nil
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if !begun {
+			// A host update holds the admission: the message stays
+			// stored for the turn after it.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-wake:
+			case <-time.After(turnRetry):
+			}
+			continue
 		}
 		accept := func() error { return s.acceptCodexMessage(ctx, ref, current.Handle.ConversationID, next.ID) }
 		_, accepted, turnErr := s.codexTurn(ctx, ref, h, env, log, current, codexMessageText(next), thread, accept)

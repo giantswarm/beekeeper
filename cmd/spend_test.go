@@ -43,7 +43,7 @@ func TestSpendCmd(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: cfg, now: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), out: &out}
 	c := a.spendCmd()
-	c.SetArgs([]string{sinceFlag, "00:00", "--tz", "UTC"})
+	c.SetArgs([]string{sinceFlag, "00:00", tzFlag, tzUTC})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ unpriced, left out of the total (metrics.models): q/n, x
 		t.Errorf("got\n%s\nwant\n%s", out.String(), want)
 	}
 	c = a.spendCmd()
-	c.SetArgs([]string{sinceFlag, "13:00", untilFlag, "12:00", "--tz", "UTC"})
+	c.SetArgs([]string{sinceFlag, "13:00", untilFlag, "12:00", tzFlag, tzUTC})
 	c.SilenceErrors, c.SilenceUsage = true, true
 	if err := c.Execute(); err != nil {
 		t.Fatal(err) // 13:00 is yesterday's, before today's 12:00

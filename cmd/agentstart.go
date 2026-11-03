@@ -153,7 +153,8 @@ the name's custom-title line to the transcript first, and a steward restores
 a title or model the import dropped; the session never sets its own model,
 which the desktop refuses). --model is the model its turns keep: while the
 desktop records another, its turns run headless on --model, and start says
-so with the call that sets it. The import switches the desktop's main
+so with the call that sets it. A headless turn on a model runs its security
+reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
 window to the new session for a moment and back to the session it showed
 (claude://code/continue); the window's focus does not hold it, the person's
 typing for 1 minute at most, and a locked screen not at all.
@@ -352,7 +353,7 @@ work, which takes no choice on a self-hosted provider.`,
 				if dryRun {
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
-				return h.Start(cmd.Context(), a, sp)
+				return a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })
 			}
 			if repository != "" || gitRef != "" {
 				return usageErr("--repo and --ref require an SSH --host")
@@ -422,6 +423,14 @@ work, which takes no choice on a self-hosted provider.`,
 				task = briefTask(brief)
 			}
 			gaps := pluginGaps(cmd.Context())
+			// a task kind at its cap (agents.kinds) refuses a start and its
+			// dry run before the gate's waits; the start checks again under the kind lock
+			if err := a.kindGate(name); err != nil {
+				if byTimer && !dryRun {
+					a.recordTimerRefusal(name, tm, err)
+				}
+				return err
+			}
 			// The dry run is judged by the same start gate a real start is,
 			// and prints its verdict: the machine's guards — MemAvailable,
 			// swap, load, the kind labs — weigh on it as on any start, only
@@ -551,7 +560,7 @@ work, which takes no choice on a self-hosted provider.`,
 			}
 			h, _ := harnessByName(harness)
 			defer a.warnClaims(cmd.Context(), cmd.ErrOrStderr())
-			if err := h.Start(cmd.Context(), a, sp); err != nil {
+			if err := a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) }); err != nil {
 				return err
 			}
 			by, err := a.caller()
@@ -832,6 +841,9 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if sp.effort != "" {
 		sp.headless = true
 	}
+	if profiled, err = withReviewModel(sp.model, profiled); err != nil {
+		return startedAgent{}, err
+	}
 	var by state.Party
 	if sp.by != nil {
 		by = *sp.by
@@ -978,7 +990,11 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // as agents wake resumes a session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
-	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
+	seed, err := withReviewModel(sp.model, []string{toolsFlag, "", strictMCPConfigFlag})
+	if err != nil {
+		return startedAgent{}, err
+	}
+	argv := agentArgv(bin, id, sp.name, sp.model, sp.brief+"\n\n"+seedNote, seed...)
 	if err := launch(unit, dir, a.explicitConfig(), nil, argv); err != nil {
 		return startedAgent{}, fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
@@ -2120,13 +2136,21 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 				return err
 			}
 		}
-		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", append(flags, effortFlags(sp.effort)...)...)
+		flags = append(flags, effortFlags(sp.effort)...)
+		if flags, err = withReviewModel(sp.model, flags); err != nil {
+			return err
+		}
+		argv := bgStartArgv("claude", sp.name, sp.model, "<rules and brief>", flags...)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s as a background session with Remote Control under %s, none of the caller's CLAUDE* variables, no desktop import\nstart: %s\n",
 			sp.name, dir, cmp.Or(profile, "no profile"), strings.Join(argv, " "))
 		return err
 	}
 	if profile == "" && sp.effort == "" {
-		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, toolsFlag, "", strictMCPConfigFlag)
+		seed, err := withReviewModel(sp.model, []string{toolsFlag, "", strictMCPConfigFlag})
+		if err != nil {
+			return err
+		}
+		argv := agentArgv("claude", id, sp.name, sp.model, "<rules and brief>\n\n"+seedNote, seed...)
 		_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under no profile: a seed turn without tools, then its task as a desktop turn with the person's whole tool surface\nseed turn: %s\n",
 			sp.name, dir, strings.Join(argv, " "))
 		return err
@@ -2138,6 +2162,9 @@ func (a *app) dryRunTurn(ctx context.Context, sp agentStart) error {
 			return err
 		}
 		flags = append(flags, pf...)
+	}
+	if flags, err = withReviewModel(sp.model, flags); err != nil {
+		return err
 	}
 	argv := headlessStartArgv("claude", id, sp.name, sp.model, "<rules and brief>", flags...)
 	_, err = fmt.Fprintf(a.out, "dry run: %s would start in %s under profile %s: %s, no seed turn\nfirst turn: %s\n",

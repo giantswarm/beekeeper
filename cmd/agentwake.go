@@ -63,6 +63,8 @@ the caller's CLAUDE* variables, and keeps its Remote Control, mode, name
 and model; no desktop route, no claude:// link and no reopen unit.
 A session whose import is pending (agents shows it importing) is refused: a
 headless turn would run beside the CLI the import warms.
+While a "starts" hold stands (beekeeper hold), a done agent's wake, which
+would hand it new work, is refused (exit 3); an agent on its task gets it.
 A session with no running CLI (after a reboot, a crash, the desktop's idle
 drop) and a row in the running desktop gets the message as a desktop turn:
 a steward's send through the desktop's session messaging starts its desktop
@@ -121,6 +123,11 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	ag, rostered, err := a.wakeParty(st, q)
 	if err != nil {
 		return err
+	}
+	// A done agent's wake hands it new work, which a "starts" hold stops;
+	// an agent on its task keeps getting its own wakes.
+	if h := startsHold(st, a.now); h != nil && rostered && ag.Done {
+		return refused("waking %s refused: it is done and %s", ag.Name, a.startsHeldText(h))
 	}
 	// Reserve the local entry before delivering a wake so retirement cannot
 	// race a turn's startup. A failed delivery restores the previous age.
@@ -587,12 +594,16 @@ func wakeRunning(ctx context.Context, id string) string {
 }
 
 // profiledWakeArgv is wakeArgv under w's profile, whose flag settings it
-// writes first.
+// writes first, with its security review on w's model (withReviewModel).
 func (a *app) profiledWakeArgv(ctx context.Context, bin string, w wakeTarget, msg string) ([]string, error) {
-	if w.profile == "" {
-		return wakeArgv(bin, w, msg), nil
+	var flags []string
+	if w.profile != "" {
+		var err error
+		if flags, err = a.profileFlags(ctx, w.profile); err != nil {
+			return nil, err
+		}
 	}
-	flags, err := a.profileFlags(ctx, w.profile)
+	flags, err := withReviewModel(w.model, flags)
 	if err != nil {
 		return nil, err
 	}

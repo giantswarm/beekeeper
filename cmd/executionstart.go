@@ -218,7 +218,7 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	// weighs those choices alone, so a choice it cannot run never shows as
 	// its room.
 	exclude = append(slices.Clone(exclude), hostUnsupportedHarnesses...)
-	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy, omp.Harness} {
 		if !host.Supports(name) {
 			exclude = append(exclude, name)
 		}
@@ -260,21 +260,21 @@ func (a *app) executionCapacity(st *state.State, sessions []*claude.Session, k c
 	if len(blocks) > 0 {
 		v.Room = 0
 	}
-	return v.stopped(a, st.Stop)
+	return v.stopped(a, st)
 }
 
 // hostUnsupportedHarnesses are the harnesses an execution host has no
-// adapter for. Of the others, Claude Code, Codex and Agy, a host runs those
-// its catalogue entry lists (executionCapacity) and its check offers
-// (hostUnoffered). hostRunsHarness is the other side, a harness some host
-// runs ("" is Claude Code).
-var hostUnsupportedHarnesses = []string{omp.Harness}
+// adapter for. hostUnsupportedHarnesses is empty now that every harness has
+// a remote adapter; the loop's verdict weighs the harnesses its catalogue
+// entry lists (executionCapacity) and its check offers (hostUnoffered).
+// hostRunsHarness is the other side, a harness some host runs ("" is Claude Code).
+var hostUnsupportedHarnesses = []string{}
 
 // hostUnoffered are the remote harnesses a host's check did not offer: a
 // harness whose version, login or guard failed there is no choice on it.
 func hostUnoffered(caps execution.Capabilities) []string {
 	var out []string
-	for _, name := range []string{claudeComm, codex.Harness, harnessAgy} {
+	for _, name := range []string{claudeComm, codex.Harness, harnessAgy, omp.Harness} {
 		if caps.Harnesses[name] == "" {
 			out = append(out, name)
 		}
@@ -283,7 +283,7 @@ func hostUnoffered(caps execution.Capabilities) []string {
 }
 
 // hostRunsHarness says whether one of hosts can run harness: Claude Code on
-// any host, as before, and Codex or Agy on a host whose entry lists it.
+// any host, as before, and Codex, Agy or omp on a host whose entry lists it.
 func hostRunsHarness(harness string, hosts []execution.Host) bool {
 	h := strings.TrimSpace(harness)
 	if h == "" || h == claudeComm {
