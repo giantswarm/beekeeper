@@ -18,6 +18,8 @@ const (
 	githubOlderRC    = "v0.171.0-rc.99"
 	githubNewerRC    = "v0.171.0-rc.100"
 	matchingRefsPath = "/git/matching-refs/"
+	// behindCompare is a compare whose head is an ancestor of its base.
+	behindCompare = `{"status":"behind"}`
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -192,6 +194,10 @@ func TestGitHubCandidateRequestsAreBounded(t *testing.T) {
 	if err == nil || res.Latest != "" || *calls != 1+maxReleaseCandidates {
 		t.Fatalf("result=%+v err=%v calls=%d", res, err, *calls)
 	}
+	// The refusal names each tag it read and why it passed it over.
+	if !strings.Contains(err.Error(), "v0.171.0-rc.99: no release; v0.171.0-rc.98: no release") || strings.Contains(err.Error(), "v0.171.0-rc.91") || strings.Contains(err.Error(), "online?") {
+		t.Errorf("the refusal does not name the tags read, or blames the network: %v", err)
+	}
 }
 
 func TestGitHubLookupCancellation(t *testing.T) {
@@ -323,7 +329,7 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 			return 200, commitOrderRefs, nil
 		}
 		if strings.Contains(r.URL.Path, comparePathPart+newestFinalSHA+"...7777777") {
-			return 200, `{"status":"behind"}`, nil
+			return 200, behindCompare, nil
 		}
 		if strings.Contains(r.URL.Path, comparePathPart) {
 			return 200, aheadCompare, nil
@@ -358,7 +364,7 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 			return 200, refs, nil
 		}
 		if strings.Contains(r.URL.Path, "/compare/"+runningSHA+"...deadbeef") {
-			return 200, `{"status":"behind"}`, nil
+			return 200, behindCompare, nil
 		}
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
@@ -421,5 +427,51 @@ func TestGitHubLookupRateLimitReset(t *testing.T) {
 	_, err := Run(context.Background(), io.Discard, true)
 	if err == nil || !strings.Contains(err.Error(), "rate limit") || !strings.Contains(err.Error(), reset.UTC().Format(time.RFC3339)) || strings.Contains(err.Error(), "online?") {
 		t.Fatalf("expected rate limit and reset time, got %v", err)
+	}
+}
+
+// A running release takes the newest release even while release candidates
+// of a later base, not promoted yet, are ahead of every release: on one
+// line of history each release is behind those candidates, and none of
+// them is stale for it. A running candidate still takes the newest
+// candidate.
+func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
+	// One line of history, oldest first: each tag on its own commit.
+	order := []string{"v0.174.3", "v0.174.4", "v0.174.5", "v0.174.6", "v0.175.0-rc.1", "v0.175.0-rc.2", "v0.175.0-rc.3", "v0.175.0-rc.4", "v0.175.0-rc.5", "v0.175.0-rc.6"}
+	tagSHAs := make([][2]string, 0, len(order))
+	position := make(map[string]int, len(order))
+	for i, tag := range order {
+		sha := fmt.Sprintf("%07x", 0xa000000+i)
+		tagSHAs = append(tagSHAs, [2]string{tag, sha})
+		position[sha] = i
+	}
+	refs := refsWithSHAJSON(tagSHAs)
+	for _, tc := range []struct{ current, want string }{
+		{"v0.174.4", "v0.174.6"},
+		{"v0.175.0-rc.5", "v0.175.0-rc.6"},
+	} {
+		t.Run(tc.current, func(t *testing.T) {
+			stubGitHub(t, tc.current, func(r *http.Request) (int, string, http.Header) {
+				if strings.Contains(r.URL.Path, matchingRefsPath) {
+					return 200, refs, nil
+				}
+				if _, compare, ok := strings.Cut(r.URL.Path, "/compare/"); ok {
+					base, head, _ := strings.Cut(compare, "...")
+					switch b, h := position[base], position[head]; {
+					case h < b:
+						return 200, behindCompare, nil
+					case h > b:
+						return 200, `{"status":"ahead"}`, nil
+					}
+					return 200, `{"status":"identical"}`, nil
+				}
+				tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+				return 200, releaseJSON(tag, true, true), nil
+			})
+			res, err := Run(context.Background(), io.Discard, true)
+			if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != tc.want {
+				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, tc.want)
+			}
+		})
 	}
 }

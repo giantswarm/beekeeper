@@ -60,8 +60,8 @@ func stateDirFromInbox(inbox string) string {
 // inbox. The first message runs `codex exec --json ... -`, captures the
 // emitted thread_id, and subsequent messages run
 // `codex exec resume --json ... <thread_id> -`. Messages arriving while a turn
-// is running stay in the persistent queue and run as the next turn as soon as
-// the active turn finishes.
+// is running can be consumed by the PreToolUse hook as additional context.
+// Messages still queued when the active turn finishes run as the next turn.
 func Run(ctx context.Context, inbox, logPath, bin, model string, stderr io.Writer) error {
 	ctx, stopSig := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSig()

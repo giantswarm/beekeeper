@@ -119,7 +119,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if err != nil {
 		return err
 	}
-	if st.Budget == nil || st.Budget.GraphQL == nil || boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.now) {
+	if st.Budget == nil || st.Budget.GraphQL == nil || boardBudgetLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
 		return fmt.Errorf("loop GitHub budget unknown or low: %w", errLoopLater)
 	}
 	lock := flock.New(filepath.Join(a.store.Dir(), "loop-graphql.lock"))
@@ -135,32 +135,32 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if _, err := a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
 		return err
 	}
-	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.now) {
+	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow()) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
-	if err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.now) {
+	if err != nil || b.GraphQL == nil || b.GraphQL.Err != "" || b.GraphQL.Blocks(a.timeNow()) {
 		return fmt.Errorf("loop GitHub budget unavailable: %w", errLoopLater)
 	}
 	g := b.GraphQL
 	reset := g.Reset
-	if reset.IsZero() || !a.now.Before(reset) {
-		reset = a.now.Add(time.Hour)
+	if reset.IsZero() || !a.timeNow().Before(reset) {
+		reset = a.timeNow().Add(time.Hour)
 	}
 	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+loopGraphQLReserve
-	wasHeld := spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.now, a.cfg.GitHub.Floor)
-	releaseHold := liveHealthy && wasHeld && (spend.floorHeld(a.now, a.cfg.GitHub.Floor) ||
+	wasHeld := spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor)
+	releaseHold := liveHealthy && wasHeld && (spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor) ||
 		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
 		g.Remaining > spend.Remaining ||
 		(g.Limit > 0 && g.Limit-g.Remaining < spend.Spent))
-	if !a.now.Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold {
+	if !a.timeNow().Before(spend.Reset) || spend.Steps == nil || (!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) || releaseHold {
 		spend = loopGraphQLSpend{Reset: reset, Remaining: g.Remaining, Steps: map[string]int{}}
 	}
 	accounts := graphQLAccounts(b)
 	spend.Remaining = g.Remaining
 	spend.Accounts = accounts
 	if !liveHealthy || (step == loopBoard && spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve) {
-		spend.HeldAt = a.now
+		spend.HeldAt = a.timeNow()
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
 		}
@@ -190,8 +190,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	}
 	if windowChanged {
 		afterReset := after.GraphQL.Reset
-		if afterReset.IsZero() || !a.now.Before(afterReset) {
-			afterReset = a.now.Add(time.Hour)
+		if afterReset.IsZero() || !a.timeNow().Before(afterReset) {
+			afterReset = a.timeNow().Add(time.Hour)
 		}
 		used := 0
 		if after.GraphQL.Limit > 0 {
@@ -266,7 +266,7 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 }
 
 func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed time.Time) (superloop.Pull, error) {
-	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.now.Sub(seen.at) < loopPullEvery {
+	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.timeNow().Sub(seen.at) < loopPullEvery {
 		return seen.pull, nil
 	}
 	var p superloop.Pull
@@ -280,7 +280,7 @@ func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed ti
 	if l.pulls == nil {
 		l.pulls = map[string]loopPullObservation{}
 	}
-	l.pulls[ref] = loopPullObservation{pull: p, at: l.a.now, changed: changed}
+	l.pulls[ref] = loopPullObservation{pull: p, at: l.a.timeNow(), changed: changed}
 	return p, nil
 }
 
