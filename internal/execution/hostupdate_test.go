@@ -87,6 +87,77 @@ func TestQuiesceHoldsAdmissionAndCountsRunningExecutions(t *testing.T) {
 	release()
 }
 
+// An execution between turns does not hold an update back, while one in a
+// turn, with a wake stored or an uncertain delivery does; and no turn begins
+// while the update holds the admission.
+func TestQuiesceLeavesAnExecutionBetweenTurnsOutAndHoldsItsNextTurn(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	prevQuiesce, prevTurn := quiesceWait, turnAdmissionWait
+	quiesceWait, turnAdmissionWait = 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { quiesceWait, turnAdmissionWait = prevQuiesce, prevTurn })
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	set := func(change func(*Journal)) {
+		t.Helper()
+		if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error {
+			j.Phase, j.Ready, j.InTurn, j.Messages = Running, true, false, MessageLedger{}
+			change(j)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wake := Envelope{ID: "b7c3c1de-7d55-4a43-9f0a-0b3c2f1d9e10", Sequence: 1}
+	for name, c := range map[string]struct {
+		change func(*Journal)
+		busy   int
+	}{
+		"between turns": {func(*Journal) {}, 0},
+		"in a turn":     {func(j *Journal) { j.InTurn = true }, 1},
+		"not ready":     {func(j *Journal) { j.Ready = false }, 1},
+		"a wake stored": {func(j *Journal) { j.Messages.Entries = map[string]Delivery{wake.ID: {Envelope: wake, Stage: Stored}} }, 1},
+		"a delivery uncertain": {func(j *Journal) {
+			j.Messages.Entries = map[string]Delivery{wake.ID: {Envelope: wake, Stage: Uncertain}}
+		}, 1},
+		"a wake accepted": {func(j *Journal) { j.Messages.Entries = map[string]Delivery{wake.ID: {Envelope: wake, Stage: Accepted}} }, 0},
+	} {
+		set(c.change)
+		busy, release, err := f.s.Quiesce(ctx)
+		if err != nil || busy != c.busy {
+			t.Fatalf("%s: Quiesce() = %d, %v, want %d", name, busy, err, c.busy)
+		}
+		release()
+		// The host's capacity still counts every running execution.
+		if n, err := f.s.busy(ctx, Ref{}); err != nil || n != 1 {
+			t.Fatalf("%s: busy = %d, %v, want 1", name, n, err)
+		}
+	}
+	set(func(*Journal) {})
+	_, release, err := f.s.Quiesce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := func(j *Journal) error { j.InTurn = true; return nil }
+	begun, err := f.s.beginTurn(ctx, f.r.Ref, begin)
+	if err != nil || begun {
+		t.Fatalf("a turn began during an update: %v, %v", begun, err)
+	}
+	if j, _ := f.s.Read(f.r.Ref); j.InTurn {
+		t.Fatal("a held turn changed the journal")
+	}
+	release()
+	if begun, err := f.s.beginTurn(ctx, f.r.Ref, begin); err != nil || !begun {
+		t.Fatalf("a turn after the update: %v, %v", begun, err)
+	}
+	if busy, release, err := f.s.Quiesce(ctx); err != nil || busy != 1 {
+		t.Fatalf("Quiesce() during the turn = %d, %v", busy, err)
+	} else {
+		release()
+	}
+}
+
 func TestHostCatalogMayLeaveTheDigestToTheState(t *testing.T) {
 	f := testFixture(t)
 	h := f.host

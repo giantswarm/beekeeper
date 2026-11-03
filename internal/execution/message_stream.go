@@ -120,7 +120,7 @@ func (m *messageStream) sendNext() error {
 	}
 	var next Envelope
 	var session string
-	err = m.s.update(m.ctx, m.ref, func(j *Journal) error {
+	begun, err := m.s.beginTurn(m.ctx, m.ref, func(j *Journal) error {
 		if j.Completed {
 			_ = m.writer.Close()
 			return nil
@@ -143,6 +143,12 @@ func (m *messageStream) sendNext() error {
 		j.InTurn, j.LastActive = true, m.s.now()
 		return nil
 	})
+	if err == nil && !begun {
+		// A host update holds the admission: the message stays stored
+		// and is sent once the update released it.
+		time.AfterFunc(turnRetry, m.signal)
+		return nil
+	}
 	if err != nil || next.ID == "" {
 		return err
 	}

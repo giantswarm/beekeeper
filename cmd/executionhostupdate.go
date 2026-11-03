@@ -76,8 +76,12 @@ release prepares its policy. A release that does not prepare holds the host. The
 host answers its release and policy digest; once its check (agents hosts
 check) passes with that digest, the digest is the host's pin.
 
-While executions run on the host nothing changes and the host drains: it
-takes no new start until it runs this release (exit 3). An update that
+While executions are in a turn on the host nothing changes and the host
+drains: it takes no new start until it runs this release (exit 3). An
+execution between turns, a parked worker's waiting for its wake, does not
+hold the update back: the host updates under it, its next turn begins on the
+updated host, and the coordinator rebinds it to the pinned policy (as agents
+recover does). An update that
 fails holds the host: it takes no start until an update succeeds (exit 3),
 and the supervisor loop hands the hold on as one finding. The other hosts
 keep running. The supervisor loop runs this for every agents.hosts entry
@@ -93,13 +97,14 @@ A development build pins no release.`, Args: cobra.ExactArgs(1), RunE: func(cmd 
 	var version string
 	var protocol int
 	selfUpdate := &cobra.Command{Use: "self-update --version <release>", Short: "On an execution host: install the coordinator's release, verified, and prepare its policy", Long: `Run on the execution host by the coordinator's agents hosts update, over the
-host's SSH route: with no execution running, install exactly the release
+host's SSH route: with no execution in a turn, install exactly the release
 --version names once its Sigstore bundle verifies (self-update's check),
 replacing the binary atomically without a backup, and have the installed
 release prepare its own policy. A release that does not prepare holds the
 host until a retry succeeds. The answer is one JSON line: the release, the
-policy digest, the executions still running (busy, nothing changed) or the
-error.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+policy digest, the executions still in a turn (busy, nothing changed) or
+the error. An execution between turns waits for the update: its next turn
+begins once the update released the host's admission.`, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(a.hostSelfUpdate(cmd.Context(), protocol, version))
 	}}
 	selfUpdate.Flags().StringVar(&version, hostVersionFlag, "", "the release to install, the coordinator's")
@@ -197,7 +202,7 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	}
 	h = pinnedHost(st, selector, h)
 	if n := hostExecutions(st, selector); n > 0 {
-		return "", refused("execution host %s drains: %d executions run on it; it updates to %s once they end", selector, n, version)
+		return "", refused("execution host %s drains: %d executions are in a turn on it; it updates to %s once they are between turns", selector, n, version)
 	}
 	x, err := a.updateHost(ctx, h, version)
 	if err == nil && x.Busy > 0 {
@@ -230,17 +235,68 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 		}
 		pin.Version, pin.PolicyDigest, pin.PinnedAt = version, x.PolicyDigest, now
 		pin.Held, pin.HeldAt, pin.HeldVersion, pin.Reported = "", time.Time{}, "", false
+		pin.Behind, pin.BehindReported = "", false
 		return []state.Event{event(by, "agents.host-pinned", "%s on %s, policy %s", selector, version, x.PolicyDigest)}, nil
 	}); serr != nil {
 		return "", serr
 	}
 	switch {
 	case errors.Is(err, errHostDrains):
-		return "", refused("execution host %s drains: %d executions run on it; it updates to %s once they end", selector, x.Busy, version)
+		return "", refused("execution host %s drains: %d executions are in a turn on it; it updates to %s once they are between turns", selector, x.Busy, version)
 	case err != nil:
 		return "", refused("execution host %s is held, it takes no start: its update to %s failed: %v", selector, version, err)
 	}
-	return fmt.Sprintf("%s runs %s, policy %s pinned", selector, version, x.PolicyDigest), nil
+	line := fmt.Sprintf("%s runs %s, policy %s pinned", selector, version, x.PolicyDigest)
+	rebound, failed := a.rebindHostExecutions(ctx, selector, h)
+	if rebound > 0 {
+		line += fmt.Sprintf("; %d executions between turns rebound to it", rebound)
+	}
+	for _, f := range failed {
+		line += "; " + f
+	}
+	return line, nil
+}
+
+// rebindHostExecutions moves the executions that run on the host selector,
+// which the update went ahead under between their turns, onto the policy h
+// now pins, as agents recover does. It answers how many it rebound and,
+// for each it could not, why and how to retry: the update stands, and that
+// execution's publication, merge and capped runs refuse until it is
+// rebound.
+func (a *app) rebindHostExecutions(ctx context.Context, selector string, h execution.Host) (rebound int, failed []string) {
+	st, err := a.store.Read()
+	if err != nil {
+		return 0, []string{"executions not rebound: " + err.Error()}
+	}
+	type run struct {
+		name string
+		ref  execution.Ref
+	}
+	var runs []run
+	for i := range st.Starts {
+		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !x.StartUnsent {
+			runs = append(runs, run{st.Starts[i].Name, x.Handle.Ref})
+		}
+	}
+	client := a.executionClient(h)
+	for _, r := range runs {
+		o, err := client.Inspect(ctx, r.ref)
+		if err == nil {
+			err = a.saveExecutionObservation(r.ref, o)
+		}
+		if err == nil {
+			if o.PolicyAvailable() || o.ProcessState != execution.Running {
+				continue
+			}
+			_, err = a.rebindExecutionPolicy(ctx, h, client, r.name, r.ref, o)
+		}
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s not rebound (beekeeper agents recover %s retries): %s", r.name, r.name, oneLine(err.Error())))
+			continue
+		}
+		rebound++
+	}
+	return rebound, failed
 }
 
 // updateHost has host h install and prepare release version.
@@ -252,15 +308,31 @@ func (a *app) updateHost(ctx context.Context, h execution.Host, version string) 
 }
 
 // hostExecutions counts the executions the coordinator recorded on the
-// host selector that have not ended.
+// host selector that have not ended, leaving out those of parked workers
+// last seen between turns: the host updates under them (Quiesce, which
+// checks it again).
 func hostExecutions(st *state.State, selector string) int {
 	n := 0
 	for i := range st.Starts {
-		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() {
+		if x := st.Starts[i].Execution; x != nil && x.Selector == selector && !x.Terminal() && !parkedBetweenTurns(st, x) {
 			n++
 		}
 	}
 	return n
+}
+
+// parkedBetweenTurns says the execution x belongs to a parked worker and was
+// last observed between turns.
+func parkedBetweenTurns(st *state.State, x *state.ExecutionRecord) bool {
+	if !x.Observation.BetweenTurns() {
+		return false
+	}
+	for i := range st.Agents {
+		if ag := &st.Agents[i]; ag.Execution != nil && *ag.Execution == x.Handle.Ref {
+			return ag.Park != nil
+		}
+	}
+	return false
 }
 
 // pinnedHost is h with the policy digest beekeeper pinned for selector,
