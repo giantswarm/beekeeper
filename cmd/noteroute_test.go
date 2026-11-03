@@ -49,7 +49,10 @@ func redirected(t *testing.T, a *app) []state.Event {
 }
 
 // opReview is the class of a review ask.
-const opReview = "review"
+const (
+	opReview = "review"
+	opDefect = "defect"
+)
 
 // openThread is decisionRef open, its epic open.
 var openThread = map[string]github.Thread{decisionRef: {State: github.Open, Parent: refOne, ParentState: github.Open}}
@@ -68,6 +71,9 @@ func TestWorkerOperationalAskIsRefusedNamingWhereItWent(t *testing.T) {
 		{"rollout", "Shall the guide fast-forward the main checkout so the merged change goes live?"},
 		{"rollout", "Install the new binary of the release on this machine?"},
 		{"sessions", "Restart the worker session that stopped mid-task?"},
+		{opDefect, "Please track the guard panic as a defect?"},
+		{opDefect, "Who should fix the red main of " + prURL + "?"},
+		{opDefect, "File an issue for the crash in the wake hook?"},
 		{"publication", "Can the coordinator fix SSH publication for " + prURL + " so the lint fix can be pushed?"},
 		{"publication", "How should commit 937e7b9 reach " + prURL + " while the coordinator refuses its publication?"},
 	} {
@@ -217,5 +223,36 @@ func TestWorkerAskIsClassifiedBeforeItFolds(t *testing.T) {
 				t.Errorf("folded: %+v", st.Notes)
 			}
 		})
+	}
+}
+
+// A worker's note whose options are "file this defect" or "who fixes it"
+// is a problem report, whatever its question asks: it is refused naming
+// agents problem, which the guide files, and never reaches the person.
+func TestWorkerDefectOptionsAreAProblemReport(t *testing.T) {
+	a := workerNoteApp(t, openThread, nil)
+	args := append(slices.Clone(decisionArgs), "--option", "File it as a defect: the guide tracks the guard's panic",
+		"--option", "Leave it: the guard keeps panicking", "How does the guard's panic on "+prURL+" go on?")
+	err := addNote(a, args...)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "a defect ask is operational") || !strings.Contains(err.Error(), "beekeeper agents problem") {
+		t.Fatalf("refusal: %v", err)
+	}
+	if st, _ := a.store.Read(); len(st.Notes) != 0 {
+		t.Errorf("filed: %+v", st.Notes)
+	}
+	// Scope and product decisions are no defect asks: "issue" and
+	// "failures" as bare nouns, or "open" and "report" as bare verbs, are
+	// ordinary words that pair with them; only a defect noun makes the ask.
+	for _, d := range []noteDraft{
+		// The commonest worker decision: do it here, or in a follow-up issue.
+		{Question: "Does the cleanup belong in this PR?", Options: []string{"Here: the PR grows by 200 lines", "Open a follow-up issue: the PR stays small"}},
+		{Question: "Should the weekly report list failures by host?"},
+		{Question: "Which of the open issues in the epic ships first?"},
+		// A consequence that names a defect is no defect ask: only the choice is.
+		{Question: "Which API shape ships?", Options: []string{"Keep v1: the old bug stays for one release", "Take v2: clients migrate"}},
+	} {
+		if c, ok := operational(d, config.Plans{}); ok {
+			t.Errorf("a decision that names no defect ask is operational (%s): %+v", d.Question, c)
+		}
 	}
 }

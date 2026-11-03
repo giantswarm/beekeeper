@@ -5,6 +5,7 @@ package platform
 import (
 	"os"
 	"syscall"
+	"time"
 )
 
 // Binary remembers the file this process started from, before an update
@@ -43,11 +44,26 @@ func ProcessBinary(pid int) *Binary {
 
 // Replaced reports an executable renamed over the running binary's path.
 func (b *Binary) Replaced() bool {
+	_, ok := b.Replacement()
+	return ok
+}
+
+// Replacement is the install renamed over the running binary's path; false
+// while the path names the running file, or no executable.
+func (b *Binary) Replacement() (Install, bool) {
 	if b == nil {
-		return false
+		return Install{}, false
 	}
 	fi, err := os.Stat(b.Path)
-	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 && !os.SameFile(fi, b.self)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 || os.SameFile(fi, b.self) {
+		return Install{}, false
+	}
+	in := Install{Path: b.Path}
+	// A rename sets the change time of the file it moves.
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		in.At = time.Unix(st.Ctimespec.Unix())
+	}
+	return in, true
 }
 
 // Exec keeps the process identity and arguments at the loop's quiet point.

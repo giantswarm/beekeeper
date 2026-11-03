@@ -336,7 +336,7 @@ func TestExecutionCapacityWeighsOnlyTheHostsHarnesses(t *testing.T) {
 	a, _ := sshStartTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	// A self-hosted omp choice with room of its own: locally it would start.
-	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{"local": {Kind: config.KindSelfHosted, Ceiling: 2}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "local/fixture", Provider: "local"}}}
+	k := config.Capacity{Ceiling: 10, Providers: map[string]config.Provider{"local": {Kind: config.KindSelfHosted, Ceiling: 2}}, Choices: []config.Choice{{Harness: omp.Harness, Model: "local/fixture", Provider: "local", Kinds: []string{workerRole}}}}
 	if v := buildProvidersCapacity(agentCount{}, nil, k, nil, roomy(), false, nil, forWorker, a.now); v.Room == 0 {
 		t.Fatalf("fixture: the omp choice has no room locally either: %v", v.Blocks)
 	}
