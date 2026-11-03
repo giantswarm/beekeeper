@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // graphqlRefusedText is GitHub's refusal of a GraphQL call while its
 // counter still shows headroom.
 const graphqlRefusedText = "API rate limit already exceeded for user ID 1."
+const budgetGraphQLPath = "/graphql"
 
 // refusingGitHub stands in for gh's login and for GitHub: REST answers with
 // headroom, GraphQL refuses while refuse is set. It counts the GraphQL
@@ -40,7 +42,7 @@ func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 		h.Set("X-RateLimit-Limit", "5000")
 		h.Set("X-RateLimit-Remaining", "4800")
 		h.Set("X-RateLimit-Reset", "1791258912")
-		if r.URL.Path != "/graphql" {
+		if r.URL.Path != budgetGraphQLPath {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
@@ -59,6 +61,11 @@ func refusingGitHub(t *testing.T, refuse *bool) (queries *int) {
 
 func budgetApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
+	previous := budgetCredentials
+	t.Cleanup(func() { budgetCredentials = previous })
+	budgetCredentials = func(context.Context) []github.BudgetCredential {
+		return []github.BudgetCredential{{Identity: "gh", Value: "tok"}}
+	}
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +211,7 @@ func searchGitHub(t *testing.T, codeLeft int, reset time.Time) {
 		h.Set("X-RateLimit-Remaining", "4800")
 		h.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
 		switch r.URL.Path {
-		case "/graphql":
+		case budgetGraphQLPath:
 			_, _ = fmt.Fprintf(w, `{"data":{"rateLimit":{"limit":5000,"remaining":4960,"used":40,"resetAt":%q}}}`, reset.UTC().Format(time.RFC3339))
 		case "/rate_limit":
 			if codeLeft < 0 {
@@ -248,6 +255,31 @@ func TestBudgetShowsTheSearchLimits(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBudgetNamesLoopSpendPerStep(t *testing.T) {
+	a, out := budgetApp(t)
+	reset := a.now.Add(40 * time.Minute)
+	searchGitHub(t, 7, reset)
+	if err := a.store.WriteFile(loopGraphQLFile, loopGraphQLSpend{
+		Reset:     reset,
+		Remaining: 4920,
+		Spent:     42,
+		Steps:     map[string]int{loopBoard: 39, loopPullStep: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := a.budgetCmd()
+	c.SetArgs(nil)
+	c.SetOut(out)
+	c.SetErr(out)
+	if err := c.Execute(); err != nil {
+		t.Fatalf("budget = %v", err)
+	}
+	want := "loop GraphQL spend: 42 of 1500 (board 39, pull 3), resets " + clock(a.now, reset)
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("budget printed %q, want %q", out.String(), want)
 	}
 }
 

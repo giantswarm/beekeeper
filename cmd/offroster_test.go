@@ -20,9 +20,9 @@ const (
 func TestWakePartyReachesSessionsOffTheRoster(t *testing.T) {
 	sup := state.Party{Session: "11111111-1111-4111-8111-111111111111", HostSession: "local_sup", Name: "Supervisor run 77"}
 	st := &state.State{
-		Supervisor: &state.Supervisor{Party: sup},
-		Agents:     []state.Agent{{Party: state.Party{Session: "s1", Name: agentOne}}},
-		Parks:      []state.Park{{By: state.Party{HostSession: offOmp, Name: "an omp session"}}},
+		Guide:  &state.Role{Holder: &state.Supervisor{Party: sup}},
+		Agents: []state.Agent{{Party: state.Party{Session: "s1", Name: agentOne}}},
+		Parks:  []state.Park{{By: state.Party{HostSession: offOmp, Name: "an omp session"}}},
 	}
 	a := &app{}
 	for q, want := range map[string]state.Party{
@@ -43,5 +43,20 @@ func TestWakePartyReachesSessionsOffTheRoster(t *testing.T) {
 	}
 	if _, _, err := a.wakeParty(st, "nobody"); err == nil {
 		t.Error("a name nothing carries was resolved")
+	}
+}
+
+func TestWakeIDKeepsHarnessChannel(t *testing.T) {
+	for _, host := range []string{offCodex, offOmp, "agy_test", ""} {
+		t.Run(host, func(t *testing.T) {
+			p := state.Party{Session: offID, HostSession: host}
+			want := host
+			if host == "" {
+				want = offID
+			}
+			if got := wakeID(p); got != want {
+				t.Fatalf("wakeID = %q, want %q", got, want)
+			}
+		})
 	}
 }

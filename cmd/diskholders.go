@@ -76,7 +76,9 @@ func (a *app) holderMachine() (holderMachine, error) {
 		return holderMachine{}, err
 	}
 	m := holderMachine{st: st}
-	if m.refs, _, err = diskReferences(); err != nil {
+	d, err := diskReferences()
+	m.refs = d.refs
+	if err != nil {
 		m.refsErr = fmt.Errorf("process references unavailable, no holder is eligible: %w", err)
 	}
 	return m, nil

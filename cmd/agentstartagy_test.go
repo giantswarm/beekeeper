@@ -71,6 +71,7 @@ func TestAgyModel(t *testing.T) {
 // carries another session's variables: agents idle --done --report,
 // agents park, log add and note add work without --as.
 func TestAgyAgentIsTheCaller(t *testing.T) {
+	stubIssuePark(t, "giantswarm/beekeeper#1")
 	const id = "8765dcba-0000-4000-8000-000000000000"
 	dir := t.TempDir()
 	store, err := state.Open(dir)

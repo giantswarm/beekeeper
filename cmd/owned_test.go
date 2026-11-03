@@ -186,6 +186,10 @@ func TestRunReason(t *testing.T) {
 		{`{"mergeCommitSha":"abc","verdict":"merged","release":null}`, "", "release-1.3",
 			"merged, release none awaited, release-1.3 has no auto-release and its tags are cut by hand; merged"},
 		{redDoc, "x", "", redReason},
+		{`{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","checks":[]}`, "x", "",
+			"required_missing: required status context build never reported; " + merge.NoRunsHint},
+		{`{"exitCode":4,"verdict":"required_missing","reason":"required status context build never reported","checks":[{"name":"test","source":"check_run","workflow":"ci","conclusion":"success"}]}`, "x", "",
+			"required_missing: required status context build never reported"},
 		{"", "devctl: not found", "", "devctl: not found"},
 		{"", "", "", "no output"},
 	} {

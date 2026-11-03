@@ -182,6 +182,27 @@ func hostCommand(ctx context.Context, dir string, env []string, bin string, args
 	return out.Bytes(), nil
 }
 
+// hostCombined is hostCommand with stderr kept: for status lines a harness
+// prints there. Callers compare it and never return it.
+func hostCombined(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c.Dir, c.Env = dir, env
+	out := &boundedBuffer{limit: MaxWire}
+	c.Stdout, c.Stderr = out, out
+	if err := c.Run(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func (s *Server) combined(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+	f := s.Combined
+	if f == nil {
+		f = hostCombined
+	}
+	return f(ctx, dir, env, bin, args...)
+}
+
 func (s *Server) command(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
 	f := s.Command
 	if f == nil {

@@ -68,29 +68,78 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		rules.WriteString("\n\n" + plugin.Skill(topic))
 	}
 	rules.WriteString("\n\nExecution host rules:\n" + string(custom))
+	// The start guards ride with the security sections: every threshold that
+	// gates a remote start on this host (the memory floor, the swap guard
+	// with its measuring window, the load and disk limits, the build slots,
+	// the kind lab cap) and every bound a capped run consumes under (memcap's
+	// memory, CPU quota and desktop weight) belong in the pinned digest. A
+	// guard weakened below the reviewed bundle must show up as a digest
+	// mismatch in `agents hosts check`, not as a host that quietly starts on
+	// weaker guards. What stays host-local of capacity, watch and memcap —
+	// the supervisor's pace, watch's alert thresholds and cadence, the slot
+	// location and hold bound — shapes this machine's watch and its own desk,
+	// never what a pinned remote worker may run or consume.
 	security, err := json.Marshal(struct {
-		GitHub   any
-		Hooks    any
-		Secret   any
-		Outbound any
-		Sandbox  any
-	}{a.cfg.GitHub, a.cfg.Hooks, a.cfg.Secret, a.cfg.Outbound, a.cfg.Sandbox})
+		GitHub          any
+		Hooks           any
+		Secret          any
+		Outbound        any
+		Sandbox         any
+		MaxKindClusters int
+		AvailMinMiB     int
+		SwapGrowthMax   int
+		SwapPSIMax      float64
+		SwapWindow      string
+		LoadMax         float64
+		LoadPerCoreMax  float64
+		DiskMinMiB      int
+		DiskFillWithin  string
+		MemcapSlots     int
+		MemcapMax       string
+		MemcapCPUQuota  string
+		MemcapCPUWeight int
+	}{
+		GitHub: a.cfg.GitHub, Hooks: a.cfg.Hooks, Secret: a.cfg.Secret, Outbound: a.cfg.Outbound, Sandbox: a.cfg.Sandbox,
+		MaxKindClusters: a.cfg.MaxKindClusters,
+		AvailMinMiB:     a.cfg.Capacity.AvailMinMiB, SwapGrowthMax: a.cfg.Capacity.SwapGrowthMaxMiB, SwapPSIMax: a.cfg.Capacity.SwapPSIMax, SwapWindow: a.cfg.Watch.SwapWindow.String(),
+		LoadMax: a.cfg.Watch.LoadMax, LoadPerCoreMax: a.cfg.Watch.LoadPerCoreMax, DiskMinMiB: a.cfg.Watch.DiskMinMiB, DiskFillWithin: a.cfg.Watch.DiskFillWithin.String(),
+		MemcapSlots: a.cfg.Memcap.Slots, MemcapMax: a.cfg.Memcap.Max, MemcapCPUQuota: a.cfg.Memcap.CPUQuota, MemcapCPUWeight: a.cfg.Memcap.CPUWeight,
+	})
 	if err != nil {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
 	s.GuardProbe = func() error {
+		const probeSession = "probe"
 		h := a.executionHook()
 		for _, command := range []string{"git push origin main", "gh pr merge 1 --repo giantswarm/beekeeper", "gh issue create --repo forbidden/repository --title fixture --body fixture"} {
-			raw, _ := json.Marshal(map[string]any{"session_id": "probe", "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
+			raw, _ := json.Marshal(map[string]any{"session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "Bash", "tool_input": map[string]any{hookTypeCommand: command}})
 			var out struct {
 				Hook struct {
 					Decision string `json:"permissionDecision"`
 				} `json:"hookSpecificOutput"`
 			}
-			b := h.DecideExecution(raw, "probe", cfg.WorkspaceRoot, a.executionProtected(s))
-			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != "deny" {
+			b := h.DecideExecution(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
+			if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
 				return errors.New("execution hook conformance probe failed")
+			}
+			if _, ok := cfg.Harnesses[execution.HarnessCodex]; ok {
+				raw, _ = json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "session_id": probeSession, "cwd": cfg.WorkspaceRoot, "tool_name": "exec_command", "tool_input": map[string]any{"cmd": command}})
+				out.Hook.Decision = ""
+				b = h.DecideExecutionCodex(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &out) != nil || out.Hook.Decision != guardDeny {
+					return errors.New("codex execution hook conformance probe failed")
+				}
+			}
+			if _, ok := cfg.Harnesses[execution.HarnessAgy]; ok {
+				raw, _ = json.Marshal(map[string]any{"conversationId": probeSession, "workspacePaths": []string{cfg.WorkspaceRoot}, "toolCall": map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": command}}})
+				var agyOut struct {
+					Decision string `json:"decision"`
+				}
+				b = h.DecideExecutionAgy(raw, probeSession, cfg.WorkspaceRoot, a.executionProtected(s))
+				if json.Unmarshal(b, &agyOut) != nil || agyOut.Decision != guardDeny {
+					return errors.New("agy execution hook conformance probe failed")
+				}
 			}
 		}
 		return nil
@@ -112,8 +161,46 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
+
+// executionGuardDecision picks the guard for the hook's format. A hook in
+// another harness's format is configuration that does not belong to this
+// execution: it is denied in the format asked for, never translated. A codex
+// or agy hook binds its calls to the thread the runner recorded.
+func executionGuardDecision(h guard.Hook, format string, j execution.Journal, protected []string) func([]byte) []byte {
+	h.ExecutionMCP = j.Request.MCP
+	deny := guard.ExecutionDeny
+	switch format {
+	case execution.HarnessCodex:
+		deny = guard.ExecutionDenyCodex
+	case execution.HarnessAgy:
+		deny = guard.ExecutionDenyAgy
+	}
+	wantFormat := ""
+	switch j.Request.Harness {
+	case execution.HarnessCodex:
+		wantFormat = execution.HarnessCodex
+	case execution.HarnessAgy:
+		wantFormat = execution.HarnessAgy
+	}
+	if format != wantFormat {
+		return func([]byte) []byte { return deny("hook format does not match the execution's harness") }
+	}
+	switch format {
+	case execution.HarnessCodex:
+		return func(raw []byte) []byte { return h.DecideExecutionCodex(raw, j.Thread, j.Handle.Workspace, protected) }
+	case execution.HarnessAgy:
+		return func(raw []byte) []byte { return h.DecideExecutionAgy(raw, j.Thread, j.Handle.Workspace, protected) }
+	default:
+		return func(raw []byte) []byte {
+			return h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, protected)
+		}
+	}
+}
+
+// guardDeny is a hook's deny decision, in both harnesses' formats.
+const guardDeny = "deny"
 
 func mustSelf() string { s, _ := os.Executable(); return s }
 
@@ -198,7 +285,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents merge", "run", "agents idle", "agents park", "agents note", "note add", "log add":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add":
 		return nil
 	case agentsName, "agents list", "supervisor status":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -235,16 +322,27 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		return s.Serve(ctx, cmd.InOrStdin(), cmd.OutOrStdout())
 	}}
 	hostRPC.Flags().IntVar(&protocol, "protocol", 0, "execution protocol")
+	var guardFormat string
 	guardCmd := &cobra.Command{Use: "execution-guard", Hidden: true, Args: cobra.NoArgs, PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return nil }, RunE: func(cmd *cobra.Command, _ []string) error {
 		var out []byte
+		denial := guard.ExecutionDeny
+		switch guardFormat {
+		case execution.HarnessCodex:
+			denial = guard.ExecutionDenyCodex
+		case execution.HarnessAgy:
+			denial = guard.ExecutionDenyAgy
+		}
 		defer func() {
 			if recover() != nil {
-				_, _ = cmd.OutOrStdout().Write(guard.ExecutionDeny("execution guard failed; denied"))
+				_, _ = cmd.OutOrStdout().Write(denial("execution guard failed; denied"))
 			}
 		}()
 		deny := func() error {
-			_, err := cmd.OutOrStdout().Write(guard.ExecutionDeny("execution identity, policy or coordinating authority could not be verified"))
+			_, err := cmd.OutOrStdout().Write(denial("execution identity, policy or coordinating authority could not be verified"))
 			return err
+		}
+		if guardFormat != "" && guardFormat != execution.HarnessCodex && guardFormat != execution.HarnessAgy {
+			return deny()
 		}
 		if err := a.load(); err != nil {
 			return deny()
@@ -269,12 +367,13 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		if authority.GitHubHeld {
 			h.Upstream.Orgs = []string{"__held__"}
 		}
-		out = h.DecideExecution(raw, j.Handle.ConversationID, j.Handle.Workspace, a.executionProtected(s))
+		out = executionGuardDecision(h, guardFormat, j, a.executionProtected(s))(raw)
 		if out != nil {
 			_, err = cmd.OutOrStdout().Write(out)
 		}
 		return err
 	}}
+	guardCmd.Flags().StringVar(&guardFormat, "format", "", "hook format: empty for Claude, codex or agy")
 	run := &cobra.Command{Use: "execution-run <execution>", Hidden: true, Args: cobra.ExactArgs(1), PersistentPreRunE: func(*cobra.Command, []string) error { a.hook = true; return a.load() }, RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := a.hostRuntime()
 		if err != nil {
@@ -288,7 +387,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return []*cobra.Command{hostRPC, guardCmd, run, a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -340,16 +439,60 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(caps)
+		// Keep the observed release and toolchain visible even when the
+		// coordinator release differs, so operators can diagnose the host.
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
+			return err
+		}
+		return checkHostRelease(caps.Version)
 	}})
+	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot provision host tools")
+		}
+		s, err := a.hostRuntime()
+		if err != nil {
+			return err
+		}
+		busy, release, err := s.Quiesce(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer release()
+		if busy > 0 {
+			return refused("execution host is busy; tool provisioning waits until executions end")
+		}
+		return s.ProvisionTools(cmd.Context())
+	}})
+	c.AddCommand(a.executionHostUpdateCmds()...)
 	c.AddCommand(&cobra.Command{Use: "sync <host>", Short: "Reconcile recorded executions, pending controls and acknowledged stops", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return a.syncExecutionHost(cmd.Context(), args[0]) }})
 	return c
 }
 
-func (a *app) executionHost(selector string) (execution.Host, error) {
+// catalogHost is the agents.hosts entry selector names, as configured.
+func (a *app) catalogHost(selector string) (execution.Host, error) {
 	h, ok := a.cfg.Agents.Hosts[selector]
 	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
+	}
+	return h, h.ValidateCatalog()
+}
+
+// executionHost is the agents.hosts entry selector names, pinned to the
+// policy digest beekeeper recorded for it (agents hosts update). The state
+// is peeked, never waited on: callers run inside a state update too.
+func (a *app) executionHost(selector string) (execution.Host, error) {
+	h, err := a.catalogHost(selector)
+	if err != nil {
+		return h, err
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return h, err
+	}
+	h = pinnedHost(st, selector, h)
+	if h.PolicyDigest == "" {
+		return h, refused("execution host %s has no pinned policy: beekeeper agents hosts update %s pins it", selector, selector)
 	}
 	return h, h.Validate()
 }
@@ -375,7 +518,14 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	// Protocol is the wire compatibility boundary. The pinned host policy
 	// still binds its own binary and rules; a coordinator-only release must
 	// not invalidate that independently prepared policy.
-	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || c.Harnesses[claudeComm] == "" {
+	if !c.Publication {
+		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
+	}
+	offered := false
+	for _, name := range h.Harnesses {
+		offered = offered || c.Harnesses[name] != ""
+	}
+	if c.Identity != h.Identity || c.Protocol != execution.Protocol || c.PolicyDigest != h.PolicyDigest || !offered {
 		return c, refused("execution host identity, protocol, harness or policy does not match")
 	}
 	if err := c.Resources.Validate(time.Now()); err != nil {
@@ -391,4 +541,12 @@ func executionRecord(st *state.State, ref execution.Ref) (*state.ExecutionRecord
 		}
 	}
 	return nil, -1
+}
+
+func checkHostRelease(version string) error {
+	want := coordinatorVersion()
+	if releaseVersion(want) && version != want {
+		return refused("execution host runs %s, coordinator runs %s; run beekeeper agents hosts update <host>", version, want)
+	}
+	return nil
 }

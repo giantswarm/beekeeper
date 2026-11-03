@@ -152,6 +152,11 @@ func (s *server) tools() []serveTool {
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
 			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
+		{newTool(toolAnswerVerifyName, "Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.",
+			fmt.Sprintf("Verified: through an authenticated channel (central, slack), at most %s old and, with head, naming that commit; for the answering person, their team or its supervisor role.", shortDur(answerFresh)), hintRead,
+			mcp.WithNumber(paramNote, mcp.Description("the note's number")),
+			mcp.WithString(paramAbout, mcp.Description("the issue or pull request, owner/repo#n")),
+			mcp.WithString(paramHead, mcp.Description("the commit its question or words must name"))), toolAnswerVerify},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
@@ -836,7 +841,11 @@ func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	answer, _ := answerText(n, choice, text) // the verb took it
 	c.s.closeDecision(c.ctx, n, outcomeAnswered, answer)
-	return map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}, nil
+	res := map[string]any{paramNote: id, "answer": answer, "answeredBy": c.who.Email}
+	if shown, err := c.app.localNote(id); err == nil && shown != nil && shown.Delivery != nil {
+		res["delivery"] = shown.Delivery
+	}
+	return res, nil
 }
 
 func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {

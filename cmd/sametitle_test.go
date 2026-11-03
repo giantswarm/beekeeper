@@ -18,7 +18,7 @@ import (
 const (
 	sharedTitle = "Supervisor run 82"
 	holderHost  = "local_9"
-	firstRun    = "Supervisor run 1"
+	firstRun    = "Guide run 1"
 )
 
 // noSocket is a machine where no CLI takes peer messages on a socket.
@@ -97,14 +97,14 @@ func TestTheRoleReachesItsHolderPastASharedTitle(t *testing.T) {
 	holder := &state.Supervisor{Party: state.Party{Session: "s9", HostSession: holderHost, Name: sharedTitle}}
 	sessions := []*claude.Session{{PID: 3, ID: "s3", Name: sharedTitle}, {PID: 9, ID: "s9", HostID: holderHost, Name: sharedTitle}}
 	sock := func(pid int) string { return fmt.Sprintf("/run/user/1000/cc-socks/%d.sock", pid) }
-	to, err := roleAddress(holder, supervisorRole, sessions, sock)
+	to, err := roleAddress(holder, guideRole, sessions, sock)
 	if err != nil || to != "uds:/run/user/1000/cc-socks/9.sock" {
 		t.Fatalf("to %q, %v; want the holder's socket", to, err)
 	}
-	if _, err := roleAddress(holder, supervisorRole, sessions, noSocket); err == nil {
+	if _, err := roleAddress(holder, guideRole, sessions, noSocket); err == nil {
 		t.Error("no socket: an ambiguous name is refused")
 	}
-	if to, err := roleAddress(holder, supervisorRole, sessions[1:], sock); err != nil || to != sharedTitle {
+	if to, err := roleAddress(holder, guideRole, sessions[1:], sock); err != nil || to != sharedTitle {
 		t.Errorf("a unique title stays the address: %q, %v", to, err)
 	}
 }
@@ -146,17 +146,17 @@ func TestARelayRefusesATakenTitle(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { *st = *handOverState(); return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
-	a.cfg.Supervisor.RelayTTL.Duration = 15 * time.Minute
+	a.cfg.Guide.RelayTTL.Duration = 15 * time.Minute
 	runLive(t, a, map[int]string{4: supB.Name})
-	_, _, err := a.startSuccessor(context.Background(), supervisorRole, supA, supA, t.TempDir())
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `the title "Supervisor run 12" is taken: the live session s4 (PID 4)`) {
+	_, _, err := a.startSuccessor(context.Background(), guideRole, supA, supA, t.TempDir())
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `the title "Guide run 12" is taken: the live session s4 (PID 4)`) {
 		t.Fatalf("relay: %v", err)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := supervisorRole.get(st); r.Relay != nil || !r.Holder.Is(supA) {
+	if r := guideRole.get(st); r.Relay != nil || !r.Holder.Is(supA) {
 		t.Errorf("the refused relay changed the role: %+v", r)
 	}
 }
@@ -166,22 +166,22 @@ func TestARelayRefusesATakenTitle(t *testing.T) {
 func TestAStartRefusesATakenTitle(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = ""
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Supervisor = nil; return nil, nil }); err != nil {
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s7")
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", "Agent eleven")
 	runLive(t, a, map[int]string{7: "Agent eleven", 4: firstRun})
-	err := a.runStart(context.Background(), supervisorRole, false)
-	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `the title "Supervisor run 1" is taken: the live session s4 (PID 4)`) {
+	err := a.runStart(context.Background(), guideRole, false)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `the title "Guide run 1" is taken: the live session s4 (PID 4)`) {
 		t.Fatalf("start: %v", err)
 	}
 	st, err := a.store.Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Supervisor != nil {
-		t.Errorf("the refused start took the role: %+v", st.Supervisor)
+	if st.Guide != nil && st.Guide.Holder != nil {
+		t.Errorf("the refused start took the role: %+v", st.Guide.Holder)
 	}
 }

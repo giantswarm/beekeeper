@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +45,21 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		{"disk: {holders: {keep: [a/b]}}", false},
 		{"disk: {holders: {asideDirs: [..]}}", false},
 		{"disk: {buildDirs: [artifacts], buildOutputs: [{path: /scratch/output, worktree: /scratch/worktree}]}", true},
+		{"disk: {caches: [{path: ~/.cache/app, olderThan: 7d}, {path: '/cache/*-dev', maxGiB: 1.5, mode: files}]}", true},
+		{"disk: {caches: [{name: go-build, maxGiB: 5}, {name: sccache, mode: off}, {name: beekeeper-tmp, olderThan: 2h}]}", true},
+		{"disk: {caches: [{path: /cache/app}]}", false},
+		{"disk: {caches: [{path: relative, olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: /, olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: '/cache/[', olderThan: 1h}]}", false},
+		{"disk: {caches: [{path: /cache/app, olderThan: 1h, mode: go}]}", false},
+		{"disk: {caches: [{name: sccache, mode: go}]}", false},
+		{"disk: {caches: [{path: /cache/app, olderThan: 1h, mode: wipe}]}", false},
+		{"disk: {caches: [{path: /cache/app, maxGiB: -1}]}", false},
+		{"disk: {caches: [{name: app}]}", false},
+		{"disk: {caches: [{path: ~/.cache/uv, mode: command, command: uv cache prune, maxGiB: 2}]}", true},
+		{"disk: {caches: [{path: /cache/tool, mode: command}]}", false},
+		{"disk: {caches: [{path: /cache/tool, olderThan: 1h, command: tool clean}]}", false},
+		{"disk: {caches: [{path: /cache/a, olderThan: 1h}, {path: /cache/a, maxGiB: 1}]}", false},
 	} {
 		if err := os.WriteFile(p, []byte(tc.raw), 0600); err != nil {
 			t.Fatal(err)
@@ -54,6 +70,11 @@ func TestDiskDefaultsAndValidation(t *testing.T) {
 		}
 		if err == nil && tc.raw == "disk: {holders: {every: 0s}}" && got.Disk.Holders.Every.Duration != 6*time.Hour {
 			t.Fatalf("every 0s = %s, want the 6h default", got.Disk.Holders.Every.Duration)
+		}
+		if err == nil && strings.Contains(tc.raw, "~/.cache/app") {
+			if e := got.Disk.Caches[0]; e.Name != e.Path || !filepath.IsAbs(e.Path) || e.OlderThan.Duration != 7*24*time.Hour {
+				t.Fatalf("cache entry=%+v", e)
+			}
 		}
 		if err == nil && tc.raw == "disk: {prune: ask}" && got.Disk.Auto() {
 			t.Fatal("ask became auto")

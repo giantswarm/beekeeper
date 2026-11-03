@@ -142,7 +142,7 @@ func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("answers %+v, %v", got, err)
 	}
-	if an := got[0]; an.About != privateThread || an.Comment != "" || an.For != notePerson || an.Via != viaCLI || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
+	if an := got[0]; an.About != privateThread || an.Comment != "" || an.For != notePerson || an.Via != channelTerminal || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
 		t.Errorf("answer %+v", an)
 	}
 	// With nobody serving it, the answer is still in the log.
@@ -361,7 +361,7 @@ func TestNoteForAPersonNeedsItsThreadAndIsWarnedOfItsAnswer(t *testing.T) {
 	if err := addNote(a, append(noRef, "approve "+prURL+"?")...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "it names no thread: --ref owner/repo#n") {
 		t.Fatalf("a decision without --ref: %v", err)
 	}
-	if err := addNote(a, "--for", supervisorRole.title, "State of the watch"); Code(err) != ExitUsage {
+	if err := addNote(a, "--for", guideRole.title, "State of the watch"); Code(err) != ExitUsage {
 		t.Fatalf("a memo --for a role: %v", err)
 	}
 	if err := runAnswer(a, decisionRef, "keep the draft"); err != nil {

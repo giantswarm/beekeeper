@@ -15,8 +15,7 @@ import (
 )
 
 // workerRole names the profile of the workers agents start creates
-// (agents.profile), beside the relayed roles' own (supervisor.profile,
-// guide.profile).
+// (agents.profile), beside the guide's own (guide.profile).
 const workerRole = "worker"
 
 // profileName is the profile the role's sessions get: agents.profile for a

@@ -95,7 +95,7 @@ const (
 	// installations through the person's kubeconfig, streamed for as long
 	// as its requester runs.
 	OpWatch = "watch"
-	// OpLab creates or tears down a held lab's kind cluster on the host,
+	// OpLab creates, tears down or resumes a held lab's kind cluster on the host,
 	// where kind reaches the container runtime.
 	OpLab = "lab"
 	// OpSign signs a payload with the person's key on the host, where gpg

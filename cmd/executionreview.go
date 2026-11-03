@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,8 +26,8 @@ func sameReviewSession(a, b state.Party) bool {
 // worker-selected name or a review's prose. Reconciliation is idempotent.
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
-		workerIndex := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent })
-		if workerIndex < 0 || st.Agents[workerIndex].Execution == nil {
+		worker, ok := executionReviewWorker(st, act)
+		if !ok {
 			return nil, nil
 		}
 		for _, round := range st.DeskReviews {
@@ -42,10 +43,10 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 				start = candidate
 			}
 		}
-		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, st.Agents[workerIndex].Party) {
+		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, worker) {
 			return nil, refused("independent reviewer start identity is unavailable")
 		}
-		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: st.Agents[workerIndex].Party, Reviewer: start.Party, AssignedAt: start.At})
+		st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: uuid.NewString(), Ref: act.Ref, Head: act.Head, Round: act.Round, Worker: worker, Reviewer: start.Party, AssignedAt: start.At})
 		for _, report := range st.WorkerReports {
 			if report.Finished && sameReviewSession(report.By, start.Party) {
 				if err := a.captureExecutionReviewReport(ctx, st, report.By, report.Text, report.At, true); err != nil {
@@ -55,6 +56,21 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 		}
 		return []state.Event{event(loopParty, "execution.review-assigned", "%s for %s at %s", name, act.URL, act.Head)}, nil
 	})
+}
+
+func executionReviewWorker(st *state.State, act superloop.Action) (state.Party, bool) {
+	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }); i >= 0 && st.Agents[i].Execution != nil {
+		return st.Agents[i].Party, true
+	}
+	if rp, ok := st.ReviewParkFor(act.Ref); ok && rp.Execution != nil {
+		return rp.Party, true
+	}
+	for i := len(st.Starts) - 1; i >= 0; i-- {
+		if st.Starts[i].Name == act.Agent && st.Starts[i].Execution != nil {
+			return st.Starts[i].Party, true
+		}
+	}
+	return state.Party{}, false
 }
 
 func executionReviewRound(st *state.State, use execution.MergeUse) *state.DeskReview {
@@ -68,15 +84,18 @@ func executionReviewRound(st *state.State, use execution.MergeUse) *state.DeskRe
 }
 
 // The public API supplies the stable node ID, author and exact commit for the
-// review URL acknowledged by the authenticated reviewer session.
-var readDeskReview = func(ctx context.Context, repository, id string) (superloop.Review, error) {
-	raw, err := github.RunGH(ctx, "api", fmt.Sprintf("repos/%s/pulls/reviews/%s", repository, id))
+// review URL acknowledged by the authenticated reviewer session. A review is
+// addressed under its pull request (repos/<owner>/<repo>/pulls/<n>/reviews/<id>),
+// and the answer must name that same pull request.
+var readDeskReview = func(ctx context.Context, repository string, pr int, id string) (superloop.Review, error) {
+	raw, err := github.RunGH(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d/reviews/%s", repository, pr, id))
 	if err != nil {
 		return superloop.Review{}, err
 	}
 	var r struct {
 		ID     string    `json:"node_id"`
 		URL    string    `json:"html_url"`
+		Pull   string    `json:"pull_request_url"`
 		Body   string    `json:"body"`
 		State  string    `json:"state"`
 		Commit string    `json:"commit_id"`
@@ -88,15 +107,37 @@ var readDeskReview = func(ctx context.Context, repository, id string) (superloop
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return superloop.Review{}, err
 	}
+	if want := fmt.Sprintf("/repos/%s/pulls/%d", repository, pr); !strings.HasSuffix(r.Pull, want) {
+		return superloop.Review{}, refused("review %s belongs to %q, not %s#%d", id, r.Pull, repository, pr)
+	}
 	return superloop.Review{ID: r.ID, URL: r.URL, Author: r.User.Login, Head: superloop.ReviewedHead(r.Body, r.Commit), Commit: r.Commit, Verdict: superloop.Verdict(r.State, r.Body), Body: r.Body, At: r.At}, nil
 }
 
 // This runs in the coordinating state transaction, so its authenticated result
 // survives report delivery/pruning and is rechecked immediately before use.
-func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUse, pull superloop.Pull) error {
+// The review authenticates the head its round reviewed; a merge head past it
+// is admitted only when it merely merges the base into that head
+// (readBaseMerge), as the reviewed merge's own branch update does.
+func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull) error {
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
-	if round == nil || round.Head != use.Head || workerIndex < 0 || !sameReviewSession(round.Worker, st.Starts[workerIndex].Party) || sameReviewSession(round.Worker, round.Reviewer) {
+	reviewed := use.Head
+	if round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
+		covered, err := readBaseMerge(ctx, pull, round.Head)
+		if err != nil {
+			return err
+		}
+		if covered {
+			reviewed = round.Head
+		}
+	}
+	workerOK := workerIndex >= 0 && round != nil && sameReviewSession(round.Worker, st.Starts[workerIndex].Party)
+	if !workerOK && use.ID == "" && workerIndex >= 0 && round != nil {
+		workerOK = slices.ContainsFunc(st.Starts, func(s state.Start) bool {
+			return s.Execution != nil && s.Execution.Request.Repository == use.Repository && sameReviewSession(round.Worker, s.Party)
+		})
+	}
+	if round == nil || round.Head != reviewed || !workerOK || sameReviewSession(round.Worker, round.Reviewer) {
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
@@ -108,8 +149,13 @@ func (a *app) authenticateExecutionReview(st *state.State, use execution.MergeUs
 		return refused("authenticated independent review no longer exists")
 	}
 	current := pull.Reviews[currentIndex]
-	if current.Author != result.Author || current.Head != use.Head || current.Commit != use.Head || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
+	if current.Author != result.Author || current.Head != reviewed || current.Commit != reviewed || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
+	}
+	// The loop's own merge presents no grant: it is the merge authority, so
+	// only a worker's grant is checked against the review it was issued for.
+	if use.ID == "" {
+		return nil
 	}
 	grant, err := execution.ReadMergeAuthorization(a.mergeAuthorityRoot(), use.ID)
 	if err == nil && (grant.DeskReviewID != round.ID || grant.ReviewID != result.ID || grant.ReviewDigest != result.BodyDigest) {
@@ -152,7 +198,7 @@ func (a *app) captureExecutionReviewReport(ctx context.Context, st *state.State,
 		}
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		review, err := readDeskReview(ctx, ref.Repo, links[0][1])
+		review, err := readDeskReview(ctx, ref.Repo, ref.N, links[0][1])
 		if err != nil {
 			return err
 		}

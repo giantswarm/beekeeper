@@ -114,10 +114,6 @@ func (a *app) claimCentral(res, purpose string) error {
 	if err != nil {
 		return err
 	}
-	sessions, _, err := a.sessions()
-	if err != nil {
-		return err
-	}
 	dir := lease.Dir(a.cfg.LeaseDir)
 	check := func(st *state.State) (int, error) {
 		holders, err := dir.List()
@@ -125,8 +121,7 @@ func (a *app) claimCentral(res, purpose string) error {
 			return -1, err
 		}
 		lease.Prune(st, heldMap(holders), a.now, a.cfg.GrantTTL.Duration)
-		sv := a.supervision(st, sessions)
-		idx, err := lease.Check(st, lease.Gate{Resource: res, Caller: me, Supervisor: sv.sup, RestartUntil: sv.until, Gone: sv.down(), Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+		idx, err := lease.Check(st, lease.Gate{Resource: res, Caller: me, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
 		if r := (*lease.Refusal)(nil); errors.As(err, &r) {
 			return -1, refused("%s: %s", res, r.Reason)
 		}

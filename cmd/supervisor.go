@@ -3,391 +3,249 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 
-	"github.com/giantswarm/beekeeper/internal/claude"
-	"github.com/giantswarm/beekeeper/internal/lease"
-	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
+
+// supervisorGroup is the command group of the supervisor's commands.
+const supervisorGroup = "supervising"
+
+// loopVersionFile is the running loop's version marker, beside the state.
+const loopVersionFile = "supervisor-loop-version.json"
+
+type loopVersionRecord struct {
+	PID     int    `json:"pid"`
+	Version string `json:"version"`
+}
+
+// loopRunningVersion returns the binary version of the current process.
+var loopRunningVersion = project.Version
+
+// installedLoopBinary returns the path of the installed beekeeper binary.
+var installedLoopBinary = os.Executable
+
+// loopVersionOf returns the binary version of the executable at path.
+var loopVersionOf = func(ctx context.Context, path string) string {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").Output() //nolint:gosec // the running or installed beekeeper binary
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) >= 2 && fields[0] == project.Name {
+		return normalizeLoopVersion(fields[1])
+	}
+	if len(fields) > 0 {
+		return normalizeLoopVersion(fields[0])
+	}
+	return ""
+}
+
+func normalizeLoopVersion(ver string) string {
+	ver = strings.TrimSpace(ver)
+	if ver == "" {
+		return ""
+	}
+	if !strings.HasPrefix(ver, "v") && ver[0] >= '0' && ver[0] <= '9' {
+		return "v" + ver
+	}
+	return ver
+}
+
+func (a *app) writeLoopVersion() error {
+	return a.store.WriteFile(loopVersionFile, loopVersionRecord{
+		PID:     os.Getpid(),
+		Version: normalizeLoopVersion(loopRunningVersion()),
+	})
+}
+
+func (a *app) clearLoopVersion() {
+	_ = a.store.WriteFile(loopVersionFile, loopVersionRecord{})
+}
 
 func (a *app) supervisorCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   supervisorRole.name,
-		Short: "Start, stop or show the supervisor session",
-		Long: `The supervisor is the one session that watches the others. From its
-start, leases are claimed only on its grant and merges wait for its word,
-until a deliberate ` + "`beekeeper supervisor stop`" + ` or a successor's start: a
-supervisor whose CLI crashed keeps the rule in force, its grants and queue
-stay recorded, and every claim waits for the successor. People and scripts
-(--as) stay ungated. A CLI back under the same session within
-supervisor.restartGrace (30s) of beekeeper first seeing it gone is a restart
-and keeps the role. Past the grace, with no relay open, the watch says
-SUPERVISOR GONE and notifies (no-supervisor, critical) until a supervisor
-is back. The role moves to a successor in two steps that leave no gap: the
-relay starts the next run, "Supervisor run N+1", as a fresh session, and
-its start takes the role. After a crash the standby watch starts it the
-same way.
+		Use:   "supervisor",
+		Short: "Show the supervisor loop, or run it",
+		Long: `The supervisor is the supervisor loop (` + "`beekeeper supervisor loop`" + `), which
+the beekeeper-supervisor-loop user service runs: beekeeper install always
+installs it. No session holds the supervisor's role and nothing starts or
+relays one: while the loop is down the standby watch restarts its systemd
+service (Linux; on macOS launchd restarts a failed loop itself), and says
+SUPERVISOR LOOP DOWN and notifies until it runs again.
 
-Without a subcommand, shows the supervisor and its context in tokens
-against supervisor.relayAt, at which watch says RELAY DUE (exit 3 when none
-runs, 4 in the session a relay relieved).`,
+Without a subcommand, shows whether the loop runs (exit 3 when it does not).`,
 		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error { return a.roleStatus(supervisorRole) },
+		RunE: func(cmd *cobra.Command, _ []string) error { return a.supervisorStatus(cmd.Context()) },
 	}
-	var takeOver bool
-	start := &cobra.Command{
-		Use:   "start",
-		Short: "Make the calling session the supervisor, or take the role relayed to it",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return a.runStart(cmd.Context(), supervisorRole, takeOver) },
-	}
-	start.Flags().BoolVar(&takeOver, "take-over", false, "replace a supervisor whose session still runs without its relay")
-	var force bool
-	stop := &cobra.Command{
-		Use:   "stop",
-		Short: "End supervision on purpose: grants and merge words no longer gate anyone",
-		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return a.runStop(supervisorRole, force) },
-	}
-	stop.Flags().BoolVar(&force, "force", false, "end the watch of another session")
 	status := &cobra.Command{
 		Use:   "status",
-		Short: "Show the supervisor (exit 3 when none runs, 4 when a relay relieved you)",
+		Short: "Show whether the supervisor loop runs (exit 3 when it does not)",
 		Args:  cobra.NoArgs,
-		RunE:  func(*cobra.Command, []string) error { return a.roleStatus(supervisorRole) },
+		RunE:  func(cmd *cobra.Command, _ []string) error { return a.supervisorStatus(cmd.Context()) },
 	}
-	c.AddCommand(start, a.relayCmd(supervisorRole, supervisorRelayLong), a.supervisorReopenCmd(), stop, status, a.supervisorLoopCmd())
+	c.AddCommand(status, a.supervisorLoopCmd())
 	return c
 }
 
-// supervisorRelayLong is the supervisor relay's help.
-const supervisorRelayLong = `Start the next supervisor run, "Supervisor run N+1", as a fresh session
-(as agents start does: its desktop title, roster name and messaging name
-are one) and open the relay to it. Its first turn runs
-` + "`beekeeper supervisor start`" + `, which takes the role, the grant queue and the
-pending grants in one step, and ends; the standby watch then resumes it in
-its desktop CLI with ` + "`beekeeper handover --prompt`" + `. Until the start you stay the
-supervisor and the grant rule stays yours, so no claim goes ungated in
-between. Any other session's start stays refused while you run. The relay
-stays open for supervisor.relayTTL (default 15m), then expires and you
-simply keep supervising; --cancel withdraws it earlier. A successor that
-does not start withdraws its relay.
-
-Once the successor has started, ` + "`beekeeper supervisor status`" + ` in your session
-exits 4: you have been relieved.`
-
-// relayCmd is rl's relay: its holder starts the next run, which takes the
-// role.
-func (a *app) relayCmd(rl role, long string) *cobra.Command {
-	var cancel bool
-	c := &cobra.Command{
-		Use:   "relay [--cancel]",
-		Short: "Start the next " + rl.title + " run as a fresh session: its `" + rl.name + " start` takes the role",
-		Long:  long,
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			me, err := a.caller()
-			if err != nil {
-				return err
-			}
-			if !cancel {
-				return a.relayToSuccessor(cmd.Context(), rl, me)
-			}
-			sessions, _, err := a.sessions()
-			if err != nil {
-				return err
-			}
-			var msg string
-			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-				var evs []state.Event
-				var err error
-				msg, evs, err = rl.cancelRelay(st, me, a.now)
-				if err != nil {
-					return nil, err
-				}
-				_, cli := rl.observeCLI(st, sessions, a.now)
-				return append(evs, cli...), nil
-			})
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(a.out, msg)
-			return err
-		},
+// loopPID is the PID of the running supervisor loop, 0 when none runs.
+func (a *app) loopPID() int {
+	var pid int
+	found, err := a.store.ReadFile(loopPIDFile, &pid)
+	if err != nil || !found || pid <= 0 || !proc.Alive(pid) {
+		return 0
 	}
-	c.Flags().BoolVar(&cancel, "cancel", false, "withdraw the open relay: you keep "+rl.ing)
-	return c
+	return pid
 }
 
-// relayToSuccessor has the holder me start rl's next run (successorDir).
-func (a *app) relayToSuccessor(ctx context.Context, rl role, me state.Party) error {
-	st, err := a.store.Read()
-	if err != nil {
-		return err
+// loopServiceHint is the command that shows the loop's user service on
+// this platform.
+func loopServiceHint() string {
+	if runtime.GOOS == "darwin" {
+		return "`launchctl list " + loopLaunchdLabel + "`"
 	}
-	if err := rl.mustHold(rl.get(st), me); err != nil {
-		return err
-	}
-	to, msg, err := a.startSuccessor(ctx, rl, me, me, "")
-	if err != nil {
-		return err
-	}
-	if to.HostSession == "" {
-		// a background successor's one session takes the role and goes on
-		// with it: no desktop turn to hand it
-		_, err := fmt.Fprintf(a.out, "started %q (background session %s): it runs `beekeeper %s start`, then `%s`, in its own turn; send it nothing\n%s\n", to.Name, to.Session, rl.name, rl.handover, msg)
-		return err
-	}
-	if _, err := fmt.Fprintf(a.out, "started %q (session %s, desktop %s): its first turn runs `beekeeper %s start`\n%s\n", to.Name, to.Session, to.HostSession, rl.name, msg); err != nil {
-		return err
-	}
-	return a.handTurn(ctx, rl, me, to)
+	return "`systemctl --user status " + loopUnit + "`"
 }
 
-// firstTurnWait bounds how long a relay waits for its successor's headless
-// first turn to end.
-const firstTurnWait = 5 * time.Minute
+// loopLaunchdLabel is the loop's launchd agent on macOS.
+const loopLaunchdLabel = "com.giantswarm.beekeeper.supervisor-loop"
 
-// handTurn tells the relaying holder me how its successor to gets its
-// desktop turn: the holder runs in a desktop CLI, whose session messaging
-// starts the successor's desktop CLI at once, whatever the window's focus,
-// the person's typing or the desktop's cap. It waits for the successor's
-// headless first turn to end (the desktop's CLI must not run beside it) and
-// makes room under the desktop's cap first.
-func (a *app) handTurn(ctx context.Context, rl role, me, to state.Party) error {
-	if err := awaitTurnEnd(ctx, to.Session, firstTurnWait); err != nil {
-		return fmt.Errorf("%q: %w: send it nothing, the standby watch gives it its desktop turn once it ends", to.Name, err)
-	}
-	if err := a.makeRoom(ctx, to.HostSession, me.HostSession); err != nil {
-		return fmt.Errorf("%q gets no desktop turn now: %w", to.Name, err)
-	}
-	turn := rl.resumeMessage("the desktop runs your CLI now, started by this message: this desktop turn keeps " + rl.duty)
-	_, err := fmt.Fprintf(a.out, "%q's first turn ended. Give it its desktop turn now: call SendMessage once with to %q and the message %q. "+
-		"The desktop starts its CLI for it (room is made under its cap); never resume it headless.\n", to.Name, to.HostSession, turn)
-	return err
+// supervisorView is the supervisor's status for --json.
+type supervisorView struct {
+	Loop    bool   `json:"loop"`
+	PID     int    `json:"pid,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
-// awaitTurnEnd waits up to wait for the headless turn of session id to end.
-func awaitTurnEnd(ctx context.Context, id string, wait time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	for {
-		if t, err := plat.Machine.Processes(); err == nil && headlessTurn(t, id) == "" {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("its headless first turn still runs after %s", wait)
-		case <-tick.C:
-		}
+// supervisorStatus says whether the supervisor loop runs: exit 3 when not.
+func (a *app) supervisorStatus(ctx ...context.Context) error {
+	c := context.Background()
+	if len(ctx) > 0 && ctx[0] != nil {
+		c = ctx[0]
 	}
-}
-
-// runStart makes the calling session rl's holder, or takes the role
-// relayed to it.
-func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
-	me, err := a.caller()
-	if err != nil {
-		return err
-	}
-	if me.Session == "" {
-		return refused("the %s is a Claude Code session: run this inside one, without --as", rl.name)
-	}
-	sessions, _, err := a.sessions()
-	if err != nil {
-		return err
-	}
-	dir := lease.Dir(a.cfg.LeaseDir)
-	var msg string
-	var run int
-	var waiting []string
-	var took bool
-	var after *state.State
-	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		if rl.grants {
-			holders, err := dir.List()
-			if err != nil {
-				return nil, err
-			}
-			lease.Prune(st, heldMap(holders), a.now, a.cfg.GrantTTL.Duration)
-		}
-		// A holder restarting its CLI still holds the role.
-		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
-		var evs []state.Event
-		was := rl.get(st).Holder
-		msg, evs, err = rl.start(st, me, sv.live || sv.restarting(), takeOver, a.now)
-		if err != nil {
-			return nil, err
-		}
-		// The start titles me with the run's name: never one another live
-		// session carries.
-		if err := titleTaken(sessions, rl.runName(rl.get(st).Run), me); err != nil {
-			return nil, err
-		}
-		took, after = was == nil || !was.Is(me), st
-		run = rl.get(st).Run
-		waiting = takeRoleLines(st, rl)
-		_, cli := rl.observeCLI(st, sessions, a.now)
-		return append(evs, cli...), nil
-	})
-	if err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(a.out, msg); err != nil {
-		return err
-	}
-	for _, line := range waiting {
-		if _, err := fmt.Fprintf(a.out, "waiting for the %s: %s\n", rl.name, line); err != nil {
-			return err
-		}
-	}
-	if line := a.titleRun(ctx, me, rl.runName(run)); line != "" {
-		if _, err := fmt.Fprintln(a.out, line); err != nil {
-			return err
-		}
-	}
-	if !rl.grants {
-		return nil
-	}
-	// The supervisor's first look, and every agent told whom to report to
-	// when the holder changed.
-	if took {
-		if _, err := fmt.Fprintln(a.out, a.announce(rl.runName(run))); err != nil {
-			return err
-		}
-	}
-	l, err := a.leases()
-	if err != nil {
-		return err
-	}
-	return a.startSummary(after, sessions, l)
-}
-
-// titleRun has a steward title me's desktop session with its run name
-// when it carries another; "" when there is nothing to title. A running
-// CLI keeps the name it takes messages under until the desktop runs it
-// again.
-func (a *app) titleRun(ctx context.Context, me state.Party, name string) string {
-	host := desktopID(me)
-	title := func() string {
-		if r, ok := claude.ReadRecord(a.cfg, host); ok {
-			return r.Title
-		}
-		return ""
-	}
-	if was := title(); was == "" || was == name {
-		return ""
-	}
-	// Not the caller itself: it is in this turn, so a request to it would
-	// wait for the turn to end.
-	find := func(_ context.Context, tried []string) (steward, error) {
-		return a.findSteward(host, append(tried, host))
-	}
-	line, err := retitle(ctx, host, name, title, find, a.peerSend, retitleWait)
-	if err != nil {
-		return fmt.Sprintf("the desktop title stays: %v", err)
-	}
-	return line + fmt.Sprintf("; peers reach this CLI as %q until the desktop runs it again", me.Name)
-}
-
-// runStop ends rl's term on purpose, force for another session's.
-func (a *app) runStop(rl role, force bool) error {
-	me, err := a.caller()
-	if err != nil {
-		return err
-	}
-	var msg string
-	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
-		r := rl.get(st)
-		if r.Holder == nil {
-			msg = fmt.Sprintf("no %s was recorded", rl.name)
-			return nil, nil
-		}
-		if !r.Holder.Is(me) && !force {
-			return nil, refused("%q %s, not you: --force ends another session's watch", r.Holder.Name, rl.verb)
-		}
-		msg = fmt.Sprintf("%q no longer %s", r.Holder.Name, rl.verb)
-		if r.Relay.Open(a.now) {
-			msg += fmt.Sprintf("; the relay to %q is cancelled", r.Relay.To.Name)
-		}
-		r.Holder, r.Relay, r.CLI = nil, nil, nil
-		rl.set(st, r)
-		return []state.Event{event(me, rl.name+".stop", "%s", msg)}, nil
-	})
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(a.out, msg)
-	return err
-}
-
-// roleStatus says who holds rl, with its context against relayAt: exit 3
-// when nobody does, 4 in the session a relay relieved.
-func (a *app) roleStatus(rl role) error {
-	st, err := a.store.Read()
-	if err != nil {
-		return err
-	}
-	sessions, _, err := a.sessions()
-	if err != nil {
-		return err
-	}
-	r := rl.get(st)
-	renameHolder(r.Holder, sessions)
-	sv := readHolder(r, sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
-	v := a.viewRole(rl, r, sessions, sv)
-	if v == nil {
-		v = &supervisorView{}
-	}
-	if me, err := a.caller(); err == nil {
-		if rf := relievedIn(r, me); rf != nil {
-			v.Relieved = true
-			if a.json {
-				_ = a.printJSON(v)
-			}
-			now := ""
-			switch {
-			case r.Holder == nil:
-				now = fmt.Sprintf("; no %s is recorded now", rl.name)
-			case !r.Holder.Is(rf.By):
-				now = fmt.Sprintf("; %q %s now", r.Holder.Name, rl.verb)
-			}
-			return &exitError{code: ExitRelieved, msg: fmt.Sprintf("you have been relieved: %q took the role at %s (relayed at %s)%s",
-				rf.By.Name, clock(a.now, rf.Taken), clock(a.now, rf.At), now)}
-		}
-	}
-	if r.Holder == nil {
-		return refused("no %s runs", rl.name)
+	pid := a.loopPID()
+	var ver string
+	if pid > 0 {
+		ver = a.loopVersion(c, pid)
 	}
 	if a.json {
-		_ = a.printJSON(v)
+		_ = a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver})
 	}
-	if sv.down() {
-		return refused("no %s runs: %q (since %s) is gone since %s; %s",
-			rl.name, r.Holder.Name, clock(a.now, r.Holder.Since), clock(a.now, sv.gone), rl.gone)
+	if pid == 0 {
+		return refused("the supervisor loop does not run (%s)", loopServiceHint())
 	}
 	if a.json {
 		return nil
 	}
-	restart := ""
-	if sv.restarting() {
-		restart = fmt.Sprintf("; its CLI is restarting (gone since %s, grace until %s)", stamp(sv.gone), stamp(sv.until))
+	if ver != "" {
+		_, err := fmt.Fprintf(a.out, "the supervisor loop runs (PID %d, %s)\n", pid, ver)
+		return err
 	}
-	relay := ""
-	if r.Relay.Open(a.now) {
-		relay = fmt.Sprintf(", relaying to %q until %s", r.Relay.To.Name, clock(a.now, r.Relay.Expires))
-	}
-	as := ""
-	if run := rl.runName(r.Run); r.Run > 0 && run != r.Holder.Name {
-		as = " as " + run
-	}
-	_, err = fmt.Fprintf(a.out, "%q %s%s since %s%s%s%s\n", r.Holder.Name, rl.verb, as, clock(a.now, r.Holder.Since), v.contextText(), relay, restart)
+	_, err := fmt.Fprintf(a.out, "the supervisor loop runs (PID %d)\n", pid)
 	return err
 }
 
-// stamp renders t as local "15:04:05", for times seconds apart.
-func stamp(t time.Time) string { return t.Local().Format(time.TimeOnly) }
+// loopVersion returns the running supervisor loop's binary version.
+func (a *app) loopVersion(ctx context.Context, pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	var rec loopVersionRecord
+	if found, err := a.store.ReadFile(loopVersionFile, &rec); err == nil && found && rec.PID == pid && rec.Version != "" {
+		return normalizeLoopVersion(rec.Version)
+	}
+	if pid == os.Getpid() {
+		return normalizeLoopVersion(loopRunningVersion())
+	}
+	for _, path := range []string{
+		fmt.Sprintf("/proc/%d/exe", pid),
+		loopProcessPath(pid),
+	} {
+		if path == "" {
+			continue
+		}
+		if ver := loopVersionOf(ctx, path); ver != "" {
+			return ver
+		}
+	}
+	if path, replaced := processBinary(pid); path != "" && !replaced {
+		if installed, err := installedLoopBinary(); err == nil && sameBinaryFile(path, installed) {
+			return normalizeLoopVersion(loopRunningVersion())
+		}
+	}
+	return ""
+}
+
+func loopProcessPath(pid int) string {
+	if b := platform.ProcessBinary(pid); b != nil && !b.Replaced() {
+		return b.Path
+	}
+	return ""
+}
+
+func sameBinaryFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if resolvedPath(a) == resolvedPath(b) {
+		return true
+	}
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
+}
+
+// staleLoopLine reports when the running supervisor loop runs an older binary
+// than the installed one.
+func (a *app) staleLoopLine(ctx context.Context) string {
+	pid := a.loopPID()
+	if pid <= 0 {
+		return ""
+	}
+	installedVer := normalizeLoopVersion(loopRunningVersion())
+	if installed, err := installedLoopBinary(); err == nil && installed != "" {
+		if self, selfErr := os.Executable(); selfErr != nil || !sameBinaryFile(installed, self) || replacedBinary(os.Getpid()) {
+			if v := loopVersionOf(ctx, installed); v != "" {
+				installedVer = v
+			}
+		}
+	}
+	loopVer := a.loopVersion(ctx, pid)
+	if loopVer != "" && installedVer != "" && loopVer != installedVer {
+		if semver.IsValid(loopVer) && semver.IsValid(installedVer) && semver.Compare(loopVer, installedVer) < 0 {
+			return fmt.Sprintf("stale supervisor loop: pid %d runs %s while %s is installed; it re-executes the installed binary at its next quiet point, or restart %s", pid, loopVer, installedVer, loopUnit)
+		}
+	}
+	if replacedBinary(pid) {
+		if loopVer != "" && installedVer != "" {
+			return fmt.Sprintf("stale supervisor loop: pid %d runs %s from a binary an install replaced (%s installed); it re-executes the installed binary at its next quiet point, or restart %s", pid, loopVer, installedVer, loopUnit)
+		}
+		return fmt.Sprintf("stale supervisor loop: pid %d runs a binary an install replaced (%s installed); it re-executes the installed binary at its next quiet point, or restart %s", pid, installedVer, loopUnit)
+	}
+	if path, _ := processBinary(pid); path != "" {
+		if installed, err := installedLoopBinary(); err == nil && installed != "" && !sameBinaryFile(path, installed) {
+			if loopVer != "" && installedVer != "" && loopVer != installedVer {
+				return fmt.Sprintf("stale supervisor loop: pid %d runs %s while %s is installed; it re-executes the installed binary at its next quiet point, or restart %s", pid, loopVer, installedVer, loopUnit)
+			}
+			return fmt.Sprintf("stale supervisor loop: pid %d runs an older binary than the installed %s; it re-executes the installed binary at its next quiet point, or restart %s", pid, installedVer, loopUnit)
+		}
+	}
+	return ""
+}
