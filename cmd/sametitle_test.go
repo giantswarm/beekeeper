@@ -166,13 +166,18 @@ func TestARelayRefusesATakenTitle(t *testing.T) {
 func TestAStartRefusesATakenTitle(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = ""
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide = nil
+		// A run beekeeper started, which may take the role.
+		st.Starts = append(st.Starts, state.Start{Party: state.Party{Session: "s7", Name: agentEleven}, Mode: state.ModeBypass, Role: guideName})
+		return nil, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s7")
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
-	t.Setenv("CLAUDE_CODE_SESSION_NAME", "Agent eleven")
-	runLive(t, a, map[int]string{7: "Agent eleven", 4: firstRun})
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentEleven)
+	runLive(t, a, map[int]string{7: agentEleven, 4: firstRun})
 	err := a.runStart(context.Background(), guideRole, false)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), `the title "Guide run 1" is taken: the live session s4 (PID 4)`) {
 		t.Fatalf("start: %v", err)

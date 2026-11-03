@@ -19,7 +19,10 @@ import (
 
 const (
 	agentTwentyEight = "Agent twenty-eight"
+	agentEleven      = "Agent eleven"
 	guideSeven       = "Guide run 7"
+	guideEight       = "Guide run 8"
+	guideNine        = "Guide run 9"
 	hostG7           = "local_G7"
 	sessionG7        = "sG7"
 	supThirteen      = "Guide run 13"
@@ -34,7 +37,7 @@ func TestRunOf(t *testing.T) {
 			t.Errorf("runOf(%q) = %d, want %d", name, got, want)
 		}
 	}
-	if got := guideRole.runName(8); got != "Guide run 8" {
+	if got := guideRole.runName(8); got != guideEight {
 		t.Errorf("runName = %q", got)
 	}
 }
@@ -80,7 +83,7 @@ func TestStartNumbersTheRun(t *testing.T) {
 }
 
 func TestSuccessorBriefTakesTheRoleAndEndsTheTurn(t *testing.T) {
-	b := guideRole.successorBrief(config.Role{Skill: guideName}, "Guide run 8", guideSeven)
+	b := guideRole.successorBrief(config.Role{Skill: guideName}, guideEight, guideSeven)
 	if !strings.HasPrefix(b, "/guide You are ") {
 		t.Errorf("the brief does not open with the bare /guide:\n%s", b)
 	}
@@ -128,7 +131,7 @@ func TestStandbyStartsAGoneGuidesSuccessor(t *testing.T) {
 		send: func(context.Context, string, string) error { return nil },
 		succeed: func(_ context.Context, rl role, from state.Party) (state.Party, error) {
 			started.Add(1)
-			to := state.Party{Session: "sG8", Name: "Guide run 8"}
+			to := state.Party{Session: "sG8", Name: guideEight}
 			return to, w.store.Update(func(st *state.State) ([]state.Event, error) {
 				_, evs, err := rl.relay(st, from, to, w.now, time.Hour)
 				return evs, err

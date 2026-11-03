@@ -43,7 +43,7 @@ type role struct {
 var (
 	guideRole = role{
 		name: guideName, title: "Guide", inf: guideName, verb: "guides", ing: "guiding", tag: "GUIDE ", duty: "the guide's role", handover: "beekeeper guide handover --prompt",
-		gone: "a successor's `beekeeper guide start` takes the role (beekeeper guide handover --prompt)",
+		gone: "the standby watch starts its successor, or `beekeeper guide start --new` does now; the successor's `beekeeper guide start` takes the role",
 		get:  (*state.State).GuideRole, set: (*state.State).SetGuideRole,
 		cfg: func(c *config.Config) config.Role { return c.Guide.Role },
 	}

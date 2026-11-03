@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A Claude worker's headless turns carry its model as `SECURITY_REVIEW_MODEL` in their `--settings`, so the security-guidance plugin's reviews run on the worker's model, and `agents` lists each worker's `sdk-py` review sessions with their count, cost and models (SDK-PY column, `sdkChildren` in `--json`) ([https://github.com/giantswarm/beekeeper/issues/994](https://github.com/giantswarm/beekeeper/issues/994)).
 - SSH execution hosts can run guarded omp workers with host-local authentication, durable RPC wake receipts and the shared coordinator-owned capacity, publication and merge contracts (https://github.com/giantswarm/beekeeper/issues/1943).
 - `beekeeper hold set starts --reason …` pauses new starts only: every start of a worker or reviewer (`--force` included, locally, on an SSH host and the supervisor loop's fill) and a done agent's wake are refused, and `capacity` and `capacity pick` say no start, while running and parked workers, the loop's merges, the guide and role successors go on; `beekeeper status` starts with STARTS HELD and who set it; `beekeeper hold lift starts` ends it (https://github.com/giantswarm/beekeeper/issues/2208).
 
@@ -30,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The hook follows script files run from shell `-c` strings, including nested strings, using the same recursion bound as nested scripts. Refusals name the script and line; files used only as data remain unread (https://github.com/giantswarm/beekeeper/issues/971).
+- Only beekeeper starts a guide run: `guide start` refuses a session beekeeper did not start as a guide run, `guide start --new` starts the next run from a terminal (in `guide.dir`, with the configured skill, model and mode) when the guide's session is gone or none is recorded, and `beekeeper resume` starts one when the guide's session runs no CLI. The standby watch and `guide status` record when the guide's CLI was first seen gone, so its restart grace runs out after a reboot or crash instead of starting anew on every read (https://github.com/giantswarm/beekeeper/issues/2205).
+- Approved conflicting pull requests retain their durable merge-repair handoff instead of being intercepted as review rework.
+
 - A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
 
 - Start one independent review for each new unapproved pull-request head even after historical review rounds are exhausted; fixes no longer receive a merge go the exact-head execution gate cannot accept (https://github.com/giantswarm/beekeeper/issues/2247).
