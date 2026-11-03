@@ -741,17 +741,20 @@ new repository or ref refuses preparation before the harness launches; update
 the installed toolchain and its policy pin before retrying. Tools remain
 host installations shared by workers, rather than per-worker downloads.
 
-Host sync also asks each configured host for the journal-backed executions of
-this coordinator, even when the coordinator has no execution records left.
-An execution absent from the coordinator's current records is stopped through
-its exact journal-backed identity. The host retains its stopped journal, so it
-is not reconciled again. Other coordinators' executions are excluded.
+Host sync also asks each used, pinned host for the active journal-backed
+executions of this coordinator, including once when the coordinator has no
+active execution records left on that host. An execution absent from the
+coordinator's current records is stopped through its exact journal-backed
+identity. The host retains its stopped journal, and naturally exited or failed
+journals are excluded, so neither is reconciled again. Other coordinators'
+executions are excluded.
 
 A recorded execution whose host journal disappeared is settled as failed only
 when the host also confirms its unit is inactive. Unknown or active unit state
 remains unconfirmed; no process without its ownership journal is stopped.
 The reconciliation writes an audit event and does not claim a stop acknowledgement.
 Host update drain messages name the recorded workers and execution IDs; a busy
-host also returns its blocking execution IDs. Hosts predating inventory must
-first be upgraded to support reconciliation; they retain their existing drain
-protection.
+host also returns its blocking execution IDs. On a host predating inventory, a
+recorded execution whose host journal is confirmed absent does not block
+`agents hosts update` from upgrading the host, after which unit inactivity is
+confirmed and the record settles.

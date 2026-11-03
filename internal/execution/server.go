@@ -631,7 +631,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				var coordinator string
 				err = Decode(req.Payload, &coordinator)
 				if err == nil {
-					value, err = s.Inventory(coordinator)
+					value, err = s.Inventory(ctx, coordinator)
 				}
 			case missingOperation:
 				value, err = s.Missing(ctx, req.Ref)
@@ -657,7 +657,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				value, err = s.Inspect(ctx, req.Ref)
 			case syncControlOperation:
 				value, err = s.SyncControl(ctx, req.Ref, nil)
-			case "stop":
+			case stopOperation:
 				var q StopRequest
 				err = Decode(req.Payload, &q)
 				if err == nil {
@@ -691,7 +691,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = errors.New("unknown execution operation")
 			}
 			if err != nil {
-				if (req.Operation == inspectOperation || req.Operation == syncControlOperation) && errors.Is(err, os.ErrNotExist) {
+				if (req.Operation == inspectOperation || req.Operation == syncControlOperation || req.Operation == stopOperation) && errors.Is(err, os.ErrNotExist) {
 					reply.Code = "not-found"
 				}
 				if errors.Is(err, ErrUnsupported) {

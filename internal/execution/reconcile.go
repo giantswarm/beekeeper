@@ -14,6 +14,7 @@ const (
 	inventoryOperation   = "inventory"
 	missingOperation     = "missing"
 	syncControlOperation = "sync-control"
+	stopOperation        = "stop"
 )
 
 // InventoryReader lists only journal-backed executions of one coordinator.
@@ -36,7 +37,7 @@ func (t SSHTransport) Missing(ctx context.Context, ref Ref) (bool, error) {
 	return absent, err
 }
 
-func (s *Server) Inventory(coordinator string) ([]Ref, error) {
+func (s *Server) Inventory(ctx context.Context, coordinator string) ([]Ref, error) {
 	if !ValidIdentity(coordinator) {
 		return nil, errors.New("invalid inventory coordinator")
 	}
@@ -67,9 +68,19 @@ func (s *Server) Inventory(coordinator string) ([]Ref, error) {
 		if err != nil {
 			return nil, err
 		}
-		if j.Request.Coordinator == coordinator && !j.StopAcknowledged {
-			refs = append(refs, j.Handle.Ref)
+		if j.Request.Coordinator != coordinator || j.StopAcknowledged {
+			continue
 		}
+		if j.Phase == Exited || j.Phase == Failed {
+			o, err := s.Inspect(ctx, j.Handle.Ref)
+			if err != nil {
+				return nil, errors.New("cannot establish owned unit state")
+			}
+			if o.ProcessState == Exited || o.ProcessState == Failed {
+				continue
+			}
+		}
+		refs = append(refs, j.Handle.Ref)
 	}
 	return refs, nil
 }

@@ -16,21 +16,40 @@ func TestInventorySeparatesCoordinatorsAndStoppedJournals(t *testing.T) {
 	if _, err := f.s.Start(ctx, f.r); err != nil {
 		t.Fatal(err)
 	}
-	refs, err := f.s.Inventory(f.r.Coordinator)
+	refs, err := f.s.Inventory(ctx, f.r.Coordinator)
 	if err != nil || len(refs) != 1 || refs[0] != f.r.Ref {
 		t.Fatalf("inventory=%v %v", refs, err)
 	}
 	f.s.Config.Coordinators["other-coordinator"] = f.s.Config.Coordinators[f.r.Coordinator]
-	if refs, err := f.s.Inventory("other-coordinator"); err != nil || len(refs) != 0 {
+	if refs, err := f.s.Inventory(ctx, "other-coordinator"); err != nil || len(refs) != 0 {
 		t.Fatal("inventory included another coordinator's journal")
 	}
-	if _, err := f.s.Inventory("untrusted"); err == nil {
+	if _, err := f.s.Inventory(ctx, "untrusted"); err == nil {
 		t.Fatal("accepted unknown coordinator")
+	}
+	// A naturally exited execution with an inactive unit is not an active
+	// orphan and must not be returned for synthetic stop mutation.
+	f.launcher.states[UnitName(f.r.Ref)] = unitInactive
+	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error {
+		j.Phase, j.Ready = Exited, true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if refs, err := f.s.Inventory(ctx, f.r.Coordinator); err != nil || len(refs) != 0 {
+		t.Fatalf("naturally exited journal returned by inventory: %v %v", refs, err)
+	}
+	f.launcher.states[UnitName(f.r.Ref)] = unitActive
+	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error {
+		j.Phase = Running
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: "fixture-orphan", Reason: "orphan"}); err != nil {
 		t.Fatal(err)
 	}
-	refs, err = f.s.Inventory(f.r.Coordinator)
+	refs, err = f.s.Inventory(ctx, f.r.Coordinator)
 	if err != nil || len(refs) != 0 {
 		t.Fatalf("stopped journal remains: %v %v", refs, err)
 	}
@@ -87,5 +106,34 @@ func TestInventoryOverSSHWire(t *testing.T) {
 	missing.Execution = ExecutionID(uuid.NewString())
 	if _, err := transport.SyncControl(ctx, missing); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sync missing error=%v", err)
+	}
+	if _, err := transport.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "stop"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stop missing error=%v", err)
+	}
+	// Pre-inventory hosts return os.ErrNotExist text without reply.Code on sync-control and stop.
+	legacy := SSHTransport{Host: f.host, Run: func(_ context.Context, _ []string, input []byte) ([]byte, error) {
+		var req WireRequest
+		if err := Decode(input, &req); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		err := f.s.Serve(ctx, bytes.NewReader(input), &out)
+		if err != nil {
+			return nil, err
+		}
+		var reply WireResponse
+		if err := Decode(out.Bytes(), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if req.Operation != inspectOperation {
+			reply.Code = ""
+		}
+		return mustJSON(reply), nil
+	}}
+	if _, err := legacy.SyncControl(ctx, missing); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("legacy sync missing error=%v", err)
+	}
+	if _, err := legacy.Stop(ctx, missing, StopRequest{ID: "stop-missing", Reason: "stop"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("legacy stop missing error=%v", err)
 	}
 }

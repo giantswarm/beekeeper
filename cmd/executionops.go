@@ -73,7 +73,7 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 		if r == nil {
 			return nil, refused("execution is not owned")
 		}
-		if released = r.Released(); released {
+		if released = r.Released() || r.HostJournalMissing; released {
 			return nil, nil
 		}
 		if r.StopRequest == nil {
@@ -100,6 +100,13 @@ func (a *app) stopExecution(ctx context.Context, ref execution.Ref, reason strin
 	}
 	ack, err := a.executionClient(h).Stop(ctx, ref, *r.StopRequest)
 	if err != nil {
+		if errors.Is(err, execution.ErrNotFound) {
+			if settled, missingErr := a.reconcileMissingExecution(ctx, h, ref); missingErr != nil {
+				return missingErr
+			} else if settled {
+				return nil
+			}
+		}
 		a.executionFailure(ref, err)
 		return err
 	}
@@ -280,12 +287,21 @@ func isUnreachable(err error) bool {
 }
 
 func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
-	h, err := a.executionHost(selector)
+	st, err := a.store.Read()
 	if err != nil {
 		return err
 	}
-	st, err := a.store.Read()
+	var indices []int
+	for i, s := range st.Starts {
+		if r := s.Execution; r != nil && !r.HostJournalMissing && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
+			indices = append(indices, i)
+		}
+	}
+	h, err := a.executionHost(selector)
 	if err != nil {
+		if len(indices) == 0 && Code(err) == ExitRefused {
+			return nil
+		}
 		return err
 	}
 	syncer, ok := a.executionClient(h).(execution.ControlSyncer)
@@ -302,12 +318,6 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	inventoryCancel()
 	if inventoryErr != nil {
 		failures = append(failures, inventoryErr.Error())
-	}
-	var indices []int
-	for i, s := range st.Starts {
-		if r := s.Execution; r != nil && !r.HostJournalMissing && r.Selector == selector && (executionNeedsSync(st, r) || a.hasUnrecoveredPublication(r)) {
-			indices = append(indices, i)
-		}
 	}
 	// Reconcile unconfirmed executions first so a persistent deadline or
 	// transport failure on one execution does not flip healthy peers on the
@@ -382,6 +392,11 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 					break
 				}
 			}
+			if current, readErr := a.store.Read(); readErr == nil {
+				if rec, _ := executionRecord(current, ref); rec != nil && rec.HostJournalMissing {
+					continue
+				}
+			}
 		}
 		opCtx, cancel = withTimeout(ctx)
 		_, syncErr := syncer.SyncControl(opCtx, ref)
@@ -409,6 +424,13 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 			opCtx, cancel = withTimeout(ctx)
 			err = a.stopExecution(opCtx, ref, r.StopRequest.Reason)
 			cancel()
+			if err == nil {
+				if current, readErr := a.store.Read(); readErr == nil {
+					if rec, _ := executionRecord(current, ref); rec != nil && rec.HostJournalMissing {
+						continue
+					}
+				}
+			}
 		} else {
 			wasTerminal := r.Terminal()
 			opCtx, cancel = withTimeout(ctx)
@@ -423,16 +445,16 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 					err = postErr
 				}
 			}
-		}
-		if errors.Is(err, execution.ErrNotFound) {
-			missingCtx, missingCancel := withTimeout(ctx)
-			settled, missingErr := a.reconcileMissingExecution(missingCtx, h, ref)
-			missingCancel()
-			if missingErr != nil {
-				failures = append(failures, missingErr.Error())
-			}
-			if settled {
-				continue
+			if errors.Is(err, execution.ErrNotFound) {
+				missingCtx, missingCancel := withTimeout(ctx)
+				settled, missingErr := a.reconcileMissingExecution(missingCtx, h, ref)
+				missingCancel()
+				if missingErr != nil {
+					failures = append(failures, missingErr.Error())
+				}
+				if settled {
+					continue
+				}
 			}
 		}
 		if err != nil {
@@ -476,26 +498,71 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 	return nil
 }
 
+func hostUsed(st *state.State, selector string, id execution.HostID) bool {
+	if p := st.HostPin(selector); p != nil && p.Identity == id && p.PolicyDigest != "" {
+		return true
+	}
+	for _, s := range st.Starts {
+		if s.Execution != nil && (s.Execution.Selector == selector || s.Execution.Handle.Ref.Host == id) {
+			return true
+		}
+	}
+	for _, ag := range st.Agents {
+		if ag.Host == selector || ag.Host == string(id) || (ag.Execution != nil && ag.Execution.Host == id) {
+			return true
+		}
+	}
+	for _, rec := range st.Records {
+		if rec.Session.Host == selector || rec.Session.Host == string(id) {
+			return true
+		}
+	}
+	return false
+}
+
 // syncExecutions reconciles each host on its own schedule and backs off
 // hosts whose reconciliation failed or hit its deadline. Rotating the first
 // host prevents an unreachable endpoint monopolizing reconciliation.
 func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
 	selectors := []string{}
 	active := map[string]bool{}
-	// A host may retain a journal after the last coordinator record goes.
-	// Inventory must still run when Starts contains no executions at all.
-	if execution.ValidIdentity(w.cfg.Identity.Host) {
-		for selector := range w.cfg.Agents.Hosts {
-			selectors = append(selectors, selector)
-			active[executionSyncEmitPrefix+selector] = true
+	needsSync := map[string]bool{}
+	startsByHost := map[string]int{}
+	for _, s := range st.Starts {
+		if r := s.Execution; r != nil {
+			startsByHost[r.Selector]++
+			if !r.HostJournalMissing && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
+				if !slices.Contains(selectors, r.Selector) {
+					selectors = append(selectors, r.Selector)
+				}
+				active[executionSyncEmitPrefix+r.Selector] = true
+				needsSync[r.Selector] = true
+			}
 		}
 	}
-	for _, s := range st.Starts {
-		if r := s.Execution; r != nil && !r.HostJournalMissing && (executionNeedsSync(st, r) || w.hasUnrecoveredPublication(r)) {
-			if !slices.Contains(selectors, r.Selector) {
-				selectors = append(selectors, r.Selector)
+	// A host may retain a journal after the last coordinator record goes.
+	// Inventory runs once for each used, pinned host when Starts contains no
+	// active executions on it.
+	if execution.ValidIdentity(w.cfg.Identity.Host) {
+		for selector := range w.cfg.Agents.Hosts {
+			if needsSync[selector] {
+				continue
 			}
-			active[executionSyncEmitPrefix+r.Selector] = true
+			h, err := w.executionHost(selector)
+			if err != nil || !hostUsed(st, selector, h.Identity) {
+				continue
+			}
+			if _, ok := w.executionClient(h).(execution.InventoryReader); !ok {
+				continue
+			}
+			w.mu.Lock()
+			prev, synced := w.executionInventorySynced[selector]
+			w.mu.Unlock()
+			if synced && startsByHost[selector] >= prev {
+				continue
+			}
+			selectors = append(selectors, selector)
+			active[executionSyncEmitPrefix+selector] = true
 		}
 	}
 	w.clearMissing(executionSyncEmitPrefix, active)
@@ -522,6 +589,9 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		if w.executionSyncFailures == nil {
 			w.executionSyncFailures = map[string]int{}
 		}
+		if w.executionInventorySynced == nil {
+			w.executionInventorySynced = map[string]int{}
+		}
 		last := w.last[key]
 		wait := executionSyncBackoff(w.executionSyncFailures[selector])
 		if !last.IsZero() && now.Sub(last) < wait {
@@ -539,6 +609,7 @@ func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.St
 		} else {
 			w.mu.Lock()
 			delete(w.executionSyncFailures, selector)
+			w.executionInventorySynced[selector] = startsByHost[selector]
 			w.mu.Unlock()
 			w.clear(executionSyncEmitPrefix + selector)
 		}

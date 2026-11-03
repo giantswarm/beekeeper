@@ -236,7 +236,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return &UnreachableError{Operation: op, Cause: errors.New("SSH response identity mismatch")}
 	}
 	if reply.Error != "" {
-		if (op == inspectOperation || op == syncControlOperation) && reply.Code == "not-found" {
+		if (op == inspectOperation || op == syncControlOperation || op == stopOperation) && (reply.Code == "not-found" || (reply.Code == "" && missingJournalError(ref, reply.Error))) {
 			return ErrNotFound
 		}
 		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
@@ -245,6 +245,10 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		return errors.New(reply.Error)
 	}
 	return Decode(reply.Payload, result)
+}
+
+func missingJournalError(ref Ref, msg string) bool {
+	return ref.Execution != "" && strings.Contains(msg, string(ref.Execution)+".json:") && strings.Contains(msg, "no such file or directory")
 }
 
 func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
@@ -322,7 +326,7 @@ func (t SSHTransport) ResolveMessage(ctx context.Context, r Ref, q MessageResolu
 }
 func (t SSHTransport) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	var x Ack
-	err := t.Call(ctx, "stop", r, q, &x)
+	err := t.Call(ctx, stopOperation, r, q, &x)
 	if err == nil && (x.ID != q.ID || x.Stage != Applied) {
 		err = errors.New("remote termination is not acknowledged")
 	}

@@ -26,13 +26,16 @@ func (a *app) reconcileHostInventory(ctx context.Context, h execution.Host) erro
 	if err != nil {
 		return err
 	}
+	if len(refs) == 0 {
+		return nil
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
 	for _, ref := range refs {
 		if ref.Validate() != nil || ref.Host != h.Identity {
 			return errors.New("host inventory identity mismatch")
-		}
-		st, err := a.store.Read()
-		if err != nil {
-			return err
 		}
 		if r, _ := executionRecord(st, ref); r != nil {
 			continue
@@ -65,16 +68,34 @@ func (a *app) reconcileMissingExecution(ctx context.Context, h execution.Host, r
 	if rec == nil || rec.Phase == executionPending {
 		return false, nil
 	}
-	inventory, ok := a.executionClient(h).(execution.InventoryReader)
+	client := a.executionClient(h)
+	inventory, ok := client.(execution.InventoryReader)
 	if !ok {
 		return false, nil
 	}
 	absent, err := inventory.Missing(ctx, ref)
 	if errors.Is(err, execution.ErrUnsupported) {
+		if _, inspectErr := client.Inspect(ctx, ref); errors.Is(inspectErr, execution.ErrNotFound) {
+			_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if r, _ := executionRecord(st, ref); r != nil && r.Phase != executionPending && !r.HostJournalMissing {
+					r.HostJournalUnconfirmed = true
+				}
+				return nil, nil
+			})
+		}
 		return false, nil
 	}
-	if err != nil || !absent {
+	if err != nil {
 		return false, err
+	}
+	if !absent {
+		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+			if r, _ := executionRecord(st, ref); r != nil {
+				r.HostJournalUnconfirmed = false
+			}
+			return nil, nil
+		})
+		return false, nil
 	}
 	settled := false
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -87,7 +108,7 @@ func (a *app) reconcileMissingExecution(ctx context.Context, h execution.Host, r
 			return nil, nil
 		}
 		now := time.Now().UTC()
-		r.Phase, r.Settled, r.HostJournalMissing = execution.Failed, true, true
+		r.Phase, r.Settled, r.HostJournalMissing, r.HostJournalUnconfirmed = execution.Failed, true, true, false
 		r.Observation = execution.Observation{Handle: r.Handle, ProcessState: execution.Failed, Reachability: execution.Reachable, ObservedAt: now, ReachabilityAt: now, LastError: "host journal missing; owned unit confirmed inactive"}
 		return []state.Event{event(st.Starts[i].By, "execution.missing-reconciled", "%s: execution %s has no host journal and its unit is inactive", st.Starts[i].Name, ref.Execution)}, nil
 	})
