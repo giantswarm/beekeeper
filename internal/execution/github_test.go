@@ -24,7 +24,7 @@ func TestWorkerGitHubDispatchPreservesClientArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"gh", GitHubGitTool} {
-		verb, args := "github-cli", []string{"issue", "view", "1", "--repo", workerGitHubPrivateRepo}
+		verb, args := "github-cli", []string{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}
 		if name == GitHubGitTool {
 			verb, args = "github-git", []string{"push", "origin", "HEAD:refs/heads/beekeeper-execution/fixture/1"}
 		}
@@ -42,6 +42,7 @@ func TestWorkerGitHubDispatchPreservesClientArguments(t *testing.T) {
 }
 
 const (
+	workerGitHubIssue       = "issue"
 	workerGitHubView        = "view"
 	workerGitHubStatus      = "status"
 	workerGitHubMainBranch  = "main"
@@ -63,13 +64,13 @@ func TestWorkerGitHubPushScope(t *testing.T) {
 }
 
 func TestWorkerGitHubRepositorySelection(t *testing.T) {
-	for _, args := range [][]string{{"issue", workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}, {"pr", workerGitHubView, "https://github.com/example/private/pull/1"}, {"api", "repos/example/private/actions/runs"}} {
+	for _, args := range [][]string{{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, workerGitHubPrivateRepo}, {"pr", workerGitHubView, "https://github.com/example/private/pull/1"}, {"api", "repos/example/private/actions/runs"}} {
 		repo, err := GitHubRepository(args, "example/default")
 		if err != nil || repo != workerGitHubPrivateRepo {
 			t.Fatalf("scope %q err %v", repo, err)
 		}
 	}
-	if _, err := GitHubRepository([]string{"issue", workerGitHubView, "1", workerGitHubRepoFlag, "outside/repo/extra"}, "example/default"); err == nil {
+	if _, err := GitHubRepository([]string{workerGitHubIssue, workerGitHubView, "1", workerGitHubRepoFlag, "outside/repo/extra"}, "example/default"); err == nil {
 		t.Fatal("invalid repository accepted")
 	}
 }
