@@ -407,6 +407,11 @@ func TestAMessageToTheSupervisorIsRefused(t *testing.T) {
 	}
 }
 
+const (
+	testLoopOldVer = "v0.175.0-rc.23"
+	testLoopNewVer = "v0.175.0-rc.25"
+)
+
 // supervisor status prints the binary version the loop runs, both in text and
 // in --json.
 func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
@@ -426,8 +431,8 @@ func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantLine := "the supervisor loop runs (PID "
-	if !strings.Contains(out.String(), wantLine) || !strings.Contains(out.String(), ", v0.175.0-rc.25)\n") {
-		t.Fatalf("supervisor status = %q, want PID and v0.175.0-rc.25", out.String())
+	if !strings.Contains(out.String(), wantLine) || !strings.Contains(out.String(), ", "+testLoopNewVer+")\n") {
+		t.Fatalf("supervisor status = %q, want PID and %s", out.String(), testLoopNewVer)
 	}
 
 	out.Reset()
@@ -435,8 +440,7 @@ func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
 	if err := a.supervisorStatus(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"version": "v0.175.0-rc.25"`) {
-		t.Fatalf("supervisor status --json = %q, want version v0.175.0-rc.25", out.String())
+	if !strings.Contains(out.String(), `"version": "`+testLoopNewVer+`"`) {
+		t.Fatalf("supervisor status --json = %q, want version %s", out.String(), testLoopNewVer)
 	}
 }
-

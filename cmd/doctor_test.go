@@ -673,19 +673,21 @@ func TestDoctorStopsFinishedAndRelievedBackgroundSessions(t *testing.T) {
 func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	a, _ := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
-	oldInstalled, oldVerOf := installedLoopBinary, loopVersionOf
+	oldInstalled, oldVerOf, oldRunningVer := installedLoopBinary, loopVersionOf, loopRunningVersion
 	t.Cleanup(func() {
 		installedLoopBinary = oldInstalled
 		loopVersionOf = oldVerOf
+		loopRunningVersion = oldRunningVer
 	})
+	loopRunningVersion = func() string { return testLoopNewVer }
 	installedBin := filepath.Join(t.TempDir(), "beekeeper")
-	if err := os.WriteFile(installedBin, []byte("installed"), 0o700); err != nil {
+	if err := os.WriteFile(installedBin, []byte("installed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	installedLoopBinary = func() (string, error) { return installedBin, nil }
 	loopVersionOf = func(_ context.Context, path string) string {
 		if path == installedBin {
-			return "v0.175.0-rc.25"
+			return testLoopNewVer
 		}
 		return ""
 	}
@@ -693,18 +695,18 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 	if err := a.store.WriteFile(loopPIDFile, pid); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: "v0.175.0-rc.23"}); err != nil {
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopOldVer}); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := a.doctor(t.Context(), doctorRun{by: watchParty})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rep.staleLoop, "stale supervisor loop: pid ") || !strings.Contains(rep.staleLoop, "runs v0.175.0-rc.23 while v0.175.0-rc.25 is installed") {
-		t.Fatalf("staleLoop = %q, want stale supervisor loop v0.175.0-rc.23 vs v0.175.0-rc.25", rep.staleLoop)
+	if !strings.Contains(rep.staleLoop, "stale supervisor loop: pid ") || !strings.Contains(rep.staleLoop, "runs "+testLoopOldVer+" while "+testLoopNewVer+" is installed") {
+		t.Fatalf("staleLoop = %q, want stale supervisor loop %s vs %s", rep.staleLoop, testLoopOldVer, testLoopNewVer)
 	}
 
-	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: "v0.175.0-rc.25"}); err != nil {
+	if err := a.store.WriteFile(loopVersionFile, loopVersionRecord{PID: pid, Version: testLoopNewVer}); err != nil {
 		t.Fatal(err)
 	}
 	installedLoopBinary = os.Executable
@@ -716,4 +718,3 @@ func TestDoctorFlagsStaleSupervisorLoop(t *testing.T) {
 		t.Fatalf("staleLoop on current binary = %q, want empty", rep.staleLoop)
 	}
 }
-

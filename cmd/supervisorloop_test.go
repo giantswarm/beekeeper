@@ -1668,7 +1668,7 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.a.cfg.Supervisor.WorkerBrief = brief
-	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.ClaudeHarness, Model: "sonnet"}}
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.OmpHarness, Model: loopQwen}}
 	r.a.now = r.a.now.Add(2 * time.Hour)
 	if err := r.a.store.Record(event(state.Party{Name: loopWorker}, superloop.VerbDone, "%s done: fix it", loopWorker)); err != nil {
 		t.Fatal(err)
@@ -1682,7 +1682,7 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 		if slices.Equal(args, []string{selfUpdateCmdName}) {
 			installed = true
 			r.replaced = true
-			runningVer = "0.175.0-rc.25"
+			runningVer = testLoopNewVer
 			return "", 0
 		}
 		if len(args) >= 2 && args[0] == loopBoard && args[1] == superloop.KindNext && r.replaced {
@@ -1718,8 +1718,8 @@ func TestLoopReexecutesAReplacedBinary(t *testing.T) {
 	if err := statusApp.supervisorStatus(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(statusOut.String(), "v0.175.0-rc.25") {
-		t.Fatalf("supervisor status after self-update pass = %q, want v0.175.0-rc.25", statusOut.String())
+	if !strings.Contains(statusOut.String(), testLoopNewVer) {
+		t.Fatalf("supervisor status after self-update pass = %q, want %s", statusOut.String(), testLoopNewVer)
 	}
 }
 
