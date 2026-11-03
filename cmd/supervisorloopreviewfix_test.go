@@ -458,3 +458,52 @@ func TestEndReviewWorkersPersistsReviewParkBeforeRosterRemoval(t *testing.T) {
 		t.Fatalf("reviewer did not start from persisted ReviewPark after interruption: %v\n%s", r.calls, r.out)
 	}
 }
+
+func TestReviewFixEndedWorkerNeedsRepair(t *testing.T) {
+	for _, reason := range []string{"conflicting base", "failed CI"} {
+		t.Run(reason, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.pull.Branch = "repair-branch"
+			r.park(t, loopPR, time.Now())
+			r.started(t, loopWorker, "ended-worker")
+			work := ""
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents[0].Park.PostMerge = &work
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			if r.called(agentsName, loopRemove, loopWorker) == nil {
+				t.Fatal("worker did not end")
+			}
+			r.pull.Green = false
+			if reason == "conflicting base" {
+				r.pull.MergeState = "DIRTY"
+			} else {
+				r.pull.Red = []superloop.Check{{Name: "unit checks"}}
+			}
+			r.pass(t)
+			start := r.called(agentsName, agentStartName, loopWorker)
+			if start == nil {
+				t.Fatalf("no repair worker: %v\n%s", r.calls, r.out)
+			}
+			brief, err := os.ReadFile(start[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{r.pull.Branch, loopURL, loopHead} {
+				if !strings.Contains(string(brief), want) {
+					t.Fatalf("repair brief lacks %q: %s", want, brief)
+				}
+			}
+			if r.called(agentsName, agentWakeName, loopWorker) != nil {
+				t.Fatal("tried waking ended worker")
+			}
+			r.pass(t)
+			if r.called(agentsName, agentStartName, loopWorker) != nil {
+				t.Fatal("duplicate repair start")
+			}
+		})
+	}
+}

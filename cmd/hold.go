@@ -24,7 +24,8 @@ func (a *app) holdCmd() *cobra.Command {
 fixed on main), "lane:<name>" (--lane) the merges of one lane (a proving
 window, such as a model load on an installation's GPU pool, stops the lane
 whose components it exercises and not the others), "merges" every merge,
-"github" every GitHub call (the budget is spent). A merge hold can let one
+"github" every GitHub call (the budget is spent), "starts" every new
+worker and reviewer (the person sorts priorities). A merge hold can let one
 repository or pull request through (--except owner/repo or owner/repo#n): a
 window that stops a lane but for the one merge it waits for. A merge hold
 can also let one session through (--except-session <name>, the session's
@@ -50,6 +51,16 @@ that repository's release or tag (it names the repository and "release" or
 promote through, the one step that cuts that release; merges into it stay
 held.
 
+A "starts" hold refuses every start of a worker or reviewer (agents start,
+--force included, on this machine or an SSH host, the supervisor loop's
+board fill and its review starts) and a wake of a done agent, which would
+hand it new work; beekeeper capacity and capacity pick say no start, with
+the hold. Running and parked workers keep working: their wakes, resumes and
+hand-overs, the loop's reviews in flight and its merges, the guide and the
+supervisor's successors all go on. beekeeper status starts with STARTS HELD,
+who set it and why. Unlike beekeeper stop it ends no session and holds no
+merge or GitHub call.
+
 Without a subcommand, lists the holds.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.holdList() },
@@ -58,7 +69,7 @@ Without a subcommand, lists the holds.`,
 	var lane laneFlag
 	set := &cobra.Command{
 		Use:   "set <target> | --lane <name>",
-		Short: "Hold a target (owner/repo, lane:<name>, merges, github)",
+		Short: "Hold a target (owner/repo, lane:<name>, merges, github, starts)",
 		Args:  lane.args,
 		RunE: func(_ *cobra.Command, args []string) error {
 			args = lane.target(args)
@@ -251,6 +262,9 @@ func (a *app) checkExcept(target, except, session string) error {
 	if (except != "" || session != "") && target == holdGitHub {
 		return usageErr("a github hold stops every GitHub call and makes no exception")
 	}
+	if (except != "" || session != "") && target == holdStarts {
+		return usageErr("a starts hold stops every new worker and reviewer and makes no exception")
+	}
 	if except == "" {
 		return nil
 	}
@@ -268,9 +282,13 @@ func (a *app) checkExcept(target, except, session string) error {
 }
 
 // activeHold returns the hold that applies to target: its own, or the
-// "github" hold for any target.
+// "github" hold for any target but "starts", which no GitHub call makes.
 func activeHold(st *state.State, a *app, target string) (state.Hold, bool) {
-	for _, t := range []string{target, holdGitHub} {
+	targets := []string{target, holdGitHub}
+	if target == holdStarts {
+		targets = targets[:1]
+	}
+	for _, t := range targets {
 		for _, h := range st.Holds {
 			if h.Target == t && h.Active(a.now) {
 				return h, true
@@ -400,11 +418,40 @@ func (a *app) holdList() error {
 // holdActive is the STATE of a hold that applies.
 const holdActive = "active"
 
-// The machine-wide hold targets: every merge, every GitHub call.
+// The machine-wide hold targets: every merge, every GitHub call, every
+// new worker and reviewer.
 const (
 	holdMerges = "merges"
 	holdGitHub = "github"
+	holdStarts = "starts"
 )
+
+// startsHold is the active "starts" hold of st, nil without one.
+func startsHold(st *state.State, now time.Time) *state.Hold {
+	for i := range st.Holds {
+		if st.Holds[i].Target == holdStarts && st.Holds[i].Active(now) {
+			return &st.Holds[i]
+		}
+	}
+	return nil
+}
+
+// startsHeldText says the "starts" hold h.
+func (a *app) startsHeldText(h *state.Hold) string {
+	return fmt.Sprintf("starts are held by %s since %s until %s: %s (beekeeper hold lift starts lifts it)", h.By.Name, clock(a.now, h.At), untilText(a, *h), h.Reason)
+}
+
+// noStart is what refuses a new worker or reviewer now: the standing stop,
+// else the "starts" hold; "" when neither stands.
+func (a *app) noStart(st *state.State) string {
+	if st.Stop != nil {
+		return a.stopText(st.Stop)
+	}
+	if h := startsHold(st, a.now); h != nil {
+		return a.startsHeldText(h)
+	}
+	return ""
+}
 
 func (a *app) printHolds(holds []state.Hold) {
 	if len(holds) == 0 {
