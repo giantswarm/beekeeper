@@ -501,6 +501,7 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 func mergeCheckHostFailure(out string) bool {
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
+		"cannot allocate memory", "signal: killed",
 		"resource temporarily unavailable", "too many open files",
 		"runtime: failed to create new OS thread",
 	} {

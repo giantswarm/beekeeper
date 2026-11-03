@@ -806,8 +806,9 @@ type Start struct {
 	// (agents.mode background): it has no desktop session, and its wakes go
 	// by its messaging, a stopped one's by claude --bg --resume.
 	Background bool `json:"background,omitempty"`
-	// Role is the relayed role the session took (guide). Once relieved or
-	// taken over, its session stays the person's to close: nothing stops or
+	// Role is the relayed role the session was started to take (a guide
+	// run); empty: none. Only such a start may take the role.
+	// Once relieved or taken over, its session stays the person's to close: nothing stops or
 	// archives it.
 	Role string `json:"role,omitempty"`
 
