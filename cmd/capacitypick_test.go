@@ -235,9 +235,10 @@ func TestCapacityReviewIsDecidedLikeAWorkersStart(t *testing.T) {
 }
 
 // The one restriction: the review of a self-hosted model's work takes a
-// provider that is not self-hosted, while a worker may start on it.
+// provider that is not self-hosted, while a worker may start on it where its
+// kinds list worker.
 func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.T) {
-	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
+	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local, kinds: [worker, review]}
 `+subscriptionChoices)
 	r.want("claude " + pickOpus)
 	r.claude[1], r.codex[1] = 60, 60
@@ -252,6 +253,35 @@ func TestCapacityPickReviewOfSelfHostedWorkTakesNoSelfHostedProvider(t *testing.
 	}
 	if !strings.Contains(p.Reason, "a reviewer on a provider that is not self-hosted") {
 		t.Errorf("capacity pick --review-of-self-hosted --json reason = %q", p.Reason)
+	}
+}
+
+// A self-hosted choice ranked first never wins a worker's start while a
+// subscription is eligible, and without kinds it takes no worker start at
+// all: with both subscriptions ahead of their pace a worker has no pick, while
+// a kind the desk does not bar takes it. The decision names the rule.
+func TestCapacityPickKeepsWorkersOffASelfHostedChoiceWithoutKinds(t *testing.T) {
+	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
+`+subscriptionChoices)
+	r.want("claude " + pickOpus)
+	r.claude[1], r.codex[1] = 60, 60
+	r.want(noPick)
+	var p struct{ Reason string }
+	if err := json.Unmarshal([]byte(r.pick(true)), &p); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Reason, selfHostedWorker) {
+		t.Errorf("capacity pick --json reason = %q, want %q", p.Reason, selfHostedWorker)
+	}
+	r.want("omp "+pickQwen, "--kind", "triage")
+	var v capacityView
+	if err := json.Unmarshal([]byte(r.pick(true, "--kind", "triage")), &struct {
+		Capacity *capacityView `json:"capacity"`
+	}{&v}); err != nil {
+		t.Fatal(err)
+	}
+	if v.Choice == nil || v.Choice.Decision != "task triage: "+choiceRule {
+		t.Errorf("capacity pick --kind triage decision = %+v", v.Choice)
 	}
 }
 

@@ -105,7 +105,9 @@ its title or a busy agent's task, "BS 3057 …" or "FIX backstage 3067 …":
 a tag its repository's name abbreviates, letter by letter from the first,
 or the repository itself, then the number; a busy agent's however
 quiet: a role holder's and an idle agent's are left out; one naming a pull request serves the issues it
-closes too, In Progress or not) nor by an agent on the roster, its CLI running or not, while it is
+closes too, In Progress or not; a record or saved review park of a role run
+a later run relieved, or of a session beekeeper started that has left the
+roster, serves nothing, its window open or not) nor by an agent on the roster, its CLI running or not, while it is
 busy with its task or parked and kept (agents keep, or an open timer that
 wakes it by name), not assigned to anybody outside board.people, without an open recorded
 blocker, active within board.staleAfter, and with every lease its labels
@@ -509,7 +511,7 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 		p := s.Party()
 		holder := slices.ContainsFunc(roles, func(rl role) bool { h := rl.get(st).Holder; return h != nil && h.Is(p) })
 		registered := slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
-		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && s.LastActive.Before(since) {
+		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && (s.LastActive.Before(since) || endedOwner(st, p)) {
 			continue
 		}
 		refs := work[i].Refs
@@ -874,6 +876,9 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 	}
 	out := map[string]string{}
 	for _, r := range st.Records {
+		if endedOwner(st, r.Session) {
+			continue
+		}
 		live := r.Ended.IsZero() && (alive(r.Session) || r.At.After(listed))
 		switch k := kept(r.Session); {
 		case k != "":
@@ -885,7 +890,15 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	for _, rp := range st.ReviewParks {
+		// Saved review metadata survives removal of its worker. It is
+		// enough to resume the review flow, but is no live ownership claim.
+		if !busy(rp.Party) && !alive(rp.Party) {
+			continue
+		}
 		who := fmt.Sprintf("%s (reviewing %s)", name(rp.Party), rp.On)
+		if endedOwner(st, rp.Party) {
+			continue
+		}
 		if rp.Serves != "" && out[strings.ToLower(rp.Serves)] == "" {
 			out[strings.ToLower(rp.Serves)] = who
 		}
@@ -914,6 +927,40 @@ func boardOwners(st *state.State, sc pickScope) map[string]string {
 		}
 	}
 	return out
+}
+
+// endedOwner reports whether p's serve records and saved review parks no
+// longer make it an item's owner, whatever its CLI still shows: a role run
+// relieved by a later one, or a session beekeeper started that has left
+// the roster (removed after a review park, retired, gone). A desktop window
+// that lingers after either serves nothing: board next offers its items.
+func endedOwner(st *state.State, p state.Party) bool {
+	switch {
+	case holdsRole(st, p):
+		return false
+	case relievedRun(st, p):
+		return true
+	case roleRun(st, p):
+		// A role's successor beekeeper started is no agent: it is on
+		// its way to the role.
+		return false
+	}
+	return st.StartIndex(p) >= 0 && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) })
+}
+
+// relievedRun reports whether p is a role's run that no longer holds it: one
+// the role's relief list names, or a run numbered below the holder's.
+func relievedRun(st *state.State, p state.Party) bool {
+	for _, rl := range roles {
+		r := rl.get(st)
+		if slices.ContainsFunc(r.Relieved, func(rf state.Relief) bool { return rf.Party.Is(p) }) {
+			return true
+		}
+		if n := rl.runOf(p.Name); n > 0 && r.Holder != nil && n < rl.runOf(r.Holder.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // offBoard are the refs of owners that are no candidate, sorted: a board
@@ -1017,8 +1064,9 @@ func (a *app) printNext(res nextResult, offered int, view nextView) error {
 
 func (a *app) boardMoveCmd() *cobra.Command {
 	var intake bool
+	var by string
 	c := &cobra.Command{
-		Use:   "move <owner/repo#n|URL> <status>",
+		Use:   "move <owner/repo#n|URL> <status> [--by <owner/repo#n|URL>]",
 		Short: "Set a board item's Status by its canonical name, adding the issue to the board when it is missing",
 		Long: `Sets the Status of the issue's board item. An issue without an item on the
 board is added first (addProjectV2ItemById, the issue's own mutation: the
@@ -1044,21 +1092,43 @@ that head. The private thread is the epic itself in a private repository,
 else the plan pull request in a private one. With neither an open nor a
 merged plan naming the epic, the move records no go and says so. An epic of a public repository
 whose plan is public too has no private thread: the move is refused before
-anything is written. Exit 3 when refused.`,
+anything is written.
+
+A move to the blocked Status (Blocked / Waiting) says what holds the item:
+--by names the open issue that does, recorded first as board block records
+it, and without --by the move is refused unless the item has an open
+recorded blocker already. A wait on a pull request, a review, a hold or the
+GitHub gate is no blocked item: the worker parks on it (agents park) and
+leaves the item in its Status; a person's decision that holds it is note add
+--holds. Exit 3 when refused.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, _, _, err := board.Ref(args[0]); err != nil {
 				return usageErr("%v", err)
 			}
+			if by != "" {
+				if intake {
+					return usageErr("--by records what holds a move to the blocked Status; --intake puts an issue on the board")
+				}
+				if _, _, _, err := board.Ref(by); err != nil {
+					return usageErr("--by: %v", err)
+				}
+			}
 			me, _ := a.caller()
 			cl := a.boardClient()
-			move := cl.Move
+			var mv *board.Moved
+			var held *board.Held
+			var err error
 			if intake {
-				move = cl.Intake
+				mv, err = cl.Intake(cmd.Context(), args[0], args[1])
+			} else {
+				mv, held, err = cl.MoveHeld(cmd.Context(), args[0], args[1], by)
 			}
-			mv, err := move(cmd.Context(), args[0], args[1])
 			if r := (*board.Refusal)(nil); errors.As(err, &r) {
 				return refused("%s", r.Reason)
+			}
+			if held != nil && held.Changed {
+				_ = a.store.Log(event(me, "board.block", "%s: by %s (%s), %s", held.Ref, held.By, openWord(held.ByOpen), holdState(held)))
 			}
 			if err != nil {
 				return err
@@ -1097,6 +1167,9 @@ anything is written. Exit 3 when refused.`,
 			default:
 				_, err = fmt.Fprintf(a.out, "moved %s: %s → %s%s\n", mv.Ref, from, mv.To, team)
 			}
+			if err == nil && held != nil && held.Changed {
+				_, err = fmt.Fprintln(a.out, holdText(held, true))
+			}
 			if g := mv.Go; err == nil && g != nil {
 				if g.Plan == nil {
 					_, err = fmt.Fprintf(a.out, "the go of %s: neither an open nor a merged plan pull request names it, no go recorded\n", mv.Ref)
@@ -1108,6 +1181,7 @@ anything is written. Exit 3 when refused.`,
 		},
 	}
 	c.Flags().BoolVar(&intake, "intake", false, "put the issue in this intake status only when it has no Status yet and is not being worked on another board")
+	c.Flags().StringVar(&by, "by", "", "a move to the blocked Status: the open issue that holds the item, owner/repo#n or its URL, recorded as board block records it")
 	return c
 }
 
@@ -1128,8 +1202,9 @@ issue without an item on the board is added first, as move adds it, with
 board.team as its Team and no Status, whatever the owner of its repository
 (GitHub decides whether it may be added).
 The other issue must be on the board already. Only the items named are read,
-never the board's items. Every GitHub call acts on the repository of the
-issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
+except an archived after anchor: board order is read to find its nearest
+unarchived predecessor, or the board's end if none precedes it. Every GitHub
+call acts on the repository of the issue it asks about (GH_REPO). Exit 3 when refused: an issue that does not
 exist, another issue that has no item on the board, an item placed against itself.
 Any session (including the guide on the person's word) may change positions;
 every move logs board.rank naming the caller. Outside a session, --as <name>
