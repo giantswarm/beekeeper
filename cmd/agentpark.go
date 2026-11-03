@@ -66,6 +66,17 @@ func parkMessage(p *state.Park, by string) string {
 	return fmt.Sprintf("Your park on %s is over: %s. Re-query the live state of your task and continue it.", what, why)
 }
 
+// validateOverlapPark prevents waits for coordination the deterministic loop
+// cannot supply. Only a tracked GitHub target can settle an overlap wait.
+func validateOverlapPark(on, waits string) error {
+	if strings.Contains(strings.ToLower(waits), "overlap") {
+		if _, ok := parseRef(on); !ok {
+			return refused("overlap needs an issue or pull request in --on <owner/repo#n>; name the overlap in your PR, build on the other PR, or park on its merge; the supervisor does not answer overlap coordination waits")
+		}
+	}
+	return nil
+}
+
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
 	c := &cobra.Command{
@@ -127,7 +138,7 @@ agents wake: its task is that message's first line.`,
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
   beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"
   beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
-  beekeeper agents park "the supervisor's go"`,
+  beekeeper agents park --on giantswarm/beekeeper#371 "overlap: waiting for this PR to merge"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			me, err := a.caller()
@@ -156,6 +167,9 @@ agents wake: its task is that message's first line.`,
 					}
 					on = refName(r)
 				}
+			}
+			if err := validateOverlapPark(on, waits); err != nil {
+				return err
 			}
 			if a.managedExecutionID() != "" {
 				kind, err := resolveParkRef(cmd.Context(), on)
@@ -186,6 +200,9 @@ agents wake: its task is that message's first line.`,
 // returns the line that says so. A bare note number is the central
 // instance's note when the machine has none of it open, as note answer's.
 func (a *app) park(me state.Party, on, waits string, postMerge ...string) (string, error) {
+	if err := validateOverlapPark(on, waits); err != nil {
+		return "", err
+	}
 	id, isNote := parkNote(on)
 	if _, _, central := parkCentralNote(on); isNote || central {
 		var err error
