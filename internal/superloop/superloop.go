@@ -16,6 +16,9 @@ import (
 
 // The kinds of action, each logged as "supervisor.<kind>".
 const (
+	mergeableConflicting = "CONFLICTING"
+	mergeStateDirty      = "DIRTY"
+
 	KindReview = "review"
 	KindGo     = "go"
 	// KindMerge records a coordinator mutation, never a worker grant.
@@ -139,6 +142,9 @@ type Pull struct {
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
+	// Updated is when GitHub last saw activity on it (a push, a review, a
+	// comment): the sweep counts a stretch without an owner from no earlier.
+	Updated time.Time
 }
 
 // Check is one check on a pull request's head: its name and the URL of its
@@ -222,6 +228,12 @@ type Worker struct {
 	Serves string
 	// Waits is what the agent's park says it waits for.
 	Waits string
+	// Saved is a saved review park whose agent left the roster: it keeps
+	// the review flow going, and owns nothing (the sweep's live owner).
+	Saved bool
+	// Mentions are the issues and pull requests (owner/repo#n, lower case)
+	// the agent's task names.
+	Mentions []string
 }
 
 // Event is one line of the event log the loop acts on.
@@ -313,6 +325,10 @@ type Input struct {
 	// Filed are the issues sessions on the desk created (gh issue create,
 	// create_issue, issue_write), read from their transcripts.
 	Filed []FiledIssue
+	// Ownerless is since when each open pull request of Ownerless has had
+	// no live owner, as the loop saw it: the sweep gives one past
+	// OrphanWait.
+	Ownerless map[string]time.Time
 }
 
 // FiledIssue is an issue a session on the desk created, with the issue or
@@ -552,7 +568,7 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 		}
 		switch t.Kind {
 		case KindReview:
-			_, head, _ := strings.Cut(t.Key, "@")
+			head := KeyHead(t.Key)
 			l.rounds[t.Ref] = append(l.rounds[t.Ref], round{head: head, at: t.At})
 			l.reviewer[t.Ref] = t.Agent
 			// A legacy exhausted-round go may predate this head's review.
@@ -580,7 +596,7 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			}
 		case KindGo, KindForward, KindOwner:
 			if t.Kind == KindGo {
-				if _, head, ok := strings.Cut(t.Key, "@"); ok && head != "" {
+				if head := KeyHead(t.Key); head != "" {
 					l.goHead[t.Ref] = head
 				}
 			} else {
@@ -854,6 +870,7 @@ func Plan(in Input) []Action {
 			leave(w.ParkedOn, "", w.Name, leftBefore, why)
 		}
 	}
+	swept := sweptBy(in.Taken)
 	refs := make([]string, 0, len(in.Pulls))
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
@@ -912,6 +929,10 @@ func Plan(in Input) []Action {
 		planOverlap(in, l, ref, p, parked, func(r string) bool {
 			return slices.ContainsFunc(out, func(a Action) bool { return strings.EqualFold(a.Ref, r) })
 		}, add)
+		// The sweep acts on what nothing above acted on.
+		if !slices.ContainsFunc(out, func(a Action) bool { return strings.EqualFold(a.Ref, ref) && a.Kind != KindLeave }) {
+			planSweep(in, l, swept, ref, p, leave, add)
+		}
 	}
 	// A reviewer leaves once the loop acted on its round's verdict.
 	reviewed := make([]string, 0, len(l.rounds))
@@ -1156,7 +1177,15 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	case unknown:
 		return
 	}
-	if isParked && (p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY") {
+	rs := l.rounds[ref]
+	// Approved heads use the merge executor's durable repair handoff, which
+	// retains the approval and retries a capacity-limited fixer only once.
+	approved := false
+	if len(rs) > 0 {
+		v := p.verdict(rs[len(rs)-1], l.pushed(p))
+		approved = v != nil && v.Verdict == Approved && sameHead(v.Head, p.Head)
+	}
+	if isParked && !approved && (p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty) {
 		if sameHead(w.ParkedHead, p.Head) {
 			a := base
 			a.Key = fmt.Sprintf("conflict %s@%s %s", ref, p.Head, w.ParkedAt.UTC().Format(time.RFC3339Nano))
@@ -1169,7 +1198,6 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	planRed(l, p, w, isParked, add)
-	rs := l.rounds[ref]
 	// An escalation logged before its key named a head was on the
 	// head of the last round, whose findings stood unfixed.
 	if escalated && esc.head == "" && len(rs) > 0 {
@@ -1418,7 +1446,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		}
 		hasActiveUnparkedOwner := liveOwner != nil && liveOwner.ParkedOn == ""
 		ownerGone := !hasActiveUnparkedOwner && (!isParked && !roundRunning ||
-			p.Draft || p.Mergeable == "CONFLICTING" ||
+			p.Draft || p.Mergeable == mergeableConflicting ||
 			(lastVerdict != nil && lastVerdict.Verdict == ChangesRequested && l.has(forwardKey(ref, lastVerdict.ID)) && (!isParked || !w.ParkedAt.After(l.keys[forwardKey(ref, lastVerdict.ID)].At))))
 		stalled := false
 		if !in.Now.IsZero() && !waiter.ParkedAt.IsZero() && !in.Now.Before(waiter.ParkedAt.Add(OverlapWait)) {

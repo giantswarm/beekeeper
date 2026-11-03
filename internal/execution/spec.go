@@ -194,6 +194,21 @@ func (o Observation) PolicyAvailable() bool {
 	return o.PolicyDigest == "" || o.PolicyDigest == o.HostPolicyDigest
 }
 
+// BetweenTurns says the observed execution runs, accepted its first task and
+// waits for a wake: no turn runs, none is stored to begin and no delivery is
+// uncertain. A host update goes ahead under it (Quiesce).
+func (o Observation) BetweenTurns() bool {
+	if o.ProcessState != Running || !o.Ready || o.InTurn || o.StopRequested || o.StopAcknowledged {
+		return false
+	}
+	for _, d := range o.Messages {
+		if d.Stage == Stored || d.Stage == Uncertain {
+			return false
+		}
+	}
+	return true
+}
+
 // PolicyRebind moves a running execution from the policy it is bound to onto
 // the host's prepared policy, once the coordinator approved that policy.
 type PolicyRebind struct {
