@@ -110,6 +110,9 @@ func (a *app) hookMergeGo(session, repo string, pr int, head string) string {
 	if pull.State != superloop.Open || pull.Head != head || !pull.Green {
 		return "merge head moved or current CI is not green; park for a new exact-head go"
 	}
+	if latestReviewRequestsChanges(pull) {
+		return "a review requested changes; park for a review approving the current head"
+	}
 	if err := store.Log(about(event(worker, "merge.authorized", "https://github.com/%s/pull/%d at %s: supervisor go checked", repo, pr, head), ref)); err != nil {
 		return "merge authorization could not be logged: " + err.Error()
 	}

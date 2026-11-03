@@ -314,6 +314,38 @@ func TestExecutionMergeRejectsEditedAuthenticatedReview(t *testing.T) {
 	}
 }
 
+func TestExecutionMergeRejectsEarlierApprovalOverriddenByChangesRequested(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	const resolvedHead = "2222222222222222222222222222222222222222"
+	pull.Head = resolvedHead
+	use.Head = resolvedHead
+	oldBaseMerge := readBaseMerge
+	t.Cleanup(func() { readBaseMerge = oldBaseMerge })
+	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+		return p.Head == resolvedHead && approved == pull.Reviews[0].Head, nil
+	}
+	pull.Reviews = append(pull.Reviews, superloop.Review{
+		ID:      "later-changes-requested",
+		Author:  "reviewer-2",
+		Head:    resolvedHead,
+		Commit:  resolvedHead,
+		Verdict: superloop.ChangesRequested,
+		Body:    "Review: changes requested\ndropped guard in conflict resolution",
+		At:      pull.Reviews[0].At.Add(time.Minute),
+	})
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.executionMergeLive(context.Background(), st, use); err == nil || !strings.Contains(err.Error(), "later review requested changes") {
+		t.Fatalf("later changes-requested review did not override earlier approval: %v", err)
+	}
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); err == nil {
+		t.Fatal("later changes-requested review still granted merge authority")
+	}
+}
+
 func TestExecutionReviewAssignmentRequiresActualSupervisorStart(t *testing.T) {
 	a, use, _ := mergeReviewRig(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {

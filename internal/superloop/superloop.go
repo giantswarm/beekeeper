@@ -189,9 +189,11 @@ const verdictSlack = 30 * time.Second
 // counts.
 func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
+	var onHead *Review
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
 		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
-			return &p.Reviews[i]
+			onHead = &p.Reviews[i]
+			break
 		}
 	}
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
@@ -199,11 +201,14 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 		if r.Verdict == "" || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
 			continue
 		}
+		if onHead != nil && (r.At.Before(onHead.At) || r.Verdict != ChangesRequested) {
+			continue
+		}
 		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) && pushed(r) {
 			return &p.Reviews[i]
 		}
 	}
-	return nil
+	return onHead
 }
 
 // Worker is an agent on the roster.
@@ -1194,13 +1199,17 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	}
 	if escalated {
 		// The person answered: a release is the merge go for the head
-		// the escalation named; any other answer goes to the worker,
-		// and the pull request's review rounds go on from there.
+		// the escalation named unless a later review asked for changes;
+		// any other answer goes to the worker, and the pull request's
+		// review rounds go on from there.
 		// A release of a head the worker moved past goes on as the
 		// rounds say of the new head, unless the new head only merges
 		// the base into the released one.
 		an := esc.answer
-		released := Releases(an.Text)
+		laterChanges := slices.ContainsFunc(p.Reviews, func(r Review) bool {
+			return r.Verdict == ChangesRequested && r.At.After(an.At)
+		})
+		released := Releases(an.Text) && !laterChanges
 		if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
 			if p.Green {
 				why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
@@ -1211,7 +1220,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			}
 			return
 		}
-		if ak := answerKey(ref, an.Note); !released && !l.has(ak) {
+		if ak := answerKey(ref, an.Note); !Releases(an.Text) && !l.has(ak) {
 			a := base
 			a.Key, a.Kind = ak, KindAnswer
 			a.Message = answerMessage(p, esc.head, *an)
@@ -1254,6 +1263,18 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	}
 	last := rs[len(rs)-1]
 	v := p.verdict(last, l.pushed(p))
+	if v != nil && v.Verdict == Approved {
+		for i := len(p.Reviews) - 1; i >= 0; i-- {
+			r := p.Reviews[i]
+			if !r.At.After(v.At) || r.Verdict == "" || r.Head == "" {
+				continue
+			}
+			if r.Verdict == ChangesRequested && !slices.ContainsFunc(last.earlier, func(h string) bool { return sameHead(h, r.Head) }) && (sameHead(r.Head, v.Head) || l.pushed(p)(r)) {
+				v = &p.Reviews[i]
+			}
+			break
+		}
+	}
 	if v == nil {
 		// The round runs until its reviewer reports done. One done
 		// without a verdict on the round's head or on the head now
@@ -1272,7 +1293,6 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		escalate(last.head, "its last reviewer finished without a verdict")
 		return
 	}
-	left := cycles < rounds && len(rs) < MaxReviews
 	// reviewed is the head the verdict is on: the round's, or a newer
 	// one the worker pushed while the round ran.
 	reviewed, moved := v.Head, ""
@@ -1339,12 +1359,8 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !l.has(fk) {
 			a := base
 			a.Key, a.Kind = fk, KindForward
-			a.Message = forwardMessage(p, *v, left)
+			a.Message = forwardMessage(p, *v, true)
 			add(a)
-			return
-		}
-		if goHead := l.goHead[ref]; !left && goHead != "" && !sameHead(goHead, reviewed) && !sameHead(goHead, p.Head) && p.Green && in.baseMerged(p, goHead) {
-			add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(goHead), short(p.Head), baseName(p))))
 			return
 		}
 		// The fixes count once the worker parked after the forward.
@@ -1355,15 +1371,14 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// were about carries no fixes: it is that head, never a go.
 		merged := p.Green && in.baseMerged(p, reviewed)
 		if sameHead(p.Head, reviewed) || merged {
-			// The findings stand unfixed: with no round left, or on a
-			// base merge, the worker reworks, once for each such park.
-			// Review and rework are the loop's; no merge question goes
-			// to the person, and an answered escalation of this head
-			// is handled above.
-			if (!left || merged) && (!escalated || !sameHead(esc.head, p.Head)) {
+			// The findings stand unfixed: the worker reworks, once for
+			// each such park. Review and rework are the loop's; no
+			// merge question goes to the person, and an answered
+			// escalation of this head is handled above.
+			if !escalated || !sameHead(esc.head, p.Head) {
 				a := base
 				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-				a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
+				a.Message = reworkMessage(p, reviewed, cycles, rounds, true)
 				add(a)
 			}
 			return
@@ -1371,11 +1386,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !p.Green {
 			return
 		}
-		if left {
-			review()
-			return
-		}
-		add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
+		review()
 	}
 }
 

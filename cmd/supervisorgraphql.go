@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -252,14 +253,13 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 			mark(a.At)
 		}
 	}
+	reviewerPrefix := strings.TrimSuffix(superloop.ReviewerName(ref, 1), "1")
 	for _, e := range in.Events {
 		if worker != "" && e.Agent == worker {
 			mark(e.At)
 		}
-		for round := 1; round <= superloop.MaxReviews; round++ {
-			if e.Agent == superloop.ReviewerName(ref, round) {
-				mark(e.At)
-			}
+		if rest, ok := strings.CutPrefix(e.Agent, reviewerPrefix); ok && rest != "" && strings.TrimLeft(rest, "0123456789") == "" {
+			mark(e.At)
 		}
 	}
 	return changed
