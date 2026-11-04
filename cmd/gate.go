@@ -2481,8 +2481,8 @@ func toolMergeRuns(st *state.State) bool {
 // release, the moment the release's binary assets exist and verify: a
 // window whose pull request merged, or a promotion's, runs the tool's update
 // (updateTool) also while the merge's devctl still waits for the release
-// workflow, and lifts once the tool reports another version than at its
-// opening (the release, once the merge recorded it). Once no merge of the
+// workflow, and lifts once the tool reports the release tagged on the merge
+// commit (or a later release). Once no merge of the
 // tool's repository runs, a window whose pull request GitHub reports not
 // merged lifts too: its merge ended without the gate recording it (a gate
 // killed, GitHub unanswered). It reads the tool and GitHub every time: a
@@ -2496,9 +2496,17 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	v := devctlVersion(ctx)
 	pulls := map[int]github.Pull{}
 	for _, h := range st.Holds {
-		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (running || v == "" || !merge.Installed(h, v)) {
+		if h.Tool != "" && h.ToolPR != 0 && (!h.ToolMerged || h.ToolRelease == "") {
 			if p, err := pullState(ctx, merge.ToolRepo, h.ToolPR); err == nil {
 				pulls[h.ToolPR] = p
+			}
+		}
+	}
+	releases := map[int]string{}
+	for pr, p := range pulls {
+		if p.State == github.Merged {
+			if tag, err := toolRelease(ctx, p.MergeCommit.OID); err == nil {
+				releases[pr] = tag
 			}
 		}
 	}
@@ -2507,6 +2515,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			for i, h := range st.Holds {
 				if p, ok := pulls[h.ToolPR]; ok && h.Tool != "" && p.State == github.Merged {
 					st.Holds[i].ToolMerged = true
+					if h.ToolRelease == "" {
+						st.Holds[i].ToolRelease = releases[h.ToolPR]
+					}
 				}
 			}
 			return nil, nil
@@ -2514,6 +2525,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	}
 	if v != "" && a.updateTool(ctx, v, by) {
 		v = devctlVersion(ctx)
+	}
+	if current, err := a.store.Read(); err == nil {
+		st = current
 	}
 	candidates := publishedCandidates(ctx, st, pulls)
 	if v == "" && len(candidates) == 0 && (running || len(pulls) == 0) {
@@ -2571,10 +2585,10 @@ func awaitsCandidate(h state.Hold, pulls map[int]github.Pull) bool {
 func publishedCandidates(ctx context.Context, st *state.State, pulls map[int]github.Pull) map[int]string {
 	found := map[int]string{}
 	for _, h := range st.Holds {
-		if !awaitsCandidate(h, pulls) {
+		if !awaitsCandidate(h, pulls) || h.ToolRelease == "" {
 			continue
 		}
-		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && (h.ToolRelease == "" || merge.Bare(c) == merge.Bare(h.ToolRelease)) {
+		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && merge.Bare(c) == merge.Bare(h.ToolRelease) {
 			found[h.ToolPR] = c
 		}
 	}
