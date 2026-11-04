@@ -312,23 +312,42 @@ func orphanWorker(p *proc.Process) bool {
 	if len(p.Args) == 0 {
 		return false
 	}
+	const claude = "claude"
 	switch p.Comm {
-	case "claude":
-		return filepath.Base(p.Args[0]) == "claude" && len(p.Args) >= 3 &&
+	case claude:
+		return filepath.Base(p.Args[0]) == claude && len(p.Args) >= 3 &&
 			p.Args[1] == "--output-format" && p.Args[2] == "stream-json"
 	case "jest-worker":
 		return filepath.Base(p.Args[0]) == "jest-worker"
 	case "node", "nodejs":
-		return slices.ContainsFunc(p.Args[1:], func(arg string) bool {
-			if strings.HasPrefix(arg, "-") {
-				return false
+		args := p.Args[1:]
+		for len(args) > 0 {
+			arg := args[0]
+			args = args[1:]
+			switch arg {
+			case "--":
+				if len(args) == 0 {
+					return false
+				}
+				arg = args[0]
+			case "--expose-gc", "--inspect", "--inspect-brk", "--no-warnings", "--enable-source-maps":
+				continue
+			default:
+				// Unknown runtime options may consume an argument or execute
+				// inline source. Leave those processes alone rather than
+				// mistaking an option value for the script being executed.
+				if strings.HasPrefix(arg, "-") {
+					return false
+				}
 			}
+			// Only the script position identifies the worker. Later arguments
+			// belong to the application and can contain arbitrary task text.
 			switch filepath.Ext(arg) {
 			case ".js", ".cjs", ".mjs":
 				return filepath.Base(arg) == "processChild.js" || strings.Contains(filepath.ToSlash(arg), "/jest-worker/")
 			}
 			return false
-		})
+		}
 	}
 	return false
 }
