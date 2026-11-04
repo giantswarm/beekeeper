@@ -27,7 +27,8 @@ const (
 // closeNotes refuses a silent close and keeps its reason in the same status
 // write as its outcome. Closed resources stay out of the open state document.
 func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID func(time.Time) (string, error)) error {
-	for k, old := range snap.notes {
+	for _, k := range sortedKeys(snap.notes) {
+		old := snap.notes[k]
 		if old.Status.State == noteClosed || old.Status.State == noteAnswered {
 			want.notes[k] = old.DeepCopy()
 			continue
