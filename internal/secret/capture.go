@@ -150,7 +150,7 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 			return CaptureResult{}, err
 		}
 	}
-	doc, keys, err := o.captureTarget(ctx, dst, opt)
+	doc, target, err := o.captureTarget(ctx, dst, opt)
 	if err != nil {
 		return CaptureResult{}, err
 	}
@@ -169,15 +169,17 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 	}
 	// the vault keeps the printed value, the SOPS path its written form
 	if opt.Docker != nil {
-		v, err = opt.Docker.fill(doc, dst.File, keys, v)
+		v, err = opt.Docker.fill(doc, dst.File, splitPath(target.Path), v)
 	} else {
 		v = o.Encode.Apply(v)
-		err = setAt(doc, dst.File, keys, v)
+		if err = doc.set(target.Path, v); err != nil {
+			err = fmt.Errorf("%s: %w", dst.File, err)
+		}
 	}
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	key := Ref{File: dst.File, Path: strings.Join(keys, ".")}
+	key := Ref{File: dst.File, Path: strings.Join(splitPath(target.Path), ".")}
 	if err := o.encrypt(ctx, doc, dst.File); err != nil {
 		if opt.Vault != (Ref{}) {
 			return CaptureResult{}, fmt.Errorf("the vault holds the value, the SOPS file not (copy %s %s): %w", opt.Vault, key, err)
@@ -187,19 +189,15 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 	return CaptureResult{Key: key.String(), Bytes: len(v), Fingerprint: o.Fingerprint(v)}, nil
 }
 
-// captureTarget is the document a captured value goes into and the keys
-// of its path there, one key each: dst's path, or a Secret's
-// stringData..dockerconfigjson with opt.Docker, checked against the
-// creation rule.
-func (o *Ops) captureTarget(ctx context.Context, dst Ref, opt CaptureOptions) (*document, []string, error) {
+// captureTarget is the document and destination path of a captured value,
+// checked against the creation rule using the same path syntax as set/copy.
+func (o *Ops) captureTarget(ctx context.Context, dst Ref, opt CaptureOptions) (*document, Ref, error) {
 	if opt.Docker == nil {
-		doc, dst, err := o.target(ctx, dst, opt.New)
-		if err != nil {
-			return nil, nil, err
-		}
-		return doc, strings.Split(dst.Path, "."), nil
+		return o.target(ctx, dst, opt.New)
 	}
-	return o.dockerTarget(ctx, dst.File, opt.New)
+	doc, _, err := o.dockerTarget(ctx, dst.File, opt.New)
+	dst.Path = `stringData.".dockerconfigjson"`
+	return doc, dst, err
 }
 
 // dockerTarget is the Secret in file a .dockerconfigjson goes into, an

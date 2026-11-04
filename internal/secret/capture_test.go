@@ -87,6 +87,60 @@ func TestCaptureTakesTheWholeOutputOrOneFieldAndAnswersNoValue(t *testing.T) {
 	}
 }
 
+// Fake SOPS verifies destination structure, not real-SOPS encryption coverage.
+func TestCaptureDestinationPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, key string
+		block           bool
+	}{
+		{"quoted parent", `"stringData".password`, "password", false},
+		{"quoted dotted key", `stringData."credentials.json"`, "credentials.json", false},
+		{"escaped dotted key", `stringData.credentials\.json`, "credentials.json", false},
+		{"block scalar", `stringData.config.yaml.password`, "config.yaml", true},
+		{"quoted block scalar", `stringData."config.yaml".password`, "config.yaml", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := secrettest.New(nil)
+			dir, _ := scratch(t)
+			if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(secretRules), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "capture.sops.yaml")
+			if tc.block {
+				plain := "stringData:\n  config.yaml: |\n    password: old\n    keep: unchanged\n"
+				if err := os.WriteFile(file, secrettest.Encrypt(plain), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := ops(tools).Capture(context.Background(), secret.Ref{File: file, Path: tc.path}, secret.CaptureOptions{Producer: producer(t, password, 0)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]map[string]string
+			if err := yaml.Unmarshal([]byte(decrypted(t, tools, file)), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc) != 1 || len(doc["stringData"]) != 1 {
+				t.Fatalf("unexpected destination keys: %v", doc)
+			}
+			value := doc["stringData"][tc.key]
+			if tc.block {
+				var inner map[string]string
+				if err := yaml.Unmarshal([]byte(value), &inner); err != nil {
+					t.Fatal(err)
+				}
+				if len(inner) != 2 || inner["keep"] != "unchanged" {
+					t.Fatalf("unexpected block contents: %v", inner)
+				}
+				value = inner["password"]
+			}
+			if value != password {
+				t.Fatalf("destination value = %q, want captured value", value)
+			}
+		})
+	}
+}
+
 // An allowed openssl generates a value no fake stands in for.
 func TestCaptureRunsOpenSSL(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
