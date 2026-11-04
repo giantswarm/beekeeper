@@ -1431,24 +1431,24 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 					(strings.EqualFold(pullRef(other.Serves), ref) || strings.EqualFold(other.Name, l.reviewer[ref]) || strings.EqualFold(other.Name, PullWorkerName(ref)))
 			})
 			if mutual && strings.ToLower(serves) < strings.ToLower(ref) {
-				if hasPlanned(serves) {
+				sp, ok := in.Pulls[serves]
+				o, _, _ := in.Desk.owner(sp, l.overridden[serves])
+				if ok && sp.State == Open && sp.Head != "" && o == ours {
+					if hasPlanned(serves) {
+						continue
+					}
+					add(Action{
+						Key:     ownerKey(serves, sp.Head, waiter.ParkedAt),
+						Kind:    KindOwner,
+						Ref:     serves,
+						Block:   ref,
+						URL:     sp.URL,
+						Agent:   waiter.Name,
+						Head:    sp.Head,
+						Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
+					})
 					continue
 				}
-				sHead, sURL := p.Head, p.URL
-				if sp, ok := in.Pulls[serves]; ok && sp.Head != "" {
-					sHead, sURL = sp.Head, sp.URL
-				}
-				add(Action{
-					Key:     ownerKey(serves, sHead, waiter.ParkedAt),
-					Kind:    KindOwner,
-					Ref:     serves,
-					Block:   ref,
-					URL:     sURL,
-					Agent:   waiter.Name,
-					Head:    sHead,
-					Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
-				})
-				continue
 			}
 		}
 		if hasPlanned(ref) {
