@@ -261,7 +261,7 @@ func TestAppAllowPersonalAccountApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	durable := ledger.AppsCreated[0].Declared
-	raw, err := os.ReadFile(durable)
+	raw, err := os.ReadFile(filepath.Clean(durable))
 	if err != nil {
 		t.Fatal(err)
 	}
