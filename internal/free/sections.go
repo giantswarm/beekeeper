@@ -41,9 +41,22 @@ func (r *Run) sessionDirs() {
 		r.say("  every dir kept: beekeeper's state cannot be read, so the sessions the roster and the roles count on are unknown")
 		return
 	}
+	root, err := os.OpenRoot(r.Scratch)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
 	dirs, _ := filepath.Glob(filepath.Join(r.Scratch, "*", "*"))
 	n := 0
 	for _, d := range dirs {
+		rel, err := filepath.Rel(r.Scratch, d)
+		if err != nil {
+			continue
+		}
+		fi, err := root.Lstat(rel)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
 		sid, slug := filepath.Base(d), filepath.Base(filepath.Dir(d))
 		if !sessionID.MatchString(sid) || !isDir(filepath.Join(d, "scratchpad")) && !isDir(filepath.Join(d, "tasks")) {
 			continue
@@ -79,7 +92,7 @@ func (r *Run) sessionDirs() {
 		if sc.kib >= minKiB {
 			r.act("remove %d MiB  %s  (CLI gone, idle %d h)", sc.kib/1024, r.name(slug, sid), int(idle.Hours()))
 		}
-		r.drop(SessionDirs, d, sc.kib)
+		r.drop(SessionDirs, rel, sc.kib, root.RemoveAll)
 	}
 	r.total(SessionDirs, n)
 }
@@ -179,7 +192,7 @@ func (r *Run) goBuilds() {
 		if sc.kib >= minKiB {
 			r.act("remove %d MiB  %s  (go command gone, unchanged %d h)", sc.kib/1024, d, int(r.Now.Sub(last).Hours()))
 		}
-		r.drop(GoBuild, d, sc.kib)
+		r.drop(GoBuild, d, sc.kib, os.RemoveAll)
 	}
 	r.total(GoBuild, n)
 }
@@ -231,7 +244,7 @@ func (r *Run) tmpDirs() {
 			}
 			n++
 			r.act("remove %d MiB  %s", sc.kib/1024, d)
-			r.drop(TmpDirs, d, sc.kib)
+			r.drop(TmpDirs, d, sc.kib, os.RemoveAll)
 		}
 	}
 	r.total(TmpDirs, n)
@@ -246,10 +259,10 @@ func (r *Run) jestRuns() bool {
 	return false
 }
 
-// drop removes d and counts it to section; a dry run only counts it.
-func (r *Run) drop(section, d string, kib int) {
+// drop removes d through removeAll and counts it to section; a dry run only counts it.
+func (r *Run) drop(section, d string, kib int, removeAll func(string) error) {
 	if r.Apply {
-		if err := os.RemoveAll(d); err != nil {
+		if err := removeAll(d); err != nil {
 			r.say("  failed: %v", err)
 			return
 		}
