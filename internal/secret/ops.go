@@ -785,6 +785,16 @@ func (o *Ops) storeVaultFields(ctx context.Context, vault, title, ref string, fi
 			return fmt.Errorf("%s: op item get answered no item", ref)
 		}
 	}
+	// Text-only items can have an empty built-in password. Apply the same
+	// selection policy as creation before adding their first secret, while
+	// preserving an existing password and its metadata.
+	if existing, ok := item["fields"].([]any); ok {
+		for _, field := range existing {
+			if f, ok := field.(map[string]any); ok && f["id"] == passwordField && (f["value"] == "" || f["value"] == nil) {
+				f["value"] = newItemPassword(fields)["value"]
+			}
+		}
+	}
 	for _, f := range fields {
 		setField(item, f.Label, f.Value, f.Plain)
 	}
