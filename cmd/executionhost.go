@@ -327,7 +327,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	switch path {
 	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
-	case "supervisor", "supervisor status":
+	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
 	case agentsName, "agents list":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -480,14 +480,17 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		caps, err := a.probeExecution(cmd.Context(), h)
-		if err != nil {
-			return err
+		caps, probeErr := a.probeExecution(cmd.Context(), h)
+		// Show per-harness diagnostics even when every configured harness is
+		// unavailable. The failed probe still refuses admission and exits nonzero.
+		if probeErr != nil && len(caps.Readiness) == 0 {
+			return probeErr
 		}
-		// Keep the observed release and toolchain visible even when the
-		// coordinator release differs, so operators can diagnose the host.
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
+		}
+		if probeErr != nil {
+			return probeErr
 		}
 		return checkHostRelease(caps.Version)
 	}})
@@ -572,6 +575,9 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	// not invalidate that independently prepared policy.
 	if !c.Publication {
 		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
+	}
+	if !c.SourcePreparation {
+		return c, refused("execution host lacks source preparation protocol support (source upload and typed not-found); upgrade and prepare the host before starting workers")
 	}
 	offered := false
 	for _, name := range h.Harnesses {
