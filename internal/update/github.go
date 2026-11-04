@@ -280,7 +280,6 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 		raw = append(raw, releaseCandidate{tag: tag, version: version, sha: sha})
 	}
 	stableSHAs := make(map[string]bool)
-	promotedBase := make(map[baseKey]bool)
 	var latestStable rcRef
 	validRaw := make([]releaseCandidate, 0, len(raw))
 	for _, c := range raw {
@@ -299,25 +298,15 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 				}
 			}
 			stableSHAs[c.sha] = true
-			if rc, ok := newestRC[bk]; !ok || sameCommit(c.sha, rc.sha) {
-				promotedBase[bk] = true
-			}
 			if latestStable.version == nil || c.version.GreaterThan(latestStable.version) {
 				latestStable = rcRef{version: c.version, sha: c.sha}
 			}
 		}
 		validRaw = append(validRaw, c)
 	}
-	candidates := make([]releaseCandidate, 0, len(validRaw))
-	for _, c := range validRaw {
-		if c.version.Prerelease() != "" && c.sha != "" && c.tag != s.current {
-			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
-			if stableSHAs[c.sha] || promotedBase[bk] {
-				continue
-			}
-		}
-		candidates = append(candidates, c)
-	}
+	// Keep prereleases as fallbacks until publication is checked. Semver order
+	// puts a stable promotion first, but its tag may have no release yet.
+	candidates := validRaw
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].version.Equal(candidates[j].version) {
 			return candidates[i].tag < candidates[j].tag

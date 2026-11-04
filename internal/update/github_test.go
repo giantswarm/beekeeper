@@ -205,6 +205,65 @@ func TestGitHubCandidateRequestsAreBounded(t *testing.T) {
 	}
 }
 
+// A promotion tag alone must not hide its published release candidate.
+func TestGitHubUnpublishedPromotionFallback(t *testing.T) {
+	const running, candidate, stable = "v1.0.0-rc.1", "v1.0.0-rc.2", "v1.0.0"
+	for _, publication := range []string{"absent", "draft", "published"} {
+		for _, current := range []string{running, "v0.9.0"} {
+			for _, stamped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/stamped=%v", publication, current, stamped), func(t *testing.T) {
+					var requested []string
+					stubGitHub(t, current, func(r *http.Request) (int, string, http.Header) {
+						if strings.Contains(r.URL.Path, matchingRefsPath) {
+							return 200, refsWithSHAJSON([][2]string{
+								{running, "1111111"}, {candidate, "2222222"},
+								{stable, "2222222"}, {"v0.9.0", "0000000"},
+							}), nil
+						}
+						if strings.Contains(r.URL.Path, "/compare/") {
+							return 200, `{"status":"ahead"}`, nil
+						}
+						tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
+						requested = append(requested, tag)
+						if tag == stable {
+							switch publication {
+							case "absent":
+								return 404, `{}`, nil
+							case "draft":
+								return 200, strings.TrimSuffix(releaseJSON(tag, true, true), "}") + `,"draft":true}`, nil
+							}
+						}
+						return 200, releaseJSON(tag, true, true), nil
+					})
+					if stamped {
+						sha := "1111111"
+						if current != running {
+							sha = "0000000"
+						}
+						currentCommit = func() string { return sha }
+					}
+					want, wantRequests := stable, stable
+					if publication != "published" {
+						want = candidate
+						if current != running {
+							want = current
+						}
+						wantRequests += "," + want
+					}
+					res, err := Run(context.Background(), io.Discard, true)
+					var wantErr error
+					if want != current {
+						wantErr = ErrOutdated
+					}
+					if !errors.Is(err, wantErr) || res.Latest != want || strings.Join(requested, ",") != wantRequests {
+						t.Fatalf("result=%+v err=%v requests=%v; want %s requests=%s", res, err, requested, want, wantRequests)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestGitHubLookupCancellation(t *testing.T) {
 	calls := stubGitHub(t, running, func(*http.Request) (int, string, http.Header) {
 		t.Error("cancelled lookup reached HTTP")
