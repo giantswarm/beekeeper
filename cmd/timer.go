@@ -88,11 +88,7 @@ and once one failed, so it never fires on red.`,
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			start := timerStartTime
-			if spec.repeat != "" {
-				start = untilTime // a recurring time's next occurrence is what it means
-			}
-			due, err := start(a.now, args[0])
+			due, err := timerDue(a.now, args[0], spec.repeat)
 			if err != nil {
 				return err
 			}
@@ -272,6 +268,15 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 	}
 	_, err = fmt.Fprintf(a.out, "#%d %s: %s\n", t.ID, timerCond(t), found)
 	return err
+}
+
+// timerDue is a timer's first time. A recurring time means its next
+// occurrence, so a --repeat timer past today waits for it, never firing now.
+func timerDue(now time.Time, s, repeat string) (time.Time, error) {
+	if repeat != "" {
+		return untilTime(now, s)
+	}
+	return timerStartTime(now, s)
 }
 
 // timerStartTime interprets clock-only starts as today, without the next-day

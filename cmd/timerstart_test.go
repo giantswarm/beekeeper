@@ -50,6 +50,20 @@ func TestTimerPastClockTimeIsRefused(t *testing.T) {
 	}
 }
 
+// A --repeat timer past today waits for its next occurrence: firing now would
+// run its action at the wrong time, and refusing would block a plain schedule.
+func TestRepeatingTimerPastTodayWaitsForItsNextOccurrence(t *testing.T) {
+	now := time.Date(2026, 9, 24, 15, 0, 0, 0, time.Local)
+	due, err := timerDue(now, "08:15", "weekly")
+	want := time.Date(2026, 9, 25, 8, 15, 0, 0, time.Local)
+	if err != nil || !due.Equal(want) {
+		t.Fatalf("repeating timer due %v, %v; want %v", due, err, want)
+	}
+	if _, err := timerDue(now, "08:15", ""); Code(err) != ExitRefused {
+		t.Fatalf("one-shot past clock time: %v", err)
+	}
+}
+
 func TestTimerPastStartAcceptsUntil(t *testing.T) {
 	now := time.Date(2026, 9, 24, 14, 30, 0, 0, time.Local)
 	a := &app{now: now}
