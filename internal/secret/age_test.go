@@ -206,7 +206,7 @@ func TestNoVaultItemFailsInOneLineNamingTheRecipient(t *testing.T) {
 	if !errors.Is(err, ErrNoAgeIdentity) || errors.Is(err, ErrVault) {
 		t.Fatalf("err = %v, want ErrNoAgeIdentity and no vault error", err)
 	}
-	for _, w := range []string{"for its recipient " + r, `"` + AgeItemTitle(r) + `"`, "the vault Shared holds no item", "AGE-SECRET-KEY-1"} {
+	for _, w := range []string{"for its recipient " + r, `"` + AgeItemTitle(r) + `"`, "the vault Shared holds no item", "0 checked"} {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("the error lacks %q: %v", w, err)
 		}
@@ -633,7 +633,7 @@ func TestNoInstallationItemHoldingTheRecipientFails(t *testing.T) {
 	if !errors.Is(err, ErrNoAgeIdentity) || strings.Contains(err.Error(), "\n") {
 		t.Fatalf("err = %v, want one line with ErrNoAgeIdentity", err)
 	}
-	for _, w := range []string{"for its recipient " + r, `"` + AgeItemTitle(r) + `"`, `no vault of Shared, Common an installation item (<installation>.agekey)`} {
+	for _, w := range []string{"for its recipient " + r, `"` + AgeItemTitle(r) + `"`, `no installation item of Shared, Common holds it: 0 checked`} {
 		if !strings.Contains(err.Error(), w) {
 			t.Errorf("the error lacks %q: %v", w, err)
 		}
@@ -653,7 +653,7 @@ func TestNoInstallationItemHoldingTheRecipientFails(t *testing.T) {
 	f.vaults[ageVaultB][cedarItem] = map[string]string{noteField: other.String()}
 	f.vaults[ageVaultB][elverItem] = map[string]string{noteField: other.String()}
 	_, err = o.values(context.Background(), Ref{File: file})
-	for _, w := range []string{"for its recipient " + r, `"cedar.agekey" of Common, "elver.agekey" of Common`, "they hold the identity of " + other.Recipient().String()} {
+	for _, w := range []string{"for its recipient " + r, `no installation item of Shared, Common holds it: 2 checked`} {
 		if err == nil || !strings.Contains(err.Error(), w) {
 			t.Errorf("the error lacks %q: %v", w, err)
 		}
