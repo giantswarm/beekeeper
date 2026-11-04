@@ -514,6 +514,11 @@ func TestLegacyHoldDoesNotTransferLift(t *testing.T) {
 			begun, ended := Reconcile(st, prod, []Upgrade{{Namespace: nsSecond, Cluster: nsCluster, To: "2"}}, at, watch)
 			if len(ended) != 1 || len(begun) != 1 || !begun[0].Active(at) || begun[0].Target != "upgrade:prod/ns-b/dev" {
 				t.Fatalf("legacy hold migration: begun %+v ended %+v", begun, ended)
+			}
+		})
+	}
+}
+
 func TestWithHoldVersions(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
@@ -624,6 +629,7 @@ func TestNamespacedReaderEventLookup(t *testing.T) {
 		t.Fatalf("event calls: %v", c)
 	}
 }
+
 const (
 	holdFrom = "35.0.1"
 	holdTo   = "36.1.0"
