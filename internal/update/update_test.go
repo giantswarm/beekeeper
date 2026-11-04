@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/go-selfupdate"
 )
 
@@ -248,7 +249,7 @@ func TestRefusesADevelopmentBuild(t *testing.T) {
 		src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}}
 		setup(t, current, src)
 		_, err := Run(context.Background(), io.Discard, false)
-		if err == nil || !strings.Contains(err.Error(), "development build") || !strings.Contains(err.Error(), "go install github.com/giantswarm/beekeeper@latest") {
+		if err == nil || !strings.Contains(err.Error(), "development build") || !strings.Contains(err.Error(), project.Source+"/releases") {
 			t.Errorf("%q: Run() = %v, want a refusal that says how to install a release", current, err)
 		}
 		if n := src.calls.Load(); n != 0 {
@@ -662,5 +663,58 @@ func TestCanaryRefusesBadBinaryAndSkipsRelease(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "is the latest release") {
 		t.Errorf("check output after skip:\n%s", out.String())
+	}
+}
+
+func TestRunExactReleaseCandidate(t *testing.T) {
+	const tag = "v0.3.0-rc.3"
+	for _, check := range []bool{true, false} {
+		t.Run(fmt.Sprint(check), func(t *testing.T) {
+			src := &fakeSource{releases: []selfupdate.SourceRelease{release(tag)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+			setup(t, running, src)
+			exe, original := installed(t)
+			validator := &acceptingValidator{}
+			newValidator = func() selfupdate.Validator { return validator }
+			ctx := WithOptions(context.Background(), Options{Version: tag})
+			res, err := Run(ctx, io.Discard, check)
+			if res.Latest != tag || !res.Newer {
+				t.Fatalf("result = %+v", res)
+			}
+			if check {
+				if !errors.Is(err, ErrOutdated) || res.Updated || validator.asset != "" {
+					t.Fatalf("check = %+v, %v", res, err)
+				}
+				assertUnchanged(t, exe, original)
+			} else {
+				if err != nil || !res.Updated || string(validator.bundle) != installBundle {
+					t.Fatalf("install = %+v, %v", res, err)
+				}
+				got, err := os.ReadFile(exe)
+				if err != nil || string(got) != newBinary {
+					t.Fatalf("installed = %q, %v", got, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunExactReleaseRefusalsKeepBinary(t *testing.T) {
+	const tag = "v0.3.0-rc.3"
+	unsigned := release(tag)
+	unsigned.assets = []selfupdate.SourceAsset{fakeAsset{binaryID, binaryName()}}
+	for name, src := range map[string]*fakeSource{
+		"missing":  {},
+		"unsigned": {releases: []selfupdate.SourceRelease{unsigned}},
+		"tampered": {releases: []selfupdate.SourceRelease{release(tag)}, assets: map[int64][]byte{binaryID: []byte("tampered"), bundleID: []byte("{}")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup(t, running, src)
+			exe, original := installed(t)
+			_, err := Run(WithOptions(context.Background(), Options{Version: tag}), io.Discard, false)
+			if err == nil || strings.Contains(err.Error(), "\n") {
+				t.Fatalf("expected one-line refusal, got %v", err)
+			}
+			assertUnchanged(t, exe, original)
+		})
 	}
 }

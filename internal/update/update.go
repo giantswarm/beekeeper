@@ -67,8 +67,10 @@ type Canary func(ctx context.Context, path, version string) error
 
 // Options configures a Run call through its context.
 type Options struct {
-	Canary Canary
-	Skip   func(tag string) bool
+	// Version selects an exact release tag, including pre-releases.
+	Version string
+	Canary  Canary
+	Skip    func(tag string) bool
 }
 
 type optionsKey struct{}
@@ -127,16 +129,19 @@ func (s *skipSource) ListReleases(ctx context.Context, repository selfupdate.Rep
 // platform's binary and a download that does not verify are refused, and the
 // executable stays as it is.
 func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
+	opts := optionsFrom(ctx)
+	if opts.Version != "" {
+		return selectVersion(ctx, w, opts.Version, checkOnly, func() (selfupdate.Source, error) { return newTagSource(opts.Version) })
+	}
 	res := Result{Current: currentVersion()}
 	if _, err := semver.NewVersion(res.Current); err != nil {
-		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
+		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases", res.Current, project.Source)
 	}
 
 	source, err := newSource(prerelease(res.Current))
 	if err != nil {
 		return res, fmt.Errorf("creating release source: %w", err)
 	}
-	opts := optionsFrom(ctx)
 	filtered := &skipSource{Source: source, skip: opts.Skip}
 	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: filtered, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
@@ -240,6 +245,11 @@ func releaseSemver(version string) (*semver.Version, error) {
 // installVersion installs release version, which newSource lists, as
 // InstallVersion says.
 func installVersion(ctx context.Context, w io.Writer, version string, newSource func() (selfupdate.Source, error)) (Result, error) {
+	return selectVersion(ctx, w, version, false, newSource)
+}
+
+// selectVersion checks or installs an exact tag through the verified installer.
+func selectVersion(ctx context.Context, w io.Writer, version string, checkOnly bool, newSource func() (selfupdate.Source, error)) (Result, error) {
 	res := Result{Current: currentVersion(), Latest: version}
 	want, err := releaseSemver(version)
 	if err != nil {
@@ -249,6 +259,7 @@ func installVersion(ctx context.Context, w io.Writer, version string, newSource 
 		return res, fmt.Errorf("cannot update a development build (version %s) to a release: install %s by hand", res.Current, version)
 	}
 	if version == res.Current {
+		_, _ = fmt.Fprintf(w, "beekeeper %s is already installed.\n", version)
 		return res, nil
 	}
 	source, err := newSource()
@@ -274,6 +285,13 @@ func installVersion(ctx context.Context, w io.Writer, version string, newSource 
 		return res, fmt.Errorf("GitHub answered no release %s of %s that carries a binary for %s/%s", version, Repository, runtime.GOOS, runtime.GOARCH)
 	}
 	res.Published, res.URL, res.Newer = rel.PublishedAt, rel.URL, newer(version, res.Current)
+	if checkOnly {
+		_, _ = fmt.Fprintf(w, "beekeeper %s is available, this is %s.\n", version, res.Current)
+		if res.Newer {
+			return res, ErrOutdated
+		}
+		return res, nil
+	}
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
