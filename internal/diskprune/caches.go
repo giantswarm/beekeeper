@@ -70,6 +70,23 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		r.Keep("not a directory")
 		return r
 	}
+	// Pin the directory before scanning, and verify that opening it did not
+	// race with replacement of the pathname checked above.
+	root, err := os.OpenRoot(p.Root)
+	if err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
+	defer func() { _ = root.Close() }()
+	opened, err := root.Stat(".")
+	if err != nil {
+		r.Errors = append(r.Errors, err)
+		return r
+	}
+	if !os.SameFile(fi, opened) || !sameCacheRoot(p.Root, fi) {
+		r.Keep("root changed during the prune")
+		return r
+	}
 	for _, q := range protect {
 		if q != "" && InUse(p.Root, []string{q}) {
 			r.Keep("holds protected state")
@@ -78,13 +95,13 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 	}
 	var units []unit
 	if p.Files {
-		u, ok := scanFiles(p.Root, refs, &r)
+		u, ok := scanFiles(root, p.Root, refs, &r)
 		if !ok {
 			return r
 		}
 		units = slices.DeleteFunc(u, func(u unit) bool { return nestedIn(u.path, p.Nested) })
 	} else {
-		entries, err := os.ReadDir(p.Root)
+		entries, err := fs.ReadDir(root.FS(), ".")
 		if err != nil {
 			r.Errors = append(r.Errors, err)
 			return r
@@ -101,7 +118,8 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				r.Keep("another policy's cache")
 				continue
 			}
-			u := inspect(path)
+			u := inspectFS(root.FS(), e.Name())
+			u.path = path
 			if u.why == "" && InUse(u.path, refs) {
 				u.why = "in use"
 			}
@@ -140,12 +158,6 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 	}
 	left := r.Held
 	emptied := map[string]bool{}
-	var root *os.Root
-	defer func() {
-		if root != nil {
-			_ = root.Close()
-		}
-	}()
 	for _, u := range units {
 		if u.why != "" {
 			r.Keep(u.why)
@@ -160,17 +172,17 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			continue
 		}
 		if !dry {
+			// Refuse a replaced pathname, even though all I/O stays anchored
+			// to the original directory if it moves after this check.
+			if !sameCacheRoot(p.Root, fi) {
+				r.Keep("root changed during the prune")
+				return r
+			}
 			var err error
 			if p.Files {
-				if root == nil {
-					if root, err = os.OpenRoot(p.Root); err != nil {
-						r.Errors = append(r.Errors, err)
-						return r
-					}
-				}
 				err = removeFile(root, p.Root, u)
 			} else {
-				err = removeEntry(u, refs)
+				err = removeEntry(root, u, refs)
 			}
 			if errors.Is(err, errChanged) {
 				r.Keep("written during the prune")
@@ -194,7 +206,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 		emptied[filepath.Dir(u.path)] = true
 	}
 	if p.Files && !dry {
-		removeEmptied(p.Root, emptied)
+		removeEmptied(root, p.Root, emptied)
 	}
 	return r
 }
@@ -212,20 +224,21 @@ func nestedIn(path string, roots []string) bool {
 // removeEntry removes one entry whole once it still qualifies: inspected
 // again right before, it must be unreferenced, hold no checkout and have no
 // write newer than the scan saw. A writer that started meanwhile keeps it.
-func removeEntry(u unit, refs []string) error {
+func removeEntry(root *os.Root, u unit, refs []string) error {
 	if InUse(u.path, refs) {
 		return errInUse
 	}
-	v := inspect(u.path)
+	name := filepath.Base(u.path)
+	v := inspectFS(root.FS(), name)
 	if v.why == whyUnreadable {
-		if _, err := os.Lstat(u.path); errors.Is(err, os.ErrNotExist) {
+		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	if v.why != "" || v.newest.After(u.newest) {
 		return errChanged
 	}
-	return Remove(u.path)
+	return removeAt(root, name)
 }
 
 // whyUnreadable keeps what could not be inspected.
@@ -255,14 +268,14 @@ func removeFile(root *os.Root, base string, u unit) error {
 
 // scanFiles lists root's regular files. A reference or checkout anywhere in
 // root, or an unreadable subtree, keeps all of it (ok false).
-func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
+func scanFiles(root *os.Root, dir string, refs []string, r *CacheResult) ([]unit, bool) {
 	if InUse(dir, refs) {
 		r.Keep("in use")
 		return nil, false
 	}
 	var units []unit
 	why := ""
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -280,7 +293,7 @@ func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
 		if err != nil {
 			return nil //nolint:nilerr // removed since its directory was read
 		}
-		units = append(units, unit{path: p, size: fi.Size(), newest: fi.ModTime()})
+		units = append(units, unit{path: filepath.Join(dir, filepath.FromSlash(p)), size: fi.Size(), newest: fi.ModTime()})
 		return nil
 	})
 	if err != nil {
@@ -299,8 +312,22 @@ func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
 // its newest write, and why it must stay (a symbolic link, a checkout, an
 // unreadable subtree), if it must.
 func inspect(path string) unit {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return unit{path: path, why: whyUnreadable}
+	}
+	parent, name := filepath.Dir(abs), filepath.Base(abs)
+	if parent == abs {
+		name = "."
+	}
+	u := inspectFS(os.DirFS(parent), name)
+	u.path = path
+	return u
+}
+
+func inspectFS(fsys fs.FS, path string) unit {
 	u := unit{path: path}
-	fi, err := os.Lstat(path)
+	fi, err := fs.Lstat(fsys, path)
 	if err != nil {
 		u.why = whyUnreadable
 		return u
@@ -317,7 +344,7 @@ func inspect(path string) unit {
 		}
 		return u
 	}
-	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(fsys, path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -353,7 +380,7 @@ func Measure(path string) (int64, time.Time) {
 
 // removeEmptied removes the directories a trim left empty, and their
 // parents it left empty in turn, deepest first; root itself stays.
-func removeEmptied(root string, dirs map[string]bool) {
+func removeEmptied(root *os.Root, base string, dirs map[string]bool) {
 	todo := make([]string, 0, len(dirs))
 	for d := range dirs {
 		todo = append(todo, d)
@@ -362,11 +389,18 @@ func removeEmptied(root string, dirs map[string]bool) {
 		return strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator))
 	})
 	for _, d := range todo {
-		for d != root && strings.HasPrefix(d, root+string(filepath.Separator)) {
-			if os.Remove(d) != nil { // fails on a directory still holding entries
+		for d != base && strings.HasPrefix(d, base+string(filepath.Separator)) {
+			rel, err := filepath.Rel(base, d)
+			if err != nil || root.Remove(rel) != nil { // fails on a directory still holding entries
 				break
 			}
 			d = filepath.Dir(d)
 		}
 	}
+}
+
+// sameCacheRoot rejects symlinks as well as a different directory identity.
+func sameCacheRoot(path string, original fs.FileInfo) bool {
+	current, err := os.Lstat(path)
+	return err == nil && current.IsDir() && os.SameFile(original, current)
 }

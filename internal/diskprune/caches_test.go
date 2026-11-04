@@ -208,3 +208,92 @@ func TestCacheFilesRecheckKeepsARootOpenedDuringTheScan(t *testing.T) {
 		t.Fatalf("files recheck: %+v", r)
 	}
 }
+
+func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
+	for _, files := range []bool{false, true} {
+		mode := "entries"
+		if files {
+			mode = "files"
+		}
+		for _, replacement := range []string{"symlink", "directory", "missing"} {
+			t.Run(mode+"/"+replacement, func(t *testing.T) {
+				base := t.TempDir()
+				root := filepath.Join(base, "cache")
+				outside := filepath.Join(base, "outside")
+				moved := filepath.Join(base, "moved")
+				cacheFile(t, root, "sub/data", 100, 10*day)
+				outsideFile := cacheFile(t, outside, "sub/data", 200, 20*day)
+				p := Policy{Root: root, Files: files, OlderThan: 7 * day, Recheck: func() ([]string, error) {
+					if err := os.Rename(root, moved); err != nil {
+						t.Fatal(err)
+					}
+					switch replacement {
+					case "symlink":
+						if err := os.Symlink(outside, root); err != nil {
+							t.Fatal(err)
+						}
+					case "directory":
+						cacheFile(t, root, "sub/data", 300, 20*day)
+					}
+					return nil, nil
+				}}
+				r := Cache(p, time.Now(), false, nil, nil, false)
+				if r.Removed != 0 || r.Freed != 0 || len(r.Errors) != 0 || r.Kept["root changed during the prune"] != 1 {
+					t.Errorf("changed root qualified for pruning: %+v", r)
+				}
+				for _, path := range []string{outsideFile, filepath.Join(moved, "sub/data")} {
+					if !exists(path) {
+						t.Errorf("removed preserved data: %s", path)
+					}
+				}
+				switch replacement {
+				case "symlink":
+					if target, err := os.Readlink(root); err != nil || target != outside {
+						t.Errorf("replacement symlink changed: %q, %v", target, err)
+					}
+				case "directory":
+					if data, err := os.ReadFile(filepath.Join(root, "sub/data")); err != nil || len(data) != 300 {
+						t.Errorf("replacement data changed: length %d, %v", len(data), err)
+					}
+				case "missing":
+					if exists(root) {
+						t.Error("missing root recreated")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCacheEmptyDirectoryCleanupStaysAnchored(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "cache")
+	outside := filepath.Join(base, "outside")
+	moved := filepath.Join(base, "moved")
+	for _, dir := range []string{path, outside} {
+		if err := os.MkdirAll(filepath.Join(dir, "sub/empty"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	removeEmptied(root, path, map[string]bool{filepath.Join(path, "sub/empty"): true})
+	if exists(filepath.Join(moved, "sub")) {
+		t.Error("anchored empty directories remain")
+	}
+	if !exists(filepath.Join(outside, "sub/empty")) {
+		t.Error("removed outside empty directories")
+	}
+	if target, err := os.Readlink(path); err != nil || target != outside {
+		t.Errorf("replacement symlink changed: %q, %v", target, err)
+	}
+}
