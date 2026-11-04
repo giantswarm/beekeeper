@@ -138,3 +138,60 @@ func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 		t.Fatalf("post-merge work crossed PRs: first %+v second %+v", first, second)
 	}
 }
+
+func TestLastMergedPullPreservesEarlierPostMergeWork(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	work, empty := "prove the release", ""
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.PostMerge = &work
+		recordAgentReviewPark(st, st.Agents[0])
+		other := st.Agents[0]
+		other.Park = &state.Park{On: multiParkSecondPR, ReviewHead: loopHead, PostMerge: &empty}
+		recordAgentReviewPark(st, other)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l := &supervisorLoop{a: r.a, merged: map[string]superloop.Pull{loopPR: {MergeCommit: loopFixed}}}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := st.Agents[0].Task
+	park := *st.Agents[0].Park
+	end := func(ref, url string) {
+		t.Helper()
+		st, err := r.a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.endMerged(t.Context(), st, superloop.Action{Key: "end " + ref, Kind: superloop.KindEnd, Ref: ref, URL: url, Message: strings.ToLower(superloop.Merged)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	end(loopPR, loopURL)
+	wake := r.called(agentsName, agentWakeName, loopWorker)
+	if wake == nil || !strings.Contains(wake[3], work) {
+		t.Fatalf("post-merge work not requested: %v", r.calls)
+	}
+	st, err = r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ReviewParks) != 1 || st.ReviewParks[0].On != multiParkSecondPR {
+		t.Fatalf("unexpected remaining review parks: %+v", st.ReviewParks)
+	}
+	end(multiParkSecondPR, secondURL)
+	st, err = r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := st.Agents[0]
+	if worker.Done || worker.Task != task || worker.Park == nil || worker.Park.PostMerge == nil || *worker.Park.PostMerge != work || worker.Park.On != park.On || worker.Park.ReviewHead != park.ReviewHead {
+		t.Fatalf("last merge erased unfinished continuation: %+v", worker)
+	}
+	if len(st.ReviewParks) != 0 || len(st.WorkerReports) != 0 {
+		t.Fatalf("last merge retained review records or reported completion: parks=%+v reports=%+v", st.ReviewParks, st.WorkerReports)
+	}
+}
