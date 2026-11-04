@@ -286,7 +286,7 @@ func TestLeaseResumeWithoutCLIStartsHeadless(t *testing.T) {
 			l := &startRecorder{Launcher: plat.Launcher}
 			useLauncher(t, l)
 			bin := t.TempDir()
-			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // an executable test fixture
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin)
