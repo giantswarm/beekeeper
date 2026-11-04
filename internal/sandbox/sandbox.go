@@ -321,7 +321,14 @@ func (p Policy) Writable(path, cwd string) bool {
 	}
 	if cwd != "" {
 		if dir := resolve(cwd, ""); under(path, dir) && p.listed(dir) {
-			return true
+			// A readable ancestor such as / does not grant access into a
+			// closed tree. Explicit Write grants above still apply there.
+			if !slices.ContainsFunc(p.closed(), func(d string) bool {
+				d = resolve(d, "")
+				return under(path, d) && !under(dir, d)
+			}) {
+				return true
+			}
 		}
 	}
 	return slices.ContainsFunc(p.ToolWrite, func(w string) bool { return underGlob(path, w) })
