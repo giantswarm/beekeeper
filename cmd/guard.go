@@ -598,8 +598,10 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				}
 				if out := guard.DecideUnsandboxed(raw); out != nil {
 					_, _ = w.Write(out)
+					return nil
 				}
-				return nil
+				// SendMessage is exempt from the sandbox requirement, but
+				// still needs the normal scope and tool checks below.
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
