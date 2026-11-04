@@ -502,16 +502,11 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		for i, it := range snap.Items {
 			if it.OpenSubIssues > 0 && !slices.Contains(epics, i) && Matches(st, it, now) {
 				epics = append(epics, i)
-				owner, repo, n, err := Ref(it.Ref)
+				part, err := subIssuesPart(i, it, "")
 				if err != nil {
 					return err
 				}
-				subs := min(it.subIssues, subIssuesRead)
-				parts = append(parts, extrasPart{
-					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subs),
-					subs:  subs,
-					repo:  owner + "/" + repo,
-				})
+				parts = append(parts, part)
 			}
 		}
 	}
@@ -520,31 +515,68 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
-	r := map[string]json.RawMessage{}
-	var missing []GraphQLError
-	// Each request reads the epics of one owner, acting on their repository
-	// (github.ActingOn), so a personal account's epic resolves too; the
-	// searches go with the board owner's epics.
-	var batches [][]extrasPart
-	for _, group := range github.ByOwner(parts, func(p extrasPart) string { return cmp.Or(p.repo, c.Board.Owner+"/") }) {
-		batches = append(batches, extrasBatches(group)...)
+	seen := map[string]bool{}
+	for len(parts) > 0 {
+		var next []extrasPart
+		// Each request acts on one repository owner, including continuations.
+		for _, group := range github.ByOwner(parts, func(p extrasPart) string { return cmp.Or(p.repo, c.Board.Owner+"/") }) {
+			for _, batch := range extrasBatches(group) {
+				var q strings.Builder
+				for _, p := range batch {
+					q.WriteString(p.field)
+				}
+				var part map[string]json.RawMessage
+				err := c.graphql(github.ActingOn(ctx, batch[0].repo), &part, "query{"+q.String()+"}"+issueFields, nil)
+				p, ok := partialOf(err)
+				if !ok {
+					return err
+				}
+				var missing []GraphQLError
+				if p != nil {
+					missing = p.Errors
+				}
+				more, err := applyExtras(snap, project, epics, part, missing)
+				if err != nil {
+					return err
+				}
+				for _, p := range more {
+					if seen[p.field] {
+						return errors.New("sub-issue pagination did not advance")
+					}
+					seen[p.field] = true
+				}
+				next = append(next, more...)
+			}
+		}
+		parts = next
 	}
-	for _, batch := range batches {
-		var q strings.Builder
-		for _, p := range batch {
-			q.WriteString(p.field)
-		}
-		var part map[string]json.RawMessage
-		err := c.graphql(github.ActingOn(ctx, batch[0].repo), &part, "query{"+q.String()+"}"+issueFields, nil)
-		p, ok := partialOf(err)
-		if !ok {
-			return err
-		}
-		if p != nil {
-			missing = append(missing, p.Errors...)
-		}
-		maps.Copy(r, part)
+	return nil
+}
+
+// subIssuesPart reads one page of an item's children. Closed children count
+// towards the page size, so the cursor must be followed even for an empty
+// page of open children.
+func subIssuesPart(i int, it Item, cursor string) (extrasPart, error) {
+	owner, repo, n, err := Ref(it.Ref)
+	if err != nil {
+		return extrasPart{}, err
 	}
+	after := ""
+	if cursor != "" {
+		after = ",after:" + quote(cursor)
+	}
+	subs := min(it.subIssues, subIssuesRead)
+	return extrasPart{
+		field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d%s){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}} pageInfo{hasNextPage endCursor}}}}", i, quote(owner), quote(repo), n, subs, after),
+		subs:  subs,
+		repo:  owner + "/" + repo,
+	}, nil
+}
+
+// applyExtras keeps one batch's data and missing-field evidence together.
+// Each returned part continues the sub-issue connection of that batch only.
+func applyExtras(snap *Snapshot, project string, epics []int, r map[string]json.RawMessage, missing []GraphQLError) ([]extrasPart, error) {
+	var next []extrasPart
 	type nodes struct {
 		Nodes []issueJSON `json:"nodes"`
 	}
@@ -587,6 +619,10 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		var e struct {
 			Issue struct {
 				SubIssues struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
 					Nodes []struct {
 						issueJSON
 						ProjectItems struct {
@@ -599,6 +635,16 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		raw, ok := r[fmt.Sprintf("e%d", i)]
 		if !ok || json.Unmarshal(raw, &e) != nil {
 			continue
+		}
+		if page := e.Issue.SubIssues.PageInfo; page.HasNextPage {
+			if page.EndCursor == "" {
+				return nil, errors.New("sub-issue pagination has no next cursor")
+			}
+			part, err := subIssuesPart(i, snap.Items[i], page.EndCursor)
+			if err != nil {
+				return nil, err
+			}
+			next = append(next, part)
 		}
 		for k, n := range e.Issue.SubIssues.Nodes {
 			if !n.open() {
@@ -616,12 +662,12 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		var s nodes
 		if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
 			if err := json.Unmarshal(raw, &s); err != nil {
-				return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+				return nil, fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
 			snap.Search[i] = open(s.Nodes)
 		}
 	}
-	return nil
+	return next, nil
 }
 
 // at is path's element i, "" past its end.
