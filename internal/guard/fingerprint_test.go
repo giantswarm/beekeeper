@@ -381,7 +381,7 @@ func TestOpenIndexRejectsShortKey(t *testing.T) {
 	if _, err := OpenIndex(dir); err == nil {
 		t.Fatal("short key accepted")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // a path of this test
 	if err != nil {
 		t.Fatal(err)
 	}
