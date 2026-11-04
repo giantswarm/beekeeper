@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The merge-result validation commits with signing off, so a machine whose git config signs commits no longer refuses every merge with `merge-result validation unavailable` ([https://github.com/giantswarm/beekeeper/issues/3265](https://github.com/giantswarm/beekeeper/issues/3265)).
 - `beekeeper lease kubeconfig <lab>` prints the bare path for use with `kubectl --kubeconfig`; `--export` prints the shell export line (#690).
 
 ### Added

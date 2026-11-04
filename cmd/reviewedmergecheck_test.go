@@ -588,6 +588,33 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 	}
 }
 
+// A machine that signs commits must not refuse the throwaway merge result.
+func TestMergeResultIgnoresCommitSigning(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	repo.advanceMain(t, repo.head1)
+	tools := t.TempDir()
+	for name, script := range map[string]string{"golangci-lint": "#!/bin/sh\nexit 0\n", "failing-signer": "#!/bin/sh\necho 'No secret key' >&2\nexit 1\n"} {
+		if err := os.WriteFile(filepath.Join(tools, name), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// testenv turns signing off through the environment, which outranks the
+	// repository's config: without this the test passes on an unfixed merge.
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for key, value := range map[string]string{"commit.gpgsign": "true", "gpg.program": filepath.Join(tools, "failing-signer")} {
+		if _, err := runGit(t.Context(), repo.dir, "config", key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newLoopRig(t)
+	r.a.cfg.Disk.Checkouts = []string{repo.dir}
+	checked, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if !checked || code != 0 || reason != "" {
+		t.Fatalf("signing setup refused the merge result: checked=%v %d: %s", checked, code, reason)
+	}
+}
+
 // Literals the package's tests share.
 const (
 	testFixWord    = "fix"
