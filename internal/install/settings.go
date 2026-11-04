@@ -56,8 +56,6 @@ func Hooks(exe string) []Hook {
 		hook("PermissionRequest", "*", "permissionrequest", 300),
 		hook("PostToolUse", "*", "posttooluse", 10),
 		hook("SessionStart", "", "sessionstart", 10),
-		hook("WorktreeCreate", "", "worktreecreate", 60),
-		hook("WorktreeRemove", "", "worktreeremove", 60),
 	}
 }
 

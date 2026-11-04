@@ -30,11 +30,10 @@ const (
 	TmpDirs     = "tmp-dirs"
 	Orphans     = "orphans"
 	Swap        = "swap"
-	Worktrees   = "worktrees"
 )
 
 // Sections lists the acting sections.
-var Sections = []string{SessionDirs, GoBuild, TmpDirs, Orphans, Swap, Worktrees}
+var Sections = []string{SessionDirs, GoBuild, TmpDirs, Orphans, Swap}
 
 // Automatic are the sections the watch frees by itself: what dead sessions
 // and dead go commands leave in the tmpfs /tmp.
