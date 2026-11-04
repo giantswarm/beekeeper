@@ -22,14 +22,52 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+const testParkRelieved = "relieved-role"
+
+func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
+	for _, reason := range []string{verbDone, testParkRelieved} {
+		t.Run(reason, func(t *testing.T) {
+			a, _ := stubApp(t)
+			ag := state.Agent{Party: state.Party{Name: "newly parked", Session: "park-after-plan"}, Done: reason == verbDone}
+			st := &state.State{Agents: []state.Agent{ag}}
+			if reason == testParkRelieved {
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
+			}
+			chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false },
+				func(state.Party) bool { return false }, 24*time.Hour, a.now, nil)
+			if len(chores) != 1 || chores[0].kind != choreRemove {
+				t.Fatalf("expected a removal plan: %+v", chores)
+			}
+			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+				*current = *st
+				current.Agents[0].Park = &state.Park{On: "giantswarm/x#4", Waits: "desk review", At: a.now}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := a.removeAgents(chores, watchParty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(removed) != 0 || len(after.Agents) != 1 || after.Agents[0].Park == nil {
+				t.Fatalf("park lost after planning: removed=%+v, agents=%+v", removed, after.Agents)
+			}
+		})
+	}
+}
+
 func TestPlanChoresKeepsStoppedParkedWorkers(t *testing.T) {
-	for _, reason := range []string{"stale", "done", "relieved"} {
+	for _, reason := range []string{"stale", verbDone, testParkRelieved} {
 		t.Run(reason, func(t *testing.T) {
 			now := keepNow
-			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: "stopped"}, Done: reason == "done",
+			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: "stopped"}, Done: reason == verbDone,
 				Registered: now.Add(-48 * time.Hour), Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review", At: now.Add(-time.Hour)}}
 			st := &state.State{Agents: []state.Agent{ag}}
-			if reason == "relieved" {
+			if reason == testParkRelieved {
 				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
 			}
 			plan := func() []chore {

@@ -650,6 +650,11 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
 				continue
 			}
+			// A worker can park after the snapshot used to plan cleanup.
+			// Recheck under the state lock before removing a local worker.
+			if st.Agents[i].Execution == nil && st.Agents[i].Park != nil {
+				continue
+			}
 			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
 				continue
 			}
