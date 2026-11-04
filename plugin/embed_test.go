@@ -34,6 +34,26 @@ func TestWorkerRulesIsTheSkillBody(t *testing.T) {
 	}
 }
 
+// Connector discovery needs a peer wake: an idle turn alone never gets the
+// boundary at which a connector attaches. Keep both sides of the wire protocol
+// and the post-ACK escalation in the shipped registration skill.
+func TestRegisterAgentConnectorHandshake(t *testing.T) {
+	registration := strings.Join(strings.Fields(Skill("register-agent")), " ")
+	for _, want := range []string{
+		"use `ListAgents` once to choose an idle peer",
+		`exactly ` + "`" + `SYN <own session name>: reply "ACK" to me with SendMessage and do nothing else.` + "`",
+		"Finish the turn's other work and end the turn",
+		"do not keep it open with a background wait",
+		"starts with `SYN <name>:`, reply exactly `ACK` to that name with `SendMessage` and do nothing else. End the turn.",
+		"In the turn the ACK opened, look for the connector tool again. Only if it is still missing in that turn, ask the person to switch it on through the normal `note add` route.",
+		"Never hand the work back to the person because a connector tool is missing.",
+	} {
+		if !strings.Contains(registration, want) {
+			t.Errorf("register-agent is missing connector handshake instruction %q", want)
+		}
+	}
+}
+
 // The worker rules name every topic skill, each topic is a skill of its
 // own name, and none restates the rules' heading.
 func TestWorkerRulesNameTheTopics(t *testing.T) {
