@@ -98,7 +98,9 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	noSystemd(t)
 	dir := t.TempDir()
 	self = filepath.Join(dir, "beekeeper")
-	script := "#!/bin/sh\necho $$ > \"$2.pid\"\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + "\n"
+	// The PID acknowledges all fixture writes, so awaitPID cannot return while
+	// cp still races TempDir cleanup (the flaky cmd test in #1180 and #439).
+	script := "#!/bin/sh\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + " && echo $$ > \"$2.pid\"\n"
 	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
@@ -107,12 +109,9 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	t.Cleanup(func() { selfExe = was })
 	return self, func() childSpec {
 		t.Helper()
-		var raw []byte
-		var err error
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-			if raw, err = os.ReadFile(filepath.Join(dir, "spec")); err == nil && json.Valid(raw) { //nolint:gosec // the test's file
-				break
-			}
+		raw, err := os.ReadFile(filepath.Join(dir, "spec")) //nolint:gosec // the test's file
+		if err != nil {
+			t.Fatal(err)
 		}
 		var spec childSpec
 		if err := json.Unmarshal(raw, &spec); err != nil {
@@ -120,6 +119,34 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 		}
 		return spec
 	}
+}
+
+// Returning from launchChild must mean that the fake child's last fixture
+// write is complete, including when a caller immediately ends its subtest.
+func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
+	// Delay cp past awaitPID's poll so publishing the PID before the copy
+	// reliably exposes an unfinished write, without depending on machine load.
+	realCP, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cp"), []byte("#!/bin/sh\nsleep 1\nexec \"$BEEKEEPER_TEST_REAL_CP\" \"$@\"\n"), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_TEST_REAL_CP", realCP)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Run("handoff", func(t *testing.T) {
+		self, launched := stubSelf(t)
+		base := filepath.Join(t.TempDir(), "child")
+		if _, err := launchChild(childSpec{Argv: []string{self}}, base); err != nil {
+			t.Fatal(err)
+		}
+		spec := launched()
+		if !slices.Equal(spec.Argv, []string{self}) {
+			t.Fatalf("child argv %q, want %q", spec.Argv, []string{self})
+		}
+	})
 }
 
 // aheadName is the session of the merge ahead in a busy lane.
