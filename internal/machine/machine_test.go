@@ -27,6 +27,56 @@ func TestParseOOM(t *testing.T) {
 	}
 }
 
+func TestParseOOMPIDReuse(t *testing.T) {
+	const summary = "2026-11-01T12:00:00Z kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/old.scope,task_memcg=/old.scope,task=old-worker,pid=42,uid=1000\n"
+	const details = `2026-11-01T12:00:00Z kernel: Memory cgroup out of memory: Killed process 42 (old-worker) total-vm:8192kB, anon-rss:2048kB, file-rss:0kB
+2026-11-01T12:30:00Z kernel: Memory cgroup out of memory: Killed process 42 (new-worker) total-vm:16384kB, anon-rss:4096kB, file-rss:0kB`
+	for _, paired := range []bool{false, true} {
+		name := "detail-only"
+		journal := details
+		old := OOMKill{At: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC), PID: 42, Task: "old-worker", AnonMiB: 2}
+		if paired {
+			name = "paired"
+			journal = summary + details
+			old.Constraint = "CONSTRAINT_MEMCG"
+			old.Memcg = "/old.scope"
+			old.TaskMemcg = "/old.scope"
+		}
+		t.Run(name, func(t *testing.T) {
+			kills := ParseOOM(journal)
+			want := []OOMKill{old, {At: time.Date(2026, 11, 1, 12, 30, 0, 0, time.UTC), PID: 42, Task: "new-worker", AnonMiB: 4}}
+			if len(kills) != len(want) {
+				t.Fatalf("kills = %+v, want %+v", kills, want)
+			}
+			for i := range want {
+				if kills[i] != want[i] {
+					t.Errorf("kill %d = %+v, want %+v", i, kills[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseOOMInterleavedPIDs(t *testing.T) {
+	journal := `2026-11-01T12:00:00Z kernel: oom-kill:constraint=CONSTRAINT_MEMCG,oom_memcg=/first.scope,task_memcg=/first.scope,task=first,pid=42
+2026-11-01T12:00:01Z kernel: oom-kill:constraint=CONSTRAINT_MEMCG,oom_memcg=/second.scope,task_memcg=/second.scope,task=second,pid=43
+2026-11-01T12:00:02Z kernel: Memory cgroup out of memory: Killed process 43 (second) anon-rss:4096kB
+2026-11-01T12:00:03Z kernel: Memory cgroup out of memory: Killed process 42 (first) anon-rss:2048kB`
+	kills := ParseOOM(journal)
+	want := []OOMKill{
+		{At: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC), PID: 42, Task: "first", AnonMiB: 2, Constraint: "CONSTRAINT_MEMCG", Memcg: "/first.scope", TaskMemcg: "/first.scope"},
+		{At: time.Date(2026, 11, 1, 12, 0, 1, 0, time.UTC), PID: 43, Task: "second", AnonMiB: 4, Constraint: "CONSTRAINT_MEMCG", Memcg: "/second.scope", TaskMemcg: "/second.scope"},
+	}
+	if len(kills) != len(want) {
+		t.Fatalf("kills = %+v, want %+v", kills, want)
+	}
+	for i := range want {
+		if kills[i] != want[i] {
+			t.Errorf("kill %d = %+v, want %+v", i, kills[i], want[i])
+		}
+	}
+}
+
 // memcap.slice's CPU: cpu.max as a systemd quota, cpu.weight, and the use
 // and the throttled periods over the sample from cpu.stat before and after.
 func TestReadBuildCPU(t *testing.T) {
