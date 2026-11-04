@@ -10,7 +10,11 @@ import (
 )
 
 func TestInstallRetriesFailedServiceChanges(t *testing.T) {
-	for _, failure := range []string{"reload", "restart", "refusal", "cancellation"} {
+	const (
+		refusedRestart = "refusal"
+		canceledRun    = "cancellation"
+	)
+	for _, failure := range []string{reload, "restart", refusedRestart, canceledRun} {
 		t.Run(failure, func(t *testing.T) {
 			f := &fakeSetup{}
 			e, _ := env(t, t.TempDir(), f, f.run)
@@ -21,7 +25,7 @@ func TestInstallRetriesFailedServiceChanges(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			e.Run = func(ctx context.Context, argv []string) error {
-				if failure == "cancellation" {
+				if failure == canceledRun {
 					cancel()
 					return ctx.Err()
 				}
@@ -30,11 +34,11 @@ func TestInstallRetriesFailedServiceChanges(t *testing.T) {
 				}
 				return f.run(ctx, argv)
 			}
-			if failure == "refusal" {
+			if failure == refusedRestart {
 				e.BeforeRestart = func(context.Context, string) error { return errors.New("synthetic refusal") }
 			}
 			err := Install(ctx, e)
-			if (failure == "refusal") != (err == nil) {
+			if (failure == refusedRestart) != (err == nil) {
 				t.Fatalf("unexpected first attempt result: %v", err)
 			}
 			e.Run, e.BeforeRestart, f.ran = f.run, nil, nil
@@ -44,7 +48,7 @@ func TestInstallRetriesFailedServiceChanges(t *testing.T) {
 			if !strings.Contains(strings.Join(f.ran, ","), "restart notify.service") {
 				t.Errorf("retry never applied the changed service: %v", f.ran)
 			}
-			if (failure == "reload" || failure == "cancellation") && !strings.Contains(strings.Join(f.ran, ","), "reload") {
+			if (failure == reload || failure == canceledRun) && !strings.Contains(strings.Join(f.ran, ","), reload) {
 				t.Error("retry never reloaded the changed definitions")
 			}
 			f.ran = nil
