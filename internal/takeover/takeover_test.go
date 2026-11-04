@@ -156,7 +156,7 @@ func TestHoldPreservesNonemptySessionFolder(t *testing.T) {
 	if got := <-done; got[1].(bool) || got[2] != nil {
 		t.Fatalf("Hold after release = %v, want no decision or error", got)
 	}
-	if got, err := os.ReadFile(other); err != nil || string(got) != contents {
+	if got, err := os.ReadFile(filepath.Clean(other)); err != nil || string(got) != contents {
 		t.Errorf("other request after release = %q, %v", got, err)
 	}
 	for _, ext := range []string{requestExt, answerExt} {
