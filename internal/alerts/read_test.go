@@ -401,3 +401,47 @@ func TestReadUsesItsOwnKubeconfig(t *testing.T) {
 		t.Errorf("kubectl asked %d times after its own kubeconfig changed, want twice", n)
 	}
 }
+
+func TestReadClosesRemovedTargets(t *testing.T) {
+	alpha := alpha
+	f := newFake(t)
+	f.reader.Keep = true
+	defer f.reader.Close()
+	f.serve("FAKE_MIMIR")
+	beta := Target{Name: instB, Context: ctxB}
+	for i, ans := range f.reader.Read(context.Background(), []Target{alpha, beta}) {
+		if !ans.OK {
+			t.Fatalf("initial target %d failed: %s", i, ans.Why)
+		}
+	}
+	active := f.reader.held[ctxA]
+	removed := f.reader.held[ctxB]
+	if removed == nil {
+		t.Fatal("beta forward missing before removal")
+	}
+	if ans := f.reader.Read(context.Background(), []Target{alpha})[0]; !ans.OK {
+		t.Fatal(ans.Why)
+	}
+	if removed.running() {
+		t.Error("removed beta still has a running port-forward")
+	}
+	if len(f.reader.held) != 1 {
+		t.Errorf("kept %d forwards for one target", len(f.reader.held))
+	}
+	if f.reader.held[ctxA] != active || f.runs("port-forward") != 2 {
+		t.Error("the active target did not reuse its forward")
+	}
+	// Remapping the remaining installation releases its old context too.
+	alpha.Context = "replacement-context"
+	if ans := f.reader.Read(context.Background(), []Target{alpha})[0]; !ans.OK {
+		t.Fatal(ans.Why)
+	}
+	if active.running() || f.runs("port-forward") != 3 {
+		t.Error("replacing a target's context did not replace its forward once")
+	}
+	f.reader.Read(context.Background(), nil)
+	if len(f.reader.held) != 0 {
+		t.Error("an empty target list kept forwards")
+	}
+	f.noForwardLeft()
+}
