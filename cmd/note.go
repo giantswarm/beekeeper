@@ -139,7 +139,12 @@ person's own decision: neither is one. The classification runs before
 is closed or merged, or whose issue's parent epic is closed, is refused as
 superseded; a thread GitHub does not answer is filed with a warning. Each
 refusal logs note.redirected; only what is the person's to decide (live,
-public, costly or reserved for them) reaches them.`,
+public, costly or reserved for them) reaches them.
+
+A decision that asks whether to merge a pull request (to approve, confirm
+or authorise its merge) is refused from anyone, logged as note.redirected:
+the supervisor loop merges a pull request after its desk review and the
+fixes of its findings, once its checks are green, and asks nobody.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
@@ -200,6 +205,9 @@ public, costly or reserved for them) reaches them.`,
 			// Classified before any fold: a fold puts the ask before the
 			// open note's person as surely as a note of its own.
 			if n.Kind == noteDecision {
+				if err := a.refuseMergeAsk(cmd.ErrOrStderr(), me, draft, refs); err != nil {
+					return err
+				}
 				worker, err := a.isWorker(me)
 				if err != nil {
 					return err
@@ -491,7 +499,7 @@ naming both. --post is the machine's notes' only.`,
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
-	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
+	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool
