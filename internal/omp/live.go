@@ -16,7 +16,7 @@ import (
 // CheckLiveModel checks custom providers against their live OpenAI model list.
 // Built-in providers without an endpoint remain under omp's own discovery.
 func CheckLiveModel(ctx context.Context, path, selector, env string, required bool) error {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the configured models file
 	if os.IsNotExist(err) && !required {
 		return nil
 	}
@@ -63,7 +63,7 @@ func CheckLiveModel(ctx context.Context, path, selector, env string, required bo
 	if err != nil {
 		return fmt.Errorf("omp model list unavailable for %q", selector)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("reading omp model list: %w", err)

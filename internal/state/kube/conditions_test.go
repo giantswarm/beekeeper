@@ -16,6 +16,10 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const conditionFixture = "fixture"
+
+const conditionTest = "test"
+
 func conditionsOf(t *testing.T, obj client.Object) []metav1.Condition {
 	t.Helper()
 	raw, err := json.Marshal(obj)
@@ -45,7 +49,7 @@ func TestWriterReadyConditions(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(obj).Build()
 			s := New(c)
-			obj.SetName("fixture")
+			obj.SetName(conditionFixture)
 			obj.SetGeneration(1)
 			ctx := context.Background()
 			if _, err := s.write(ctx, change{obj: obj, create: true}); err != nil {
@@ -81,10 +85,10 @@ func TestHolderReadyCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Generation: 3}}
+	env := &v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: conditionFixture, Generation: 3}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(env).WithObjects(env).Build()
 	s := New(c)
-	holder := v1alpha1.Holder{Party: v1alpha1.Party{Name: "fixture"}, Since: metav1.NewTime(time.Now())}
+	holder := v1alpha1.Holder{Party: v1alpha1.Party{Name: conditionFixture}, Since: metav1.NewTime(time.Now())}
 	if err := s.Claim(env.Name, holder); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +99,7 @@ func TestHolderReadyCondition(t *testing.T) {
 	if ready == nil || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != 3 {
 		t.Fatalf("Ready after claim: %+v", ready)
 	}
-	if err := s.Release(env.Name, state.Party{Name: "fixture"}, time.Now()); err != nil {
+	if err := s.Release(env.Name, state.Party{Name: conditionFixture}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(env), env); err != nil {
@@ -108,14 +112,14 @@ func TestHolderReadyCondition(t *testing.T) {
 
 func TestEnvtestReadyCondition(t *testing.T) {
 	s, _, c := envtestStore(t)
-	environment(t, c, "fixture")
-	if err := s.Claim("fixture", v1alpha1.Holder{
-		Party: v1alpha1.Party{Name: "fixture"}, Purpose: "test", Since: metav1.NewTime(time.Now()),
+	environment(t, c, conditionFixture)
+	if err := s.Claim(conditionFixture, v1alpha1.Holder{
+		Party: v1alpha1.Party{Name: conditionFixture}, Purpose: conditionTest, Since: metav1.NewTime(time.Now()),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	env := &v1alpha1.Environment{}
-	if err := c.Get(context.Background(), client.ObjectKey{Name: "fixture"}, env); err != nil {
+	if err := c.Get(context.Background(), client.ObjectKey{Name: conditionFixture}, env); err != nil {
 		t.Fatal(err)
 	}
 	ready := meta.FindStatusCondition(env.Status.Conditions, "Ready")
