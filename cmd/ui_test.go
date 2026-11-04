@@ -26,7 +26,7 @@ const (
 	uiLab1      = "kind-1"
 	uiLab2      = "kind-2"
 	uiPurpose   = "e2e"
-	uiPerson    = "teemow@lab"
+	uiPerson    = "fixture-person@lab"
 	uiNoteText  = "merge the bump?"
 )
 
@@ -73,8 +73,8 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	}
 	// One lease held by a gone session, one by a person.
 	for res, raw := range map[string]string{
-		uiLab1: `{"env":"kind-1","holder":"teemow@lab","session":"gone-session","name":"gone-session","purpose":"e2e","since":"2026-09-26T09:00:00Z"}`,
-		uiLab2: `{"env":"kind-2","holder":"teemow@lab","purpose":"by hand","since":"2026-09-26T10:00:00Z"}`,
+		uiLab1: `{"env":"kind-1","holder":"fixture-person@lab","session":"gone-session","name":"gone-session","purpose":"e2e","since":"2026-09-26T09:00:00Z"}`,
+		uiLab2: `{"env":"kind-2","holder":"fixture-person@lab","purpose":"by hand","since":"2026-09-26T10:00:00Z"}`,
 	} {
 		if err := os.MkdirAll(filepath.Join(cfg.LeaseDir, res), 0o700); err != nil {
 			t.Fatal(err)

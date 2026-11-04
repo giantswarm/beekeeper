@@ -416,7 +416,7 @@ func TestNamedRefsReadsTheFormsPeopleWrite(t *testing.T) {
 		{"note #708 then #2", owner, nil},
 		// A bare #n after prose is no item of the list before it: a memo
 		// across repositories names each by its own repository.
-		{"Morning, #37850 chip: (1) glean portal steps (gpm#282 encoding fix live as 0.44.1); then Timo ticks #37850 criterion 3. gpm#283 proven; backstage#2597 filed", owner, []string{"gs/gpm#282", "gs/gpm#283", "gs/backstage#2597"}},
+		{"Morning, #37850 chip: (1) glean portal steps (gpm#282 encoding fix live as 0.44.1); then Alex ticks #37850 criterion 3. gpm#283 proven; backstage#2597 filed", owner, []string{"gs/gpm#282", "gs/gpm#283", "gs/backstage#2597"}},
 		{"o/r#1 is merged, now tick #2", owner, []string{refOne}},
 		{"o/r#1 / #2 or #6; #62 & #63", owner, []string{refOne, idleRef, "o/r#6", "o/r#62", "o/r#63"}},
 		{"o/r#1 and O/R#1 once", owner, []string{refOne}},

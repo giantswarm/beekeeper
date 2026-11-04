@@ -313,7 +313,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 	if err := os.WriteFile(path, []byte(turn), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := titleTranscript(projects, "id", `Guide run 2: Timo's "open" decisions`); err != nil {
+	if err := titleTranscript(projects, "id", `Guide run 2: Alex's "open" decisions`); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's own transcript
@@ -328,7 +328,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 		SessionID   string `json:"sessionId"`
 	}
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &title); err != nil || title.Type != "custom-title" ||
-		title.CustomTitle != `Guide run 2: Timo's "open" decisions` || title.SessionID != "id" {
+		title.CustomTitle != `Guide run 2: Alex's "open" decisions` || title.SessionID != "id" {
 		t.Errorf("the import window's last line = %q (%v)", lines[len(lines)-1], err)
 	}
 	if model, err := claude.Model(path); err != nil || model != "claude-haiku-4-5-20251001" {

@@ -47,7 +47,7 @@ type Party struct {
 }
 
 // Owner names whose agent the party is, of which team, on which host
-// ("timo@example.com, team bumblebee, on lab"); empty when none is known.
+// ("alex@example.com, team bumblebee, on lab"); empty when none is known.
 func (p Party) Owner() string {
 	var parts []string
 	if p.Person != "" {

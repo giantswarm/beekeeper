@@ -115,7 +115,7 @@ func TestPlanChores(t *testing.T) {
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
 		case "local_untitled":
-			return &claude.Record{Title: "klaus-lab-3d"}, true
+			return &claude.Record{Title: "fixture-lab-3d"}, true
 		case "local_titled":
 			return &claude.Record{Title: "test: titled"}, true
 		case "local_archived":
@@ -132,7 +132,7 @@ func TestPlanChores(t *testing.T) {
 		`take "test: done" off the roster and archive its desktop session (it reported its work done)`,
 		`take "test: relieved" off the roster (it was relieved of its role, which relays instead)`,
 		`take "test: stale" off the roster and archive its desktop session (idle 2d, its CLI no longer runs)`,
-		`retitle local_untitled "test: untitled" (the desktop recorded "klaus-lab-3d" instead of "test: untitled")`,
+		`retitle local_untitled "test: untitled" (the desktop recorded "fixture-lab-3d" instead of "test: untitled")`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("chores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -438,7 +438,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
 		Agents: []state.Agent{
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
+			{Party: state.Party{Name: "on Alex"}, Task: "t", Park: &state.Park{Waits: "Alex's go"}},
 			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
 			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: parkedIssueRef, Waits: deskReviewWait}},
 			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
@@ -447,16 +447,16 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
 		},
 	}
-	lines, evs := parkedNews(st, "Timo", now)
+	lines, evs := parkedNews(st, "Alex", now)
 	if len(lines) != 4 || len(evs) != 4 ||
 		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
-		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Timo"`) || !strings.Contains(lines[1], "tells Timo") ||
+		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Alex"`) || !strings.Contains(lines[1], "tells Alex") ||
 		!strings.HasPrefix(lines[2], `PARKED ON A PERSON: "on a reply"`) ||
 		!strings.HasPrefix(lines[3], `PARKED ON A LEASE: "on a lease" parked on lease agentlab-1`) ||
 		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedNews(st, "Timo", now); len(lines) != 0 {
+	if lines, _ := parkedNews(st, "Alex", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }

@@ -166,7 +166,7 @@ nothing to wait for. One
 that reported its task idle (agents idle, --done included) has a task
 again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
-		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
+		Example: `  beekeeper agents park --on 41 "Alex's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
   beekeeper agents park --on example/tool@v1.2.3 "release to promote"
   beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"

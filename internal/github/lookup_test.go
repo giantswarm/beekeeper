@@ -40,14 +40,14 @@ func TestLookup(t *testing.T) {
 func TestLookupResolvesAPersonalAccountRepository(t *testing.T) {
 	var acting []string
 	run := ownerLink(&acting, func(query string) string {
-		if strings.Contains(query, `owner:"teemow"`) {
-			return `{"data":{"p0":{"pullRequest":{"title":"fix: lab"}},"d":{"nodes":[{"number":3,"repository":{"nameWithOwner":"teemow/plans"}}]}}}`
+		if strings.Contains(query, `owner:"fixture-person"`) {
+			return `{"data":{"p0":{"pullRequest":{"title":"fix: lab"}},"d":{"nodes":[{"number":3,"repository":{"nameWithOwner":"fixture-person/plans"}}]}}}`
 		}
 		return `{"data":{"p0":{"pullRequest":{"title":"feat: beekeeper"}}}}`
 	})
 	pulls := []PR{{Repo: orgRepo, N: 1}, {Repo: personalRepo, N: 7}}
-	titles, drafts, err := Lookup(context.Background(), run, pulls, []string{"teemow/plans"})
-	if err != nil || titles[pulls[0]] != "feat: beekeeper" || titles[pulls[1]] != "fix: lab" || !slices.Equal(drafts, []PR{{Repo: "teemow/plans", N: 3}}) {
+	titles, drafts, err := Lookup(context.Background(), run, pulls, []string{"fixture-person/plans"})
+	if err != nil || titles[pulls[0]] != "feat: beekeeper" || titles[pulls[1]] != "fix: lab" || !slices.Equal(drafts, []PR{{Repo: "fixture-person/plans", N: 3}}) {
 		t.Errorf("Lookup = %v, %v, %v", titles, drafts, err)
 	}
 	if !slices.Equal(acting, []string{orgRepo, personalRepo}) {
