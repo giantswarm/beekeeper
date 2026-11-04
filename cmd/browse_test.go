@@ -26,6 +26,26 @@ const (
 	tabsContext = "tabs_context_mcp"
 )
 
+func TestBrowseReactAriaCoordinateClick(t *testing.T) {
+	for name, guidance := range map[string]string{
+		"prompt": browsePrompt("Click the Dev Portal's 'Sign in' button by coordinate.", "", nil, false, nil),
+		"help":   (&app{}).browseCmd().Long,
+	} {
+		for _, want := range []string{
+			"React-aria Buttons (bui components)", "need a coordinate click",
+			"computer left_click with coordinate", "current position from a screenshot",
+			"silently does nothing", "action_summary", "check the resulting page or window",
+		} {
+			if !strings.Contains(guidance, want) {
+				t.Errorf("%s guidance lacks %q", name, want)
+			}
+		}
+	}
+	if help := (&app{}).browseCmd().Long; !strings.Contains(help, "Dev Portal's 'Sign in' button by coordinate at its current position") {
+		t.Error("browse help lacks a coordinate-click step for the portal Sign in button")
+	}
+}
+
 // selfSettings are the settings of a turn browse runs in this test binary.
 func selfSettings(t *testing.T, rules []string) string {
 	t.Helper()
