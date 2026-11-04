@@ -85,7 +85,7 @@ func TestScanExecutableEntriesLeaveOtherData(t *testing.T) {
 			t.Errorf("unrelated file %s changed: %v", name, err)
 		}
 	}
-	if got, err := os.ReadFile(outside); err != nil || string(got) != "outside data" {
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "outside data" { //nolint:gosec // reads only this test's temporary fixture
 		t.Errorf("outside data changed: %q, %v", got, err)
 	}
 }
