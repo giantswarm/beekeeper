@@ -30,6 +30,14 @@ type fake struct {
 	redirect bool
 }
 
+const hyprClients = "clients"
+
+const hyprDispatch = "dispatch"
+
+const hyprCreate = "create"
+
+const hyprMove = "move"
+
 // open maps a window Chrome opens: on the output's workspace while the
 // redirect is on, else on the workspace the person's focused monitor shows.
 func (f *fake) open(w Window) {
@@ -44,7 +52,7 @@ var moveRE = regexp.MustCompile(`(?:workspace = "|movetoworkspacesilent )(?:name
 
 func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch {
-	case slices.Equal(args, []string{"-j", "clients"}):
+	case slices.Equal(args, []string{"-j", hyprClients}):
 		return json.Marshal(f.windows)
 	case slices.Equal(args, []string{"-j", "monitors"}):
 		return json.Marshal(f.monitors)
@@ -59,7 +67,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		}
 	}
 	lua := args[0] == evalCmd || strings.HasPrefix(call, "dispatch hl.dsp.")
-	if slices.Contains([]string{evalCmd, "keyword", "dispatch"}, args[0]) && lua == f.classic {
+	if slices.Contains([]string{evalCmd, "keyword", hyprDispatch}, args[0]) && lua == f.classic {
 		return []byte("error: not this syntax"), nil
 	}
 	switch {
@@ -67,7 +75,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		f.redirect = true
 	case args[0] == evalCmd && strings.HasPrefix(args[1], redirectOff):
 		f.redirect = false
-	case slices.Equal(args, []string{"output", "create", "headless", Output}):
+	case slices.Equal(args, []string{"output", hyprCreate, "headless", Output}):
 		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: surface}
 		if f.onCreate != nil {
 			f.onCreate(f, &out)
@@ -75,7 +83,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		f.monitors = append(f.monitors, out)
 	case slices.Equal(args, []string{"output", "remove", Output}):
 		f.monitors = slices.DeleteFunc(f.monitors, func(m Monitor) bool { return m.Name == Output })
-	case args[0] == "dispatch":
+	case args[0] == hyprDispatch:
 		m := moveRE.FindStringSubmatch(args[1])
 		if m == nil {
 			return nil, errors.New("unexpected dispatch " + args[1])
@@ -678,7 +686,7 @@ func TestConsecutiveTurnsReuseOutput(t *testing.T) {
 // its response reached Show. Cleanup must use a live, bounded context and
 // return both the shared window and any redirected pop-up before removal.
 func TestShowRollsBackCancelledSetup(t *testing.T) {
-	for _, boundary := range []string{"create", "redirect", "move"} {
+	for _, boundary := range []string{hyprCreate, "redirect", hyprMove} {
 		t.Run(boundary, func(t *testing.T) {
 			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -694,9 +702,9 @@ func TestShowRollsBackCancelledSetup(t *testing.T) {
 					}
 				}
 				out, err := f.ctl(callCtx, args...)
-				hit := boundary == "create" && args[0] == "output" && args[1] == "create" ||
-					boundary == "redirect" && args[0] == "eval" && strings.Contains(args[1], "set_enabled(true)") ||
-					boundary == "move" && args[0] == "dispatch"
+				hit := boundary == hyprCreate && args[0] == "output" && args[1] == hyprCreate ||
+					boundary == "redirect" && args[0] == evalCmd && strings.Contains(args[1], "set_enabled(true)") ||
+					boundary == hyprMove && args[0] == hyprDispatch
 				if !cancelled && hit {
 					if f.redirect {
 						f.open(Window{Address: "0xe", Class: chromeClass})
@@ -734,7 +742,7 @@ func TestShowRollbackPreservesExistingOutput(t *testing.T) {
 			return nil, err
 		}
 		out, err := f.ctl(callCtx, args...)
-		if args[0] == "eval" && strings.Contains(args[1], "set_enabled(true)") {
+		if args[0] == evalCmd && strings.Contains(args[1], "set_enabled(true)") {
 			f.open(Window{Address: "0xe", Class: chromeClass})
 			cancel()
 			return nil, callCtx.Err()
@@ -750,7 +758,7 @@ func TestShowRollbackPreservesExistingOutput(t *testing.T) {
 }
 
 func TestShowRollbackRetainsOutputWhenCleanupFails(t *testing.T) {
-	for _, failure := range []string{"redirect off", "clients", "move"} {
+	for _, failure := range []string{"redirect off", hyprClients, hyprMove} {
 		t.Run(failure, func(t *testing.T) {
 			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -760,13 +768,13 @@ func TestShowRollbackRetainsOutputWhenCleanupFails(t *testing.T) {
 				if err := callCtx.Err(); err != nil {
 					return nil, err
 				}
-				if failed && (failure == "redirect off" && args[0] == "eval" ||
-					failure == "clients" && slices.Equal(args, []string{"-j", "clients"}) ||
-					failure == "move" && args[0] == "dispatch") {
+				if failed && (failure == "redirect off" && args[0] == evalCmd ||
+					failure == hyprClients && slices.Equal(args, []string{"-j", hyprClients}) ||
+					failure == hyprMove && args[0] == hyprDispatch) {
 					return nil, errors.New("cleanup refused")
 				}
 				out, err := f.ctl(callCtx, args...)
-				if !failed && args[0] == "dispatch" {
+				if !failed && args[0] == hyprDispatch {
 					failed = true
 					cancel()
 					return nil, callCtx.Err()

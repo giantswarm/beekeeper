@@ -17,7 +17,7 @@ func TestReviewParkPostMergeDistinguishesOmittedAndEmpty(t *testing.T) {
 		{name: "omitted preserves explicit empty", old: &empty},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := &State{ReviewParks: []ReviewPark{{On: on, ReviewHead: "before", PostMerge: tc.old}}}
+			st := &State{ReviewParks: []ReviewPark{{On: on, ReviewHead: beforeWord, PostMerge: tc.old}}}
 			st.UpsertReviewPark(ReviewPark{On: "O/R#7", ReviewHead: "after", PostMerge: tc.next})
 			rp, ok := st.ReviewParkFor(on)
 			if !ok || len(st.ReviewParks) != 1 || rp.PostMerge == nil || *rp.PostMerge != tc.want || rp.ReviewHead != "after" {

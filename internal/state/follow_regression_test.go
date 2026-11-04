@@ -11,6 +11,8 @@ const followReport = "agents.report"
 
 const followAfter = "after"
 
+const beforeWord = "before"
+
 func TestFollowReadsLargeEventsAndContinuesPastThem(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
@@ -18,7 +20,7 @@ func TestFollowReadsLargeEventsAndContinuesPastThem(t *testing.T) {
 	}
 	const readerName = "large-events"
 	keep := func(e Event) bool { return e.Verb != followReport }
-	if err := s.Record(Event{Verb: "before"}); err != nil {
+	if err := s.Record(Event{Verb: beforeWord}); err != nil {
 		t.Fatal(err)
 	}
 	if events, err := s.Follow(readerName, keep); err != nil || len(events) != 1 {
@@ -31,7 +33,7 @@ func TestFollowReadsLargeEventsAndContinuesPastThem(t *testing.T) {
 	// Even a reader whose filter rejects the report must get past it.
 	for range 2 {
 		events, err := s.Follow(readerName, keep)
-		if err != nil || len(events) != 2 || events[0].Verb != "before" || events[1].Verb != followAfter {
+		if err != nil || len(events) != 2 || events[0].Verb != beforeWord || events[1].Verb != followAfter {
 			t.Fatalf("past the report: %d events, %v", len(events), err)
 		}
 	}

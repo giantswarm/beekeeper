@@ -15,6 +15,12 @@ const (
 	routeChangeLegacy = "legacy record"
 )
 
+const optBeekeeper = "/opt/beekeeper"
+
+const otherHostName = "other-host"
+
+const conflictingWord = "conflicting"
+
 func TestRetainedExecutionRefusesCatalogRouteChange(t *testing.T) {
 	for _, change := range []string{"SSH destination", "remote executable", "configuration path", "host identity", routeChangeAlias, routeChangeExited} {
 		t.Run(change, func(t *testing.T) {
@@ -47,7 +53,7 @@ func TestRetainedExecutionRefusesCatalogRouteChange(t *testing.T) {
 			case "SSH destination":
 				changed.SSH = "replacement.example"
 			case "remote executable":
-				changed.Executable = "/opt/beekeeper"
+				changed.Executable = optBeekeeper
 			case "host identity":
 				changed.Identity = sshTestOtherSelector
 			case routeChangeAlias:
@@ -78,7 +84,7 @@ func TestRetainedExecutionRefusesCatalogRouteChange(t *testing.T) {
 }
 
 func TestRetainedExecutionAllowsCompatibleCatalogChanges(t *testing.T) {
-	for _, change := range []string{"policy digest", routeChangeAlias, "other-host", routeChangeLegacy} {
+	for _, change := range []string{"policy digest", routeChangeAlias, otherHostName, routeChangeLegacy} {
 		t.Run(change, func(t *testing.T) {
 			a, _ := sshStartTestApp(t)
 			original := a.cfg.Agents.Hosts[sshTestSelector]
@@ -103,7 +109,7 @@ func TestRetainedExecutionAllowsCompatibleCatalogChanges(t *testing.T) {
 				changed.PolicyDigest = execution.Digest([]byte("updated policy"))
 			case routeChangeAlias:
 				selector = sshTestOtherSelector
-			case "other-host":
+			case otherHostName:
 				selector = sshTestOtherSelector
 				changed = a.cfg.Agents.Hosts[selector]
 			case routeChangeLegacy:
@@ -121,7 +127,7 @@ func TestRetainedExecutionAllowsCompatibleCatalogChanges(t *testing.T) {
 // Its pin must be checked again under the reservation lock.
 func TestRetainedExecutionRouteRecheckedAtAdmission(t *testing.T) {
 	for _, sameRoute := range []bool{false, true} {
-		t.Run(map[bool]string{false: "conflicting", true: "compatible"}[sameRoute], func(t *testing.T) {
+		t.Run(map[bool]string{false: conflictingWord, true: "compatible"}[sameRoute], func(t *testing.T) {
 			a, brief := sshStartTestApp(t)
 			probe := a.executionProbe
 			a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {

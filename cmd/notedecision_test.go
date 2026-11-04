@@ -31,6 +31,8 @@ const (
 	optWait     = "wait: the release ships Monday"
 )
 
+const alphaTeam = "alpha"
+
 func decisionNote(args ...string) []string {
 	return append(append(slices.Clone(decisionArgs), "--option", optMerge, "--option", optWait), args...)
 }
@@ -435,7 +437,7 @@ func TestResolveNoteChoiceUsesStoredOrder(t *testing.T) {
 func TestDefaultEventsIdentifyTheNotesTeam(t *testing.T) {
 	now := time.Now().UTC()
 	st := &state.State{}
-	for _, team := range []string{"alpha", "beta"} {
+	for _, team := range []string{alphaTeam, "beta"} {
 		st.Notes = append(st.Notes, state.Note{ID: 3, Kind: noteDecision, By: state.Party{Team: team}, Due: now.Add(-time.Hour), Default: "wait for " + team})
 	}
 	actor := state.Party{Name: "timer", Team: "operations"}

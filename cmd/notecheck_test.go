@@ -308,7 +308,7 @@ func TestPlanStagesAdmitsPRDRevisionWithoutContrarianPlaceholder(t *testing.T) {
 		if args[0] == noteCheckAPI {
 			// The PRD already ran; the revision is now grilled before its next output.
 			// No contrarian file or missing-contrarian finding is needed.
-			return []byte(`["revision: index.html missing: the last revision/index.html is older than the PRD's last change"]`), nil
+			return []byte(`[{"title":"plan-stages","message":"revision: index.html missing: the last revision/index.html is older than the PRD's last change"}]`), nil
 		}
 		return []byte(`{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`), nil
 	}
