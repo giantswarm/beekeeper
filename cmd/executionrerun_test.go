@@ -75,9 +75,9 @@ func TestExecutionCIRerunScopeAndRevocation(t *testing.T) {
 func TestRunExecutionCIRerunPreservesCLIResult(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "devctl")
 	script := "#!/bin/sh\n[ \"$*\" = 'pr rerun giantswarm/beekeeper 2224' ] || exit 99\nprintf '{\"verdict\":\"refused\"}'\nprintf 'CI login required' >&2\nexit 8\n"
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil { //nolint:gosec // G306: executable probe in a private test directory
 		t.Fatal(err)
-	} //nolint:gosec // executable fixture in a private test directory
+	}
 	result, err := runExecutionCIRerun(context.Background(), binary, sshTestRepository, 2224)
 	if err != nil || result.Code != 8 || !json.Valid([]byte(result.Output)) || result.ErrorOutput != "CI login required" {
 		t.Fatalf("result: %+v, %v", result, err)
