@@ -401,7 +401,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
 	case strings.Contains(q, boardItemsQuery):
-		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
+		if vars["q"] != `is:open team:"X"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}
 		page := 0
