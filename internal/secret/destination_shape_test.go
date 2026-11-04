@@ -12,12 +12,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+const shapePrivateKey = "private-key"
+
+const shapeCopy = "copy"
+
 func TestUnwritableDestinationRefusesBeforeProduction(t *testing.T) {
 	for _, tc := range []struct{ section, path, shape string }{
-		{"stringData", "private-key", "{}"}, {"stringData", "private-key", "[]"},
-		{"stringData", "broken.child", "[]"}, {"data", "private-key", "{}"},
+		{"stringData", shapePrivateKey, "{}"}, {"stringData", shapePrivateKey, "[]"},
+		{"stringData", "broken.child", "[]"}, {"data", shapePrivateKey, "{}"},
 	} {
-		for _, action := range []string{"keys", "copy", "capture"} {
+		for _, action := range []string{"keys", shapeCopy, "capture"} {
 			// A data node is occupied for SecretKeys; copy/capture write a separate stringData key.
 			if tc.section == "data" && action != "keys" {
 				continue
@@ -51,7 +55,7 @@ func TestUnwritableDestinationRefusesBeforeProduction(t *testing.T) {
 						produced++
 						return map[string]string{tc.path: "synthetic"}, nil
 					}})
-				case "copy":
+				case shapeCopy:
 					_, err = o.CopyValue(ctx, src, secret.Ref{File: file, Path: tc.path})
 				case "capture":
 					_, err = o.Capture(ctx, secret.Ref{File: file, Path: tc.path}, secret.CaptureOptions{Producer: azGenerateArgs})
