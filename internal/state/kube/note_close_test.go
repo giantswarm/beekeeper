@@ -190,3 +190,51 @@ func TestLegacyDefaultCloseReason(t *testing.T) {
 		t.Fatalf("legacy close attribution: %+v %v", closed, err)
 	}
 }
+
+func TestDefaultDeliveryAcknowledgesOnlyItsClosure(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Name: NoteObject(team, 1).GetName(), Namespace: teamNamespace(team)},
+		Spec:   v1alpha1.NoteSpec{ID: 1, Default: unreleasedDefault},
+		Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), Closure: &v1alpha1.NoteClosure{ID: "first", Verb: noteDefaultedEvent}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(n).Build()
+	s := New(c)
+	pending, err := s.PendingDefaults()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending: %+v %v", pending, err)
+	}
+	d := pending[0]
+	if err := s.AcknowledgeDefault(d); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err = New(c).PendingDefaults(); err != nil || len(pending) != 0 {
+		t.Fatalf("acknowledgement lost: %+v %v", pending, err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(n), n); err != nil {
+		t.Fatal(err)
+	}
+	n.Status.Closure = &v1alpha1.NoteClosure{ID: "second", Verb: noteDefaultedEvent}
+	if err := c.Status().Update(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AcknowledgeDefault(d); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = New(c).PendingDefaults()
+	if err != nil || len(pending) != 1 || pending[0].ClosureID != "second" {
+		t.Fatalf("stale acknowledgement hid replacement: %+v %v", pending, err)
+	}
+	n.Status.State = noteAnswered
+	n.Status.Closure = &v1alpha1.NoteClosure{ID: "answer", Verb: noteAnsweredEvent}
+	if err := c.Status().Update(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AcknowledgeDefault(pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err = New(c).PendingDefaults(); err != nil || len(pending) != 0 {
+		t.Fatalf("answer did not supersede default: %+v %v", pending, err)
+	}
+}

@@ -309,23 +309,28 @@ func (s *server) defaultLoop(ctx context.Context) {
 // defaultDue closes the decisions due now: note.defaulted on each, its
 // message rewritten.
 func (s *server) defaultDue(ctx context.Context, now time.Time) error {
-	var due []state.Note
 	err := s.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, evs, notes := closeDefaulted(st, s.cfg.Guide.Person, serveParty, now)
-		due = notes
+		_, evs, _ := closeDefaulted(st, s.cfg.Guide.Person, serveParty, now)
 		return evs, nil
 	})
-	if err != nil {
-		return err
-	}
-	for i := range due {
-		s.log.Info("default", "note", due[i].ID, "for", due[i].For, "default", due[i].Default)
-		s.closeDecision(ctx, &due[i], outcomeDefaulted, due[i].Default)
-		if err := s.mailFiler(ctx, &due[i], defaultedLine(&due[i])); err != nil {
-			s.log.Error("default", "note", due[i].ID, "filer", due[i].By.Name, "host", due[i].By.Host, "detail", "telling the filer: "+err.Error())
+	// Status and closure may have committed even when Update reports failure.
+	pending, readErr := s.store.PendingDefaults()
+	err = errors.Join(err, readErr)
+	for _, d := range pending {
+		n := &d.Note
+		if s.gw != nil && n.Posted != "" {
+			if closeErr := s.gw.close(ctx, n.Posted, outcomeDefaulted, n.Default); closeErr != nil {
+				err = errors.Join(err, closeErr)
+				continue
+			}
 		}
+		if mailErr := s.mailFiler(ctx, n, defaultedLine(n)); mailErr != nil {
+			err = errors.Join(err, mailErr)
+			continue
+		}
+		err = errors.Join(err, s.store.AcknowledgeDefault(d))
 	}
-	return nil
+	return err
 }
 
 // mailFiler queues line in the mailbox of the person whose agent filed n,

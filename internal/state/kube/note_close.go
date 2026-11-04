@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
@@ -158,4 +160,56 @@ func (s *Store) LookupNote(id int) (*state.Note, *state.Event, error) {
 		return &note, closure, nil
 	}
 	return nil, nil, nil
+}
+
+// defaultDeliveredAnnotation records the exact closure whose effects completed.
+const defaultDeliveredAnnotation = "beekeeper.giantswarm.io/default-delivered"
+
+// DefaultDelivery is a retained default awaiting its external effects.
+type DefaultDelivery struct {
+	Note      state.Note
+	ClosureID string
+}
+
+// PendingDefaults recovers deliveries independently of Update callback retries.
+func (s *Store) PendingDefaults() ([]DefaultDelivery, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	list := &v1alpha1.NoteList{}
+	if err := s.c.List(ctx, list); err != nil {
+		return nil, err
+	}
+	var pending []DefaultDelivery
+	for i := range list.Items {
+		n := &list.Items[i]
+		c := n.Status.Closure
+		if c != nil && c.Verb == noteDefaultedEvent && c.ID != "" && n.Annotations[defaultDeliveredAnnotation] != c.ID {
+			pending = append(pending, DefaultDelivery{Note: noteOf(n), ClosureID: c.ID})
+		}
+	}
+	return pending, nil
+}
+
+// AcknowledgeDefault marks only the closure delivered by the caller. A later
+// answer supersedes it; a concurrent status write causes a conflict, never an
+// acknowledgement of the replacement closure.
+func (s *Store) AcknowledgeDefault(d DefaultDelivery) error {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	n := &v1alpha1.Note{}
+	if err := s.c.Get(ctx, client.ObjectKeyFromObject(NoteObject(d.Note.By.Team, d.Note.ID)), n); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	c := n.Status.Closure
+	if c == nil || c.Verb != noteDefaultedEvent || c.ID != d.ClosureID {
+		return nil
+	}
+	if n.Annotations == nil {
+		n.Annotations = map[string]string{}
+	}
+	n.Annotations[defaultDeliveredAnnotation] = d.ClosureID
+	return s.c.Update(ctx, n)
 }
