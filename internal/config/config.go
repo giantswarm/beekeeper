@@ -2257,10 +2257,14 @@ type Guide struct {
 type Supervisor struct {
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
-	// ReviewRounds is retained for configuration compatibility and reporting
-	// (default 1). It never releases a head without an approving review.
-	// Every new head gets one independent review, except a proven base-only
-	// update of an approved head, which remains covered by that approval.
+	// ReviewRounds caps the review rounds that ask for changes (default 1);
+	// an approved round counts for none, and superloop.MaxReviews bounds all
+	// rounds. Under the cap a green head with fixes gets the next review.
+	// Once the cap is used it gets the merge go with no new review: fixes
+	// pushed after a review need no review of their own. A head that only
+	// brings the base into the findings' head carries no fixes and goes back
+	// to rework; one that only brings the base into an approved head stays
+	// covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
