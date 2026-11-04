@@ -85,6 +85,7 @@ loop) says so and restores the values before, each step in the event log
 override set it is not restored: the watch asks guide.person in a note,
 answered with config restore <id> --force or config keep <id>. A key
 another override in effect set is taken over, with that one's value before.
+stateDir cannot be overridden temporarily: restoring it would switch state history.
 
   beekeeper config set --until owner/repo#42 \
     --reason "budget floor off for the merge batch" -- github.floor -1
