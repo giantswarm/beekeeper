@@ -76,9 +76,10 @@ func command(entry json.RawMessage) []string {
 	}
 	var subs []string
 	for _, h := range e.Hooks {
-		f := strings.Fields(h.Command)
-		if len(f) == 3 && filepath.Base(strings.Trim(f[0], `'"`)) == project.Name && f[1] == hookWord {
-			subs = append(subs, f[2])
+		for _, sub := range []string{"pretooluse", "permissionrequest", "posttooluse", "sessionstart"} {
+			if exe := installedHookBinary(h.Command, " "+hookWord+" "+sub); filepath.Base(exe) == project.Name {
+				subs = append(subs, sub)
+			}
 		}
 	}
 	return subs
@@ -174,7 +175,7 @@ func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileS
 		return i, fileUpdated
 	}
 	sub := command(want.Entry)
-	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
+	if len(sub) > 0 && slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
 		return 0, fileKept
 	}
 	return 0, fileNew
