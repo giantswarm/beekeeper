@@ -112,8 +112,9 @@ func TestTrimSkipsAnEntryGoneAlready(t *testing.T) {
 }
 
 func TestDir(t *testing.T) {
-	t.Setenv("GOCACHE", "/x/go-build")
-	if d := Dir(); d != "/x/go-build" {
+	dir := filepath.Join(t.TempDir(), "go-build")
+	t.Setenv("GOCACHE", dir)
+	if d := Dir(); d != dir {
 		t.Errorf("Dir = %q", d)
 	}
 	t.Setenv("GOCACHE", "off")
