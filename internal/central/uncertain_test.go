@@ -25,7 +25,7 @@ func TestCallLostBackendReplyIsSent(t *testing.T) {
 	})
 	h := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true))
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Mcp-Method") == "tools/call" {
+		if r.Header.Get("Mcp-Method") == toolsCallMethod {
 			// Complete the backend write, then replace its reply with a
 			// truncated response, as a connection lost on the way to muster.
 			h.ServeHTTP(httptest.NewRecorder(), r)

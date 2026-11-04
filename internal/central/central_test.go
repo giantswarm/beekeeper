@@ -44,6 +44,8 @@ func backend(t *testing.T) string {
 // labContext is the muster context the tests call through.
 const labContext = "lab"
 
+const toolsCallMethod = "tools/call"
+
 func client(t *testing.T, endpoint string) (*central.Client, string) {
 	return clientOf(t, endpoint, "beekeeper", 10*time.Second)
 }
@@ -99,7 +101,7 @@ func TestCall(t *testing.T) {
 // startup and TLS handshakes margin on busy CI runners; only the deliberately
 // stalled request should exhaust the deadline.
 func TestCallStalledConnection(t *testing.T) {
-	for method, stage := range map[string]string{"": "connect", "tools/call": "tool call"} {
+	for method, stage := range map[string]string{"": "connect", toolsCallMethod: "tool call"} {
 		t.Run(stage, func(t *testing.T) {
 			m, tr := centraltest.NewStalling(t, backend(t), "beekeeper", method)
 			central.SetBaseTransport(t, tr)
@@ -110,7 +112,7 @@ func TestCallStalledConnection(t *testing.T) {
 			if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Reason != stage+" timed out (deadline 5s)" {
 				t.Fatalf("stalled: %v, want Unreachable naming the %s stage and its deadline", err, stage)
 			}
-			if u.Sent != (method == "tools/call") {
+			if u.Sent != (method == toolsCallMethod) {
 				t.Errorf("stalled in the %s stage: Sent %v, want it only once the tool call went out", stage, u.Sent)
 			}
 			if text, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); err != nil || text != "claimed graveler" {
@@ -150,7 +152,7 @@ func pagerDuty(t *testing.T) string {
 // With muster answering, a stalled connection costs the PagerDuty reading
 // one attempt: its retry connects afresh and reads.
 func TestPagerDutyReadStalledConnection(t *testing.T) {
-	m, tr := centraltest.NewStalling(t, pagerDuty(t), "pd", "tools/call")
+	m, tr := centraltest.NewStalling(t, pagerDuty(t), "pd", toolsCallMethod)
 	central.SetBaseTransport(t, tr)
 	c, _ := clientOf(t, m.URL, "pd", 5*time.Second)
 	var calls []error
