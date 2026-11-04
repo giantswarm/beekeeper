@@ -70,7 +70,9 @@ func (w *watcher) dispatch(ctx context.Context, s config.Sink, pending []state.E
 	for _, e := range evs {
 		if err := sink.Dispatch(ctx, sinkGH, s, e); err != nil {
 			failed = true
-			_ = w.sinkLedger.Unclaim(ctx, now, e)
+			// Shutdown may have canceled the dispatch. Give its claim back
+			// with a live context; the ledger bounds its own lock wait.
+			_ = w.sinkLedger.Unclaim(context.WithoutCancel(ctx), time.Now(), e)
 			w.fail(sinkKey, "SINK FAILED: %s %s: %v", e.Verb, e.Subject, err)
 			_ = w.store.Log(event(watchParty, "sink.failed", "%s %s: %v", e.Verb, e.Subject, err))
 			continue
