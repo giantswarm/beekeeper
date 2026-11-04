@@ -801,6 +801,7 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 // a candidate, so devctl never reports it.
 func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
+	toolRelease = func(context.Context, string) (string, error) { return devctlTo + "-rc.1", nil }
 	updates := 0
 	devctlUpdate = func(context.Context) error { updates++; return nil }
 	candidate, since := "", time.Time{}
@@ -979,5 +980,38 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 	want := "requested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
 	if !strings.HasPrefix(got, want) {
 		t.Fatalf("kept output missing requester header:\ngot:\n%s\nwant prefix:\n%s", got, want)
+	}
+}
+
+func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		t.Run(fmt.Sprint(live), func(t *testing.T) {
+			stubGitHub(t, github.Merged, devctlTo)
+			tag := ""
+			toolRelease = func(context.Context, string) (string, error) { return tag, nil }
+			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+			if !live {
+				_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Merges[0].PID, st.Merges[0].Child = 0, 0
+					return nil, nil
+				})
+			}
+			// An unrelated newer binary is installed before this merge gets a tag.
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 1 {
+				t.Fatal("unrelated release lifted the window")
+			}
+			// The merge's tag appears, but its binary is not installed yet.
+			tag = "v999.0.0"
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolRelease != tag {
+				t.Fatalf("expected persisted release, got %+v", st.Holds)
+			}
+			devctlVersion = func(context.Context) string { return "999.0.0" }
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 0 {
+				t.Fatalf("installed merge release kept window: %+v", st.Holds)
+			}
+		})
 	}
 }

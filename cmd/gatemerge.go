@@ -31,6 +31,11 @@ import (
 
 // Seams for the tests.
 var (
+	toolRelease = func(ctx context.Context, sha string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return github.CommitRelease(ctx, github.RunGH, merge.ToolRepo, sha)
+	}
 	pullState = github.PullState
 	pullBase  = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
 		return github.ReadPullBase(ctx, github.RunGH, repo, n)

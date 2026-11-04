@@ -763,6 +763,8 @@ func TestInstalled(t *testing.T) {
 		v    string
 		want bool
 	}{
+		{state.Hold{Tool: Tool, ToolPR: 7, ToolFrom: toolFrom}, "8.0.1", false},
+		{state.Hold{Tool: Tool, ToolPR: 7, ToolMerged: true, ToolFrom: toolFrom}, "8.0.1", false},
 		{released, "8.0.0", false},
 		{released, "8.0.5", false},
 		{released, "8.1.0", true},
