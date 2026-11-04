@@ -170,6 +170,23 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 	}
 }
 
+// Multi-repository searches must avoid exhausting GitHub's code-search bucket.
+func TestGitHubSkillRoutesMultiRepositoryCodeSearchToClones(t *testing.T) {
+	text := strings.Join(strings.Fields(Skill("github")), " ")
+	for _, want := range []string{
+		"10 requests per minute",
+		"Across more than a few repos",
+		"`git clone --depth 1`",
+		"`<stateDir>/code-scans/<owner>/<repo>` and `rg`",
+		"never per-repo `gh search code` loops",
+		"configured state directory",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the github skill does not say %q", want)
+		}
+	}
+}
+
 // Every gated merge line a shipped skill shows passes --update-branch: from
 // devctl 8.140.0 a head behind its base is exit 3 without it, strict
 // protection or not. The merge skill says what an exit 3 that still says
