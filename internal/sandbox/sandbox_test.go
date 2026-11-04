@@ -5,10 +5,68 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
 )
+
+func TestSettingsHookExecutableIsLiteral(t *testing.T) {
+	for _, exe := range []string{
+		"/opt/bin/beekeeper",
+		"/opt/bee keeper/beekeeper",
+		"/opt/bee'keeper/beekeeper",
+		"/opt/bee\"keeper/beekeeper",
+		"/opt/$BEEKEEPER/beekeeper",
+		"/opt/`beekeeper`/beekeeper",
+		"/opt/bee;keeper/beekeeper",
+		"/opt/bee\nkeeper/beekeeper",
+	} {
+		t.Run(exe, func(t *testing.T) {
+			data, err := (Policy{Exe: exe}).JSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings struct {
+				Hooks struct {
+					PreToolUse []struct {
+						Hooks []struct{ Command string }
+					}
+				}
+			}
+			if err := json.Unmarshal(data, &settings); err != nil {
+				t.Fatal(err)
+			}
+			if len(settings.Hooks.PreToolUse) != 1 || len(settings.Hooks.PreToolUse[0].Hooks) != 1 {
+				t.Fatalf("unexpected hooks: %+v", settings.Hooks)
+			}
+			command := settings.Hooks.PreToolUse[0].Hooks[0].Command
+			file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(command), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(file.Stmts) != 1 {
+				t.Fatalf("expected one command: %q", command)
+			}
+			stmt := file.Stmts[0]
+			call, ok := stmt.Cmd.(*syntax.CallExpr)
+			if !ok || len(stmt.Redirs) != 0 || stmt.Background || stmt.Negated || len(call.Assigns) != 0 {
+				t.Fatalf("expected a simple command: %q", command)
+			}
+			// Expand words only; no interpreter or command substitution callback
+			// is used, and no ambient environment is inherited.
+			got, err := expand.Fields(&expand.Config{Env: expand.ListEnviron()}, call.Args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{exe, "hook", "pretooluse"}; !slices.Equal(got, want) {
+				t.Fatalf("arguments = %q, want %q", got, want)
+			}
+		})
+	}
+}
 
 // policy is a policy for a home directory in a temporary directory, with a
 // checkout configured and a credential beside it.
