@@ -1214,7 +1214,7 @@ func TestCodexHookUpgradeUpdatesWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, path := range paths {
-				raw, err := os.ReadFile(path)
+				raw, err := os.ReadFile(filepath.Clean(path))
 				if preexisting {
 					if err != nil || string(raw) != priorCodexHooks {
 						t.Errorf("uninstall: %s = %s (%v), want original hooks", path, raw, err)
