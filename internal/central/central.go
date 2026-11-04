@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -230,9 +231,23 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 		return c.unreachable("%v", err)
 	}
 	defer func() { _ = mc.Close() }()
+	// Keep the request alive after acknowledgment, but cancel even an HTTP
+	// request that has not returned headers when the handshake expires.
+	sctx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	stopHandshake := context.AfterFunc(hctx, stopStream)
+	defer stopHandshake()
+	var acknowledged atomic.Bool
 	mc.OnNotification(func(n mcp.JSONRPCNotification) {
 		switch n.Method {
 		case mcp.MethodNotificationSubscriptionsAcknowledged:
+			if !acknowledged.Load() {
+				// If cancellation already started, the deadline won the race.
+				if !stopHandshake() {
+					return
+				}
+				acknowledged.Store(true)
+			}
 			ready()
 		case mcp.MethodNotificationResourceUpdated:
 			if uri, ok := n.Params.AdditionalFields["uri"].(string); ok {
@@ -252,10 +267,12 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 	if v := mc.ProtocolVersion(); !mcp.IsModernProtocol(v) {
 		return c.unreachable("muster at %s speaks MCP %s: subscriptions/listen needs %s", url, v, mcp.ProtocolVersion20260728)
 	}
-	err = mc.Listen(ctx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
+	err = mc.Listen(sctx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
 	switch {
 	case ctx.Err() != nil:
 		return nil
+	case !acknowledged.Load() && hctx.Err() != nil:
+		return c.timedOut(hctx, "subscription handshake", c.cfg.Timeout.Duration, c.unreachable("subscriptions/listen: %v", err))
 	case err == nil:
 		return c.unreachable("muster ended the subscription")
 	}

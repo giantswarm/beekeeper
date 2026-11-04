@@ -1,9 +1,11 @@
 package central_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -227,7 +229,7 @@ func subscriber(t *testing.T, updates <-chan struct{}) string {
 
 func TestListen(t *testing.T) {
 	updates := make(chan struct{})
-	c, _ := client(t, subscriber(t, updates))
+	c, _ := clientOf(t, subscriber(t, updates), "beekeeper", time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	events := make(chan string, 2)
@@ -242,6 +244,8 @@ func TestListen(t *testing.T) {
 				t.Fatalf("event %q, want %s", event, want)
 			}
 			if event == "ready" {
+				// An established subscription must survive its startup deadline.
+				time.Sleep(1500 * time.Millisecond)
 				close(updates)
 			}
 		case err := <-done:
@@ -270,5 +274,70 @@ func TestListenUnreachable(t *testing.T) {
 	var u *central.Unreachable
 	if err := c.Listen(context.Background(), []string{mailboxURI}, func() {}, func(string) {}); !errors.As(err, &u) || u.Context != labContext {
 		t.Errorf("Listen = %v (%T), want Unreachable", err, err)
+	}
+}
+
+// Both the HTTP response and the MCP acknowledgment are part of startup.
+func TestListenHandshakeTimeout(t *testing.T) {
+	for _, flushHeaders := range []bool{false, true} {
+		name := "without headers"
+		if flushHeaders {
+			name = "without acknowledgment"
+		}
+		t.Run(name, func(t *testing.T) {
+			backend := subscriber(t, nil)
+			started := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				var req struct {
+					Method string `json:"method"`
+				}
+				_ = json.Unmarshal(raw, &req)
+				if req.Method == string(mcp.MethodSubscriptionsListen) {
+					close(started)
+					if flushHeaders {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.(http.Flusher).Flush()
+					}
+					<-r.Context().Done()
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				proxy, err := http.NewRequestWithContext(r.Context(), r.Method, backend, r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				proxy.Header = r.Header.Clone()
+				res, err := http.DefaultClient.Do(proxy)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer res.Body.Close()
+				for key, values := range res.Header {
+					w.Header()[key] = values
+				}
+				w.WriteHeader(res.StatusCode)
+				_, _ = io.Copy(w, res.Body)
+			}))
+			defer srv.Close()
+			c, _ := clientOf(t, srv.URL, "beekeeper", time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			err := c.Listen(ctx, []string{mailboxURI}, func() { t.Error("unexpected acknowledgment") }, func(string) {})
+			select {
+			case <-started:
+			default:
+				t.Fatal("subscription request never reached server")
+			}
+			var u *central.Unreachable
+			if !errors.As(err, &u) || u.Reason != "subscription handshake timed out (deadline 1s)" {
+				t.Fatalf("Listen = %v, want handshake timeout", err)
+			}
+			if ctx.Err() != nil {
+				t.Fatal("Listen waited for caller cancellation")
+			}
+		})
 	}
 }
