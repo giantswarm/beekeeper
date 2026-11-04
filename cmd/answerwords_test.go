@@ -16,7 +16,7 @@ func TestAnswerKeepsPersonsExtraWordsWithoutProvenance(t *testing.T) {
 		t.Run(notes, func(t *testing.T) {
 			a, _ := answerApp(t)
 			a.cfg.Claude.ProjectsDir = t.TempDir()
-			guide := state.Party{Session: "answer-words-guide", Name: "Guide"}
+			guide := state.Party{Session: "answer-words-guide", Name: mailGuide}
 			question := "Which approach for https://github.com/o/private/pull/7?"
 			result, _ := json.Marshal(map[string]any{
 				"answers":     map[string]string{question: "Approach 1"},

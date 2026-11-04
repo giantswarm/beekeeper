@@ -89,7 +89,7 @@ func TestRosterScope(t *testing.T) {
 func TestVerbWithoutArgs(t *testing.T) {
 	prev := os.Args
 	t.Cleanup(func() { os.Args = prev })
-	os.Args = []string{"beekeeper", "serve", "--http=:8080"}
+	os.Args = []string{pluginName, "serve", "--http=:8080"}
 	ran := false
 	cmd := &cobra.Command{Use: verbHold, Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error { ran = true; return nil }}
 	c := &call{ctx: context.Background(), out: &bytes.Buffer{}}

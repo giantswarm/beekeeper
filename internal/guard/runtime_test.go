@@ -14,28 +14,35 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+const (
+	testAllPackages   = "./..."
+	testLinterCommand = "golangci-lint"
+	testSleepCommand  = "sleep"
+	testSleepSeconds  = "30"
+)
+
 func TestRunTimeout(t *testing.T) {
 	for _, tt := range []struct {
 		o    Options
 		argv []string
 		want time.Duration
 	}{
-		{Options{}, []string{"go", "test", "./..."}, 30 * time.Minute},
-		{Options{}, []string{"golangci-lint", "run"}, 5 * time.Minute},
+		{Options{}, []string{"go", testCommand, testAllPackages}, 30 * time.Minute},
+		{Options{}, []string{testLinterCommand, executionRunCommand}, 5 * time.Minute},
 		{Options{}, []string{"sh", "-c", "cd /tmp && golangci-lint run"}, 5 * time.Minute},
 		{Options{Class: ClassLab}, []string{"agentlab", "prove"}, 0},
 		{Options{Class: ClassBenchmark}, []string{"bench"}, 0},
-		{Options{Timeout: time.Hour}, []string{"golangci-lint", "run"}, time.Hour},
+		{Options{Timeout: time.Hour}, []string{testLinterCommand, executionRunCommand}, time.Hour},
 	} {
 		if got := RunTimeout(tt.o, tt.argv); got != tt.want {
 			t.Errorf("%v: got %s want %s", tt.argv, got, tt.want)
 		}
 	}
-	argv := []string{"golangci-lint", "run", "./..."}
-	if got := lintTimeout(argv, 5*time.Minute); !reflect.DeepEqual(got, []string{"golangci-lint", "run", "--timeout=5m0s", "./..."}) {
+	argv := []string{testLinterCommand, executionRunCommand, testAllPackages}
+	if got := lintTimeout(argv, 5*time.Minute); !reflect.DeepEqual(got, []string{testLinterCommand, executionRunCommand, "--timeout=5m0s", testAllPackages}) {
 		t.Fatal(got)
 	}
-	argv = []string{"golangci-lint", "run", "--timeout", "10m"}
+	argv = []string{testLinterCommand, executionRunCommand, "--timeout", "10m"}
 	if !reflect.DeepEqual(lintTimeout(argv, time.Minute), argv) {
 		t.Fatal("overwrote explicit timeout")
 	}
@@ -44,12 +51,12 @@ func TestRunTimeout(t *testing.T) {
 func TestLintTimeoutSlotlessClasses(t *testing.T) {
 	for _, class := range []string{ClassLab, ClassBenchmark} {
 		t.Run(class, func(t *testing.T) {
-			argv := []string{"golangci-lint", "run", "./..."}
+			argv := []string{testLinterCommand, executionRunCommand, testAllPackages}
 			for _, timeout := range []time.Duration{0, time.Hour} {
 				deadline := RunTimeout(Options{Class: class, Timeout: timeout}, argv)
 				want := argv
 				if timeout > 0 {
-					want = []string{"golangci-lint", "run", "--timeout=1h0m0s", "./..."}
+					want = []string{testLinterCommand, executionRunCommand, "--timeout=1h0m0s", testAllPackages}
 				}
 				if got := lintTimeout(argv, deadline); !reflect.DeepEqual(got, want) {
 					t.Errorf("override %s: got %v, want %v", timeout, got, want)
@@ -66,7 +73,14 @@ type deadlineCapper struct {
 }
 
 func (f *deadlineCapper) Command(_ string, _ platform.Cap, argv []string) (*exec.Cmd, error) {
-	f.command = exec.Command(argv[0], argv[1:]...)
+	switch {
+	case len(argv) == 2 && argv[0] == testSleepCommand && argv[1] == testSleepSeconds:
+		f.command = exec.Command(testSleepCommand, testSleepSeconds)
+	case len(argv) == 1 && argv[0] == flagOn:
+		f.command = exec.Command(flagOn)
+	default:
+		return nil, fmt.Errorf("unexpected deadline fixture command: %v", argv)
+	}
 	return f.command, nil
 }
 func (f *deadlineCapper) Reap(string) ([]int, error) {
@@ -77,7 +91,7 @@ func (f *deadlineCapper) Reap(string) ([]int, error) {
 func TestScopeExecutionDeadline(t *testing.T) {
 	f := &deadlineCapper{}
 	var log strings.Builder
-	rc, drain := scope(f, "test", Options{Timeout: 20 * time.Millisecond, Stderr: io.Discard}, 1, []string{"sleep", "30"}, nil, func(s string, a ...any) { fmt.Fprintf(&log, s, a...) })
+	rc, drain := scope(f, testCommand, Options{Timeout: 20 * time.Millisecond, Stderr: io.Discard}, 1, []string{testSleepCommand, testSleepSeconds}, nil, func(s string, a ...any) { fmt.Fprintf(&log, s, a...) })
 	drain()
 	if rc != ExitTimeout || !f.stopped || !strings.Contains(log.String(), "timed out") {
 		t.Fatalf("exit %d stopped %t log %s", rc, f.stopped, log.String())
@@ -96,14 +110,14 @@ func TestRunTimeoutReleasesSlot(t *testing.T) {
 				records = append(records, detail)
 			}
 		}}
-	if rc := Run(o, []string{"sleep", "30"}); rc != ExitTimeout {
+	if rc := Run(o, []string{testSleepCommand, testSleepSeconds}); rc != ExitTimeout {
 		t.Fatalf("exit %d", rc)
 	}
 	if _, err := os.Stat(filepath.Join(o.SlotDir, "1.holder")); !os.IsNotExist(err) {
 		t.Fatalf("holder retained: %v", err)
 	}
 	o.Timeout = time.Second
-	if rc := Run(o, []string{"true"}); rc != 0 {
+	if rc := Run(o, []string{flagOn}); rc != 0 {
 		t.Fatalf("next run: %d", rc)
 	}
 	if len(records) != 2 || !strings.Contains(records[0], "exit 124") {

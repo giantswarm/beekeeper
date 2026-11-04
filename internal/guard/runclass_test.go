@@ -35,7 +35,7 @@ func TestDefaultClass(t *testing.T) {
 		{[]string{testShell, "-c", "agentlab --help"}, ClassBuild},
 		{[]string{testShell, "-c", "python3 benchmark_preset.py"}, ClassBuild},
 		{[]string{testShell, "-c", "grep agentlab README.md"}, ClassBuild},
-		{[]string{"go", "build", "./..."}, ClassBuild},
+		{[]string{"go", "build", testAllPackages}, ClassBuild},
 	} {
 		if got := DefaultClass(c.argv); got != c.want {
 			t.Errorf("DefaultClass(%q) = %q, want %q", c.argv, got, c.want)
@@ -48,14 +48,14 @@ func TestBuildsNothing(t *testing.T) {
 		argv []string
 		want bool
 	}{
-		{[]string{"true"}, true},
+		{[]string{flagOn}, true},
 		{[]string{"/usr/bin/false"}, true},
 		{[]string{"echo", "done"}, true},
 		{[]string{testShell, "-c", "printf '%s' x"}, true},
 		{[]string{"go", "version"}, true},
 		{[]string{testShell, "-c", "make help"}, true},
 		{[]string{"kubectl", "--help"}, true},
-		{[]string{"go", "test", "./..."}, false},
+		{[]string{"go", testCommand, testAllPackages}, false},
 		{[]string{testShell, "-c", "make"}, false},
 		{[]string{testShell, "-c", "true && go test ./..."}, false},
 		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},

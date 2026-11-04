@@ -74,9 +74,11 @@ func (a *app) clearLoopVersion() {
 	_ = a.store.WriteFile(loopVersionFile, loopVersionRecord{})
 }
 
+const supervisorCommandName = "supervisor"
+
 func (a *app) supervisorCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "supervisor",
+		Use:   supervisorCommandName,
 		Short: "Show the supervisor loop, or run it",
 		Long: `The supervisor is the supervisor loop (` + "`beekeeper supervisor loop`" + `), which
 the beekeeper-supervisor-loop user service runs: beekeeper install always

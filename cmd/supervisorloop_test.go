@@ -583,8 +583,10 @@ func TestLoopGivesABaseMergeOfAnApprovedHeadTheGo(t *testing.T) {
 	if evs := r.logged(t, "supervisor.merge"); len(evs) != 2 || !strings.Contains(evs[1].Detail, "[go "+loopPR+"@"+loopFixed+"]") {
 		t.Errorf("the go logged as %+v", evs)
 	}
-	// The planner's read and the merge authority's: a claim proves nothing.
-	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed, loopHead + ".." + loopFixed}) {
+	// The planner compares the base once; the executor receives the loop's
+	// separate exact-head authorization, so it needs no second comparison.
+	// An ownership claim alone is still refused by the authority tests.
+	if !slices.Equal(r.baseReads, []string{loopHead + ".." + loopFixed}) {
 		t.Errorf("base merge reads = %v", r.baseReads)
 	}
 	// A further head with a change of its own: its review, no go.

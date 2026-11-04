@@ -28,7 +28,7 @@ func RunTimeout(o Options, argv []string) time.Duration {
 // lintTimeout supplies the linter's own deadline for direct invocations.
 // Compound shell commands are bounded by the enclosing scope deadline.
 func lintTimeout(argv []string, deadline time.Duration) []string {
-	if deadline <= 0 || len(argv) < 2 || filepath.Base(argv[0]) != "golangci-lint" || argv[1] != "run" {
+	if deadline <= 0 || len(argv) < 2 || filepath.Base(argv[0]) != "golangci-lint" || argv[1] != executionRunCommand {
 		return argv
 	}
 	for _, arg := range argv[2:] {

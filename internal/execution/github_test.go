@@ -126,7 +126,7 @@ func TestWorkerGitHubWriteClassification(t *testing.T) {
 		{workerGitHubIssueGroup}, {workerGitHubIssueGroup, workerGitHubRepoFlag, workerGitHubOutsideRepo, workerGitHubClose, "1"},
 		{workerGitHubIssueGroup, workerGitHubDelete, "1"}, {workerGitHubIssueGroup, "transfer", "1", workerGitHubOutsideRepo}, {workerGitHubIssueGroup, "new"},
 		{workerGitHubPRGroup, workerGitHubClose, "1"}, {workerGitHubPRGroup, "update-branch", "1"},
-		{workerGitHubRepoGroup, workerGitHubDelete, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, workerGitHubEdit, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, "deploy-key", "add"},
+		{workerGitHubRepoGroup, workerGitHubDelete, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, workerGitHubEdit, workerGitHubOutsideRepo}, {workerGitHubRepoGroup, "deploy-key", fixtureAddCommand},
 		{workerGitHubRunGroup, "cancel", "1"}, {workerGitHubRunGroup, "rerun", "1"}, {workerGitHubRunGroup, workerGitHubDelete, "1"},
 		{workerGitHubWorkflowGroup, workerGitHubRunGroup, mcpFixtureName}, {workerGitHubWorkflowGroup, "enable", mcpFixtureName}, {workerGitHubWorkflowGroup, "disable", mcpFixtureName},
 		{workerGitHubReleaseGroup, workerGitHubCreate, workerGitHubTag}, {workerGitHubReleaseGroup, workerGitHubDelete, workerGitHubTag}, {workerGitHubReleaseGroup, "delete-asset", workerGitHubTag, mcpFixtureName}, {workerGitHubReleaseGroup, workerGitHubEdit, workerGitHubTag}, {workerGitHubReleaseGroup, "upload", workerGitHubTag, mcpFixtureName},

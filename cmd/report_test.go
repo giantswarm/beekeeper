@@ -52,7 +52,7 @@ func reportFixture(t *testing.T) *reportFacts {
 		From: from, To: to, Zone: zone, Person: "Ada",
 		Merged: windowMerges(fixtureEvents(t), lanes, from, to),
 		Workers: []reportWorker{
-			{Name: "Supervisor run 3", Doing: "supervisor"},
+			{Name: "Supervisor run 3", Doing: supervisorName},
 			{Name: "Worker tools#43", Issue: "example/tools#39", Doing: "CI on #43", Leases: []string{"lab-1"}},
 			{Name: "Token rotation", Issue: "example/portal#5", Doing: "rotating the portal token"},
 		},

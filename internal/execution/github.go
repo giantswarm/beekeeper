@@ -209,7 +209,7 @@ func GitHubWriteRepository(args []string, fallback string) (string, error) {
 // and subdomains that gh normalizes to github.com.
 func gitHubURLRepository(arg string) string {
 	u, err := url.Parse(arg)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+	if err != nil || (u.Scheme != httpsScheme && u.Scheme != "http") {
 		return ""
 	}
 	host := strings.ToLower(u.Hostname())
