@@ -156,6 +156,9 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 				version = q.Version
 			}
 		}
+		if version == p.Version {
+			continue
+		}
 		_, _ = fmt.Fprintf(w, "Updated the plugin %s %s → %s: sessions started from now load its skills.\n", p.ID, p.Version, version)
 	}
 }

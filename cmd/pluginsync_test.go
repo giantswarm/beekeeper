@@ -248,6 +248,37 @@ func TestNewBinarySyncsPluginAfterAnOldSelfUpdate(t *testing.T) {
 	}
 }
 
+// The first run records a successful sync but only announces a changed revision.
+func TestFirstRunSyncReportsOnlyChangedPlugin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		changed bool
+	}{
+		{name: "unchanged", version: newPlugin},
+		{name: "changed", version: oldPlugin, changed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := asBinary(t, newBinary)
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: tc.version, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t)}})
+			out := beekeeper(t, "timer")
+			if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
+				t.Errorf("ran claude plugin %q, want %q", *ran, want)
+			}
+			if tc.changed {
+				if want := "Updated the plugin " + beekeeperID + " " + oldPlugin + " → " + newPlugin; !strings.Contains(out, want) {
+					t.Errorf("output %q lacks %q", out, want)
+				}
+			} else if strings.Contains(out, "Updated the plugin") {
+				t.Errorf("unchanged plugin reported an update: %q", out)
+			}
+			if got := recordedSync(dir); got != newBinary {
+				t.Errorf("recorded sync %q, want %q", got, newBinary)
+			}
+		})
+	}
+}
+
 // A Claude Code that does not list its plugins leaves the sync to the next
 // command, unsaid; a development build never syncs.
 func TestFirstRunSyncWaitsForClaudeCode(t *testing.T) {
