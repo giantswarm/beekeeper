@@ -2238,7 +2238,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		if confirm = confirm && settles; confirm {
 			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
 		}
-		return ev, nil
+		return g.mergeEvents(ev)
 	})
 	if confirm && err == nil {
 		releaseLine, rc = g.confirmRelease(&r.out, rc)
@@ -2247,6 +2247,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
 			g.key(), stale.Version, stale.Newer, filepath.Dir(base), project.Name)
+	} else if err != nil {
+		return err
 	} else {
 		removeMergeFiles(base)
 	}

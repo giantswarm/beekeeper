@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Dispatch recovered merge confirmations to the workflow sink once per pull request and preserve saved results when recording fails (https://github.com/giantswarm/beekeeper/issues/3023).
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
 - Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).

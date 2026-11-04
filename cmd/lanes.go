@@ -799,7 +799,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(mergeBase(a.store.Dir(), m.Repo, m.PR)))
 	}
 	isCut := func(m state.Merge) bool { return cutRun(a.store.Dir(), m, proc.Alive) }
-	var cutBases []string
+	var cutBases, recordedBases []string
 	runs := map[string]runOutcome{}
 	for _, m := range st.Merges {
 		if !gone(m) {
@@ -859,18 +859,18 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			ev := recordRun(st, i, lane, watchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
-			removeMergeFiles(mergeBase(a.store.Dir(), m.Repo, m.PR))
+			recordedBases = append(recordedBases, mergeBase(a.store.Dir(), m.Repo, m.PR))
 		}
 		lost = merge.Lost(st, a.now, proc.Alive)
 		for _, m := range lost {
 			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
 		}
-		return evs, nil
+		return a.mergeEvents(evs)
 	})
 	if err != nil {
 		return nil, nil, nil
 	}
-	for _, base := range cutBases {
+	for _, base := range append(cutBases, recordedBases...) {
 		removeMergeFiles(base)
 	}
 	return recorded, cut, lost
