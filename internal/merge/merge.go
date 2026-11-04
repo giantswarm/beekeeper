@@ -1203,9 +1203,12 @@ func ToolReleased(h state.Hold) bool { return h.Tool != "" && (h.ToolMerged || h
 
 // Installed says whether the merge tool reporting version v ends the
 // tool-release window h: a window whose merge released waits for the tool to
-// report that release or a later one, any other for a version other than the
-// one it opened on.
+// report that release or a later one. A merge with no known release keeps
+// its window; a promotion waits for a version other than the one it opened on.
 func Installed(h state.Hold, v string) bool {
+	if h.ToolPR != 0 && h.ToolRelease == "" {
+		return false
+	}
 	if h.ToolMerged && h.ToolRelease != "" {
 		return reached(v, h.ToolRelease)
 	}
