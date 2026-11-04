@@ -499,7 +499,7 @@ func browserPattern() string {
 	for i, c := range browserClasses {
 		q[i] = regexp.QuoteMeta(c)
 	}
-	return "^(" + strings.Join(q, "|") + ")$"
+	return "(?i)^(" + strings.Join(q, "|") + ")$"
 }
 
 // setting is runtime configuration in both of Hyprland's syntaxes: a Lua

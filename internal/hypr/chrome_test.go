@@ -259,7 +259,7 @@ func TestShowClassicSyntax(t *testing.T) {
 func TestRedirect(t *testing.T) {
 	on := redirectOn(hold)
 	for _, want := range []string{
-		`match = { class = "^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
+		`match = { class = "(?i)^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
 		`workspace = "name:beekeeper-browse silent"`,
 		"no_initial_focus = true",
 		`suppress_event = "activate activatefocus fullscreen maximize"`,
