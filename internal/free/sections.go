@@ -48,7 +48,7 @@ func (r *Run) sessionDirs() {
 	if err != nil {
 		return
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	dirs, _ := fs.Glob(root.FS(), "*/*")
 	n := 0
 	for _, d := range dirs {
@@ -440,9 +440,4 @@ func size(kib int) string {
 		return fmt.Sprintf("%d KiB", kib)
 	}
 	return fmt.Sprintf("%d MiB", kib/1024)
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
