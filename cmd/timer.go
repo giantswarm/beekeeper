@@ -277,10 +277,10 @@ type timerSpec struct {
 	expire                                bool
 }
 
-// timerFrom checks spec and returns the timer due at due it describes.
 // guideRoleAlias names the guide role rather than one of its runs.
 const guideRoleAlias = "the guide"
 
+// timerFrom checks spec and returns the timer due at due it describes.
 func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run), Repeat: strings.TrimSpace(spec.repeat)}
 	if t.When != "" {
