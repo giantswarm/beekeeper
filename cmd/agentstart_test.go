@@ -23,7 +23,7 @@ import (
 
 func TestResumeSeededTask(t *testing.T) {
 	noSteward := errors.New("no idle desktop CLI")
-	mismatch := modelNotHeld{recorded: "claude-opus-5-5", want: sonnetModel, why: noSteward}
+	mismatch := modelNotHeld{recorded: "fixture-model", want: sonnetModel, why: noSteward}
 	for _, tc := range []struct {
 		name       string
 		desktopErr error
