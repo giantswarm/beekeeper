@@ -61,7 +61,11 @@ func parseDocument(raw []byte) (*document, error) {
 	if n.Kind != yaml.MappingNode {
 		return nil, errors.New("no YAML mapping")
 	}
-	return &document{root: n}, nil
+	doc := &document{root: n}
+	if _, err := doc.checkedLeaves(); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 // topKeys are the mapping's keys in their order.
@@ -91,8 +95,16 @@ func (d *document) encode() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// leaves maps the dotted path of every scalar to its value.
+// leaves maps the dotted path of every scalar in a validated or generated document.
 func (d *document) leaves() map[string]string {
+	out, _ := d.checkedLeaves()
+	return out
+}
+
+// checkedLeaves refuses paths that would hide a scalar behind another scalar.
+// The error contains no path or value from the decrypted document.
+func (d *document) checkedLeaves() (map[string]string, error) {
+	var err error
 	out := map[string]string{}
 	var walk func(n *yaml.Node, path string)
 	walk = func(n *yaml.Node, path string) {
@@ -104,6 +116,9 @@ func (d *document) leaves() map[string]string {
 		}
 		switch n.Kind {
 		case yaml.ScalarNode:
+			if _, exists := out[path]; exists {
+				err = errors.New("ambiguous scalar paths in YAML document")
+			}
 			out[path] = n.Value
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
@@ -118,7 +133,10 @@ func (d *document) leaves() map[string]string {
 		}
 	}
 	walk(d.root, "")
-	return out
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // get is the scalar at a dotted path.
