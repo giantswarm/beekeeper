@@ -192,11 +192,16 @@ func (ix *Index) Save(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(ix.dir, indexFile+".tmp")
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(ix.dir, ".index-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(ix.dir, indexFile))
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.Write(raw)
+	if err := errors.Join(writeErr, tmp.Close()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(ix.dir, indexFile))
 }
 
 // Fingerprint is the keyed hash of s, comparable only through beekeeper;
