@@ -191,3 +191,38 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 	}
 	check()
 }
+
+// Written items keep their category through listing, reading and editing.
+func TestItemsMatchCategoryAfterCreateAndEdit(t *testing.T) {
+	tools := secrettest.New(nil)
+	o := ops(tools)
+	ctx := context.Background()
+	for _, phase := range []string{"create", "edit"} {
+		t.Run(phase, func(t *testing.T) {
+			if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: "credential", Value: "synthetic-" + phase}}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := o.Items(ctx, shared, secret.ItemsOptions{Match: "password", Fields: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Title != "widget" || got[0].Category != "PASSWORD" {
+				t.Fatalf("matched items = %+v, want widget with category PASSWORD", got)
+			}
+			raw, err := tools.Run(ctx, "", []string{"OP_SERVICE_ACCOUNT_TOKEN=" + saToken}, nil, "op", "item", "get", got[0].ID, "--vault", shared, "--format", "json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var item struct{ Category string }
+			if err := json.Unmarshal(raw, &item); err != nil {
+				t.Fatal(err)
+			}
+			if item.Category != "PASSWORD" {
+				t.Fatalf("read category = %q, want PASSWORD", item.Category)
+			}
+			if tools.Vault["op://"+shared+"/widget/credential"] != "synthetic-"+phase {
+				t.Fatal("credential was not updated")
+			}
+		})
+	}
+}
