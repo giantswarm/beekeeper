@@ -53,7 +53,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		if !ok {
 			r.Status = upgrade.Status{Installation: in.Name, Err: "not read"}
 		}
-		out = append(out, r.Status)
+		out = append(out, upgrade.WithHoldVersions(r.Status, st, now))
 	}
 	return out
 }
