@@ -38,7 +38,7 @@ const versionRe = `v\d+\.\d+(\.\d+)?`
 var rules = []rule{
 	{"date", "a dated line: say what holds now, the date belongs in the log",
 		// A date on its own, not one inside a file name or a version.
-		regexp.MustCompile(`(^|[\s(\[])(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])($|[\s).,;:\]])`)},
+		regexp.MustCompile(`(^|[\s(\[])(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])($|[\s),;:\]]|\.+($|[\s),;:\]]))`)},
 	{"until-ships", `a wait on something to ship: say what to do now, and change the line when it ships`,
 		regexp.MustCompile(`(?i)\buntil\b[^.;\n]{1,120}?\b(ships|shipped|lands|landed|merges|is merged|is released|is fixed|is installed|is out|is live|goes live)\b`)},
 	{"fixed-in", "a note on the release that changed something: describe the behaviour, not its history",
