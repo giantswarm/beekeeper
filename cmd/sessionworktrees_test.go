@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -68,6 +69,9 @@ func TestFreeNestedWorktrees(t *testing.T) {
 	if strings.Count(report.String(), "merged and clean, removable") != 2 || strings.Count(report.String(), "unmerged or dirty, to move") != 2 {
 		t.Fatal(report.String())
 	}
+	savedMachine := plat.Machine
+	t.Cleanup(func() { plat.Machine = savedMachine })
+	plat.Machine = ungatedMachine{Machine: plat.Machine, table: proc.NewTable()}
 	if err := a.freeNestedWorktrees(free.Options{Apply: true, Only: []string{free.Worktrees}}, &report); err != nil {
 		t.Fatal(err)
 	}

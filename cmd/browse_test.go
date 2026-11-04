@@ -1438,7 +1438,7 @@ func TestBrowseLabSignInSelection(t *testing.T) {
 func TestBrowseLocalPageRunsWithSignInOnlyWhenNeeded(t *testing.T) {
 	for _, signIn := range []bool{false, true} {
 		t.Run(strconv.FormatBool(signIn), func(t *testing.T) {
-			a, out := stubApp(t)
+			a, out := browseApp(t)
 			bin := t.TempDir()
 			argsFile := filepath.Join(bin, "args")
 			t.Setenv("BROWSE_ARGV", argsFile)

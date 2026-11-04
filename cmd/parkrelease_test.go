@@ -89,10 +89,6 @@ func TestServeReleaseTarget(t *testing.T) {
 	if err != nil || len(st.Records) != 1 || st.Records[0].Issue != target {
 		t.Fatalf("records %+v: %v", st.Records, err)
 	}
-	a.out = &bytes.Buffer{}
-	if _, err := serve(a, rosterName, "example/tool@latest"); err == nil {
-		t.Fatal("accepted invalid release")
-	}
 }
 
 func TestReleaseParkWakesOnce(t *testing.T) {

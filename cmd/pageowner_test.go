@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	otherTeam = "other-team"
-	ownedPage = "alpha/PodRestarting"
+	otherTeam                   = "other-team"
+	ownedPage                   = "alpha/PodRestarting"
+	legacyPageFingerprintPrefix = "fp1@"
 )
 
 // pageApp is stubApp with an alert baseline of one page and one notify
@@ -26,7 +27,7 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 	a, out := stubApp(t)
 	since := start.UTC().Format(time.RFC3339Nano)
 	base := &alerts.State{Installations: map[string]*alerts.Installation{"alpha": {Reachable: true, Alerts: alerts.Set{
-		"fp1": {Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/app", Since: since},
+		"fp1": {Severity: alerts.Page, Team: "t", Alertname: "PodRestarting", Where: "ns/app", Since: since},
 		"fp2": {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
 		"fp3": {Severity: alerts.Page, Team: otherTeam, Alertname: "TheirPage", Where: "ns/x", Since: since},
 	}}}}
@@ -84,7 +85,7 @@ func TestAlertsOwnStopsTheLinesUntilTheOwnerEnds(t *testing.T) {
 	a, out := pageApp(t, start)
 	owner := &claude.Session{ID: "s2", Name: ownerName}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: owner.Party(), At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: owner.Party(), At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestWatchOnceRecordsNoOwnerEnd(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	a, out := pageApp(t, start)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), By: state.Party{Session: holderGone, Name: "w"}, At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: state.Party{Session: holderGone, Name: "w"}, At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -195,7 +196,7 @@ func TestAlertsOwnOneInstance(t *testing.T) {
 		t.Fatalf("own of one instance said:\n%s", got)
 	}
 	st, _ := a.store.Read()
-	if len(st.AlertOwners) != 1 || !strings.HasPrefix(st.AlertOwners[0].Alert, "fp1@") {
+	if len(st.AlertOwners) != 1 || !strings.HasPrefix(st.AlertOwners[0].Alert, "alpha/fp1@") {
 		t.Fatalf("owners: %+v", st.AlertOwners)
 	}
 	w := a.newWatcher(false, true)
@@ -247,6 +248,68 @@ func TestAlertsDisown(t *testing.T) {
 	}
 	if _, err := runAlerts(t, a.alertsDisownCmd(), out, "alpha/Nope"); err == nil || !strings.Contains(err.Error(), "firing pages: ") {
 		t.Fatalf("disown of no alert: %v", err)
+	}
+}
+
+// Instance ownership, reminders, takeover and release stay installation-
+// specific even when separate Alertmanagers use the same fingerprint and
+// start. Legacy owners keep their scope through their persisted names.
+func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
+	for _, format := range []string{"scoped", "legacy instance", "legacy name"} {
+		t.Run(format, func(t *testing.T) {
+			start := time.Now().Add(-time.Hour)
+			a, out := pageApp(t, start)
+			store := alerts.NewStore(a.cfg.StateDir)
+			base, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			base.Installations["beta"] = &alerts.Installation{Reachable: true, Alerts: alerts.Set{"fp1": base.Installations["alpha"].Alerts["fp1"]}}
+			if err := store.Save(base); err != nil {
+				t.Fatal(err)
+			}
+			if format == "scoped" {
+				if _, err := runAlerts(t, a.alertsOwnCmd(), out, ownedPage+"#fp1"); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				name := ownedPage
+				if format == "legacy instance" {
+					name += "#fp1"
+				}
+				st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: name, By: state.Party{Name: "legacy-person"}, At: start}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w := a.newWatcher(false, true)
+			lines := pollPages(w, out, start, nil, 30)
+			if len(lines) != 1 || !strings.Contains(lines[0], "PAGE UNOWNED beta ") {
+				t.Fatalf("owning alpha also affected beta, or a saved owner was lost: %q", lines)
+			}
+			const otherInstance = "beta/PodRestarting#fp1"
+			if _, err := runAlerts(t, a.alertsDisownCmd(), out, otherInstance); err == nil || !strings.Contains(err.Error(), "no owner") {
+				t.Fatalf("beta released alpha's owner: %v", err)
+			}
+			if _, err := runAlerts(t, a.alertsOwnCmd(), out, otherInstance); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runAlerts(t, a.alertsDisownCmd(), out, otherInstance); err != nil {
+				t.Fatal(err)
+			}
+			st, err := a.store.Read()
+			if err != nil || len(st.AlertOwners) != 2 {
+				t.Fatalf("beta's takeover removed alpha's owner: %+v, %v", st, err)
+			}
+			for _, o := range st.AlertOwners {
+				if strings.HasPrefix(o.Name, "alpha/") && !o.Ended.IsZero() || o.Name == otherInstance && o.Ended.IsZero() {
+					t.Fatalf("beta's release affected the wrong owner: %+v", st.AlertOwners)
+				}
+			}
+			if _, err := runAlerts(t, a.alertsDisownCmd(), out, ownedPage+"#fp1"); err != nil {
+				t.Fatalf("alpha's saved owner could not be released: %v", err)
+			}
+		})
 	}
 }
 
@@ -335,67 +398,3 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 		})
 	}
 }
-
-// Instance ownership, reminders, takeover and release stay installation-
-// specific even when separate Alertmanagers use the same fingerprint and
-// start. Legacy owners keep their scope through their persisted names.
-func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
-	for _, format := range []string{"scoped", "legacy instance", "legacy name"} {
-		t.Run(format, func(t *testing.T) {
-			start := time.Now().Add(-time.Hour)
-			a, out := pageApp(t, start)
-			store := alerts.NewStore(a.cfg.StateDir)
-			base, err := store.Load()
-			if err != nil {
-				t.Fatal(err)
-			}
-			base.Installations["beta"] = &alerts.Installation{Reachable: true, Alerts: alerts.Set{"fp1": base.Installations["alpha"].Alerts["fp1"]}}
-			if err := store.Save(base); err != nil {
-				t.Fatal(err)
-			}
-			if format == "scoped" {
-				if _, err := runAlerts(t, a.alertsOwnCmd(), out, ownedPage+"#fp1"); err != nil {
-					t.Fatal(err)
-				}
-			} else if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				name := ownedPage
-				if format == "legacy instance" {
-					name += "#fp1"
-				}
-				st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: name, By: state.Party{Name: "legacy-person"}, At: start}}
-				return nil, nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			w := a.newWatcher(false, true)
-			lines := pollPages(w, out, start, nil, 30)
-			if len(lines) != 1 || !strings.Contains(lines[0], "PAGE UNOWNED beta ") {
-				t.Fatalf("owning alpha also affected beta, or a saved owner was lost: %q", lines)
-			}
-			const otherInstance = "beta/PodRestarting#fp1"
-			if _, err := runAlerts(t, a.alertsDisownCmd(), out, otherInstance); err == nil || !strings.Contains(err.Error(), "no owner") {
-				t.Fatalf("beta released alpha's owner: %v", err)
-			}
-			if _, err := runAlerts(t, a.alertsOwnCmd(), out, otherInstance); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := runAlerts(t, a.alertsDisownCmd(), out, otherInstance); err != nil {
-				t.Fatal(err)
-			}
-			st, err := a.store.Read()
-			if err != nil || len(st.AlertOwners) != 2 {
-				t.Fatalf("beta's takeover removed alpha's owner: %+v, %v", st, err)
-			}
-			for _, o := range st.AlertOwners {
-				if strings.HasPrefix(o.Name, "alpha/") && !o.Ended.IsZero() || o.Name == otherInstance && o.Ended.IsZero() {
-					t.Fatalf("beta's release affected the wrong owner: %+v", st.AlertOwners)
-				}
-			}
-			if _, err := runAlerts(t, a.alertsDisownCmd(), out, ownedPage+"#fp1"); err != nil {
-				t.Fatalf("alpha's saved owner could not be released: %v", err)
-			}
-		})
-	}
-}
-
-const legacyPageFingerprintPrefix = "fp1@"
