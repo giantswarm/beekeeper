@@ -11,6 +11,10 @@ import (
 	"github.com/gofrs/flock"
 )
 
+const protocolCancel = "cancel"
+
+const protocolAnswer = "answer"
+
 func protocolFixture(t *testing.T) (string, Request, Flag) {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,6 +32,9 @@ func protocolFixture(t *testing.T) (string, Request, Flag) {
 func assertNoHeldFiles(t *testing.T, dir string, r Request) {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(dir, r.Session))
+	if errors.Is(err, os.ErrNotExist) {
+		return // the empty request folder is removed with its last file
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +44,7 @@ func assertNoHeldFiles(t *testing.T, dir string, r Request) {
 }
 
 func TestHeldDecisionRejectsInvalidationBeforeAnswer(t *testing.T) {
-	for _, cause := range []string{"release", "dead screen", "cancel", "replacement"} {
+	for _, cause := range []string{"release", "dead screen", protocolCancel, "replacement"} {
 		t.Run(cause, func(t *testing.T) {
 			dir, r, owner := protocolFixture(t)
 			if err := Answer(dir, r.Session, r.ID, Decision{Behavior: Allow}); err != nil {
@@ -53,7 +60,7 @@ func TestHeldDecisionRejectsInvalidationBeforeAnswer(t *testing.T) {
 				}
 			case "dead screen":
 				live = func(int) bool { return false }
-			case "cancel":
+			case protocolCancel:
 				cancel()
 			case "replacement":
 				next := owner
@@ -117,7 +124,7 @@ func TestAnswerPublicationAndFinalizationShareLock(t *testing.T) {
 }
 
 func TestHoldSynchronizedLifecycle(t *testing.T) {
-	for _, action := range []string{"answer", "release", "cancel"} {
+	for _, action := range []string{protocolAnswer, "release", protocolCancel} {
 		t.Run(action, func(t *testing.T) {
 			dir := t.TempDir()
 			r := Request{Session: tSession, ID: "held-request"}
@@ -145,7 +152,7 @@ func TestHoldSynchronizedLifecycle(t *testing.T) {
 				t.Fatal("hold did not publish its request")
 			}
 			switch action {
-			case "answer":
+			case protocolAnswer:
 				if err := Answer(dir, r.Session, r.ID, Decision{Behavior: Deny}); err != nil {
 					t.Fatal(err)
 				}
@@ -153,15 +160,15 @@ func TestHoldSynchronizedLifecycle(t *testing.T) {
 				if err := Release(dir, r.Session); err != nil {
 					t.Fatal(err)
 				}
-			case "cancel":
+			case protocolCancel:
 				cancel()
 			}
 			select {
 			case got := <-done:
-				if got[2] != nil || got[1].(bool) != (action == "answer") {
+				if got[2] != nil || got[1].(bool) != (action == protocolAnswer) {
 					t.Fatalf("Hold = %v", got)
 				}
-				if action == "answer" && got[0].(Decision).Behavior != Deny {
+				if action == protocolAnswer && got[0].(Decision).Behavior != Deny {
 					t.Fatalf("decision = %v", got[0])
 				}
 			case <-time.After(3 * time.Second):
