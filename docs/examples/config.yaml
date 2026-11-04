@@ -164,7 +164,8 @@ merge:
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   busyBudget: 4h            # a merge with --update-branch whose base moved during every devctl update wait (exit 3) runs devctl again in its lane place this long from its first run
-  ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeout: 2h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeouts: {}           # per-repository overrides, e.g. {example-org/slow-repo: 3h}
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
   admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
@@ -450,6 +451,7 @@ omp:
   sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
   modelsFile: ~/.omp/agent/models.yml  # the default; omp's providers, a vault provider's apiKey there the variable's name (SPARK_API_KEY)
   model: ""                 # agents start --harness omp without --model: an exact selector omp lists (provider/id); empty: the start is refused
+  servedBy: ""              # optional lease resource serving the model; held: refuse with holder/purpose, retry after release
   providers:                # providers whose key agents start hands over from the vault, by their name in modelsFile
     spark:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone

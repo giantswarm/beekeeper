@@ -34,6 +34,26 @@ func TestWorkerRulesIsTheSkillBody(t *testing.T) {
 	}
 }
 
+// Connector discovery needs a peer wake: an idle turn alone never gets the
+// boundary at which a connector attaches. Keep both sides of the wire protocol
+// and the post-ACK escalation in the shipped registration skill.
+func TestRegisterAgentConnectorHandshake(t *testing.T) {
+	registration := strings.Join(strings.Fields(Skill("register-agent")), " ")
+	for _, want := range []string{
+		"use `ListAgents` once to choose an idle peer",
+		`exactly ` + "`" + `SYN <own session name>: reply "ACK" to me with SendMessage and do nothing else.` + "`",
+		"Finish the turn's other work and end the turn",
+		"do not keep it open with a background wait",
+		"starts with `SYN <name>:`, reply exactly `ACK` to that name with `SendMessage` and do nothing else. End the turn.",
+		"In the turn the ACK opened, look for the connector tool again. Only if it is still missing in that turn, ask the person to switch it on through the normal `note add` route.",
+		"Never hand the work back to the person because a connector tool is missing.",
+	} {
+		if !strings.Contains(registration, want) {
+			t.Errorf("register-agent is missing connector handshake instruction %q", want)
+		}
+	}
+}
+
 // The worker rules name every topic skill, each topic is a skill of its
 // own name, and none restates the rules' heading.
 func TestWorkerRulesNameTheTopics(t *testing.T) {
@@ -74,6 +94,47 @@ func TestWorkerRulesBudget(t *testing.T) {
 		desc, _, _ := strings.Cut(raw[strings.Index(raw, "\ndescription: ")+len("\ndescription: "):], "\n")
 		if msg := overBudget(file, topic+"'s description", len(desc), 60); msg != "" {
 			t.Error(msg)
+		}
+	}
+}
+
+// Keep room for new worker reminders without increasing the topic budget.
+func TestGitHubSkillHeadroom(t *testing.T) {
+	const budget, headroom = 1890, 150
+	if n := len(SkillFile("github")); n > budget-headroom {
+		t.Errorf("github skill: %d bytes, want at least %d bytes free under %d", n, headroom, budget)
+	}
+}
+
+func TestGitHubSkillPersonalAccountGraphQL(t *testing.T) {
+	if !strings.Contains(Skill("github"), "**Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`") {
+		t.Error("the github skill must name GH_REPO for personal-account GraphQL")
+	}
+}
+
+// The on-demand reference must ship with the skill and retain its guidance.
+func TestGitHubSkillBrowserAndSecurityReference(t *testing.T) {
+	const reference = "references/browser-and-security.md"
+	if !strings.Contains(Skill("github"), "before either, read ["+reference+"]("+reference+")") {
+		t.Fatal("the github skill must load the reference before browser or Dependabot work")
+	}
+	raw, err := Skills.ReadFile(SkillsDir + "/github/" + reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	for _, want := range []string{
+		"before/after remediation, `beekeeper security alert <owner/repo> <number>`",
+		"Unreadable or dismissed is not fixed",
+		"App: Dependabot alerts read, accepted on installation",
+		"No personal scopes or security-scan bypass",
+		"headless: CLI Claude in Chrome tools; desktop: `beekeeper browse",
+		"Never wait on site approval",
+		"Own App grants: `beekeeper app allow` first; refusals are barriers",
+		"Sign-in: `muster auth login --no-browser`, the printed URL in a browse step",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("github reference lacks %q", want)
 		}
 	}
 }
@@ -165,6 +226,23 @@ func TestCodeScanFindingsNameTheirCommit(t *testing.T) {
 	gh := words(Skill("github"))
 	for _, want := range []string{"fresh worktree of `origin/main`, never a shared clone", "names the commit and module versions"} {
 		if !strings.Contains(gh, want) {
+			t.Errorf("the github skill does not say %q", want)
+		}
+	}
+}
+
+// Multi-repository searches must avoid exhausting GitHub's code-search bucket.
+func TestGitHubSkillRoutesMultiRepositoryCodeSearchToClones(t *testing.T) {
+	text := strings.Join(strings.Fields(Skill("github")), " ")
+	for _, want := range []string{
+		"10 requests per minute",
+		"Across more than a few repos",
+		"`git clone --depth 1`",
+		"`<stateDir>/code-scans/<owner>/<repo>` and `rg`",
+		"never per-repo `gh search code` loops",
+		"configured state directory",
+	} {
+		if !strings.Contains(text, want) {
 			t.Errorf("the github skill does not say %q", want)
 		}
 	}
