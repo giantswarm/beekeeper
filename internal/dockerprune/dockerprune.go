@@ -522,31 +522,73 @@ func parseUsedAgo(s string) time.Duration {
 
 // Importer says an argument vector loads or builds images: kind load and
 // kind create (which loads its node image), docker build, load, save and
-// import, buildx, and containerd's ctr import. The verb is one of the first
-// three words that are no flag: docker image load, docker --context x
-// build, ctr -n k8s.io images import.
+// import, buildx, and containerd's ctr import. Global options and their
+// values precede the command path; command arguments are never verbs.
 func Importer(args []string) bool {
 	if len(args) < 2 {
 		return false
 	}
 	name := args[0][strings.LastIndex(args[0], "/")+1:]
-	var words []string
-	for _, a := range args[1:] {
+	const build, buildx = "build", "buildx"
+	dockerFlags := []string{"--config", "--context", "-c", "--host", "-H", "--log-level", "-l", "--tlscacert", "--tlscert", "--tlskey"}
+	spec := map[string]struct{ flags, groups, verbs []string }{
+		"kind": {
+			flags: []string{"--verbosity", "-v"},
+			verbs: []string{"load", "create"},
+		},
+		"docker": {
+			flags: dockerFlags, groups: []string{"image", "builder"},
+			verbs: []string{build, buildx, "load", "save", "import"},
+		},
+		"docker-buildx": {
+			flags: append(slices.Clone(dockerFlags), "--builder"), groups: []string{buildx},
+			verbs: []string{build, "bake"},
+		},
+		"buildctl": {
+			flags: []string{"--addr", "--timeout", "--log-format", "--tlscacert", "--tlscert", "--tlskey", "--tlsservername", "--tlsdir"},
+			verbs: []string{build},
+		},
+		"ctr": {
+			flags:  []string{"--address", "-a", "--namespace", "-n", "--timeout", "--connect-timeout"},
+			groups: []string{"images", "image", "i"}, verbs: []string{"import"},
+		},
+	}[name]
+	words := commandArgs(args[1:], spec.flags)
+	if len(words) == 0 {
+		return false
+	}
+	// Docker's management groups and the buildx plugin's forwarded
+	// prefix introduce a subcommand, not an arbitrary positional argument.
+	if slices.Contains(spec.groups, words[0]) {
+		words = commandArgs(words[1:], spec.flags)
+	}
+	if len(words) == 0 {
+		return false
+	}
+	return slices.Contains(spec.verbs, words[0])
+}
+
+// commandArgs skips leading options, consuming a separate value only for
+// options that take one. Short options with attached values need no skip.
+func commandArgs(args, valueFlags []string) []string {
+	for len(args) > 0 {
+		a := args[0]
+		if a == "--" {
+			return args[1:]
+		}
 		if !strings.HasPrefix(a, "-") {
-			if words = append(words, a); len(words) == 3 {
-				break
+			return args
+		}
+		args = args[1:]
+		flag, _, attached := strings.Cut(a, "=")
+		if !attached && slices.Contains(valueFlags, flag) {
+			if len(args) == 0 {
+				return nil
 			}
+			args = args[1:]
 		}
 	}
-	const build = "build"
-	verbs := map[string][]string{
-		"kind":          {"load", "create"},
-		"docker":        {build, "buildx", "load", "save", "import"},
-		"docker-buildx": {build, "bake"},
-		"buildctl":      {build},
-		"ctr":           {"import"},
-	}[name]
-	return slices.ContainsFunc(words, func(a string) bool { return slices.Contains(verbs, a) })
+	return nil
 }
 
 // ParseSize reads a size as docker prints it: decimal units, "1.5GB",

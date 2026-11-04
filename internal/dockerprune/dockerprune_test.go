@@ -25,12 +25,13 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	nginxRef    = "docker.io/library/nginx:1"
+	kind        = "kind"
+	build       = "build"
+	docker      = "docker"
+	contextFlag = "--context"
+	image       = "image"
+	oldID       = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -56,7 +57,7 @@ func TestImporter(t *testing.T) {
 		{kind, "load", "docker-image", "x:dev", "--name", "agentlab"},
 		{"/usr/bin/kind", "create", "cluster"},
 		{docker, build, "-t", "x", "."},
-		{docker, "--context", "default", build, "."},
+		{docker, contextFlag, "default", build, "."},
 		{docker, image, "load", "-i", "x.tar"},
 		{docker, "save", "x"},
 		{"/usr/lib/docker/cli-plugins/docker-buildx", "buildx", build, "."},
@@ -78,6 +79,27 @@ func TestImporter(t *testing.T) {
 	for _, a := range no {
 		if Importer(a) {
 			t.Errorf("%v is an importer", a)
+		}
+	}
+}
+
+func TestImporterWithGlobalOptions(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{docker, "--config", "/tmp/docker-fixture", contextFlag, "default", image, "load", "-i", "/tmp/synthetic.tar"}, true},
+		{[]string{docker, "-H", "unix:///tmp/docker-fixture.sock", "-c", "local-fixture", "save", "example:dev"}, true},
+		{[]string{docker, "--config=/tmp/docker-fixture", "--context=default", "builder", build, "."}, true},
+		{[]string{kind, "--verbosity", "2", "--quiet", "load", "docker-image", "example:dev"}, true},
+		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", "images", "import", "/tmp/synthetic.tar"}, true},
+		{[]string{"buildctl", "--addr", "unix:///tmp/buildkit-fixture.sock", "--timeout=30", build}, true},
+		{[]string{docker, contextFlag, "load", "ps"}, false},
+		{[]string{docker, "run", "example:dev", build}, false},
+		{[]string{docker, "exec", "node", "load"}, false},
+	} {
+		if got := Importer(c.args); got != c.want {
+			t.Errorf("Importer(%v) = %v; want %v", c.args, got, c.want)
 		}
 	}
 }
