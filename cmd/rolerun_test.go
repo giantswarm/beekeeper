@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -115,7 +116,7 @@ func TestOnlyABeekeeperRunTakesTheGuide(t *testing.T) {
 
 // guide start --new starts the next run as a background session with
 // Remote Control when none is recorded; its start records the role, so its
-// own guide start takes it.
+// own guide start takes it and clears the initial reservation.
 func TestNewGuideRunWithoutAGuide(t *testing.T) {
 	a, out := stubApp(t)
 	plat.Machine = tableMachine{plat.Machine}
@@ -140,7 +141,7 @@ func TestNewGuideRunWithoutAGuide(t *testing.T) {
 		t.Errorf("brief:\n%s", brief)
 	}
 	st, _ := a.store.Read()
-	if st.Guide.Relay != nil || !guideRole.startedAs(st, state.Party{Session: bgID}) {
+	if st.Guide.Relay == nil || st.Guide.Relay.To.Session != bgID || !guideRole.startedAs(st, state.Party{Session: bgID}) {
 		t.Fatalf("relay %+v, starts %+v", st.Guide.Relay, st.Starts)
 	}
 	a.as = ""
@@ -152,6 +153,8 @@ func TestNewGuideRunWithoutAGuide(t *testing.T) {
 	}
 	if st, _ := a.store.Read(); st.Guide.Holder == nil || st.Guide.Holder.Session != bgID || st.Guide.Run != 12 {
 		t.Errorf("guide %+v", st.Guide)
+	} else if st.Guide.Relay != nil {
+		t.Errorf("initial reservation remains after taking the role: %+v", st.Guide.Relay)
 	}
 }
 
@@ -181,6 +184,71 @@ func TestNewGuideRunRefusals(t *testing.T) {
 	}
 	if err := a.runNewRun(t.Context(), guideRole, false); Code(err) != ExitRefused || !strings.Contains(err.Error(), `"Guide run 10" is starting already`) {
 		t.Fatalf("a starting run: %v", err)
+	}
+}
+
+// The daemon can run the first prompt before its launch command returns.
+// Reserve the initial run too, so another --new cannot launch a duplicate.
+func TestInitialGuideRunReservesItsStart(t *testing.T) {
+	a, _ := stubApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	plat.Machine = tableMachine{plat.Machine}
+	a.now, a.as = relayNow, personAsker
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Guide.Dir = t.TempDir()
+	stubBackground(t, "backgrounded · "+bgShortID+" · Guide run 1\n", bgSession{ID: bgShortID, SessionID: bgID})
+	launch := bgRun
+	launches := 0
+	bgRun = func(ctx context.Context, dir string, env, argv []string) (string, error) {
+		launches++
+		if launches == 1 {
+			wait, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+			defer cancel()
+			if err := a.awaitRoleStart(wait, guideRole, state.Party{Session: bgID, Name: "Guide run 1"}); err != nil {
+				t.Fatal(err)
+			}
+			if wait.Err() == nil {
+				t.Error("first prompt did not wait for its background start record")
+			}
+			_, _, err := a.newRun(ctx, guideRole, state.Party{Name: personAsker}, false)
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), "starting already") {
+				t.Errorf("second start while daemon launch is in flight: %v", err)
+			}
+		}
+		return launch(ctx, dir, env, argv)
+	}
+	if err := a.runNewRun(t.Context(), guideRole, false); err != nil {
+		t.Fatal(err)
+	}
+	if launches != 1 {
+		t.Fatalf("launched %d initial guide sessions, want 1", launches)
+	}
+}
+
+func TestFailedInitialGuideRunReleasesItsReservation(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	a.now, a.as = relayNow, personAsker
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Guide.Dir = t.TempDir()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	stubBackground(t, "", bgSession{})
+	bgRun = func(context.Context, string, []string, []string) (string, error) {
+		return "", errors.New("daemon launch failed")
+	}
+	if err := a.runNewRun(t.Context(), guideRole, false); err == nil {
+		t.Fatal("failed daemon launch succeeded")
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := st.GuideRole(); r.Holder != nil || r.Relay != nil {
+		t.Fatalf("failed launch retained a holder or reservation: %+v", r)
 	}
 }
 

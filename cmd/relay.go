@@ -78,6 +78,9 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	prev := r.Holder
 	how := ""
 	switch {
+	case prev == nil && r.Relay != nil && r.Relay.From == (state.Party{}) && takesRelay(r.Relay.To, me):
+		// The first run reserved its launch without an outgoing holder.
+		r.Relay = nil
 	case prev == nil || prev.Is(me):
 		// A restart of the same holder keeps an open relay.
 	case r.Relay.Open(now) && r.Relay.From.Is(prev.Party) && takesRelay(r.Relay.To, me):
