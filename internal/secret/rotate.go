@@ -114,6 +114,13 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 			if !ok {
 				continue
 			}
+			_, node, keys := doc.walk(splitPath(path))
+			if node == nil {
+				return Rotation{}, fmt.Errorf("nothing rotated: %s: cannot resolve carrier %s", f, path)
+			}
+			if err := checkRule(f, keys); err != nil {
+				return Rotation{}, fmt.Errorf("nothing rotated: %w", err)
+			}
 			nv := v
 			if b64 {
 				nv = base64.StdEncoding.EncodeToString([]byte(v))
