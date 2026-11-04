@@ -237,6 +237,26 @@ func (u Upstream) ghWrite(args []string, cwd, env string, known bool) (what, rep
 	named := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		// Short options are a cluster until the first value-taking flag.
+		// Its remaining characters (or the next word) are its value.
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
+			for j := 1; j < len(a); j++ {
+				flag := "-" + a[j:j+1]
+				if !ghValued[flag] {
+					continue
+				}
+				value := strings.TrimPrefix(a[j+1:], "=")
+				if j+1 == len(a) && i+1 < len(args) {
+					i++
+					value = args[i]
+				}
+				if flag == "-R" {
+					named = repoSlug(value)
+				}
+				break
+			}
+			continue
+		}
 		if v, ok := repoFlag(a); ok {
 			named = repoSlug(v)
 			continue

@@ -203,3 +203,23 @@ func TestUpstreamRefusesConnectorPosts(t *testing.T) {
 	passed(t, decideEvent(t, h, toolEvent("mcp__github__get_pull_request",
 		map[string]any{ownerKey: "kagent-dev", repoKey: theirName})), "connector read")
 }
+
+// Test both separate and attached values, including a boolean short flag
+// before -R. A preceding value-taking flag must consume the rest of a cluster.
+func TestUpstreamRepositoryShortFlags(t *testing.T) {
+	for _, owner := range []string{"foreign", "giantswarm"} {
+		for _, flags := range []string{"-R OWNER/repo", "-ROWNER/repo", "-xR OWNER/repo", "-xROWNER/repo", "--repo=OWNER/repo"} {
+			cmd := "gh pr create " + strings.ReplaceAll(flags, "OWNER", owner) + " --fill"
+			t.Run(owner+"/"+flags, func(t *testing.T) {
+				d := decide(t, upstreamHook(nil), oursDir, cmd, nil)
+				if owner == "foreign" {
+					refused(t, d, cmd, "foreign/repo")
+				} else {
+					passed(t, d, cmd)
+				}
+			})
+		}
+	}
+	cmd := "gh pr create -tRforeign/repo -R giantswarm/repo"
+	passed(t, decide(t, upstreamHook(nil), oursDir, cmd, nil), cmd)
+}

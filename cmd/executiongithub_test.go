@@ -283,6 +283,12 @@ func TestWorkerGitHubRejectsAuthorityAndScopeChanges(t *testing.T) {
 			var token workerGitHubToken
 			if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &token, false); err == nil {
 				t.Fatal("unauthorized cached token issued")
+			} else if change == "outside owner" {
+				for _, owner := range a.cfg.GitHub.AllowedOrgs {
+					if !strings.Contains(err.Error(), owner) {
+						t.Fatalf("refusal %q does not name allowed owner %q", err, owner)
+					}
+				}
 			}
 		})
 	}

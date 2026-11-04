@@ -137,7 +137,7 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 		return errors.New("invalid worker GitHub repository")
 	}
 	if request.Write && !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
-		return errors.New("worker GitHub repository is outside configured owners")
+		return fmt.Errorf("worker GitHub repository is outside github.allowedOrgs (%s)", strings.Join(a.cfg.GitHub.AllowedOrgs, ", "))
 	}
 	if a.cfg.GitHub.WorkerApp == nil || a.cfg.GitHub.WorkerApp.Validate() != nil {
 		return errors.New("worker GitHub App is no longer configured")
