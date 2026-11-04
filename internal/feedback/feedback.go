@@ -152,18 +152,23 @@ func Later(a, b string) bool {
 // "<name>: <message>" (the longest, without regard to case), with the rest;
 // none, "" and the whole text.
 func Route(text string, names []string) (to, msg string) {
-	for _, n := range names {
-		if len(n) <= len(to) || len(text) <= len(n) || !strings.EqualFold(text[:len(n)], n) {
+	// Try the longest text prefix first. EqualFold can match names with
+	// different UTF-8 byte lengths, so the colon defines the prefix's end.
+	for i := len(text) - 1; i >= 0; i-- {
+		if text[i] != ':' {
 			continue
 		}
-		if rest, ok := strings.CutPrefix(text[len(n):], ":"); ok && strings.TrimSpace(rest) != "" {
-			to, msg = n, strings.TrimSpace(rest)
+		rest := strings.TrimSpace(text[i+1:])
+		if rest == "" {
+			continue
+		}
+		for _, n := range names {
+			if n != "" && strings.EqualFold(text[:i], n) {
+				return n, rest
+			}
 		}
 	}
-	if to == "" {
-		return "", text
-	}
-	return to, msg
+	return "", text
 }
 
 func firstLine(s string) string {
