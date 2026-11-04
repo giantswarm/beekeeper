@@ -120,3 +120,36 @@ func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 		})
 	}
 }
+
+type panickingStdin struct{}
+
+func (panickingStdin) Read([]byte) (int, error) { panic("injected setup failure") }
+
+// A panic while recording a panic must not skip the deny: the guard stays
+// closed through the real pretooluse hook.
+func TestPreToolUseDeniesWhenRecordingThePanicPanics(t *testing.T) {
+	oldPlatform, oldOpen := plat, openPanicLog
+	t.Cleanup(func() { plat, openPanicLog = oldPlatform, oldOpen })
+	var out bytes.Buffer
+	a, _ := scopeApp(t, &out)
+	if err := a.loadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	recorded := false
+	openPanicLog = func(string) (*state.FileStore, error) {
+		recorded = true
+		panic("injected recording failure")
+	}
+	c := a.hookCmd()
+	c.SetIn(panickingStdin{})
+	c.SetArgs([]string{"pretooluse"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !recorded {
+		t.Fatal("the recording never ran")
+	}
+	if !strings.Contains(out.String(), `"deny"`) || !strings.Contains(out.String(), "failing closed") {
+		t.Fatalf("no deny: %q", out.String())
+	}
+}

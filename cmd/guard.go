@@ -1218,6 +1218,10 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 	return g
 }
 
+// openPanicLog opens the event log a recovered panic goes to; a seam for the
+// tests.
+var openPanicLog = state.Open
+
 // recordGuardPanic keeps stack traces in the event log, never tool responses.
 func (a *app) recordGuardPanic(check string, stack []byte) {
 	// Recording runs inside a recover: a panic here must not skip the deny.
@@ -1228,7 +1232,7 @@ func (a *app) recordGuardPanic(check string, stack []byte) {
 	if a.cfg == nil {
 		return
 	}
-	store, err := state.Open(a.cfg.StateDir)
+	store, err := openPanicLog(a.cfg.StateDir)
 	if err != nil {
 		return
 	}
