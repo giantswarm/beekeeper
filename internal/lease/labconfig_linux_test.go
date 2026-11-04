@@ -14,7 +14,7 @@ import (
 // changing the test runner's limits. Only the disposable child sets the limit.
 func TestLeaveLabChangeWriteFailure(t *testing.T) {
 	if os.Getenv("BEEKEEPER_TEST_NOTICE_WRITE_FAILURE") != "1" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestLeaveLabChangeWriteFailure$", "-test.v")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestLeaveLabChangeWriteFailure$", "-test.v") //nolint:gosec // reexecute this test binary with a fixed test selector
 		cmd.Env = append(os.Environ(), "BEEKEEPER_TEST_NOTICE_WRITE_FAILURE=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("subprocess: %v\n%s", err, out)
