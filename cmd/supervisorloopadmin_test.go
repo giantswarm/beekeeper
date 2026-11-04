@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
+
+const reviewRequiredDecision = "REVIEW_REQUIRED"
 
 const adminPolicyTestReason = "the base branch policy prohibits the merge: add the --admin flag"
 
@@ -178,6 +181,62 @@ func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
 	r.pass(t)
 	if attempts != 0 || len(r.logged(t, loopUnstageVerb)) != 0 || len(r.logged(t, loopClaimEndVerb)) != 0 {
 		t.Fatalf("genuine branch repair was undone: attempts=%d output=%s", attempts, r.out)
+	}
+}
+
+func TestLoopReviewedMergePolicyAndIdentity(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		for _, succeeds := range []bool{false, true} {
+			t.Run(fmt.Sprintf("devctl=%t/merged=%t", configured, succeeds), func(t *testing.T) {
+				r := newLoopRig(t)
+				if configured {
+					r.a.cfg.Merge.DevctlOwners = []string{"o"}
+				}
+				r.pull.Mergeable = "MERGEABLE"
+				r.pull.MergeState = "BLOCKED"
+				r.pull.ReviewDecision = reviewRequiredDecision
+				r.park(t, loopPR, time.Now())
+				r.pass(t)
+				r.verdict("R1", loopHead, superloop.Approved, "")
+				attempts := 0
+				r.command = func(argv []string) (string, int) {
+					attempts++
+					want := strings.Fields("gh pr merge 7 --repo " + loopMergeRepo + " --squash --delete-branch --match-head-commit " + loopHead)
+					if configured {
+						want = append(strings.Fields(devctlBinary+" auth exec --"), want...)
+					}
+					if !slices.Equal(argv, want) {
+						t.Fatalf("merge route or exact-head safety changed: got %v want %v", argv, want)
+					}
+					if succeeds {
+						r.pull.State = superloop.Merged
+						r.pull.MergeCommit = loopFixed
+						return "", 0
+					}
+					return "the base branch policy prohibits the merge", 1
+				}
+				r.pass(t)
+				if attempts != 1 {
+					t.Fatalf("merge attempts=%d: %s", attempts, r.out)
+				}
+				if wake := r.called(agentsName, agentWakeName, loopWorker); wake != nil {
+					t.Fatalf("policy refusal woke branch repair: %v", wake)
+				}
+				if succeeds {
+					if len(r.logged(t, "supervisor.merge")) != 1 {
+						t.Fatalf("approved head did not progress: %s", r.out)
+					}
+				} else {
+					if !strings.Contains(r.out.String(), "reviewDecision=REVIEW_REQUIRED") {
+						t.Fatalf("missing precise policy blocker: %s", r.out)
+					}
+					r.pass(t)
+					if attempts != 2 {
+						t.Fatalf("approved head lost its retry authority: %s", r.out)
+					}
+				}
+			})
+		}
 	}
 }
 

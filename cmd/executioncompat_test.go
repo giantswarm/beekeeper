@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +86,37 @@ func TestHostsCheckPrintsFailedHarnessReadiness(t *testing.T) {
 	}
 	if caps.Readiness[execution.HarnessCodex].Login != readinessCheckFailed || len(caps.Harnesses) != 0 {
 		t.Fatalf("wrong readiness diagnostics: %+v", caps)
+	}
+}
+
+func TestLegacyHostSourcePreparationRejectedBeforeReservation(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	h := a.cfg.Agents.Hosts[sshTestSelector]
+	caps, err := a.executionProbe(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy hosts pass the ordinary protocol, policy and publication checks,
+	// but omit the source preparation capability from their check response.
+	caps.Version = "v0.171.0-rc.111"
+	caps.SourcePreparation = false
+	a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) { return caps, nil }
+	a.executionTransport = func(execution.Host) execution.Transport {
+		t.Fatal("legacy host contacted after admission")
+		return nil
+	}
+	if _, err := a.probeExecution(context.Background(), h); err == nil || !strings.Contains(err.Error(), "source preparation") {
+		t.Fatalf("host check accepted missing source preparation: %v", err)
+	}
+	err = a.startSSHExecution(context.Background(), "fixture worker", brief, executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel})
+	if err == nil || !strings.Contains(err.Error(), "source preparation") {
+		t.Fatalf("start accepted missing source preparation: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Starts) != 0 || len(st.Agents) != 0 {
+		t.Fatal("incompatible host reserved an execution")
 	}
 }

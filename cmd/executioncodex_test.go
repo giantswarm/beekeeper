@@ -34,7 +34,7 @@ func sshCodexTestApp(t *testing.T, offered map[string]string) (*app, string, *[]
 	h.Harnesses = []string{claudeComm, codex.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: project.Version(), PolicyDigest: h.PolicyDigest, Harnesses: offered, Unavailable: map[string]string{}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
+		return execution.Capabilities{SourcePreparation: true, Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: project.Version(), PolicyDigest: h.PolicyDigest, Harnesses: offered, Unavailable: map[string]string{}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
 	}
 	var requests []execution.StartRequest
 	var handle execution.Handle
