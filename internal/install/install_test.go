@@ -1164,6 +1164,67 @@ const priorCodexHooks = `{
 }
 `
 
+func TestCodexUninstallKeepsRepointedLinks(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		t.Run(map[bool]string{false: "existing targets", true: "dangling targets"}[dangling], func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.CodexSkills = filepath.Join(home, ".codex", "skills")
+			userAgentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+			write(t, userAgentsMD, "# User rules\n")
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			unchanged := filepath.Join(e.CodexSkills, "guide")
+			if _, err := os.Readlink(unchanged); err != nil {
+				t.Fatal(err)
+			}
+			links := []string{
+				filepath.Join(e.CodexSkills, "park"),
+				CodexWorkerSkills(e.StateDir),
+				filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"),
+			}
+			targets := make(map[string]string)
+			for i, link := range links {
+				target := filepath.Join(home, "custom", filepath.Base(link))
+				if !dangling {
+					write(t, target, "custom content\n")
+				}
+				if _, err := os.Readlink(link); err != nil {
+					t.Fatalf("installed link %d: %v", i, err)
+				}
+				if err := os.Remove(link); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				targets[link] = target
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			for link, target := range targets {
+				if got, err := os.Readlink(link); err != nil || got != target {
+					t.Errorf("changed link %s = %q, %v; want %q", link, got, err, target)
+				}
+				if !dangling {
+					if got, err := os.ReadFile(target); err != nil || string(got) != "custom content\n" {
+						t.Errorf("custom target changed: %q, %v", got, err)
+					}
+				}
+			}
+			if _, err := os.Lstat(unchanged); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("unchanged skill link remains: %v", err)
+			}
+			if got, err := os.ReadFile(userAgentsMD); err != nil || string(got) != "# User rules\n" {
+				t.Errorf("user rules changed: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCodexHooksAndSkills(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
