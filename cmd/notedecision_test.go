@@ -15,7 +15,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const choiceMergeWord = "merge"
+const (
+	choiceMergeWord = "merge"
+	choiceWaitWord  = "wait"
+)
 
 // A decision's two options, the first recommended, and a name nobody has.
 const (
@@ -69,7 +72,7 @@ func TestDecisionKeepsItsParts(t *testing.T) {
 	if n.Question != "approve "+prURL || n.StatusQuo != sqNow || !slices.Equal(n.Options, []string{optMerge, optWait}) || n.Recommend != 1 {
 		t.Fatalf("note %+v", n)
 	}
-	if label, cons, ok := n.Option(2); label != "wait" || cons != "the release ships Monday" || !ok {
+	if label, cons, ok := n.Option(2); label != choiceWaitWord || cons != "the release ships Monday" || !ok {
 		t.Fatalf("option 2: %q %q %v", label, cons, ok)
 	}
 	if err := addNote(a, "--recommend", "1", "a memo"); Code(err) != ExitUsage {
@@ -185,7 +188,7 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 }
 
 func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
-	for _, dflt := range []string{"wait", ghNone, "nothing happens", "", "ask again"} {
+	for _, dflt := range []string{choiceWaitWord, ghNone, "nothing happens", "", "ask again"} {
 		t.Run(dflt, func(t *testing.T) {
 			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
 			st := &state.State{Notes: []state.Note{n}}
@@ -381,7 +384,7 @@ func TestNoteAnswerResolvesStoredLabelAndRefusesConflictingRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, words := range []string{choiceMergeWord, "merge (Recommended)", optMerge, "merge — ship today"} {
-		if _, err := noteCommand(a, verbAnswer, "1", flagChoice, "wait", words); err == nil || !strings.Contains(err.Error(), "relayed text") {
+		if _, err := noteCommand(a, verbAnswer, "1", flagChoice, choiceWaitWord, words); err == nil || !strings.Contains(err.Error(), "relayed text") {
 			t.Fatalf("conflicting relay %q: %v", words, err)
 		}
 	}
@@ -393,7 +396,7 @@ func TestNoteAnswerResolvesStoredLabelAndRefusesConflictingRelay(t *testing.T) {
 	if err != nil || len(answers) != 0 {
 		t.Fatalf("conflicting relay recorded an answer: %+v, %v", answers, err)
 	}
-	if _, err := noteCommand(a, verbAnswer, "1", flagChoice, "wait", "wait — until checks pass"); err != nil {
+	if _, err := noteCommand(a, verbAnswer, "1", flagChoice, choiceWaitWord, "wait — until checks pass"); err != nil {
 		t.Fatal(err)
 	}
 	answers, err = a.answeredSince(time.Time{})
@@ -407,7 +410,7 @@ func TestAnswerTextRefusesAnotherOptionWithNumericChoice(t *testing.T) {
 	if _, err := answerText(n, 1, "merge — ship today"); err == nil {
 		t.Fatal("accepted mismatched numeric choice")
 	}
-	if got, err := answerText(n, 1, ""); err != nil || got != "wait" {
+	if got, err := answerText(n, 1, ""); err != nil || got != choiceWaitWord {
 		t.Fatalf("answer %q, %v", got, err)
 	}
 }
@@ -418,7 +421,7 @@ func TestResolveNoteChoiceUsesStoredOrder(t *testing.T) {
 		value string
 		want  int
 	}{
-		{"wait", 1}, {choiceMergeWord, 2}, {"1", 1}, {"2", 2}, {"", 0}, {"0", 0},
+		{choiceWaitWord, 1}, {choiceMergeWord, 2}, {"1", 1}, {"2", 2}, {"", 0}, {"0", 0},
 	} {
 		if got, err := resolveNoteChoice(n, tc.value); err != nil || got != tc.want {
 			t.Fatalf("%q: got %d, %v; want %d", tc.value, got, err, tc.want)
