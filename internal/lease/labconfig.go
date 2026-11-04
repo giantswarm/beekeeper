@@ -144,7 +144,22 @@ func (d Dir) LeaveLabChange(res string, c LabChange) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(d.changePath(res), append(raw, '\n'), 0o600)
+	f, err := os.CreateTemp(string(d), ".labchange-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(append(raw, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, d.changePath(res))
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
 }
 
 // LabChangeOf is the change a release of res left for its next claim, nil
