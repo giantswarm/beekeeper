@@ -50,3 +50,7 @@ helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest sui
 .PHONY: tools-doc
 tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
+
+.PHONY: browse-upload-live
+browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.
+	go test -tags browselive -run '^TestBrowseUploadLive$$' -count=1 -timeout=10m ./cmd

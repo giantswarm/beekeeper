@@ -39,10 +39,10 @@ func TestNoteAddFilesOnlyDecisionsAndLogins(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, args := range map[string][]string{
-		"a memo":            {"--for", notePerson, "--kind", "memo", "State of the watch"},
+		"a memo":            {flagFor, notePerson, "--kind", "memo", "State of the watch"},
 		"a pinned note":     append(slices.Clone(decisionArgs), "--pin", "approve "+prURL),
 		"a replacement":     append(slices.Clone(decisionArgs), "--replaces", "1", "approve "+prURL),
-		"a note for nobody": {"--kind", noteLogin, "--until", probeHolds, signIn},
+		"a note for nobody": {"--kind", noteLogin, untilFlag, probeHolds, signIn},
 	} {
 		if err := addNote(a, args...); err == nil {
 			t.Errorf("%s is filed", name)

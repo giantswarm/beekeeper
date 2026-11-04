@@ -12,6 +12,16 @@ executions require expiring coordinator leases and live supervisor merge grants.
 The component command below is the supported remote merge path; local approvals
 and raw merge commands do not authorize an SSH execution.
 
+For remote starts, `--force` overrides coordinator capacity only. Execution-host
+admission still enforces memory, swap, load, disk, build slots (with `--builds`)
+and `maxBusy`. The CLI explains these limits before remote preparation; a
+passing host check does not reserve room or guarantee that preparation will
+succeed. Authentication, identity, version and policy checks remain required.
+If the host refuses preparation before acknowledging a start and inspection
+confirms no execution exists, the coordinator releases the reservation: no
+worker remains registered and no host or desk slot is held. Start anew after
+resolving the host's refusal.
+
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
@@ -276,7 +286,9 @@ that host.
 
 Prepare and pin a matching policy bundle before running `agents hosts check`.
 The bundle binds an explicit omp extension. The check validates the pinned
-version, asks `omp models --json --no-extensions` for available model metadata
+version from the packaged CLI's `omp/<version>` output (or the previously
+supported `omp v<version>` banner); it still requires an exact match to the
+configured pin. It asks `omp models --json --no-extensions` for available model metadata
 without a model call, and starts a bounded RPC session without sending a
 prompt to verify the extension starts. A missing login/model, extension error
 or absent readiness event leaves omp unavailable. No credential value is
@@ -289,6 +301,11 @@ edits and searches; PTYs, services, asynchronous bash, URL reads and every
 other tool are refused. The extension blocks on command failure, timeout,
 invalid JSON and guard rewrites it cannot apply. Each allowed call passes the
 shared workspace and execution guards and live coordinator authority check.
+File tools accept one literal local path; reads require an existing target to
+avoid omp spelling, suffix and approved-plan fallback resolution. URL shorthand
+(`www.`) is refused. Home and `@` shorthands, whitespace,
+path lists and patterns are refused because omp expands them differently from
+the shared guard. Use guarded bash for filenames requiring those characters.
 Hooks are not an OS sandbox for arbitrary code executed inside an allowed
 shell command.
 
@@ -364,6 +381,49 @@ Claude. Codex usage stays on the coordinator: the remote worker counts against
 the configured `codex` provider's ceiling, and the coordinator's own usage
 reading covers the shared subscription; a host adds machine room only.
 
+### Codex lifecycle proof (#2281)
+
+Track the first live lifecycle at
+https://github.com/giantswarm/beekeeper/issues/2281. A passing fixture test is
+not a live proof. Before starting, verify the trust and reviewer-placement
+fixes integrated through PR #2291, the code-mode route in PR #2268, the
+coordinator CI wait in issue #2242, and parked publication/review retention
+from PR #2244 are merged, released and installed. Do not reproduce those
+changes in the proof branch.
+
+Use the existing supervisor-granted host lease procedure. If no execution-host
+resource is available to claim, stop the live phase and record the blocker;
+do not select a host outside that procedure. Use the existing subscription
+login and installed tools without changing accounts, logins or spending settings.
+
+On the leased host, record these observations in order:
+
+1. Record the installed beekeeper and Codex versions and subscription login
+   mode, then run host checks including forbidden push/merge probes. Start a
+   worker twice and verify the installed policy remains valid after each start.
+2. Verify the isolated worktree and execution identity, and that the coordinator
+   counts the worker once against the shared Codex ceiling. Have the worker
+   execute a shell command through its supported tool route, read the task issue
+   with `gh`, and run the repository's focused checks.
+3. Publish only its owned branch and open the proof PR. Record its commit and
+   PR URL. Request independent review, park on the coordinator's CI condition,
+   and wake through the coordinator. Verify the recorded thread, publication
+   and review request survive the wake, with one accepted wake receipt.
+4. Have the coordinator obtain independent review and explicit go for the exact
+   head before merging. Record the observed merge commit and URL. A proof run
+   subject to a no-merge instruction stops before this step and remains incomplete.
+
+Record a stable host alias, execution identity, thread metadata, versions,
+commit, PR URL and observed result. Keep the alias-to-hostname mapping private;
+public evidence must contain no hostnames, personal details, secret values or
+login files. Inventory residual artifacts under
+https://github.com/giantswarm/beekeeper/issues/2113. Keep #2281 open until the
+linked proof PR is merged and the complete live lifecycle has been observed.
+
+The runner requires `turn.completed` after acceptance before treating a turn
+as successful. A clean exit without that event fails the execution while
+preserving an already accepted wake receipt for coordinator recovery.
+
 ## Antigravity (agy) on an execution host
 
 A host may also run Antigravity (`agy` / Gemini) workers. Install a pinned `agy`
@@ -427,6 +487,12 @@ and reports `versionCheck`, `login` and `guard` as `passed`, `failed` or
 `not checked`. The version is the configured pin; `versionCheck: passed`
 confirms that the executable matched it. A failed version check leaves the
 login check `not checked`, rather than claiming a login failure.
+
+When every configured harness fails, `hosts check` still prints its JSON
+`readiness` and `unavailable` reports and exits nonzero. No failed harness is
+advertised or admitted. A rejected agy hooks file reports a failed guard.
+Policy, identity or transport failures before probing can prevent a readiness
+report; they must not be interpreted as a passing check.
 
 The guard result covers the installed policy and conformance check. For omp
 it also requires the actual harness to load the bound extension without a
@@ -969,6 +1035,32 @@ reruns without waiting for completion. Read the failure first and use this for
 transient CI failures; code failures still need a fix. A lost callback reply is
 not proof that no rerun started: inspect CI before trying again.
 
+The coordinator records `execution.ci-rerun-requested` before invoking devctl
+and `execution.ci-rerun-result` when it returns. These audit events name the
+repository and PR, with the result's exit code and whether the command errored;
+command output and credentials are excluded.
+
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
+
+## Remote harness acceptance evidence
+
+Adapter tests use temporary repositories and fake harnesses and transports;
+they do not establish a live provider or fleet proof. Complete the following
+on a provisioned host, in order: Codex, omp, then agy with accepted guard hooks.
+Use the independently provisioned host login described above; never transfer
+coordinator credentials.
+
+For each harness, retain the host identity, installed beekeeper and harness
+versions, `hosts check` report, execution ID/generation, published commit and
+PR URL. Start with explicit `--host`, `--harness` and `--model`; verify inspect,
+logs, a parked wake on the same conversation, and acknowledged stop on a
+separate disposable execution. Confirm the worker occupies its coordinator
+provider pool and does not introduce another usage reader or ceiling.
+
+Have the worker publish through `agents publish`. Record independent review
+of the exact published head, the coordinator's go, and the merge receipt/URL
+from `agents merge`. Verify raw host merge commands remain denied. Record
+failed steps explicitly; a successful launch or fake-harness test alone does
+not complete the PR/review/go/merge proof for that harness.

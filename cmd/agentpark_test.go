@@ -61,7 +61,7 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Channel: channelTerminal, Answer: parkAnswer, Note: n.ID}
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
 		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
 	register := func(args ...string) error {
 		c := w.agentsCmd()
-		c.SetArgs(append([]string{"register"}, args...))
+		c.SetArgs(append([]string{registerVerb}, args...))
 		c.SetOut(w.out)
 		c.SetErr(w.out)
 		c.SilenceUsage, c.SilenceErrors = true, true
@@ -399,7 +399,7 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err != nil {
 		t.Fatal(err)
 	}
-	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != "hold merges" {
+	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != litHoldMerges {
 		t.Fatalf("park %+v", ag.Park)
 	}
 	w.out.(*bytes.Buffer).Reset()
@@ -778,5 +778,75 @@ func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 	}
 	if err := validateOverlapPark("", "waiting for a manual resume"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParkRefusesMismatchedWaitTarget(t *testing.T) {
+	for _, tc := range []struct{ waits, hint string }{
+		{"waiting for the merge hold to lift", litOnHoldTarget},
+		{"merges are HELD for the release", "--on hold:<target>"},
+		{"the devctl release window", "--on hold:<target>"},
+		{"waiting for gate-run completion", "beekeeper gate runs"},
+		{"the gated run's outcome", "beekeeper gate runs"},
+	} {
+		t.Run(tc.waits, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			for _, direct := range []bool{false, true} {
+				var err error
+				if direct {
+					_, err = w.park(state.Party{Name: agentOne}, refOne, tc.waits)
+				} else {
+					err = park(t, w, "--on", refOne, tc.waits)
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.hint) {
+					t.Fatalf("park: %v; want %s", err, tc.hint)
+				}
+				if agentOf(t, w).Park != nil {
+					t.Fatal("refused park was recorded")
+				}
+			}
+		})
+	}
+	for _, waits := range []string{"desk review", "waiting for this PR to merge", "the shareholder review"} {
+		if err := validateParkWait(refOne, waits); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, on := range []string{"", "#3", "hold merges"} {
+		if err := validateParkWait(on, "waiting for the hold or gate run"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
+	for _, waits := range []string{"the merge hold lifting", "gate run completion"} {
+		t.Run(waits, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			old := refStates
+			t.Cleanup(func() { refStates = old })
+			refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+				out := map[github.PR]github.RefState{}
+				for _, r := range refs {
+					out[r] = github.RefState{Kind: github.RefPullRequest, State: github.Merged}
+				}
+				return out, nil
+			}
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				// Both roster and off-roster parks may predate validation.
+				st.Agents[0].Park = &state.Park{On: refOne, Waits: waits, At: relayNow}
+				st.Parks = []state.Park{{By: state.Party{Name: "other-worker"}, On: refOne, Waits: waits, At: relayNow}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w.pending(context.Background(), nil)
+			if out := w.out.(*bytes.Buffer).String(); strings.Contains(out, "AGENT RESUMABLE") {
+				t.Fatalf("PR merge settled an unrelated condition: %s", out)
+			}
+			if !agentOf(t, w).Park.Resumable.IsZero() {
+				t.Fatal("mismatched park marked resumable")
+			}
+		})
 	}
 }

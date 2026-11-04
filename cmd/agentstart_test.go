@@ -21,6 +21,37 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+func TestResumeSeededTask(t *testing.T) {
+	noSteward := errors.New("no idle desktop CLI")
+	mismatch := modelNotHeld{recorded: "fixture-model", want: sonnetModel, why: noSteward}
+	for _, tc := range []struct {
+		name       string
+		desktopErr error
+		refused    bool
+	}{
+		{"wrong model without steward", mismatch, true},
+		{"missing model without steward", modelNotHeld{want: sonnetModel, why: noSteward}, true},
+		{"wrapped mismatch", fmt.Errorf("desktop: %w", mismatch), true},
+		{"desktop unavailable", errors.New("the desktop does not run"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			resumeErr := errors.New("resume result")
+			err := resumeSeededTask(tc.desktopErr, func() error {
+				called = true
+				return resumeErr
+			})
+			if tc.refused {
+				if called || !errors.As(err, new(modelNotHeld)) || !strings.Contains(err.Error(), "start refused before its task") {
+					t.Fatalf("resume called = %v, error = %v", called, err)
+				}
+			} else if !called || !errors.Is(err, resumeErr) {
+				t.Fatalf("resume called = %v, error = %v", called, err)
+			}
+		})
+	}
+}
+
 func TestRecordStart(t *testing.T) {
 	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 	live := func(p state.Party) bool { return p.Session == "r" }
@@ -99,7 +130,7 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 }
 
 func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: "default"}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
+	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: paramDefault}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
 	for id, want := range map[string]bool{"b": true, "d": false, "x": false, "": false} {
 		if _, ok := st.BypassStart(id); ok != want {
 			t.Errorf("BypassStart(%q) = %v", id, ok)

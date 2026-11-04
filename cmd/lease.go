@@ -21,7 +21,8 @@ import (
 // The states of a held lease.
 const (
 	holderLive    = "live"    // the holder's session runs
-	holderGone    = "gone"    // it does not: the lease is stale
+	holderGone    = "gone"    // no running session or roster wake path
+	holderParked  = "parked"  // no CLI, but the roster keeps a wake path
 	holderPerson  = "person"  // held by a person or script
 	holderUnknown = "unknown" // the platform lists no sessions to tell
 )
@@ -36,6 +37,15 @@ type leaseView struct {
 }
 
 func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
+	var st *state.State
+	if a.store != nil {
+		st, _ = a.store.Read()
+	}
+	return a.leaseViewState(st, sessions, h)
+}
+
+// leaseViewState also serves callers already holding the state lock.
+func (a *app) leaseViewState(st *state.State, sessions []*claude.Session, h lease.Holder) leaseView {
 	v := leaseView{Holder: h, State: holderPerson}
 	if h.Session != "" || h.HostSession != "" {
 		v.State = holderGone
@@ -44,6 +54,8 @@ func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
 			if v.Name == "" {
 				v.Name = s.Name
 			}
+		} else if st != nil && rosterKept(st, h.Party(), a.now) != "" {
+			v.State = holderParked
 		}
 	}
 	if v.Name == "" {
@@ -58,8 +70,8 @@ func (a *app) leaseCmd() *cobra.Command {
 		Short: "Hold a shared resource: a kind lab, an installation, the browser",
 		Long: `Hold one of the machine's shared resources, one session at a time: the
 environments listed under resources in the configuration (kind labs,
-shared installations) and the browser. A lab lease named under labs in the
-configuration stands for its kind cluster: the list shows whether that
+shared installations), installations under alerts.installations, and the browser.
+A lab lease named under labs in the configuration stands for its kind cluster: the list shows whether that
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
@@ -193,6 +205,9 @@ server (--gib, default ollama.budgetGiB, at most ollama.maxBudgetGiB): a loaded
 model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if os.Getenv(envTimerCommand) != "" {
+				return refused("lease claim refused inside a timer --probe or --run: the command inherits the watch session, not the timer setter; claim from the setter session after the timer wakes it")
+			}
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err
@@ -338,10 +353,10 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 				// above, the claim completes; without one, the node was
 				// the caller's already.
 				if modeLine != "" {
-					msg = fmt.Sprintf("held by you since %s: %s is yours; %s", clock(a.now, cur.SinceTime()), res+lab, strings.TrimPrefix(modeLine, "; "))
+					msg = claimHeldLine(a.now, cur.SinceTime(), fmt.Sprintf("%s is yours; %s", res+lab, strings.TrimPrefix(modeLine, "; ")))
 					return append(evs, modeEvs...), nil
 				}
-				msg = fmt.Sprintf("held by you since %s: %s was yours already", clock(a.now, cur.SinceTime()), res+lab)
+				msg = claimHeldLine(a.now, cur.SinceTime(), res+lab+" was yours already")
 				return evs, nil
 			}
 			// Another party holds the node: its constraint stands, and
@@ -405,7 +420,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		if idx >= 0 {
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
-		msg = fmt.Sprintf("held by you since %s: claimed %s", clock(a.now, a.now), res+lab)
+		msg = claimHeldLine(a.now, a.now, "claimed "+res+lab)
 		if labRaw != nil {
 			if err := dir.KeepLabConfig(res, labRaw); err != nil {
 				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)
@@ -507,6 +522,14 @@ func (r *claimRefusal) Error() string { return r.line() }
 
 // line is the claim's first line, with what to do while it is not held.
 func (r *claimRefusal) line() string {
+	return claimOutcomeLine(time.Time{}, time.Time{}, "", r)
+}
+
+// claimOutcomeLine is the shared CLI and MCP outcome formatter.
+func claimOutcomeLine(now, since time.Time, detail string, r *claimRefusal) string {
+	if r == nil {
+		return fmt.Sprintf("held by you since %s: %s", clock(now, since), detail)
+	}
 	out := "refused: " + r.why
 	if r.queued {
 		out = "queued: " + r.why
@@ -523,7 +546,7 @@ func (r *claimRefusal) line() string {
 // claimHeld is the outcome of me's claim of the lease cur holds: queued
 // when a grant of it to me waits, else refused.
 func (a *app) claimHeld(st *state.State, me state.Party, sessions []*claude.Session, cur lease.Holder) error {
-	v := a.leaseView(sessions, cur)
+	v := a.leaseViewState(st, sessions, cur)
 	q := lease.Pending(st, cur.Env, true, a.now, a.cfg.GrantTTL.Duration)
 	if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(me) }); i >= 0 {
 		return &claimRefusal{res: cur.Env, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s",
@@ -765,7 +788,7 @@ func (a *app) leases() (*leaseList, error) {
 	l := &leaseList{Queues: map[string][]state.Grant{}}
 	names := map[string]string{}
 	for _, h := range holders {
-		v := a.leaseView(sessions, h)
+		v := a.leaseViewState(st, sessions, h)
 		l.Held = append(l.Held, v)
 		names[h.Env] = v.Name
 	}
@@ -1064,4 +1087,9 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
+}
+
+// claimHeldLine formats successful claims for both CLI and MCP.
+func claimHeldLine(now, since time.Time, detail string) string {
+	return claimOutcomeLine(now, since, detail, nil)
 }

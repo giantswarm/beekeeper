@@ -31,27 +31,31 @@ type (
 		data *Data
 		err  error
 	}
-	// tailMsg carries a detail pane's transcript; session names whose
+	// tailMsg carries a detail pane's transcript; session identifies whose
 	// transcript it is, so a late answer about a closed pane is dropped.
 	// The open pane asks again at every tick: it follows the turn live.
 	tailMsg struct {
 		session string
+		pane    uint64
 		turns   []Turn
 		err     error
 	}
 	// sentMsg carries a message's delivery: where it went, or why not.
 	sentMsg struct {
 		session string
+		pane    uint64
 		where   string
 		err     error
 	}
 	// actMsg carries a take-over's, a release's or an answer's result:
 	// done says what happened, err why it did not.
 	actMsg struct {
+		pane uint64
 		done string
 		err  error
 		// took is the session id a take-over took, "" for anything else.
-		took string
+		took     string
+		released string
 	}
 )
 
@@ -74,10 +78,14 @@ type model struct {
 	updated    time.Time
 	refreshing bool
 
-	tab int
-	sel [len(tabs)]int
+	tab    int
+	sel    [len(tabs)]int
+	scroll [len(tabs)]viewport
+	facts  viewport
 
-	detail    string
+	detail string // session ID; display names can change or collide
+	// paneID distinguishes successive openings, including the same session.
+	paneID    uint64
 	tail      []Turn
 	tailState int // 0 closed, 1 loading, 2 ready, 3 failed
 	tailErr   string
@@ -101,7 +109,7 @@ type model struct {
 	acting bool
 
 	// taken are the sessions (by id) this screen took over: quitting
-	// hands them back. seen are the approvals the screen showed, by
+	// hands them back if still owned. seen are the approvals the screen showed, by
 	// request id, that it did not answer: one that goes away went back to
 	// its session's window.
 	taken map[string]bool
@@ -113,6 +121,16 @@ type model struct {
 	width, height int
 	quitting      bool
 }
+
+const keyDown = "down"
+
+const keyPageUp = "pgup"
+
+const keyPageDown = "pgdown"
+
+const keyHome = "home"
+
+const keyEnd = "end"
 
 // newModel builds the screen's model; Run calls it, and tests build one
 // around a fake Source.
@@ -162,9 +180,10 @@ func (m *model) tailCmd(session string) tea.Cmd {
 		return nil
 	}
 	m.tailing = true
+	paneID := m.paneID
 	return func() tea.Msg {
 		turns, err := m.src.Tail(m.ctx, session, tailTurns)
-		return tailMsg{session: session, turns: turns, err: err}
+		return tailMsg{session: session, pane: paneID, turns: turns, err: err}
 	}
 }
 
@@ -191,14 +210,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			picked := m.selectedSession()
 			m.data = msg.data
 			m.err = nil
+			m.updated = time.Now()
 			m.keepSelection(picked)
 		}
-		m.updated = time.Now()
 		m.clampAll()
 		m.noticeHandedBack()
 		return m, nil
 	case tailMsg:
-		if msg.session != m.detail {
+		if msg.session != m.detail || msg.pane != m.paneID {
 			return m, nil
 		}
 		m.tailing = false
@@ -206,6 +225,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sentMsg:
 		m.sending = false
+		if m.detail == "" || msg.pane != m.paneID {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.outcome, m.outcomeErr = "not sent: "+msg.err.Error(), true
 		} else {
@@ -215,10 +237,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actMsg:
 		m.acting = false
 		if msg.err != nil {
-			m.outcome, m.outcomeErr = msg.err.Error(), true
+			if m.detail != "" && msg.pane == m.paneID {
+				m.outcome, m.outcomeErr = msg.err.Error(), true
+			}
 			return m, m.refreshCmd()
 		}
-		m.outcome, m.outcomeErr = msg.done, false
+		if m.detail != "" && msg.pane == m.paneID {
+			m.outcome, m.outcomeErr = msg.done, false
+		}
+		delete(m.taken, msg.released)
 		if msg.took != "" {
 			if m.taken == nil {
 				m.taken = map[string]bool{}
@@ -268,9 +295,10 @@ func newer(ts []Turn, last Turn) int {
 // sendCmd delivers text to session under the model's context.
 func (m *model) sendCmd(session, text string) tea.Cmd {
 	m.sending = true
+	paneID := m.paneID
 	return func() tea.Msg {
 		where, err := m.src.Send(m.ctx, session, text)
-		return sentMsg{session: session, where: where, err: err}
+		return sentMsg{session: session, pane: paneID, where: where, err: err}
 	}
 }
 
@@ -312,9 +340,10 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 	if m.tab != sessionsTab || m.sel[m.tab] >= len(s) {
 		return m, nil
 	}
-	name := s[m.sel[m.tab]].Name
-	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = name, nil, "", 0, 1, false
-	return m, m.tailCmd(name)
+	id := s[m.sel[m.tab]].ID
+	m.paneID++
+	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = id, nil, "", 0, 1, false
+	return m, m.tailCmd(id)
 }
 
 // compose edits the message line: enter sends a non-empty draft, esc
@@ -345,21 +374,26 @@ func (m *model) compose(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // scrollDetail moves the transcript window of an open pane: k and up go
 // back to older turns, j and down forward; G and end follow live again,
-// g and home go to the oldest turn read.
+// g and home go to the oldest turn read. Overflowing facts scroll first.
 func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Rendering measures the facts at the current terminal size.
+	_ = m.screen()
+	if m.scrollFacts(msg.String()) {
+		return m, nil
+	}
 	oldest := maxRow(len(m.tail))
 	switch msg.String() {
 	case "k", "up":
 		m.tailBack = min(m.tailBack+1, oldest)
-	case "j", "down":
+	case "j", keyDown:
 		m.tailBack = max(m.tailBack-1, 0)
-	case "pgup":
+	case keyPageUp:
 		m.tailBack = min(m.tailBack+m.page(), oldest)
-	case "pgdown":
+	case keyPageDown:
 		m.tailBack = max(m.tailBack-m.page(), 0)
-	case "g", "home":
+	case "g", keyHome:
 		m.tailBack = oldest
-	case "G", "end":
+	case "G", keyEnd:
 		m.tailBack = 0
 	case "r":
 		return m, m.refreshCmd()
@@ -375,13 +409,44 @@ func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// scrollFacts gives overflowing facts the movement keys until their edge.
+// At the edge the same keys still reach transcript history; ends move both.
+func (m *model) scrollFacts(key string) bool {
+	v := &m.facts
+	if v.limit == 0 {
+		return false
+	}
+	old := v.top
+	switch key {
+	case "k", "up":
+		v.top--
+	case "j", keyDown:
+		v.top++
+	case keyPageUp:
+		v.top -= m.page()
+	case keyPageDown:
+		v.top += m.page()
+	case "g", keyHome:
+		v.top = 0
+	case "G", keyEnd:
+		v.top = v.limit
+	default:
+		return false
+	}
+	v.top = min(max(0, v.top), v.limit)
+	if key == "g" || key == keyHome || key == "G" || key == keyEnd {
+		return false
+	}
+	return v.top != old
+}
+
 // paneSession is the open pane's session in the current data, nil when it
 // is gone.
 func (m *model) paneSession() *Session {
 	if m.data == nil || m.detail == "" {
 		return nil
 	}
-	return sessionNamed(m.data.Sessions, m.detail)
+	return sessionByID(m.data.Sessions, m.detail)
 }
 
 // toggleTakeOver takes the pane's session over, or hands it back when this
@@ -393,20 +458,20 @@ func (m *model) toggleTakeOver() tea.Cmd {
 	}
 	m.acting = true
 	id, name := s.ID, s.Name
+	paneID := m.paneID
 	if s.TakenOver {
-		delete(m.taken, id)
 		return func() tea.Msg {
 			if err := m.src.Release(m.ctx, id); err != nil {
-				return actMsg{err: err}
+				return actMsg{pane: paneID, err: err}
 			}
-			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
+			return actMsg{pane: paneID, released: id, done: "handed back: " + name + "'s approvals go to its own window"}
 		}
 	}
 	return func() tea.Msg {
 		if err := m.src.TakeOver(m.ctx, id); err != nil {
-			return actMsg{err: err}
+			return actMsg{pane: paneID, err: err}
 		}
-		return actMsg{done: "taken over: " + name + "'s approvals come here", took: id}
+		return actMsg{pane: paneID, done: "taken over: " + name + "'s approvals come here", took: id}
 	}
 }
 
@@ -427,11 +492,12 @@ func (m *model) answer(allow bool) tea.Cmd {
 		verb = "allowed"
 	}
 	id := s.ID
+	paneID := m.paneID
 	return func() tea.Msg {
 		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {
-			return actMsg{err: fmt.Errorf("%s: %w", ap.Gist, err)}
+			return actMsg{pane: paneID, err: fmt.Errorf("%s: %w", ap.Gist, err)}
 		}
-		return actMsg{done: verb + ": " + ap.Gist}
+		return actMsg{pane: paneID, done: verb + ": " + ap.Gist}
 	}
 }
 
@@ -463,6 +529,8 @@ func (m *model) noticeHandedBack() {
 
 // navigate moves between tabs and within the current tab's list.
 func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	_ = m.screen()
+	v := &m.scroll[m.tab]
 	rows := m.rows()
 	sel := &m.sel[m.tab]
 	switch msg.String() {
@@ -474,18 +542,26 @@ func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setTab((m.tab + len(tabs) - 1) % len(tabs))
 	case "1", "2", "3", "4", "5", "6":
 		m.setTab(int(msg.String()[0] - '1'))
-	case "j", "down":
+	case "j", keyDown:
 		m.move(1, rows)
+		v.top++
 	case "k", "up":
 		m.move(-1, rows)
-	case "pgdown":
+		v.top--
+	case keyPageDown:
 		m.move(m.page(), rows)
-	case "pgup":
+		v.top += m.page()
+		v.reveal = false
+	case keyPageUp:
 		m.move(-m.page(), rows)
-	case "home", "g":
+		v.top -= m.page()
+		v.reveal = false
+	case keyHome, "g":
 		*sel = 0
-	case "end", "G":
+		v.top, v.reveal = 0, false
+	case keyEnd, "G":
 		*sel = maxRow(rows)
+		v.top, v.reveal = v.limit, false
 	}
 	return m, nil
 }
@@ -501,6 +577,8 @@ func (m *model) setTab(t int) {
 // move shifts the current tab's selection by n, clamped to its rows.
 func (m *model) move(n, rows int) {
 	sel := &m.sel[m.tab]
+	old := *sel
+	defer func() { m.scroll[m.tab].reveal = *sel != old }()
 	*sel += n
 	if *sel < 0 {
 		*sel = 0
@@ -520,6 +598,7 @@ func (m *model) page() int {
 
 // pane is what the open pane shows beyond the session's facts.
 type pane struct {
+	facts       *viewport
 	tail        []Turn
 	state, back int
 	err         string
@@ -533,12 +612,14 @@ type pane struct {
 
 // pane is the open pane's state for the view.
 func (m *model) pane() pane {
-	return pane{tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
+	return pane{facts: &m.facts, tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
 		composing: m.composing, draft: string(m.draft), sending: m.sending, outcome: m.outcome, outcomeErr: m.outcomeErr, acting: m.acting}
 }
 
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
+	m.paneID++
+	m.facts = viewport{}
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
 	m.composing, m.draft, m.outcome, m.outcomeErr = false, nil, "", false
 }
@@ -547,7 +628,7 @@ func (m *model) closeDetail() {
 // is closing.
 func (m *model) releaseAll() {
 	for id := range m.taken {
-		_ = m.src.Release(context.Background(), id)
+		_ = m.src.ReleaseOwned(context.Background(), id)
 	}
 	m.taken = nil
 }
@@ -593,24 +674,27 @@ func (m *model) rowsFor(t int) int {
 // sessionsTab is the sessions tab's index.
 const sessionsTab = 1
 
-// selectedSession is the name of the session the sessions tab selects, ""
+// selectedSession is the ID of the session the sessions tab selects, ""
 // when it selects none.
 func (m *model) selectedSession() string {
 	if s := m.sessions(); m.sel[sessionsTab] < len(s) {
-		return s[m.sel[sessionsTab]].Name
+		return s[m.sel[sessionsTab]].ID
 	}
 	return ""
 }
 
-// keepSelection moves the sessions tab's selection to name's new row: the
+// keepSelection moves the sessions tab's selection to id's new row: the
 // list reorders as sessions get busy, and enter, t and a must act on the
 // session the person picked, not on whichever took its place.
-func (m *model) keepSelection(name string) {
-	if name == "" {
+func (m *model) keepSelection(id string) {
+	if id == "" {
 		return
 	}
 	for i, s := range m.sessions() {
-		if s.Name == name {
+		if s.ID == id {
+			if m.sel[sessionsTab] != i {
+				m.scroll[sessionsTab].reveal = true
+			}
 			m.sel[sessionsTab] = i
 			return
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -77,6 +78,27 @@ func (d noteDraft) unrenderable(forWho string) []string {
 
 const recommendedSuffix = " (Recommended)"
 
+// resolveNoteChoice keeps numeric choices in the note's stored order and
+// accepts the note's own labels without relying on a rendered option order.
+func resolveNoteChoice(n *state.Note, value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if n != nil {
+		for i := range n.Options {
+			label, _, _ := n.Option(i + 1)
+			if value == label {
+				return i + 1, nil
+			}
+		}
+	}
+	if i, err := strconv.Atoi(value); err == nil {
+		return i, nil
+	}
+	return 0, usageErr("--choice %q does not name an option label or a 1-based option number", value)
+}
+
 // answerText is an answer word for word: the chosen option's label, the
 // person's own words, or both.
 func answerText(n *state.Note, choice int, text string) (string, error) {
@@ -90,6 +112,16 @@ func answerText(n *state.Note, choice int, text string) (string, error) {
 	label, _, ok := n.Option(choice)
 	if !ok {
 		return "", usageErr("note #%d has no option %d (it has %d)", n.ID, choice, len(n.Options))
+	}
+	// A relay may add context, but must not name another option as its choice.
+	for i, full := range n.Options {
+		if i+1 == choice {
+			continue
+		}
+		other, _, _ := n.Option(i + 1)
+		if text != "" && trimOptionPrefix(other, text, full) != text {
+			return "", usageErr("--choice %d selects %q, but the relayed text names %q", choice, label, other)
+		}
 	}
 	text = trimOptionPrefix(label, text, n.Options[choice-1])
 	if text == "" {
@@ -266,7 +298,11 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 // otherwise. A central instance has no sessions to tell: it queues line in
 // the mailbox of the filer's person, addressed to the filing agent, whose
 // machine's watch delivers it.
-func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) (report string) {
+func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) string {
+	return a.tellFilerWithWake(ctx, by, n, line, (*app).quietWake)
+}
+
+func (a *app) tellFilerWithWake(ctx context.Context, by state.Party, n *state.Note, line string, wake func(*app, context.Context, state.Party, string, string) error) (report string) {
 	delivery := noteDelivery{Note: n.ID, Team: n.By.Team, Status: "delivered"}
 	defer func() {
 		// Hold-release messages use this route too; their delivery must not
@@ -311,14 +347,14 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	}
 	rl, ok := filedRole(st, n.By)
 	if !ok {
-		if err := a.quietWake(ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
+		if err := wake(a, ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
 			return fail(err)
 		}
 		return ""
 	}
 	why := fmt.Sprintf("no session holds the %s's role", rl.name)
 	if h := rl.get(st).Holder; h != nil {
-		err := a.quietWake(ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
+		err := wake(a, ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
 		switch {
 		case err == nil && h.Is(n.By):
 			return ""
