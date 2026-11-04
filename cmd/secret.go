@@ -1240,11 +1240,14 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 			if err != nil {
 				return err
 			}
-			ops, ix, err := a.secretOpsIndexed()
+			files, err := a.scanFiles()
 			if err != nil {
 				return err
 			}
-			files, err := a.scanFiles()
+			if err := a.sandboxPaths(files, files); err != nil {
+				return err
+			}
+			ops, ix, err := a.secretOpsIndexed()
 			if err != nil {
 				return err
 			}
