@@ -386,6 +386,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
+		argv = merge.RequireRebase(argv)
+	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
