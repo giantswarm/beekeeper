@@ -11,6 +11,12 @@ import (
 	"testing"
 )
 
+const (
+	sweepContext     = "sweep-builders"
+	sweepContextFlag = "--context"
+	sweepNamespace   = "sweep-workers"
+)
+
 func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 	for _, conflicting := range []bool{false, true} {
 		label := "missing"
@@ -41,11 +47,11 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 				t.Fatal(err)
 			}
 			name := builderName(host, origin)
-			runner := Runner{StateDir: state, Config: Config{Kubeconfig: "build.yaml", Context: "builders", Namespace: "build-workers"}}
+			runner := Runner{StateDir: state, Config: Config{Kubeconfig: "build.yaml", Context: sweepContext, Namespace: sweepNamespace}}
 			if err := runner.remember(origin, host, name); err != nil {
 				t.Fatal(err)
 			}
-			rec := builderRecord{origin, host, kubeconfig, "builders", "build-workers"}
+			rec := builderRecord{origin, host, kubeconfig, sweepContext, sweepNamespace}
 			path := filepath.Join(state, "remote-build", rec.file(name))
 			raw, err := os.ReadFile(path) //nolint:gosec // owned test fixture
 			if err != nil {
@@ -63,7 +69,7 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 			calls := 0
 			runner.Command = func(_ context.Context, _ io.Reader, _ io.Writer, args ...string) error {
 				calls++
-				want := []string{"--kubeconfig", kubeconfig, "--context", "builders", "--namespace", "build-workers"}
+				want := []string{"--kubeconfig", kubeconfig, sweepContextFlag, sweepContext, "--namespace", sweepNamespace}
 				if !slices.Equal(args[:6], want) {
 					t.Fatalf("connection = %v, want %v", args[:6], want)
 				}
@@ -101,7 +107,7 @@ func TestSweepRetainsLegacyRelativeKubeconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := builderName(host, root)
-	rec := builderRecord{root, host, "build.yaml", "builders", "build-workers"}
+	rec := builderRecord{root, host, "build.yaml", sweepContext, sweepNamespace}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
@@ -123,5 +129,30 @@ func TestSweepRetainsLegacyRelativeKubeconfig(t *testing.T) {
 		if err != nil || string(kept) != string(raw) {
 			t.Fatalf("legacy record changed: %v", err)
 		}
+	}
+}
+
+// The default kubeconfig has no path: its record must not gain one.
+func TestRememberKeepsTheDefaultKubeconfigEmpty(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(state, "remote-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const host, name = "fixture-host", "fixture-builder"
+	runner := Runner{StateDir: state, Config: Config{Context: sweepContext, Namespace: sweepNamespace}}
+	if err := runner.remember(root, host, name); err != nil {
+		t.Fatal(err)
+	}
+	rec := builderRecord{root, host, "", sweepContext, sweepNamespace}
+	raw, err := os.ReadFile(filepath.Join(state, "remote-build", rec.file(name))) //nolint:gosec // owned test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved builderRecord
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved != rec {
+		t.Fatalf("saved record = %+v, want %+v", saved, rec)
 	}
 }

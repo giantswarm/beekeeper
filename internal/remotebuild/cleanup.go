@@ -42,9 +42,14 @@ func (r Runner) remember(root, host, name string) error {
 	dir := filepath.Join(r.StateDir, "remote-build")
 	// Retirement may run outside this build directory. Persist the connection
 	// path before hashing it so its meaning and record identity stay stable.
-	kubeconfig, err := filepath.Abs(r.Config.Kubeconfig)
-	if err != nil {
-		return fmt.Errorf("resolve builder kubeconfig: %w", err)
+	// An empty path means the default kubeconfig; Abs would make it this
+	// directory.
+	kubeconfig := r.Config.Kubeconfig
+	if kubeconfig != "" {
+		var err error
+		if kubeconfig, err = filepath.Abs(kubeconfig); err != nil {
+			return fmt.Errorf("resolve builder kubeconfig: %w", err)
+		}
 	}
 	record := builderRecord{root, host, kubeconfig, r.Config.Context, r.Config.Namespace}
 	raw, err := json.Marshal(record)
