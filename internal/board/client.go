@@ -64,7 +64,7 @@ const isOpen = "is:open"
 
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
+labels(first:20){nodes{name} pageInfo{hasNextPage endCursor}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item, the Status with
@@ -92,9 +92,7 @@ type issueJSON struct {
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
-	Labels struct {
-		Nodes []struct{ Name string } `json:"nodes"`
-	} `json:"labels"`
+	Labels    labelPage `json:"labels"`
 	Assignees struct {
 		Nodes []struct{ Login string } `json:"nodes"`
 	} `json:"assignees"`
@@ -150,6 +148,7 @@ func (j issueJSON) item() Item {
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
 		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.BlockedBy.TotalCount, OpenBlockers: max(0, j.BlockedBy.TotalCount-len(j.BlockedBy.Nodes)), OpenSubIssues: j.Subs.Total - j.Subs.Completed,
 		subIssues: j.Subs.Total, BlockersClosed: j.blockersClosed(),
+		labelsMore: j.Labels.PageInfo.HasNextPage, labelsCursor: j.Labels.PageInfo.EndCursor,
 	}
 	for _, l := range j.Labels.Nodes {
 		it.Labels = append(it.Labels, l.Name)
@@ -386,10 +385,16 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if snap.Items, err = c.items(ctx, filter(c.Board, order, gate.statuses()...)); err != nil {
 		return nil, err
 	}
+	if err := c.readLabels(ctx, snap); err != nil {
+		return nil, err
+	}
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {
 		return nil, err
 	}
 	if err := c.blockerDetails(ctx, snap); err != nil {
+		return nil, err
+	}
+	if err := c.readLabels(ctx, snap); err != nil {
 		return nil, err
 	}
 	snap.Plans, err = c.plansOf(ctx, snap)
