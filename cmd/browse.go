@@ -684,6 +684,8 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	}
 	env := append(browseEnv(os.Environ()), guard.SharedEnv+"="+strings.Join(staged, string(os.PathListSeparator)))
 	if stage != "" {
+		// CLAUDE_STAGE_FILE_ROOT is undocumented; the browselive upload check
+		// must pass after upgrading the CLI that consumes this stage root.
 		env = append(env, stageRootEnv+"="+stage)
 	}
 	out := a.out
@@ -1770,6 +1772,8 @@ func browseEnv(env []string) []string {
 // Chrome's file_upload takes without the Read tool. A browse turn has no Read
 // tool, and granting it would let the turn read every path the person's own
 // allow rules cover, so a shared file reaches the turn as a copy there.
+// CLAUDE_STAGE_FILE_ROOT is undocumented and may change with a CLI upgrade.
+// TestBrowseUploadLive exercises this contract against the installed CLI.
 const stageRootEnv = "CLAUDE_STAGE_FILE_ROOT"
 
 // uploadLimit is file_upload's bound on the bytes of the files of one call.
