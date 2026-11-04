@@ -182,6 +182,11 @@ func (s *Store) Send(ctx context.Context, m Message, now time.Time) (Sent, error
 	var out Sent
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// One sender's sends and one mailbox's cap are judged one at a time.
+		// Always take the sender lock first. The two-key lock space keeps
+		// sender locks separate from the one-key mailbox locks.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_sender'), hashtext($1))`, m.Sender); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_mailbox:' || $1))`, m.Mailbox); err != nil {
 			return err
 		}
