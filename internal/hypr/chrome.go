@@ -278,7 +278,7 @@ type Shown struct {
 	Where  string `json:"where"`
 	// Moved says the placement moved the window onto the output.
 	Moved bool `json:"moved"`
-	// Created says the placement created the output, which Restore removes.
+	// Created says the placement created the output.
 	Created bool `json:"created"`
 	// Left says why Restore left the window where it was: closed, or moved
 	// by the person to another workspace; "" when it put it back.
@@ -404,10 +404,11 @@ func checkOutput(before, after layout) error {
 
 // Restore ends the redirect, then puts the window back on its own
 // workspace, and every other window on the output's workspace with it (one
-// Chrome opened during the turn); then it removes the output, unless a
-// window failed to move off it, which removing the output would put on the
-// person's screen. One closed since, or moved by the person to a third
-// workspace, is left where it is, and Left says so.
+// Chrome opened during the turn). The empty output stays for later turns:
+// Hyprland creates and switches to a numbered fallback workspace when
+// removing a monitor, even when its workspace is empty. One closed since,
+// or moved by the person to a third workspace, is left where it is, and
+// Left says so.
 func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if s == nil {
 		return nil
@@ -438,10 +439,7 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if err := joinErr(moves...); err != nil {
 		return joinErr(append(errs, fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output))...)
 	}
-	// The output is beekeeper's by its name: one a died turn left is
-	// removed too.
-	s.Created = l.output() != nil
-	return joinErr(append(errs, s.removeOutput(ctx, ctl))...)
+	return joinErr(errs...)
 }
 
 // removeOutput removes the output the placement created, once.

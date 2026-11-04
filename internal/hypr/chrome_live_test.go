@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -207,9 +208,10 @@ func TestLivePopUpLandsOnTheOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.output() != nil {
-		t.Errorf("the output %s outlived the turn", Output)
+	if l.output() == nil {
+		t.Errorf("the output %s was removed after the turn", Output)
 	}
+	time.Sleep(100 * time.Millisecond) // let the event reader drain the restore batch
 	ev := stop()
 	if err := os.WriteFile(filepath.Join(dir, "9-events.txt"), []byte(strings.Join(ev, "\n")+"\n"), 0o600); err != nil { //nolint:gosec // the proof's scratch dir
 		t.Fatal(err)
@@ -224,6 +226,9 @@ func TestLivePopUpLandsOnTheOutput(t *testing.T) {
 		ours = append(ours, "activewindowv2>>"+strings.TrimPrefix(w.Address, "0x"))
 	}
 	for _, e := range ev {
+		if numberedWorkspaceEvent(e) {
+			t.Errorf("a numbered workspace changed during the turn: %s", e)
+		}
 		if slices.ContainsFunc([]string{"activewindowv2>>", "focusedmon>>", "workspacev2>>", "fullscreen>>"}, func(k string) bool { return strings.Contains(e, " "+k) }) {
 			t.Logf("focus or workspace event: %s", e)
 		}
@@ -232,4 +237,53 @@ func TestLivePopUpLandsOnTheOutput(t *testing.T) {
 		}
 	}
 	t.Logf("scratch Chrome pid %d, %d windows, %d events", main.Pid, len(wins), len(ev))
+}
+
+// numberedWorkspaceEvent checks names rather than IDs: the surface has a
+// positive ID but a named workspace must never borrow a desktop number.
+func numberedWorkspaceEvent(event string) bool {
+	_, event, ok := strings.Cut(event, " ")
+	if !ok {
+		return false
+	}
+	kind, payload, ok := strings.Cut(event, ">>")
+	if !ok {
+		return false
+	}
+	switch kind {
+	case "workspace", "createworkspace", "destroyworkspace":
+	case "workspacev2", "createworkspacev2", "destroyworkspacev2":
+		_, payload, ok = strings.Cut(payload, ",")
+		if !ok {
+			return false
+		}
+	default:
+		return false
+	}
+	_, err := strconv.Atoi(payload)
+	return err == nil
+}
+
+func TestNumberedWorkspaceEvent(t *testing.T) {
+	for _, kind := range []string{"workspace", "createworkspace", "destroyworkspace"} {
+		for _, name := range []string{"5", Surface, hidden} {
+			for _, v2 := range []bool{false, true} {
+				event := "12:00:00.000 " + kind
+				if v2 {
+					event += "v2>>5,"
+				} else {
+					event += ">>"
+				}
+				event += name
+				if got := numberedWorkspaceEvent(event); got != (name == "5") {
+					t.Errorf("numberedWorkspaceEvent(%q) = %v", event, got)
+				}
+			}
+		}
+	}
+	for _, event := range []string{"", "12:00:00.000 workspacev2>>5", "12:00:00.000 monitorremovedv2>>1,BEEKEEPER-BROWSE,"} {
+		if numberedWorkspaceEvent(event) {
+			t.Errorf("unexpected numbered workspace event: %q", event)
+		}
+	}
 }
