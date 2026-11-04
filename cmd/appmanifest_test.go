@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func (w *browsingWriter) String() string {
 func manifestApp(t *testing.T) (*app, *fakeGitHub, *secrettest.Tools, string, string) {
 	t.Helper()
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	manifest := filepath.Join(t.TempDir(), "manifest.json")
 	if err := os.WriteFile(manifest, []byte(fixtureManifest), 0o600); err != nil {
 		t.Fatal(err)
@@ -176,6 +177,37 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].Slug != fixtureApp ||
 		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || !strings.HasPrefix(st.AppsCreated[0].Declared, a.store.Dir()+string(os.PathSeparator)) {
 		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
+	}
+}
+
+func TestAppCreateManifestWebhookActive(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			a, _, tools, file, manifest := manifestApp(t)
+			raw := strings.Replace(fixtureManifest, `"hook_attributes": {`, fmt.Sprintf(`"hook_attributes": {"active": %t,`, active), 1)
+			if err := os.WriteFile(manifest, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			out, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, orgFlag, fixtureOrg, timeoutFlag, tenSeconds)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain, err := tools.Run(context.Background(), "", nil, nil, "sops", "decrypt", file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(plain), "webhook-secret:"); got != active {
+				t.Errorf("webhook-secret present = %v, want %v", got, active)
+			}
+			if active && !strings.Contains(string(plain), "webhook-secret: "+fixtureWebhook) {
+				t.Error("active webhook secret was not preserved")
+			}
+			if got := strings.Contains(stderr.String(), "#stringData.webhook-secret"); got != active {
+				t.Errorf("reported webhook-secret = %v, want %v", got, active)
+			}
+			noFixtureSecret(t, "output", out+stderr.String())
+		})
 	}
 }
 
@@ -384,7 +416,7 @@ func TestAppCreateManifestRefuses(t *testing.T) {
 		code int
 		want string
 	}{
-		"installation": {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
+		installCmd:     {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
 		"nameless":     {[]string{fixtureOrg, manifestFlag, nameless, orgFlag, fixtureOrg}, ExitUsage, `names no App ("name")`},
 		"no file":      {[]string{fixtureOrg, manifestFlag, filepath.Join(dir, "absent.json"), orgFlag, fixtureOrg}, ExitUsage, "--manifest: "},
 		"known":        {[]string{fixtureOrg, manifestFlag, taken, orgFlag, fixtureOrg}, ExitRefused, "GitHub already knows an App named taken"},

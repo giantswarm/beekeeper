@@ -59,7 +59,7 @@ func TestRoomFor(t *testing.T) {
 	if got := roomFor(st, sessions, tbl, now, []string{stale, fresh, waiting}, false); got != nil {
 		t.Fatalf("with only the person's own session, a role's holder and a busy worker left it ends %s, want none", got.HostID)
 	}
-	st.Merges = []state.Merge{{Repo: "o/r", PR: 1, By: state.Party{Session: onhold}}}
+	st.Merges = []state.Merge{{Repo: repo, PR: 1, By: state.Party{Session: onhold}}}
 	if got := roomFor(st, sessions, tbl, now, []string{stale, fresh}, false); got != nil {
 		t.Fatalf("a parked worker whose merge waits in the gate is ended: %s", got.HostID)
 	}
@@ -112,7 +112,7 @@ func TestRoomForRelievedRun(t *testing.T) {
 	if got := roomFor(st, sessions, tbl, now, keep, true); got != nil {
 		t.Fatalf("ends %s, a relieved run still writing its hand-over", got.HostID)
 	}
-	if forRole(st, []string{"local_worker"}, now) {
+	if forRole(st, []string{litLocalWorker}, now) {
 		t.Fatal("a worker counts as a role's run")
 	}
 }

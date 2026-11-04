@@ -117,6 +117,7 @@ func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string
 	if err != nil {
 		return nil, err
 	}
+	doc.snapshot = &fileSnapshot{} // CopyFile requires an absent destination.
 	if name != "" || namespace != "" {
 		if err := doc.rename(name, namespace); err != nil {
 			return nil, fmt.Errorf("%s: %w", src.File, err)
@@ -216,13 +217,20 @@ func (o *Ops) CopyValues(ctx context.Context, pairs []Pair, file string, nw *New
 		return nil, err
 	}
 	paths := make([]string, len(pairs))
+	planned := &document{root: clone(doc.root)}
+	seen := map[destination]bool{}
 	for i, p := range pairs {
 		if paths[i], err = place(doc, file, p.Path); err != nil {
 			return nil, err
 		}
-		if slices.Contains(paths[:i], paths[i]) {
+		dst, err := planned.planDestination(paths[i])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if seen[dst] {
 			return nil, fmt.Errorf("%s: %s is named twice", file, paths[i])
 		}
+		seen[dst] = true
 	}
 	vs := make([]string, len(pairs))
 	for i, p := range pairs {
@@ -271,6 +279,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	raw, err := os.ReadFile(file) //nolint:gosec // the caller's SOPS file
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		doc.snapshot = &fileSnapshot{}
 		return doc, nil
 	case err != nil:
 		return nil, err
@@ -280,6 +289,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	case err != nil:
 		return nil, fmt.Errorf("%s: %w", file, err)
 	case skel != nil:
+		skel.snapshot = snapshotOf(raw, true)
 		return skel, nil
 	}
 	return o.decrypt(ctx, file)
@@ -290,18 +300,20 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 // sops encrypts, the one holding the document for a path into it.
 func place(doc *document, file, path string) (string, error) {
 	path = doc.valuePath(path)
-	keys := splitPath(path)
-	if l, ok := doc.inLeaf(keys); ok {
-		keys = l.held
-	}
+	keys := doc.encryptionKeys(splitPath(path))
 	if err := checkRule(file, keys); err != nil {
 		return "", err
+	}
+	// Check the mutation on an isolated tree before obtaining a one-time value.
+	planned := &document{root: clone(doc.root)}
+	if err := planned.set(path, "beekeeper-preflight"); err != nil {
+		return "", fmt.Errorf("%s: %w", file, err)
 	}
 	return path, nil
 }
 
 // checkRule refuses the keys of a value's path, one key each, that file's
-// creation rule would leave in plaintext.
+// creation rule would leave in plaintext, or when no creation rule matches.
 func checkRule(file string, keys []string) error {
 	cfg, rel, err := sopsTarget(file)
 	if err != nil {
@@ -311,10 +323,11 @@ func checkRule(file string, keys []string) error {
 	if err != nil {
 		return err
 	}
-	if rule != nil {
-		if err := rule.checkKeys(keys); err != nil {
-			return fmt.Errorf("%s: %w (%s)", file, err, cfg)
-		}
+	if rule == nil {
+		return fmt.Errorf("%s: no creation rule of %s applies to it", file, cfg)
+	}
+	if err := rule.checkKeys(keys); err != nil {
+		return fmt.Errorf("%s: %w (%s)", file, err, cfg)
 	}
 	return nil
 }
@@ -461,21 +474,14 @@ func kubectlExec(argv []string) error {
 	if len(argv) < 2 || argv[1] != "exec" || dash < 0 {
 		return fmt.Errorf("%q: kubectl takes a value only as kubectl exec -i --context <context> <pod> -- <command>", cmd)
 	}
-	stdin := false
-	for _, a := range argv[2:dash] {
-		switch {
-		case a == "-i", a == "--stdin", a == "--stdin=true":
-			stdin = true
-		case a == "-t", a == "--tty", strings.HasPrefix(a, "--tty="), strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 2 && strings.ContainsAny(a[1:], "it"):
-			return fmt.Errorf("%q: no TTY and no combined short flags, a TTY echoes stdin: kubectl exec -i", cmd)
-		case a == "-v", a == "--v", strings.HasPrefix(a, "-v="), strings.HasPrefix(a, "--v="):
-			return fmt.Errorf("%q: no verbosity, kubectl's request log stays off", cmd)
-		}
+	context, stdin, err := kubectlExecFlags(argv[2:dash])
+	if err != nil {
+		return fmt.Errorf("%q: %w", cmd, err)
 	}
 	switch {
 	case !stdin:
 		return fmt.Errorf("%q: the value goes on the exec stream, kubectl exec -i", cmd)
-	case ConsumerContext(argv) == "":
+	case context == "":
 		return fmt.Errorf("%q: name the cluster, --context <context>", cmd)
 	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]) && !valkeyCLI(argv[dash+1:]):
 		return fmt.Errorf("%q: the command in the pod reads the value on stdin: %s, %s", cmd, stdinReaders, podReaders)
@@ -483,25 +489,57 @@ func kubectlExec(argv []string) error {
 	return nil
 }
 
-// ConsumerContext is the kube context a kubectl exec consumer names, ""
-// for any other consumer.
+// kubectlExecFlags deliberately accepts only flags whose arity we know. Unknown
+// flags and flag-looking values could hide a context from this inspection.
+func kubectlExecFlags(args []string) (context string, stdin bool, err error) {
+	pod := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name, value, equal := strings.Cut(a, "=")
+		switch name {
+		case "-i", "--stdin":
+			if equal && value != "true" {
+				return "", false, errors.New("kubectl exec requires stdin")
+			}
+			stdin = true
+		case "--context", "-n", "--namespace", "-c", "--container":
+			if !equal {
+				i++
+				if i == len(args) {
+					return "", false, errors.New("kubectl exec flag requires a value")
+				}
+				value = args[i]
+			}
+			if value == "" || strings.HasPrefix(value, "-") {
+				return "", false, errors.New("kubectl exec flag requires an unambiguous value")
+			}
+			if name == "--context" {
+				if context != "" {
+					return "", false, errors.New("kubectl exec requires exactly one context")
+				}
+				context = value
+			}
+		default:
+			if strings.HasPrefix(a, "-") || pod || a == "" {
+				return "", false, errors.New("unsupported or ambiguous kubectl exec argument")
+			}
+			pod = true
+		}
+	}
+	if !pod {
+		return "", false, errors.New("kubectl exec requires a pod")
+	}
+	return context, stdin, nil
+}
+
+// ConsumerContext is the kube context a valid kubectl exec consumer names,
+// or "" for any other or invalid consumer.
 func ConsumerContext(argv []string) string {
-	if len(argv) < 2 || filepath.Base(argv[0]) != "kubectl" {
+	if len(argv) < 2 || filepath.Base(argv[0]) != "kubectl" || kubectlExec(argv) != nil {
 		return ""
 	}
-	end := slices.Index(argv, "--")
-	if end < 0 {
-		end = len(argv)
-	}
-	for i, a := range argv[:end] {
-		if a == "--context" && i+1 < end {
-			return argv[i+1]
-		}
-		if c, ok := strings.CutPrefix(a, "--context="); ok {
-			return c
-		}
-	}
-	return ""
+	context, _, _ := kubectlExecFlags(argv[2:slices.Index(argv, "--")])
+	return context
 }
 
 // Stdin shapes what a consumer reads: the value alone, or with Field set,
@@ -522,7 +560,7 @@ func (s Stdin) Check() error {
 	}
 	obj := map[string]any{}
 	if s.Template != "" {
-		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil || obj == nil {
 			return errors.New("--stdin-json: no JSON object")
 		}
 	}
@@ -539,7 +577,7 @@ func (s Stdin) input(v string) (string, error) {
 	}
 	obj := map[string]any{}
 	if s.Template != "" {
-		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil || obj == nil {
 			return "", errors.New("--stdin-json: no JSON object")
 		}
 	}

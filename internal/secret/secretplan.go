@@ -61,8 +61,9 @@ func PlanSecretKeys(file string, keys []string, replace bool) (*SecretKeysPlan, 
 		if err != nil {
 			return nil, err
 		}
-		_, inData := doc.get("data." + key)
-		if _, inString := doc.get(path); (inString || inData) && !replace {
+		inData := doc.node("data."+key) != nil
+		inString := doc.node(path) != nil
+		if (inString || inData) && !replace {
 			return nil, fmt.Errorf("%s: the Secret holds %s already: replacing it takes --replace", file, key)
 		}
 		paths = append(paths, path)
