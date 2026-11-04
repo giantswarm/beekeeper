@@ -1866,9 +1866,12 @@ func (s *FileStore) busy(waited time.Duration) error {
 func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
-// back atomically together with the events fn returns. When fn fails nothing
+// back with the events fn returns under the same lock. When fn fails nothing
 // is written. When a newer release wrote the state, fn is not invoked and
 // Update returns StaleWriterError.
+// Event-log open failures leave state unchanged. Later event write/close failures
+// and crashes can still leave state and events inconsistent; this is not a
+// transaction across the two files.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1894,10 +1897,23 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
+	var log *os.File
+	if len(events) > 0 {
+		log, err = s.openEventLog()
+		if err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(s.path("state.json"), st); err != nil {
+		if log != nil {
+			_ = log.Close()
+		}
 		return err
 	}
-	return s.append(events)
+	if log == nil {
+		return nil
+	}
+	return appendEvents(log, events)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2071,10 +2087,19 @@ func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := s.openEventLog()
 	if err != nil {
 		return err
 	}
+	return appendEvents(f, events)
+}
+
+func (s *FileStore) openEventLog() (*os.File, error) {
+	return os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+}
+
+// appendEvents consumes and closes f, including on failure.
+func appendEvents(f *os.File, events []Event) error {
 	if err := endLine(f); err != nil {
 		_ = f.Close()
 		return err
