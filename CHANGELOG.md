@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Serialize a sender's mailbox sends across destinations so concurrent retries return one delivery instead of a uniqueness error (https://github.com/giantswarm/beekeeper/issues/2919).
+- An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
+- Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
 
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
 
@@ -74,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
+- No person is asked whether to merge. Past its reviews the supervisor loop now gives the go for a reviewed, green head itself, where it used to ask the guide's person in a note ("Merge … without a third review, or have it reworked?"). `note add` refuses a decision from anyone that asks whether to merge a pull request and logs it as `note.redirected`. `beekeeper answer verify`, the `answer_verify` tool, the computed answer channel with its relay attribution and guide dialog receipt, and the verified-answer suffix on `merge.merged` are removed; `answer --via cli|slack` stays a plain record of how the words came (https://github.com/giantswarm/beekeeper/issues/2207).
 - A message an omp, agy or codex worker sends by `agents wake` names the sender's roster name (or role) to reply to, and a `SendMessage` by that name reaches the worker's inbox; a `SendMessage` to a peer socket that ended (a relay turn's) is refused with that hint instead of failing with ENOENT. The worker rules say workers send the guide no status (https://github.com/giantswarm/beekeeper/issues/2143).
 - `self-update` and `--check` never ask GitHub anonymously: without `GH_TOKEN`, `GITHUB_TOKEN` or a gh login they say so and stop, and a rate-limited lookup names the limit with its reset. `agents hosts update` looks the release up on the coordinator with its gh login and hands it to the execution host over SSH, which downloads the binary and bundle from the release's public download URLs instead of asking GitHub's API anonymously from an IP whose limit other machines share ([https://github.com/giantswarm/beekeeper/issues/643](https://github.com/giantswarm/beekeeper/issues/643)).
 
