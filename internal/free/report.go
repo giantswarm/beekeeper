@@ -289,7 +289,7 @@ func (r *Run) heavy() {
 		case "Hyprland", "waybar", "kitty", "zenity":
 			continue
 		}
-		detail := p.Cmdline()
+		detail := processCommand(p)
 		if leaf := path.Base(cg); strings.HasSuffix(leaf, ".service") && strings.Contains(cg, "/user@"+strconv.Itoa(r.UID)+".service/") {
 			if units[leaf] {
 				continue
@@ -385,4 +385,12 @@ func truncate(s string, n int) string {
 		return string(rs[:n])
 	}
 	return s
+}
+
+func processCommand(p *proc.Process) string {
+	command, cut := proc.MaskedCommand(p.Args)
+	if cut {
+		command += " (masked)"
+	}
+	return command
 }
