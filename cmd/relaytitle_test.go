@@ -11,12 +11,12 @@ import (
 )
 
 func TestRelayKeepsRunNameAfterDesktopCLIRestarts(t *testing.T) {
-	for _, title := range []string{"Guide", "Supervisor"} {
+	for _, title := range []string{mailGuide, claimSupervisor} {
 		t.Run(title, func(t *testing.T) {
 			rl := guideRole
 			rl.title = title
-			out := state.Party{Session: "old", Name: rl.runName(79)}
-			next := state.Party{Session: "next", HostSession: "local_next", Name: rl.runName(80)}
+			out := state.Party{Session: "outgoing-run", Name: rl.runName(79)}
+			next := state.Party{Session: "next-run", HostSession: "local_next-run", Name: rl.runName(80)}
 			st := &state.State{}
 			rl.set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: relayNow.Add(-time.Hour)}, Run: 79})
 			if _, _, err := rl.relay(st, out, next, relayNow, time.Minute); err != nil {
@@ -44,10 +44,21 @@ func TestRelayKeepsRunNameAfterDesktopCLIRestarts(t *testing.T) {
 
 func TestTitleRunRestoresAnEmptyDesktopTitle(t *testing.T) {
 	a, _ := supervisorApp(t)
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	desktopRecord(t, a.cfg.Claude.DesktopDir, "local_desktop-run", "desktop-run", false)
 	// No desktop steward is available: an empty title must still attempt
 	// restoration and report the failure instead of silently skipping it.
-	line := a.titleRun(context.Background(), state.Party{Session: "missing", Name: "Guide run 80"}, "Guide run 80")
+	line := a.titleRun(context.Background(), state.Party{Session: "desktop-run", Name: "Guide run 80"}, "Guide run 80")
 	if !strings.Contains(line, "the desktop recorded no title") {
 		t.Fatalf("empty title was not restored: %q", line)
+	}
+}
+
+// A background role run has no desktop record, so nothing to restore.
+func TestTitleRunSkipsASessionWithoutADesktopRecord(t *testing.T) {
+	a, _ := supervisorApp(t)
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	if line := a.titleRun(context.Background(), state.Party{Session: "background-run", Name: "Guide run 81"}, "Guide run 81"); line != "" {
+		t.Fatalf("a session without a desktop record was retitled: %q", line)
 	}
 }
