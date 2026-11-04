@@ -412,19 +412,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
-			pm := ""
-			if v.PostMerge != nil {
-				pm = *v.PostMerge
-			}
-			if pm == "" && ag.Park != nil && strings.EqualFold(ag.Park.On, v.On) && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
-				pm = *ag.Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
-					pm = *rp.PostMerge
-				}
-			}
-			v.PostMerge = &pm
+			v.PostMerge = reviewPostMerge(st, v.On, ag.Park, v.PostMerge)
 			if ag.Execution != nil {
 				if r, _ := executionRecord(st, *ag.Execution); r != nil {
 					r.Completed = true
