@@ -64,6 +64,10 @@ type Store struct {
 	// home is the namespace of the store's own objects: the note counter.
 	home string
 
+	// publishMu keeps feed ID allocation and its durable write in order.
+	// Feed holds it across both lists to return a consistent cursor view.
+	publishMu sync.Mutex
+
 	// idMu guards lastID, the id of the last Event recorded or found: ids
 	// only grow, across restarts too (the first record reads the Events'
 	// highest).
@@ -183,6 +187,8 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		if err != nil {
 			return false, err
 		}
+		s.publishMu.Lock()
+		defer s.publishMu.Unlock()
 		if err := snap.closeNotes(want, events, func(at time.Time) (string, error) { return s.nextID(ctx, at) }); err != nil {
 			return false, err
 		}
@@ -583,6 +589,8 @@ func FeedEvent(ev *corev1.Event) (feed.Event, error) {
 // oldest first: the changes, not the audit of the calls that changed
 // nothing (serve.*).
 func (s *Store) Feed(n int) ([]feed.Event, error) {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	ctx, cancel := s.ctx()
 	defer cancel()
 	list := &corev1.EventList{}
@@ -712,7 +720,7 @@ func (s *Store) record(ctx context.Context, written []client.Object, events []st
 		if obj == nil {
 			continue
 		}
-		if err := s.recordOn(ctx, obj, e); err != nil {
+		if err := s.recordOnLocked(ctx, obj, e); err != nil {
 			return err
 		}
 	}
@@ -721,6 +729,13 @@ func (s *Store) record(ctx context.Context, written []client.Object, events []st
 
 // recordOn writes e as a Kubernetes Event on obj.
 func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) error {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	return s.recordOnLocked(ctx, obj, e)
+}
+
+// recordOnLocked is called with publishMu held until the Event is persisted.
+func (s *Store) recordOnLocked(ctx context.Context, obj client.Object, e state.Event) error {
 	gvk, err := s.c.GroupVersionKindFor(obj)
 	if err != nil {
 		return err
