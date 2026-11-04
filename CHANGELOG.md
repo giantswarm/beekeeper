@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remove the obsolete sandbox mask setting from the example so it passes `config check` once its local inputs exist (https://github.com/giantswarm/beekeeper/issues/2483).
+
 - Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
