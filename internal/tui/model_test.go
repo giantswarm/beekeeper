@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image/color"
 	"slices"
 	"strings"
@@ -789,4 +790,61 @@ func TestLoadingBeforeFirstRefresh(t *testing.T) {
 // keyText is the key press that types text.
 func keyText(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(text)[0], Text: text}
+}
+
+func TestMultilineDraftStaysWithinScreenAndSendsOriginal(t *testing.T) {
+	for _, sep := range []string{"\n", "\r\n", "\r"} {
+		t.Run(fmt.Sprintf("separator-%q", sep), func(t *testing.T) {
+			src := &fakeSource{data: fixtureData()}
+			m := newTestModel(t, src)
+			m.key(keyText("2"))
+			_, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			for _, msg := range msgs(c) {
+				m.Update(msg)
+			}
+			m.key(keyText("m"))
+			text := "first" + sep + "second" + sep + "third" + strings.Repeat(sep+"x", 40)
+			m.Update(tea.PasteMsg{Content: text})
+			line := messageLine(m.pane(), 100)
+			if strings.ContainsAny(line, "\r\n") {
+				t.Errorf("multiline message display: %q", line)
+			}
+			assertScreenRows(t, render(m, 100, 30), 30)
+			_, c = m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if c == nil {
+				t.Fatal("no send command")
+			}
+			m.Update(c())
+			if src.sendText != text {
+				t.Errorf("sent %q, want %q", src.sendText, text)
+			}
+		})
+	}
+}
+
+func assertScreenRows(t *testing.T, screen string, height int) {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(screen), "\n")
+	if len(lines) > height {
+		t.Fatalf("screen has %d rows, maximum %d", len(lines), height)
+	}
+	for _, line := range lines {
+		if strings.ContainsRune(line, '\r') || ansi.StringWidth(line) > 100 {
+			t.Errorf("invalid screen row: %q", line)
+		}
+	}
+	if !strings.Contains(lines[len(lines)-1], "updated") {
+		t.Errorf("footer displaced: %q", lines[len(lines)-1])
+	}
+}
+
+func TestMultilineCellsStayWithinScreen(t *testing.T) {
+	m := newTestModel(t, &fakeSource{data: fixtureData()})
+	m.data.Notes[0].Text = "first\nsecond\r\nthird\rfourth" + strings.Repeat("\nx", 40)
+	for tab := range tabs {
+		m.tab = tab
+		assertScreenRows(t, render(m, 100, 30), 30)
+	}
+	m.err = errors.New("refresh\nfailed\r\nretry\rlater" + strings.Repeat("\nx", 40))
+	assertScreenRows(t, render(m, 100, 30), 30)
 }
