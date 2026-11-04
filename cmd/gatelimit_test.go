@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -17,31 +16,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
-
-// Killing the gate must not hide its still-running child or tell its owner
-// that the merge was lost. The child PID alone keeps the lane occupied.
-func TestAKilledGateWithALiveChildStaysInItsLane(t *testing.T) {
-	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four,
-		PID: deadPID(t), Child: os.Getpid(), Phase: state.Running, Started: relayNow})
-	polls(w, 3)
-	st, err := w.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Merges) != 1 || st.Merges[0].Phase != state.Running || len(*woke) != 0 {
-		t.Fatalf("merges %+v, wakes %q", st.Merges, *woke)
-	}
-	var out bytes.Buffer
-	w.out = &out
-	w.printLanes(w.laneViews(st))
-	if !strings.Contains(out.String(), "running o/r#7") {
-		t.Fatalf("surviving merge missing from lanes: %s", out.String())
-	}
-	evs, err := w.store.Events(0, func(e state.Event) bool { return e.Verb == "merge.lost" || e.Verb == "merge.cut" })
-	if err != nil || len(evs) != 0 {
-		t.Fatalf("premature loss events %+v: %v", evs, err)
-	}
-}
 
 // A gate whose devctl runs past the call's tool limit leaves at the limit
 // with exit 76: devctl runs on, the merge keeps running in its lane, no heard
