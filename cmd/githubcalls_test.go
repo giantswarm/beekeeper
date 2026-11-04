@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const finishedSession = "finished-session"
+
 func TestHookRecordsGitHubCalls(t *testing.T) {
 	var out bytes.Buffer
 	a, dir := scopeApp(t, &out)
@@ -24,7 +26,7 @@ func TestHookRecordsGitHubCalls(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	raw := func(cwd, command string) string {
-		b, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", executionOmpSession: "finished-session", executionOmpCwd: cwd, "tool_name": tToolBash, "tool_input": map[string]string{hookTypeCommand: command}})
+		b, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", executionOmpSession: finishedSession, executionOmpCwd: cwd, "tool_name": tToolBash, executionHookInput: map[string]string{hookTypeCommand: command}})
 		return string(b)
 	}
 	// No gh executable or credentials are needed to record the call.
@@ -52,10 +54,10 @@ func TestHookRecordsGitHubCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logged []state.Event
-	if err := json.Unmarshal(out.Bytes(), &logged); err != nil || len(logged) != 1 || logged[0].By.Session != "finished-session" {
+	if err := json.Unmarshal(out.Bytes(), &logged); err != nil || len(logged) != 1 || logged[0].By.Session != finishedSession {
 		t.Fatalf("log: %s (%v)", out.String(), err)
 	}
-	if events[0].By.Session != "finished-session" || !strings.Contains(events[0].Detail, `"heavy":true`) || strings.Contains(events[0].Detail, "narrow") {
+	if events[0].By.Session != finishedSession || !strings.Contains(events[0].Detail, `"heavy":true`) || strings.Contains(events[0].Detail, "narrow") {
 		t.Fatal(events)
 	}
 }
@@ -89,7 +91,7 @@ func TestBudgetAndWatchNameFinishedGitHubCaller(t *testing.T) {
 	refuse := true
 	refusingGitHub(t, &refuse)
 	a, out := budgetApp(t)
-	if err := a.store.Record(state.Event{At: a.now.Add(-time.Minute), By: state.Party{Session: "finished-session"}, Verb: verbGitHubCall, Detail: `{"class":"gh project item-list","heavy":true}`}); err != nil {
+	if err := a.store.Record(state.Event{At: a.now.Add(-time.Minute), By: state.Party{Session: finishedSession}, Verb: verbGitHubCall, Detail: `{"class":"gh project item-list","heavy":true}`}); err != nil {
 		t.Fatal(err)
 	}
 	cmd := a.budgetCmd()

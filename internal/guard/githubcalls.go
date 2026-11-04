@@ -10,6 +10,7 @@ import (
 const (
 	ghHostnameFlag = "--hostname"
 	ghReleaseSub   = "release"
+	ghViewSub      = "view"
 )
 
 // GitHubCall describes an invocation, not measured GraphQL points. Arguments
@@ -83,7 +84,7 @@ func graphQLCalls(command string) []GitHubCall {
 			if tool == "gh" && len(args) >= 2 {
 				switch args[0] {
 				case "project":
-					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", verbList, "view", "create", verbEdit, "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", unlinkCmd, "mark-template"}, args[1]) {
+					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", verbList, ghViewSub, "create", verbEdit, "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", unlinkCmd, "mark-template"}, args[1]) {
 						class = "gh project " + args[1]
 					}
 				case "api":
@@ -91,11 +92,11 @@ func graphQLCalls(command string) []GitHubCall {
 						class = "gh api graphql"
 					}
 				case "pr":
-					if slices.Contains([]string{"view", verbList, "checks"}, args[1]) {
+					if slices.Contains([]string{ghViewSub, verbList, "checks"}, args[1]) {
 						class = "gh pr " + args[1]
 					}
 				case ghIssueSub:
-					if slices.Contains([]string{"view", verbList}, args[1]) {
+					if slices.Contains([]string{ghViewSub, verbList}, args[1]) {
 						class = "gh issue " + args[1]
 					}
 				case ghReleaseSub:

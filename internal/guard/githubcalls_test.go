@@ -45,7 +45,7 @@ func TestGitHubCallsFormats(t *testing.T) {
 			}
 		})
 	}
-	raw, _ := json.Marshal(map[string]any{sessionKey: "s1", "tool_name": "Write", executionToolInput: map[string]string{commandKey: prListClass}})
+	raw, _ := json.Marshal(map[string]any{sessionKey: "s1", executionToolName: "Write", executionToolInput: map[string]string{commandKey: prListClass}})
 	if _, calls := GitHubCalls(raw, "claude"); len(calls) != 0 {
 		t.Fatal(calls)
 	}
