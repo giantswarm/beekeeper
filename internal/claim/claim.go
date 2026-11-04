@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // prefix opens a marker; markerEnd closes it.
@@ -187,13 +188,14 @@ func (m Marker) Says(now time.Time, staleAfter time.Duration) string {
 }
 
 // quote is v as a marker value: bare when it is one token, quoted
-// otherwise, never closing the HTML comment.
+// otherwise, preserving its identity without closing the HTML comment.
 func quote(v string) string {
-	v = clean(v)
-	if v != "" && !strings.ContainsAny(v, " \t\r\n\"=\\") && strconv.CanBackquote(v) {
+	if v != "" && !strings.Contains(v, "--") && !strings.ContainsFunc(v, unicode.IsSpace) && !strings.ContainsAny(v, "\"=\\") && strconv.CanBackquote(v) {
 		return v
 	}
-	return strconv.Quote(v)
+	// Go escapes round trip through split; escaping hyphens also prevents
+	// embedded HTML comment delimiters, including inside quoted values.
+	return strings.ReplaceAll(strconv.Quote(v), "-", `\x2d`)
 }
 
 // clean keeps v on one line and out of the way of the comment's end.
