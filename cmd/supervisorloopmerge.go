@@ -229,9 +229,10 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 // dropAdminRepairs undoes a branch repair an older loop requested for a
 // merge refused by base branch policy with an admin suggestion: no branch
 // change repairs that refusal. Its repair stage and the go it completed are
-// closed durably, so the unchanged approved head is merged again on this
-// pass without a new review or the worker's action. A repair stage for any
-// other reason stands.
+// closed durably outside dry-run mode, so the unchanged approved head is
+// merged again on this pass without a new review or the worker's action.
+// Dry runs only update the in-memory plan. A repair stage for any other
+// reason stands.
 func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
 	for stage, detail := range stageDetail {
 		key, ok := strings.CutSuffix(stage, " repair")
@@ -243,14 +244,18 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 			ref = ref[:i]
 		}
 		why := "base branch policy refusal is merge configuration, not branch repair"
-		if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
-			return taken, err
+		if !l.dryRun {
+			if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
+				return taken, err
+			}
 		}
 		delete(stages, stage)
 		delete(stageDetail, stage)
 		if slices.ContainsFunc(taken, func(t superloop.Taken) bool { return t.Key == key }) {
-			if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
-				return taken, err
+			if !l.dryRun {
+				if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+					return taken, err
+				}
 			}
 			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
 		}

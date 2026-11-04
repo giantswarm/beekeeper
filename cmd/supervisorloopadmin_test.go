@@ -164,6 +164,45 @@ func TestLoopRestartRecoversOlderAdminPolicyRepair(t *testing.T) {
 	}
 }
 
+func TestLoopDryRunPreservesOlderAdminPolicyRepair(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	seedOlderRepair(t, r, adminPolicyTestReason)
+	before, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.out.Reset()
+	for range 2 {
+		if err := r.a.dryRunSupervisorLoop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("dry run appended %d events, including %d unstages and %d unclaims", len(after)-len(before), len(r.logged(t, loopUnstageVerb)), len(r.logged(t, loopClaimEndVerb)))
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD GO [go "+loopPR+"@"+loopHead+"]") {
+		t.Fatalf("dry run did not preview the recovered approved head: %s", r.out)
+	}
+	attempts := 0
+	r.command = func([]string) (string, int) { attempts++; return adminPolicyTestReason, 1 }
+	for range 2 {
+		r.pass(t)
+	}
+	if attempts != 2 {
+		t.Fatalf("real passes did not retry the approved head: attempts=%d output=%s", attempts, r.out)
+	}
+	if len(r.logged(t, loopUnstageVerb)) != 1 || len(r.logged(t, loopClaimEndVerb)) != 1 {
+		t.Fatalf("real passes must record recovery exactly once: unstages=%d unclaims=%d", len(r.logged(t, loopUnstageVerb)), len(r.logged(t, loopClaimEndVerb)))
+	}
+}
+
 func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
 	r := newLoopRig(t)
 	r.park(t, loopPR, time.Now())
