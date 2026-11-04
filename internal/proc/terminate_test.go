@@ -105,8 +105,11 @@ func TestTerminateMatchingPinsIdentityBeforeChecks(t *testing.T) {
 	}
 }
 
+// failOpen names the case where opening the process handle fails.
+const failOpen = "open"
+
 func TestTerminateMatchingFailsClosed(t *testing.T) {
-	for _, failure := range []string{"open", "start", "stale", "match", "signal", "protected"} {
+	for _, failure := range []string{failOpen, "start", "stale", "match", "signal", "protected"} {
 		t.Run(failure, func(t *testing.T) {
 			current := 1
 			var signals []int
@@ -120,7 +123,7 @@ func TestTerminateMatchingFailsClosed(t *testing.T) {
 			ops := terminationOS{
 				open: func(int) (processHandle, error) {
 					opened++
-					if failure == "open" {
+					if failure == failOpen {
 						return nil, errors.New("pidfds unavailable")
 					}
 					return h, nil
@@ -146,13 +149,13 @@ func TestTerminateMatchingFailsClosed(t *testing.T) {
 				t.Fatalf("unexpected signals: %v, %v", got, signals)
 			}
 			wantClosed := 1
-			if failure == "open" || failure == "protected" {
+			if failure == failOpen || failure == "protected" {
 				wantClosed = 0
 			}
 			if h.closed != wantClosed {
 				t.Fatalf("closed %d times, want %d", h.closed, wantClosed)
 			}
-			if failure == "open" && checked != 0 {
+			if failure == failOpen && checked != 0 {
 				t.Fatal("read evidence without a stable handle")
 			}
 			if failure == "protected" && opened != 0 {
