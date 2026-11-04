@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,35 @@ func TestHostsCheckFlagsCoordinatorReleaseMismatch(t *testing.T) {
 	}
 	if err := checkHostRelease(hostNewRelease); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHostsCheckPrintsFailedHarnessReadiness(t *testing.T) {
+	const (
+		readinessCheckPassed = "passed"
+		readinessCheckFailed = "failed"
+	)
+	a, _ := sshStartTestApp(t)
+	failure := errors.New("codex: independently provisioned host login required")
+	a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) {
+		return execution.Capabilities{
+			Harnesses:   map[string]string{},
+			Unavailable: map[string]string{execution.HarnessCodex: failure.Error()},
+			Readiness: map[string]execution.HarnessReadiness{
+				execution.HarnessCodex: {Version: codexSSHFixtureVersion, VersionCheck: readinessCheckPassed, Login: readinessCheckFailed, Guard: readinessCheckPassed},
+			},
+		}, failure
+	}
+	out, err := runAgents(a, "hosts", "check", sshTestSelector)
+	if !errors.Is(err, failure) {
+		t.Fatalf("hosts check must fail: %v", err)
+	}
+	var caps execution.Capabilities
+	if err := json.Unmarshal([]byte(out), &caps); err != nil {
+		t.Fatalf("missing JSON diagnostics: %q: %v", out, err)
+	}
+	if caps.Readiness[execution.HarnessCodex].Login != readinessCheckFailed || len(caps.Harnesses) != 0 {
+		t.Fatalf("wrong readiness diagnostics: %+v", caps)
 	}
 }
 
