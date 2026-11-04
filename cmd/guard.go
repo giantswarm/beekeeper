@@ -26,6 +26,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -374,6 +375,7 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(a.relayHookCmd())
 	var formatFlag string
 	preCmd := &cobra.Command{
 		Use:   "pretooluse",
@@ -649,7 +651,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				_, _ = w.Write(h.DecideAgy(raw))
 				return nil
 			}
-			if out := h.Decide(raw); out != nil {
+			if out := peer.WithInstructionContext(a.cfg.StateDir, raw, h.Decide(raw)); out != nil {
 				_, _ = w.Write(out)
 			}
 			return nil

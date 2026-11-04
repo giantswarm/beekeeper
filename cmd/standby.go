@@ -562,7 +562,15 @@ func (w *watcher) sendAsync(ctx context.Context, to, msg string, done func(error
 
 // peerSend sends from the command line with the peer package.
 func (a *app) peerSend(ctx context.Context, to, msg string) error {
-	_, err := peer.Sender{Dir: a.cfg.StateDir}.Send(ctx, to, msg)
+	target, err := a.instructionTarget(to)
+	if err != nil {
+		return err
+	}
+	if target != nil {
+		_, err := a.relayInstruction(ctx, target.ID, instructionAddress(target), msg)
+		return err
+	}
+	_, err = peer.Sender{Dir: a.cfg.StateDir}.Send(ctx, to, msg)
 	if errors.Is(err, peer.ErrUnreachable) {
 		return fmt.Errorf("%w: its CLI stopped", err)
 	}

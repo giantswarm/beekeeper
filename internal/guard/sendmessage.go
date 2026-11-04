@@ -36,9 +36,10 @@ const SocketPrefix = "uds:"
 // a name several running CLIs carry goes to the roster agent's of that name
 // through its own socket (Agent), so a hand-over's follow-up gets it while
 // the session it replaces still runs. A message by name to a roster agent
-// whose harness reads an inbox (omp, agy, codex) is delivered there by
-// Inbox, and the call is refused with where it went: SendMessage reaches
-// only Claude sessions. A peer socket (uds:…) that no longer exists is
+// whose harness reads an inbox is delivered there by Inbox. A running Claude
+// session can likewise receive a queued instruction through its boundary hooks.
+// The native call is then refused with the delivery status to avoid a second
+// send. A peer socket (uds:…) that no longer exists is
 // refused with the sender's roster name to reply by: a relay turn's socket
 // ends with the turn. Every other call passes unchanged.
 func (h Hook) sendMessage(session string, input map[string]any) []byte {
@@ -64,14 +65,18 @@ func (h Hook) sendMessage(session string, input map[string]any) []byte {
 				" is gone: it was a turn's own, which ended (a message sent by beekeeper agents wake comes from a relay turn). Reply by the sender's roster name, which its message names"})
 		}
 	}
-	if !ok && h.Inbox != nil && !strings.HasPrefix(to, desktopPrefix) && !strings.HasPrefix(to, SocketPrefix) {
+	if h.Inbox != nil {
 		msg, _ := input["message"].(string)
 		where, err := h.Inbox(session, to, msg)
 		if err != nil {
 			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + err.Error()})
 		}
 		if where != "" {
-			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Delivered by beekeeper, not by SendMessage: " + where +
+			prefix := "Delivered by beekeeper, not by SendMessage: "
+			if strings.HasPrefix(where, "queued;") {
+				prefix = "Queued by beekeeper: "
+			}
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: prefix + where +
 				". Nothing more to send; do not repeat the message"})
 		}
 	}

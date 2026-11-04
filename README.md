@@ -3668,6 +3668,16 @@ second, the SessionStart hook two) and then fails naming the holder's PID, comma
 has held the lock. The desktop import freezes a session's headless turns only while no process
 holds the lock, so a frozen turn never holds it.
 
+Relayed instructions to a running Claude session are stored separately from the
+peer notification. After `beekeeper install`, the session receives them as chat
+context at its next tool call or turn boundary (`Stop` or `UserPromptSubmit`). A
+`Stop` with pending instructions continues the session once with those
+instructions. The peer notification only wakes an idle session; it cannot repeat
+an instruction already delivered by a hook. `agents wake` and intercepted
+`SendMessage` results report `queued` until a hook consumes the instruction, or
+`delivered` when consumption has already occurred. These receipts indicate
+injection into the session context, not completion of the requested action.
+
 ## Development
 
 Workers read Dependabot alert states with `beekeeper security alert <owner/repo> <number>`
