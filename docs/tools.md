@@ -230,7 +230,7 @@ Lift a hold: your own, or as its setter's team's supervisor role.
 ## `hold_list`
 
 ```text
-List the holds on merges into a repository or lane, or on every merge, until lifted.
+List the holds on merges into a repository or lane until lifted.
 ```
 
 ```json
@@ -253,7 +253,9 @@ List the holds on merges into a repository or lane, or on every merge, until lif
 ## `hold_set`
 
 ```text
-Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.
+Hold merges in a central repository or lane: owner/repo or lane:<name>.
+
+The merges and github targets are machine-local; use the local CLI for them.
 ```
 
 ```json
@@ -276,7 +278,7 @@ Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github f
       "type": "string"
     },
     "target": {
-      "description": "owner/repo, lane:<name>, merges or github",
+      "description": "owner/repo or lane:<name>",
       "type": "string"
     },
     "until": {
