@@ -247,10 +247,10 @@ func TestTeleportMissedRetryWaitsForBrowser(t *testing.T) {
 				attempts := filepath.Join(dir, "attempts")
 				tsh := filepath.Join(dir, "tsh")
 				script := "#!/bin/sh\ncase \"$1\" in\nstatus) echo '" + raw + "';;\nlogin) echo attempt >> '" + attempts + "'; exit 1;;\n*) exit 2;;\nesac\n"
-				if err := os.WriteFile(tsh, []byte(script), 0o700); err != nil {
+				if err := os.WriteFile(tsh, []byte(script), 0o700); err != nil { //nolint:gosec // a test-owned executable
 					t.Fatal(err)
 				}
-				a.cfg.Teleport = config.Teleport{Proxy: "test", Tsh: tsh, Home: filepath.Join(dir, "home"), Every: config.Duration{Duration: every}, RenewBefore: config.Duration{Duration: 90 * time.Minute}, LoginTimeout: config.Duration{Duration: time.Second}}
+				a.cfg.Teleport = config.Teleport{Proxy: goTestSubcmd, Tsh: tsh, Home: filepath.Join(dir, "home"), Every: config.Duration{Duration: every}, RenewBefore: config.Duration{Duration: 90 * time.Minute}, LoginTimeout: config.Duration{Duration: time.Second}}
 				initial := teleport.Record{CheckedAt: start, FailedAt: start, FailedFor: until, Reason: "previous failure"}
 				if err := a.store.WriteFile(teleportFile, initial); err != nil {
 					t.Fatal(err)
@@ -258,13 +258,13 @@ func TestTeleportMissedRetryWaitsForBrowser(t *testing.T) {
 				browser := lease.Dir(a.cfg.LeaseDir)
 				if grant {
 					if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-						st.Grants = append(st.Grants, state.Grant{Resource: config.Browser, To: state.Party{Session: "test", Name: "test"}, At: start.Add(time.Hour)})
+						st.Grants = append(st.Grants, state.Grant{Resource: config.Browser, To: state.Party{Session: goTestSubcmd, Name: goTestSubcmd}, At: start.Add(time.Hour)})
 						return nil, nil
 					}); err != nil {
 						t.Fatal(err)
 					}
 				} else {
-					if _, err := browser.Claim(config.Browser, lease.Holder{Env: config.Browser, Name: "test", Purpose: "test"}); err != nil {
+					if _, err := browser.Claim(config.Browser, lease.Holder{Env: config.Browser, Name: goTestSubcmd, Purpose: goTestSubcmd}); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -278,7 +278,7 @@ func TestTeleportMissedRetryWaitsForBrowser(t *testing.T) {
 					return c.RunE(c, nil)
 				}
 				count := func() int {
-					b, err := os.ReadFile(attempts)
+					b, err := os.ReadFile(attempts) //nolint:gosec // a path of this test
 					if err != nil && !os.IsNotExist(err) {
 						t.Fatal(err)
 					}
