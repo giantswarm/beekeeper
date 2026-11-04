@@ -51,7 +51,8 @@ func trimLink(t *testing.T, target string) string {
 }
 
 func TestTrimKeepsReplacedRoot(t *testing.T) {
-	for _, when := range []string{"before trim", "during trim"} {
+	const beforeTrim = "before trim"
+	for _, when := range []string{beforeTrim, "during trim"} {
 		t.Run(when, func(t *testing.T) {
 			dir := cache(t, map[string][2]int{entryA: {100, 24}})
 			outside := cache(t, map[string][2]int{entryA: {10, 1}})
@@ -69,7 +70,7 @@ func TestTrimKeepsReplacedRoot(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if when == "before trim" {
+			if when == beforeTrim {
 				replace()
 			}
 			freed, removed, err := Trim(u, 0, func() bool {
@@ -78,7 +79,7 @@ func TestTrimKeepsReplacedRoot(t *testing.T) {
 				}
 				return false
 			})
-			if when == "before trim" {
+			if when == beforeTrim {
 				if err == nil || freed != 0 || removed != 0 {
 					t.Errorf("trim = %d, %d, %v; want the replaced root refused", freed, removed, err)
 				}
