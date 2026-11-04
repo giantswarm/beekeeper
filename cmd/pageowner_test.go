@@ -334,7 +334,7 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 				t.Fatal(err)
 			}
 			base.Installations["alpha"].Alerts = alerts.Set{}
-			for i, labels := range [][2]string{{litClusterA, "namespace-a"}, {"cluster-a", "namespace-b"}, {"cluster-b", "namespace-a"}, {"cluster-b", "namespace-b"}} {
+			for i, labels := range [][2]string{{litClusterA, litNamespaceA}, {"cluster-a", "namespace-b"}, {"cluster-b", litNamespaceA}, {"cluster-b", "namespace-b"}} {
 				fp := []string{"fp1", "fp2", "fp3", "fp4"}[i]
 				base.Installations["alpha"].Alerts[fp] = alerts.Alert{Alertname: litPodrestarting, Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
 			}
@@ -360,7 +360,7 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 			}
 			until := ownedUntil(st.AlertOwners, nil, a.now)
 			for _, f := range base.Firing("") {
-				wantOwned := (tc.name == "alertname only" || tc.name == "namespace" || f.Cluster == "cluster-a") && (tc.name == "alertname only" || tc.name == "cluster" || f.Labels["namespace"] == "namespace-a")
+				wantOwned := (tc.name == "alertname only" || tc.name == "namespace" || f.Cluster == "cluster-a") && (tc.name == "alertname only" || tc.name == "cluster" || f.Labels["namespace"] == litNamespaceA)
 				_, owned := until(f.Key)
 				if owned != wantOwned {
 					t.Errorf("%s owned = %v, want %v", f.Instance(), owned, wantOwned)
