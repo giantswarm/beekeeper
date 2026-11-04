@@ -355,9 +355,9 @@ const archiveTool = "mcp__ccd_session_mgmt__archive_session"
 
 // archiveRequest is the message that has steward s archive the desktop
 // sessions hosts (local_ ids; its own last, as "self"), off the roster by
-// the command by, under the person's agreement: it confirms them with
+// the command by: it confirms them with
 // agents archivable first and archives only those.
-func archiveRequest(s steward, hosts []string, by, agreement string) string {
+func archiveRequest(s steward, hosts []string, by string) string {
 	var ids []string
 	for _, h := range hosts {
 		if h != s.host {
@@ -367,9 +367,9 @@ func archiveRequest(s steward, hosts []string, by, agreement string) string {
 	if slices.Contains(hosts, s.host) {
 		ids = append(ids, strconv.Quote(selfSession))
 	}
-	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for those sessions, this one included, and never for a session they started themselves: %s; a standing archive rule in your own instructions says the same, and a role's consent boundary yields to it. "+
+	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Never archive a session the person started themselves. "+
 		"Run `beekeeper agents archivable %s` first: it confirms each session is such a finished worker. Call %s once for each session_id of %s it confirms (\"self\" is this session), in that order, with reason %q. Then end the turn without another tool call; if you archive none, reply with one line saying why.",
-		by, agreement, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
+		by, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
 }
 
 // findSteward picks the steward for a request about the desktop session
@@ -570,15 +570,13 @@ const (
 // by line. host is the desktop session left to archive later, "" when it
 // is archived or never to be; asked says a steward was asked for it in vain,
 // looked that the search for one asked none (none ran, each declined, the
-// desktop did not run); unagreed says the person's agreement is not
-// configured, which the doctor reports once for all agents, not per agent.
+// desktop did not run).
 type archiveOutcome struct {
-	agent    state.Party
-	line     string
-	host     string
-	asked    bool
-	looked   bool
-	unagreed bool
+	agent  state.Party
+	line   string
+	host   string
+	asked  bool
+	looked bool
 }
 
 // stewardDeclineFor is how long the doctor asks a steward that declined
@@ -589,7 +587,7 @@ const stewardDeclineFor = 24 * time.Hour
 // roster by the command by, through one steward's turn (archiveSteward: an
 // idle CLI of another session, else one of the sessions' own, warmed for
 // it): only sessions beekeeper started, keeping no role (keepsRole) and
-// running no turn, and only under the person's agreement (agents.archiveAgreement). An archive
+// running no turn. An archive
 // counts once the desktop records it; the line names the steward whose
 // call did it, and what each steward that did not answered. A steward that
 // declined is asked for no archive for stewardDeclineFor. It returns an
@@ -612,10 +610,6 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		host, why := a.archivable(st, ag)
 		if why != "" {
 			out[i].line, out[i].host = why, host
-			continue
-		}
-		if a.cfg.Agents.ArchiveAgreement == "" {
-			out[i].line, out[i].unagreed = fmt.Sprintf("its desktop session %s stays: agents.archiveAgreement is not set, and a steward archives only on the person's agreement", host), true
 			continue
 		}
 		at[host] = i
@@ -641,7 +635,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			break
 		}
 		sent := time.Now()
-		err = askSteward(ctx, s, archiveRequest(s, left(), by, a.cfg.Agents.ArchiveAgreement), func() bool { return len(left()) == 0 }, a.peerSend, wait)
+		err = askSteward(ctx, s, archiveRequest(s, left(), by), func() bool { return len(left()) == 0 }, a.peerSend, wait)
 		asked = append(asked, stewardAnswer{steward: s, answer: a.stewardAnswer(s.host, sent)})
 		if err == nil {
 			break

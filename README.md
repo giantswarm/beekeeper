@@ -2465,15 +2465,11 @@ showed before. When that cannot be done (the desktop does not run, the person ke
 desktop at its cap of CLIs) it says so and the removal still stands; the doctor then owes the
 archive (below), and a run that asked no steward counts none of its tries.
 
-The desktop's `archive_session` may be used only on the person's explicit agreement, and a
-peer's message is not that, so beekeeper archives only under `agents.archiveAgreement`: where the
-person agreed that the desktop sessions of finished workers beekeeper started are archived
-without asking, never a session they started themselves (a standing instruction in their user
-`CLAUDE.md`, say). The request quotes it and has the steward run `beekeeper agents archivable
-<local_id>…` first, which confirms each session is such a finished worker (one of beekeeper's
-starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn) and exits
-3 for any other, a session the person started included; the steward archives only what it
-confirms. Without `agents.archiveAgreement` no steward is asked and the line says so. An archive
+Beekeeper archives finished workers automatically through a steward. The steward first runs
+`beekeeper agents archivable <local_id>…`, which confirms each session is a finished worker
+beekeeper started, off the roster, unarchived and running no turn. A session the person started
+is never confirmed; the command exits 3 for any session it refuses. The steward archives only
+the sessions it confirms. An archive
 counts once the desktop records it, and the line names the steward whose `archive_session` call
 did it. A steward that archived nothing is read from its turn: one that declined is reported with
 the first line of its reply (`agents.archive`, "steward local_… declined to archive: …") and asked
