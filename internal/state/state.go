@@ -720,7 +720,8 @@ type AlertOwner struct {
 	// Cluster and Namespace are optional exact matchers used when taking ownership.
 	Cluster   string `json:"cluster,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
-	// Alert is the alert's key in the alert baseline (fingerprint@start).
+	// Alert is the firing key (installation/fingerprint@start); legacy
+	// records use fingerprint@start with the installation recorded in Name.
 	Alert string    `json:"alert"`
 	Name  string    `json:"name"`
 	By    Party     `json:"by"`
