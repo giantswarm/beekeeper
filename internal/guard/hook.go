@@ -496,7 +496,7 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	if wrapped.MatchString(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated, bg)
+		return h.rewrite(ev.ToolInput, cwd, cmd, gated, bg)
 	}
 
 	h.beginCheck("labRuntime")
@@ -526,9 +526,9 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if !isHeavy(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
+		return h.rewrite(ev.ToolInput, cwd, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
-	return h.rewrite(ev.ToolInput, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
+	return h.rewrite(ev.ToolInput, cwd, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
@@ -1026,16 +1026,14 @@ func (h Hook) insertGate(cmd string, at []int, bg bool, bare map[int]bool) strin
 	return cmd
 }
 
-// backgroundExport starts every background Bash call: a beekeeper run
-// anywhere in it, reached directly, after a cd or export chain or through a
-// script, inherits it and waits the background wait.
+// backgroundExport gives detected background runs the longer slot wait.
 var backgroundExport = "export " + BackgroundEnv + "=1; "
 
 // rewrite allows the call with cmd as its command when changed, a
 // foreground call's timeout raised to the Bash tool's 10 minutes; a
-// background call's command always starts with backgroundExport.
-func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte {
-	if bg {
+// detected background run inherits backgroundExport.
+func (h Hook) rewrite(input map[string]any, cwd, cmd string, changed, bg bool) []byte {
+	if bg && backgroundRun(cmd, cwd, 0) {
 		cmd, changed = backgroundExport+cmd, true
 	}
 	if !changed {

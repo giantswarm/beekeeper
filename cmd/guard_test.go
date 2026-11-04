@@ -408,6 +408,11 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 	holdSlots(t, state)
 	self, _ := os.Executable()
 	dir := t.TempDir()
+	binary := filepath.Join(dir, "beekeeper")
+	if err := os.Symlink(self, binary); err != nil {
+		t.Fatal(err)
+	}
+	self = binary
 	script := filepath.Join(dir, "build.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run --class build -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
 		t.Fatal(err)

@@ -135,8 +135,9 @@ out exits 75, states the wait it applied and names each slot's holder (its
 session, its process, since when and for how long, its command): run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
-exports MEMCAP_BACKGROUND=1 into every background call, so a run reached
-directly, after a cd or export chain or through a script gets the 60m.
+exports MEMCAP_BACKGROUND=1 only for a detected beekeeper run, directly,
+after a cd or export chain, or in a readable shell wrapper. A wrapper
+that cannot be detected needs an explicit --wait 60m.
 
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
