@@ -287,10 +287,27 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 		p.add("skip", s, "", nil)
 	}
 	if written {
+		m.ReloadPending = true
+	}
+	if m.ReloadPending {
 		p.command(ctx, e, e.Setup.Reload())
+		p.add("record", e.manifest(), "service definitions reloaded", func() error {
+			m.ReloadPending = false
+			return writeFile(e.manifest(), m.encode())
+		})
 	}
 	for _, u := range units {
-		e.planStart(ctx, p, m, u.Path, states[u.Path])
+		state := states[u.Path]
+		if state == fileNew || state == fileUpdated {
+			if !slices.Contains(m.PendingServices, u.Path) {
+				m.PendingServices = append(m.PendingServices, u.Path)
+			}
+		} else if state == fileSame && slices.Contains(m.PendingServices, u.Path) {
+			state = fileUpdated
+		} else if state == fileKept {
+			m.PendingServices = slices.DeleteFunc(m.PendingServices, func(path string) bool { return path == u.Path })
+		}
+		e.planStart(ctx, p, m, u.Path, state)
 	}
 }
 
@@ -329,6 +346,12 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 					return nil
 				})
 			}
+			p.add("record", e.manifest(), "service definition applied", func() error {
+				if deferred {
+					return nil
+				}
+				return e.completeService(m, path)
+			})
 		} else {
 			p.add("ok", name, "running", nil)
 		}
@@ -337,7 +360,16 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 			m.Services = append(m.Services, path)
 		}
 		p.command(ctx, e, e.Setup.Start(path))
+		p.add("record", e.manifest(), "service definition applied", func() error {
+			return e.completeService(m, path)
+		})
 	}
+}
+
+// completeService acknowledges a definition only after all its commands succeed.
+func (e Env) completeService(m *Manifest, path string) error {
+	m.PendingServices = slices.DeleteFunc(m.PendingServices, func(p string) bool { return p == path })
+	return writeFile(e.manifest(), m.encode())
 }
 
 // plan is the steps install or uninstall takes, printed as they run.
@@ -395,6 +427,10 @@ func (p *plan) tilde(s string) string {
 
 // Manifest is what install wrote, read by the next install and uninstall.
 type Manifest struct {
+	// ReloadPending and PendingServices retain unapplied definitions across
+	// command failures and deferred restarts, independently of file ownership.
+	ReloadPending   bool     `json:"reloadPending,omitempty"`
+	PendingServices []string `json:"pendingServices,omitempty"`
 	// Files are the files install wrote and the SHA-256 of their content.
 	Files map[string]string `json:"files,omitempty"`
 	// Dirs are the directories install created.

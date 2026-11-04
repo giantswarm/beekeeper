@@ -1359,6 +1359,14 @@ func TestInstallDefersOnlyRefusedRestart(t *testing.T) {
 	if !strings.Contains(out.String(), "restart deferred") {
 		t.Fatal("refusal was not reported")
 	}
+	f.ran = nil
+	e.BeforeRestart = nil
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"restart beekeeper-sandbox.service"}; !slices.Equal(f.ran, want) {
+		t.Fatalf("retry commands = %v, want %v", f.ran, want)
+	}
 }
 
 func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
@@ -1382,5 +1390,72 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 	}
 	if !prepared || !revoked {
 		t.Fatal("failed restart left its prepared state")
+	}
+}
+
+func TestInstallRetriesFailedServiceChanges(t *testing.T) {
+	for _, failure := range []string{"reload", "restart", "refusal"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			f := &fakeSetup{}
+			e, _ := env(t, t.TempDir(), f, f.run)
+			if err := Install(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+			e.Exe, e.Spec.Exe = replacementExe, replacementExe
+			injected := errors.New("injected failure")
+			e.Run = func(ctx context.Context, argv []string) error {
+				if argv[0] == failure {
+					return injected
+				}
+				return f.run(ctx, argv)
+			}
+			if failure == "refusal" {
+				e.BeforeRestart = func(context.Context, string) error { return injected }
+			}
+			err := Install(ctx, e)
+			if failure == "refusal" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, injected) {
+				t.Fatalf("expected injected failure, got %v", err)
+			}
+			e.Run, e.BeforeRestart = f.run, nil
+			f.ran = nil
+			before, err := os.ReadFile(e.manifest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.DryRun = true
+			if err := Install(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(e.manifest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(f.ran) != 0 || !bytes.Equal(before, after) {
+				t.Fatal("dry run applied or forgot pending service changes")
+			}
+			e.DryRun = false
+			if err := Install(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"restart notify.service"}
+			if failure == "reload" {
+				want = append([]string{reload}, want...)
+			}
+			if !slices.Equal(f.ran, want) {
+				t.Fatalf("retry commands = %v, want %v", f.ran, want)
+			}
+			f.ran = nil
+			if err := Install(ctx, e); err != nil {
+				t.Fatal(err)
+			}
+			if len(f.ran) != 0 {
+				t.Fatalf("successful retry left commands pending: %v", f.ran)
+			}
+		})
 	}
 }
