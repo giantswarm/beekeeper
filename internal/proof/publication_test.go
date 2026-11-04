@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"testing"
 )
@@ -19,9 +20,9 @@ const (
 	otherBlob    = "other-blob"
 	otherTree    = "other-tree"
 	otherHead    = "other-head"
-	getPrefix    = "GET "
-	postPrefix   = "POST "
-	patchPrefix  = "PATCH "
+	getPrefix    = http.MethodGet + " "
+	postPrefix   = http.MethodPost + " "
+	patchPrefix  = http.MethodPatch + " "
 	proofCommits = proofGitAPI + "commits"
 	proofRefs    = proofGitAPI + "refs"
 	proofRef     = proofRefs + "/heads/" + Branch
@@ -63,7 +64,7 @@ func (g *publicationGH) files() map[string]string {
 }
 
 func publicationRequest(args []string) (method, path string) {
-	method = "GET"
+	method = http.MethodGet
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "-X":
@@ -162,7 +163,7 @@ func (g *publicationGH) run(ctx context.Context, input []byte, args ...string) (
 		if !ok {
 			return nil, errors.New("unknown ref commit")
 		}
-		if method == "POST" {
+		if method == http.MethodPost {
 			if body.Ref != "refs/heads/"+Branch {
 				return nil, errors.New("wrong branch")
 			}
@@ -186,7 +187,7 @@ func TestUploadCreationRace(t *testing.T) {
 	raced := false
 	gh := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 		method, path := publicationRequest(args)
-		if method == "POST" && path == proofRefs && !raced {
+		if method == http.MethodPost && path == proofRefs && !raced {
 			// Another upload publishes after our missing-head read.
 			g.seed()
 			raced = true
@@ -218,7 +219,7 @@ func TestUploadConflictBudget(t *testing.T) {
 	moves := 0
 	gh := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 		method, path := publicationRequest(args)
-		if method == "PATCH" && path == proofRef {
+		if method == http.MethodPatch && path == proofRef {
 			// A competing writer wins every attempt; keep its tree and
 			// advance its ancestry so our candidate is never a fast-forward.
 			moves++
@@ -302,7 +303,7 @@ func TestUploadInvalidObjectResponses(t *testing.T) {
 			gh := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 				out, err := g.run(ctx, input, args...)
 				method, path := publicationRequest(args)
-				if err == nil && method == "POST" && path == proofCommits {
+				if err == nil && method == http.MethodPost && path == proofCommits {
 					return []byte(response), nil // the commit exists, but its ID is unavailable
 				}
 				return out, err
@@ -331,7 +332,7 @@ func TestUploadCancellationBeforePublication(t *testing.T) {
 	gh := func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
 		out, err := g.run(ctx, input, args...)
 		method, path := publicationRequest(args)
-		if method == "POST" && path == proofCommits {
+		if method == http.MethodPost && path == proofCommits {
 			cancel() // objects are written; the ref update must honor cancellation
 		}
 		return out, err
