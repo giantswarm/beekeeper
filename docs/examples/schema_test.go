@@ -12,7 +12,6 @@ import (
 
 func TestConfigPassesCheck(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("BEEKEEPER_EXECUTION_HOME", home)
 	// Supply only synthetic local inputs. Check stats these files without
 	// reading them, resolving credentials or contacting the example services.
 	for _, name := range []string{
