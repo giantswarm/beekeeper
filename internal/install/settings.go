@@ -876,18 +876,21 @@ func (e Env) planCodexHooks(p *plan, m *Manifest) error {
 	if e.CodexHooks == "" {
 		return nil
 	}
-	if err := e.planCodexHooksFile(p, m, e.CodexHooks, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
+	// Both files must be matched against the hook from the previous install.
+	// Planning the first file updates m.CodexHook to the new command.
+	previous := m.CodexHook
+	if err := e.planCodexHooksFile(p, m, e.CodexHooks, previous, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
 		return err
 	}
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := e.planCodexHooksFile(p, m, workerHooks, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
+		if err := e.planCodexHooksFile(p, m, workerHooks, previous, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]string, created *bool) error {
+func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, previous json.RawMessage, keys *[]string, created *bool) error {
 	if symlink(path) {
 		p.add("keep", path, "a symlink to "+resolve(path)+": install never writes through a link; "+
 			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
@@ -904,7 +907,7 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]strin
 	want := CodexHook(e.Exe)
 	what := path + ": " + project.Name + " PreToolUse hook"
 	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
-		if sameJSON(r, want) || len(m.CodexHook) > 0 && sameJSON(r, m.CodexHook) {
+		if sameJSON(r, want) || len(previous) > 0 && sameJSON(r, previous) {
 			return true
 		}
 		bin, _, _ := codexHookBinary(r)
