@@ -1,10 +1,13 @@
 package proc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseStat(t *testing.T) {
@@ -104,4 +107,54 @@ func TestNamedFindsTheCallersProcessesByComm(t *testing.T) {
 	if got := namedAt(root, "go", os.Getuid()+1); len(got) != 0 {
 		t.Errorf("namedAt another uid = %v, want none", got)
 	}
+}
+
+func TestBootTimeAfterLongInterruptLine(t *testing.T) {
+	for name, ending := range map[string]string{"with_final_newline": "\n", "without_final_newline": ""} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			raw := "cpu  1 0 1 1 0 0 0 0 0 0\nintr 0" + strings.Repeat(" 0", 40000) + "\nbtime 1700000000" + ending
+			if err := os.WriteFile(filepath.Join(root, "stat"), []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := time.Unix(1700000000, 0)
+			if got, err := bootTime(root); err != nil || !got.Equal(want) {
+				t.Fatalf("bootTime = %v, %v; want %v", got, err, want)
+			}
+			if _, err := ReadAt(root); err != nil {
+				t.Fatalf("ReadAt: %v", err)
+			}
+		})
+	}
+}
+
+// readOp is the os.PathError operation of a failed read.
+const readOp = "read"
+
+func TestBootTimeErrors(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"missing", "cpu 1 2 3\n", "no btime in /proc/stat"},
+		{"malformed", "btime invalid\n", "invalid syntax"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "stat"), []byte(tc.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := bootTime(root); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("bootTime error = %v; want %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("read_failure", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "stat"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, err := bootTime(root)
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || pathErr.Op != readOp {
+			t.Fatalf("bootTime error = %v; want underlying read error", err)
+		}
+	})
 }
