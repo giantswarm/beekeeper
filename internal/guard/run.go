@@ -411,8 +411,7 @@ func Run(o Options, argv []string) int {
 // run completes cleanup, including releasing the slot, before Run retries.
 func run(o Options, argv []string, boundedGo bool) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
-	var inherited syscall.Rlimit
-	if !o.Core && syscall.Getrlimit(syscall.RLIMIT_CORE, &inherited) == nil && (inherited.Cur != 0 || inherited.Max != 0) {
+	if !o.Core && coreDumpsOn() {
 		logf("core dumps off")
 	}
 	kubeEnv, cleanupKube, err := runKubeconfig()
