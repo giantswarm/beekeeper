@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -233,6 +234,44 @@ func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
 	}
 	if len(dialogs) != 1 || dialogs[0].Text != "Option A — keep the existing flag" || !slices.Equal(dialogs[0].Questions, []string{"Approach?"}) {
 		t.Fatalf("DialogsSince = %+v, want the Approach? answer alone", dialogs)
+	}
+}
+
+func TestAskUserQuestionFallbackReaders(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"single answer", `"Proceed?"="Wait for CI"`, "Wait for CI"},
+		{"multiple answers", `"Proceed?"="Wait for CI", "Scope?"="Keep the current flag"`, `"Proceed?"="Wait for CI", "Scope?"="Keep the current flag"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			lines := []string{
+				`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed?"},{"question":"Scope?"}]}}]}}`,
+			}
+			result, err := json.Marshal("User has answered your questions: " + tc.body + ". You can now continue with the user's answers in mind.")
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, `{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":`+string(result)+`}]}}`)
+			if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			turns, err := Tail(path, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(turns) != 1 || turns[0].Role != roleUser || turns[0].Text != tc.want {
+				t.Errorf("Tail = %+v, want user text %q", turns, tc.want)
+			}
+			dialogs, err := DialogsSince(path, time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(dialogs) != 1 || dialogs[0].Text != tc.want || !slices.Equal(dialogs[0].Questions, []string{"Proceed?", "Scope?"}) {
+				t.Errorf("DialogsSince = %+v, want both questions and text %q", dialogs, tc.want)
+			}
+		})
 	}
 }
 
