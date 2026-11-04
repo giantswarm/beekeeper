@@ -156,7 +156,9 @@ func query(ctx context.Context, ctl Ctl, v any, args ...string) error {
 func (l layout) browser() *Window {
 	var b *Window
 	for i, w := range l.windows {
-		if isBrowser(w) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
+		// Hyprland uses -1 for a window absent from its focus history.
+		// Keep the first browser as a fallback, but prefer a known focus.
+		if isBrowser(w) && (b == nil || w.FocusHistoryID >= 0 && (b.FocusHistoryID < 0 || w.FocusHistoryID < b.FocusHistoryID)) {
 			b = &l.windows[i]
 		}
 	}
