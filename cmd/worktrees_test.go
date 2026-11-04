@@ -23,6 +23,20 @@ import (
 // output.
 const mergedPR = "mergedpr"
 
+const removeActive = "active"
+
+const removeOther = "other"
+
+const removeReview = "review"
+
+const removeTask = "task"
+
+const removeDesktop = "desktop"
+
+const removeParked = "parked"
+
+const removeUnused = "unused"
+
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -326,7 +340,7 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 
 // Cleanup only touches scratch checkouts; all process data is injected.
 func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
-	for _, name := range []string{"unused", "active", "parked", "desktop", "process unavailable", "roster unavailable", "canonical child", "canonical parent"} {
+	for _, name := range []string{removeUnused, removeActive, removeParked, removeDesktop, "process unavailable", "roster unavailable", "canonical child", "canonical parent"} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = ungatedMachine{Machine: plat.Machine, table: proc.NewTable()}
@@ -359,12 +373,12 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 				}
 			}
 			switch name {
-			case "active", "parked", "canonical child", "canonical parent":
+			case removeActive, removeParked, "canonical child", "canonical parent":
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-					agent := state.Agent{Party: state.Party{Session: "other"}, Task: "task"}
-					if name == "parked" {
+					agent := state.Agent{Party: state.Party{Session: removeOther}, Task: removeTask}
+					if name == removeParked {
 						agent.Task = ""
-						agent.Park = &state.Park{Waits: "review"}
+						agent.Park = &state.Park{Waits: removeReview}
 					}
 					st.Agents = append(st.Agents, agent)
 					st.Starts = append(st.Starts, state.Start{Party: agent.Party, Dir: live})
@@ -372,8 +386,8 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-			case "desktop":
-				writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_other.json"), `{"sessionId":"local_other","cliSessionId":"other","cwd":"`+dir+`"}`)
+			case removeDesktop:
+				writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_other.json"), `{"sessionId":"local_other","cliSessionId":removeOther,"cwd":"`+dir+`"}`)
 			case "process unavailable":
 				plat.Machine = platform.Stub().Machine
 			case "roster unavailable":
@@ -383,7 +397,7 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 				writeT(t, a.cfg.StateDir, "unreadable roster directory")
 			}
 			a.cleanRemovedWorktree(context.Background(), dir, head)
-			if got, want := exists(dir), name != "unused"; got != want {
+			if got, want := exists(dir), name != removeUnused; got != want {
 				t.Fatalf("checkout exists = %v, want %v", got, want)
 			}
 		})
