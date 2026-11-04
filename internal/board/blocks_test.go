@@ -295,3 +295,42 @@ func TestMoveHeldRecordsWhatHoldsABlockedItem(t *testing.T) {
 		t.Errorf("MoveHeld to Up Next = %+v, %+v, %v", mv, h, err)
 	}
 }
+
+func TestMoveHeldRefusesInvalidMoveBeforeRecordingABlocker(t *testing.T) {
+	for _, tc := range []struct {
+		name, ref, team, want string
+		gate                  config.EpicGate
+	}{
+		{name: "pull request closing an issue", ref: "o/r#15", want: "is no issue"},
+		{name: "unknown team", ref: issue5, team: "unknown", want: "board.team:"},
+		{name: "unknown epic kind", ref: issue5, gate: config.EpicGate{Kind: []string{"unknown"}}, want: "board.epics:"},
+		{name: "unknown planning status", ref: issue5, gate: config.EpicGate{Planning: []string{"unknown"}}, want: "board.epics:"},
+		{name: "unknown go status", ref: issue5, gate: config.EpicGate{Go: "unknown"}, want: "board.epics:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newFakeDeps(t)
+			gh := &fakeGH{t: t, item: onBoard}
+			if tc.ref == "o/r#15" {
+				gh.item = `{"data":{"repository":{"issue":null}}}`
+			}
+			run := func(ctx context.Context, args ...string) ([]byte, error) {
+				switch q := args[3]; {
+				case strings.Contains(q, "fields(first:50)"):
+					return []byte(blockedMeta), nil
+				case strings.Contains(q, "issueOrPullRequest") || strings.Contains(q, "BlockedBy("):
+					return deps.run(ctx, args...)
+				}
+				return gh.run(ctx, args...)
+			}
+			c := &Client{GH: run, Board: config.Board{Owner: "o", Project: 7, Team: tc.team, Epics: tc.gate}}
+			_, _, err := c.MoveHeld(context.Background(), tc.ref, "blocked", issue9)
+			var refusal *Refusal
+			if !errors.As(err, &refusal) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("MoveHeld = %v, want refusal containing %q", err, tc.want)
+			}
+			if len(gh.mutations)+len(deps.mutations) != 0 {
+				t.Errorf("refused move wrote board %v, dependencies %v", gh.mutations, deps.mutations)
+			}
+		})
+	}
+}

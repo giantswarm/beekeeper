@@ -1029,3 +1029,24 @@ func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
 		t.Fatalf("incomplete blockers: %+v", it)
 	}
 }
+
+func TestMoveRefusesInvalidGateBeforeAddingAnItem(t *testing.T) {
+	for _, gate := range []config.EpicGate{
+		{Kind: []string{"unknown"}},
+		{Planning: []string{"unknown"}},
+		{Go: "unknown"},
+	} {
+		f := &fakeGH{t: t,
+			item:  `{"data":{"repository":{"issue":{"id":"ISSUE","projectItems":{"nodes":[]}}}}}`,
+			added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I2","project":{"id":"P"}}}}}`}
+		c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Epics: gate}}
+		_, err := c.Move(context.Background(), issue5, "backlog")
+		var refusal *Refusal
+		if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "board.epics:") {
+			t.Fatalf("Move with gate %+v = %v, want epic gate refusal", gate, err)
+		}
+		if len(f.mutations) != 0 {
+			t.Errorf("refused move with gate %+v wrote %v", gate, f.mutations)
+		}
+	}
+}
