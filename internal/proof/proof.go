@@ -116,7 +116,9 @@ func (u Upload) Run(ctx context.Context, img []byte) (Result, error) {
 			return Result{}, err
 		}
 		url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", u.Repo, commit, path)
-		alt := strings.NewReplacer("[", "", "]", "", "\n", " ").Replace(u.Alt)
+		// Escape backslashes so an alt ending in one cannot escape the
+		// closing bracket; normalize both kinds of line ending.
+		alt := strings.NewReplacer("\\", "\\\\", "[", "", "]", "", "\r", " ", "\n", " ").Replace(u.Alt)
 		return Result{Commit: commit, Path: path, URL: url, Markdown: fmt.Sprintf("![%s](%s)", alt, url)}, nil
 	}
 }
