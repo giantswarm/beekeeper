@@ -29,6 +29,7 @@ func TestExecutionApprovalCoversTheMergesBaseUpdateAcrossARetry(t *testing.T) {
 	ref := fmt.Sprintf("%s#%d", use.Repository, use.PR)
 	approved := superloop.Review{ID: "independent-approval", Verdict: superloop.Approved}
 	completeMergeReview(t, a, use, &approved)
+	approved.Member = true
 	pull.Reviews = append([]superloop.Review{approved}, pull.Reviews...)
 	pull.Ref, pull.Base, pull.MergeState, pull.Checks = ref, mainBranch, mergeStateBehind, []string{behindBuild}
 
