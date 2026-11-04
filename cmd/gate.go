@@ -693,6 +693,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
+	if err := g.reloadQueueConfig(); err != nil {
+		return "", err
+	}
 	g.passive = false
 	liveWait, claimed := g.waitBehindLive()
 	if liveWait != "" && claimed {
@@ -876,6 +879,37 @@ func (g *gateRun) step() (string, error) {
 		g.settleUrgent(urgent, b)
 	}
 	return why, err
+}
+
+// reloadQueueConfig lets waiting gates observe edits without replacing the
+// binary. An incomplete edit keeps the last valid settings until the next poll.
+func (g *gateRun) reloadQueueConfig() error {
+	path := cmp.Or(g.cfgPath, g.loadedCfg)
+	if path == "" {
+		return nil
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		gateLine("queue configuration could not be reloaded; keeping the last valid settings")
+		return nil
+	}
+	lane := c.LaneOf(g.repo)
+	if lane.Name != g.lane.Name {
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := g.mine(st, state.Waiting); i >= 0 {
+				st.Merges[i].Lane = lane.Name
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	next := *g.cfg
+	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
+	g.cfg = &next
+	g.lane = lane
+	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
+	return nil
 }
 
 // checkCandidate refuses a promotion whose turn came, its place running,
