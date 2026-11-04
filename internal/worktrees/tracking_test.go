@@ -11,14 +11,16 @@ import (
 
 const trackingRemote = "origin"
 
+const trackingFeatureRef = "refs/heads/feature"
+
 func TestInspectTrackingConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name, remote, destination, source, want string
 	}{
-		{"standard", trackingRemote, "refs/remotes/origin/feature", "refs/heads/feature", automaticFeature},
-		{"custom namespace", trackingRemote, "refs/cache/origin/feature", "refs/heads/feature", automaticFeature},
-		{"other remote", "other", "refs/remotes/other/feature", "refs/heads/feature", ""},
-		{"local upstream", ".", "refs/heads/feature", "refs/heads/feature", ""},
+		{"standard", trackingRemote, "refs/remotes/origin/feature", trackingFeatureRef, automaticFeature},
+		{"custom namespace", trackingRemote, "refs/cache/origin/feature", trackingFeatureRef, automaticFeature},
+		{"other remote", "other", "refs/remotes/other/feature", trackingFeatureRef, ""},
+		{"local upstream", ".", trackingFeatureRef, trackingFeatureRef, ""},
 		{"no upstream", "", "refs/remotes/origin/feature", "", ""},
 		{"default upstream", trackingRemote, "refs/remotes/origin/main", "refs/heads/main", automaticDefault},
 	} {
