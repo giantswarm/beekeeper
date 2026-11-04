@@ -128,6 +128,9 @@ func TestBootTimeAfterLongInterruptLine(t *testing.T) {
 	}
 }
 
+// readOp is the os.PathError operation of a failed read.
+const readOp = "read"
+
 func TestBootTimeErrors(t *testing.T) {
 	for _, tc := range []struct{ name, raw, want string }{
 		{"missing", "cpu 1 2 3\n", "no btime in /proc/stat"},
@@ -150,7 +153,7 @@ func TestBootTimeErrors(t *testing.T) {
 		}
 		_, err := bootTime(root)
 		var pathErr *os.PathError
-		if !errors.As(err, &pathErr) || pathErr.Op != "read" {
+		if !errors.As(err, &pathErr) || pathErr.Op != readOp {
 			t.Fatalf("bootTime error = %v; want underlying read error", err)
 		}
 	})
