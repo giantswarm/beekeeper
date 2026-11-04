@@ -132,6 +132,10 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	count := countingDevctl(t, 99)
 	stubGitHub(t, github.Merged, "")
 	gateStdout(t)
+	// The release recovery reads, it is no merge retry: keep it off the count.
+	was := releaseWait
+	t.Cleanup(func() { releaseWait = was })
+	releaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	if err := g.runMerge(); Code(err) != 7 {
 		t.Fatalf("exit %d, want devctl's 7", Code(err))

@@ -127,7 +127,7 @@ func TestHeldNamesCwdExeAndOpenFiles(t *testing.T) {
 	}
 	got := held(root, 42)
 	slices.Sort(got)
-	want := []string{"/dev/null", "/tmp/claude-1000/p/s/scratchpad/out.log", "/tmp/go-build1/b001/x.test", "/work"}
+	want := []string{"/dev/null", "/tmp/claude-1000/p/s/scratchpad/out.log", "/tmp/claude-1000/p/s/scratchpad/out.log (deleted)", "/tmp/go-build1/b001/x.test", "/work"}
 	if !slices.Equal(got, want) {
 		t.Errorf("held = %v, want %v", got, want)
 	}
