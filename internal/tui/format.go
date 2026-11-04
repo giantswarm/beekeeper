@@ -13,6 +13,10 @@ import (
 // ellipsis is the mark a truncated string ends with.
 const ellipsis = "…"
 
+// Cell text occupies one physical row even when its source contains a
+// pasted block, a multiline note or a command's error output.
+var lineBreaks = strings.NewReplacer("\r\n", " ↵ ", "\n", " ↵ ", "\r", " ↵ ")
+
 // dur renders a duration the way the screen always does: 4s, 12m,
 // 2h10m, 3d4h. Minutes inside an hour are zero-padded so the shapes
 // column up; a negative duration renders as the age of nothing: 0s.
@@ -111,7 +115,7 @@ func fit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	return ansi.Truncate(s, w, ellipsis)
+	return ansi.Truncate(lineBreaks.Replace(s), w, ellipsis)
 }
 
 // fitLeft keeps the right end of s within w columns, for values whose
@@ -120,6 +124,7 @@ func fitLeft(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
+	s = lineBreaks.Replace(s)
 	if ansi.StringWidth(s) <= w {
 		return s
 	}
@@ -171,6 +176,7 @@ func bar(frac float64, n int) string {
 // trimWord shortens s to w columns, cutting at the last word, slash or
 // dash where it can, so a truncated name stays readable.
 func trimWord(s string, w int) string {
+	s = lineBreaks.Replace(s)
 	if ansiWidth(s) <= w {
 		return s
 	}
