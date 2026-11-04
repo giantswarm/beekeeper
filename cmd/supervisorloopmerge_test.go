@@ -843,3 +843,27 @@ func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
 		t.Fatalf("expected merge with explicit supervisor.go, got %+v cmds=%v", doc, r.cmds)
 	}
 }
+
+// Reopened episode keys must retain both the claim and exact-head authority;
+// ending that episode must revoke the go again.
+func TestReopenedPullMergeAuthority(t *testing.T) {
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
+	r.pull.Head = loopFixed
+	suffix := " reopened " + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	for _, verb := range []string{loopGoVerb, loopClaimVerb} {
+		if err := r.a.store.Record(about(event(loopParty, verb, "[go %s@%s%s] %s", loopPR, loopFixed, suffix, loopWorker), loopPR)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
+	if doc.ExitCode != 0 || len(r.cmds) != 1 {
+		t.Fatalf("reopened go refused: %+v cmds=%v", doc, r.cmds)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopEndVerb, "[end %s%s] closed", loopPR, suffix), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	if why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, r.pull, loopFixed); err != nil || why == "" || explicit {
+		t.Fatalf("closed episode retained authority: why=%q explicit=%v err=%v", why, explicit, err)
+	}
+}
