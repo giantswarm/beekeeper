@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const searchedFreeRef = "o/r#30"
+
 func TestReadSearchFindsWorkBeyondFiftyAssignedIssues(t *testing.T) {
 	var nodes []string
 	for n := range 50 {
@@ -36,7 +38,7 @@ func TestReadSearchFindsWorkBeyondFiftyAssignedIssues(t *testing.T) {
 			t.Errorf("assigned issue offered: %+v", cand)
 		}
 	}
-	if last := got[len(got)-1]; last.Ref != "o/r#30" || last.Skip != "" {
+	if last := got[len(got)-1]; last.Ref != searchedFreeRef || last.Skip != "" {
 		t.Fatalf("next free search result: %+v", last)
 	}
 	if len(f.mutations) != 0 {
