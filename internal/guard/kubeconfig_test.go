@@ -28,7 +28,10 @@ func TestRunKubeconfigWriter(t *testing.T) {
 	}
 }
 
-const kubeconfigAssignment = "assignment"
+const (
+	kubeconfigAssignment = "assignment"
+	kubeconfigInherited  = "inherited"
+)
 
 type alreadyCappedKubeconfigCapper struct{ fakeCapper }
 
@@ -36,7 +39,7 @@ func (*alreadyCappedKubeconfigCapper) Capped() bool { return true }
 
 func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 	for _, execution := range []string{"capped", "uncapped", "already-capped"} {
-		for _, mode := range []string{"unset", "blank", "inherited", kubeconfigAssignment} {
+		for _, mode := range []string{"unset", "blank", kubeconfigInherited, kubeconfigAssignment} {
 			t.Run(mode+"/"+execution, func(t *testing.T) {
 				saved := plat.Capper
 				plat.Capper = &fakeCapper{down: execution == "uncapped"}
@@ -61,7 +64,7 @@ func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 					}
 				}
 				explicit := filepath.Join(home, "explicit")
-				if mode == "inherited" {
+				if mode == kubeconfigInherited {
 					t.Setenv("KUBECONFIG", explicit)
 				}
 				report := filepath.Join(home, "report")
@@ -91,7 +94,7 @@ func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 					t.Fatal(err)
 				}
 				used := string(raw)
-				if mode == "inherited" || mode == kubeconfigAssignment {
+				if mode == kubeconfigInherited || mode == kubeconfigAssignment {
 					if used != explicit {
 						t.Fatalf("used %q, want explicit path", used)
 					}
