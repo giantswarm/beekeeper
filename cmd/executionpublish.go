@@ -75,7 +75,12 @@ func runPublicationGit(ctx context.Context, dir string, identity []string, args 
 	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
 	c := exec.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
 	c.Dir = dir
-	c.Env = append(os.Environ(), identity...)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			c.Env = append(c.Env, kv)
+		}
+	}
+	c.Env = append(c.Env, identity...)
 	c.Env = append(c.Env, "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
 	var stderr bytes.Buffer
 	c.Stderr = &stderr

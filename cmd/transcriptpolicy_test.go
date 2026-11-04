@@ -16,6 +16,7 @@ import (
 
 const transcriptEditingMode = "acceptEdits"
 
+const transcriptHookEventKey = "hook_event_name"
 const transcriptToolName = "tool_name"
 const transcriptPreToolUse = "pretooluse"
 

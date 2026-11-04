@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -133,12 +135,16 @@ func (l *supervisorLoop) quotaReview(st *state.State, ag state.Agent) (*quotaRou
 			return nil, nil
 		}
 		ref, _, _ := strings.Cut(rest, "@")
-		for rd := 1; rd <= superloop.MaxReviews; rd++ {
-			if superloop.ReviewerName(ref, rd) == ag.Name {
-				return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.a.cfg.Capacity, st, ref)}, nil
-			}
+		// A pull request has no cap on its review rounds: the name says which.
+		digits, ok := strings.CutPrefix(ag.Name, strings.TrimSuffix(superloop.ReviewerName(ref, 0), "0"))
+		if !ok {
+			return nil, nil
 		}
-		return nil, nil
+		rd, err := strconv.Atoi(digits)
+		if err != nil || rd < 1 || superloop.ReviewerName(ref, rd) != ag.Name {
+			return nil, nil
+		}
+		return &quotaRound{key: key, ref: ref, round: rd, selfHosted: reviewedSelfHosted(l.a.cfg.Capacity, st, ref)}, nil
 	}
 	return nil, nil
 }
@@ -289,9 +295,21 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 	if !ok || l.a.cfg.Supervisor.WorkerBrief == "" {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
 	} else {
-		brief, err := l.brief(l.a.cfg.Supervisor.WorkerBrief, "", "resume "+ag.Name, briefData{URL: fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N), Repo: r.Repo, Number: r.N, Worker: ag.Name})
+		file, def := l.a.cfg.Supervisor.WorkerBrief, ""
+		url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
+		if ag.Park != nil && ag.Park.RefKind == github.RefPullRequest {
+			// A recovery continues the parked task; the board template would
+			// turn the PR number into an unrelated issue assignment.
+			file, def = "", "Continue your existing task after the pull request {{.URL}} settled."
+			url = fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
+		}
+		brief, err := l.brief(file, def, "resume "+ag.Name, briefData{URL: url, Repo: r.Repo, Number: r.N, Worker: ag.Name})
 		if err == nil {
-			err = appendBrief(brief, fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, loopParty.Name)))
+			text := fmt.Sprintf("\nContinue your existing task: %s\n%s\nRe-query its live state before continuing.\n", ag.Task, parkMessage(ag.Park, loopParty.Name))
+			if ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
+				text += fmt.Sprintf("\nRemaining post-merge work: %s\n", *ag.Park.PostMerge)
+			}
+			err = appendBrief(brief, text)
 		}
 		if err == nil {
 			_, err = l.run(ctx, agentsName, agentStartName, ag.Name, brief, "--harness", harnessAuto)

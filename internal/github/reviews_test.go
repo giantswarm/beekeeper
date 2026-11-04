@@ -24,6 +24,17 @@ func rv(login, state, commit, hm string) ghReview {
 	return ghReview{User: ghUser{Login: login, ID: 1, Type: "User"}, State: state, CommitID: commit, SubmittedAt: at(hm), HTMLURL: "https://github.com/o/r/pull/7#" + login + hm}
 }
 
+func deskRv(login, verdict, commit, hm string) ghReview {
+	r := rv(login, "COMMENTED", commit, hm)
+	r.Body = "Review: " + verdict + "\n\nFindings."
+	return r
+}
+
+func member(r ghReview) ghReview {
+	r.AuthorAssociation = "MEMBER"
+	return r
+}
+
 func cm(login, hm string) ghComment {
 	return ghComment{User: ghUser{Login: login, ID: 1, Type: "User"}, CreatedAt: at(hm), HTMLURL: "https://github.com/o/r/pull/7#c" + login + hm}
 }
@@ -61,6 +72,23 @@ func TestChangesRequestedHoldsUntilApprovedOrDismissed(t *testing.T) {
 		"the author's own feedback": {f: feedback{headSHA: "h", headAt: at("08:00"),
 			reviews:  []ghReview{rv("teemow", "CHANGES_REQUESTED", "h", "09:00")},
 			comments: []ghComment{cm("teemow", "09:30")}}},
+		"desk review changes requested from author's login holds across new commits": {f: feedback{headSHA: "3d8e8a7f", headAt: at("09:00"),
+			reviews:  []ghReview{deskRv("teemow", "changes requested", "3d8e8a7f", "09:02")},
+			comments: []ghComment{cm("teemow", "09:10")}},
+			want: []string{"teemow CHANGES_REQUESTED"}},
+		"desk review changes requested superseded by desk review approved": {f: feedback{headSHA: "h2", headAt: at("09:30"),
+			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), deskRv("teemow", "approved", "h2", "09:40")}}},
+		"desk review changes requested superseded by a member's desk approval": {f: feedback{headSHA: "h2", headAt: at("09:30"),
+			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), member(deskRv("kim", "approved.", "h2", "09:40"))}}},
+		"an outsider's desk approval is a comment, never a verdict": {f: feedback{headSHA: "h2", headAt: at("09:30"),
+			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), deskRv("mallory", "approved", "h2", "09:40")}},
+			want: []string{"teemow CHANGES_REQUESTED", "mallory COMMENTED"}},
+		"an outsider's desk changes requested holds nothing past an answer": {f: feedback{headSHA: "h", headAt: at("09:00"),
+			reviews:  []ghReview{deskRv("mallory", "changes requested", "h", "09:10")},
+			comments: []ghComment{cm("teemow", "09:20")}}},
+		"a desk review from the author's login answers earlier feedback": {f: feedback{headSHA: "h", headAt: at("08:00"),
+			comments: []ghComment{cm("pat", "09:00")},
+			reviews:  []ghReview{deskRv("teemow", "approved", "h", "09:30")}}},
 		"an unanswered comment after the head": {f: feedback{headSHA: "h", headAt: at("08:00"),
 			comments: []ghComment{cm("pat", "09:00")}},
 			want: []string{"pat "}},
@@ -71,6 +99,22 @@ func TestChangesRequestedHoldsUntilApprovedOrDismissed(t *testing.T) {
 		}
 		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
 			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A desk verdict line reads alike in the review guard and the loop: case,
+// surrounding space and a trailing "." or "!" aside.
+func TestDeskVerdict(t *testing.T) {
+	for body, want := range map[string]string{
+		"Review: approved\n\nFine.":        "APPROVED",
+		"\n  Review: Approved.  \n":        "APPROVED",
+		"Review: changes requested!\nFix.": changesRequested,
+		"Looks approved to me":             "",
+		"":                                 "",
+	} {
+		if got := DeskVerdict(body); got != want {
+			t.Errorf("DeskVerdict(%q) = %q, want %q", body, got, want)
 		}
 	}
 }

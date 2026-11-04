@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/giantswarm/beekeeper/internal/agyhooks"
 	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/beekeeper/plugin"
 )
@@ -255,53 +256,6 @@ func AgyHook(exe string) json.RawMessage {
 	return bytes.TrimSpace(b.Bytes())
 }
 
-// agyRejects is why agy refuses the named hook entry raw as it parses
-// hooks.json, or "" when agy accepts the events beekeeper writes:
-// PreInvocation items are commands, PreToolUse items matchers with
-// commands, and every command of type "command" (or of no type) names its
-// command.
-func agyRejects(raw json.RawMessage) string {
-	var events map[string][]json.RawMessage
-	if err := json.Unmarshal(raw, &events); err != nil {
-		return "not an object of hook lists: " + err.Error()
-	}
-	command := func(event string, item json.RawMessage) string {
-		var h struct {
-			Type    *string `json:"type"`
-			Command string  `json:"command"`
-		}
-		if err := json.Unmarshal(item, &h); err != nil {
-			return event + ": " + err.Error()
-		}
-		if (h.Type == nil || *h.Type == hookTypeCommand) && strings.TrimSpace(h.Command) == "" {
-			return event + ": command hook must specify 'command'"
-		}
-		return ""
-	}
-	for _, item := range events["PreInvocation"] {
-		if why := command("PreInvocation", item); why != "" {
-			return why
-		}
-	}
-	for _, item := range events["PreToolUse"] {
-		var e struct {
-			Hooks []json.RawMessage `json:"hooks"`
-		}
-		if err := json.Unmarshal(item, &e); err != nil {
-			return "PreToolUse: " + err.Error()
-		}
-		if len(e.Hooks) == 0 {
-			return "PreToolUse: a matcher without hooks"
-		}
-		for _, h := range e.Hooks {
-			if why := command("PreToolUse", h); why != "" {
-				return why
-			}
-		}
-	}
-	return ""
-}
-
 const pretooluseWord = "pretooluse"
 
 // agyHookBinary returns the binary path and timeout of an agy hook entry
@@ -313,17 +267,32 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 		return "", 0
 	}
 	list := events["PreToolUse"]
-	if len(list) != 1 || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+	if len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
 		return "", 0
 	}
-	f := strings.Fields(list[0].Hooks[0].Command)
-	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "agy" {
-		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
-	}
-	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=agy" {
-		return strings.Trim(f[0], `'"`), list[0].Hooks[0].Timeout
+	for _, suffix := range []string{" hook pretooluse --format agy", " hook pretooluse --format=agy"} {
+		if exe := installedHookBinary(list[0].Hooks[0].Command, suffix); exe != "" {
+			return exe, list[0].Hooks[0].Timeout
+		}
 	}
 	return "", 0
+}
+
+// installedHookBinary recognizes only the literal executable spelling generated
+// by shellQuote, so shell operators or expansions cannot masquerade as a guard.
+func installedHookBinary(command, suffix string) string {
+	if !strings.HasSuffix(command, suffix) {
+		return ""
+	}
+	quoted := strings.TrimSuffix(command, suffix)
+	exe := quoted
+	if strings.HasPrefix(quoted, "'") && strings.HasSuffix(quoted, "'") && len(quoted) >= 2 {
+		exe = strings.ReplaceAll(quoted[1:len(quoted)-1], `'\''`, "'")
+	}
+	if shellQuote(exe) != quoted {
+		return ""
+	}
+	return exe
 }
 
 // agyPreInvocationBinary returns the binary path and timeout of an agy hook
@@ -340,9 +309,8 @@ func agyPreInvocationBinary(raw json.RawMessage) (string, int) {
 	if len(list) != 1 || list[0].Type != hookTypeCommand {
 		return "", 0
 	}
-	f := strings.Fields(list[0].Command)
-	if len(f) == 3 && f[1] == hookWord && f[2] == "preinvocation" {
-		return strings.Trim(f[0], `'"`), list[0].Timeout
+	if exe := installedHookBinary(list[0].Command, " hook preinvocation"); exe != "" {
+		return exe, list[0].Timeout
 	}
 	return "", 0
 }
@@ -351,18 +319,25 @@ func agyPreInvocationBinary(raw json.RawMessage) (string, int) {
 // when e.AgyHooks is set, leaving any other named hooks in that file
 // untouched. An entry of an earlier install that agy rejects (PreInvocation
 // as matcher entries) is replaced, and a hooks.json that is a link is kept.
-func (e Env) planAgyHooks(p *plan, m *Manifest) error {
+// It returns why agy would reject the file as it stands after install, ""
+// when agy accepts every entry: agy drops the whole file for one bad entry,
+// beekeeper's hooks with it.
+func (e Env) planAgyHooks(p *plan, m *Manifest) (string, error) {
 	if e.AgyHooks == "" {
-		return nil
+		return "", nil
 	}
 	if symlink(e.AgyHooks) {
 		p.add("keep", e.AgyHooks, "a symlink to "+resolve(e.AgyHooks)+": install never writes through a link; "+
 			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
-		return nil
+		s, err := readSettings(e.AgyHooks)
+		if err != nil {
+			return "agy cannot read it either: " + err.Error(), nil
+		}
+		return agyFileRejects(s), nil
 	}
 	s, err := readSettings(e.AgyHooks)
 	if err != nil {
-		return err
+		return "", err
 	}
 	want := AgyHook(e.Exe)
 	what := e.AgyHooks + ": " + project.Name + " PreToolUse hook"
@@ -385,7 +360,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) error {
 		p.add("add", what, "", nil)
 	}
 	if !changed {
-		return nil
+		return agyFileRejects(s), nil
 	}
 	if !s.existed {
 		m.AgyHooksCreated = true
@@ -395,7 +370,33 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) error {
 	p.add(writeVerb(s.existed), e.AgyHooks, "", func() error {
 		return writeFile(e.AgyHooks, raw)
 	})
-	return nil
+	return agyFileRejects(s), nil
+}
+
+// agyFileRejects is why agy refuses the hooks.json s as a whole, naming the
+// first entry it rejects in file order, or "" when agy accepts them all.
+func agyFileRejects(s *settings) string {
+	for _, m := range s.top {
+		if why := agyhooks.EntryRejects(m.value); why != "" {
+			return fmt.Sprintf("agy rejects the %s entry, so none of the file's hooks runs, %s's neither (%s)", m.key, project.Name, why)
+		}
+	}
+	return ""
+}
+
+// failAgyHooks is the step that fails install, after every other step ran,
+// when agy would reject the hooks.json at path for the reason why.
+func failAgyHooks(p *plan, path, why string) {
+	if why == "" {
+		return
+	}
+	target := path
+	if symlink(path) {
+		target = resolve(path)
+	}
+	p.add("fail", path, why+"; fix "+target+": agy loads none of its hooks until then", func() error {
+		return errors.New("agy would reject " + path + ": " + why)
+	})
 }
 
 // planAgyUnhooks removes the project.Name entry install added to agy's
@@ -426,9 +427,11 @@ func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error 
 
 // CheckAgyHooks checks that agy's hooks.json at path holds the PreInvocation
 // and PreToolUse entry for project.Name in a shape agy accepts (running exe
-// when exe is non-empty); it returns a one-line finding for `beekeeper
-// doctor`, or "" when healthy or path is empty. A hooks.json that is a link
-// install never writes through, so its finding says to edit the target.
+// when exe is non-empty), and that agy accepts every other entry too: it
+// drops the whole file for one it rejects. It returns a one-line finding for
+// `beekeeper doctor`, or "" when healthy or path is empty. A hooks.json that
+// is a link install never writes through, so its finding says to edit the
+// target.
 func CheckAgyHooks(path, exe, home string) string {
 	if path == "" {
 		return ""
@@ -445,6 +448,19 @@ func CheckAgyHooks(path, exe, home string) string {
 	if !s.existed {
 		return fmt.Sprintf("agy hooks: %s is missing; run `beekeeper install`", short(path))
 	}
+	for _, m := range s.top {
+		if m.key == project.Name {
+			continue
+		}
+		if why := agyhooks.EntryRejects(m.value); why != "" {
+			target := path
+			if symlink(path) {
+				target = resolve(path)
+			}
+			return fmt.Sprintf("agy hooks: %s: agy rejects the %s entry, so none of the file's hooks runs, %s's neither (%s); fix or remove that entry in %s",
+				short(path), m.key, project.Name, why, short(target))
+		}
+	}
 	cur, ok := s.top.get(project.Name)
 	if !ok {
 		return fmt.Sprintf("agy hooks: %s lacks the %s PreToolUse hook; %s", short(path), project.Name, fix)
@@ -452,7 +468,7 @@ func CheckAgyHooks(path, exe, home string) string {
 	if exe != "" && sameJSON(cur, AgyHook(exe)) {
 		return ""
 	}
-	if why := agyRejects(cur); why != "" {
+	if why := agyhooks.EntryRejects(cur); why != "" {
 		return fmt.Sprintf("agy hooks: %s: agy rejects the %s entry, so none of its hooks runs (%s); %s", short(path), project.Name, why, fix)
 	}
 	gotExe, timeout := agyHookBinary(cur)
@@ -465,6 +481,34 @@ func CheckAgyHooks(path, exe, home string) string {
 	}
 	if exe != "" && gotExe != exe {
 		return fmt.Sprintf("agy hooks: %s runs %s instead of %s; %s", short(path), short(gotExe), short(exe), fix)
+	}
+	return ""
+}
+
+// AgyHooksUnguarded is why an agy started now would run without beekeeper's
+// guard, or "" when its hooks.json at path loads with the project.Name
+// PreToolUse hook: the file is missing or unreadable, agy rejects one of its
+// entries and so drops them all, or it lacks beekeeper's entry or its guard.
+func AgyHooksUnguarded(path string) string {
+	if path == "" {
+		return "agy's hooks.json has no path"
+	}
+	s, err := readSettings(path)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", path, err)
+	}
+	if !s.existed {
+		return path + " is missing; run `beekeeper install`"
+	}
+	if why := agyFileRejects(s); why != "" {
+		return path + ": " + why
+	}
+	cur, ok := s.top.get(project.Name)
+	if !ok {
+		return fmt.Sprintf("%s lacks the %s entry; run `beekeeper install`", path, project.Name)
+	}
+	if exe, _ := agyHookBinary(cur); exe == "" {
+		return fmt.Sprintf("%s: the %s entry runs no `%s pretooluse --format agy` guard; run `beekeeper install`", path, project.Name, hookWord)
 	}
 	return ""
 }

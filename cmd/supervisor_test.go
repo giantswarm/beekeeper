@@ -71,7 +71,7 @@ func TestRelayMovesTheRole(t *testing.T) {
 	if relievedIn(st.GuideRole(), supA) == nil || relievedIn(st.GuideRole(), supB) != nil {
 		t.Fatal("status does not tell the outgoing guide it has been relieved")
 	}
-	if len(log) != 2 || log[0].Verb != "guide.relay" || log[1].Verb != "guide.start" {
+	if len(log) != 2 || log[0].Verb != "guide.relay" || log[1].Verb != guideStartVerb {
 		t.Fatalf("the event log lacks the two steps: %+v", log)
 	}
 	lines, _ := guideRole.fireRelay(st, relayNow.Add(time.Minute))
@@ -293,7 +293,7 @@ func TestSupervisorStatusReadsTheLoop(t *testing.T) {
 	}
 	for _, c := range a.supervisorCmd().Commands() {
 		switch c.Name() {
-		case "status", "loop":
+		case testStatusWord, "loop":
 		default:
 			t.Errorf("the supervisor command has %q: no session holds the role", c.Name())
 		}

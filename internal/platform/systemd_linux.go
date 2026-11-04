@@ -18,6 +18,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/machine"
 	"github.com/giantswarm/beekeeper/internal/proc"
+
+	"github.com/giantswarm/beekeeper/internal/sshagent"
 )
 
 // Name is the platform this build runs on.
@@ -172,9 +174,16 @@ func runArgs(u Unit, quiet bool) []string {
 	if u.MaxRuntime > 0 {
 		args = append(args, "-p", "RuntimeMaxSec="+seconds(u.MaxRuntime))
 	}
+	// Resolve against this host before systemd imports its manager environment.
+	env := append(os.Environ(), u.Env...)
+	resolved := sshagent.Environment(env)
 	for _, e := range u.Env {
+		if strings.HasPrefix(e, "SSH_AUTH_SOCK=") {
+			continue
+		}
 		args = append(args, "--setenv="+e)
 	}
+	args = append(args, "--setenv="+resolved[len(resolved)-1])
 	return append(append(args, "--"), u.Argv...)
 }
 
@@ -335,6 +344,36 @@ func scopeArgs(name string, c Cap, argv []string) []string {
 		args = append(args, "-p", "Requisite="+c.StopWith, "-p", "PartOf="+c.StopWith, "-p", "After="+c.StopWith)
 	}
 	return append(append(args, "--"), argv...)
+}
+
+// ScopePopulated reports whether the scope or a descendant cgroup contains
+// processes. cgroup.events includes descendants, unlike cgroup.procs. A
+// missing scope is empty; other read failures leave the run alone.
+func (systemdCapper) ScopePopulated(name string) (bool, error) {
+	p := machine.FindMemcapScope(name + ".scope")
+	if p == "" {
+		return false, nil
+	}
+	return scopePopulated(p)
+}
+
+func scopePopulated(path string) (bool, error) {
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(path, "cgroup.events")))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		switch line {
+		case "populated 1":
+			return true, nil
+		case "populated 0":
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("cgroup.events has no populated value")
 }
 
 // Adopt starts the transient scope name around the running process pid

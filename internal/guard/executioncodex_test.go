@@ -88,6 +88,9 @@ func TestExecutionCodexGuard(t *testing.T) {
 		"update plan":        executionCodexEvent(codexUpdatePlanTool, map[string]any{"steps": []any{}}, executionThread, workspace),
 		"image in workspace": executionCodexEvent(codexViewImageTool, map[string]any{pathKey: "a.png"}, executionThread, workspace),
 	}
+	for _, tool := range []string{"web_run", "web.run", "web__run", "WebFetch", webSearchTool} {
+		allowed[tool] = executionCodexEvent(tool, map[string]any{"open": []any{map[string]any{"ref_id": "https://example.org"}}}, executionThread, workspace)
+	}
 	for name, raw := range allowed {
 		if decide(raw) {
 			t.Errorf("%s was denied: %s", name, h.DecideExecutionCodex(raw, executionThread, workspace, []string{protected}))

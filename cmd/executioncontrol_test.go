@@ -266,6 +266,20 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 
 // A managed SSH worker leaves its own park on the coordinator: resume ends
 // it, wakes nobody and says what settled the wait; a second is refused.
+func TestExecutionRefusesUntargetedOverlapPark(t *testing.T) {
+	a, _ := executionTestApp(t)
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, evs, err := a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{
+			Operation: execution.ControlPark,
+			Data:      mustExecutionJSON(t, executionPark{Waits: "supervisor overlap coordination"}),
+		})
+		return evs, err
+	})
+	if err == nil || !strings.Contains(err.Error(), "--on <owner/repo#n>") {
+		t.Fatalf("untargeted overlap: %v", err)
+	}
+}
+
 func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 	a, _ := executionTestApp(t)
 	apply := func(op string, data any) (string, error) {

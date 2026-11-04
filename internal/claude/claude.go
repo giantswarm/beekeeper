@@ -537,6 +537,18 @@ func Archived(cfg *config.Config) map[string]bool {
 	return out
 }
 
+// AllRecords returns the desktop session records, archived included, most
+// recently active first.
+func AllRecords(cfg *config.Config) []*Record {
+	var out []*Record
+	for _, path := range recordFiles(cfg) {
+		if r, ok := readRecord(path); ok {
+			out = append(out, r)
+		}
+	}
+	return byActivity(out)
+}
+
 // StoppedRecords returns the unarchived desktop records active since since
 // whose session runs no CLI (paused or closed), most recently active first.
 func StoppedRecords(cfg *config.Config, running []*Session, since time.Time) []*Record {
