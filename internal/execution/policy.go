@@ -615,20 +615,6 @@ func (s *Server) agyHooksLoad() error {
 	return nil
 }
 
-// agyHooksLoad fails when agy would reject the managed hooks.json: agy drops
-// the whole file for one entry it rejects, and its workers would run with
-// no execution guard at all.
-func (s *Server) agyHooksLoad() error {
-	b, err := readRegular(filepath.Join(s.agyConfigDir(), hooksJSONFile), MaxWire)
-	if err != nil {
-		return errors.New("the managed agy hooks.json is unreadable; prepare the matching bundle")
-	}
-	if why := agyhooks.Rejects(b); why != "" {
-		return errors.New("agy would reject the managed hooks.json and run unguarded: " + why)
-	}
-	return nil
-}
-
 func agyHasModels(raw string) bool {
 	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == '\r' }) {
 		fields := strings.Fields(strings.TrimSpace(line))
