@@ -207,7 +207,9 @@ func (a *app) titleRun(ctx context.Context, me state.Party, name string) string 
 		}
 		return ""
 	}
-	if was := title(); was == "" || was == name {
+	// A session without a desktop record has no title to restore: a
+	// background role run must not wait on a steward for one.
+	if _, ok := claude.ReadRecord(a.cfg, host); !ok || title() == name {
 		return ""
 	}
 	// Not the caller itself: it is in this turn, so a request to it would
