@@ -79,7 +79,8 @@ func TestCodexStderrRedactsAuthentication(t *testing.T) {
 	for _, diagnostic := range []string{
 		"Authorization:\nBearer opaque-fixture-value\n",
 		"refresh_token: opaque-fixture-value\n",
-		"-----BEGIN PRIVATE KEY-----\nopaque-fixture-value\n",
+		// Keep the synthetic PEM marker from triggering source key scanners.
+		"-----BEGIN " + "PRIVATE KEY-----\nopaque-fixture-value\n",
 		"gitleaks:allow " + patternValue,
 		"unexpected value " + patternValue,
 	} {

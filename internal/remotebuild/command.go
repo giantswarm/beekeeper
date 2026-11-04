@@ -91,6 +91,9 @@ func literal(w *syntax.Word) (string, bool) {
 				}
 				b.WriteString(p.Value)
 			case *syntax.DblQuoted:
+				if p.Dollar { // Locale translation can change the argument.
+					return false
+				}
 				if !add(p.Parts, true) {
 					return false
 				}

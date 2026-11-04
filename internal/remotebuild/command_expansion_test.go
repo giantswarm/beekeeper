@@ -9,6 +9,7 @@ func TestToolchainRejectsShellReinterpretation(t *testing.T) {
 		`go test -tool\exec=host-helper ./...`,
 		`go test \/host/project`,
 		`go test $'\x2fhost/project'`,
+		`go test $"./pkg"`,
 		`go test *.go`,
 		`go test ~/project`,
 		`go test ./pkg{one,two}`,
