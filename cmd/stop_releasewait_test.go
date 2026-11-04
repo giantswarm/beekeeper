@@ -45,7 +45,7 @@ func TestStopReportsReleaseWaiterThatIgnoresInterrupt(t *testing.T) {
 	was := stopWait
 	stopWait = 20 * time.Millisecond
 	t.Cleanup(func() { stopWait = was })
-	gate := exec.Command("sh", "-c", "trap '' INT; echo ready; exec sleep 60")
+	gate := exec.Command("sh", "-c", "trap '' INT; echo interrupt-handler-ready; exec sleep 60")
 	ready, err := gate.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestStopReportsReleaseWaiterThatIgnoresInterrupt(t *testing.T) {
 	done := make(chan struct{})
 	go func() { _ = gate.Wait(); close(done) }()
 	t.Cleanup(func() { _ = gate.Process.Kill(); <-done })
-	if line, err := bufio.NewReader(ready).ReadString('\n'); err != nil || line != "ready\n" {
+	if line, err := bufio.NewReader(ready).ReadString('\n'); err != nil || line != "interrupt-handler-ready\n" {
 		t.Fatalf("fixture did not ignore interrupts: %q, %v", line, err)
 	}
 	seed(t, a, func(st *state.State) {
