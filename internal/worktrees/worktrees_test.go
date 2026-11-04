@@ -66,7 +66,7 @@ func TestClassifyBuildDirsPreservesFilesNamedLikeDirectories(t *testing.T) {
 func TestHeadBranch(t *testing.T) {
 	for _, c := range []struct{ branch, pushed, want string }{
 		{"wt/feat/x", "feat/x", "feat/x"},
-		{"fix-1", "main", "fix-1"},
+		{"fix-1", automaticDefault, "fix-1"},
 		{"fix-2", "", "fix-2"},
 	} {
 		if got := (Tree{Branch: c.branch, Pushed: c.pushed}).HeadBranch(); got != c.want {
