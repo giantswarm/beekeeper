@@ -374,7 +374,7 @@ func (h handover) summary() string {
 }
 
 // handOver runs the hand-over's steps, one line each.
-func (a *app) handOver(ctx context.Context, h handover) error {
+func (a *app) handOver(ctx context.Context, h handover) (err error) {
 	defer a.recordStoppedGates(ctx)
 	began := time.Now()
 	me, err := a.caller()
@@ -411,9 +411,17 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if err := refuseHandoverGate(st, ag.Party); err != nil {
 		return err
 	}
+	release, err := a.beginHandover(ag.Party)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release()) }()
 	noted := "no note"
 	note, ok, err := a.askNote(ctx, h)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if ok {
@@ -529,6 +537,31 @@ func refuseHandoverGate(st *state.State, p state.Party) error {
 }
 
 var endHandoverSession = endSession
+
+// beginHandover publishes the guard before any note or successor starts can
+// make the outgoing session appear superseded. Every return releases it.
+func (a *app) beginHandover(p state.Party) (func() error, error) {
+	mark := state.Handover{Party: p, PID: os.Getpid()}
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, h := range st.Handovers {
+			if h.Is(p) && proc.Alive(h.PID) {
+				return nil, refused("%q already has a handover in progress", p.Name)
+			}
+		}
+		st.Handovers = slices.DeleteFunc(st.Handovers, func(h state.Handover) bool { return !proc.Alive(h.PID) })
+		st.Handovers = append(st.Handovers, mark)
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Handovers = slices.DeleteFunc(st.Handovers, func(h state.Handover) bool { return h.PID == mark.PID && h.Is(p) })
+			return nil, nil
+		})
+	}, nil
+}
 
 // listSuccessor makes sure the roster lists the follow-up to of the
 // handed-over from under its name, busy with task, after from ends: the

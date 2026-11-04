@@ -614,7 +614,9 @@ disk:
 
 A central Note closes only with a recognised close event (`answer.recorded`,
 `note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
-line atomically with the outcome. Closed Notes remain as history, outside the
+line atomically with the outcome. Answered Notes also retain the verbatim answer
+in `status.answer`, the caller's verified email in `status.answeredBy`, and the
+answer time in `status.answeredAt`. Closed Notes remain as history, outside the
 open notes and the 24-hour default-answer window, for 30 days after closure.
 Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first
