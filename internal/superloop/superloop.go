@@ -405,6 +405,10 @@ type Action struct {
 	Agent string // the worker it concerns
 	Head  string
 	Round int
+	// The verdict the merge decision observed. A newer change request must
+	// force replanning before the loop records its exact-head authorization.
+	ReviewID      string
+	ReviewVerdict string
 	// SelfHosted asks for a reviewer on no self-hosted provider.
 	SelfHosted bool
 	// Message is what the worker or the guide is told.
@@ -1651,6 +1655,17 @@ func EventAgent(verb, detail, by string) string {
 func goAction(in Input, base Action, why string) Action {
 	a := base
 	a.Key, a.Kind = goKey(base.Ref, base.Head), KindGo
+	var latest *Review
+	pull := in.Pulls[base.Ref]
+	for i := range pull.Reviews {
+		r := &pull.Reviews[i]
+		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+			latest = r
+		}
+	}
+	if latest != nil {
+		a.ReviewID, a.ReviewVerdict = latest.ID, latest.Verdict
+	}
 	repo, n, _ := strings.Cut(base.Ref, "#")
 	if in.gated(repo) {
 		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s --update-branch`, once `gh pr view` shows head %s. This go covers a head the gate's --update-branch moves on by merging the base alone: let that merge run to its end, then report.",

@@ -75,7 +75,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if latestReviewRequestsChanges(p) {
+	if latestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
 		return "", refused("a review requested changes; new supervisor approval required")
 	}
 	repair := func(code int, reason string) (string, error) {
@@ -205,7 +205,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if latestReviewRequestsChanges(p) {
+	if latestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
 		return "", refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
@@ -720,6 +720,20 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// reviewOvertookDecision prevents a fresh exact-head authorization from
+// concealing a change request that arrived after the planner's review snapshot.
+func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
+	var latest *superloop.Review
+	for i := range p.Reviews {
+		r := &p.Reviews[i]
+		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+			latest = r
+		}
+	}
+	return latest != nil && latest.Verdict == superloop.ChangesRequested &&
+		(latest.ID != act.ReviewID || act.ReviewVerdict != superloop.ChangesRequested)
 }
 
 // latestReviewRequestsChanges reports whether the latest review verdict on p

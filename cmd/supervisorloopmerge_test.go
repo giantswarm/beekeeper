@@ -54,6 +54,36 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
+func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix the handler")
+	r.pass(t)
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	read := readLoopPull
+	reads := 0
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		p, err := read(ctx, ref)
+		reads++
+		if reads > 1 {
+			p.Reviews = append(slices.Clone(p.Reviews), superloop.Review{ID: "R2", Author: loopDesk, Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Now()})
+		}
+		return p, err
+	}
+	r.pass(t)
+	if reads < 2 {
+		t.Fatal("did not exercise the executor's live review read")
+	}
+	if r.called(gateCmdName) != nil || len(r.logged(t, "merge.authorized")) != 0 {
+		t.Fatalf("new findings were overwritten by a fresh authorization: %v", r.calls)
+	}
+	if !strings.Contains(r.out.String(), "requested changes") {
+		t.Fatalf("new review refusal was not reported: %s", r.out)
+	}
+}
+
 func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
