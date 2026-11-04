@@ -203,9 +203,20 @@ func TestRefreshKeepsLastGoodDataOnError(t *testing.T) {
 	src := &fakeSource{data: fixtureData()}
 	m := newTestModel(t, src)
 	first := m.data
+	lastUpdated := time.Now().Add(-5 * time.Minute)
+	m.updated = lastUpdated
 
 	want := errors.New("kubectl timed out")
-	m.Update(refreshMsg{err: want})
+	for range 2 {
+		m.refreshing = true
+		m.Update(refreshMsg{err: want})
+		if !m.updated.Equal(lastUpdated) {
+			t.Errorf("failed refresh changed updated from %v to %v", lastUpdated, m.updated)
+		}
+		if m.refreshing {
+			t.Error("failed refresh left a read outstanding")
+		}
+	}
 
 	if m.data != first {
 		t.Errorf("a failed refresh replaced the data")
@@ -219,9 +230,32 @@ func TestRefreshKeepsLastGoodDataOnError(t *testing.T) {
 
 	fresh := fixtureData()
 	fresh.Status.Due = 9
+	before := time.Now()
 	m.Update(refreshMsg{data: fresh})
 	if m.data != fresh || m.err != nil {
 		t.Errorf("a good refresh did not swap the data and clear the error")
+	}
+	if m.updated.Before(before) || m.updated.After(time.Now()) {
+		t.Errorf("successful refresh timestamp = %v, want current time", m.updated)
+	}
+}
+
+func TestInitialRefreshErrorKeepsFooterNever(t *testing.T) {
+	m := newModel(&fakeSource{}, Options{}).(*model)
+	t.Cleanup(m.cancel)
+	m.refreshing = true
+	want := errors.New("refresh failed")
+	m.Update(refreshMsg{err: want})
+
+	if m.data != nil || !m.updated.IsZero() {
+		t.Errorf("initial failure recorded data or an update: data=%v updated=%v", m.data, m.updated)
+	}
+	if m.err != want || m.refreshing {
+		t.Errorf("initial failure state: err=%v refreshing=%v", m.err, m.refreshing)
+	}
+	footer := ansi.Strip(footerView(m, 100))
+	if !strings.Contains(footer, "never") || strings.Contains(footer, "updated") || !strings.Contains(footer, want.Error()) {
+		t.Errorf("footer should show never and the refresh error: %q", footer)
 	}
 }
 func TestTicksDoNotStack(t *testing.T) {
