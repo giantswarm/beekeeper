@@ -181,7 +181,8 @@ func (ix *Index) ValueFingerprint(ref string) (string, bool) {
 	return fp, ok
 }
 
-// Save writes the index, readable by the user only.
+// Save atomically publishes a complete index snapshot, readable by the user only.
+// Concurrent saves from independent indexes may replace one another; they do not merge.
 func (ix *Index) Save(now time.Time) error {
 	if ix.key == nil {
 		return errors.New("the index has no key: open it with OpenIndex")
@@ -192,11 +193,19 @@ func (ix *Index) Save(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(ix.dir, indexFile+".tmp")
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(ix.dir, indexFile+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(ix.dir, indexFile))
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(ix.dir, indexFile))
 }
 
 // Fingerprint is the keyed hash of s, comparable only through beekeeper;

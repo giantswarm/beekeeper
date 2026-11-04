@@ -3,8 +3,10 @@ package guard
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -269,5 +271,78 @@ func TestIndexSOPSAndVaultReadTheirSourcesQuietly(t *testing.T) {
 	}
 	if _, f := ix.Redact("someone-long-name"); f != nil {
 		t.Fatal("a plain STRING field was indexed")
+	}
+}
+
+func TestIndexConcurrentSavesPublishCompleteSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	// Create the shared key before opening independent writers.
+	if _, err := OpenIndex(dir); err != nil {
+		t.Fatal(err)
+	}
+	const writers = 32
+	indexes := make([]*Index, writers)
+	for i := range indexes {
+		ix, err := OpenIndex(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j := range 64 {
+			ix.Add(fmt.Sprintf("synthetic/%02d/%02d", i, j), fmt.Sprintf("synthetic-value-%02d-%02d", i, j))
+		}
+		indexes[i] = ix
+	}
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, ix := range indexes {
+		go func() { <-start; results <- ix.Save(now) }()
+	}
+	close(start)
+	for range writers {
+		if err := <-results; err != nil {
+			t.Errorf("Save: %v", err)
+		}
+	}
+	loaded, err := LoadIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := false
+	for _, ix := range indexes {
+		if reflect.DeepEqual(loaded.data, ix.data) {
+			complete = true
+			break
+		}
+	}
+	if !complete {
+		t.Fatal("final index is not one complete writer snapshot")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("save left temporary files: %v", entries)
+	}
+}
+
+func TestIndexSaveCleansUpAfterPublishFailure(t *testing.T) {
+	ix := plantedIndex(t)
+	// A directory at the destination forces rename to fail after writing.
+	if err := os.Mkdir(filepath.Join(ix.dir, indexFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.Save(time.Now()); err == nil {
+		t.Fatal("Save succeeded with a directory at the destination")
+	}
+	entries, err := os.ReadDir(ix.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != indexKeyFile && entry.Name() != indexFile {
+			t.Errorf("temporary file remains: %s", entry.Name())
+		}
 	}
 }
