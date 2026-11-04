@@ -529,7 +529,7 @@ func TestRunHoldsBuildCachesWithoutGoCache(t *testing.T) {
 func TestRunReportsUnconfirmedSIGKILL(t *testing.T) {
 	var stderr strings.Builder
 	var end string
-	o := Options{Max: "64M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: &stderr,
+	o := Options{Max: guardTestMax, Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: &stderr,
 		Record: func(verb, detail string) {
 			if verb == VerbEnd {
 				end = detail

@@ -980,7 +980,7 @@ func mergeChild(base string) childResult {
 		log, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
 		recordMergeTermination(base, mergeKillReason(log))
 	} else {
-		_ = os.Remove(base + terminationExt) // a newer completed run supersedes the old diagnostic //nolint:gosec // a path of this tool's own state
+		_ = os.Remove(base + terminationExt) //nolint:gosec // a newer completed run supersedes the old diagnostic
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)

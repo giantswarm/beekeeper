@@ -322,7 +322,7 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 		{litAlertnameOnly, nil, 4},
 		{"cluster", []string{litCluster, litClusterA}, 2},
 		{litNamespace, []string{namespaceFlag, litNamespaceA}, 2},
-		{"both", []string{litCluster, litClusterA, "--namespace", "namespace-a"}, 1},
+		{"both", []string{litCluster, litClusterA, "--namespace", litNamespaceA}, 1},
 		{"no match", []string{"--cluster", workerGitHubMissingRef}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,9 +334,9 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 				t.Fatal(err)
 			}
 			base.Installations["alpha"].Alerts = alerts.Set{}
-			for i, labels := range [][2]string{{"cluster-a", "namespace-a"}, {"cluster-a", "namespace-b"}, {"cluster-b", "namespace-a"}, {"cluster-b", "namespace-b"}} {
+			for i, labels := range [][2]string{{litClusterA, "namespace-a"}, {"cluster-a", "namespace-b"}, {"cluster-b", "namespace-a"}, {"cluster-b", "namespace-b"}} {
 				fp := []string{"fp1", "fp2", "fp3", "fp4"}[i]
-				base.Installations["alpha"].Alerts[fp] = alerts.Alert{Alertname: "PodRestarting", Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
+				base.Installations["alpha"].Alerts[fp] = alerts.Alert{Alertname: litPodrestarting, Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
 			}
 			if err := store.Save(base); err != nil {
 				t.Fatal(err)
