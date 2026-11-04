@@ -91,6 +91,7 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 			key = "path"
 		}
 		p, _ := ev.ToolInput[key].(string)
+		p = globSearchRoot(ev, p)
 		if p == "" && key == "file_path" {
 			return ExecutionDeny("file tool requires a target")
 		}

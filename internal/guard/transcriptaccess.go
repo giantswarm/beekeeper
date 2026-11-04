@@ -346,6 +346,7 @@ func (h Hook) transcriptFileRefusal(ev event) string {
 	if p == "" {
 		p, _ = ev.ToolInput[notebookPathKey].(string)
 	}
+	p = globSearchRoot(ev, p)
 	if p == "" {
 		p = cwd
 	}

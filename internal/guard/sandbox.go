@@ -66,10 +66,7 @@ func (h Hook) sandboxRefusal(ev event) string {
 		write = true
 	case grepTool, globTool:
 		path, _ = ev.ToolInput[pathKey].(string)
-		if pat, _ := ev.ToolInput[patternKey].(string); ev.ToolName == globTool && filepath.IsAbs(pat) {
-			// an absolute pattern searches from its literal prefix
-			path = globRoot(pat)
-		}
+		path = globSearchRoot(ev, path)
 		if path == "" {
 			path = cwd
 		}
@@ -90,6 +87,15 @@ func (h Hook) sandboxRefusal(ev event) string {
 			"credentials stay unreadable by design. A path the desk needs goes into sandbox.allowRead in beekeeper's config."
 	}
 	return ""
+}
+
+// globSearchRoot accounts for an absolute Glob pattern overriding the path
+// argument. Relative patterns keep the caller's default search path.
+func globSearchRoot(ev event, path string) string {
+	if pat, _ := ev.ToolInput[patternKey].(string); ev.ToolName == globTool && filepath.IsAbs(pat) {
+		return globRoot(pat)
+	}
+	return path
 }
 
 // globRoot is the directory an absolute glob pattern searches from: its
