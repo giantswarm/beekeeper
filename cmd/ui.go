@@ -40,6 +40,9 @@ const uiRefreshEvery = 2 * time.Second
 type collector struct {
 	a *app
 
+	// owned remembers the exact flag written for shutdown cleanup, guarded by mu.
+	owned map[string]takeover.Flag
+
 	// budgetEvery and upgradesEvery pace the slow readings; 0 leaves that
 	// reading off entirely (the tests run that way).
 	budgetEvery, upgradesEvery time.Duration
@@ -235,19 +238,44 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)
 	}
 	person := c.a.uiPerson()
-	if err := takeover.Take(c.takeoverDir(), s.ID, takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flag := takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}
+	if err := takeover.Take(c.takeoverDir(), s.ID, flag); err != nil {
 		return err
 	}
+	if c.owned == nil {
+		c.owned = make(map[string]takeover.Flag)
+	}
+	c.owned[s.ID] = flag
 	_ = c.a.store.Log(event(state.Party{Name: person}, "ui.takeover", "%s: its approvals come to the screen", s.Name))
 	return nil
 }
 
 // Release hands the approvals of session id back to its own window.
 func (c *collector) Release(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := takeover.Release(c.takeoverDir(), id); err != nil {
 		return err
 	}
+	delete(c.owned, id)
 	_ = c.a.store.Log(event(state.Party{Name: c.a.uiPerson()}, "ui.release", "%s: its approvals go to its own window", id))
+	return nil
+}
+
+// ReleaseOwned cleans up only the takeover this collector wrote.
+func (c *collector) ReleaseOwned(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flag, ok := c.owned[id]
+	if !ok {
+		return nil
+	}
+	if err := takeover.ReleaseOwned(c.takeoverDir(), id, flag); err != nil {
+		return err
+	}
+	delete(c.owned, id)
 	return nil
 }
 
