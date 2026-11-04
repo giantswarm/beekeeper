@@ -229,6 +229,25 @@ func (d *document) set(path, value string) error {
 	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
 }
 
+// destination identifies a scalar node, or a top-level key inside the
+// block scalar that contains an embedded document.
+type destination struct {
+	node  *yaml.Node
+	inner string
+}
+
+// planDestination applies a placeholder to an isolated planning tree. The
+// resulting node identity ignores quoted/escaped aliases of the same path.
+func (d *document) planDestination(path string) (destination, error) {
+	if err := d.set(path, "beekeeper-preflight"); err != nil {
+		return destination{}, err
+	}
+	if l, ok := d.inLeaf(splitPath(path)); ok {
+		return destination{node: l.node, inner: strings.Join(l.rest, ".")}, nil
+	}
+	return destination{node: d.node(path)}, nil
+}
+
 // setKeys puts a string under keys, one key each, a key holding a dot
 // included (a Secret's .dockerconfigjson), creating the mappings on the way.
 func (d *document) setKeys(keys []string, value string) error {
