@@ -1635,6 +1635,12 @@ interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < m
 an interpreter (`zsh -c 'bash merge.sh'`, `sh -c '. merge.sh'`, `bash -c './merge.sh'`).
 Nested `-c` strings share the script recursion bound; a refusal names the script and its line.
 
+Configure a fork repository with `merge.methods: {example/fork: rebase}` to keep
+its upstream-ready commits separate and linear. The gate adds `--rebase` before
+checking or queuing its devctl PR merges, including when the worker omits the flag or
+passes `--rebase=false`. Repositories without this setting keep the default squash
+method; an explicit worker `--rebase` still works.
+
 A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
 merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
 pr wait o/r 7` ``) is refused too, on the command line, in a here-document or here-string a shell
@@ -3490,6 +3496,14 @@ muster's `call_tool` (`x_<central.server>_<tool>`). The person signs in once wit
 claim another person's agent holds is refused (exit 3) with its holder, `"<person>/<agent>"`; a
 name the central instance does not know is a usage error (exit 2). As a local claim, a central
 claim needs no grant: a free resource is the claimant's.
+
+Central access is **host-only**. Sandboxed sessions cannot use central notes, roster,
+holds, leases or subscriptions: the sandbox cannot access the host's muster session
+and socket, and no central broker route or token handoff is provided. Adding a
+central endpoint to `sandbox.domains` does not enable access. Run commands that
+need central state on the host outside the agent sandbox. Sandboxed central calls
+fail with an explicit host-only message (exit 69 for commands requiring central);
+commands that also show local state retain their existing local fallback behavior.
 
 There is no local copy to fall back on: a central verb that does not reach the central instance
 (no sign-in, muster or `beekeeper serve` not answering) is refused with the reason and exit 69,

@@ -386,6 +386,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
+		argv = merge.RequireRebase(argv)
+	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
@@ -1874,7 +1877,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		argv = squashArgv(self, g.repo, g.pr, g.argv)
 	}
 	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
