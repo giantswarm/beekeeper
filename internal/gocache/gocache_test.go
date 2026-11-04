@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -255,5 +256,83 @@ func TestModDir(t *testing.T) {
 	t.Setenv("HOME", "/h")
 	if got := ModDir(); got != "/h/go/pkg/mod" {
 		t.Errorf("home: %s", got)
+	}
+}
+
+func TestScanAndTrimExecutableEntries(t *testing.T) {
+	old := "00/" + strings.Repeat("a", 64) + "-d"
+	recent := "01/" + strings.Repeat("b", 64) + "-d"
+	dir := cache(t, map[string][2]int{
+		old + "/program":    {200, 1},
+		recent + "/program": {300, 100},
+		"02/regular-d":      {100, 10},
+	})
+	now := time.Now()
+	for name, age := range map[string]int{old: 20, recent: 1} {
+		at := now.Add(-time.Duration(age) * time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u, err := Scan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Bytes != 600 || len(u.Entries) != 3 {
+		t.Fatalf("scan = %d bytes in %d entries, want 600 in 3", u.Bytes, len(u.Entries))
+	}
+	for i, name := range []string{old + "/program", "02/regular-d", recent + "/program"} {
+		if u.Entries[i].Path != filepath.Join(dir, name) {
+			t.Errorf("entry %d = %s, want %s", i, u.Entries[i].Path, name)
+		}
+	}
+	freed, removed, err := Trim(u, 300, func() bool { return false })
+	if err != nil || freed != 300 || removed != 2 {
+		t.Fatalf("trim = %d, %d, %v; want 300, 2, nil", freed, removed, err)
+	}
+	for name, kept := range map[string]bool{old + "/program": false, "02/regular-d": false, recent + "/program": true} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if kept && err != nil || !kept && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: kept = %v, err = %v", name, kept, err)
+		}
+	}
+}
+
+func TestScanExecutableEntriesExcludesUnrelatedData(t *testing.T) {
+	output := "00/" + strings.Repeat("a", 64) + "-d"
+	dir := cache(t, map[string][2]int{
+		output + "/program":                            {100, 1},
+		output + "/nested/ignored":                     {1000, 1},
+		"00/unrelated/program":                         {1000, 1},
+		"00/" + strings.Repeat("g", 64) + "-d/program": {1000, 1},
+		"00/" + strings.Repeat("a", 63) + "-d/program": {1000, 1},
+		"00/" + strings.Repeat("b", 64) + "-a/program": {1000, 1},
+	})
+	outside := cache(t, map[string][2]int{"payload": {1000, 1}})
+	for link, target := range map[string]string{
+		"ff":                                   outside,
+		"00/" + strings.Repeat("c", 64) + "-d": outside,
+		"00/link":                              filepath.Join(outside, "payload"),
+		output + "/link":                       filepath.Join(outside, "payload"),
+		output + "/linked-dir":                 outside,
+	} {
+		if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u, err := Scan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Bytes != 100 || len(u.Entries) != 1 {
+		t.Fatalf("scan = %d bytes in %d entries, want 100 in 1", u.Bytes, len(u.Entries))
+	}
+	if _, _, err := Trim(u, 0, func() bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(outside, "payload"), filepath.Join(dir, output, "nested/ignored"), filepath.Join(dir, "00/unrelated/program")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("excluded data removed: %v", err)
+		}
 	}
 }

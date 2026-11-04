@@ -154,12 +154,13 @@ func Dir() string {
 	return filepath.Join(d, "go-build")
 }
 
-// Entry is one file of the cache: an action or an output.
+// Entry is one file of the cache: an action, output, or executable payload.
 type Entry struct {
 	Path string
 	Size int64
 	// Used is its modification time, which the go command moves on when it
-	// uses an entry last touched over an hour before.
+	// uses an entry last touched over an hour before. Executable payloads use
+	// the enclosing output directory's modification time.
 	Used time.Time
 }
 
@@ -172,7 +173,9 @@ type Usage struct {
 }
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
-// subdirectories. Everything else (its README, trim.txt, fuzz corpora) is
+// subdirectories, including regular payloads directly inside executable
+// output directories named <64 hex digits>-d. Everything else (README,
+// trim.txt, fuzz corpora, unrelated directories and symbolic links) is
 // left out, and a missing cache is empty.
 func Scan(dir string) (Usage, error) {
 	u := Usage{Dir: dir}
@@ -192,6 +195,32 @@ func Scan(dir string) (Usage, error) {
 			return u, err
 		}
 		for _, f := range files {
+			path := filepath.Join(dir, s.Name(), f.Name())
+			if f.IsDir() && executableOutput(f.Name()) {
+				info, err := f.Info()
+				if err != nil {
+					continue
+				}
+				payloads, err := os.ReadDir(path)
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return u, err
+				}
+				for _, payload := range payloads {
+					if !payload.Type().IsRegular() {
+						continue
+					}
+					pi, err := payload.Info()
+					if err != nil {
+						continue
+					}
+					u.Entries = append(u.Entries, Entry{Path: filepath.Join(path, payload.Name()), Size: pi.Size(), Used: info.ModTime()})
+					u.Bytes += pi.Size()
+				}
+				continue
+			}
 			if !f.Type().IsRegular() {
 				continue
 			}
@@ -199,7 +228,7 @@ func Scan(dir string) (Usage, error) {
 			if err != nil {
 				continue // removed since the directory was read
 			}
-			u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, s.Name(), f.Name()), Size: info.Size(), Used: info.ModTime()})
+			u.Entries = append(u.Entries, Entry{Path: path, Size: info.Size(), Used: info.ModTime()})
 			u.Bytes += info.Size()
 		}
 	}
@@ -207,10 +236,15 @@ func Scan(dir string) (Usage, error) {
 	return u, nil
 }
 
+func executableOutput(name string) bool {
+	return len(name) == 66 && name[64:] == "-d" && hexDigits(name[:64])
+}
+
 func hexByte(name string) bool {
-	if len(name) != 2 {
-		return false
-	}
+	return len(name) == 2 && hexDigits(name)
+}
+
+func hexDigits(name string) bool {
 	for _, c := range name {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
