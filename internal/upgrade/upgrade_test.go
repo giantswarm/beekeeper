@@ -442,16 +442,51 @@ func TestRollingAfterMarkCleared(t *testing.T) {
 	}
 }
 
-// TestStaleMarkKeepsDueSchedule: a due scheduled upgrade holds its cluster
-// though the previous one's mark is stale.
-func TestStaleMarkKeepsDueSchedule(t *testing.T) {
-	objs := withMC(t, "0843-after", map[string]string{
-		upgradingMark: marked, upgradeStartTime: stamp(50 * time.Hour),
+// A due schedule gets its own identity and hold despite a lingering mark.
+func TestLingeringMarkDueSchedule(t *testing.T) {
+	for _, age := range []time.Duration{10 * time.Minute, 50 * time.Hour} {
+		t.Run(age.String(), func(t *testing.T) {
+			objs := withMC(t, "0843-after", map[string]string{
+				upgradingMark: marked, upgradeStartTime: stamp(age),
+				scheduleRelease: "35.2.0", scheduleTime: stamp(time.Minute),
+			})
+			st := &state.State{}
+			Reconcile(st, prod, []Upgrade{{Cluster: "mc", To: to}}, at.Add(-age), watch)
+			if !Lift(st, HoldTarget(prod, "mc"), watch, at.Add(-age)) {
+				t.Fatal("previous upgrade hold was not lifted")
+			}
+			held := HeldClusters(st, at)
+			ups := Detect(objs, at, func(c string) bool { return held(prod, c) })
+			if len(ups) != 1 {
+				t.Fatalf("upgrades %+v", ups)
+			}
+			u := ups[0]
+			if u.Cluster != "mc" || u.From != to || u.To != "35.2.0" || !u.Since.Equal(at.Add(-time.Minute)) || u.Rolling {
+				t.Fatalf("due upgrade has wrong identity: %+v", u)
+			}
+			begun, _ := Reconcile(st, prod, ups, at, watch)
+			if len(begun) != 1 || len(st.Holds) != 1 || st.Holds[0].UpgradeTo != "35.2.0" || !st.Holds[0].Active(at) {
+				t.Fatalf("new upgrade must have an active hold: begun %+v holds %+v", begun, st.Holds)
+			}
+			if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun)+len(ended) != 0 {
+				t.Errorf("repeated reading changed holds: begun %+v ended %+v", begun, ended)
+			}
+		})
+	}
+}
+
+func TestLabelChangePrecedesDueSchedule(t *testing.T) {
+	objs := withMC(t, "0821-changed", map[string]string{
+		upgradingMark: marked, upgradeStartTime: stamp(10 * time.Minute),
 		scheduleRelease: "35.2.0", scheduleTime: stamp(time.Minute),
 	})
 	ups := Detect(objs, at, func(string) bool { return false })
-	if len(ups) != 1 || ups[0].Cluster != "mc" || ups[0].Rolling {
-		t.Errorf("a due schedule: %+v", ups)
+	if len(ups) != 1 {
+		t.Fatalf("upgrades %+v", ups)
+	}
+	u := ups[0]
+	if u.From != "35.0.1" || u.To != to || !u.Since.Equal(at.Add(-10*time.Minute)) || u.Rolling {
+		t.Errorf("observed label change lost precedence: %+v", u)
 	}
 }
 
