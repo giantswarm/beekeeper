@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -242,6 +243,7 @@ func TestHoldGivesUpWithItsContext(t *testing.T) {
 }
 
 func TestModDir(t *testing.T) {
+	t.Setenv("GOENV", "off")
 	t.Setenv("GOMODCACHE", "/m")
 	if got := ModDir(); got != "/m" {
 		t.Errorf("GOMODCACHE: %s", got)
@@ -255,5 +257,86 @@ func TestModDir(t *testing.T) {
 	t.Setenv("HOME", "/h")
 	if got := ModDir(); got != "/h/go/pkg/mod" {
 		t.Errorf("home: %s", got)
+	}
+}
+
+func TestCacheDirectoriesUseGoEnvSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		defaultPath, disabled, missing bool
+		settings                       string
+		process                        map[string]string
+		build, mod                     string
+	}{
+		{name: "explicit settings", settings: "GOCACHE={root}/build\nGOMODCACHE={root}/modules\n", build: "build", mod: "modules"},
+		{name: "default settings", defaultPath: true, settings: "GOCACHE={root}/build\nGOMODCACHE={root}/modules\n", build: "build", mod: "modules"},
+		{name: "process overrides", settings: "GOCACHE={root}/saved-build\nGOMODCACHE={root}/saved-modules\n", process: map[string]string{"GOCACHE": "{root}/build", "GOMODCACHE": "{root}/modules"}, build: "build", mod: "modules"},
+		{name: "persisted GOPATH", settings: "GOPATH={root}/workspace" + string(os.PathListSeparator) + "{root}/second\n", mod: "workspace/pkg/mod"},
+		{name: "process GOPATH", settings: "GOPATH={root}/saved\n", process: map[string]string{"GOPATH": "{root}/workspace"}, mod: "workspace/pkg/mod"},
+		{name: "module setting before process GOPATH", settings: "GOMODCACHE={root}/modules\n", process: map[string]string{"GOPATH": "{root}/workspace"}, mod: "modules"},
+		{name: "disabled settings", disabled: true, settings: "GOCACHE={root}/build\nGOMODCACHE={root}/modules\n"},
+		{name: "missing explicit settings", missing: true},
+		{name: "missing default settings", defaultPath: true, missing: true},
+		{name: "persisted cache off", settings: "GOCACHE=off\n", build: "off"},
+		{name: "process cache off", settings: "GOCACHE={root}/build\n", process: map[string]string{"GOCACHE": "off"}, build: "off"},
+		{name: "empty settings and malformed lines", settings: "# comment\nmalformed\nGOCACHE=\nGOMODCACHE=\n"},
+		{name: "literal values and last duplicate", settings: "GOCACHE=ignored\nGOCACHE={root}/build=cache\nGOMODCACHE={root}/module cache", build: "build=cache", mod: "module cache"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, key := range []string{"GOCACHE", "GOMODCACHE", "GOPATH", "GOENV"} {
+				t.Setenv(key, "")
+			}
+			t.Setenv("HOME", root)
+			t.Setenv("USERPROFILE", root)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+			t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+			t.Setenv("APPDATA", filepath.Join(root, "config"))
+			t.Setenv("LocalAppData", filepath.Join(root, "cache"))
+			config, err := os.UserConfigDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(root, "settings")
+			if tc.defaultPath || tc.disabled {
+				file = filepath.Join(config, "go", "env")
+			}
+			if !tc.missing {
+				if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(file, []byte(strings.ReplaceAll(tc.settings, "{root}", root)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.disabled {
+				t.Setenv("GOENV", "off")
+			} else if !tc.defaultPath {
+				t.Setenv("GOENV", file)
+			}
+			for key, value := range tc.process {
+				t.Setenv(key, strings.ReplaceAll(value, "{root}", root))
+			}
+			cache, err := os.UserCacheDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantBuild := filepath.Join(cache, "go-build")
+			if tc.build == "off" {
+				wantBuild = ""
+			} else if tc.build != "" {
+				wantBuild = filepath.Join(root, tc.build)
+			}
+			wantMod := filepath.Join(root, "go", "pkg", "mod")
+			if tc.mod != "" {
+				wantMod = filepath.Join(root, tc.mod)
+			}
+			if got := Dir(); got != wantBuild {
+				t.Errorf("Dir() = %q, want %q", got, wantBuild)
+			}
+			if got := ModDir(); got != wantMod {
+				t.Errorf("ModDir() = %q, want %q", got, wantMod)
+			}
+		})
 	}
 }

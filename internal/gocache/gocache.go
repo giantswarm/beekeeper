@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -117,14 +118,46 @@ func Hold(ctx context.Context, dir string, waiting func()) (release func(), err 
 	return func() { _ = l.Unlock(); _ = turn.Unlock() }, nil
 }
 
-// ModDir is the module cache the go command uses: $GOMODCACHE, else pkg/mod
-// in the first $GOPATH entry, else in go under the home directory; "" when
-// unknown.
+// goSetting follows the go command's precedence: a nonempty process value,
+// then the user settings file. Read the file directly so hooks need no Go
+// subprocess and subsequent calls observe settings changes.
+func goSetting(key string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	file := os.Getenv("GOENV")
+	if file == "off" {
+		return ""
+	}
+	if file == "" {
+		dir, err := os.UserConfigDir()
+		if err != nil || dir == "" {
+			return ""
+		}
+		file = filepath.Join(dir, "go", "env")
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return ""
+	}
+	var value string
+	for _, line := range strings.Split(string(data), "\n") {
+		name, setting, ok := strings.Cut(line, "=")
+		if ok && name == key {
+			value = setting
+		}
+	}
+	return value
+}
+
+// ModDir is the module cache the go command uses: GOMODCACHE, else pkg/mod
+// in the first GOPATH entry, else in go under the home directory; "" when
+// unknown. Process values take precedence over Go user settings.
 func ModDir() string {
-	if d := os.Getenv("GOMODCACHE"); d != "" {
+	if d := goSetting("GOMODCACHE"); d != "" {
 		return d
 	}
-	if p := filepath.SplitList(os.Getenv("GOPATH")); len(p) > 0 && p[0] != "" {
+	if p := filepath.SplitList(goSetting("GOPATH")); len(p) > 0 && p[0] != "" {
 		return filepath.Join(p[0], "pkg", "mod")
 	}
 	home, err := os.UserHomeDir()
@@ -138,10 +171,11 @@ func ModDir() string {
 // build began.
 const busyEvery = 256
 
-// Dir is the build cache the go command uses: $GOCACHE, else go-build in
-// the user's cache directory; "" when it is off or unknown.
+// Dir is the build cache the go command uses: GOCACHE, else go-build in
+// the user's cache directory; "" when it is off or unknown. Process values
+// take precedence over Go user settings.
 func Dir() string {
-	if d := os.Getenv("GOCACHE"); d != "" {
+	if d := goSetting("GOCACHE"); d != "" {
 		if d == "off" {
 			return ""
 		}
