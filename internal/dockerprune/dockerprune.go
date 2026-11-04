@@ -336,7 +336,8 @@ type Trimmed struct {
 // image Docker refuses to remove (a container started on it since, a child
 // image built on it) is skipped; while the images stay over target the
 // refused ones are tried again, the newest first so a child goes before
-// its parent, as long as a pass removes one.
+// its parent, as long as a pass removes one. A failed removal can already
+// have untagged references; retries read the remaining ones first.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
 	var t Trimmed
 	left := total
@@ -351,7 +352,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 		left = n
 		return left > target, nil
 	}
-	pass := func(images []Image) ([]Blocker, error) {
+	pass := func(images []Image, refresh bool) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
 			if more, err := over(); err != nil || !more {
@@ -359,6 +360,25 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			}
 			if busy() {
 				return refused, ErrBusy
+			}
+			if refresh && len(img.Refs) > 0 {
+				raw, err := d(ctx, "image", "inspect", "--format", "{{json .RepoTags}}", img.ID)
+				var refs []string
+				if err == nil {
+					err = json.Unmarshal(raw, &refs)
+				}
+				if err != nil {
+					if canceled := ctx.Err(); canceled != nil {
+						return refused, canceled
+					}
+					refused = append(refused, Blocker{Image: img, Why: "Cannot read remaining references: " + err.Error()})
+					continue
+				}
+				if slices.ContainsFunc(refs, func(ref string) bool { return !slices.Contains(img.Refs, ref) }) {
+					refused = append(refused, Blocker{Image: img, Why: "Image has references outside the removal snapshot"})
+					continue
+				}
+				img.Refs = refs
 			}
 			args := []string{"image", "rm"}
 			if len(img.Refs) == 0 {
@@ -375,7 +395,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 		}
 		return refused, nil
 	}
-	refused, err := pass(candidates)
+	refused, err := pass(candidates, false)
 	slices.Reverse(refused)
 	for removed := len(t.Removed); err == nil && len(refused) > 0 && removed > 0; {
 		retry := make([]Image, len(refused))
@@ -383,7 +403,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			retry[i] = b.Image
 		}
 		before := len(t.Removed)
-		refused, err = pass(retry)
+		refused, err = pass(retry, true)
 		removed = len(t.Removed) - before
 	}
 	t.Refused = refused

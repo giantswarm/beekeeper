@@ -2,6 +2,7 @@ package dockerprune
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -303,6 +304,109 @@ func TestTrimImagesRetriesNothingAfterAPassRemovedNothing(t *testing.T) {
 	tr, err := TrimImages(context.Background(), counted, []Image{{ID: stuck, Size: 1}}, 1, 0, nil, func() bool { return false })
 	if err != nil || len(tr.Removed) != 0 || len(tr.Refused) != 1 || calls != 1 {
 		t.Errorf("trim = %+v, %v after %d removals; want stuck refused once", tr, err, calls)
+	}
+}
+
+func TestTrimImagesRetriesAfterPartialUntagging(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		t.Run(strconv.FormatBool(dangling), func(t *testing.T) {
+			refs := []string{"example:one", "example:two"}
+			if dangling {
+				refs = refs[:1]
+			}
+			remaining := map[string]bool{}
+			for _, ref := range refs {
+				remaining[ref] = true
+			}
+			const id, spare = "sha256:partial", "sha256:spare"
+			first, exists := true, true
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				if args[0] == image && args[1] == "inspect" {
+					var tags []string
+					for ref := range remaining {
+						tags = append(tags, ref)
+					}
+					return json.Marshal(tags)
+				}
+				if args[0] != image || args[1] != "rm" {
+					t.Fatalf("unexpected Docker call: %v", args)
+				}
+				if args[len(args)-1] == spare {
+					return nil, nil
+				}
+				if first {
+					first = false
+					delete(remaining, refs[0])
+					return nil, errors.New("removal failed after untagging")
+				}
+				// Docker processes every argument, then joins errors: a
+				// vanished tag makes the command fail even if a later
+				// argument successfully deletes the image.
+				var errs []error
+				for _, ref := range args[2:] {
+					if strings.HasPrefix(ref, "-") {
+						continue
+					}
+					if ref == id || remaining[ref] {
+						delete(remaining, ref)
+						if len(remaining) == 0 {
+							exists = false
+						}
+					} else {
+						errs = append(errs, errors.New("no such image: "+ref))
+					}
+				}
+				return nil, errors.Join(errs...)
+			}
+			candidates := []Image{{ID: id, Refs: refs, Size: 2}, {ID: spare, Size: 1}}
+			trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
+			if err != nil || exists || len(trimmed.Removed) != 2 || len(trimmed.Refused) != 0 {
+				t.Fatalf("trim = %+v, %v, image exists = %v; want both candidates removed and no stale refusal", trimmed, err, exists)
+			}
+		})
+	}
+}
+
+func TestTrimImagesKeepsRefusalWhenReferencesCannotBeRead(t *testing.T) {
+	for _, readError := range []bool{false, true} {
+		attempts := 0
+		run := func(_ context.Context, args ...string) ([]byte, error) {
+			if args[1] == "inspect" {
+				if readError {
+					return nil, errors.New("inspection unavailable")
+				}
+				return []byte("not-json"), nil
+			}
+			if args[len(args)-1] == "example:retry" {
+				attempts++
+				return nil, errors.New("partial removal")
+			}
+			return nil, nil
+		}
+		candidates := []Image{{ID: "retry", Refs: []string{"example:retry"}, Size: 2}, {ID: "spare", Size: 1}}
+		trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
+		if err != nil || attempts != 1 || len(trimmed.Removed) != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "remaining references") {
+			t.Fatalf("trim = %+v, %v after %d attempts; want to retain the refusal when references are unknown", trimmed, err, attempts)
+		}
+	}
+}
+
+func TestTrimImagesDoesNotAdoptNewTagsDuringRetry(t *testing.T) {
+	attempts := 0
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		if args[1] == "inspect" {
+			return []byte(`["example:retry","example:new"]`), nil
+		}
+		if args[len(args)-1] != "spare" {
+			attempts++
+			return nil, errors.New("partial removal")
+		}
+		return nil, nil
+	}
+	candidates := []Image{{ID: "retry", Refs: []string{"example:retry"}, Size: 2}, {ID: "spare", Size: 1}}
+	trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
+	if err != nil || attempts != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "outside the removal snapshot") {
+		t.Fatalf("trim = %+v, %v after %d attempts; want the newly tagged image kept", trimmed, err, attempts)
 	}
 }
 
