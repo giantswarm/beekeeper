@@ -226,6 +226,58 @@ func mustRecord(t *testing.T, a *app) teleport.Record {
 // teleportKeeper is the name the keeper's unit runs as.
 const teleportKeeper = "teleport keeper"
 
+func TestTeleportKeeperEnsuresContextsWithoutRenewal(t *testing.T) {
+	a := teleportApp(t)
+	a.as = teleportKeeper
+	dir := t.TempDir()
+	a.cfg.StateDir = dir
+	a.cfg.Teleport.Proxy = "proxy"
+	a.cfg.Teleport.Home = filepath.Join(dir, "profile")
+	a.cfg.Teleport.RenewBefore.Duration = time.Hour
+	a.cfg.Teleport.Every.Duration = 10 * time.Minute
+	a.cfg.Teleport.Tsh = filepath.Join(dir, "tsh")
+	a.cfg.Alerts.Kubectl = filepath.Join(dir, "kubectl")
+	a.cfg.Alerts.Kubeconfig = []string{filepath.Join(dir, "kube", "keeper")}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: "alpha"}, {Name: workerGitHubMissingRef}}
+	a.cfg.Kube.ContextTemplate = "ctx-{installation}"
+	script := `#!/bin/sh
+case "$*" in
+ "status --format=json") echo '{"active":{"cluster":"proxy","valid_until":"` + a.now.Add(8*time.Hour).Format(time.RFC3339) + `"}}';;
+ "kube ls --format json") echo '[{"kube_cluster_name":"alpha"}]';;
+ "kube login alpha") echo ctx-alpha >> "$KUBECONFIG";;
+ *) exit 2;;
+esac
+`
+	if err := os.WriteFile(a.cfg.Teleport.Tsh, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test fixture
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.cfg.Alerts.Kubectl, []byte("#!/bin/sh\ncat \"$KUBECONFIG\" 2>/dev/null\n"), 0o700); err != nil { //nolint:gosec // an executable test fixture
+		t.Fatal(err)
+	}
+	c := a.teleportRenewCmd()
+	c.SetArgs([]string{"--keeper"})
+	if err := c.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(a.cfg.Alerts.Kubeconfig[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "ctx-alpha\n" {
+		t.Fatalf("contexts: %q", raw)
+	}
+	if got := a.teleportContextsLine(); got != "Teleport kube contexts: missing: not listed by Teleport" {
+		t.Fatal(got)
+	}
+	a.cfg.Alerts.Installations = a.cfg.Alerts.Installations[:1]
+	if err := a.keepTeleportContexts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.teleportContextsLine(); got != "" {
+		t.Fatalf("stale diagnostic: %s", got)
+	}
+}
+
 func TestTeleportMissedRetryWaitsForBrowser(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		for _, grant := range []bool{false, true} {

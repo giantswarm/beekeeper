@@ -3493,6 +3493,14 @@ claim another person's agent holds is refused (exit 3) with its holder, `"<perso
 name the central instance does not know is a usage error (exit 2). As a local claim, a central
 claim needs no grant: a free resource is the claimant's.
 
+Central access is **host-only**. Sandboxed sessions cannot use central notes, roster,
+holds, leases or subscriptions: the sandbox cannot access the host's muster session
+and socket, and no central broker route or token handoff is provided. Adding a
+central endpoint to `sandbox.domains` does not enable access. Run commands that
+need central state on the host outside the agent sandbox. Sandboxed central calls
+fail with an explicit host-only message (exit 69 for commands requiring central);
+commands that also show local state retain their existing local fallback behavior.
+
 There is no local copy to fall back on: a central verb that does not reach the central instance
 (no sign-in, muster or `beekeeper serve` not answering) is refused with the reason and exit 69,
 and the machine's own resources are unaffected. `beekeeper watch` publishes the machine's agents
