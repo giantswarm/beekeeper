@@ -276,6 +276,11 @@ func TestMoveHeldRecordsWhatHoldsABlockedItem(t *testing.T) {
 			t.Errorf("--by %s = %v; mutations %v %v", by, err, gh.mutations, deps.mutations)
 		}
 	}
+	// A PR alias must not bypass the closed-blocker check.
+	deps.nodes["q#13"] = strings.ReplaceAll(deps.nodes["q#13"], `"OPEN"`, `"CLOSED"`)
+	if _, _, err := c.MoveHeld(ctx, issue5, "blocked", "o/q#13"); !refusedWith(err, "o/q#3 is closed: it holds nothing") || len(gh.mutations)+len(deps.mutations) != 0 {
+		t.Fatalf("closed blocker through PR = %v; mutations %v %v", err, gh.mutations, deps.mutations)
+	}
 	// --by names what holds a blocked item only.
 	if _, _, err := c.MoveHeld(ctx, issue5, "progress", issue9); !refusedWith(err, "In Progress ⛏️ is none") || len(gh.mutations)+len(deps.mutations) != 0 {
 		t.Errorf("--by with In Progress = %v", err)
