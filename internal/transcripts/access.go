@@ -98,8 +98,20 @@ func grantCovers(g state.TranscriptGrant, meta Meta, metaRepo string) bool {
 	if g.Repo != "" && metaRepo != "" && strings.EqualFold(g.Repo, metaRepo) {
 		return true
 	}
-	if g.Session != "" && meta.Matches(g.Session) {
+	// Authorization must not use Matches: its substring matching is for
+	// interactive searches and would grant access to similarly named sessions.
+	if meta.ExactMatch(g.Session) {
 		return true
+	}
+	if ref := NormalizeRef(g.Session); ref != "" {
+		if strings.EqualFold(meta.Ref, ref) {
+			return true
+		}
+		for _, r := range meta.Refs {
+			if strings.EqualFold(r, ref) {
+				return true
+			}
+		}
 	}
 	return false
 }
