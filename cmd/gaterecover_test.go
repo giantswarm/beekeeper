@@ -69,7 +69,7 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 			if m.Release != version || m.Outside {
 				t.Fatalf("not release tracked: %+v", m)
 			}
-			hrs := []merge.HelmRelease{{Key: "ns/chart", Chart: "r", Ready: true, Version: "1.2.3", Range: ">=1.0.0"}}
+			hrs := []merge.HelmRelease{{Key: "ns/chart", Chart: "r", Ready: true, Version: "1.2.2", Range: ">=1.0.0"}}
 			ready, _ := merge.Ready(lane, hrs, &m, now, time.Hour)
 			if ready != merge.PreRelease(version) {
 				t.Fatalf("before roll ready=%v for %s", ready, version)
