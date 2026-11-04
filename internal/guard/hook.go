@@ -252,6 +252,8 @@ type Hook struct {
 	// read only for a command that moves or removes an existing directory
 	// (liveworktrees.go); nil guards no worktree.
 	LiveDirs func() []string
+	// WorktreeOwner reserves a new worktree or checks its live session owner.
+	WorktreeOwner func(session, dir string, create bool) string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -322,6 +324,10 @@ func (h Hook) decide(ev event) []byte {
 	}
 	h.beginCheck("desktopBrowserRefusal")
 	if r := h.desktopBrowserRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	h.beginCheck("storageRefusal")
+	if r := storageRefusal(ev, h.Shared); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("subscriptionRefusal")
@@ -442,6 +448,10 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("secretGuard")
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
+	}
+	h.beginCheck("crossGoRefusal")
+	if r := crossGoRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("goCacheRefusal")
 	if r := h.goCacheRefusal(cmd); r != "" {
@@ -1233,14 +1243,15 @@ func (h *Hook) beginCheck(name string) {
 }
 
 func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
-	if recover() == nil {
+	value := recover()
+	if value == nil {
 		return
 	}
 	check := "PreToolUse"
 	if h.check != nil {
 		check = *h.check
 	}
-	stack := debug.Stack()
+	stack := append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
 	if h.Panic != nil {
 		h.Panic(check, stack)
