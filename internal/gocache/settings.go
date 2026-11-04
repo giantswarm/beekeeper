@@ -24,7 +24,7 @@ func goEnv(key string) string {
 		}
 		file = filepath.Join(dir, "go", "env")
 	}
-	data, err := os.ReadFile(file)
+	data, err := os.ReadFile(file) //nolint:gosec // GOENV deliberately selects the user's Go settings file
 	if err != nil {
 		return ""
 	}
