@@ -152,11 +152,14 @@ func query(ctx context.Context, ctl Ctl, v any, args ...string) error {
 }
 
 // browser is Chrome's most recently focused browser window, the one the
-// extension opens a turn's tabs in; nil without one.
+// extension opens a turn's tabs in; nil without one. If none has focus
+// history, the first browser in the client list is the fallback.
 func (l layout) browser() *Window {
 	var b *Window
 	for i, w := range l.windows {
-		if isBrowser(w) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
+		// Hyprland uses -1 for windows absent from its focus history.
+		if isBrowser(w) && (b == nil || (w.FocusHistoryID >= 0 &&
+			(b.FocusHistoryID < 0 || w.FocusHistoryID < b.FocusHistoryID))) {
 			b = &l.windows[i]
 		}
 	}
@@ -383,6 +386,14 @@ func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	}
 	if m := l.showing(s.Before.Workspace); m != nil {
 		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
+	}
+	for _, w := range l.windows {
+		if w.Address == s.Before.Address {
+			if m := l.showing(w.Workspace); m != nil {
+				return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, w.Workspace.Name), nil
+			}
+			break
+		}
 	}
 	return "", nil
 }
