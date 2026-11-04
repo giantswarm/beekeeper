@@ -34,8 +34,10 @@ of each condition found.`,
 		Use:   "add <time> <what>",
 		Short: "Add a timer: a time (22:55) or a duration (45m), and what to look at",
 		Long: `Adds a timer at a time (22:55) or after a duration (45m).
-Clock times without a date mean today. A start in the past starts now.
-Use an explicit date to schedule a clock time tomorrow.
+Clock times without a date mean today. One already past today is refused,
+naming the time it would have rolled to: give a date, as a timer can run a
+real action. A dated start in the past starts now. A --repeat timer takes
+the clock time's next occurrence.
 
 A plain timer is one watch line when its time comes and stays open until
 timer done. With --when or --probe it waits on a condition from its time:
@@ -86,7 +88,11 @@ and once one failed, so it never fires on red.`,
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			due, err := timerStartTime(a.now, args[0])
+			start := timerStartTime
+			if spec.repeat != "" {
+				start = untilTime // a recurring time's next occurrence is what it means
+			}
+			due, err := start(a.now, args[0])
 			if err != nil {
 				return err
 			}
@@ -269,11 +275,17 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 }
 
 // timerStartTime interprets clock-only starts as today, without the next-day
-// rollover used for deadlines. Past starts become immediately due.
+// rollover used for deadlines. A clock time already past is refused: firing at
+// once or rolling silently can both run an action at the wrong time. The
+// current minute and a dated past start are due now.
 func timerStartTime(now time.Time, s string) (time.Time, error) {
 	if t, err := time.ParseInLocation("15:04", s, time.Local); err == nil {
 		today := now.In(time.Local)
 		due := time.Date(today.Year(), today.Month(), today.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+		if now.Sub(due) >= time.Minute {
+			next := due.AddDate(0, 0, 1)
+			return time.Time{}, refused("%s is already past today (it is %s): it would roll to %s; give the date, for example %q, or start it now", s, now.In(time.Local).Format("15:04"), next.Format("2006-01-02 15:04"), next.Format("2006-01-02 15:04"))
+		}
 		if due.Before(now) {
 			return now, nil
 		}

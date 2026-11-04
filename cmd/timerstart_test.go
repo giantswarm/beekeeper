@@ -14,7 +14,6 @@ func TestTimerStartTime(t *testing.T) {
 		input string
 		want  time.Time
 	}{
-		{timerPastClock, now},
 		{"14:30", now},
 		{"2026-09-24 13:00", now},
 		{now.Add(-time.Hour).Format(time.RFC3339), now},
@@ -36,10 +35,25 @@ func TestTimerStartTime(t *testing.T) {
 	}
 }
 
+// A past clock time names both times and asks for a date: it neither fires at
+// once nor rolls silently.
+func TestTimerPastClockTimeIsRefused(t *testing.T) {
+	now := time.Date(2026, 9, 24, 14, 30, 15, 0, time.Local)
+	_, err := timerStartTime(now, timerPastClock)
+	if Code(err) != ExitRefused {
+		t.Fatalf("past clock time: %v", err)
+	}
+	for _, want := range []string{timerPastClock, "14:30", "2026-09-25 13:00"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal lacks %q: %v", want, err)
+		}
+	}
+}
+
 func TestTimerPastStartAcceptsUntil(t *testing.T) {
 	now := time.Date(2026, 9, 24, 14, 30, 0, 0, time.Local)
 	a := &app{now: now}
-	for _, start := range []string{timerPastClock, "2026-09-24 13:00", now.Add(-time.Hour).Format(time.RFC3339)} {
+	for _, start := range []string{"2026-09-24 13:00", now.Add(-time.Hour).Format(time.RFC3339)} {
 		t.Run(start, func(t *testing.T) {
 			due, err := timerStartTime(now, start)
 			if err != nil {
