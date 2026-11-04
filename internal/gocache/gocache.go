@@ -120,12 +120,12 @@ func Hold(ctx context.Context, dir string, waiting func()) (release func(), err 
 
 // ModDir is the module cache the go command uses: $GOMODCACHE, else pkg/mod
 // in the first $GOPATH entry, else in go under the home directory; "" when
-// unknown.
+// unknown. Settings saved by go env -w apply unless the process overrides them.
 func ModDir() string {
-	if d := os.Getenv("GOMODCACHE"); d != "" {
+	if d := goEnv("GOMODCACHE"); d != "" {
 		return d
 	}
-	if p := filepath.SplitList(os.Getenv("GOPATH")); len(p) > 0 && p[0] != "" {
+	if p := filepath.SplitList(goEnv("GOPATH")); len(p) > 0 && p[0] != "" {
 		return filepath.Join(p[0], "pkg", "mod")
 	}
 	home, err := os.UserHomeDir()
@@ -140,9 +140,10 @@ func ModDir() string {
 const busyEvery = 256
 
 // Dir is the build cache the go command uses: $GOCACHE, else go-build in
-// the user's cache directory; "" when it is off or unknown.
+// the user's cache directory; "" when it is off or unknown. Settings saved
+// by go env -w apply unless the process overrides them.
 func Dir() string {
-	if d := os.Getenv("GOCACHE"); d != "" {
+	if d := goEnv("GOCACHE"); d != "" {
 		if d == "off" {
 			return ""
 		}
