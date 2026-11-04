@@ -175,6 +175,7 @@ type HostCommand func(context.Context, string, []string, string, ...string) ([]b
 
 func hostCommand(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c.WaitDelay = commandWaitDelay
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}
 	c.Stdout, c.Stderr = out, io.Discard
@@ -188,6 +189,7 @@ func hostCommand(ctx context.Context, dir string, env []string, bin string, args
 // prints there. Callers compare it and never return it.
 func hostCombined(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c.WaitDelay = commandWaitDelay
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}
 	c.Stdout, c.Stderr = out, out

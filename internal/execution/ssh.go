@@ -157,11 +157,16 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
+// commandWaitDelay bounds output draining when descendants inherit command pipes.
+// Incomplete output remains an error, including after a successful process exit.
+const commandWaitDelay = time.Second
+
 func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	if len(argv) < 2 {
 		return nil, errors.New("missing SSH command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed SSH executable and validated argument vector
+	c.WaitDelay = commandWaitDelay
 	c.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{limit: MaxWire}
 	// Stderr may carry remote diagnostics or credentials. Never reflect it
