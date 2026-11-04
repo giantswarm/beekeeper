@@ -658,3 +658,69 @@ func testRunQuota429(t *testing.T, mode string) {
 		t.Fatalf("ReadQuotaError after RemoveInbox = %+v, want nil", got)
 	}
 }
+
+func TestDelayedStreamConfirmationKeepsUnacceptedWake(t *testing.T) {
+	for _, origin := range []string{"stdin", "hook"} {
+		t.Run(origin, func(t *testing.T) {
+			inbox := InboxPath(t.TempDir(), "agent")
+			transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+			if err := MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // test inbox in t.TempDir
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = reader.Close() }()
+			if err := Send(inbox, "initial message"); err != nil {
+				t.Fatal(err)
+			}
+			if origin == "stdin" {
+				if msg, ok, err := popInflight(inbox); err != nil || !ok || msg != "initial message" {
+					t.Fatalf("popInflight = %q, %v, %v", msg, ok, err)
+				}
+			} else {
+				if msgs, err := drainHook(inbox, transcript); err != nil || !slices.Equal(msgs, []string{"initial message"}) {
+					t.Fatalf("initial hook = %q, %v", msgs, err)
+				}
+			}
+			entry, err := json.Marshal(transcriptLine{Type: stepUserInput, Content: "initial message"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(transcript, append(entry, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if msgs, err := drainHook(inbox, transcript); err != nil || len(msgs) != 0 {
+				t.Fatalf("transcript reconciliation = %q, %v", msgs, err)
+			}
+			if err := Send(inbox, "unaccepted wake"); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"unaccepted wake"}
+			// Discard this hook output, as if the hook timed out before agy accepted it.
+			if msgs, err := drainHook(inbox, transcript); err != nil || !slices.Equal(msgs, want) {
+				t.Fatalf("discarded hook = %q, %v", msgs, err)
+			}
+			if err := Confirm(inbox); err != nil {
+				t.Fatal(err)
+			}
+			if msgs, err := drainHook(inbox, transcript); err != nil || !slices.Equal(msgs, want) {
+				t.Fatalf("retry after delayed acknowledgement = %q, %v, want %q", msgs, err, want)
+			}
+			if err := restoreInflight(inbox); err != nil {
+				t.Fatal(err)
+			}
+			if msgs, err := Drain(inbox); err != nil || !slices.Equal(msgs, want) {
+				t.Fatalf("retry after restart = %q, %v, want %q", msgs, err, want)
+			}
+			// The new process starts its stdout count afresh and can accept the wake.
+			if err := Confirm(inbox); err != nil {
+				t.Fatal(err)
+			}
+			if msgs, err := Drain(inbox); err != nil || len(msgs) != 0 {
+				t.Fatalf("hook after acceptance = %q, %v", msgs, err)
+			}
+		})
+	}
+}

@@ -84,6 +84,10 @@ type queue struct {
 	// StreamInputs is the number of user_input step_update events the
 	// current agy-run process has seen on stdout.
 	StreamInputs int `json:"streamInputs,omitempty"`
+	// ConfirmedInputs is the highest input sequence accepted through either
+	// stdout or the transcript in the current runner. Keep it independently
+	// of StreamInputs so delayed stdout events cannot confirm newer wakes.
+	ConfirmedInputs int `json:"confirmedInputs,omitempty"`
 	// Transcript is the conversation's transcript.jsonl path, and
 	// TranscriptInputs is the number of USER_INPUT steps in that
 	// transcript before the current Inflight/Injected messages were sent.
@@ -187,7 +191,7 @@ func (q *queue) reconcile(transcriptPath string) int {
 	if transcriptPath != "" {
 		q.Transcript = transcriptPath
 	}
-	highSeq := q.StreamInputs
+	highSeq := max(q.StreamInputs, q.ConfirmedInputs)
 	if q.Inflight != nil && q.Inflight.InputSeq > 0 && q.Inflight.InputSeq <= q.StreamInputs {
 		q.markDelivered(q.Inflight.ID)
 		q.Inflight = nil
@@ -200,6 +204,7 @@ func (q *queue) reconcile(transcriptPath string) int {
 	}
 	inputs, ok := transcriptUserInputs(q.Transcript)
 	if !ok {
+		q.ConfirmedInputs = highSeq
 		return highSeq
 	}
 	if q.Inflight != nil && q.TranscriptInputs < len(inputs) && strings.Contains(inputs[q.TranscriptInputs], q.Inflight.Text) {
@@ -221,6 +226,7 @@ func (q *queue) reconcile(transcriptPath string) int {
 		q.Injected = q.Injected[1:]
 		q.TranscriptInputs++
 	}
+	q.ConfirmedInputs = highSeq
 	return highSeq
 }
 
