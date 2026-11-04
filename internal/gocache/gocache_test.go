@@ -40,7 +40,7 @@ func cache(t *testing.T, entries map[string][2]int) string {
 }
 
 // The entries of the trim tests, newest first.
-const entryA, entryB, entryC, entryD = "00/a", "01/b", "02/c", "03/d"
+const entryA, entryB, entryC, entryD = entryA, "01/b", "02/c", "03/d"
 
 func TestScanOrdersLeastRecentlyUsedFirst(t *testing.T) {
 	dir := cache(t, map[string][2]int{"00/new-a": {10, 1}, "ff/old-d": {20, 48}, "7a/mid-d": {30, 5}})
@@ -274,15 +274,15 @@ func TestTrimReportsProgressBeforeReplacementFailure(t *testing.T) {
 
 func testTrimReplacement(t *testing.T, root, partial bool) {
 	t.Helper()
-	entries := map[string][2]int{"00/a": {7, 1}}
+	entries := map[string][2]int{entryA: {7, 1}}
 	if partial {
 		for i := 0; i < busyEvery; i++ {
 			entries[fmt.Sprintf("01/%03d", i)] = [2]int{3, 2}
 		}
 	}
 	dir := cache(t, entries)
-	outside := cache(t, map[string][2]int{"00/a": {11, 1}})
-	outsideFile := filepath.Join(outside, "00/a")
+	outside := cache(t, map[string][2]int{entryA: {11, 1}})
+	outsideFile := filepath.Join(outside, entryA)
 	u, err := Scan(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -314,14 +314,14 @@ func testTrimReplacement(t *testing.T, root, partial bool) {
 	if err == nil || freed != wantFreed || removed != wantRemoved {
 		t.Errorf("trim = %d, %d, %v; want %d, %d, error", freed, removed, err, wantFreed, wantRemoved)
 	}
-	if data, err := os.ReadFile(outsideFile); err != nil || len(data) != 11 {
+	if data, err := os.ReadFile(outsideFile); err != nil || len(data) != 11 { //nolint:gosec // a path of this test
 		t.Errorf("outside file changed: size %d, error %v", len(data), err)
 	}
 	original := filepath.Join(dir, "saved/a")
 	if root {
-		original = filepath.Join(moved, "00/a")
+		original = filepath.Join(moved, entryA)
 	}
-	if data, err := os.ReadFile(original); err != nil || len(data) != 7 {
+	if data, err := os.ReadFile(original); err != nil || len(data) != 7 { //nolint:gosec // a path of this test
 		t.Errorf("original file changed: size %d, error %v", len(data), err)
 	}
 }
@@ -329,7 +329,7 @@ func testTrimReplacement(t *testing.T, root, partial bool) {
 func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
 	for _, symlink := range []bool{false, true} {
 		t.Run(fmt.Sprintf("symlink=%t", symlink), func(t *testing.T) {
-			dir := cache(t, map[string][2]int{"00/a": {7, 1}})
+			dir := cache(t, map[string][2]int{entryA: {7, 1}})
 			u, err := Scan(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -341,7 +341,7 @@ func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
 			}
 			outside := dir
 			if symlink {
-				outside = cache(t, map[string][2]int{"00/a": {11, 1}})
+				outside = cache(t, map[string][2]int{entryA: {11, 1}})
 				if err := os.Symlink(outside, dir); err != nil {
 					t.Fatal(err)
 				}
@@ -349,7 +349,7 @@ func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
 				if err := os.MkdirAll(filepath.Join(dir, "00"), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(dir, "00/a"), make([]byte, 11), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, entryA), make([]byte, 11), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -357,8 +357,8 @@ func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
 			if err == nil || freed != 0 || removed != 0 {
 				t.Fatalf("trim = %d, %d, %v", freed, removed, err)
 			}
-			for path, size := range map[string]int{filepath.Join(outside, "00/a"): 11, filepath.Join(moved, "00/a"): 7} {
-				if data, err := os.ReadFile(path); err != nil || len(data) != size {
+			for path, size := range map[string]int{filepath.Join(outside, entryA): 11, filepath.Join(moved, entryA): 7} {
+				if data, err := os.ReadFile(path); err != nil || len(data) != size { //nolint:gosec // a path of this test
 					t.Errorf("file changed: size %d, error %v", len(data), err)
 				}
 			}
@@ -368,7 +368,7 @@ func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
 
 func TestScanExcludesSymlinkShards(t *testing.T) {
 	dir := t.TempDir()
-	outside := cache(t, map[string][2]int{"00/a": {11, 1}})
+	outside := cache(t, map[string][2]int{entryA: {11, 1}})
 	if err := os.Symlink(filepath.Join(outside, "00"), filepath.Join(dir, "00")); err != nil {
 		t.Fatal(err)
 	}
