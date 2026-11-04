@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -112,6 +113,29 @@ func KubeGuardOff(production string) string {
 
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
+	if strings.Contains(cmd, "BEEKEEPER_PROD_NOTE") {
+		m := productionNoteCommand.FindStringSubmatch(cmd)
+		if m == nil {
+			return "Refused: production note marker requires one literal kubectl delete with explicit context, namespace, kind and name."
+		}
+		id, err := strconv.Atoi(m[1])
+		if err != nil || id <= 0 {
+			return "Refused: invalid production note id."
+		}
+		if h.ProductionNote == nil {
+			return "Refused: production note verification is unavailable."
+		}
+		// Validate the normal guard first. Only the production-write refusal
+		// can be superseded; context and other refusals remain in force.
+		r := h.scanKube(m[2], kubeEnv{kubeconfig: h.Kubeconfig}, 0)
+		if !strings.Contains(r, "a production cluster (") {
+			return "Refused: note authority requires an explicitly targeted production write."
+		}
+		if err := h.ProductionNote(id, m[2]); err != nil {
+			return "Refused: production note: " + err.Error()
+		}
+		return ""
+	}
 	return h.scanKube(cmd, kubeEnv{kubeconfig: h.Kubeconfig}, 0)
 }
 
@@ -597,3 +621,7 @@ func readKubeconfig(list string) kubeconfig {
 func CurrentContext(kubeconfig string) string {
 	return readKubeconfig(kubeconfig).current
 }
+
+// Deliberately narrow: no expansions, redirections, extra flags, lists,
+// selectors, multiple names or shell operators can share a note's authority.
+var productionNoteCommand = regexp.MustCompile(`^BEEKEEPER_PROD_NOTE=([0-9]+) (kubectl --context [a-zA-Z0-9_.-]+ delete [a-z][a-z0-9.-]* [a-z0-9][a-z0-9.-]* --namespace [a-z0-9][a-z0-9-]*)$`)

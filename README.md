@@ -582,6 +582,22 @@ session's scratchpad in the worker rules.
 
 ## Kube contexts and production writes
 
+A person can authorise one production object deletion with a decision note. Put the complete
+literal command in backticks in the note's question, for example
+`kubectl --context production delete job stale --namespace monitoring`, and have the person
+answer `yes`, `approve`, `approved` or `delete it` through a verified person channel. Carry its id as:
+
+```sh
+BEEKEEPER_PROD_NOTE=42 kubectl --context production delete job stale --namespace monitoring
+```
+
+The hook requires that exact command, in that order, with literal context, kind, name and
+namespace. Additional flags, shell syntax, selectors and multiple objects are refused.
+Answers from agent sessions and scripts cannot authorise a write. Answers expire after 24 hours.
+The local state consumes the note atomically before execution and records `production.write`
+with the note id and command in `beekeeper log`. A failed execution still consumes its authority;
+a retry needs a new decision. Stores unable to persist the consumption refuse the write.
+
 With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
 `kubectl`, `helm` or `flux` command without an explicit target fails instead of reaching production.
 The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
@@ -611,8 +627,8 @@ kube guard is off and `beekeeper snapshot` says so):
   install/upgrade/uninstall/rollback/test; `flux` suspend/resume/reconcile/create/delete/bootstrap/
   install/uninstall. The target is the `--context`/`--kube-context`/`--cluster` given, else the current
   context of the kubeconfig the command uses (`--kubeconfig`, `KUBECONFIG` in the command or the
-  session). Changes to production go through GitOps pull requests and platformctl; there is no
-  break-glass. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
+  session). Changes to production go through GitOps pull requests and platformctl, except for
+  the single-object deletion authority described below. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
   `helm list|status|get|template`; `flux get|logs`) and writes to any other cluster pass.
 - A kubectl plugin's write to production: `kubectl <plugin> …` (a first word that is no kubectl
   command) and a `kubectl-<plugin>` binary (a path or `go run ./cmd/kubectl-<plugin>` included), with

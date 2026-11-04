@@ -150,6 +150,8 @@ type Hook struct {
 	// Production is the installation the kube guard protects; empty, the
 	// guard is off.
 	Production string
+	// ProductionNote consumes a verified, single-use authority for an exact command.
+	ProductionNote func(id int, command string) error
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string
@@ -407,6 +409,14 @@ func (h Hook) decide(ev event) []byte {
 	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
+	// Defer consuming authority until the other command guards have passed.
+	var consumeProduction func() error
+	if verify := h.ProductionNote; verify != nil {
+		h.ProductionNote = func(id int, command string) error {
+			consumeProduction = func() error { return verify(id, command) }
+			return nil
+		}
+	}
 	h.beginCheck("kubeRefusal")
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -484,6 +494,12 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("ghBodyRefusal")
 	if r := h.ghBodyRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if consumeProduction != nil {
+		h.beginCheck("productionNote")
+		if err := consumeProduction(); err != nil {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: production note: " + err.Error()})
+		}
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated, bg)
