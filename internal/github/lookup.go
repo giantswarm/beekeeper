@@ -129,6 +129,11 @@ func lookupPage(ctx context.Context, run GH, pulls []PR, drafts []string, titles
 	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
 		return draftSearch{}, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
 	}
+	// Only a title may fail with the rest kept: a request without titles (a
+	// draft continuation) that fails is an error, whatever data it carries.
+	if err != nil && len(pulls) == 0 {
+		return draftSearch{}, err
+	}
 	for i, p := range pulls {
 		var r struct {
 			PullRequest *struct {

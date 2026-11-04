@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// draftFixtureRepo is the repository the draft search fixtures name.
+const draftFixtureRepo = "example/plans"
+
 func TestLookupReadsEveryDraftPage(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -16,10 +19,11 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 	}{
 		{"case 0: draft after first 50", nil},
 		{"case 1: failed draft continuation", errors.New("draft continuation unavailable")},
+		{"case 2: failed draft continuation with data", errors.New("draft continuation partial")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			const repo = "example/plans"
+			repo := draftFixtureRepo
 			run := func(ctx context.Context, args ...string) ([]byte, error) {
 				calls++
 				if Repo(ctx) != repo {
@@ -40,7 +44,7 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 					if !strings.Contains(q, `after:"draft-page-1"`) || strings.Contains(q, "pullRequest(number:") {
 						t.Fatalf("wrong continuation %s", q)
 					}
-					if tc.failure != nil {
+					if tc.failure != nil && !strings.Contains(tc.name, "with data") {
 						return nil, tc.failure
 					}
 					nodes = append(nodes, map[string]any{"number": 51, "repository": map[string]string{"nameWithOwner": repo}})
@@ -48,7 +52,11 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 					t.Fatal("unexpected extra request")
 				}
 				data["d"] = map[string]any{"nodes": nodes, "issueCount": 51, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": "draft-page-1"}}
-				return json.Marshal(map[string]any{"data": data})
+				out, err := json.Marshal(map[string]any{"data": data})
+				if err == nil && calls == 2 {
+					err = tc.failure
+				}
+				return out, err
 			}
 			pull := PR{Repo: repo, N: 99}
 			titles, drafts, err := Lookup(t.Context(), run, []PR{pull}, []string{repo})
@@ -81,7 +89,7 @@ func TestLookupRejectsIncompleteDraftSearch(t *testing.T) {
 				}
 				return []byte(`{"data":{"d":` + search + `}}`), nil
 			}
-			if _, _, err := Lookup(t.Context(), run, nil, []string{"example/plans"}); err == nil {
+			if _, _, err := Lookup(t.Context(), run, nil, []string{draftFixtureRepo}); err == nil {
 				t.Fatal("incomplete search returned as complete")
 			}
 		})
@@ -100,7 +108,7 @@ func TestLookupStopsAfterCancellation(t *testing.T) {
 		cancel()
 		return []byte(`{"data":{"d":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}`), nil
 	}
-	if _, _, err := Lookup(ctx, run, nil, []string{"example/plans"}); !errors.Is(err, context.Canceled) {
+	if _, _, err := Lookup(ctx, run, nil, []string{draftFixtureRepo}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want cancellation", err)
 	}
 }
