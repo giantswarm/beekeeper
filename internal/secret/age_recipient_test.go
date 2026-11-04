@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const agePasswordPath = "stringData.password"
+
 // A SOPS file's identity is found by the recipient its sops.age block
 // names, at any path: a bare path, a management cluster's directory without
 // a .sops.yaml above it, or under another installation's directory.
@@ -43,7 +45,7 @@ func TestCompareAndCopyFindTheIdentityByRecipient(t *testing.T) {
 				ageVaultB: {"alder.agekey": {noteField: other.String()}, cedarItem: {"": "# public key: " + r + "\n" + id.String() + "\n"}},
 			}}
 			o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}}
-			src := Ref{File: file, Path: "stringData.password"}
+			src := Ref{File: file, Path: agePasswordPath}
 			vs, err := o.Compare(context.Background(), src, src)
 			if err != nil {
 				t.Fatalf("compare: %v", err)
@@ -54,7 +56,7 @@ func TestCompareAndCopyFindTheIdentityByRecipient(t *testing.T) {
 			if len(f.env) != 1 || f.env[0] != envAgeKey+"="+id.String() {
 				t.Errorf("sops did not get the identity of the file's recipient (%d entries)", len(f.env))
 			}
-			if _, err := o.CopyValue(context.Background(), src, Ref{File: dst, Path: "stringData.password"}); err != nil {
+			if _, err := o.CopyValue(context.Background(), src, Ref{File: dst, Path: agePasswordPath}); err != nil {
 				t.Fatalf("copy: %v", err)
 			}
 			rs, err := o.Recipients(context.Background(), file)
@@ -131,7 +133,7 @@ func TestAgeRecipientCache(t *testing.T) {
 		t.Helper()
 		f.calls = nil
 		o := &Ops{Run: f.run, Vault: ageVault, Token: "t", AgeVaults: []string{ageVaultB}, AgeCache: store}
-		src := Ref{File: file, Path: "stringData.password"}
+		src := Ref{File: file, Path: agePasswordPath}
 		_, err := o.Compare(context.Background(), src, Ref{Op: "op://" + ageVault + "/" + unrelatedItem + "/" + ageItemField})
 		if missing {
 			if !errors.Is(err, ErrNoAgeIdentity) {
