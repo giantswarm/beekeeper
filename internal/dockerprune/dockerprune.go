@@ -339,6 +339,7 @@ type Trimmed struct {
 // its parent, as long as a pass removes one. A failed removal can already
 // have untagged references; retries read the remaining ones first.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
+	const imageVerb = "image"
 	var t Trimmed
 	left := total
 	over := func() (bool, error) {
@@ -362,7 +363,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				return refused, ErrBusy
 			}
 			if refresh && len(img.Refs) > 0 {
-				raw, err := d(ctx, "image", "inspect", "--format", "{{json .RepoTags}}", img.ID)
+				raw, err := d(ctx, imageVerb, "inspect", "--format", "{{json .RepoTags}}", img.ID)
 				var refs []string
 				if err == nil {
 					err = json.Unmarshal(raw, &refs)
@@ -380,7 +381,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				}
 				img.Refs = refs
 			}
-			args := []string{"image", "rm"}
+			args := []string{imageVerb, "rm"}
 			if len(img.Refs) == 0 {
 				args = append(args, img.ID)
 			} else {

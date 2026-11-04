@@ -26,12 +26,15 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	inspectCommand = "inspect"
+	retryRef       = "example:retry"
+	spareID        = "spare"
+	nginxRef       = "docker.io/library/nginx:1"
+	kind           = "kind"
+	build          = "build"
+	docker         = "docker"
+	image          = "image"
+	oldID          = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -113,7 +116,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
 		}
 		return []byte("Total:\t0B\n"), nil
-	case args[0] == image && args[1] == "inspect":
+	case args[0] == image && args[1] == inspectCommand:
 		var out string
 		for _, id := range args[4:] {
 			at, ok := f.tagged[id]
@@ -195,7 +198,7 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 func TestListImagesFailsWithoutTagTimes(t *testing.T) {
 	f := &fake{dfv: dfv}
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == image && args[1] == "inspect" {
+		if args[0] == image && args[1] == inspectCommand {
 			return nil, errors.New("no such image")
 		}
 		return f.run(ctx, args...)
@@ -321,7 +324,7 @@ func TestTrimImagesRetriesAfterPartialUntagging(t *testing.T) {
 			const id, spare = "sha256:partial", "sha256:spare"
 			first, exists := true, true
 			run := func(_ context.Context, args ...string) ([]byte, error) {
-				if args[0] == image && args[1] == "inspect" {
+				if args[0] == image && args[1] == inspectCommand {
 					var tags []string
 					for ref := range remaining {
 						tags = append(tags, ref)
@@ -371,19 +374,19 @@ func TestTrimImagesKeepsRefusalWhenReferencesCannotBeRead(t *testing.T) {
 	for _, readError := range []bool{false, true} {
 		attempts := 0
 		run := func(_ context.Context, args ...string) ([]byte, error) {
-			if args[1] == "inspect" {
+			if args[1] == inspectCommand {
 				if readError {
 					return nil, errors.New("inspection unavailable")
 				}
 				return []byte("not-json"), nil
 			}
-			if args[len(args)-1] == "example:retry" {
+			if args[len(args)-1] == retryRef {
 				attempts++
 				return nil, errors.New("partial removal")
 			}
 			return nil, nil
 		}
-		candidates := []Image{{ID: "retry", Refs: []string{"example:retry"}, Size: 2}, {ID: "spare", Size: 1}}
+		candidates := []Image{{ID: "retry", Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
 		trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
 		if err != nil || attempts != 1 || len(trimmed.Removed) != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "remaining references") {
 			t.Fatalf("trim = %+v, %v after %d attempts; want to retain the refusal when references are unknown", trimmed, err, attempts)
@@ -394,16 +397,16 @@ func TestTrimImagesKeepsRefusalWhenReferencesCannotBeRead(t *testing.T) {
 func TestTrimImagesDoesNotAdoptNewTagsDuringRetry(t *testing.T) {
 	attempts := 0
 	run := func(_ context.Context, args ...string) ([]byte, error) {
-		if args[1] == "inspect" {
+		if args[1] == inspectCommand {
 			return []byte(`["example:retry","example:new"]`), nil
 		}
-		if args[len(args)-1] != "spare" {
+		if args[len(args)-1] != spareID {
 			attempts++
 			return nil, errors.New("partial removal")
 		}
 		return nil, nil
 	}
-	candidates := []Image{{ID: "retry", Refs: []string{"example:retry"}, Size: 2}, {ID: "spare", Size: 1}}
+	candidates := []Image{{ID: "retry", Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
 	trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
 	if err != nil || attempts != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "outside the removal snapshot") {
 		t.Fatalf("trim = %+v, %v after %d attempts; want the newly tagged image kept", trimmed, err, attempts)
