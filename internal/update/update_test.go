@@ -16,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/giantswarm/beekeeper/pkg/project"
 	"github.com/giantswarm/go-selfupdate"
+
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // fakeSource stands in for GitHub: the releases it lists, how it fails and
