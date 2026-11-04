@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -104,7 +105,7 @@ broker serving calls (a gate, a secret call, an agents start) is left to
 finish them, and the restart still due is named with its command (due).
 
 The beekeeper plugin goes with the binary: an update brings every
-installed beekeeper plugin up to its marketplace's latest (claude plugin
+installed beekeeper plugin to this binary's release tag (claude plugin
 marketplace update, then claude plugin update in the plugin's scope), so
 the role skills it serves are the ones the new binary hands its workers;
 on the latest release a plugin whose skills differ from the binary's is
@@ -171,6 +172,7 @@ reset. A development build (version dev) is refused.`,
 				}
 			}
 			switch {
+			case !syncsUnder(a.explicitConfig()):
 			case err != nil || check:
 			case res.Updated:
 				a.syncByInstalled(cmd.Context(), w, res.Path)
@@ -188,15 +190,14 @@ reset. A development build (version dev) is refused.`,
 
 // syncByInstalled has the binary an update installed at path bring the plugins up
 // to date with its own sync, so they follow the new binary whatever this
-// one knows; a new binary that does not run is said, and this one syncs.
+// one knows; a new binary that does not run leaves the sync to its next run.
 func (a *app) syncByInstalled(ctx context.Context, w io.Writer, path string) {
 	args := []string{selfUpdateCmdName, "--" + syncPluginsFlag}
 	if a.cfgPath != "" {
 		args = append(args, "--"+configFlag, a.cfgPath)
 	}
 	if err := runInstalled(ctx, w, path, args...); err != nil {
-		_, _ = fmt.Fprintf(w, "The installed %s did not sync its plugin (%v): this binary syncs it.\n", path, err)
-		syncPlugins(ctx, w, true)
+		_, _ = fmt.Fprintf(w, "The installed %s did not sync its plugin (%v): its next command will retry.\n", path, err)
 	}
 }
 
@@ -212,6 +213,8 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	switch {
 	case binaryIdentity() == "":
 		_, _ = fmt.Fprintln(a.out, "A development build leaves the beekeeper plugin as it is.")
+	case !syncsUnder(a.explicitConfig()):
+		_, _ = fmt.Fprintln(a.out, "A scratch configuration leaves the beekeeper plugin as it is.")
 	case !runsInstalled():
 		_, _ = fmt.Fprintln(a.out, "This beekeeper is not the one on PATH: it leaves the beekeeper plugin as it is.")
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
@@ -248,7 +251,8 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // installed at its path by itself once replaced: a gate call, waiting for
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
-	return len(p.Args) > 1 && (p.Args[1] == gateCmdName || p.Args[1] == mergeChildCmd)
+	sub := claude.BeekeeperSubcommand(p)
+	return sub == gateCmdName || sub == mergeChildCmd
 }
 
 func (a *app) selfUpdateStore() state.Store {
