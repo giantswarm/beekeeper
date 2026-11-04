@@ -87,7 +87,7 @@ func OpenIndex(dir string) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(key); err != nil {
 		_ = tmp.Close()
 		return nil, err
