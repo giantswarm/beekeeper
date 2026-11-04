@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated fixture and protocol literals make the failure scenarios readable.
 package remotebuild
 
 import (
@@ -26,7 +27,7 @@ func TestSweepPinsRelativeKubeconfig(t *testing.T) {
 	}
 	t.Chdir(origin)
 	var selected string
-	runner := Runner{StateDir: state, Config: Config{Kubeconfig: "connection.yaml", Context: "builders", Namespace: "builders"},
+	runner := Runner{StateDir: state, Config: Config{Kubeconfig: "connection.yaml", Context: "connection-fixture", Namespace: "connection-fixture"},
 		Command: func(_ context.Context, _ io.Reader, _ io.Writer, args ...string) error {
 			// Read only the synthetic connection file the transport would select.
 			data, err := os.ReadFile(args[1]) //nolint:gosec // paths are owned fixture connections
@@ -56,7 +57,7 @@ func TestSweepRetainsLegacyRelativeConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := builderName(host, root)
-	rec := builderRecord{Root: root, Host: host, Kubeconfig: "connection.yaml", Context: "builders", Namespace: "builders"}
+	rec := builderRecord{Root: root, Host: host, Kubeconfig: "connection.yaml", Context: "connection-fixture", Namespace: "connection-fixture"}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
