@@ -258,12 +258,17 @@ type Session struct {
 	// are the requests held for it, oldest first.
 	TakenOver bool
 	Approvals []Approval
+	// TakeoverAlias is the original CLI id whose takeover survives a restart.
+	// ID remains the current CLI id for messages, tails and other actions.
+	TakeoverAlias string
 }
 
 // Approval is a permission request a taken-over session waits on.
 type Approval struct {
-	ID string
-	At time.Time
+	// Session is the queue holding this request, possibly an earlier CLI id.
+	Session string
+	ID      string
+	At      time.Time
 	// Gist is the call in one line ("Bash: Run the tests"), Detail its
 	// input, a line per field.
 	Gist   string

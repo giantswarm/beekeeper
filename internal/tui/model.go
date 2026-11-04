@@ -394,10 +394,17 @@ func (m *model) toggleTakeOver() tea.Cmd {
 	m.acting = true
 	id, name := s.ID, s.Name
 	if s.TakenOver {
+		alias := s.TakeoverAlias
+		delete(m.taken, alias)
 		delete(m.taken, id)
 		return func() tea.Msg {
 			if err := m.src.Release(m.ctx, id); err != nil {
 				return actMsg{err: err}
+			}
+			if alias != "" && alias != id {
+				if err := m.src.Release(m.ctx, alias); err != nil {
+					return actMsg{err: err}
+				}
 			}
 			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
 		}
@@ -427,6 +434,9 @@ func (m *model) answer(allow bool) tea.Cmd {
 		verb = "allowed"
 	}
 	id := s.ID
+	if ap.Session != "" {
+		id = ap.Session
+	}
 	return func() tea.Msg {
 		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {
 			return actMsg{err: fmt.Errorf("%s: %w", ap.Gist, err)}
