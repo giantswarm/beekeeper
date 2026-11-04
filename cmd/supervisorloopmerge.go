@@ -137,6 +137,9 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if err := l.claim(act, act.Agent); err != nil {
 		return "", err
 	}
+	if err := a.store.Record(about(event(loopParty, "merge.authorized", "%s at %s: the supervisor loop authorizes the reviewed green fixes", act.URL, act.Head), act.Ref)); err != nil {
+		return "", err
+	}
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
@@ -741,8 +744,7 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 // checkMergeHeadAuthority verifies that merging p at targetHead is backed by
 // an approved desk review covering that head (or a base merge into it) or an
 // explicit exact-head supervisor go: the loop's own go for that head
-// (supervisor.go, or the supervisor.claim the loop logs right before its own
-// merge of a planned go, which is the same decision), merge.authorized,
+// (supervisor.go), merge.authorized,
 // or execution.merge-issued. A verdict counts
 // only from a login the desk trusts (trustedReview): on a public repository
 // anyone can post "Review: approved".
@@ -803,7 +805,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 				if key, _, ok := keyed(e.Detail); ok {
 					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
 						switch e.Verb {
-						case loopGoVerb, loopClaimVerb:
+						case loopGoVerb:
 							activeGo[after] = goRecord{head: after, at: e.At}
 						case loopMergeVerb, loopClaimEndVerb:
 							delete(activeGo, after)

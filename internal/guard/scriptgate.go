@@ -253,10 +253,10 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 		}
 		return h.scriptUngated(args[0], modeShell, true, dirs, vars, depth)
 	case localShells[name]:
-		if slices.Contains(args, "-n") {
-			return nil, "" // -n runs nothing
-		}
 		ip, mode = shellOptions, modeShell
+		// Only an option before the program disables execution. A -n
+		// following the command string or script is a data argument.
+		ip.module = []string{"-n"}
 		// Read -c in program order: after a script it is data, and
 		// after -o it can be an option value. Combined flags carry it too.
 		for _, a := range args {

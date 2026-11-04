@@ -496,3 +496,20 @@ func TestAgyQuotaReviewerRestartsAsReviewer(t *testing.T) {
 		t.Fatalf("reviewer restart = %v, want %q with brief %s, --review and --%s", start, name, brief, reviewOfSelfHostedFlag)
 	}
 }
+
+func TestAgyQuotaDelayedRecoveryKeepsOriginalReset(t *testing.T) {
+	f := newQuotaFixture(t, quotaTestWorker, quotaTestTask, "giantswarm/beekeeper#2150")
+	qerr := agy.ReadQuotaError(f.cfg.StateDir, f.startID)
+	for _, delay := range []time.Duration{time.Hour, 6 * time.Hour} {
+		a := &app{cfg: f.cfg, store: f.store, now: f.t0.Add(delay)}
+		a.recordAgyQuotaExhaustedForID("", testModelOpus46, qerr, a.now)
+		var ledger usageQuotaLedger
+		if found, err := f.store.ReadFile(usageQuotaFile(config.AgyHarness), &ledger); err != nil || !found {
+			t.Fatalf("quota ledger: found %v, error %v", found, err)
+		}
+		got := ledger.Buckets[config.DefaultAgyClaudeBucket].ResetsAt
+		if want := f.t0.Add(qerr.ResetsIn); !got.Equal(want) {
+			t.Fatalf("recovered after %s: reset %s, want %s", delay, got, want)
+		}
+	}
+}
