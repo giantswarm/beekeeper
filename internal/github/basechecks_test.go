@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -46,5 +48,64 @@ func TestReadBaseChecksFailsWhenGitHubDoesNotAnswer(t *testing.T) {
 	gh := func(context.Context, ...string) ([]byte, error) { return nil, errors.New("HTTP 502") }
 	if _, err := ReadBaseChecks(context.Background(), gh, "o/r", "main"); err == nil {
 		t.Error("no error without GitHub's answer")
+	}
+}
+
+func TestReadBaseChecksReadsEveryStatusPage(t *testing.T) {
+	for _, failContinuation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuationError=%t", failContinuation), func(t *testing.T) {
+			continuationErr := errors.New("status continuation unavailable")
+			type status struct {
+				Context string `json:"context"`
+				State   string `json:"state"`
+			}
+			first := struct {
+				Statuses []status `json:"statuses"`
+			}{}
+			for i := 0; i < 100; i++ {
+				first.Statuses = append(first.Statuses, status{fmt.Sprintf("ci-%d", i), "success"})
+			}
+			page, err := json.Marshal(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gh := func(_ context.Context, args ...string) ([]byte, error) {
+				for _, arg := range args {
+					switch arg {
+					case "repos/o/r/branches/main":
+						return []byte(`{"commit":{"sha":"abc123"}}`), nil
+					case "repos/o/r/rules/branches/main":
+						return []byte(`[]`), nil
+					case "repos/o/r/commits/abc123/check-runs?per_page=100":
+						return []byte(`{"name":"ci-0","status":"completed","conclusion":"failure","started_at":"2026-10-13T02:00:00Z"}`), nil
+					case "repos/o/r/commits/abc123/status?per_page=100":
+						if !slices.Contains(args, "--paginate") {
+							return page, nil
+						}
+						if failContinuation {
+							return page, continuationErr
+						}
+						return append(append([]byte{}, page...), []byte(`
+{"statuses":[{"context":"legacy-ci","state":"failure"},{"context":"pending-ci","state":"pending"}]}`)...), nil
+					}
+				}
+				return nil, fmt.Errorf("unexpected gh arguments: %q", args)
+			}
+			b, err := ReadBaseChecks(context.Background(), gh, "o/r", "main")
+			if failContinuation {
+				if !errors.Is(err, continuationErr) {
+					t.Fatalf("got error %v, want %v", err, continuationErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range map[string]string{"ci-0": CheckFail, "ci-99": CheckPass, "legacy-ci": CheckFail, "pending-ci": CheckPending} {
+				if got := b.Outcome(name); got != want {
+					t.Errorf("%s: got %s, want %s", name, got, want)
+				}
+			}
+		})
 	}
 }
