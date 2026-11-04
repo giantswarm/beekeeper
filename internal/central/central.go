@@ -29,8 +29,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-// Unreachable is a call that did not reach the central instance: muster's
-// context or sign-in, the network, muster, or beekeeper serve behind it.
+// Unreachable is a call that could not obtain the central instance's answer:
+// muster's context or sign-in, the network, muster, or beekeeper serve behind it.
 type Unreachable struct {
 	Context string
 	Reason  string
@@ -136,7 +136,7 @@ func (c *Client) Tool(name string) string { return "x_" + c.cfg.Server + "_" + n
 
 // Call calls the central instance's tool with args and decodes its
 // structured result into v (nil: none wanted). It returns the tool's text.
-// A refusal is *Refused; a call that did not reach the instance is
+// A refusal is *Refused; a call without the instance's answer is
 // *Unreachable, naming the stage that timed out and its deadline. Each call
 // connects afresh: a stalled connection of an earlier call is never reused.
 func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v any) (string, error) {
@@ -302,7 +302,8 @@ func (c *Client) timedOut(ctx context.Context, stage string, deadline time.Durat
 
 // result unwraps muster's call_tool result: its text is the envelope of
 // the wrapped tool's result, its structured content the tool's own. An
-// error without beekeeper's outcome never came from beekeeper serve.
+// error without beekeeper's outcome does not establish whether beekeeper
+// serve acted before its reply was lost.
 func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, error) {
 	text := envelopeText(res)
 	outcome, code := "", 0.0
@@ -317,7 +318,7 @@ func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, er
 		case "error":
 			return text, errors.New(text)
 		}
-		return text, c.unreachable("%s: %s", c.Tool(tool), firstLine(text))
+		return text, &Unreachable{Context: c.cfg.Context, Reason: fmt.Sprintf("%s: %s", c.Tool(tool), firstLine(text)), Sent: true}
 	}
 	if v != nil && res.StructuredContent != nil {
 		raw, err := json.Marshal(res.StructuredContent)
