@@ -370,3 +370,21 @@ func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 		t.Fatalf("defaulted %v, want [3 4]", kept)
 	}
 }
+
+func TestDefaultEventsIdentifyTheNotesTeam(t *testing.T) {
+	now := time.Now().UTC()
+	st := &state.State{}
+	for _, team := range []string{"alpha", "beta"} {
+		st.Notes = append(st.Notes, state.Note{ID: 3, Kind: noteDecision, By: state.Party{Team: team}, Due: now.Add(-time.Hour), Default: "wait for " + team})
+	}
+	actor := state.Party{Name: "timer", Team: "operations"}
+	_, events, due := closeDefaulted(st, "", actor, now)
+	if len(events) != 2 || len(due) != 2 {
+		t.Fatalf("defaults: %+v %+v", events, due)
+	}
+	for i, e := range events {
+		if e.NoteTeam != due[i].By.Team || e.By != actor || !strings.Contains(e.Detail, due[i].Default) {
+			t.Fatalf("event: %+v, note: %+v", e, due[i])
+		}
+	}
+}

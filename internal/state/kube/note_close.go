@@ -39,6 +39,9 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 		var closing *state.Event
 		for i := range events {
 			e := &events[i]
+			if e.NoteTeam != "" && teamNamespace(e.NoteTeam) != old.Namespace {
+				continue
+			}
 			detail := e.Detail
 			if e.Verb == noteAnsweredEvent {
 				_, detail, _ = strings.Cut(detail, ", note #")

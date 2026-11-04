@@ -190,3 +190,90 @@ func TestLegacyDefaultCloseReason(t *testing.T) {
 		t.Fatalf("legacy close attribution: %+v %v", closed, err)
 	}
 }
+
+func TestLegacySameNumberDefaultsKeepTheirOwnClosures(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	teams := []string{"alpha", "beta"}
+	objects := make([]client.Object, 0, len(teams))
+	for _, team := range teams {
+		n := NoteObject(team, 3).(*v1alpha1.Note)
+		n.Spec = v1alpha1.NoteSpec{ID: 3, Kind: state.NoteDecision, Due: apiTime(now.Add(-time.Hour)), Default: "wait for " + team}
+		n.Status = v1alpha1.NoteStatus{State: noteOpen, By: apiParty(state.Party{Team: team}), At: metav1.NewTime(now)}
+		objects = append(objects, n)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(objects...).Build()
+	s := New(c)
+	actor := state.Party{Name: "timer", Team: "operations"}
+	err = s.Update(func(st *state.State) ([]state.Event, error) {
+		var events []state.Event
+		for _, n := range st.Notes {
+			events = append(events, state.Event{At: now, By: actor, NoteTeam: n.By.Team, Verb: noteDefaultedEvent, Detail: "#3 defaulted: " + n.Default})
+		}
+		st.Defaulted, st.Notes = st.Notes, nil
+		return events, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := &corev1.EventList{}
+	if err := c.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("events: %+v", list.Items)
+	}
+	ids := map[string]bool{}
+	for _, team := range teams {
+		n := &v1alpha1.Note{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(NoteObject(team, 3)), n); err != nil {
+			t.Fatal(err)
+		}
+		closure := n.Status.Closure
+		if closure == nil || closure.Detail != "#3 defaulted: wait for "+team || closure.By.Team != actor.Team || closure.By.Name != actor.Name {
+			t.Fatalf("closure for %s: %+v", team, closure)
+		}
+		if ids[closure.ID] {
+			t.Fatal("duplicate closure ID")
+		}
+		ids[closure.ID] = true
+		matches := 0
+		for _, e := range list.Items {
+			if e.InvolvedObject.Namespace == n.Namespace {
+				matches++
+				if e.InvolvedObject.Name != n.Name || e.Message != closure.Detail || e.Annotations[idAnnotation] != closure.ID {
+					t.Fatalf("event for %s: %+v", team, e)
+				}
+			}
+		}
+		if matches != 1 {
+			t.Fatalf("events for %s: %d", team, matches)
+		}
+	}
+	entries, err := New(c).Feed(0)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("feed: %+v, %v", entries, err)
+	}
+	for _, entry := range entries {
+		if !ids[entry.ID] {
+			t.Fatalf("unexpected feed ID: %s", entry.ID)
+		}
+		delete(ids, entry.ID)
+	}
+	if len(ids) != 0 {
+		t.Fatal("missing closures in feed")
+	}
+}
+
+func TestQualifiedNoteEventWaitsForItsTeam(t *testing.T) {
+	e := state.Event{NoteTeam: "beta", Detail: "#3 defaulted"}
+	written := []client.Object{NoteObject("alpha", 3)}
+	for _, all := range []bool{false, true} {
+		if got := on(written, e, all); got != nil {
+			t.Fatalf("routed to another team: %+v", got)
+		}
+	}
+}
