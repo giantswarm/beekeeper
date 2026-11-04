@@ -90,7 +90,7 @@ func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 // The gate and its replacement may confirm a merge before or after owed
 // recovery. Both paths retain their log details, but dispatch only once.
 func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
-	for _, producer := range []string{"gate", "replacement"} {
+	for _, producer := range []string{gateCmdName, "replacement"} {
 		for _, recoveryFirst := range []bool{false, true} {
 			name := producer + "/gate-first"
 			if recoveryFirst {
@@ -117,9 +117,9 @@ func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
 				record := func() {
 					base := mergeBase(a.store.Dir(), scratchRepo, 7)
 					doc := []byte(`{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.3"}}`)
-					if producer == "gate" {
+					if producer == gateCmdName {
 						g := &gateRun{app: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
-							lane: config.Lane{Name: scratchRepo, Installation: "scratch"}}
+							lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
 						if err := g.record(base, childRun{doc: doc}); err != nil {
 							t.Fatal(err)
 						}
@@ -226,5 +226,58 @@ func TestARecoveredMergeWaitsUntilItsEventCanBeRecorded(t *testing.T) {
 	sinkPoll(w)
 	if len(*calls) != 1 {
 		t.Fatalf("the retried confirmation dispatched %d times: %q", len(*calls), *calls)
+	}
+}
+
+// A history read failure must leave the runner's evidence for a later poll.
+func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
+	for _, producer := range []string{gateCmdName, "replacement"} {
+		t.Run(producer, func(t *testing.T) {
+			a, _ := sinkApp(t, mergedSinkYAML)
+			base := mergeBase(a.store.Dir(), scratchRepo, 7)
+			doc := []byte(`{"mergeCommitSha":"abc","release":{"verdict":"available","tag":"v1.2.3"}}`)
+			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for suffix, data := range map[string][]byte{".json": doc, ".rc": []byte("0")} {
+				if err := os.WriteFile(base+suffix, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			store := a.store
+			a.store = unreadMergeHistory{store}
+			if producer == gateCmdName {
+				g := &gateRun{app: a, ctx: t.Context(), repo: scratchRepo, pr: 7, me: sinkParty,
+					lane: config.Lane{Name: scratchRepo, Installation: hungLane}}
+				if err := g.record(base, childRun{doc: doc}); err == nil {
+					t.Fatal("recording failure was hidden")
+				}
+			} else {
+				recorded, _, _ := a.recordGone(t.Context())
+				if len(recorded) != 0 {
+					t.Fatalf("reported unrecorded results: %v", recorded)
+				}
+			}
+			for _, suffix := range []string{".json", ".rc"} {
+				if _, err := os.Stat(base + suffix); err != nil {
+					t.Fatalf("lost retry evidence: %v", err)
+				}
+			}
+			a.store = store
+			recorded, _, _ := a.recordGone(t.Context())
+			if len(recorded) != 1 {
+				t.Fatalf("retry did not record saved result: %v", recorded)
+			}
+			evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == verbMerged })
+			if err != nil || len(evs) != 1 || evs[0].Subject != decisionRef || !strings.Contains(evs[0].Detail, "release v1.2.3") {
+				t.Fatalf("retry lost merge confirmation: %+v, %v", evs, err)
+			}
+		})
 	}
 }
