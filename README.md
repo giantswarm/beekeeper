@@ -108,6 +108,9 @@ On the person's explicit emergency authorization, the current guide can run
 `beekeeper emergency on --reason "<their verbatim words>" --until 30m`, then
 `beekeeper emergency merge owner/repo 123`. The merge requires GitHub approval
 and matches the observed head; it bypasses desk review and the merge lane while
+Sessions can [read classic branch protection through the broker](docs/branch-protection.md)
+with `beekeeper sandbox protection <owner/repo> <branch>`.
+
 GitHub branch protection still applies. `emergency hold set/lift`, `emergency
 start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.

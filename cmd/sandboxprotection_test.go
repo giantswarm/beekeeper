@@ -1,0 +1,64 @@
+package cmd
+
+import (
+	"context"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type protectionTransport func(*http.Request) (*http.Response, error)
+
+func (f protectionTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestProtectionArgsRefuseWritesAndOtherOwners(t *testing.T) {
+	for _, args := range [][]string{
+		nil, {"acme/repo"}, {"other/repo", "main"}, {"acme/repo", "main", "DELETE"},
+		{"acme/repo", "main", "--method=PUT"}, {"acme/repo?x=y", "main"},
+		{"acme/..", "main"}, {"acme/repo", ".."}, {"acme/repo", ""},
+	} {
+		if _, _, err := protectionArgs(args, []string{"acme"}); err == nil {
+			t.Errorf("accepted %q", args)
+		}
+	}
+	repo, branch, err := protectionArgs([]string{"ACME/repo", "release/v1"}, []string{"acme"})
+	if err != nil || repo != "ACME/repo" || branch != "release/v1" {
+		t.Fatalf("%q %q %v", repo, branch, err)
+	}
+}
+
+func TestProtectionReadOnlyGET(t *testing.T) {
+	for _, status := range []int{200, 403, 404, 302, 500} {
+		client := &http.Client{Transport: protectionTransport(func(r *http.Request) (*http.Response, error) {
+			if r.Method != http.MethodGet || r.Body != nil {
+				t.Fatalf("request could write: %s", r.Method)
+			}
+			if r.URL.EscapedPath() != "/repos/acme/repo/branches/release%2Fv1/protection" || r.URL.RawQuery != "" {
+				t.Fatalf("unexpected URL: %s", r.URL)
+			}
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatal("missing host credential")
+			}
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"required_status_checks":{"strict":true}}`)), Header: make(http.Header)}, nil
+		})}
+		out, err := readProtection(context.Background(), client, "test-token", "acme/repo", "release/v1")
+		if status == 200 {
+			if err != nil || !strings.Contains(out, `"strict":true`) {
+				t.Fatalf("lost protection: %q %v", out, err)
+			}
+		} else if err == nil || out != "" || strings.Contains(err.Error(), "test-token") {
+			t.Fatalf("failed read: %q %v", out, err)
+		}
+	}
+}
+
+func TestProtectionBrokerRejectsWriteBeforeCredentials(t *testing.T) {
+	a, _, _ := secretApp(t)
+	for _, args := range [][]string{{"giantswarm/example", "main", "DELETE"}, {"other/example", "main"}} {
+		if _, err := a.brokeredProtection()(context.Background(), 0, sandbox.Request{Args: args}); err == nil {
+			t.Fatalf("broker accepted %q", args)
+		}
+	}
+}
