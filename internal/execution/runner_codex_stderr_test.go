@@ -77,11 +77,10 @@ func TestCodexRunnerLogsStartupStderr(t *testing.T) {
 func TestCodexStderrRedactsAuthentication(t *testing.T) {
 	patternValue := "ghp_" + strings.Repeat("A1b2", 9)
 	// Assemble the synthetic PEM marker at runtime so secret scanners accept the source.
-	privateKeyMarker := strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ")
 	for _, diagnostic := range []string{
 		"Authorization:\nBearer opaque-fixture-value\n",
 		"refresh_token: opaque-fixture-value\n",
-		privateKeyMarker + "\nopaque-fixture-value\n",
+		strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\nopaque-fixture-value\n",
 		"gitleaks:allow " + patternValue,
 		"unexpected value " + patternValue,
 	} {
