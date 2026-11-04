@@ -107,6 +107,36 @@ func TestDeleteGuardCorpus(t *testing.T) {
 	}
 }
 
+func TestAuditNounsetEmptyDeletePrefix(t *testing.T) {
+	for _, tt := range []struct {
+		cmd     string
+		refused bool
+	}{
+		{`set -u; D=; rm -rf "$D"/var/lib/fixture`, true},
+		{`D=''; set -o nounset; shred -u "$D"/var/lib/fixture`, true},
+		{`set -eu; D=""; unlink "${D}"/var/lib/fixture`, true},
+		{`set -u; D=; truncate -s 0 "$D"/var/lib/fixture`, true},
+		{`set -u; D=; find "$D"/var/lib/fixture -delete`, true},
+		{`D=; rm -rf "$D"/var/lib/fixture`, true},
+		{`set -u; D=/tmp/fixture; rm -rf "$D"/var/lib/fixture`, false},
+		{`D=/tmp/fixture; set -o nounset; shred -u "$D"/var/lib/fixture`, false},
+		{`set -u; rm -rf "$D"/var/lib/fixture`, false},
+		{`set -u; D=; rm -rf "${D:?}"/var/lib/fixture`, false},
+		{`set -u; D=; rm -rf "${D:-/tmp/fixture}"/var/lib/fixture`, false},
+		{`set -u; rm -rf /var/lib/fixture`, false},
+	} {
+		t.Run(tt.cmd, func(t *testing.T) {
+			reason := deleteRefusal(tt.cmd)
+			if got := reason != ""; got != tt.refused {
+				t.Fatalf("refused %v, want %v: %s", got, tt.refused, reason)
+			}
+			if tt.refused && !strings.Contains(reason, "empty or unset") {
+				t.Errorf("refusal does not explain the empty prefix: %s", reason)
+			}
+		})
+	}
+}
+
 func TestDeleteGuardNamesTheExpansion(t *testing.T) {
 	r := deleteRefusal(`cd /nowhere && D=$(mktemp -d) && x; shred -u "$D"/*; rmdir "$D"`)
 	for _, want := range []string{"`shred -u \"$D\"/*`", "when `$D` is empty or unset", "that is `/*`"} {
