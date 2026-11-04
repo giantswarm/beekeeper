@@ -28,7 +28,7 @@ func TestGuardPanicNamesCheckAndLogsStack(t *testing.T) {
 			if !strings.Contains(string(out), "deny") || !strings.Contains(string(out), "liveWorktreeRefusal") {
 				t.Fatalf("response: %s", out)
 			}
-			if check != "liveWorktreeRefusal" || !strings.Contains(stack, "TestGuardPanicNamesCheckAndLogsStack") {
+			if check != "liveWorktreeRefusal" || !strings.Contains(stack, "TestGuardPanicNamesCheckAndLogsStack") || !strings.Contains(stack, "injected") {
 				t.Fatalf("check=%s stack=%s", check, stack)
 			}
 			if strings.Contains(string(out), "goroutine") {
