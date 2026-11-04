@@ -590,8 +590,7 @@ A path the person named for the task is created by the person or with their go-a
 Commands follow `cd` (bare `cd` goes home), `git -C`, `~`, `$HOME` and shell
 assignments; use `cd "${dir:?}"` to stop on an empty directory variable.
 
-
-`hooks.personFolders` names the person's folders (`~/` and globs: `[~, ~/projects, ~/projects/*]`;
+`hooks.personFolders` names the person's folders (`~/` and globs: `[~/, ~/projects, ~/projects/*]`;
 unset, the guard is off). The PreToolUse hook refuses a Write, Edit, MultiEdit or NotebookEdit, and a
 Bash command's output redirection (`>`, `>|`, `>>`, `&>`, `n>`) or `tee` target, that creates a file
 directly in one of them (an existing dotfile there is written in place), or writes a file in the main
