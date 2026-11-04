@@ -12,7 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const retireFixtureTracked = "tracked.txt"
+const (
+	retireFixtureTracked = "tracked.txt"
+	retireFixtureEdit    = "uncommitted edit\n"
+)
 
 func retireRequest(trigger string) RetireRequest {
 	return RetireRequest{ID: uuid.NewString(), Trigger: trigger, Reason: "fixture ended"}
@@ -55,7 +58,7 @@ func leaveWork(t *testing.T, f fixture, h Handle) string {
 	git("add", retireFixtureTracked)
 	git("-c", "user.name=Example", "-c", "user.email=example@example.invalid", "commit", "-m", "unpublished follow-up")
 	head := git("rev-parse", "HEAD")
-	writeFixture(t, filepath.Join(h.Workspace, retireFixtureTracked), "uncommitted edit\n")
+	writeFixture(t, filepath.Join(h.Workspace, retireFixtureTracked), retireFixtureEdit)
 	writeFixture(t, filepath.Join(h.Workspace, "untracked.txt"), "untracked work\n")
 	return head
 }
@@ -132,7 +135,7 @@ func TestRetirePreservesWorkOnEveryTerminalPath(t *testing.T) {
 			if x.Stage != RetireRetired || x.Recovery == nil || x.Recovery.Head != head || x.Recovery.Base != h.Commit || !x.Recovery.Dirty || x.RetainUntil.IsZero() {
 				t.Fatalf("retirement = %+v", x)
 			}
-			if got := recoveredFile(t, f, x, retireFixtureTracked); got != "uncommitted edit\n" {
+			if got := recoveredFile(t, f, x, retireFixtureTracked); got != retireFixtureEdit {
 				t.Fatalf("recovered edit = %q", got)
 			}
 			if got := recoveredFile(t, f, x, "untracked.txt"); got != "untracked work\n" {
@@ -146,7 +149,7 @@ func TestRetirePreservesWorkOnEveryTerminalPath(t *testing.T) {
 			}
 			aside := filepath.Join(f.s.Root, retiredResources, retiredLabel(f.r.Ref))
 			for path, want := range map[string]string{
-				filepath.Join(retiredRoot(f), "workspace", retireFixtureTracked): "uncommitted edit\n",
+				filepath.Join(retiredRoot(f), "workspace", retireFixtureTracked): retireFixtureEdit,
 				filepath.Join(retiredRoot(f), temporaryDir, "scratch"):           "temporary\n",
 				filepath.Join(aside, "sources", filepath.Base(source)):           "owned source bundle\n",
 				filepath.Join(aside, workerGitHubBinDir, "gh"):                   "#!/bin/sh\n",
@@ -568,12 +571,12 @@ func TestRetireUnjournaledSource(t *testing.T) {
 func TestOwnedEnvironmentRoutesWorkerPaths(t *testing.T) {
 	f := testFixture(t)
 	h := launched(t, f)
-	env, err := f.s.ownedEnvironment(Journal{Handle: h}, []string{"PATH=/usr/bin", "GOCACHE=/home/worker/.cache/go-build", "GOPATH=/home/worker/go"})
+	env, err := f.s.ownedEnvironment(Journal{Handle: h}, []string{workerGitHubTestPath, "GOCACHE=/home/worker/.cache/go-build", "GOPATH=/home/worker/go"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Dir(h.Workspace)
-	if !slices.Contains(env, "PATH=/usr/bin") {
+	if !slices.Contains(env, workerGitHubTestPath) {
 		t.Fatalf("environment lost PATH: %v", env)
 	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOTMPDIR", "XDG_CACHE_HOME", "GOCACHE", "GOPATH", "GOMODCACHE"} {

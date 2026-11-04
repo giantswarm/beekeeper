@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,7 +46,7 @@ const (
 	ResourceCache          = "cache"
 	ResourceToolchain      = "toolchain"
 	ResourceSourceBundle   = "source-bundle"
-	ResourceCredential     = "credential-handle"
+	ResourceCredential     = "credential-handle" //nolint:gosec // a resource kind, not a credential
 	ResourceMCPHome        = "mcp-home"
 
 	// DefaultRetention is how long moved-aside resources are kept when the host
@@ -208,13 +209,7 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 		_, ok := routed[k]
 		return ok
 	})
-	for _, k := range slices.Sorted(func(yield func(string) bool) {
-		for k := range routed {
-			if !yield(k) {
-				return
-			}
-		}
-	}) {
+	for _, k := range slices.Sorted(maps.Keys(routed)) {
 		out = append(out, k+"="+routed[k])
 	}
 	return out, nil

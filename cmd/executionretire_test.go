@@ -14,6 +14,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	retireFixturePark = "giantswarm/beekeeper#2284"
+	retireFixtureStop = "fixture-stop"
+)
+
 type retireTransport struct {
 	*testExecutionTransport
 	requests []execution.RetireRequest
@@ -69,7 +74,7 @@ func tick(t *testing.T, a *app, w *watcher) {
 }
 
 func TestExecutionRetirementTriggers(t *testing.T) {
-	park := &state.Park{On: "giantswarm/beekeeper#1"}
+	park := &state.Park{On: retireFixturePark}
 	for _, tc := range []struct {
 		name   string
 		change func(*state.State, *state.ExecutionRecord)
@@ -91,7 +96,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 			r.Completed = true
 		}},
 		{name: "stop requested", want: execution.RetireTriggerStop, change: func(_ *state.State, r *state.ExecutionRecord) {
-			r.StopRequest = &execution.StopRequest{ID: "stop", Reason: "operator stop"}
+			r.StopRequest = &execution.StopRequest{ID: retireFixtureStop, Reason: "operator stop"}
 		}},
 		{name: "parked with an ended unit", change: func(st *state.State, _ *state.ExecutionRecord) { st.Agents[0].Park = park }},
 		{name: "review park completes the round, not the task", change: func(st *state.State, r *state.ExecutionRecord) {
@@ -103,7 +108,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 			ref := r.Handle.Ref
 			st.Agents = nil
 			r.Completed = true
-			st.ReviewParks = []state.ReviewPark{{On: "giantswarm/beekeeper#1", Execution: &ref}}
+			st.ReviewParks = []state.ReviewPark{{On: retireFixturePark, Execution: &ref}}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +128,7 @@ func TestExecutionRetirementTriggers(t *testing.T) {
 
 func TestExecutionWatchRetiresOnceAndKeepsParkedWorkers(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(st *state.State, r *state.ExecutionRecord) {
-		st.Agents[0].Park = &state.Park{On: "giantswarm/beekeeper#1"}
+		st.Agents[0].Park = &state.Park{On: retireFixturePark}
 	})
 	tick(t, a, w)
 	if len(fake.requests) != 0 || retirementOf(t, a, ref) != nil {
@@ -205,7 +210,7 @@ func TestExecutionStopRevokesBeforeItsHostAnswers(t *testing.T) {
 	a, w, fake, ref := retireFixture(t, func(_ *state.State, r *state.ExecutionRecord) {
 		r.Request.GitHub = true
 		r.Observation.ProcessState = execution.Running
-		r.StopRequest = &execution.StopRequest{ID: "stop", Reason: "operator stop"}
+		r.StopRequest = &execution.StopRequest{ID: retireFixtureStop, Reason: "operator stop"}
 	})
 	tick(t, a, w)
 	x := retirementOf(t, a, ref)
@@ -216,7 +221,7 @@ func TestExecutionStopRevokesBeforeItsHostAnswers(t *testing.T) {
 
 func TestExecutionHostRetirementWaits(t *testing.T) {
 	for name, change := range map[string]func(*state.State, *state.ExecutionRecord){
-		"desk stop":          func(st *state.State, _ *state.ExecutionRecord) { st.Stop = &state.Stop{Reason: "person's stop"} },
+		"held by a stop":     func(st *state.State, _ *state.ExecutionRecord) { st.Stop = &state.Stop{Reason: "person's stop"} },
 		"transcript pending": func(_ *state.State, r *state.ExecutionRecord) { r.TranscriptCollected = false },
 		"publication pending": func(_ *state.State, r *state.ExecutionRecord) {
 			r.PendingPublication = &state.ExecutionPendingPublication{Head: "0123456789012345678901234567890123456789", BundleDigest: execution.Digest([]byte("bundle"))}
