@@ -78,8 +78,10 @@ type model struct {
 	updated    time.Time
 	refreshing bool
 
-	tab int
-	sel [len(tabs)]int
+	tab    int
+	sel    [len(tabs)]int
+	scroll [len(tabs)]viewport
+	facts  viewport
 
 	detail string
 	// paneID distinguishes successive openings, including the same session.
@@ -362,8 +364,13 @@ func (m *model) compose(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // scrollDetail moves the transcript window of an open pane: k and up go
 // back to older turns, j and down forward; G and end follow live again,
-// g and home go to the oldest turn read.
+// g and home go to the oldest turn read. Overflowing facts scroll first.
 func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Rendering measures the facts at the current terminal size.
+	_ = m.screen()
+	if m.scrollFacts(msg.String()) {
+		return m, nil
+	}
 	oldest := maxRow(len(m.tail))
 	switch msg.String() {
 	case "k", "up":
@@ -390,6 +397,37 @@ func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.answer(msg.String() == "a")
 	}
 	return m, nil
+}
+
+// scrollFacts gives overflowing facts the movement keys until their edge.
+// At the edge the same keys still reach transcript history; ends move both.
+func (m *model) scrollFacts(key string) bool {
+	v := &m.facts
+	if v.limit == 0 {
+		return false
+	}
+	old := v.top
+	switch key {
+	case "k", "up":
+		v.top--
+	case "j", "down":
+		v.top++
+	case "pgup":
+		v.top -= m.page()
+	case "pgdown":
+		v.top += m.page()
+	case "g", "home":
+		v.top = 0
+	case "G", "end":
+		v.top = v.limit
+	default:
+		return false
+	}
+	v.top = min(max(0, v.top), v.limit)
+	if key == "g" || key == "home" || key == "G" || key == "end" {
+		return false
+	}
+	return v.top != old
 }
 
 // paneSession is the open pane's session in the current data, nil when it
@@ -481,6 +519,8 @@ func (m *model) noticeHandedBack() {
 
 // navigate moves between tabs and within the current tab's list.
 func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	_ = m.screen()
+	v := &m.scroll[m.tab]
 	rows := m.rows()
 	sel := &m.sel[m.tab]
 	switch msg.String() {
@@ -494,16 +534,24 @@ func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setTab(int(msg.String()[0] - '1'))
 	case "j", "down":
 		m.move(1, rows)
+		v.top++
 	case "k", "up":
 		m.move(-1, rows)
+		v.top--
 	case "pgdown":
 		m.move(m.page(), rows)
+		v.top += m.page()
+		v.reveal = false
 	case "pgup":
 		m.move(-m.page(), rows)
+		v.top -= m.page()
+		v.reveal = false
 	case "home", "g":
 		*sel = 0
+		v.top, v.reveal = 0, false
 	case "end", "G":
 		*sel = maxRow(rows)
+		v.top, v.reveal = v.limit, false
 	}
 	return m, nil
 }
@@ -519,6 +567,8 @@ func (m *model) setTab(t int) {
 // move shifts the current tab's selection by n, clamped to its rows.
 func (m *model) move(n, rows int) {
 	sel := &m.sel[m.tab]
+	old := *sel
+	defer func() { m.scroll[m.tab].reveal = *sel != old }()
 	*sel += n
 	if *sel < 0 {
 		*sel = 0
@@ -538,6 +588,7 @@ func (m *model) page() int {
 
 // pane is what the open pane shows beyond the session's facts.
 type pane struct {
+	facts       *viewport
 	tail        []Turn
 	state, back int
 	err         string
@@ -551,13 +602,14 @@ type pane struct {
 
 // pane is the open pane's state for the view.
 func (m *model) pane() pane {
-	return pane{tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
+	return pane{facts: &m.facts, tail: m.tail, state: m.tailState, back: m.tailBack, err: m.tailErr,
 		composing: m.composing, draft: string(m.draft), sending: m.sending, outcome: m.outcome, outcomeErr: m.outcomeErr, acting: m.acting}
 }
 
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
 	m.paneID++
+	m.facts = viewport{}
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
 	m.composing, m.draft, m.outcome, m.outcomeErr = false, nil, "", false
 }
@@ -630,6 +682,9 @@ func (m *model) keepSelection(name string) {
 	}
 	for i, s := range m.sessions() {
 		if s.Name == name {
+			if m.sel[sessionsTab] != i {
+				m.scroll[sessionsTab].reveal = true
+			}
 			m.sel[sessionsTab] = i
 			return
 		}
