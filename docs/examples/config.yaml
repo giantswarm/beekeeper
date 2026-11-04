@@ -11,6 +11,13 @@
 # for the machine above: tune them to yours or delete them.
 
 # stateDir: /home/ada/.local/state/beekeeper   # default: $XDG_STATE_HOME/beekeeper
+# Clones belong to the person; sessions create checkouts under worktrees.
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees] # layout: <repo>/<branch>
+home:
+  places: [~/.local/state] # session state, logs and backups; drafts use the scratchpad
+# agents.roots defaults to projects.worktrees when unset.
 identity:
   # Whose agents run here: every lease, hold, merge place and note this
   # machine's commands record names them, and lease, lanes and note list

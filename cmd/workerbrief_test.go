@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/plugin"
 )
@@ -152,5 +153,30 @@ func TestRoleAddress(t *testing.T) {
 	}
 	if got, _ := roleAddress(&state.Supervisor{Party: state.Party{Name: "Guide run 3"}}, guideRole, nil, noSocket); got != "Guide run 3" {
 		t.Errorf("no session known: the name, got %q", got)
+	}
+}
+
+func TestWorkerPromptConfiguredPlaces(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := config.Load(filepath.Join(home, "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Agents.Dir = filepath.Join(home, "desk")
+	org := filepath.Join(cfg.Projects.Dir, "org")
+	if err := os.MkdirAll(filepath.Join(org, "repo", ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: cfg}
+	p := a.workerPrompt(taskPrompt("Do the task"))
+	for _, text := range []string{home, cfg.Projects.Dir, org, cfg.Projects.Worktrees[0], cfg.Home.Places[0], "<repo>/<branch>", `cd "${dir:?}"`} {
+		if !strings.Contains(p, text) {
+			t.Errorf("worker rules missing %q", text)
+		}
+	}
+	dir := filepath.Join(cfg.Projects.Worktrees[0], "repo", "branch")
+	if got, err := a.agentDir(dir, workerRole); err != nil || got != dir {
+		t.Fatalf("default worktree root: %q, %v", got, err)
 	}
 }
