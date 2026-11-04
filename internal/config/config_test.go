@@ -391,6 +391,9 @@ func TestMetricsModels(t *testing.T) {
 	if got, ok := m.Model("claude-sonnet-5-5"); !ok || got.Input != 2 || got.Output != 10 || got.CacheRead != 0.2 || got.CacheWrite1h != 4 {
 		t.Errorf("claude-sonnet-5-5 has its list price: %+v %v", got, ok)
 	}
+	if got, ok := m.Model("claude-haiku-5-5"); !ok || got != (Model{Input: 0.1, Output: 0.5, CacheWrite5m: 0.125, CacheWrite1h: 0.2, CacheRead: 0.01, ContextWindow: 1_000_000, LongContextThreshold: 100_000, LongContextMultiplier: 5}) {
+		t.Errorf("claude-haiku-5-5 has its list prices and context tier: %+v %v", got, ok)
+	}
 	for _, unknown := range []string{"claude-opus-5-6", "claude-opus-5-5-fast", "claude"} {
 		if _, ok := m.Model(unknown); ok {
 			t.Errorf("%s has no price", unknown)
@@ -1263,3 +1266,62 @@ func TestWatchBatchInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestLeasableInstallations(t *testing.T) {
+	c := Config{Resources: []string{leasableShared}}
+	c.Alerts.Installations = []Installation{{Name: leasableCustomer}, {Name: leasableShared}, {Name: leasableCustomer}}
+	if got, want := c.Leasable(), []string{leasableShared, leasableCustomer, Browser}; !slices.Equal(got, want) {
+		t.Fatalf("Leasable() = %v, want %v", got, want)
+	}
+	if !c.IsLeasable(leasableCustomer) || c.IsLeasable("unknown") {
+		t.Fatal("only configured installations should be leasable")
+	}
+}
+
+func TestMergeCITimeouts(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    example-org/slow-repo: 3h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]time.Duration{
+		"example-org/other":     2 * time.Hour,
+		"EXAMPLE-ORG/SLOW-REPO": 3 * time.Hour,
+	} {
+		if got := c.Merge.TimeoutFor(repo); got != want {
+			t.Errorf("TimeoutFor(%q) = %s, want %s", repo, got, want)
+		}
+	}
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeout: 4h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Merge.TimeoutFor("example-org/other"); got != 4*time.Hour {
+		t.Errorf("configured fallback = %s, want 4h", got)
+	}
+}
+
+func TestMergeCITimeoutsRejectInvalidOverrides(t *testing.T) {
+	for _, value := range []string{"example-org/repo: 0s", "example-org/repo: -1h", "repo: 3h"} {
+		t.Run(value, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    "+value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "merge.ciTimeouts") {
+				t.Fatalf("Load error = %v, want invalid CI timeout override", err)
+			}
+		})
+	}
+}
+
+const (
+	leasableShared   = "shared"
+	leasableCustomer = "customer"
+)

@@ -11,11 +11,11 @@ const restarting = "PodRestarting"
 func pageState(start time.Time) *State {
 	since := start.UTC().Format(time.RFC3339Nano)
 	return &State{Installations: map[string]*Installation{
-		"alpha": {Reachable: true, Alerts: Set{
+		instA: {Reachable: true, Alerts: Set{
 			"fp1": {Severity: Page, Team: "t", Alertname: restarting, Where: "ns/app", Since: since},
 			"fp2": {Severity: notify, Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
 		}},
-		"beta": {Reachable: false, Alerts: Set{
+		instB: {Reachable: false, Alerts: Set{
 			"fp3": {Severity: Page, Team: "t", Alertname: "Stale", Where: "ns/x", Since: since},
 		}},
 	}}

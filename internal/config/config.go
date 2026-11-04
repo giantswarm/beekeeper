@@ -2114,7 +2114,9 @@ type Serve struct {
 	Organization string `yaml:"organization"`
 	// Organizations are further groups that make a caller a member: one per
 	// Dex connector where the connectors spell the organization differently
-	// (a GitHub org's <org>:<team>, a directory's group name).
+	// (a GitHub org's <connector>:<org>:<team>, a directory's group name).
+	// Use the exact token group, e.g. giantswarm-github:giantswarm:employees;
+	// an unprefixed <org>:<team> matches only an unprefixed token group.
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
 	// in none is refused, a caller in several is the team of TeamGroups'
@@ -2255,10 +2257,14 @@ type Guide struct {
 type Supervisor struct {
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
-	// ReviewRounds is retained for configuration compatibility and reporting
-	// (default 1). It never releases a head without an approving review.
-	// Every new head gets one independent review, except a proven base-only
-	// update of an approved head, which remains covered by that approval.
+	// ReviewRounds caps the review rounds that ask for changes (default 1);
+	// an approved round counts for none, and superloop.MaxReviews bounds all
+	// rounds. Under the cap a green head with fixes gets the next review.
+	// Once the cap is used it gets the merge go with no new review: fixes
+	// pushed after a review need no review of their own. A head that only
+	// brings the base into the findings' head carries no fixes and goes back
+	// to rework; one that only brings the base into an approved head stays
+	// covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -2422,6 +2428,7 @@ const DefaultQueueTTL = 15 * time.Minute
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
 	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	// Rebase also makes the ordinary devctl gate add --rebase automatically.
 	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
@@ -2458,9 +2465,11 @@ type Merge struct {
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
 	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
-	// when the gated command names none: devctl's own 30m is shorter than a
-	// repository's CI restarted from zero by --update-branch.
+	// when the gated command names none (default 2h, including CI queueing).
+	// CITimeouts can override it for repositories with longer pipelines.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// CITimeouts overrides CITimeout for repositories keyed by owner/repo.
+	CITimeouts map[string]Duration `yaml:"ciTimeouts"`
 	// BusyBudget is how long a merge with --update-branch keeps its lane
 	// place running devctl again after a run ends on a busy base (its base
 	// moved during every one of devctl's update waits, exit 3), counted from
@@ -2480,6 +2489,16 @@ type Merge struct {
 	// past their branch ruleset after the approved desk review; only their
 	// merge go names --admin.
 	Admin []string `yaml:"admin"`
+}
+
+// TimeoutFor returns the repository's CI timeout, falling back to CITimeout.
+func (m Merge) TimeoutFor(repo string) time.Duration {
+	for name, timeout := range m.CITimeouts {
+		if strings.EqualFold(name, repo) && timeout.Duration > 0 {
+			return timeout.Duration
+		}
+	}
+	return m.CITimeout.Duration
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
@@ -3001,6 +3020,10 @@ type Model struct {
 	// defaults): a fast request's cost is unknown.
 	Fast          float64 `yaml:"fast" json:"fast,omitempty"`
 	ContextWindow int     `yaml:"contextWindow" json:"contextWindow"`
+	// LongContextThreshold counts all input tokens, including cache reads
+	// and writes. Requests above it multiply every price by LongContextMultiplier.
+	LongContextThreshold  int64   `yaml:"longContextThreshold" json:"longContextThreshold,omitempty"`
+	LongContextMultiplier float64 `yaml:"longContextMultiplier" json:"longContextMultiplier,omitempty"`
 }
 
 // Runaway are the per-session figures over which the watch prints one line.
@@ -3029,6 +3052,7 @@ var DefaultModels = map[string]Model{
 	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-5":   {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-4-6": {Input: 3, Output: 15, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.3, ContextWindow: 1_000_000},
+	"claude-haiku-5-5":  {Input: 0.1, Output: 0.5, CacheWrite5m: 0.125, CacheWrite1h: 0.2, CacheRead: 0.01, ContextWindow: 1_000_000, LongContextThreshold: 100_000, LongContextMultiplier: 5},
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.1, ContextWindow: 200_000},
 }
 
@@ -3090,6 +3114,8 @@ type Omp struct {
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// ServedBy is the lease resource serving Model. Starts refuse while held.
+	ServedBy string `yaml:"servedBy"`
 	// Providers are the providers of ModelsFile whose key lives in the
 	// vault, by the provider's name there.
 	Providers map[string]OmpProvider `yaml:"providers"`
@@ -3576,7 +3602,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
-	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.CITimeout, 2*time.Hour)
 	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
@@ -4038,6 +4064,12 @@ func (c *Config) validateEach(report func(error)) {
 			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
 		}
 	}
+	for repo, timeout := range c.Merge.CITimeouts {
+		ownerReposEach("merge.ciTimeouts", []string{repo}, report)
+		if timeout.Duration <= 0 {
+			report(fmt.Errorf("merge.ciTimeouts.%s: %s is not positive", repo, timeout.Duration))
+		}
+	}
 	ownerReposEach("merge.admin", c.Merge.Admin, report)
 	c.Sink.validateEach(report)
 	for i, st := range c.Board.Order {
@@ -4347,10 +4379,15 @@ func (c Capacity) serveModeNodeNames() []string {
 }
 
 // Leasable returns every resource a session can lease: the configured ones,
-// the nodes a self-hosted serving mode occupies, the model server when one is
-// watched, the browser last.
+// the installations under alerts, the nodes a self-hosted serving mode
+// occupies, the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	for _, in := range c.Alerts.Installations {
+		if !slices.Contains(out, in.Name) {
+			out = append(out, in.Name)
+		}
+	}
 	for _, n := range c.Capacity.serveModeNodeNames() {
 		if !slices.Contains(out, n) {
 			out = append(out, n)
@@ -4396,7 +4433,7 @@ func (c *Config) LabLease(cluster string) string {
 	return ""
 }
 
-// IsLeasable reports whether name is a configured resource or the browser.
+// IsLeasable reports whether name is one of the resources returned by Leasable.
 func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }
