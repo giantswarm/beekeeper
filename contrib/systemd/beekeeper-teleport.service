@@ -14,6 +14,7 @@ After=graphical-session.target
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/beekeeper --as "teleport keeper" teleport renew --keeper
-# Past teleport.loginTimeout: the renewal bounds its own login.
-TimeoutStartSec=15min
+# Each login attempt has teleport.loginTimeout; a callback failure can retry
+# once. Let the command enforce those budgets and finish its cleanup.
+TimeoutStartSec=infinity
 MemoryMax=512M
