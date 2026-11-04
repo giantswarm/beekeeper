@@ -20,7 +20,7 @@ var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 // EntryRejects is why agy refuses the named hook entry raw, an object of
 // event lists, or "" when agy accepts it: a tool event's items are matchers
 // with at least one hook, a lifecycle event's items are command hooks, and
-// every hook of type "command" (or of no type) names its command.
+// every hook uses the supported command type and names its command.
 func EntryRejects(raw json.RawMessage) string {
 	var events map[string][]json.RawMessage
 	if err := json.Unmarshal(raw, &events); err != nil {
@@ -44,7 +44,8 @@ func itemRejects(event string, item json.RawMessage) string {
 		return commandRejects(event, item)
 	}
 	var e struct {
-		Hooks []json.RawMessage `json:"hooks"`
+		Matcher string            `json:"matcher"`
+		Hooks   []json.RawMessage `json:"hooks"`
 	}
 	if err := json.Unmarshal(item, &e); err != nil {
 		return event + ": " + err.Error()
@@ -62,13 +63,20 @@ func itemRejects(event string, item json.RawMessage) string {
 
 func commandRejects(event string, item json.RawMessage) string {
 	var h struct {
-		Type    *string `json:"type"`
-		Command string  `json:"command"`
+		Type    string `json:"type"`
+		Command string `json:"command"`
+		// Decode even unused fields: agy discards the whole file on a type
+		// mismatch. Its timeout accepts null, zero and signed int32 values.
+		Timeout int32 `json:"timeout"`
 	}
 	if err := json.Unmarshal(item, &h); err != nil {
 		return event + ": " + err.Error()
 	}
-	if (h.Type == nil || *h.Type == "command") && strings.TrimSpace(h.Command) == "" {
+	if h.Type != "" && h.Type != "command" {
+		return fmt.Sprintf("%s: unsupported hook type %q", event, h.Type)
+	}
+	// agy defaults a missing, null or empty type to command.
+	if strings.TrimSpace(h.Command) == "" {
 		return event + ": command hook must specify 'command'"
 	}
 	return ""

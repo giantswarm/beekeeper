@@ -1384,3 +1384,24 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 		t.Fatal("failed restart left its prepared state")
 	}
 }
+
+func TestAgyHooksMalformedSiblingBlocksGuard(t *testing.T) {
+	for _, sibling := range []string{
+		`{"PreInvocation":[{"command":"true","timeout":"30"}]}`,
+		`{"PreToolUse":[{"matcher":42,"hooks":[{"command":"true"}]}]}`,
+		`{"PreInvocation":[{"type":"http","command":"true"}]}`,
+	} {
+		t.Run(sibling, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, "hooks.json")
+			exe := "/opt/bin/beekeeper"
+			write(t, path, `{"beekeeper":`+string(AgyHook(exe))+`,"other":`+sibling+`}`)
+			if why := CheckAgyHooks(path, exe, home); !strings.Contains(why, "agy rejects the other entry") {
+				t.Errorf("CheckAgyHooks = %q, want malformed sibling", why)
+			}
+			if why := AgyHooksUnguarded(path); !strings.Contains(why, "agy rejects the other entry") {
+				t.Errorf("AgyHooksUnguarded = %q, want malformed sibling", why)
+			}
+		})
+	}
+}

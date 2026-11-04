@@ -21,7 +21,7 @@ func TestEntryRejects(t *testing.T) {
 	}{
 		{"beekeeper's entry", guard, ""},
 		{"a lifecycle event of flat commands", `{"PostInvocation": [{"command": "/usr/bin/true"}]}`, ""},
-		{"a hook of another type", `{"PreInvocation": [{"type": "http", "url": "http://localhost"}]}`, ""},
+		{"a hook of another type", `{"PreInvocation": [{"type": "http"}]}`, "PreInvocation: unsupported hook type"},
 		{"a PostToolUse matcher", `{"PostToolUse": [{"matcher": "*", "hooks": [{"command": "/usr/bin/true"}]}]}`, ""},
 		{"a matcher under PreInvocation", `{"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/bin/true"}]}]}`,
 			"PreInvocation: command hook must specify 'command'"},
@@ -63,6 +63,56 @@ func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 		got := Rejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {
 			t.Errorf("%s: Rejects = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestMalformedFieldsDiscardWholeFile(t *testing.T) {
+	for _, c := range []struct{ name, item, field string }{
+		{"string timeout", `{"command":"true","timeout":"30"}`, "timeout"},
+		{"fractional timeout", `{"command":"true","timeout":1.5}`, "timeout"},
+		{"overflow timeout", `{"command":"true","timeout":2147483648}`, "timeout"},
+		{"underflow timeout", `{"command":"true","timeout":-2147483649}`, "timeout"},
+		{"unsupported type", `{"type":"http","command":"true"}`, "type"},
+		{"empty type without command", `{"type":""}`, "command"},
+		{"numeric command", `{"command":42}`, "command"},
+		{"numeric type", `{"type":42,"command":"true"}`, "type"},
+		{"numeric matcher", `{"matcher":42,"hooks":[{"command":"true"}]}`, "matcher"},
+		{"object matcher", `{"matcher":{},"hooks":[{"command":"true"}]}`, "matcher"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			event := "PreInvocation"
+			if c.field == "matcher" {
+				event = "PreToolUse"
+			}
+			entry := `{"` + event + `":[` + c.item + `]}`
+			if why := EntryRejects([]byte(entry)); !strings.Contains(why, c.field) {
+				t.Fatalf("EntryRejects = %q, want malformed %s", why, c.field)
+			}
+			file := `{"beekeeper":` + guard + `,"other":` + entry + `}`
+			if why := Rejects([]byte(file)); !strings.Contains(why, `the "other" entry: `+event) || !strings.Contains(why, c.field) {
+				t.Fatalf("Rejects = %q, want malformed sibling and field", why)
+			}
+		})
+	}
+}
+
+func TestAcceptedHandlerFieldDefaultsAndLimits(t *testing.T) {
+	for _, handler := range []string{
+		`{"command":"true"}`,
+		`{"type":null,"command":"true","timeout":null}`,
+		`{"type":"","command":"true","timeout":0}`,
+		`{"type":"command","command":"true","timeout":-2147483648}`,
+		`{"command":"true","timeout":2147483647}`,
+	} {
+		for _, entry := range []string{
+			`{"PreInvocation":[` + handler + `]}`,
+			`{"PreToolUse":[{"matcher":null,"hooks":[` + handler + `]}]}`,
+			`{"PostToolUse":[{"hooks":[` + handler + `]}]}`,
+		} {
+			if why := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + entry + `}`)); why != "" {
+				t.Errorf("%s rejected: %s", entry, why)
+			}
 		}
 	}
 }
