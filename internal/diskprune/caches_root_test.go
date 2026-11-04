@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	cacheRootTestPath  = "sub/data"
+	cacheRootTestEntry = "entry"
+	cacheRootTestEmpty = "empty directory"
+)
+
 func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
 	for _, files := range []bool{false, true} {
 		name := "entries"
@@ -16,8 +22,8 @@ func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
 			root, moved, outside := filepath.Join(base, "cache"), filepath.Join(base, "moved"), filepath.Join(base, "outside")
-			cacheFile(t, root, "sub/data", 1000, 10*day)
-			victim := cacheFile(t, outside, "sub/data", 1000, 20*day)
+			cacheFile(t, root, cacheRootTestPath, 1000, 10*day)
+			victim := cacheFile(t, outside, cacheRootTestPath, 1000, 20*day)
 			p := Policy{Root: root, Files: files, OlderThan: 7 * day, Recheck: func() ([]string, error) {
 				if err := os.Rename(root, moved); err != nil {
 					return nil, err
@@ -28,8 +34,8 @@ func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
 				return nil, nil
 			}}
 			r := Cache(p, time.Now(), false, nil, nil, false)
-			if r.Freed != 0 || r.Removed != 0 || r.Kept[whyRootChanged] != 1 || !exists(victim) || !exists(filepath.Join(moved, "sub", "data")) {
-				t.Fatalf("root replacement redirected prune: %+v, outside=%v original=%v", r, exists(victim), exists(filepath.Join(moved, "sub", "data")))
+			if r.Freed != 0 || r.Removed != 0 || r.Kept[whyRootChanged] != 1 || !exists(victim) || !exists(filepath.Join(moved, filepath.FromSlash(cacheRootTestPath))) {
+				t.Fatalf("root replacement redirected prune: %+v, outside=%v original=%v", r, exists(victim), exists(filepath.Join(moved, filepath.FromSlash(cacheRootTestPath))))
 			}
 		})
 	}
@@ -38,17 +44,17 @@ func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
 // Exercise the operations after their parent was opened: a later rename must
 // not redirect reinspection, deletion or empty-directory cleanup.
 func TestCacheRemovalStaysInOpenedRoot(t *testing.T) {
-	for _, operation := range []string{"entry", "file", "empty directory"} {
+	for _, operation := range []string{cacheRootTestEntry, "file", cacheRootTestEmpty} {
 		t.Run(operation, func(t *testing.T) {
 			base := t.TempDir()
 			dir, moved, outside := filepath.Join(base, "cache"), filepath.Join(base, "moved"), filepath.Join(base, "outside")
-			original := cacheFile(t, dir, "sub/data", 1000, 10*day)
-			victim := cacheFile(t, outside, "sub/data", 1000, 20*day)
+			original := cacheFile(t, dir, cacheRootTestPath, 1000, 10*day)
+			victim := cacheFile(t, outside, cacheRootTestPath, 1000, 20*day)
 			u := inspect(original)
-			if operation == "entry" {
+			if operation == cacheRootTestEntry {
 				u = inspect(filepath.Dir(original))
 			}
-			if operation == "empty directory" {
+			if operation == cacheRootTestEmpty {
 				if err := os.Remove(original); err != nil {
 					t.Fatal(err)
 				}
@@ -69,17 +75,17 @@ func TestCacheRemovalStaysInOpenedRoot(t *testing.T) {
 				t.Skip(err)
 			}
 			switch operation {
-			case "entry":
+			case cacheRootTestEntry:
 				err = removeEntry(root, u, nil)
 			case "file":
 				err = removeFile(root, dir, u)
-			case "empty directory":
+			case cacheRootTestEmpty:
 				removeEmptied(root, map[string]bool{filepath.Dir(original): true})
 			}
-			if err != nil || !exists(victim) || exists(filepath.Join(moved, "sub", "data")) {
-				t.Fatalf("cleanup escaped opened root: err=%v outside=%v original=%v", err, exists(victim), exists(filepath.Join(moved, "sub", "data")))
+			if err != nil || !exists(victim) || exists(filepath.Join(moved, filepath.FromSlash(cacheRootTestPath))) {
+				t.Fatalf("cleanup escaped opened root: err=%v outside=%v original=%v", err, exists(victim), exists(filepath.Join(moved, filepath.FromSlash(cacheRootTestPath))))
 			}
-			if operation == "empty directory" && exists(filepath.Join(moved, "sub")) {
+			if operation == cacheRootTestEmpty && exists(filepath.Join(moved, "sub")) {
 				t.Fatal("original empty directory survived")
 			}
 		})
@@ -88,7 +94,7 @@ func TestCacheRemovalStaysInOpenedRoot(t *testing.T) {
 
 func TestMeasurePathForms(t *testing.T) {
 	root := t.TempDir()
-	file := cacheFile(t, root, "sub/data", 1000, 10*day)
+	file := cacheFile(t, root, cacheRootTestPath, 1000, 10*day)
 	for _, path := range []string{root, root + string(filepath.Separator), file} {
 		size, newest := Measure(path)
 		if size != 1000 || newest.IsZero() {
