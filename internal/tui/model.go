@@ -31,7 +31,7 @@ type (
 		data *Data
 		err  error
 	}
-	// tailMsg carries a detail pane's transcript; session names whose
+	// tailMsg carries a detail pane's transcript; session identifies whose
 	// transcript it is, so a late answer about a closed pane is dropped.
 	// The open pane asks again at every tick: it follows the turn live.
 	tailMsg struct {
@@ -83,7 +83,7 @@ type model struct {
 	scroll [len(tabs)]viewport
 	facts  viewport
 
-	detail string
+	detail string // session ID; display names can change or collide
 	// paneID distinguishes successive openings, including the same session.
 	paneID    uint64
 	tail      []Turn
@@ -330,10 +330,10 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 	if m.tab != sessionsTab || m.sel[m.tab] >= len(s) {
 		return m, nil
 	}
-	name := s[m.sel[m.tab]].Name
+	id := s[m.sel[m.tab]].ID
 	m.paneID++
-	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = name, nil, "", 0, 1, false
-	return m, m.tailCmd(name)
+	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = id, nil, "", 0, 1, false
+	return m, m.tailCmd(id)
 }
 
 // compose edits the message line: enter sends a non-empty draft, esc
@@ -436,7 +436,7 @@ func (m *model) paneSession() *Session {
 	if m.data == nil || m.detail == "" {
 		return nil
 	}
-	return sessionNamed(m.data.Sessions, m.detail)
+	return sessionByID(m.data.Sessions, m.detail)
 }
 
 // toggleTakeOver takes the pane's session over, or hands it back when this
@@ -664,24 +664,24 @@ func (m *model) rowsFor(t int) int {
 // sessionsTab is the sessions tab's index.
 const sessionsTab = 1
 
-// selectedSession is the name of the session the sessions tab selects, ""
+// selectedSession is the ID of the session the sessions tab selects, ""
 // when it selects none.
 func (m *model) selectedSession() string {
 	if s := m.sessions(); m.sel[sessionsTab] < len(s) {
-		return s[m.sel[sessionsTab]].Name
+		return s[m.sel[sessionsTab]].ID
 	}
 	return ""
 }
 
-// keepSelection moves the sessions tab's selection to name's new row: the
+// keepSelection moves the sessions tab's selection to id's new row: the
 // list reorders as sessions get busy, and enter, t and a must act on the
 // session the person picked, not on whichever took its place.
-func (m *model) keepSelection(name string) {
-	if name == "" {
+func (m *model) keepSelection(id string) {
+	if id == "" {
 		return
 	}
 	for i, s := range m.sessions() {
-		if s.Name == name {
+		if s.ID == id {
 			if m.sel[sessionsTab] != i {
 				m.scroll[sessionsTab].reveal = true
 			}
