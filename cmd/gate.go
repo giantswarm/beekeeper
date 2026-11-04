@@ -414,6 +414,8 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	if pr == 0 {
 		_, pin, _ := merge.ParsePromote(argv)
 		switch {
+		case pin != "" && !strings.HasPrefix(pin, "v"):
+			return gateRefusedWith(3, "invalid promotion version %q: expected vX.Y.Z (for example v1.2.3 or v1.2.3-rc.1); nothing promoted", pin)
 		case pin != "":
 			g.candidate, g.candidateRead, g.pinned = pin, true, true
 		case !queued:
@@ -2090,7 +2092,9 @@ func (g *gateRun) record(base string, run childRun) error {
 	}
 	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool
-	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
+	r.out, ok, rc = parseRunOutcome(g.pr, doc, rc)
+	r.rc = rc
+	if merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
 	releaseLine := ""
@@ -2259,6 +2263,16 @@ func parseOutcome(pr int, doc []byte) (merge.Outcome, bool) {
 		return merge.ParsePromoteDocument(doc)
 	}
 	return merge.ParseDocument(doc)
+}
+
+// parseRunOutcome treats promote's usage exit as a certain refusal, even
+// without a JSON document. No GitHub mutation can have happened.
+func parseRunOutcome(pr int, doc []byte, rc int) (merge.Outcome, bool, int) {
+	if pr == 0 && rc == devctlUsage {
+		return merge.Outcome{}, true, 3
+	}
+	out, ok := parseOutcome(pr, doc)
+	return out, ok, rc
 }
 
 // toolMerge says whether the gate merges or promotes the merge tool's own
