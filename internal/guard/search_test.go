@@ -1,6 +1,8 @@
 package guard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,5 +88,75 @@ func TestDecideRefusesCrossRepositorySearch(t *testing.T) {
 	}
 	if d := decide("person", "gh search issues --owner giantswarm token"); d != nil && d.PermissionDecision == decisionDeny {
 		t.Errorf("the person's own org-wide search refused: %+v", d)
+	}
+}
+
+func TestGraphQLIssueSearch(t *testing.T) {
+	h := Hook{Started: func(string) bool { return true }}
+	for _, tc := range []struct {
+		name, command string
+		refused       bool
+	}{
+		{"heredoc", "gh api graphql -F query=@- <<'EOF'\n{ search(type: ISSUE, query: \"org:example\") { issueCount } }\nEOF", true},
+		{"unscoped", `gh api graphql -f query='{ search(type: ISSUE, query: "org:example is:open", first: 10) { issueCount } }'`, true},
+		{"reordered", `gh api graphql --raw-field='query={ search(query: "org:example", first: 10, type: ISSUE) { issueCount } }'`, true},
+		{"single repository", `gh api graphql -f query='{ search(query: "repo:example/project", type: ISSUE) { issueCount } }'`, false},
+		{"two repositories", `gh api graphql -f query='{ search(type: ISSUE, query: "repo:example/a repo:example/b") { issueCount } }'`, true},
+		{"excluded repository", `gh api graphql -f query='{ search(type: ISSUE, query: "-repo:example/a") { issueCount } }'`, true},
+		{"variable", `gh api graphql -f query='query($q:String!) { search(type: ISSUE, query: $q) { issueCount } }' -f q='repo:example/project'`, false},
+		{"unresolved variable", `gh api graphql -f query='query($q:String!) { search(type: ISSUE, query: $q) { issueCount } }'`, true},
+		{"scoped sibling", `gh api graphql -f query='{ a: search(type: ISSUE, query: "repo:example/a") { issueCount } b: search(type: ISSUE, query: "org:example") { issueCount } }'`, true},
+		{"unrelated qualifier", `gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }' -f unrelated=repo:example/project`, true},
+		{"repository search", `gh api graphql -f query='{ search(type: REPOSITORY, query: "org:example") { repositoryCount } }'`, false},
+		{"repository query", `gh api graphql -f query='{ repository(owner: "example", name: "project") { issues(first: 10) { totalCount } } }'`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := h.searchRefusal(tc.command, "worker")
+			if (got != "") != tc.refused {
+				t.Fatalf("refusal = %q, want refused %v", got, tc.refused)
+			}
+			if tc.refused && (!strings.Contains(got, "without an error") || !strings.Contains(got, "gh issue list --repo")) {
+				t.Fatalf("missing risk or alternative: %s", got)
+			}
+		})
+	}
+}
+
+func TestPersonalSearchOptIn(t *testing.T) {
+	for _, command := range []string{
+		"gh search issues --owner example",
+		"gh api search/issues -f q=org:example",
+		`gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }'`,
+	} {
+		h := Hook{Self: hookSelf, Shell: hookShell, GuardPersonalSearch: true}
+		ev := toolEvent(bashTool, map[string]any{commandKey: command})
+		ev["cwd"], ev["session_id"] = t.TempDir(), "personal"
+		if d := decideEvent(t, h, ev); d == nil || d.PermissionDecision != decisionDeny {
+			t.Fatalf("opted-in personal search allowed: %s", command)
+		}
+		h.GuardPersonalSearch = false
+		if d := decideEvent(t, h, ev); d != nil && d.PermissionDecision == decisionDeny {
+			t.Fatalf("default personal search refused: %s", command)
+		}
+	}
+}
+
+func TestGraphQLSearchFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		file, content, command string
+		refused                bool
+	}{
+		{"query.graphql", `{ search(type: ISSUE, query: "org:example") { issueCount } }`, "gh api graphql -F query=@query.graphql", true},
+		{"input.json", `{"query":"query($q:String!) { search(type: ISSUE, query: $q) { issueCount } }","variables":{"q":"repo:example/project"}}`, "gh api graphql --input input.json", false},
+		{"wide.json", `{"query":"query($q:String!) { search(type: ISSUE, query: $q) { issueCount } }","variables":{"q":"org:example"}}`, "gh api graphql --input=wide.json", true},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(tc.content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		h := Hook{GuardPersonalSearch: true}
+		if got := h.searchRefusal(tc.command, "personal", dir); (got != "") != tc.refused {
+			t.Fatalf("%s: refusal %q, want %v", tc.command, got, tc.refused)
+		}
 	}
 }
