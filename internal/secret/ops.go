@@ -293,6 +293,8 @@ func place(doc *document, file, path string) (string, error) {
 	keys := splitPath(path)
 	if l, ok := doc.inLeaf(keys); ok {
 		keys = l.held
+	} else {
+		keys = doc.putPath(keys)
 	}
 	if err := checkRule(file, keys); err != nil {
 		return "", err

@@ -176,6 +176,22 @@ func splitPath(path string) []string {
 	return append(keys, k.String())
 }
 
+// putPath resolves the existing keys as putKeys does, then keeps each
+// remaining segment as a new key. It does not change the document.
+func (d *document) putPath(keys []string) []string {
+	n := d.root
+	var held []string
+	for i := 0; i < len(keys); {
+		c, width := childAt(n, keys[i:])
+		if c == nil {
+			return append(held, keys[i:]...)
+		}
+		held = append(held, strings.Join(keys[i:i+width], "."))
+		n, i = c, i+width
+	}
+	return held
+}
+
 // remove deletes the key or list item at a dotted path; an absent one
 // stays absent.
 func (d *document) remove(path string) {
