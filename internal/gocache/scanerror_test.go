@@ -15,7 +15,12 @@ func TestScanReportsUnreadableEntry(t *testing.T) {
 	}
 	dir := cache(t, map[string][2]int{entryA: {100, 1}})
 	shard := filepath.Join(dir, filepath.Dir(entryA))
-	t.Cleanup(func() { _ = os.Chmod(shard, 0o750) })
+	t.Cleanup(func() {
+		// Restore owner traversal so TempDir cleanup can remove the fixture.
+		if err := os.Chmod(shard, 0o700); err != nil { // #nosec G302 -- directory traversal is required for cleanup.
+			t.Errorf("restore shard permissions: %v", err)
+		}
+	})
 	// Directory names remain readable, but looking up their metadata fails.
 	if err := os.Chmod(shard, 0o400); err != nil {
 		t.Fatal(err)
@@ -31,7 +36,12 @@ func TestScanReturnsPartialUsageOnMetadataFailure(t *testing.T) {
 	}
 	dir := cache(t, map[string][2]int{"00/readable": {100, 1}, "ff/unreadable": {200, 1}})
 	shard := filepath.Join(dir, "ff")
-	t.Cleanup(func() { _ = os.Chmod(shard, 0o750) })
+	t.Cleanup(func() {
+		// Restore owner traversal so TempDir cleanup can remove the fixture.
+		if err := os.Chmod(shard, 0o700); err != nil { // #nosec G302 -- directory traversal is required for cleanup.
+			t.Errorf("restore shard permissions: %v", err)
+		}
+	})
 	if err := os.Chmod(shard, 0o400); err != nil {
 		t.Fatal(err)
 	}
