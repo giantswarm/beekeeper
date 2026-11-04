@@ -34,6 +34,8 @@ of each condition found.`,
 		Use:   "add <time> <what>",
 		Short: "Add a timer: a time (22:55) or a duration (45m), and what to look at",
 		Long: `Adds a timer at a time (22:55) or after a duration (45m).
+Clock times without a date mean today. A start in the past starts now.
+Use an explicit date to schedule a clock time tomorrow.
 
 A plain timer is one watch line when its time comes and stays open until
 timer done. With --when or --probe it waits on a condition from its time:
@@ -84,7 +86,7 @@ and once one failed, so it never fires on red.`,
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			due, err := untilTime(a.now, args[0])
+			due, err := timerStartTime(a.now, args[0])
 			if err != nil {
 				return err
 			}
@@ -264,6 +266,24 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 	}
 	_, err = fmt.Fprintf(a.out, "#%d %s: %s\n", t.ID, timerCond(t), found)
 	return err
+}
+
+// timerStartTime interprets clock-only starts as today, without the next-day
+// rollover used for deadlines. Past starts become immediately due.
+func timerStartTime(now time.Time, s string) (time.Time, error) {
+	if t, err := time.ParseInLocation("15:04", s, time.Local); err == nil {
+		today := now.In(time.Local)
+		due := time.Date(today.Year(), today.Month(), today.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+		if due.Before(now) {
+			return now, nil
+		}
+		return due, nil
+	}
+	due, err := untilTime(now, s)
+	if err == nil && !due.IsZero() && due.Before(now) {
+		due = now
+	}
+	return due, err
 }
 
 // timerSpec is what timer add was given beyond the time and the text.
