@@ -20,11 +20,20 @@ func ReadDisk(path string) (Disk, error) {
 	if err := unix.Statfs(path, &s); err != nil {
 		return Disk{}, err
 	}
+	return diskFromStatfs(path, s), nil
+}
+
+func diskFromStatfs(path string, s unix.Statfs_t) Disk {
 	bs := uint64(s.Bsize) //nolint:gosec // block sizes are positive
+	var available uint64
+	// Bavail is signed on FreeBSD and can be negative when space is exhausted.
+	if s.Bavail > 0 {
+		available = uint64(s.Bavail)
+	}
 	return Disk{
 		Path:     path,
 		UsedMiB:  int((s.Blocks - s.Bfree) * bs >> 20),
-		FreeMiB:  int(s.Bavail * bs >> 20),
+		FreeMiB:  int(available * bs >> 20),
 		TotalMiB: int(s.Blocks * bs >> 20),
-	}, nil
+	}
 }
