@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
+- Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
 - Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).

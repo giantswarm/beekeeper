@@ -382,7 +382,7 @@ func within(p, d string) bool { return p == d || strings.HasPrefix(p, d+"/") }
 
 type dirScan struct {
 	kib     int
-	newest  time.Time // newest file mtime; zero when d holds no file
+	newest  time.Time // newest regular-file or directory mtime
 	foreign bool      // something inside belongs to another user
 }
 
@@ -416,9 +416,9 @@ func (r *Run) scanWalk(walk func(fs.WalkDirFunc) error) (dirScan, error) {
 		}
 		if fi.Mode().IsRegular() {
 			bytes += fi.Size()
-			if fi.ModTime().After(s.newest) {
-				s.newest = fi.ModTime()
-			}
+		}
+		if (fi.Mode().IsRegular() || fi.IsDir()) && fi.ModTime().After(s.newest) {
+			s.newest = fi.ModTime()
 		}
 		return nil
 	})

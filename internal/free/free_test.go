@@ -50,7 +50,7 @@ const (
 	workDir = "/work"
 )
 
-// fixture writes a file of kib KiB under root/rel, touched age ago.
+// fixture writes a file of kib KiB under root/rel, its tree touched age ago.
 func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	t.Helper()
 	p := filepath.Join(root, rel)
@@ -62,6 +62,14 @@ func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	}
 	if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
 		t.Fatal(err)
+	}
+	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+		if err := os.Chtimes(d, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		if d == root {
+			break
+		}
 	}
 }
 
