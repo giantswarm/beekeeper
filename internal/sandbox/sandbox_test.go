@@ -363,7 +363,7 @@ func TestSymlinkParentTraversal(t *testing.T) {
 		if err != nil || actual != canary {
 			t.Fatalf("actual target = %q, %v; want %q", actual, err, canary)
 		}
-		if data, err := os.ReadFile(path); err != nil || string(data) != public {
+		if data, err := os.ReadFile(path); err != nil || string(data) != public { //nolint:gosec // a path of this test
 			t.Fatalf("raw read = %q, %v", data, err)
 		}
 		for _, suffix := range []string{"canary.txt", "missing/descendant.txt"} {
