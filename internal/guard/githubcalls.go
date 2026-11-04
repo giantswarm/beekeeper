@@ -62,11 +62,11 @@ func graphQLCalls(command string) []GitHubCall {
 			args := words[i+1:]
 			if tool == "gh" {
 				for len(args) > 0 {
-					if (args[0] == "-R" || args[0] == "--repo" || args[0] == ghHostnameFlag) && len(args) > 1 {
+					if (args[0] == "-R" || args[0] == flagRepo || args[0] == ghHostnameFlag) && len(args) > 1 {
 						args = args[2:]
 						continue
 					}
-					if strings.HasPrefix(args[0], "--repo=") || strings.HasPrefix(args[0], ghHostnameFlag+"=") {
+					if strings.HasPrefix(args[0], flagRepo+"=") || strings.HasPrefix(args[0], ghHostnameFlag+"=") {
 						args = args[1:]
 						continue
 					}
@@ -83,7 +83,7 @@ func graphQLCalls(command string) []GitHubCall {
 			if tool == "gh" && len(args) >= 2 {
 				switch args[0] {
 				case "project":
-					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", "list", "view", "create", "edit", "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", "unlink", "mark-template"}, args[1]) {
+					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", verbList, "view", "create", verbEdit, "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", unlinkCmd, "mark-template"}, args[1]) {
 						class = "gh project " + args[1]
 					}
 				case "api":
@@ -91,15 +91,15 @@ func graphQLCalls(command string) []GitHubCall {
 						class = "gh api graphql"
 					}
 				case "pr":
-					if slices.Contains([]string{"view", "list", "checks"}, args[1]) {
+					if slices.Contains([]string{"view", verbList, "checks"}, args[1]) {
 						class = "gh pr " + args[1]
 					}
 				case ghIssueSub:
-					if slices.Contains([]string{"view", "list"}, args[1]) {
+					if slices.Contains([]string{"view", verbList}, args[1]) {
 						class = "gh issue " + args[1]
 					}
 				case ghReleaseSub:
-					if args[1] == "list" {
+					if args[1] == verbList {
 						class = "gh release list"
 					}
 				}
