@@ -46,6 +46,7 @@ type Muster struct {
 // stream is one subscriptions/listen stream: its session, the request id
 // its notifications carry, and the URIs it subscribed.
 type stream struct {
+	ctx     context.Context
 	session mcpserver.ClientSession
 	id      any
 	uris    []string
@@ -102,7 +103,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 func (m *Muster) handler(backend, server string) http.Handler {
 	hooks := &mcpserver.Hooks{}
 	hooks.AddBeforeSubscriptionsListen(func(ctx context.Context, id any, req *mcp.SubscriptionsListenRequest) {
-		st := &stream{session: mcpserver.ClientSessionFromContext(ctx), id: id, uris: req.Params.Notifications.ResourceSubscriptions}
+		st := &stream{ctx: ctx, session: mcpserver.ClientSessionFromContext(ctx), id: id, uris: req.Params.Notifications.ResourceSubscriptions}
 		m.mu.Lock()
 		if m.streams == nil {
 			m.streams = map[*stream]struct{}{}
@@ -147,17 +148,24 @@ func (m *Muster) handler(backend, server string) http.Handler {
 // reached.
 func (m *Muster) Updated(uri string) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
+	streams := make([]*stream, 0, len(m.streams))
 	for st := range m.streams {
-		if !slices.Contains(st.uris, uri) {
+		streams = append(streams, st)
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, st := range streams {
+		if !slices.Contains(st.uris, uri) || st.ctx.Err() != nil {
 			continue
 		}
-		st.session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
+		select {
+		case st.session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
 			Method: mcp.MethodNotificationResourceUpdated,
 			Params: mcp.NotificationParams{Meta: map[string]any{mcp.MetaKeySubscriptionID: st.id}, AdditionalFields: map[string]any{"uri": uri}},
-		}}
-		n++
+		}}:
+			n++
+		case <-st.ctx.Done():
+		}
 	}
 	return n
 }
