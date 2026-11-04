@@ -6,7 +6,6 @@
 package proc
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -162,7 +161,9 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 	}, nil
 }
 
-func ticks(n int64) time.Duration { return time.Duration(n) * time.Second / clockTicks }
+// USER_HZ divides a second exactly, so scale by the duration of one tick
+// without overflowing an intermediate product for representable durations.
+func ticks(n int64) time.Duration { return time.Duration(n) * (time.Second / clockTicks) }
 
 // stat is the part of /proc/<pid>/stat beekeeper reads; times in clock ticks.
 type stat struct {
@@ -212,14 +213,13 @@ func splitNul(b []byte) []string {
 }
 
 func bootTime(root string) (time.Time, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "stat")))
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(root, "stat")))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("reading the process table needs Linux /proc: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "btime "); ok {
+	// Interrupt tables can make unrelated lines arbitrarily long.
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
 			s, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
 				return time.Time{}, err

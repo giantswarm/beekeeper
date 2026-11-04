@@ -2,12 +2,63 @@ package proc
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestReadAtLongUptimeAndCPUTime(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		ticks int64
+		want  time.Duration
+	}{
+		{"before overflow boundary", 9223372036, 92233720*time.Second + 360*time.Millisecond},
+		{"at overflow boundary", 9223372037, 92233720*time.Second + 370*time.Millisecond},
+		{"reported counter", 10000000001, 100000000*time.Second + 10*time.Millisecond},
+		{"largest representable counter", 922337203685, 9223372036*time.Second + 850*time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "42"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			// Split CPU ticks across utime and stime to exercise their sum.
+			stat := fmt.Sprintf("42 (worker) S 1 42 42 0 -1 0 0 0 0 0 %d 1 0 0 20 0 1 0 %d 4096 1\n", tt.ticks-1, tt.ticks)
+			for name, data := range map[string]string{
+				"stat":       "btime 1700000000\n",
+				"42/stat":    stat,
+				"42/cmdline": "worker\x00",
+			} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tab, err := ReadAt(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := tab.Process(42)
+			if p == nil {
+				t.Fatal("process missing")
+			}
+			if p.CPU != tt.want {
+				t.Errorf("CPU = %v, want %v", p.CPU, tt.want)
+			}
+			wantStart := time.Unix(1700000000, 0).Add(tt.want)
+			if !p.Start.Equal(wantStart) {
+				t.Errorf("Start = %v, want %v", p.Start, wantStart)
+			}
+			if p.StartTicks != tt.ticks {
+				t.Errorf("StartTicks = %d, want %d", p.StartTicks, tt.ticks)
+			}
+		})
+	}
+}
 
 func TestParseStat(t *testing.T) {
 	raw := []byte("4242 (tmux: server) (x)) S 1 4242 4242 0 -1 4194560 1 0 0 0 300 45 0 0 20 0 1 0 123456 1 2560 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0")
@@ -182,4 +233,54 @@ func TestReadProcessWithoutCmdlinePermission(t *testing.T) {
 	if tb.Process(42) != nil || tb.MissingReason(42) != "not visible to the caller (permission denied)" {
 		t.Fatalf("permission failure: %+v", tb)
 	}
+}
+
+func TestBootTimeAfterLongInterruptLine(t *testing.T) {
+	for name, ending := range map[string]string{"with_final_newline": "\n", "without_final_newline": ""} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			raw := "cpu  1 0 1 1 0 0 0 0 0 0\nintr 0" + strings.Repeat(" 0", 40000) + "\nbtime 1700000000" + ending
+			if err := os.WriteFile(filepath.Join(root, "stat"), []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := time.Unix(1700000000, 0)
+			if got, err := bootTime(root); err != nil || !got.Equal(want) {
+				t.Fatalf("bootTime = %v, %v; want %v", got, err, want)
+			}
+			if _, err := ReadAt(root); err != nil {
+				t.Fatalf("ReadAt: %v", err)
+			}
+		})
+	}
+}
+
+// readOp is the os.PathError operation of a failed read.
+const readOp = "read"
+
+func TestBootTimeErrors(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"missing", "cpu 1 2 3\n", "no btime in /proc/stat"},
+		{"malformed", "btime invalid\n", "invalid syntax"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "stat"), []byte(tc.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := bootTime(root); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("bootTime error = %v; want %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("read_failure", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "stat"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, err := bootTime(root)
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || pathErr.Op != readOp {
+			t.Fatalf("bootTime error = %v; want underlying read error", err)
+		}
+	})
 }

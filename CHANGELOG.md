@@ -63,9 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret rotation checks current encryption selectors for every carrier before changing values (https://github.com/giantswarm/beekeeper/issues/3129).
 - Prefer an observed release change, then a due schedule, then a lingering upgrade mark (https://github.com/giantswarm/beekeeper/issues/3148).
 - Require an active hold to match the running upgrade target before retaining it (https://github.com/giantswarm/beekeeper/issues/3151).
+- Preserve whole-machine OOM kill constraints and victim cgroups so snapshots identify global exhaustion and capped runs can find their victims (https://github.com/giantswarm/beekeeper/issues/2896).
+- Keep separate OOM victims when a PID is reused, preserving each kill's time, task, memory and cap attribution (https://github.com/giantswarm/beekeeper/issues/2906).
 - Stop worktree cleanup when pull-request reads fail or leave any requested branch unanswered, preserving harness checkouts when PR data is unavailable (https://github.com/giantswarm/beekeeper/issues/3093).
 - Broker replies use exclusively created temporary files so planted staging links cannot overwrite other files; failed publication cleans up its temporary file (#3034).
 - Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).
+- Compile the Unix disk reader on FreeBSD and keep exhausted signed availability from wrapping into positive free space (https://github.com/giantswarm/beekeeper/issues/2927).
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - Preserve untracked files named like build directories during worktree cleanup. (https://github.com/giantswarm/beekeeper/issues/3089).
 - Keep the active Teleport profile unchanged when backup preparation fails (https://github.com/giantswarm/beekeeper/issues/3017).
