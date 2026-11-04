@@ -30,7 +30,7 @@ func TestGitHubKeepsCandidateWhenPromotionIsUnpublished(t *testing.T) {
 						}), nil
 					}
 					if strings.Contains(r.URL.Path, "/compare/") {
-						return http.StatusOK, `{"status":"ahead"}`, nil
+						return http.StatusOK, aheadCompare, nil
 					}
 					tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 					requested = append(requested, tag)
@@ -93,7 +93,7 @@ func TestGitHubUnpublishedPromotionFallbacksStayBounded(t *testing.T) {
 			return http.StatusOK, refsWithSHAJSON(refs), nil
 		}
 		if strings.Contains(r.URL.Path, "/compare/") {
-			return http.StatusOK, `{"status":"ahead"}`, nil
+			return http.StatusOK, aheadCompare, nil
 		}
 		releases++
 		if strings.Contains(r.URL.Path, "-rc.") {
