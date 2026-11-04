@@ -80,7 +80,8 @@ func (o *Ops) checkRotate(ref Ref) error {
 // carry writes v to ref first when store is set, then to every carrier of
 // the value fingerprinted oldFP, and indexes v under each reference. The
 // carriers are found, every file decrypted, before anything is written:
-// a file that cannot be read stops the rotation with nothing changed.
+// a file that cannot be read or a carrier excluded by its current encryption
+// rule stops the rotation with nothing changed.
 func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Index, oldFP, v string, store bool) (Rotation, error) {
 	docs := map[string]*document{}
 	var carriers []Carrier
@@ -94,6 +95,10 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 			b64, ok := carries(ix, leaves[path], oldFP)
 			if !ok {
 				continue
+			}
+			_, _, keys := doc.walk(splitPath(path))
+			if err := checkRule(f, keys); err != nil {
+				return Rotation{}, fmt.Errorf("nothing rotated: %w", err)
 			}
 			nv := v
 			if b64 {

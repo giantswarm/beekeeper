@@ -180,3 +180,104 @@ func TestRotatePlatformRunsTheManagersRotation(t *testing.T) {
 		t.Error("a platform reference names installation, capability and name")
 	}
 }
+
+// Fake SOPS records encryption calls; it does not model selective ciphertext.
+func TestRotatePreflightsCarrierSelectors(t *testing.T) {
+	for _, generated := range []bool{true, false} {
+		mode := "issued"
+		if generated {
+			mode = "generated"
+		}
+		for _, tc := range []struct {
+			name, selector, extra string
+			refused               bool
+		}{
+			{"excluded raw", "encrypted_regex: '^data$'", "", true},
+			{"excluded base64", "encrypted_regex: '^stringData$'", "", true},
+			{"fully selected", "encrypted_regex: '^(data|stringData)$'", "", false},
+			{"excluded suffix", "unencrypted_suffix: password", "", true},
+			{"comment selector", "encrypted_comment_regex: secret", "", true},
+			{"dotted key excluded", "encrypted_regex: '^(data|stringData|credential)$'", "credential.json: ", true},
+			{"dotted key selected", "encrypted_regex: '^(data|stringData|credential[.]json)$'", "credential.json: ", false},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				tools := secrettest.New(map[string]string{vaultRef: password})
+				files := carriersRepo(t, password)
+				if tc.extra != "" {
+					plain := decrypted(t, tools, files[0]) + tc.extra + password + "\n"
+					if err := os.WriteFile(files[0], secrettest.Encrypt(plain), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				cfg := "creation_rules:\n  - " + tc.selector + "\n"
+				if err := os.WriteFile(filepath.Join(filepath.Dir(files[0]), ".sops.yaml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				before := map[string]string{}
+				for _, file := range files {
+					raw, err := os.ReadFile(file)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before[file] = string(raw)
+				}
+				ix := index(t)
+				ix.Add(vaultRef, password)
+				ref, _ := secret.ParseRef(vaultRef)
+				wantVault := password
+				if !generated {
+					tools.Vault[vaultRef] = issued
+					wantVault = issued
+				}
+				tools.Calls = nil
+				var err error
+				var rot secret.Rotation
+				if generated {
+					rot, err = ops(tools).RotateGenerated(context.Background(), ref, files, ix, 32, "alnum")
+				} else {
+					rot, err = ops(tools).RotateIssued(context.Background(), ref, files, ix)
+				}
+				if !tc.refused {
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := 2
+					if tc.extra != "" {
+						want++
+					}
+					if len(rot.Carriers) != want {
+						t.Fatalf("got %d carriers, want %d", len(rot.Carriers), want)
+					}
+					plain := decrypted(t, tools, files[0])
+					if strings.Contains(plain, password) || strings.Contains(plain, base64.StdEncoding.EncodeToString([]byte(password))) {
+						t.Fatal("a selected carrier retains the old value")
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), "nothing rotated") {
+					t.Fatalf("expected preflight refusal, got %v", err)
+				}
+				if tools.Vault[vaultRef] != wantVault {
+					t.Error("vault changed")
+				}
+				for _, call := range tools.Calls {
+					if strings.HasPrefix(call, "op item edit") || (strings.HasPrefix(call, "sops") && strings.Contains(call, "encrypt")) {
+						t.Errorf("preflight performed a write: %s", call)
+					}
+				}
+				for _, file := range files {
+					raw, err := os.ReadFile(file)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(raw) != before[file] {
+						t.Error("carrier bytes changed")
+					}
+				}
+				if fp, _ := ix.ValueFingerprint(vaultRef); fp != ix.Fingerprint(password) {
+					t.Error("index changed")
+				}
+			})
+		}
+	}
+}
