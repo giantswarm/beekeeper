@@ -24,17 +24,20 @@ func (s *Server) ompGuardBytes() []byte {
 func (s *Server) ompEnvironment() []string {
 	return append(cleanEnvironment("", s.Executable), "PI_CODING_AGENT_DIR="+s.Config.Harnesses[HarnessOmp].ConfigDir)
 }
-func (s *Server) ompArgs(model string) []string {
+func (s *Server) ompArgs(model, effort string) []string {
 	args := []string{"--mode", "rpc", "--no-ui", "--no-extensions", "--extension", s.ompGuardFile(), "--tools", "bash,read,write", "--approval-mode", "yolo", "--append-system-prompt", filepath.Join(s.Root, "CLAUDE.md")}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--thinking", effort)
 	}
 	return args
 }
 func (s *Server) probeOmp(ctx context.Context, h HarnessConfig, readiness *HarnessReadiness) error {
 	readiness.Guard = probeNotChecked
 	version, err := s.command(ctx, s.Root, s.ompEnvironment(), h.Executable, "--version")
-	if err != nil || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(version)), "omp v")) != h.Version {
+	if err != nil || ompVersionOutput(version) != h.Version {
 		readiness.VersionCheck = probeFailed
 		return errors.New("unsupported or mismatched omp version")
 	}
@@ -54,4 +57,17 @@ func (s *Server) probeOmp(ctx context.Context, h HarnessConfig, readiness *Harne
 	}
 	readiness.Guard = probePassed
 	return nil
+}
+
+// Accept the packaged CLI's omp/<version> and the previously supported
+// omp v<version> banner.
+// Normalize only those banners, keeping the comparison to the pin exact.
+func ompVersionOutput(raw []byte) string {
+	version := strings.TrimSpace(string(raw))
+	for _, prefix := range []string{"omp/", "omp v"} {
+		if rest, ok := strings.CutPrefix(version, prefix); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return version
 }
