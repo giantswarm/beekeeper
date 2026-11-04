@@ -60,13 +60,15 @@ func parseDocument(raw []byte) (*document, error) {
 	d := &document{root: n}
 	seen := map[string]bool{}
 	var ambiguous string
+	collided := false
 	d.walkLeaves(func(path, _ string) {
 		if seen[path] {
 			ambiguous = path
+			collided = true
 		}
 		seen[path] = true
 	})
-	if ambiguous != "" {
+	if collided {
 		return nil, fmt.Errorf("ambiguous dotted path %q: literal dotted keys and nested keys overlap", ambiguous)
 	}
 	return d, nil
