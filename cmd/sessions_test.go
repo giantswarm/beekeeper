@@ -11,6 +11,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	browseHelperName = "helper"
+	ownSessionID     = "own"
+	otherTestRepo    = "example/other"
+	unrelatedAgent   = "unrelated"
+)
+
 var (
 	parkedWorker = state.Party{Session: "p1", Name: "Parked worker"}
 	activeWorker = state.Party{Session: "a1", Name: "Active worker"}
@@ -160,5 +167,57 @@ func TestSessionNamedRosterNameWithSlash(t *testing.T) {
 	}
 	if _, _, err := sessionNamed(sessions, st, "violet/elver", now); err == nil || !strings.Contains(err.Error(), "matches 2 sessions") {
 		t.Errorf("a part two roster names share: %v", err)
+	}
+}
+
+func TestSessionsAttributeBrowseHelpers(t *testing.T) {
+	for _, hostOnly := range []bool{false, true} {
+		name := "session ID"
+		parent := state.Party{Session: "parent", Name: "test: worker"}
+		if hostOnly {
+			name = "harness host ID"
+			parent.Session, parent.HostSession = "", "codex:parent"
+		}
+		t.Run(name, func(t *testing.T) {
+			worker := &sessionView{Session: &claude.Session{ID: parent.Session, HostID: parent.HostSession, Repo: exampleToolRepo},
+				Work: claude.Work{Repos: []string{exampleToolRepo}, Refs: []string{"example/tool#7"}, Created: []string{"example/tool#8"}}}
+			helper := &sessionView{Session: &claude.Session{ID: browseHelperName, Name: "test: browse helper"}}
+			own := &sessionView{Session: &claude.Session{ID: ownSessionID, Repo: otherTestRepo}, Role: "own role",
+				Work: claude.Work{Repos: []string{otherTestRepo}, Refs: []string{"example/other#2"}}}
+			unrelated := &sessionView{Session: &claude.Session{ID: unrelatedAgent}}
+			v := &view{Sessions: []*sessionView{helper, own, unrelated, worker}, st: &state.State{
+				Agents: []state.Agent{{Party: parent, Task: "fix example/tool#7"}},
+				Starts: []state.Start{
+					{Party: state.Party{Session: browseHelperName, Name: browseStart}, By: parent},
+					{Party: state.Party{Session: ownSessionID, Name: browseStart}, By: parent},
+					{Party: state.Party{Session: unrelatedAgent, Name: "other start"}, By: parent},
+				},
+			}}
+			v.attributeBrowseSessions()
+			b, err := json.Marshal(helper)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{`"repo":"example/tool"`, `"role":"agent: fix example/tool#7"`, `"refs":["example/tool#7"]`, `"parent":`} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("helper JSON lacks %s: %s", want, b)
+				}
+			}
+			if helper.ID != browseHelperName || len(helper.Work.Created) != 0 {
+				t.Errorf("helper lost its identity or inherited created issues: %+v", helper)
+			}
+			if own.Repo != otherTestRepo || own.Role != "own role" || own.Work.Refs[0] != "example/other#2" {
+				t.Errorf("helper's own attribution overwritten: %+v", own)
+			}
+			if unrelated.Parent != "" || unrelated.Role != "" || unrelated.Repo != "" {
+				t.Errorf("non-browse session attributed: %+v", unrelated)
+			}
+			// Roster attribution survives a parent CLI disappearing.
+			v.Sessions = []*sessionView{{Session: &claude.Session{ID: browseHelperName}}}
+			v.attributeBrowseSessions()
+			if v.Sessions[0].Role != "agent: fix example/tool#7" {
+				t.Errorf("absent parent's task lost: %+v", v.Sessions[0])
+			}
+		})
 	}
 }
