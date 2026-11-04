@@ -172,7 +172,7 @@ privateKey:
 }
 
 func TestRevealAppIDKeys(t *testing.T) {
-	ids := []string{clientIDKey, "clientId", "client_id", "app-id", "appId", "app_id", "application-id", "applicationId", "application_id"}
+	ids := []string{clientIDKey, "clientId", "client_id", appIDKey, "appId", "app_id", "application-id", "applicationId", "application_id"}
 	var doc strings.Builder
 	doc.WriteString("oauth:\n")
 	for _, k := range ids {
