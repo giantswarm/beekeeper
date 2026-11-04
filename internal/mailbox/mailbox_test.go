@@ -204,11 +204,15 @@ func TestMailboxRefusesAPassedDeadline(t *testing.T) {
 func TestMailboxListen(t *testing.T) {
 	s := open(t, mailboxtest.URL(t))
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	changed := make(chan string, 10)
 	ready := make(chan struct{}, 1)
-	go s.Listen(ctx, func(mb string) { changed <- mb }, func() { ready <- struct{}{} }, func(err error) { t.Log("listen:", err) })
-	<-ready
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Listen(ctx, func(mb string) { changed <- mb }, func() { ready <- struct{}{} }, func(err error) { t.Log("listen:", err) })
+	}()
+	t.Cleanup(func() { cancel(); awaitListener(t, done) })
+	awaitListener(t, ready)
 	sent := send(t, s, msg(bob, ana, "m1"), t0)
 	expect := func(what string) {
 		t.Helper()
