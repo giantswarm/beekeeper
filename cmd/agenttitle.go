@@ -687,6 +687,19 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 // of the session is its running CLI: none is warmed beside it.
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
+	st, err := a.store.Read()
+	if err != nil {
+		return steward{}, err
+	}
+	p := state.Party{Session: id, HostSession: host}
+	if by, _ := superseded(st, p, a.now); by != "" {
+		return steward{}, refused("session %s was superseded by %s: its CLI will not be resumed to archive itself; use another steward", id, by)
+	}
+	// superseded answers nothing during a handover, whose own archive step
+	// must not revive the session it just stopped.
+	if slices.ContainsFunc(st.Handovers, func(h state.Handover) bool { return h.Is(p) && proc.Alive(h.PID) }) {
+		return steward{}, refused("session %s is being handed over: its CLI will not be resumed to archive itself; use another steward", id)
+	}
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
 		a.markWarmed(host)
 		return steward{host: host, sock: sock}, nil
