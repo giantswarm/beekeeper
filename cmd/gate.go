@@ -2094,8 +2094,9 @@ func (g *gateRun) record(base string, run childRun) error {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
 	// Keep the running place until recovery finishes, so an unknown release
-	// cannot enter settling while this gate can still identify it.
-	if r.out.Merged && r.out.Unconfirmed && r.unanswered == nil && g.pr != 0 && g.handCut() == "" {
+	// cannot enter settling while this gate can still identify it. A gate
+	// that was itself stopped ends now: lanes settle --release names it later.
+	if r.out.Merged && r.out.Unconfirmed && r.unanswered == nil && g.pr != 0 && g.handCut() == "" && !run.stopped {
 		gateLine("%s merged per GitHub; recovering its release (%s release wait %s --pr %d)", g.key(), merge.Tool, g.repo, g.pr)
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
 		recovered, _, found := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
