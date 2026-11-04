@@ -13,6 +13,8 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -319,5 +321,71 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 	}
 	if !exists(filepath.Join(root, mergedPR)) {
 		t.Fatal("dry run removed worktree")
+	}
+}
+
+// Cleanup only touches scratch checkouts; all process data is injected.
+func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
+	for _, name := range []string{"unused", "active", "parked", "desktop", "process unavailable", "roster unavailable", "canonical child", "canonical parent"} {
+		t.Run(name, func(t *testing.T) {
+			a, _ := stubApp(t)
+			plat.Machine = ungatedMachine{Machine: plat.Machine, table: proc.NewTable()}
+			a.cfg.Claude.DesktopDir = t.TempDir()
+			a.cfg.Omp.SessionsDir = t.TempDir()
+			a.cfg.Codex.SessionsDir = t.TempDir()
+			a.cfg.Agy.BrainDir = t.TempDir()
+			a.cfg.Agy.ProjectsDir = t.TempDir()
+			a.cfg.Agy.ConversationsDir = t.TempDir()
+			// Reuse a real, clean linked checkout whose HEAD is published.
+			fixture, _, root := worktreeApp(t)
+			dir := filepath.Join(root, "nopr")
+			a.cfg.Disk.BuildDirs = fixture.cfg.Disk.BuildDirs
+			if err := os.RemoveAll(filepath.Join(dir, "node_modules")); err != nil {
+				t.Fatal(err)
+			}
+			head := gitT(t, dir, "rev-parse", "HEAD")
+			live := dir
+			if strings.HasPrefix(name, "canonical") {
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(root, alias); err != nil {
+					t.Fatal(err)
+				}
+				live = alias
+				if name == "canonical child" {
+					live = filepath.Join(alias, "nopr", "child")
+					if err := os.MkdirAll(filepath.Join(dir, "child"), 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			switch name {
+			case "active", "parked", "canonical child", "canonical parent":
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					agent := state.Agent{Party: state.Party{Session: "other"}, Task: "task"}
+					if name == "parked" {
+						agent.Task = ""
+						agent.Park = &state.Park{Waits: "review"}
+					}
+					st.Agents = append(st.Agents, agent)
+					st.Starts = append(st.Starts, state.Start{Party: agent.Party, Dir: live})
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			case "desktop":
+				writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_other.json"), `{"sessionId":"local_other","cliSessionId":"other","cwd":"`+dir+`"}`)
+			case "process unavailable":
+				plat.Machine = platform.Stub().Machine
+			case "roster unavailable":
+				if err := os.RemoveAll(a.cfg.StateDir); err != nil {
+					t.Fatal(err)
+				}
+				writeT(t, a.cfg.StateDir, "unreadable roster directory")
+			}
+			a.cleanRemovedWorktree(context.Background(), dir, head)
+			if got, want := exists(dir), name != "unused"; got != want {
+				t.Fatalf("checkout exists = %v, want %v", got, want)
+			}
+		})
 	}
 }
