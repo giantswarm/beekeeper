@@ -15,10 +15,9 @@ check-crds: generate-crds ## Fail when the committed CRDs (config/crd, helm/beek
 	git diff --exit-code -- config/crd helm/beekeeper/crds pkg/apis
 
 .PHONY: test-envtest
-test-envtest: ## Run the envtest-backed tests of the Kubernetes store and beekeeper serve, and the mailboxes' (downloads a kube-apiserver via setup-envtest; BEEKEEPER_TEST_DATABASE_URL names a Postgres).
-	@test -n "$$BEEKEEPER_TEST_DATABASE_URL" || { echo "BEEKEEPER_TEST_DATABASE_URL is not set: a Postgres for the mailbox tests, see docs/development.md"; exit 1; }
-	KUBEBUILDER_ASSETS="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) -p path)" \
-		go test ./internal/state/kube/ ./internal/mailbox/ ./cmd/ -run 'Envtest|Mailbox' -count=1 -v
+test-envtest: ## Run the envtest-backed tests of the Kubernetes store and beekeeper serve, and optional mailbox tests (set BEEKEEPER_TEST_DATABASE_URL for Postgres).
+	assets="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION) use $(ENVTEST_K8S_VERSION) -p path)" && \
+		KUBEBUILDER_ASSETS="$$assets" go test ./internal/state/kube/ ./internal/mailbox/ ./cmd/ -run 'Envtest|Mailbox' -count=1 -v
 
 HELM_UNITTEST_VERSION := 1.0.3
 # The release tarball's sha256 per platform, from the release's helm-unittest-checksum.sha: pinned here,
@@ -50,6 +49,14 @@ helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest sui
 .PHONY: tools-doc
 tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
+
+.PHONY: test-loop-workflow
+test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with local Git and GitHub fixtures.
+	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
+
+# The generated go-build release prerequisite invokes make test. Keep the same
+# uncached regression mandatory there, so publication cannot bypass this suite.
+test: test-loop-workflow
 
 .PHONY: browse-upload-live
 browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.

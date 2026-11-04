@@ -92,7 +92,8 @@ only to `generic-api-key`; other values and files remain scanned.
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
-`test-envtest` job does after `make check-crds`. The mailboxes' tests (`internal/mailbox`, and serve's, which need
+`test-envtest` job does after `make check-crds`. HTTP authentication and body-limit tests run without Postgres,
+including from a linked git worktree. The mailboxes' tests (`internal/mailbox`, and serve's, which need
 both) run against the Postgres `BEEKEEPER_TEST_DATABASE_URL` names, each in a database of its own, and skip without it;
 CI's job runs one beside it, and locally the same image does:
 
@@ -922,3 +923,64 @@ wakes and handovers; no user settings file is changed.
 `guide.effort` selects the guide's session effort, ahead of the rules. The
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
+
+## Supervisor workflow regression
+
+Issue #2255's `test-loop-workflow` CircleCI job runs on every branch and PR,
+without path filters, and on release tags. Run it locally with
+`make test-loop-workflow` (Go and Git are required). It builds the candidate and
+runs the public `supervisor loop --once`, `board next` and worker-start commands
+in subprocesses. The test executable supplies only the external GitHub CLI and
+Git trace wrapper; a local HTTP adapter supplies the budget API. The planner,
+`readLoopPull`/`parseLoopPull`, merge-result validation and gate are production
+code. Raw pull responses include base, head, branch, checks and reviews; raw
+project responses include metadata and a selectable issue. The merge adapter
+actually squashes the branch and pushes a local bare origin. Success requires
+that origin's base to match the reported merge commit, exactly one mutation,
+and durable completion of the saved review park on the next loop pass.
+
+This boundary fixture starts with a durable published review park and review
+round, rather than replacing parsed pulls with in-memory planner objects. The
+full worker/reviewer lifecycle harness is tracked separately in #2254. A failed
+public worker start is also exercised with its worker executable unavailable: it must not
+create a registration or merge proof. The fixture caps starts at zero to avoid
+any dependence on the runner's available capacity or subscriptions.
+
+The matrix covers the supported no-checkout policy, non-Go checkouts, current
+and diverged Go checkouts, a combined Go tree that fails while each branch's
+changes are valid, a head moving after planning, red checks, missing base,
+unavailable validation with no server queue, an unreadable queue, budget hold
+and failed start. A separate control builds a candidate through a Go overlay
+that removes the parsed base assignment (the historical regression); the same
+complete response must then fail before merge. Unknown GitHub calls fail the
+suite even if the application handles their error.
+
+Every subprocess gets an explicit environment, private configuration/state,
+file-only Git transport, offline module resolution and a small command PATH.
+No account credentials or production state are inherited. The fixture uses
+`LANG=C.UTF-8`; builds have a five-minute deadline, scenarios a ninety-second
+deadline, Go tests a twelve-minute deadline and the CI command a fifteen-minute
+outer deadline. There is no opt-in environment switch or skip path.
+
+On failures, the job stores sanitized command/event traces, command output and
+Git refs (both a listing and a bundle of the fixture origin) under the
+`loop-workflow` artifacts. `BEEKEEPER_TEST_LOOP_ARTIFACTS`
+selects the local artifact directory. Only known fixture files are retained;
+the fixture root is replaced by `<fixture>` and the configured identity is
+synthetic. Credentials and the runner environment are never uploaded.
+
+Required repository configuration prerequisite: after its first pipeline,
+add **`ci/circleci: test-loop-workflow`** to the required status checks in the
+branch protection/ruleset for main and protected release branches, using the
+CircleCI check's exact name as reported on the PR and selecting CircleCI as its
+source where supported. Keep this check required even for CI-only changes.
+Adding YAML does not change GitHub branch protection; a repository administrator
+must configure that rule before treating the check as a merge requirement.
+
+Release publication is also guarded without changing generated workflows:
+`make test` depends on the same uncached `test-loop-workflow` target. The
+generated `go-build` job invokes `make test`, and release asset/image publishing
+requires `go-build` (chart publication depends on the image publication).
+Consequently a workflow regression fails the release prerequisite, including
+on tags. The dedicated job gives PRs a stable required-check name and retained
+failure artifacts. Do not add path filters or a skip-on-missing-tool fallback.
