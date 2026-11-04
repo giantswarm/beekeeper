@@ -33,10 +33,17 @@ func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
 		return me, err
 	}
 	h := st.GuideRole().Holder
-	if a.as != "" || (me.Session == "" && me.HostSession == "") || h == nil || !h.Is(me) {
+	if a.as != "" || (me.Session == "" && me.HostSession == "") || h == nil || !sameEmergencySession(h.Party, me) {
 		return me, refused("only the current guide session can use emergency controls")
 	}
 	return me, nil
+}
+
+// sameEmergencySession preserves person/host checks without Party.Is's
+// display-name fallback for parties that have only host session IDs.
+func sameEmergencySession(p, other state.Party) bool {
+	return p.Is(other) && ((p.Session != "" && p.Session == other.Session) ||
+		(p.HostSession != "" && p.HostSession == other.HostSession))
 }
 
 func (a *app) emergencyAction(action string) (*state.Emergency, error) {
@@ -47,7 +54,7 @@ func (a *app) emergencyAction(action string) (*state.Emergency, error) {
 			return nil, err
 		}
 		e := st.Emergency
-		if e == nil || !e.By.Is(me) || !emergencyNow().Before(e.Until) {
+		if e == nil || !sameEmergencySession(e.By, me) || !emergencyNow().Before(e.Until) {
 			return nil, refused("emergency mode is off or expired; enable it with the person's quoted words and --until")
 		}
 		copy := *e

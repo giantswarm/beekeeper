@@ -273,3 +273,46 @@ func TestEmergencyMergePreservesStopsAndHolds(t *testing.T) {
 		})
 	}
 }
+
+func TestEmergencyHostSessionGrantDoesNotFollowName(t *testing.T) {
+	a := emergencyApp(t)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("BEEKEEPER_CODEX_AGENT", "original")
+	t.Setenv("BEEKEEPER_AGENT_NAME", mailGuide)
+	original, err := a.caller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Holder.Party = original
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Pause starts now.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_CODEX_AGENT", "successor")
+	if err := emergencyCall(a, "auto-install", emergencyPauseCommand, emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+		t.Errorf("different host session with the guide name authorized: %v", err)
+	}
+	successor, err := a.caller()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Holder.Party = successor
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a, "hold", emergencySetCommand, "starts", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+		t.Errorf("successor inherited the old grant: %v", err)
+	}
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Pause starts again.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := emergencyCall(a, "hold", emergencySetCommand, "starts", emergencyReasonFlag, "Wait."); err != nil {
+		t.Fatalf("successor's own grant refused: %v", err)
+	}
+}
