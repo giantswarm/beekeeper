@@ -457,7 +457,10 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
 			continue
 		}
-		if j.Phase == Exited || j.Phase == Failed {
+		// A killed runner or failed service launch may never commit a
+		// terminal journal. Reconcile launched units with the supervisor
+		// before reserving capacity for their last recorded phase.
+		if j.ActivationAttempted || j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
 				return nil, errors.New("cannot establish owned unit state")

@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run merge-result checks and Git diagnostics with `LC_ALL=C`, and keep checker launch, cancellation and host-resource failures out of pull-request branch repair (https://github.com/giantswarm/beekeeper/issues/2240).
 - Codex web tool aliases use the shared read guard in local and managed workers; unknown tool names remain refused (https://github.com/giantswarm/beekeeper/issues/2074).
 - Stopping or inspecting an expired SSH execution preserves its workspace, Git metadata and source artifacts, including unpublished commits and local edits. Termination acknowledgement no longer authorizes irreversible workspace deletion (https://github.com/giantswarm/beekeeper/issues/2175).
+- Release SSH host admission and update capacity when the owned supervisor confirms a runner has ended, even if its final journal write was lost (https://github.com/giantswarm/beekeeper/issues/2717).
 - Enable the code-mode host in managed Codex configuration so execution-host workers can use tools (https://github.com/giantswarm/beekeeper/issues/2266).
 - Codex execution workers receive workspace trust on the command line for first and resumed turns, keeping startup from rewriting the policy-bound managed configuration and invalidating the host (https://github.com/giantswarm/beekeeper/issues/2265).
 
