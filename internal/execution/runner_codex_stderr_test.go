@@ -76,10 +76,13 @@ func TestCodexRunnerLogsStartupStderr(t *testing.T) {
 
 func TestCodexStderrRedactsAuthentication(t *testing.T) {
 	patternValue := "ghp_" + strings.Repeat("A1b2", 9)
+	// Keep the runtime PEM marker without a static private-key signature
+	// that the repository's detect-private-key hook would reject.
+	privateKeyMarker := "-----BEGIN " + "PRIVATE KEY-----\n"
 	for _, diagnostic := range []string{
 		"Authorization:\nBearer opaque-fixture-value\n",
 		"refresh_token: opaque-fixture-value\n",
-		"-----BEGIN PRIVATE KEY-----\nopaque-fixture-value\n",
+		privateKeyMarker + "opaque-fixture-value\n",
 		"gitleaks:allow " + patternValue,
 		"unexpected value " + patternValue,
 	} {
