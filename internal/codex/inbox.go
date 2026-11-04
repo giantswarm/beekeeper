@@ -99,11 +99,14 @@ func markDelivered(q *persistentQueue, ids ...string) {
 func readQueue(inbox string) (persistentQueue, error) {
 	var q persistentQueue
 	b, err := os.ReadFile(QueuePath(inbox))
-	if errors.Is(err, os.ErrNotExist) || len(bytes.TrimSpace(b)) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
 		return q, nil
 	}
 	if err != nil {
 		return q, err
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return q, nil
 	}
 	if err := json.Unmarshal(b, &q); err != nil {
 		return persistentQueue{}, err
