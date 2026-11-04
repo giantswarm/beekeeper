@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -105,4 +106,88 @@ func TestItemsBoundEachReadOnItsOwn(t *testing.T) {
 			t.Errorf("call %d shares an earlier call's deadline", i)
 		}
 	}
+}
+
+// Sectioned fixtures exercise the same metadata and references as op, including
+// custom fields whose labels coincide with built-in IDs, across an item edit.
+func TestItemsFakePreservesFieldSections(t *testing.T) {
+	const base = "op://Shared/widget/"
+	values := map[string]string{
+		"first/notes": "FIRST=one\n", "second/notes": "SECOND=two\n",
+		"first/username": "CUSTOM=three\n", "username": "BUILTIN=four\n",
+		"notesPlain": "PLAIN=five\n", "credential": "original",
+	}
+	tools := secrettest.New(nil)
+	tools.Types = map[string]string{}
+	wantFields := map[string]secret.FieldInfo{}
+	wantKeys := map[string]secret.EnvKey{}
+	for name, value := range values {
+		typ, purpose := "STRING", ""
+		if name == "credential" {
+			typ = concealedType
+		}
+		if name == "username" {
+			purpose = "USERNAME"
+		}
+		if name == "notesPlain" {
+			purpose = "NOTES"
+		}
+		tools.Vault[base+name], tools.Types[base+name] = value, typ
+		section, label, found := strings.Cut(name, "/")
+		if !found {
+			section, label = "", name
+		}
+		wantFields[name] = secret.FieldInfo{Label: label, Section: section, Type: typ, Purpose: purpose, Length: len(value)}
+		if typ == "STRING" {
+			key, val, _ := strings.Cut(strings.TrimSpace(value), "=")
+			wantKeys[name] = secret.EnvKey{Field: name, Key: key, Length: len(val)}
+		}
+	}
+	o := ops(tools)
+	ctx := context.Background()
+	check := func() {
+		t.Helper()
+		items, err := o.Items(ctx, shared, secret.ItemsOptions{Fields: true, EnvKeys: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("items = %+v", items)
+		}
+		fields := map[string]secret.FieldInfo{}
+		for _, f := range items[0].Fields {
+			name := f.Label
+			if f.Section != "" {
+				name = f.Section + "/" + name
+			}
+			fields[name] = f
+		}
+		keys := map[string]secret.EnvKey{}
+		for _, k := range items[0].EnvKeys {
+			keys[k.Field] = k
+		}
+		if !reflect.DeepEqual(fields, wantFields) || len(items[0].Fields) != len(wantFields) {
+			t.Errorf("fields = %+v, want %+v", fields, wantFields)
+		}
+		if !reflect.DeepEqual(keys, wantKeys) || len(items[0].EnvKeys) != len(wantKeys) {
+			t.Errorf("env keys = %+v, want %+v", keys, wantKeys)
+		}
+	}
+	check()
+	if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: "credential", Value: "updated"}}); err != nil {
+		t.Fatal(err)
+	}
+	values["credential"] = "updated"
+	f := wantFields["credential"]
+	f.Length = len(values["credential"])
+	wantFields["credential"] = f
+	if len(tools.Vault) != len(values) || len(tools.Types) != len(values) {
+		t.Errorf("edit changed field references: values=%v types=%v", tools.Vault, tools.Types)
+	}
+	for name, value := range values {
+		if tools.Vault[base+name] != value || tools.Types[base+name] != wantFields[name].Type {
+			t.Errorf("edit changed %s: value=%q type=%q", name, tools.Vault[base+name], tools.Types[base+name])
+		}
+	}
+	check()
 }

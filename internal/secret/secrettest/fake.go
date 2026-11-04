@@ -172,12 +172,17 @@ var builtins = map[string][2]string{
 
 func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	vault := args[slices.Index(args, "--vault")+1]
+	type section struct {
+		ID    string `json:"id"`
+		Label string `json:"label"`
+	}
 	type field struct {
-		ID      string `json:"id"`
-		Label   string `json:"label"`
-		Type    string `json:"type"`
-		Purpose string `json:"purpose,omitempty"`
-		Value   string `json:"value"`
+		Section *section `json:"section,omitempty"`
+		ID      string   `json:"id"`
+		Label   string   `json:"label"`
+		Type    string   `json:"type"`
+		Purpose string   `json:"purpose,omitempty"`
+		Value   string   `json:"value"`
 	}
 	type item struct {
 		ID       string  `json:"id"`
@@ -197,6 +202,10 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			items[parts[1]] = it
 		}
 		f := field{ID: parts[2], Label: parts[2], Type: concealedType, Value: v}
+		if name, label, ok := strings.Cut(parts[2], "/"); ok {
+			f.Label = label
+			f.Section = &section{ID: name, Label: name}
+		}
 		if typ, ok := t.Types[ref]; ok {
 			f.Type = typ
 		}
@@ -266,7 +275,11 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 				// op keeps a built-in field's own label
 				f.Label = f.ID
 			}
-			ref := "op://" + vault + "/" + it.Title + "/" + f.Label
+			name := f.Label
+			if f.Section != nil {
+				name = f.Section.Label + "/" + name
+			}
+			ref := "op://" + vault + "/" + it.Title + "/" + name
 			t.Vault[ref], t.Types[ref] = f.Value, f.Type
 		}
 		return bytes.TrimSpace(raw), nil
