@@ -388,6 +388,11 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 	pid, err := launchChild(spec, base)
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
+		if filepath.Base(filepath.Dir(base)) == ownedRuns {
+			// Followers may already be waiting before a PID is published.
+			// Keep the known failure after the startup files are removed.
+			writeResult(base, runResult{RC: guard.ExitNotFound})
+		}
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
