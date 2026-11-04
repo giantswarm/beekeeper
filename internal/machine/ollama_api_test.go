@@ -14,6 +14,11 @@ func TestOllamaModelsAttributionFailure(t *testing.T) {
 	// Docker is optional enrichment. An empty search path mocks its absence
 	// and ensures these fixtures never reach a real Docker daemon.
 	t.Setenv("PATH", t.TempDir())
+	const (
+		firstModel   = "first"
+		secondModel  = "second"
+		secondClient = "172.21.0.4"
+	)
 	const journal = `time=2026-11-01T12:00:00Z level=INFO msg="starting llama-server" cmd="llama-server --model /fixture/blobs/first --port 40001"
 [GIN] 2026/11/01 - 12:00:10 | 200 | 11s | 172.21.0.3 | POST "/api/chat"
 time=2026-11-01T12:01:00Z level=INFO msg="starting llama-server" cmd="llama-server --model /fixture/blobs/second --port 40002"
@@ -26,9 +31,9 @@ time=2026-11-01T12:01:00Z level=INFO msg="starting llama-server" cmd="llama-serv
 		clients       [2]string
 	}{
 		{name: "case 0: service journal unavailable", logErr: errors.New("fixture journal unavailable")},
-		{name: "case 1: one model disappears before show", showFailure: true, clients: [2]string{"", "172.21.0.4"}},
-		{name: "case 2: one model has malformed metadata", malformedShow: true, clients: [2]string{"", "172.21.0.4"}},
-		{name: "case 3: Docker unavailable leaves known client addresses", clients: [2]string{"172.21.0.3", "172.21.0.4"}},
+		{name: "case 1: one model disappears before show", showFailure: true, clients: [2]string{"", secondClient}},
+		{name: "case 2: one model has malformed metadata", malformedShow: true, clients: [2]string{"", secondClient}},
+		{name: "case 3: Docker unavailable leaves known client addresses", clients: [2]string{"172.21.0.3", secondClient}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mux := http.NewServeMux()
@@ -41,15 +46,15 @@ time=2026-11-01T12:01:00Z level=INFO msg="starting llama-server" cmd="llama-serv
 				var req struct {
 					Model string `json:"model"`
 				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Model != "first" && req.Model != "second") {
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Model != firstModel && req.Model != secondModel) {
 					http.Error(w, "invalid fixture model request", http.StatusBadRequest)
 					return
 				}
-				if req.Model == "first" && tc.showFailure {
+				if req.Model == firstModel && tc.showFailure {
 					http.NotFound(w, r)
 					return
 				}
-				if req.Model == "first" && tc.malformedShow {
+				if req.Model == firstModel && tc.malformedShow {
 					_, _ = w.Write([]byte(`{"modelfile":`))
 					return
 				}
@@ -68,8 +73,8 @@ time=2026-11-01T12:01:00Z level=INFO msg="starting llama-server" cmd="llama-serv
 				t.Fatalf("loaded models = %+v, %v, want both despite attribution failure", got, err)
 			}
 			want := []HostModel{
-				{Server: Ollama, Name: "first", SizeMiB: 3, GPUMiB: 2, Client: tc.clients[0]},
-				{Server: Ollama, Name: "second", SizeMiB: 6, GPUMiB: 5, Client: tc.clients[1]},
+				{Server: Ollama, Name: firstModel, SizeMiB: 3, GPUMiB: 2, Client: tc.clients[0]},
+				{Server: Ollama, Name: secondModel, SizeMiB: 6, GPUMiB: 5, Client: tc.clients[1]},
 			}
 			expires := time.Date(2026, 11, 1, 12, 30, 0, 0, time.UTC)
 			for i, m := range got {
