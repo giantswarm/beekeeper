@@ -74,7 +74,7 @@ func (p Party) Is(o Party) bool {
 		return true
 	case p.HostSession != "" && p.HostSession == o.HostSession:
 		return true
-	case p.Session == "" && o.Session == "" && p.Name != "" && p.Name == o.Name:
+	case p.Session == "" && o.Session == "" && p.HostSession == "" && o.HostSession == "" && p.Name != "" && p.Name == o.Name:
 		return true
 	}
 	return false
