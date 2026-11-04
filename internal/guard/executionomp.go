@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -54,8 +55,8 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 			ev.ToolName = writeTool
 		}
 		path, ok := input[pathKey].(string)
-		if !ok || path == "" || strings.Contains(path, ":") {
-			return ExecutionDeny("omp file tool requires a local path")
+		if !ok || !ompLiteralFilePath(path) {
+			return ExecutionDeny("omp file tool requires one literal local path; use bash for shorthand or special path syntax")
 		}
 		// Do not preserve provider-specific fields which the shared guard
 		// might interpret differently from the harness.
@@ -71,4 +72,15 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 		return ExecutionDeny("invalid managed omp tool input")
 	}
 	return h.DecideExecution(b, session, workspace, protected)
+}
+
+// ompLiteralFilePath restricts the adapter to paths omp will not reinterpret.
+// omp expands @ and ~ prefixes, trims/unwraps input, and parses read lists.
+// Reject that syntax rather than checking a literal that differs from the
+// harness target. This deliberately also rejects literal names containing list
+// delimiters: omp's choice depends on filesystem state at execution time.
+func ompLiteralFilePath(path string) bool {
+	return path != "" && !strings.HasPrefix(path, "@") && !strings.HasPrefix(path, "~") &&
+		!strings.ContainsAny(path, ":;,\"\\[]") &&
+		!strings.ContainsFunc(path, func(r rune) bool { return unicode.IsSpace(r) || r == '\ufeff' })
 }
