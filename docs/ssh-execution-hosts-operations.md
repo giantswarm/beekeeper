@@ -992,6 +992,11 @@ reruns without waiting for completion. Read the failure first and use this for
 transient CI failures; code failures still need a fix. A lost callback reply is
 not proof that no rerun started: inspect CI before trying again.
 
+The coordinator records `execution.ci-rerun-requested` before invoking devctl
+and `execution.ci-rerun-result` when it returns. These audit events name the
+repository and PR, with the result's exit code and whether the command errored;
+command output and credentials are excluded.
+
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
