@@ -20,11 +20,21 @@ func ReadDisk(path string) (Disk, error) {
 	if err := unix.Statfs(path, &s); err != nil {
 		return Disk{}, err
 	}
+	return diskUsage(path, &s), nil
+}
+
+func diskUsage(path string, s *unix.Statfs_t) Disk {
 	bs := uint64(s.Bsize) //nolint:gosec // block sizes are positive
+	// FreeBSD reports signed availability, which can be negative when
+	// reserved space is exhausted. Linux and macOS use an unsigned count.
+	var available uint64
+	if s.Bavail > 0 {
+		available = uint64(s.Bavail)
+	}
 	return Disk{
 		Path:     path,
 		UsedMiB:  int((s.Blocks - s.Bfree) * bs >> 20),
-		FreeMiB:  int(s.Bavail * bs >> 20),
+		FreeMiB:  int(available * bs >> 20),
 		TotalMiB: int(s.Blocks * bs >> 20),
-	}, nil
+	}
 }
