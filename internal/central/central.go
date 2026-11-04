@@ -213,10 +213,11 @@ func (c *Client) connect(ctx context.Context, deadline time.Duration) (*client.C
 // 2026-07-28) as the person and blocks until ctx ends (nil) or the stream
 // does (*Unreachable, or *Refused when the subscription is refused). ready
 // is called each time the subscription is acknowledged, updated with the
-// URI of each notifications/resources/updated. Only the handshake is bound
-// by the call timeout: the stream lasts.
+// URI of each notifications/resources/updated. Establishment through the
+// first acknowledgment is bound by the call timeout; the acknowledged
+// stream lasts until ctx ends or the stream does.
 func (c *Client) Listen(ctx context.Context, uris []string, ready func(), updated func(uri string)) error {
-	hctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
+	hctx, cancel, deadline := c.bound(ctx)
 	defer cancel()
 	url, err := c.endpoint(hctx)
 	if err != nil {
@@ -234,9 +235,17 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 		return c.unreachable("%v", err)
 	}
 	defer func() { _ = mc.Close() }()
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	// Establishment includes the subscription acknowledgment, but an
+	// acknowledged stream must retain the caller's longer lifetime.
+	stopHandshake := context.AfterFunc(hctx, cancelStream)
+	defer stopHandshake()
 	mc.OnNotification(func(n mcp.JSONRPCNotification) {
 		switch n.Method {
 		case mcp.MethodNotificationSubscriptionsAcknowledged:
+			stopHandshake()
+			cancel()
 			ready()
 		case mcp.MethodNotificationResourceUpdated:
 			if uri, ok := n.Params.AdditionalFields["uri"].(string); ok {
@@ -251,15 +260,17 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
 	if _, err := mc.Initialize(hctx, init); err != nil {
-		return c.timedOut(hctx, stageConnect, c.cfg.Timeout.Duration, c.unreachable("muster at %s: %v", url, err))
+		return c.timedOut(hctx, stageConnect, deadline, c.unreachable("muster at %s: %v", url, err))
 	}
 	if v := mc.ProtocolVersion(); !mcp.IsModernProtocol(v) {
 		return c.unreachable("muster at %s speaks MCP %s: subscriptions/listen needs %s", url, v, mcp.ProtocolVersion20260728)
 	}
-	err = mc.Listen(ctx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
+	err = mc.Listen(streamCtx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
 	switch {
 	case ctx.Err() != nil:
 		return nil
+	case errors.Is(hctx.Err(), context.DeadlineExceeded):
+		return c.timedOut(hctx, stageSubscribe, deadline, err)
 	case err == nil:
 		return c.unreachable("muster ended the subscription")
 	}
@@ -274,9 +285,10 @@ var baseTransport = http.DefaultTransport.(*http.Transport)
 
 // The stages of a call, as a timeout names them.
 const (
-	stageConnect  = "connect"
-	stageAuth     = "auth"
-	stageToolCall = "tool call"
+	stageConnect   = "connect"
+	stageAuth      = "auth"
+	stageToolCall  = "tool call"
+	stageSubscribe = "subscribe"
 )
 
 // timedOut is err, or Unreachable naming stage and deadline when the call's
