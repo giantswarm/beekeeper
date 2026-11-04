@@ -338,9 +338,12 @@ func (r *Run) swap() {
 // inUse reports whether some process works inside d or holds something
 // there: its working directory, its executable or an open file.
 func (r *Run) inUse(d string) bool {
+	// /proc resolves aliases in cwd, exe and fd paths. Resolve the configured
+	// roots and candidate too, so an aliased TMPDIR cannot hide its holders.
+	d = resolvedPath(d)
 	if r.held == nil {
 		r.held = []string{}
-		tmp, scratch := filepath.Clean(r.TmpDir), filepath.Clean(r.Scratch)
+		tmp, scratch := resolvedPath(r.TmpDir), resolvedPath(r.Scratch)
 		for pid := range r.Table.ByPID {
 			for _, p := range r.holds(pid) {
 				if within(p, tmp) || within(p, scratch) {
@@ -352,8 +355,21 @@ func (r *Run) inUse(d string) bool {
 	return slices.ContainsFunc(r.held, func(p string) bool { return within(p, d) })
 }
 
+func resolvedPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return filepath.Clean(p)
+}
+
 // within reports whether path p is d or lies under it.
-func within(p, d string) bool { return p == d || strings.HasPrefix(p, d+"/") }
+func within(p, d string) bool {
+	rel, err := filepath.Rel(d, p)
+	return err == nil && filepath.IsLocal(rel)
+}
 
 type dirScan struct {
 	kib     int
