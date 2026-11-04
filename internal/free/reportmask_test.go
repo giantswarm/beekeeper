@@ -8,6 +8,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const reportChildScript = "processChild.js"
+
+const reportTokenFlag = "--token"
+
+const reportNode = "node"
+
 func TestReportsMaskProcessArguments(t *testing.T) {
 	for _, summary := range []bool{false, true} {
 		name := "report"
@@ -18,9 +24,9 @@ func TestReportsMaskProcessArguments(t *testing.T) {
 			r, out := newRun(t, Options{Summary: summary, HeavyMiB: 1, Only: []string{Orphans}, Orphan: 30 * time.Minute})
 			r.Table = proc.NewTable(
 				&proc.Process{PID: 10, PPID: 2, Comm: "worker", RSSKiB: 4096, Start: now.Add(-time.Hour),
-					Args: []string{"worker", "--token", "fixture-token", "PASSWORD=fixture-password", "https://user:fixture-url@host.invalid/path"}},
-				&proc.Process{PID: 20, PPID: 1, Comm: "node", RSSKiB: 4096, Start: now.Add(-time.Hour),
-					Args: []string{"node", "processChild.js", "--token", "fixture-orphan"}},
+					Args: []string{"worker", reportTokenFlag, "fixture-token", "PASSWORD=fixture-password", "https://user:fixture-url@host.invalid/path"}},
+				&proc.Process{PID: 20, PPID: 1, Comm: reportNode, RSSKiB: 4096, Start: now.Add(-time.Hour),
+					Args: []string{reportNode, reportChildScript, reportTokenFlag, "fixture-orphan"}},
 			)
 			r.anonKiB = func(int) int { return 2048 }
 			r.Do()
@@ -29,7 +35,7 @@ func TestReportsMaskProcessArguments(t *testing.T) {
 					t.Errorf("process argument %q reached %s output", value, name)
 				}
 			}
-			if !strings.Contains(out.String(), "--token") || !strings.Contains(out.String(), "(masked)") {
+			if !strings.Contains(out.String(), reportTokenFlag) || !strings.Contains(out.String(), "(masked)") {
 				t.Errorf("masked output should retain flag names and identify omitted values:\n%s", out)
 			}
 		})
@@ -40,14 +46,14 @@ func TestReportsKeepMaskedMarkerAfterTruncation(t *testing.T) {
 	for _, summary := range []bool{false, true} {
 		r, out := newRun(t, Options{Summary: summary, HeavyMiB: 1, Only: []string{Orphans}, Orphan: 30 * time.Minute})
 		r.Table = proc.NewTable(&proc.Process{
-			PID: 20, PPID: 1, Comm: "node", RSSKiB: 4096, Start: now.Add(-time.Hour),
-			Args: []string{"node", "processChild.js", strings.Repeat("界", 140), "--token", "fixture-secret"},
+			PID: 20, PPID: 1, Comm: reportNode, RSSKiB: 4096, Start: now.Add(-time.Hour),
+			Args: []string{reportNode, reportChildScript, strings.Repeat("界", 140), reportTokenFlag, "fixture-secret"},
 		})
 		r.anonKiB = func(int) int { return 2048 }
 		r.Do()
 		seen := 0
 		for _, line := range strings.Split(out.String(), "\n") {
-			if !strings.Contains(line, "processChild.js") {
+			if !strings.Contains(line, reportChildScript) {
 				continue
 			}
 			seen++
