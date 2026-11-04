@@ -8,10 +8,11 @@ import (
 )
 
 func TestSessionGrantDoesNotAuthorizeSubstringMatches(t *testing.T) {
+	const grantedSession = "guide-1"
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	caller := Caller{RosterName: "requesting-worker", Repo: "example/source"}
 	grant := state.TranscriptGrant{
-		To: state.Party{Name: caller.RosterName}, Session: "guide-1",
+		To: state.Party{Name: caller.RosterName}, Session: grantedSession,
 		Expires: now.Add(time.Hour),
 	}
 	for _, tc := range []struct {
@@ -19,7 +20,7 @@ func TestSessionGrantDoesNotAuthorizeSubstringMatches(t *testing.T) {
 		meta Meta
 		want bool
 	}{
-		{"exact key", Meta{Key: "guide-1"}, true},
+		{"exact key", Meta{Key: grantedSession}, true},
 		{"exact name", Meta{RosterName: "Guide-1"}, true},
 		{"longer key", Meta{Key: "guide-10"}, false},
 		{"longer name", Meta{RosterName: "guide-10"}, false},
