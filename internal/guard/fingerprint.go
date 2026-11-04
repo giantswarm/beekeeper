@@ -298,7 +298,7 @@ func (ix *Index) Redact(s string) (string, []Finding) {
 		}
 	}
 	spans = disjoint(patterns, spans)
-	spans = disjoint(ix.encodedSpans(s, 1), spans)
+	spans = disjoint(ix.encodedSpans(s, 1, true), spans)
 	if len(spans) == 0 {
 		return s, nil
 	}
