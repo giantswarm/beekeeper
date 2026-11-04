@@ -14,7 +14,7 @@ import (
 
 func TestSecretRotateSandboxFiles(t *testing.T) {
 	for _, generated := range []bool{false, true} {
-		for _, access := range []string{"denied", "readable", "writable", "host"} {
+		for _, access := range []string{"denied", "readable", "writable", "outside-sandbox"} {
 			t.Run(strings.Join([]string{map[bool]string{false: "issued", true: "generated"}[generated], access}, "/"), func(t *testing.T) {
 				a, tools, repo := secretApp(t)
 				base := t.TempDir()
@@ -27,7 +27,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 				t.Chdir(repo)
 				t.Setenv(sandbox.Env, "1")
 				t.Setenv(sandbox.Brokered, "1")
-				if access == "host" {
+				if access == "outside-sandbox" {
 					t.Setenv(sandbox.Env, "")
 				}
 				if access == "readable" {
@@ -45,7 +45,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 					t.Fatal(err)
 				}
 				local := filepath.Join(repo, "db.sops.yaml")
-				localBefore, err := os.ReadFile(local)
+				localBefore, err := os.ReadFile(local) //nolint:gosec // synthetic file created by secretApp in its temporary repository
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -77,7 +77,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 						t.Error("a refused rotation changed the vault")
 					}
 					for file, before := range map[string][]byte{closed: original, local: localBefore} {
-						after, rerr := os.ReadFile(file)
+						after, rerr := os.ReadFile(file) //nolint:gosec // synthetic files owned by this test
 						if rerr != nil || !bytes.Equal(before, after) {
 							t.Errorf("a refused rotation changed %s (read error %v)", filepath.Base(file), rerr)
 						}
