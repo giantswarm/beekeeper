@@ -38,8 +38,10 @@ func codexArgs(model, workspace, thread string, effort ...string) []string {
 	}
 	// Supply trust in memory so Codex does not persist it in the policy-bound
 	// config.toml. Resumed turns need the same override as the first turn.
+	// Override the table: the CLI splits override keys on dots without TOML
+	// quoted-key parsing, so a quoted workspace in a dotted key fails strict mode.
 	project, _ := json.Marshal(workspace)
-	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects."+string(project)+".trust_level=\"trusted\"")
+	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects={"+string(project)+"={trust_level=\"trusted\"}}")
 	if len(effort) > 0 && effort[0] != "" {
 		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort[0]))
 	}
@@ -274,6 +276,12 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		return thread, false, err
 	}
 	if err := c.Start(); err != nil {
+		// An exec/chdir error has no child stderr. Preserve its OS diagnostic
+		// through the same bounded, redacted log path as child diagnostics.
+		_, _ = stderr.Write([]byte(err.Error()))
+		if logErr := stderr.writeLog(log); logErr != nil {
+			return thread, false, logErr
+		}
 		return thread, false, errors.New("harness process could not start")
 	}
 	wait := func() error {
