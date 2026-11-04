@@ -31,6 +31,10 @@ const emptyRefAttempts = 3
 // online.
 var errIncompleteLookup = errors.New("refusing an incomplete lookup")
 
+// assetUploadWindow bounds how long a public release without its assets
+// counts as still uploading; uploads land 10 to 18 minutes after the tag.
+const assetUploadWindow = time.Hour
+
 type githubSource struct {
 	selfupdate.Source // retain the upstream asset downloader
 	api               *github.Client
@@ -41,9 +45,10 @@ type githubSource struct {
 }
 
 type releaseCandidate struct {
-	tag     string
-	version *semver.Version
-	sha     string
+	tag        string
+	version    *semver.Version
+	sha        string
+	promotedBy []string
 }
 
 type baseKey struct {
@@ -174,7 +179,27 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	var skipped []string
 	skip := optionsFrom(ctx).Skip
 	checked := 0
+	pending := make(map[string]bool, len(set.candidates))
 	for _, candidate := range set.candidates {
+		pending[candidate.tag] = true
+	}
+	for len(set.candidates) != 0 {
+		// Try a stable promotion before its candidates, but retain them as
+		// fallbacks until the promotion has a usable published release.
+		index := 0
+		for i, candidate := range set.candidates {
+			blocked := false
+			for _, tag := range candidate.promotedBy {
+				blocked = blocked || pending[tag]
+			}
+			if !blocked {
+				index = i
+				break
+			}
+		}
+		candidate := set.candidates[index]
+		set.candidates = append(set.candidates[:index], set.candidates[index+1:]...)
+		delete(pending, candidate.tag)
 		if skip != nil && (skip(candidate.tag) || skip("v"+strings.TrimPrefix(candidate.tag, "v"))) {
 			s.skipped = true
 			continue
@@ -225,11 +250,20 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 		if binary && bundle {
 			return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
 		}
-		if !binary {
-			skipped = append(skipped, candidate.tag+": no "+name)
-		} else {
-			skipped = append(skipped, candidate.tag+": no "+name+".bundle")
+		missing := name
+		if binary {
+			missing += ".bundle"
 		}
+		// A release past the upload window lost its assets for good: holding
+		// every update back for it would last until the next release.
+		if published := release.GetPublishedAt().Time; !published.IsZero() && time.Since(published) > assetUploadWindow {
+			skipped = append(skipped, candidate.tag+": no "+missing)
+			continue
+		}
+		// A public release can precede the upload job by the duration of the
+		// cross-platform build. Falling back here would falsely call an older
+		// version latest. Leave Latest unset until the signed asset pair exists.
+		return nil, fmt.Errorf("public release %s is still being prepared: missing %s; retry after its release assets finish uploading: %w", candidate.tag, missing, errIncompleteLookup)
 	}
 	return nil, nil
 }
@@ -280,7 +314,8 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 		raw = append(raw, releaseCandidate{tag: tag, version: version, sha: sha})
 	}
 	stableSHAs := make(map[string]bool)
-	promotedBase := make(map[baseKey]bool)
+	stableTags := make(map[string][]string)
+	promotedBase := make(map[baseKey][]string)
 	var latestStable rcRef
 	validRaw := make([]releaseCandidate, 0, len(raw))
 	for _, c := range raw {
@@ -299,8 +334,9 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 				}
 			}
 			stableSHAs[c.sha] = true
+			stableTags[c.sha] = append(stableTags[c.sha], c.tag)
 			if rc, ok := newestRC[bk]; !ok || sameCommit(c.sha, rc.sha) {
-				promotedBase[bk] = true
+				promotedBase[bk] = append(promotedBase[bk], c.tag)
 			}
 			if latestStable.version == nil || c.version.GreaterThan(latestStable.version) {
 				latestStable = rcRef{version: c.version, sha: c.sha}
@@ -312,9 +348,8 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 	for _, c := range validRaw {
 		if c.version.Prerelease() != "" && c.sha != "" && c.tag != s.current {
 			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
-			if stableSHAs[c.sha] || promotedBase[bk] {
-				continue
-			}
+			c.promotedBy = append(c.promotedBy, stableTags[c.sha]...)
+			c.promotedBy = append(c.promotedBy, promotedBase[bk]...)
 		}
 		candidates = append(candidates, c)
 	}

@@ -576,6 +576,9 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if !c.Publication {
 		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
 	}
+	if !c.CIWait {
+		return c, refused("execution host lacks coordinator CI wait support; upgrade and prepare the host before starting workers")
+	}
 	if !c.SourcePreparation {
 		return c, refused("execution host lacks source preparation protocol support (source upload and typed not-found); upgrade and prepare the host before starting workers")
 	}

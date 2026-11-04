@@ -449,6 +449,10 @@ func (h Hook) decide(ev event) []byte {
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
 	}
+	h.beginCheck("crossGoRefusal")
+	if r := crossGoRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("goCacheRefusal")
 	if r := h.goCacheRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -1239,14 +1243,15 @@ func (h *Hook) beginCheck(name string) {
 }
 
 func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
-	if recover() == nil {
+	value := recover()
+	if value == nil {
 		return
 	}
 	check := "PreToolUse"
 	if h.check != nil {
 		check = *h.check
 	}
-	stack := debug.Stack()
+	stack := append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
 	if h.Panic != nil {
 		h.Panic(check, stack)
