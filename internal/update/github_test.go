@@ -20,6 +20,7 @@ const (
 	matchingRefsPath = "/git/matching-refs/"
 	// behindCompare is a compare whose head is an ancestor of its base.
 	behindCompare = `{"status":"behind"}`
+	aheadCompare  = `{"status":"ahead"}`
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -246,7 +247,6 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 		nextPromoted    = "v0.172.0"
 		newestFinal     = "v0.172.2"
 		newestFinalSHA  = "0668790"
-		aheadCompare    = `{"status":"ahead"}`
 		comparePathPart = "/compare/"
 	)
 	refs := refsWithSHAJSON([][2]string{
@@ -473,7 +473,7 @@ func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
 					case h < b:
 						return 200, behindCompare, nil
 					case h > b:
-						return 200, `{"status":"ahead"}`, nil
+						return 200, aheadCompare, nil
 					}
 					return 200, `{"status":"identical"}`, nil
 				}

@@ -45,9 +45,10 @@ type githubSource struct {
 }
 
 type releaseCandidate struct {
-	tag     string
-	version *semver.Version
-	sha     string
+	tag        string
+	version    *semver.Version
+	sha        string
+	promotedBy []string
 }
 
 type baseKey struct {
@@ -178,7 +179,27 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 	var skipped []string
 	skip := optionsFrom(ctx).Skip
 	checked := 0
+	pending := make(map[string]bool, len(set.candidates))
 	for _, candidate := range set.candidates {
+		pending[candidate.tag] = true
+	}
+	for len(set.candidates) != 0 {
+		// Try a stable promotion before its candidates, but retain them as
+		// fallbacks until the promotion has a usable published release.
+		index := 0
+		for i, candidate := range set.candidates {
+			blocked := false
+			for _, tag := range candidate.promotedBy {
+				blocked = blocked || pending[tag]
+			}
+			if !blocked {
+				index = i
+				break
+			}
+		}
+		candidate := set.candidates[index]
+		set.candidates = append(set.candidates[:index], set.candidates[index+1:]...)
+		delete(pending, candidate.tag)
 		if skip != nil && (skip(candidate.tag) || skip("v"+strings.TrimPrefix(candidate.tag, "v"))) {
 			s.skipped = true
 			continue
@@ -293,7 +314,8 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 		raw = append(raw, releaseCandidate{tag: tag, version: version, sha: sha})
 	}
 	stableSHAs := make(map[string]bool)
-	promotedBase := make(map[baseKey]bool)
+	stableTags := make(map[string][]string)
+	promotedBase := make(map[baseKey][]string)
 	var latestStable rcRef
 	validRaw := make([]releaseCandidate, 0, len(raw))
 	for _, c := range raw {
@@ -312,8 +334,9 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 				}
 			}
 			stableSHAs[c.sha] = true
+			stableTags[c.sha] = append(stableTags[c.sha], c.tag)
 			if rc, ok := newestRC[bk]; !ok || sameCommit(c.sha, rc.sha) {
-				promotedBase[bk] = true
+				promotedBase[bk] = append(promotedBase[bk], c.tag)
 			}
 			if latestStable.version == nil || c.version.GreaterThan(latestStable.version) {
 				latestStable = rcRef{version: c.version, sha: c.sha}
@@ -325,9 +348,8 @@ func (s *githubSource) collectCandidates(refs []*github.Reference) candidateSet 
 	for _, c := range validRaw {
 		if c.version.Prerelease() != "" && c.sha != "" && c.tag != s.current {
 			bk := baseKey{c.version.Major(), c.version.Minor(), c.version.Patch()}
-			if stableSHAs[c.sha] || promotedBase[bk] {
-				continue
-			}
+			c.promotedBy = append(c.promotedBy, stableTags[c.sha]...)
+			c.promotedBy = append(c.promotedBy, promotedBase[bk]...)
 		}
 		candidates = append(candidates, c)
 	}
