@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agyhooks"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
@@ -965,6 +966,47 @@ func TestAgyHooksRejectedThroughALink(t *testing.T) {
 
 // An agy start needs beekeeper's guard loaded: a missing file, a missing
 // entry or one without the PreToolUse guard leaves agy unguarded.
+func TestAgyRejectsIncompleteJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		suffix string
+		valid  bool
+	}{
+		{name: "trailing text", suffix: "} trailing"},
+		{name: "second object", suffix: "} {}"},
+		{name: "truncated object", suffix: ""},
+		{name: "wrong closing delimiter", suffix: "]"},
+		{name: "trailing whitespace", suffix: "} \n\t", valid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+			raw := `{"beekeeper":` + string(AgyHook(e.Exe)) + tc.suffix
+			write(t, e.AgyHooks, raw)
+			if got := agyhooks.Rejects([]byte(raw)); (got == "") != tc.valid {
+				t.Fatalf("agyhooks.Rejects = %q, valid = %v", got, tc.valid)
+			}
+			if got := AgyHooksUnguarded(e.AgyHooks); (got == "") != tc.valid {
+				t.Errorf("AgyHooksUnguarded = %q, valid = %v", got, tc.valid)
+			}
+			if got := CheckAgyHooks(e.AgyHooks, e.Exe, home); (got == "") != tc.valid {
+				t.Errorf("CheckAgyHooks = %q, valid = %v", got, tc.valid)
+			}
+			if err := Install(context.Background(), e); (err == nil) != tc.valid {
+				t.Errorf("Install = %v, valid = %v", err, tc.valid)
+			}
+			if !tc.valid {
+				got, err := os.ReadFile(e.AgyHooks)
+				if err != nil || string(got) != raw {
+					t.Errorf("Install changed invalid hooks file: %q, %v", got, err)
+				}
+			}
+		})
+	}
+}
+
 func TestAgyHooksUnguarded(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hooks.json")

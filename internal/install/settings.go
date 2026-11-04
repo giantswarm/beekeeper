@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -1381,6 +1382,18 @@ func decodeObject(raw []byte) (object, error) {
 			return nil, err
 		}
 		o = append(o, member{t.(string), v})
+	}
+	if t, err := dec.Token(); err != nil {
+		return nil, err
+	} else if t != json.Delim('}') {
+		return nil, errors.New("missing JSON object closing delimiter")
+	}
+	// A guard only loads when the entire file is one valid JSON document.
+	if _, err := dec.Token(); err != io.EOF {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("unexpected content after JSON object")
 	}
 	return o, nil
 }
