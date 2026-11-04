@@ -408,7 +408,7 @@ func TestTranscriptsUnknownHarnessHasNoGuideAccess(t *testing.T) {
 	if caller.IsGuide || caller.Role != workerRole {
 		t.Fatalf("unregistered worker received guide access: %+v", caller)
 	}
-	if transcripts.Allowed(caller, transcripts.Meta{ID: "other", Role: guideRole.name}, nil, a.now) {
+	if transcripts.Allowed(caller, transcripts.Meta{ID: transcriptTestGuideSession, Role: guideRole.name}, nil, a.now) {
 		t.Fatal("unregistered worker can read guide transcript")
 	}
 	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: session}}}
