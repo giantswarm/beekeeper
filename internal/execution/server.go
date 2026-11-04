@@ -17,10 +17,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
-	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
+	Cleanup             *Cleanup      `json:"cleanup,omitempty"`
 	Lease               *LeaseGrant   `json:"lease,omitempty"`
 	LeasePending        *LeaseRequest `json:"leasePending,omitempty"`
 	Completed           bool          `json:"completed,omitempty"`
@@ -213,7 +213,11 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
+	leftovers, err := s.AuditLeftovers()
+	if err != nil {
+		return c, err
+	}
+	return Capabilities{Leftovers: leftovers, GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -486,6 +490,11 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 		o.HostPolicyDigest = p.Digest()
 	}
 	if j.StopAcknowledged {
+		if j.StopRequest != nil {
+			if _, err := s.Stop(ctx, r, *j.StopRequest); err != nil {
+				return Observation{}, err
+			}
+		}
 		o.ProcessState = Exited
 		return o, nil
 	}
@@ -508,6 +517,9 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 			}); err != nil {
 				return Observation{}, err
 			}
+			if _, err := s.Stop(ctx, r, *j.StopRequest); err != nil {
+				return Observation{}, err
+			}
 			o.StopAcknowledged, o.ProcessState = true, Exited
 			return o, nil
 		}
@@ -522,12 +534,16 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 	default:
 		o.ProcessState = Unknown
 	}
+	if (o.ProcessState == Exited || o.ProcessState == Failed) && (j.Phase == Exited || j.Phase == Failed || j.Completed || !j.betweenTurns()) {
+		if err := s.retireTerminal(ctx, r); err != nil {
+			return Observation{}, err
+		}
+	}
 	return o, nil
 }
 
-// Stop terminates only the owned process. Its workspace and source artifacts
-// remain at the journal's recorded paths: even a clean tree can contain
-// unpublished commits, and an acknowledged stop is not proof of task completion.
+// Stop terminates the owned process and retries retirement of disposable files.
+// Dirty files and unpublished commits remain recoverable at their recorded paths.
 func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if q.ID == "" || len(q.ID) > 128 || q.Reason == "" || len(q.Reason) > 1024 {
 		return Ack{}, errors.New("stop needs an idempotency key and reason")
@@ -545,7 +561,10 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
-		s.cleanStoppedRuntime(r)
+		s.retireLocked(ctx, &j)
+		if err := atomicFile(p, mustJSON(j)); err != nil {
+			return Ack{}, err
+		}
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -571,19 +590,11 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
-	s.cleanStoppedRuntime(r)
-	return Ack{ID: q.ID, Stage: Applied}, nil
-}
-
-// Only the disposable MCP proxy home is runtime state. The workspace and
-// source bundle may contain unpublished work and are deliberately retained.
-func (s *Server) cleanStoppedRuntime(r Ref) {
-	if s.Root != "" {
-		mcpHome := s.agyMCPHomeDir(r)
-		if within(s.Root, mcpHome) {
-			_ = worktrees.RemoveAll(mcpHome)
-		}
+	s.retireLocked(ctx, &j)
+	if err := atomicFile(p, mustJSON(j)); err != nil {
+		return Ack{}, err
 	}
+	return Ack{ID: q.ID, Stage: Applied}, nil
 }
 
 // RebindPolicy binds a running execution to the host's prepared policy. The

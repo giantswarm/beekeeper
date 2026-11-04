@@ -408,7 +408,7 @@ func TestCallerUsesServiceIdentityAndCallbackProof(t *testing.T) {
 	}
 }
 
-func TestStopRetainsWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
+func TestStopRetiresCleanWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()
 	h, err := f.s.Start(ctx, f.r)
@@ -451,8 +451,8 @@ func TestStopRetainsWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
 		t.Fatalf("stop failed: %+v, %v", ack, err)
 	}
 	for _, p := range []string{h.Workspace, filepath.Dir(h.Workspace), sourceDir} {
-		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("stop removed retained path %s: %v", p, err)
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("stop retained disposable path %s: %v", p, err)
 		}
 	}
 }

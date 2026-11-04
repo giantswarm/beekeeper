@@ -959,3 +959,7 @@ not proof that no rerun started: inspect CI before trying again.
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
+
+See [remote worker resource retirement](remote-worker-cleanup.md) for owned
+temporary paths, cleanup retries, recovery retention and the read-only leftovers
+inventory returned by host checks.

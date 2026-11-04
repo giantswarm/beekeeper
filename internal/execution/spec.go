@@ -341,6 +341,7 @@ type HarnessReadiness struct {
 }
 
 type Capabilities struct {
+	Leftovers    []Leftover        `json:"leftovers,omitempty"`
 	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`

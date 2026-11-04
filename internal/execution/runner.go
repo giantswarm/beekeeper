@@ -114,7 +114,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(s.toolPath(cleanEnvironment(h.ConfigDir, s.Executable)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
-	env, err = s.GitHubEnvironment(j, env)
+	env, err = s.workerGitHubEnvironment(j, env)
 	if err != nil {
 		return err
 	}
