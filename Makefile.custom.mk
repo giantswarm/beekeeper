@@ -50,3 +50,11 @@ helm-test: helm-unittest-install ## Lint the chart and run its helm-unittest sui
 .PHONY: tools-doc
 tools-doc: ## Regenerate docs/tools.md, every tool's description and input schema as a model reads them, from the registered tools.
 	TOOLS_DOC_UPDATE=1 go test -count=1 -run TestToolsDocIsCurrent ./cmd/
+
+.PHONY: test-loop-workflow
+test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with local Git and GitHub fixtures.
+	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
+
+# The generated go-build release prerequisite invokes make test. Keep the same
+# uncached regression mandatory there, so publication cannot bypass this suite.
+test: test-loop-workflow
