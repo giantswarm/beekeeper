@@ -173,6 +173,34 @@ func TestUploadNewBranch(t *testing.T) {
 	}
 }
 
+// Alt text cannot escape the image delimiter or introduce line endings.
+func TestUploadAltText(t *testing.T) {
+	for _, tt := range []struct{ name, alt, want string }{
+		{"empty", "", ""},
+		{"odd trailing backslashes", `shot\`, `shot\\`},
+		{"even trailing backslashes", `shot\\`, `shot\\\\`},
+		{"three trailing backslashes", `shot\\\`, `shot\\\\\\`},
+		{"backslashes beside brackets", `\[shot\]\`, `\\shot\\\\`},
+		{"brackets between backslashes", `shot\[]\`, `shot\\\\`},
+		{"CR paragraphs", "shot\r\rnext", "shot  next"},
+		{"LF paragraphs", "shot\n\nnext", "shot  next"},
+		{"CRLF paragraphs", "shot\r\n\r\nnext", "shot  next"},
+		{"mixed line endings", "a\rb\nc\r\nd", "a b c d"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeGH{visibility: public}
+			res, err := (Upload{GH: f.run, Repo: repo, Alt: tt.alt, Now: at}).Run(context.Background(), []byte("img"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			url := "https://raw.githubusercontent.com/o/r/" + res.Commit + "/" + res.Path
+			if want := "![" + tt.want + "](" + url + ")"; res.Markdown != want {
+				t.Errorf("Markdown = %q, want %q", res.Markdown, want)
+			}
+		})
+	}
+}
+
 // An upload onto the branch builds on its head and moves it without force;
 // a branch that moved meanwhile is retried on its new head.
 func TestUploadExistingBranchRetries(t *testing.T) {
