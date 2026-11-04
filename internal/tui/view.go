@@ -1272,7 +1272,12 @@ func dedupAlerts(as []Alert) []alertRow {
 		key := strings.ToLower(a.Severity) + "\x00" + a.Alertname + "\x00" + a.Cluster + "\x00" + a.Where
 		if i, ok := idx[key]; ok {
 			out[i].n++
-			if a.Since < out[i].Since {
+			// Compare instants, since offsets and fractional seconds do not
+			// sort chronologically as strings. Prefer a valid timestamp;
+			// retain the first value when neither timestamp can be parsed.
+			since, err := time.Parse(time.RFC3339Nano, a.Since)
+			previous, previousErr := time.Parse(time.RFC3339Nano, out[i].Since)
+			if err == nil && (previousErr != nil || since.Before(previous)) {
 				out[i].Since = a.Since
 			}
 			continue
