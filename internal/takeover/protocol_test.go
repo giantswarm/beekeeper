@@ -15,6 +15,8 @@ const protocolCancel = "cancel"
 
 const protocolAnswer = "answer"
 
+const protocolRelease = "release"
+
 func protocolFixture(t *testing.T) (string, Request, Flag) {
 	t.Helper()
 	dir := t.TempDir()
@@ -44,7 +46,7 @@ func assertNoHeldFiles(t *testing.T, dir string, r Request) {
 }
 
 func TestHeldDecisionRejectsInvalidationBeforeAnswer(t *testing.T) {
-	for _, cause := range []string{"release", "dead screen", protocolCancel, "replacement"} {
+	for _, cause := range []string{protocolRelease, "dead screen", protocolCancel, "replacement"} {
 		t.Run(cause, func(t *testing.T) {
 			dir, r, owner := protocolFixture(t)
 			if err := Answer(dir, r.Session, r.ID, Decision{Behavior: Allow}); err != nil {
@@ -54,7 +56,7 @@ func TestHeldDecisionRejectsInvalidationBeforeAnswer(t *testing.T) {
 			defer cancel()
 			live := alive
 			switch cause {
-			case "release":
+			case protocolRelease:
 				if err := Release(dir, r.Session); err != nil {
 					t.Fatal(err)
 				}
@@ -124,7 +126,7 @@ func TestAnswerPublicationAndFinalizationShareLock(t *testing.T) {
 }
 
 func TestHoldSynchronizedLifecycle(t *testing.T) {
-	for _, action := range []string{protocolAnswer, "release", protocolCancel} {
+	for _, action := range []string{protocolAnswer, protocolRelease, protocolCancel} {
 		t.Run(action, func(t *testing.T) {
 			dir := t.TempDir()
 			r := Request{Session: tSession, ID: "held-request"}
@@ -156,7 +158,7 @@ func TestHoldSynchronizedLifecycle(t *testing.T) {
 				if err := Answer(dir, r.Session, r.ID, Decision{Behavior: Deny}); err != nil {
 					t.Fatal(err)
 				}
-			case "release":
+			case protocolRelease:
 				if err := Release(dir, r.Session); err != nil {
 					t.Fatal(err)
 				}
