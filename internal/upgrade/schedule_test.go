@@ -7,6 +7,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const scheduleSupervisor = "Supervisor"
+
 func TestDueScheduleUsesScheduledRelease(t *testing.T) {
 	const next = "35.2.0"
 	for _, age := range []time.Duration{10 * time.Minute, 50 * time.Hour} {
@@ -31,7 +33,7 @@ func TestDueScheduleReholdsLiftedUpgrade(t *testing.T) {
 	const next = "35.2.0"
 	st := &state.State{}
 	Reconcile(st, prod, []Upgrade{{Cluster: "mc", To: to}}, at.Add(-10*time.Minute), watch)
-	if !Lift(st, HoldTarget(prod, "mc"), state.Party{Name: "Supervisor"}, at.Add(-5*time.Minute)) {
+	if !Lift(st, HoldTarget(prod, "mc"), state.Party{Name: scheduleSupervisor}, at.Add(-5*time.Minute)) {
 		t.Fatal("the previous upgrade was not held")
 	}
 	objs := withMC(t, "0843-after", map[string]string{
