@@ -134,6 +134,84 @@ func TestSessionDirsFreeOnlyTheDead(t *testing.T) {
 	}
 }
 
+func TestSessionDirsStayInsideScratch(t *testing.T) {
+	for _, level := range []string{"project", "session", "internal-project", "internal-session"} {
+		t.Run(level, func(t *testing.T) {
+			r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+			external := t.TempDir()
+			fixture(t, external, filepath.Join(deadSID, "scratchpad", "keep"), 1, 5*time.Hour)
+			project := filepath.Join(r.Scratch, "-outside")
+			link, target := project, external
+			if strings.HasPrefix(level, "internal-") {
+				target = filepath.Join(r.Scratch, "target")
+				fixture(t, target, filepath.Join("source", deadSID, "scratchpad", "keep"), 1, 5*time.Hour)
+				target = filepath.Join(target, "source")
+			}
+			keep := filepath.Join(target, deadSID, "scratchpad", "keep")
+			if strings.HasSuffix(level, "session") {
+				link, target = filepath.Join(project, deadSID), filepath.Join(target, deadSID)
+			}
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Free(); len(got) != 0 {
+				t.Fatalf("symlink counted as a session: %v", got)
+			}
+			if _, err := os.Stat(keep); err != nil {
+				t.Fatalf("target file lost: %v", err)
+			}
+			if _, err := os.Lstat(link); err != nil {
+				t.Fatalf("symlink removed: %v", err)
+			}
+		})
+	}
+}
+
+// Replace a checked project after scanning, before deletion. A pathname-only
+// containment check would still let RemoveAll follow the replacement alias.
+func TestSessionDirsProjectReplacedBeforeRemoval(t *testing.T) {
+	r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+	fixture(t, r.TmpDir, filepath.Join(sessionDir(deadSID), "scratchpad", "a"), 1, 5*time.Hour)
+	external := t.TempDir()
+	keep := filepath.Join(deadSID, "scratchpad", "keep")
+	fixture(t, external, keep, 1, 5*time.Hour)
+	r.Records = func() map[string]*claude.Record {
+		project := filepath.Dir(filepath.Join(r.TmpDir, sessionDir(deadSID)))
+		if err := os.Rename(project, project+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, project); err != nil {
+			t.Fatal(err)
+		}
+		return map[string]*claude.Record{}
+	}
+	if got := r.Free(); len(got) != 0 {
+		t.Fatalf("failed deletion counted: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(external, keep)); err != nil {
+		t.Fatalf("external file lost: %v", err)
+	}
+}
+
+func TestSessionDirsScratchAlias(t *testing.T) {
+	r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+	fixture(t, r.TmpDir, filepath.Join(sessionDir(deadSID), "scratchpad", "a"), 1, 5*time.Hour)
+	original := r.Scratch
+	r.Scratch = filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(original, r.Scratch); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Free(); len(got) != 1 || got[0].N != 1 {
+		t.Fatalf("normal cleanup through alias: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.TmpDir, sessionDir(deadSID))); !os.IsNotExist(err) {
+		t.Fatalf("session remains: %v", err)
+	}
+}
+
 func TestSessionDirsTranscriptAndCwdKeep(t *testing.T) {
 	r, out := newRun(t, Options{Summary: true, Only: []string{SessionDirs}})
 	written := sessionDir("55555555-dead-4000-8000-000000000000")

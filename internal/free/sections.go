@@ -41,14 +41,32 @@ func (r *Run) sessionDirs() {
 		r.say("  every dir kept: beekeeper's state cannot be read, so the sessions the roster and the roles count on are unknown")
 		return
 	}
-	dirs, _ := filepath.Glob(filepath.Join(r.Scratch, "*", "*"))
+	// OpenRoot deliberately permits Scratch itself to be an alias. Every
+	// subsequent scratch operation stays relative to this directory handle,
+	// even if a path component is replaced with a symlink during cleanup.
+	root, err := os.OpenRoot(r.Scratch)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	dirs, _ := fs.Glob(root.FS(), "*/*")
 	n := 0
 	for _, d := range dirs {
-		sid, slug := filepath.Base(d), filepath.Base(filepath.Dir(d))
-		if !sessionID.MatchString(sid) || !isDir(filepath.Join(d, "scratchpad")) && !isDir(filepath.Join(d, "tasks")) {
+		rel := d
+		sid, slug := filepath.Base(rel), filepath.Base(filepath.Dir(rel))
+		// Lstat rejects aliases at both candidate levels, including aliases
+		// whose targets happen to be inside Scratch.
+		if !sessionID.MatchString(sid) || !rootDir(root, slug) || !rootDir(root, rel) {
 			continue
 		}
-		sc := r.scan(d)
+		if !rootDir(root, rel+"/scratchpad") && !rootDir(root, rel+"/tasks") {
+			continue
+		}
+		sc, err := r.scanFS(root.FS(), rel)
+		if err != nil {
+			continue
+		}
+		d = filepath.Join(r.Scratch, filepath.FromSlash(rel))
 		transcript := filepath.Join(r.Projects, slug, sid+".jsonl")
 		last := sc.newest
 		if fi, err := os.Stat(transcript); err == nil && fi.ModTime().After(last) {
@@ -79,7 +97,14 @@ func (r *Run) sessionDirs() {
 		if sc.kib >= minKiB {
 			r.act("remove %d MiB  %s  (CLI gone, idle %d h)", sc.kib/1024, r.name(slug, sid), int(idle.Hours()))
 		}
-		r.drop(SessionDirs, d, sc.kib)
+		if r.Apply {
+			if err := root.RemoveAll(rel); err != nil {
+				r.say("  failed: %v", err)
+				continue
+			}
+			r.freedKiB += sc.kib
+		}
+		r.tally(SessionDirs, sc.kib)
 	}
 	r.total(SessionDirs, n)
 }
@@ -362,14 +387,28 @@ type dirScan struct {
 }
 
 func (r *Run) scan(d string) dirScan {
+	s, _ := r.scanWalk(func(fn fs.WalkDirFunc) error { return filepath.WalkDir(d, fn) })
+	return s
+}
+
+// scanFS reads metadata through the same boundary used for deletion. An
+// incomplete scan must not make a session appear stale or safe to remove.
+func (r *Run) scanFS(tree fs.FS, d string) (dirScan, error) {
+	return r.scanWalk(func(fn fs.WalkDirFunc) error { return fs.WalkDir(tree, d, fn) })
+}
+
+func (r *Run) scanWalk(walk func(fs.WalkDirFunc) error) (dirScan, error) {
 	var s dirScan
 	var bytes int64
-	_ = filepath.WalkDir(d, func(_ string, e fs.DirEntry, err error) error {
+	var scanErr error
+	err := walk(func(_ string, e fs.DirEntry, err error) error {
 		if err != nil {
+			scanErr = err
 			return nil
 		}
 		fi, err := e.Info()
 		if err != nil {
+			scanErr = err
 			return nil
 		}
 		if fileUID(fi) != r.UID {
@@ -384,7 +423,15 @@ func (r *Run) scan(d string) dirScan {
 		return nil
 	})
 	s.kib = int(bytes / 1024)
-	return s
+	if err != nil {
+		return s, err
+	}
+	return s, scanErr
+}
+
+func rootDir(root *os.Root, name string) bool {
+	fi, err := root.Lstat(name)
+	return err == nil && fi.IsDir()
 }
 
 // size renders KiB as MiB, or KiB below one MiB.
@@ -393,9 +440,4 @@ func size(kib int) string {
 		return fmt.Sprintf("%d KiB", kib)
 	}
 	return fmt.Sprintf("%d MiB", kib/1024)
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
