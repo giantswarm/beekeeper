@@ -880,6 +880,7 @@ faults but remedying none.`,
 			return nil
 		},
 	}
+	c.AddCommand(a.retryArchiveCmd())
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what the doctor would do, fixing nothing")
 	c.Flags().StringArrayVar(&attended, "fault", nil, "run this fault's remedy although it may not run unattended (repeatable)")
 	return c
