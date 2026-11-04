@@ -163,6 +163,11 @@ func (r Rules) hidden(installation string, s Set) string {
 // Set is an installation's alerts by fingerprint.
 type Set map[string]Alert
 
+// workloadNamespace prefers the workload's namespace over the scrape target's.
+func workloadNamespace(labels map[string]string) string {
+	return first(labels["exported_namespace"], labels["namespace"])
+}
+
 // Normalize turns an answer's alerts into the set, ignored names dropped.
 func (r Rules) Normalize(raw []Raw, installation string) Set {
 	out, _ := r.normalize(raw, installation)
@@ -182,7 +187,7 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 			continue
 		}
 		cluster := first(l["cluster_id"], l["cluster"], l["installation"], installation)
-		namespace := first(l["exported_namespace"], l["namespace"])
+		namespace := workloadNamespace(l)
 		exporter := l["service"] != "" && strings.HasPrefix(l["pod"], l["service"])
 		obj := ""
 		for _, k := range objectLabels {
@@ -662,7 +667,7 @@ func (r Rules) SnapshotAlerts(installation string, ans Answer) []Alert {
 }
 
 // SnapshotLines is the current set grouped by severity, team, alertname,
-// cluster and namespace, pages and the team's alerts first.
+// cluster and workload namespace, pages and the team's alerts first.
 func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []string {
 	if !ans.OK {
 		return []string{fmt.Sprintf("%s unreachable: %s", installation, ans.Why)}
@@ -675,7 +680,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	var groups []*group
 	byKey := map[[5]string]*group{}
 	for _, a := range shown {
-		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, a.Labels["namespace"]}
+		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, workloadNamespace(a.Labels)}
 		if g, ok := byKey[k]; ok {
 			g.n++
 			continue
@@ -694,7 +699,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
 		line := fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n)
-		if ns := g.Labels["namespace"]; ns != "" {
+		if ns := workloadNamespace(g.Labels); ns != "" {
 			line += " namespace=" + ns
 		}
 		lines = append(lines, line)
