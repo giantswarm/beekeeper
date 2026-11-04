@@ -274,6 +274,12 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		return thread, false, err
 	}
 	if err := c.Start(); err != nil {
+		// An exec/chdir error has no child stderr. Preserve its OS diagnostic
+		// through the same bounded, redacted log path as child diagnostics.
+		_, _ = stderr.Write([]byte(err.Error()))
+		if logErr := stderr.writeLog(log); logErr != nil {
+			return thread, false, logErr
+		}
 		return thread, false, errors.New("harness process could not start")
 	}
 	wait := func() error {

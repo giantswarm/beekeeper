@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
+
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Unregistered harness sessions keep worker transcript permissions; default repository access includes only explicitly identified worker transcripts (https://github.com/giantswarm/beekeeper/issues/2183).
