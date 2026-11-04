@@ -174,7 +174,8 @@ func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileS
 		return i, fileUpdated
 	}
 	sub := command(want.Entry)
-	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
+	// Failed recognition is not evidence that two entries run the same hook.
+	if len(sub) > 0 && slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
 		return 0, fileKept
 	}
 	return 0, fileNew

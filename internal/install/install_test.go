@@ -143,6 +143,65 @@ const priorSettings = `{
 }
 `
 
+func TestClaudeInstallsGuardWithQuotedOrRenamedBinary(t *testing.T) {
+	for _, exe := range []string{"/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper", "/opt/bin/bk"} {
+		t.Run(exe, func(t *testing.T) {
+			e, out := env(t, t.TempDir(), platform.Stub().Setup, nil)
+			e.Exe, e.Spec.Exe = exe, exe
+			write(t, e.Settings, priorSettings)
+			before, err := readSettings(e.Settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			unrelated, err := before.hooks("PreToolUse")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			settings, err := readSettings(e.Settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range Hooks(exe) {
+				list, err := settings.hooks(want.Event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := 1
+				if want.Event == "PreToolUse" {
+					expected = 2
+					if len(list) == 0 || !sameJSON(list[0], unrelated[0]) {
+						t.Error("install changed the unrelated hook")
+					}
+				}
+				if len(list) != expected || !slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
+					t.Errorf("%s lacks generated hook: %s", want.Event, list)
+				}
+			}
+			installed := tree(t, e.Spec.Home)
+			out.Reset()
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(installed, tree(t, e.Spec.Home)) {
+				t.Error("second install changed files")
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(e.Settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != priorSettings {
+				t.Errorf("uninstall did not restore settings: %s", raw)
+			}
+		})
+	}
+}
+
 func TestInstallTwiceThenUninstallRestores(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
