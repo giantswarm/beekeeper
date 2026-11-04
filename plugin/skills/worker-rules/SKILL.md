@@ -24,9 +24,3 @@ One task; stricter desk rules win.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
 
 Load first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
-
-- **Cross-platform scans and release promotion checks:** build scanners for the host
-  first (`GOOS=$(go env GOHOSTOS) go build -o /tmp/govulncheck golang.org/x/vuln/cmd/govulncheck`),
-  then cross-scan with the host binary (`GOOS=windows /tmp/govulncheck ./...`).
-  Never use cross-target `go run`; use `GOOS=<os> go build` for cross-compilation.
-  Cross-target `go test` requires an explicit `-exec` runner.

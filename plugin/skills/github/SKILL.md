@@ -27,9 +27,3 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
   Never wait on site approval. Own App grants: `beekeeper app allow` first; refusals are
   barriers. Sign-in: `muster auth login --no-browser`, the printed URL in a browse step.
 - **Subagents:** only if the brief allows, each told force-push and secret rules.
-
-- **Cross-platform scans and release promotion checks:** build scanners for the host
-  first (`GOOS=$(go env GOHOSTOS) go build -o /tmp/govulncheck golang.org/x/vuln/cmd/govulncheck`),
-  then cross-scan with the host binary (`GOOS=windows /tmp/govulncheck ./...`).
-  Never use cross-target `go run`; use `GOOS=<os> go build` for cross-compilation.
-  Cross-target `go test` requires an explicit `-exec` runner.
