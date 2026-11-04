@@ -107,7 +107,7 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 		}
 		what := e.Settings + ": " + want.Event + " hook"
 		mine := slices.IndexFunc(m.Hooks, func(h Hook) bool { return h.Event == want.Event })
-		switch i, state := find(list, want, m.Hooks, mine); state {
+		switch i, state := find(list, want, slices.Concat(m.Hooks, m.PreviousHooks)); state {
 		case fileSame:
 			p.add("ok", what, "", nil)
 		case fileUpdated:
@@ -156,17 +156,18 @@ func writeVerb(existed bool) string {
 	return "write"
 }
 
-// find is where want stands in list: as it is, as the entry install added
-// earlier (mine, an index into added, -1 for none) or one running the same
-// command with another matcher or timeout (fileUpdated), as a beekeeper hook
-// of the same subcommand with another command (fileKept), or absent
-// (fileNew).
-func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileState) {
+// find locates an identical hook, an owned previous version, the same
+// binary's command with an older matcher, or another binary's hook.
+
+func find(list []json.RawMessage, want Hook, added []Hook) (int, fileState) {
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
 		return 0, fileSame
 	}
-	if mine >= 0 {
-		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, added[mine].Entry) }); i >= 0 {
+	for _, owned := range added {
+		if owned.Event != want.Event {
+			continue
+		}
+		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, owned.Entry) }); i >= 0 {
 			return i, fileUpdated
 		}
 	}
@@ -182,7 +183,7 @@ func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileS
 
 // planUnhooks removes the hooks install added and the keys it created.
 func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.Hooks) == 0 {
+	if len(m.Hooks) == 0 && len(m.PreviousHooks) == 0 {
 		return nil
 	}
 	s, err := readSettings(e.Settings)
@@ -190,7 +191,7 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 		return err
 	}
 	changed := false
-	for _, h := range m.Hooks {
+	for _, h := range slices.Concat(m.Hooks, m.PreviousHooks) {
 		list, err := s.hooks(h.Event)
 		if err != nil {
 			return err
@@ -346,7 +347,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) (string, error) {
 	switch {
 	case ok && sameJSON(cur, want):
 		p.add("ok", what, "", nil)
-	case ok && (len(m.AgyHook) > 0 && sameJSON(cur, m.AgyHook) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
+	case ok && (m.ownsAgyHook(cur) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
 		s.top.set(project.Name, want)
 		m.AgyHook = want
 		changed = true
@@ -402,7 +403,7 @@ func failAgyHooks(p *plan, path, why string) {
 // planAgyUnhooks removes the project.Name entry install added to agy's
 // hooks.json, leaving any other named hooks in place.
 func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.AgyHook) == 0 || e.AgyHooks == "" || symlink(e.AgyHooks) {
+	if len(m.AgyHook) == 0 && len(m.PreviousAgyHooks) == 0 || e.AgyHooks == "" || symlink(e.AgyHooks) {
 		return nil
 	}
 	s, err := readSettings(e.AgyHooks)
@@ -410,7 +411,7 @@ func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error 
 		return err
 	}
 	cur, ok := s.top.get(project.Name)
-	if !ok || !sameJSON(cur, m.AgyHook) {
+	if !ok || !m.ownsAgyHook(cur) {
 		return nil
 	}
 	s.top.del(project.Name)
@@ -904,7 +905,7 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]strin
 	want := CodexHook(e.Exe)
 	what := path + ": " + project.Name + " PreToolUse hook"
 	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
-		if sameJSON(r, want) || len(m.CodexHook) > 0 && sameJSON(r, m.CodexHook) {
+		if sameJSON(r, want) || m.ownsCodexHook(r) {
 			return true
 		}
 		bin, _, _ := codexHookBinary(r)
@@ -953,21 +954,22 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]strin
 // planCodexUnhooks removes the PreToolUse entry install added to Codex's
 // hooks.json files, leaving any other hooks in place.
 func (e Env) planCodexUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.CodexHook) == 0 || e.CodexHooks == "" {
+	if len(m.CodexHook) == 0 && len(m.PreviousCodexHooks) == 0 || e.CodexHooks == "" {
 		return nil
 	}
-	if err := planCodexUnhooksFile(p, m.CodexHook, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
+	owned := slices.Concat([]json.RawMessage{m.CodexHook}, m.PreviousCodexHooks)
+	if err := planCodexUnhooksFile(p, owned, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
 		return err
 	}
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := planCodexUnhooksFile(p, m.CodexHook, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
+		if err := planCodexUnhooksFile(p, owned, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []string, created bool, removed map[string]bool) error {
+func planCodexUnhooksFile(p *plan, hooks []json.RawMessage, path string, keys []string, created bool, removed map[string]bool) error {
 	if path == "" || symlink(path) {
 		return nil
 	}
@@ -980,7 +982,7 @@ func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []str
 		return err
 	}
 	kept := slices.DeleteFunc(slices.Clone(list), func(r json.RawMessage) bool {
-		return sameJSON(r, hook)
+		return slices.ContainsFunc(hooks, func(h json.RawMessage) bool { return sameJSON(r, h) })
 	})
 	if len(kept) == len(list) {
 		return nil

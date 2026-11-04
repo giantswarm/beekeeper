@@ -64,6 +64,7 @@ func Install(ctx context.Context, e Env) error {
 		return err
 	}
 	before := m.encode()
+	previous := Manifest{Files: maps.Clone(m.Files), Hooks: slices.Clone(m.Hooks), AgyHook: m.AgyHook, CodexHook: m.CodexHook}
 	p := &plan{home: e.Spec.Home}
 	if err := e.planHooks(p, &m); err != nil {
 		return err
@@ -84,7 +85,15 @@ func Install(ctx context.Context, e Env) error {
 	e.planConfig(p, &m)
 	e.planSetup(ctx, p, &m)
 	m.addDirs(e.StateDir)
+	m.rememberPrevious(previous)
 	failAgyHooks(p, e.AgyHooks, agyRejected)
+	if m.hasPrevious() {
+		p.add("record", e.manifest(), "complete install ownership", func() error {
+			m.PreviousFiles, m.PreviousHooks = nil, nil
+			m.PreviousAgyHooks, m.PreviousCodexHooks = nil, nil
+			return writeFile(e.manifest(), m.encode())
+		})
+	}
 	if after := m.encode(); !bytes.Equal(before, after) {
 		p.first("record", e.manifest(), "what install writes, for uninstall", func() error {
 			return writeFile(e.manifest(), after)
@@ -405,6 +414,12 @@ type Manifest struct {
 	// Service is the standby service's definition as earlier installs
 	// recorded it, read into Services.
 	Service string `json:"service,omitempty"`
+	// Previous ownership stays valid until all install steps complete: a
+	// failed replacement may have left an earlier owned version on disk.
+	PreviousFiles      map[string][]string `json:"previousFiles,omitempty"`
+	PreviousHooks      []Hook              `json:"previousHooks,omitempty"`
+	PreviousAgyHooks   []json.RawMessage   `json:"previousAgyHooks,omitempty"`
+	PreviousCodexHooks []json.RawMessage   `json:"previousCodexHooks,omitempty"`
 	// Hooks are the settings entries install added.
 	Hooks []Hook `json:"hooks,omitempty"`
 	// SettingsKeys are the settings keys install created ("hooks",
@@ -477,7 +492,7 @@ func (m *Manifest) addDirs(dir string) {
 // owns reports whether install wrote the file at path with content cur.
 func (m Manifest) owns(path string, cur []byte) bool {
 	h, ok := m.Files[path]
-	return ok && h == sum(cur)
+	return ok && (h == sum(cur) || slices.Contains(m.PreviousFiles[path], sum(cur)))
 }
 
 // ownsTarget reports whether install wrote the file the symlink at path
