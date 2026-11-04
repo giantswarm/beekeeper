@@ -282,6 +282,12 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
 		return
 	}
+	if !f.t.WakeParkAt.IsZero() {
+		p := wakeTargetPark(st, f.t.Wake)
+		if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
+			return // The worker has already left or replaced this CI wait.
+		}
+	}
 	if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
 		w.emitNow("timer", "TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now))
 		return
@@ -291,7 +297,17 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if !f.t.Due.IsZero() {
 		quiet.executionRequestID = fmt.Sprintf("timer/%d/%s/%s", f.t.ID, f.t.Due.UTC().Format(time.RFC3339Nano), execution.Digest([]byte(f.message())))
 	}
-	if err := wakeOwner(&quiet, ctx, watchParty, f.t.Wake, f.message(), ""); err != nil {
+	// A CI park belongs to this wake until the execution harness accepts
+	// it. Pass the park through the durable delivery ledger so acceptance
+	// clears it, while storage or an uncertain delivery keeps it parked.
+	var wakeErr error
+	if i, findErr := findAgent(st, f.t.Wake); findErr == nil && st.Agents[i].Execution != nil && st.Agents[i].Park != nil && st.Agents[i].Park.Checks {
+		ag := st.Agents[i]
+		wakeErr = quiet.enqueueExecutionWake(ctx, watchParty, ag, f.message(), ag.Park)
+	} else {
+		wakeErr = wakeOwner(&quiet, ctx, watchParty, f.t.Wake, f.message(), "")
+	}
+	if err := wakeErr; err != nil {
 		var pending *executionDeliveryPending
 		if errors.As(err, &pending) {
 			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))

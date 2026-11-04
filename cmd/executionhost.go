@@ -573,6 +573,9 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	if !c.Publication {
 		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
 	}
+	if !c.CIWait {
+		return c, refused("execution host lacks coordinator CI wait support; upgrade and prepare the host before starting workers")
+	}
 	offered := false
 	for _, name := range h.Harnesses {
 		offered = offered || c.Harnesses[name] != ""

@@ -340,6 +340,8 @@ func (k *Keep) Holds(now time.Time) bool {
 // issue or pull request (owner/repo#n), and once that settled, since when
 // it is resumable and the words its resume carries.
 type Park struct {
+	// Checks parks on coordinator-owned CI settlement, never PR comments or review.
+	Checks bool `json:"checks,omitempty"`
 	// RefKind caches GitHub's Issue or PullRequest type for this park.
 	RefKind string `json:"refKind,omitempty"`
 	// RefChecked is the last lookup attempt; issues and unresolved references retry every five minutes.
@@ -552,6 +554,8 @@ type Timer struct {
 	What string    `json:"what"`
 	By   Party     `json:"by"`
 	At   time.Time `json:"at"`
+	// WakeParkAt binds an execution CI wake to the exact park that created it.
+	WakeParkAt time.Time `json:"wakeParkAt,omitzero"`
 	// Fired is when a watch reported the timer; it reports it once.
 	Fired time.Time `json:"fired,omitzero"`
 	// When is a typed condition (pr-merged owner/repo#n, …) and Probe a

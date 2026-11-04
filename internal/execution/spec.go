@@ -341,6 +341,7 @@ type HarnessReadiness struct {
 }
 
 type Capabilities struct {
+	CIWait       bool              `json:"ciWait"`
 	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
 	Protocol     int               `json:"protocol"`

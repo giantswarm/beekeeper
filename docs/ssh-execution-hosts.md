@@ -539,3 +539,24 @@ requests; none means "try a new start". Status distinguishes preparation,
 registration, running/exited/unknown process observations, transport failure,
 pending stop and undelivered control. A public report uses only generic
 examples; operational identities and workspace paths belong in local state.
+
+### Waiting for CI on an execution host
+
+Every prepared host includes the CI wait in beekeeper itself; a separate
+`devctl` installation is not required. After publication, run:
+
+```sh
+beekeeper agents park --checks --on giantswarm/beekeeper#123 "CI"
+```
+
+The coordinator records the park and a `pr-checks` wake timer together. It
+checks every five minutes and wakes the worker when checks pass or fail
+(including cancellation and timeout), or the PR closes. Failed reads and
+pending checks leave the wait open. The coordinator watch or supervisor loop
+must be running. The worker should end its turn, then read the result on wake,
+fix failures, or request desk review with an ordinary PR park after green CI.
+A CI park does not request review or complete the execution, and PR comments
+cannot settle it. Host-local timers remain coordinator controls.
+
+`agents hosts check` and worker admission refuse hosts that do not advertise
+CI-wait support. Upgrade and prepare those hosts before assigning work.
