@@ -1272,7 +1272,7 @@ func dedupAlerts(as []Alert) []alertRow {
 		key := strings.ToLower(a.Severity) + "\x00" + a.Alertname + "\x00" + a.Cluster + "\x00" + a.Where
 		if i, ok := idx[key]; ok {
 			out[i].n++
-			if a.Since < out[i].Since {
+			if earlierSince(a.Since, out[i].Since) {
 				out[i].Since = a.Since
 			}
 			continue
@@ -1290,6 +1290,23 @@ func dedupAlerts(as []Alert) []alertRow {
 		return out[i].Cluster < out[j].Cluster
 	})
 	return out
+}
+
+// earlierSince compares timestamps as instants, including offsets and
+// optional fractional seconds. Legacy duration fixtures represent ages, so
+// a larger duration began earlier. Unknown formats keep the old ordering.
+func earlierSince(a, b string) bool {
+	ta, ea := time.Parse(time.RFC3339Nano, a)
+	tb, eb := time.Parse(time.RFC3339Nano, b)
+	if ea == nil && eb == nil {
+		return ta.Before(tb)
+	}
+	da, ea := time.ParseDuration(a)
+	db, eb := time.ParseDuration(b)
+	if ea == nil && eb == nil {
+		return da > db
+	}
+	return a < b
 }
 
 // sevRank orders severities by how much they hurt; unknown ones sit
