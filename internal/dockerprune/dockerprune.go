@@ -466,9 +466,10 @@ type CacheTrim struct {
 // best-effort pass of the daemon's GC policy and frees nothing while the
 // policy's reserved or min-free-space floor sits above the target, which
 // on a nearly full disk is always. A record Docker does not call
-// reclaimable is never touched and is counted in Kept.
-func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
-	var t CacheTrim
+// reclaimable is never touched and is counted in Kept. A successful prune
+// can remove nothing, so fresh records confirm progress and remaining size.
+// Records blocked by children are retried while a pass removes a record.
+func PruneBuildCache(ctx context.Context, d Docker, keep int64) (t CacheTrim, err error) {
 	records, err := CacheRecords(ctx, d)
 	if err != nil {
 		return t, err
@@ -487,24 +488,42 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 		return cmp.Or(cmp.Compare(b.UsedAgo, a.UsedAgo), cmp.Compare(a.ID, b.ID))
 	})
 	var refused []error
-	removed := map[string]bool{}
-	for _, r := range candidates {
-		if total-t.Freed <= keep {
-			break
-		}
-		if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
-			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
-			continue
-		}
-		t.Freed += r.Size
-		t.Removed++
-		removed[r.ID] = true
-	}
-	for _, r := range records {
-		if !removed[r.ID] {
+	defer func() {
+		for _, r := range records {
 			t.Kept++
 			t.KeptBytes += r.Size
 		}
+	}()
+	for len(candidates) > 0 && total > keep {
+		var retry []CacheRecord
+		before := t.Removed
+		for _, r := range candidates {
+			if total <= keep {
+				break
+			}
+			if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
+				refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
+				continue
+			}
+			current, err := CacheRecords(ctx, d)
+			if err != nil {
+				return t, err
+			}
+			records, total = current, 0
+			for _, remaining := range records {
+				total += remaining.Size
+			}
+			if slices.ContainsFunc(records, func(remaining CacheRecord) bool { return remaining.ID == r.ID }) {
+				retry = append(retry, r)
+				continue
+			}
+			t.Freed += r.Size
+			t.Removed++
+		}
+		if t.Removed == before {
+			break
+		}
+		candidates = retry
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)
