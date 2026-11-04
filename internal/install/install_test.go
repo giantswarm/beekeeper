@@ -475,7 +475,7 @@ func TestUninstallResolvesASymlinkedUnit(t *testing.T) {
 	}{{"beekeeper's target", false}, {"the person's target", true}} {
 		t.Run(c.name, func(t *testing.T) {
 			home := t.TempDir()
-			f := &fakeSetup{}
+			f := &partialStateSetup{}
 			e, out := env(t, home, f, f.run)
 			if err := Install(context.Background(), e); err != nil {
 				t.Fatal(err)
@@ -503,7 +503,9 @@ func TestUninstallResolvesASymlinkedUnit(t *testing.T) {
 				}
 			}
 
-			f.ran = nil
+			// An owned linked unit must be halted even when only its partial
+			// state remains; a changed target must still be left alone.
+			f.started, f.ran = false, nil
 			out.Reset()
 			e.DryRun = true
 			if err := Uninstall(context.Background(), e, false); err != nil {

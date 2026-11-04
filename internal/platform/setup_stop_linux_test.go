@@ -18,7 +18,7 @@ is-active:*-active.service) printf 'active\n' ;;
 *) exit 1 ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(bin, systemctl), []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, systemctl), []byte(script), 0o700); err != nil { //nolint:gosec // the isolated systemctl fixture must be executable
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
