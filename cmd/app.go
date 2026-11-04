@@ -365,7 +365,7 @@ credentials were stored nowhere). check decides from the same.`,
 			if err != nil {
 				return err
 			}
-			apps := guardAppsOf(st)
+			apps := a.consentApps(context.Background(), st)
 			var d guard.Decision
 			if navigate {
 				d = guard.Navigation(apps, args[0])
@@ -966,7 +966,7 @@ func (a *app) allowedApps() []guard.App {
 	if err != nil {
 		return nil
 	}
-	return guardAppsOf(st)
+	return a.consentApps(context.Background(), st)
 }
 
 // guardApps are the Apps on record as the guard reads them.
