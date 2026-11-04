@@ -49,6 +49,7 @@ type fakeSource struct {
 	took, released []string
 	answers        []string
 	answerErr      error
+	releaseErr     error
 }
 
 // TakeOver records the take-over and marks the session in the data.
@@ -65,6 +66,9 @@ func (f *fakeSource) TakeOver(_ context.Context, id string) error {
 // Release records the hand-back and unmarks the session.
 func (f *fakeSource) Release(_ context.Context, id string) error {
 	f.released = append(f.released, id)
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	for i := range f.data.Sessions {
 		if f.data.Sessions[i].ID == id {
 			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
@@ -784,4 +788,65 @@ func TestLoadingBeforeFirstRefresh(t *testing.T) {
 // keyText is the key press that types text.
 func keyText(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(text)[0], Text: text}
+}
+
+func TestHandBackOwnership(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			src := &fakeSource{data: fixtureData()}
+			m := newTestModel(t, src)
+			session := &src.data.Sessions[0]
+			session.ID = "sid-bee"
+			session.TakenOver = true
+			id := session.ID
+			m.detail = session.Name
+			m.taken = map[string]bool{id: true}
+			if fail {
+				src.releaseErr = errors.New("temporary release failure")
+			}
+			_, cmd := m.key(keyText("t"))
+			if cmd == nil {
+				t.Fatal("t did not schedule hand-back")
+			}
+			if !m.taken[id] {
+				t.Fatal("scheduling hand-back removed ownership")
+			}
+			msg := cmd()
+			if !m.taken[id] {
+				t.Fatal("command changed ownership before result handling")
+			}
+			m.Update(msg)
+			if m.taken[id] != fail {
+				t.Fatalf("ownership after result = %v, want %v", m.taken[id], fail)
+			}
+			if m.outcomeErr != fail {
+				t.Fatalf("outcome error = %v, want %v", m.outcomeErr, fail)
+			}
+			if session.TakenOver != fail {
+				t.Fatalf("taken over after release = %v, want %v", session.TakenOver, fail)
+			}
+			src.releaseErr = nil
+			m.key(keyText("q"))
+			m.releaseAll()
+			wantCalls := 1
+			if fail {
+				wantCalls = 2
+			}
+			if len(src.released) != wantCalls {
+				t.Fatalf("release calls = %v, want %d", src.released, wantCalls)
+			}
+			for _, got := range src.released {
+				if got != id {
+					t.Fatalf("released %q, want %q", got, id)
+				}
+			}
+			if session.TakenOver {
+				t.Fatal("shutdown did not hand back session")
+			}
+		})
+	}
 }

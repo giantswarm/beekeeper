@@ -52,6 +52,8 @@ type (
 		err  error
 		// took is the session id a take-over took, "" for anything else.
 		took string
+		// released is the session id successfully handed back.
+		released string
 	}
 )
 
@@ -219,6 +221,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshCmd()
 		}
 		m.outcome, m.outcomeErr = msg.done, false
+		if msg.released != "" {
+			delete(m.taken, msg.released)
+		}
 		if msg.took != "" {
 			if m.taken == nil {
 				m.taken = map[string]bool{}
@@ -394,12 +399,11 @@ func (m *model) toggleTakeOver() tea.Cmd {
 	m.acting = true
 	id, name := s.ID, s.Name
 	if s.TakenOver {
-		delete(m.taken, id)
 		return func() tea.Msg {
 			if err := m.src.Release(m.ctx, id); err != nil {
 				return actMsg{err: err}
 			}
-			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
+			return actMsg{done: "handed back: " + name + "'s approvals go to its own window", released: id}
 		}
 	}
 	return func() tea.Msg {
