@@ -169,6 +169,67 @@ func TestSourceChunksRejectConflictsAndPreserveRetries(t *testing.T) {
 	}
 }
 
+func TestSourceUploadResumesPartialChunk(t *testing.T) {
+	for _, prefixSize := range []int{17, SourceChunkSize + 17} {
+		for _, conflict := range []bool{false, true} {
+			t.Run(fmt.Sprintf("prefix=%d/conflict=%t", prefixSize, conflict), func(t *testing.T) {
+				f := testFixture(t)
+				data := bytes.Repeat([]byte("source bytes"), SourceChunkSize/6)
+				prefix := bytes.Clone(data[:prefixSize])
+				if conflict {
+					prefix[len(prefix)-1] ^= 1
+				}
+				p := f.s.sourcePath(f.r.Ref)
+				if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, prefix, 0600); err != nil {
+					t.Fatal(err)
+				}
+				err := f.transport(t, nil).UploadSource(context.Background(), f.r.Ref, data)
+				want := data
+				if conflict {
+					if err == nil || !strings.Contains(err.Error(), "conflicting source chunk retry") {
+						t.Fatalf("conflicting prefix: %v", err)
+					}
+					want = prefix
+				} else if err != nil {
+					t.Fatalf("resume matching prefix: %v", err)
+				}
+				got, err := os.ReadFile(p)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("unexpected source contents: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestSourceUploadRejectsPreparedPartialChunk(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("x"), SourceChunkSize+31)
+	transport := f.transport(t, nil)
+	if err := transport.UploadSource(ctx, f.r.Ref, data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	p := f.s.sourcePath(f.r.Ref)
+	prefix := data[:SourceChunkSize+17]
+	if err := os.Truncate(p, int64(len(prefix))); err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.UploadSource(ctx, f.r.Ref, data); err == nil {
+		t.Fatal("prepared partial source was extended")
+	}
+	got, err := os.ReadFile(p)
+	if err != nil || !bytes.Equal(got, prefix) {
+		t.Fatalf("prepared source changed: %v", err)
+	}
+}
+
 func TestSourceUploadRoundTripAndPreparedRetry(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()
