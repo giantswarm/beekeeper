@@ -281,8 +281,37 @@ func toolLoadLine(t *proc.Table, tools []string, max int, owners map[int]string)
 		return ""
 	}
 	line := fmt.Sprintf("LOAD: %d CLI processes over %d, top: %s", n, max, sharesLine(shares(comms, n, stormNames), false))
+	var recursive []string
+	for comm, count := range comms {
+		if count > max && recursiveChain(t, comm, max) {
+			recursive = append(recursive, comm)
+		}
+	}
+	slices.Sort(recursive)
+	if len(recursive) > 0 {
+		line += "; possible recursion: " + strings.Join(recursive, ", ")
+	}
 	if len(sessions) > 0 {
 		line += "; sessions: " + sharesLine(shares(sessions, n, stormNames), true)
 	}
 	return line
+}
+
+// recursiveChain distinguishes a repeated parent-child chain from independent
+// calls of the same CLI. The walk is bounded even for a malformed snapshot.
+func recursiveChain(t *proc.Table, comm string, max int) bool {
+	for _, p := range t.ByPID {
+		if p.Comm != comm {
+			continue
+		}
+		seen := map[int]bool{}
+		for p != nil && p.Comm == comm && !seen[p.PID] {
+			seen[p.PID] = true
+			if len(seen) > max && len(seen) > 1 {
+				return true
+			}
+			p = t.ByPID[p.PPID]
+		}
+	}
+	return false
 }
