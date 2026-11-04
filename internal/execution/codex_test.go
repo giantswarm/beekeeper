@@ -40,13 +40,14 @@ test -n "${BEEKEEPER_CONFIG}"
 # Model Codex persisting workspace trust when no command-line override exists.
 trusted=false
 for arg in "$@"; do
-  case "$arg" in projects.*.trust_level=\"trusted\") trusted=true;; esac
+  case "$arg" in projects=\{*trust_level=\"trusted\"\}\}) trusted=true;; esac
 done
 if [ "$trusted" = false ]; then
   printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PWD" >> "$CODEX_HOME/config.toml"
 fi
 input=$(cat)
 printf '%s|%s|%s\n' "$CODEX_HOME" "$*" "$input" >> "$calls"
+if [ -e "$(dirname "$0")/startup-error" ]; then cat "$(dirname "$0")/startup-error" >&2; exit 1; fi
 if [ -e "$(dirname "$0")/no-thread" ]; then echo '{"type":"error"}'; exit 1; fi
 if [ "$2" = resume ]; then
   thread=""
@@ -163,7 +164,7 @@ func TestCheckAdvertisesOnlyPassingHarnesses(t *testing.T) {
 	f, dir := codexFixture(t)
 	ctx := context.Background()
 	caps, err := f.s.Check(ctx)
-	if err != nil || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
+	if err != nil || !caps.SourcePreparation || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
 		t.Fatalf("both harnesses should pass: %+v %v", caps, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
@@ -220,7 +221,7 @@ func TestCodexRunnerSingleTurn(t *testing.T) {
 	}
 	line := strings.TrimSpace(string(calls))
 	project, _ := json.Marshal(j.Handle.Workspace)
-	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" -C " + j.Handle.Workspace + " -|" + f.r.Prompt
+	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects={" + string(project) + "={trust_level=\"trusted\"}} -C " + j.Handle.Workspace + " -|" + f.r.Prompt
 	if line != want {
 		t.Fatalf("first turn:\n got %q\nwant %q", line, want)
 	}
@@ -247,7 +248,7 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
-	for _, level := range []string{"", "high"} {
+	for _, level := range []string{"", testEffortHigh} {
 		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
 	}
 }
@@ -337,7 +338,7 @@ func testCodexRunnerWakesWithEffort(t *testing.T, level string) {
 	}
 	j, _ := f.s.Read(f.r.Ref)
 	project, _ := json.Marshal(j.Handle.Workspace)
-	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" " + fixtureThread + " -|"
+	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects={" + string(project) + "={trust_level=\"trusted\"}} " + fixtureThread + " -|"
 	if !strings.HasPrefix(turns[1], resume+"Message from ") || !strings.Contains(turns[1], `"name":"supervisor"`) || !strings.HasSuffix(turns[1], "first follow-up") {
 		t.Fatalf("first wake turn: %q", turns[1])
 	}
