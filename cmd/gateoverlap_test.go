@@ -381,3 +381,24 @@ func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 		t.Error("a lane without merges has a pace")
 	}
 }
+
+func TestWarmUpUsesRepositoryCITimeout(t *testing.T) {
+	g := runningMerge(t, scratchRepo, localLane)
+	g.argv = mergeArgv(scratchRepo)
+	g.cfg.Merge.CITimeout.Duration = time.Hour
+	g.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: 3 * time.Hour}}
+	wasWait := prWarmWait
+	t.Cleanup(func() { prWarmWait = wasWait })
+	called := false
+	prWarmWait = func(ctx context.Context, repo string, pr int) {
+		called = true
+		deadline, ok := ctx.Deadline()
+		if left := time.Until(deadline); !ok || left < 3*time.Hour-time.Minute || left > 3*time.Hour {
+			t.Errorf("warm-up deadline = %v, want three hours from now", deadline)
+		}
+	}
+	g.warmUp(context.Background())
+	if !called {
+		t.Fatal("warm-up did not wait for CI")
+	}
+}
