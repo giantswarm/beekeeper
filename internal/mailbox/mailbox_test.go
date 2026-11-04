@@ -227,3 +227,69 @@ func TestMailboxListen(t *testing.T) {
 	}
 	expect("the ack")
 }
+
+// Reusing an ID admits a new delivery without changing the old delivery's life.
+func TestMailboxReusedID(t *testing.T) {
+	for _, recipient := range []string{bob, "other@example.com"} {
+		t.Run(recipient, func(t *testing.T) {
+			s := open(t, mailboxtest.URL(t))
+			m := msg(bob, ana, "reused")
+			m.Deadline = t0.Add(72 * time.Hour)
+			first := send(t, s, m, t0)
+			later := t0.Add(mailbox.DedupeWindow + time.Hour)
+			m.Mailbox = recipient
+			second := send(t, s, m, later)
+			if second.Duplicate || second.Seq <= first.Seq {
+				t.Fatalf("first %+v, second %+v: want a new ordered delivery", first, second)
+			}
+			ds := receive(t, s, bob, later)
+			if len(ds) == 0 || ds[0].Seq != first.Seq {
+				t.Fatalf("original delivery lost: %+v", ds)
+			}
+			want := 1
+			if recipient == bob {
+				want = 2
+			}
+			if len(ds) != want || (recipient == bob && ds[1].Seq != second.Seq) {
+				t.Fatalf("deliveries %+v, want %d in sequence order", ds, want)
+			}
+			if duplicate := send(t, s, m, later.Add(time.Minute)); !duplicate.Duplicate || duplicate.Seq != second.Seq {
+				t.Fatalf("retry %+v, want duplicate of %+v", duplicate, second)
+			}
+			if n, err := s.Ack(context.Background(), recipient, []int64{second.Seq}, later); err != nil || n != 1 {
+				t.Fatalf("ack second: %d, %v", n, err)
+			}
+			if ds := receive(t, s, bob, later); len(ds) != 1 || ds[0].Seq != first.Seq {
+				t.Fatalf("acking second changed first: %+v", ds)
+			}
+			if n, err := s.Ack(context.Background(), bob, []int64{first.Seq}, later); err != nil || n != 1 {
+				t.Fatalf("ack first: %d, %v", n, err)
+			}
+		})
+	}
+}
+
+func TestMailboxReusedIDBeforeExpirySweep(t *testing.T) {
+	s := open(t, mailboxtest.URL(t))
+	first := send(t, s, msg(bob, ana, "reused"), t0)
+	later := t0.Add(mailbox.DedupeWindow + time.Hour)
+	second := send(t, s, msg(bob, ana, "reused"), later)
+	expired, err := s.Expire(context.Background(), later)
+	if err != nil || len(expired) != 1 || expired[0].Seq != first.Seq {
+		t.Fatalf("expired %+v, %v: want original delivery", expired, err)
+	}
+	notices := receive(t, s, ana, later)
+	if len(notices) != 1 || notices[0].Kind != mailbox.KindExpired {
+		t.Fatalf("notices %+v", notices)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(notices[0].Envelope, &env); err != nil || env["messageId"] != "reused" || env["to"] != bobKey {
+		t.Fatalf("notice %s: %v", notices[0].Envelope, err)
+	}
+	if ds := receive(t, s, bob, later); len(ds) != 1 || ds[0].Seq != second.Seq {
+		t.Fatalf("sweep changed new delivery: %+v", ds)
+	}
+	if expired, err := s.Expire(context.Background(), later); err != nil || len(expired) != 0 {
+		t.Fatalf("repeated sweep: %+v, %v", expired, err)
+	}
+}
