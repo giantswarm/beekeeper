@@ -8,11 +8,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+const overtakenRepo = "o/r"
 
 const (
 	refOne  = "o/r#1"
@@ -400,5 +403,55 @@ func TestGuideFeedSaysOvertakenOnce(t *testing.T) {
 	}
 	if lines, _ := a.feedLines(st, nil, closed, nil); lines != nil {
 		t.Fatalf("said twice: %q", lines)
+	}
+}
+
+// The same merge settles an older question but cannot settle one filed
+// about the already merged PR, even after its worker reports done.
+func TestNoteOvertakenOnlyByMergeAfterItWasAdded(t *testing.T) {
+	merged := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		name     string
+		added    time.Time
+		ended    time.Time
+		wantOpen bool
+	}{
+		{"added before merge", merged.Add(-time.Hour), time.Time{}, false},
+		{"added after merge", merged.Add(time.Hour), time.Time{}, true},
+		{"added at merge", merged, time.Time{}, true},
+		{"worker done after existing merge", merged.Add(time.Hour), merged.Add(2 * time.Hour), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, _ := overtakingWatch(t, nil)
+			current := github.Open
+			statusQuo := "The referenced PR is open."
+			if tc.wantOpen {
+				current = github.Merged
+				statusQuo = "The referenced PR is merged."
+			}
+			refStates = func(_ context.Context, _ []github.PR) (map[github.PR]github.RefState, error) {
+				return map[github.PR]github.RefState{{Repo: overtakenRepo, N: 1}: {Kind: github.RefPullRequest, State: current, MergedAt: merged}}, nil
+			}
+			setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: "note reader", Text: "Does this change need a decision?", StatusQuo: statusQuo, At: tc.added, TaskEnded: tc.ended, Refs: []string{refOne}})
+			// A note against an open PR stays open until the merge.
+			w.pending(context.Background(), nil)
+			if len(openIDs(t, w)) != 1 {
+				t.Fatal("note closed before a later merge")
+			}
+			current = github.Merged
+			for range 2 {
+				w.pending(context.Background(), nil)
+			}
+			if got := len(openIDs(t, w)) == 1; got != tc.wantOpen {
+				t.Fatalf("open = %v, want %v", got, tc.wantOpen)
+			}
+			wantEvents := 1
+			if tc.wantOpen {
+				wantEvents = 0
+			}
+			if got := len(overtakenEvents(t, w)); got != wantEvents {
+				t.Fatalf("overtaken events = %d, want %d", got, wantEvents)
+			}
+		})
 	}
 }
