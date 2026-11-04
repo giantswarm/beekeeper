@@ -507,3 +507,12 @@ func openArgs(app, url string, now time.Time) []string {
 	return []string{userManager, "--scope", quietRun, "--collect", "--slice=app.slice",
 		"--unit=app-com.anthropic.Claude-beekeeper-" + strconv.FormatInt(now.UnixNano(), 10), app, url}
 }
+
+// SuspendRecords observes power management; it never takes an inhibitor lock.
+func (systemdMachine) SuspendRecords(ctx context.Context, since time.Time) ([]machine.SuspendRecord, error) {
+	out, err := exec.CommandContext(ctx, "journalctl", "-k", "-b", "--no-pager", "-o", "short-iso-precise", "--since", since.Local().Format("2006-01-02 15:04:05"), "--grep", "PM: suspend (entry|exit)").Output() //nolint:gosec // fixed query and formatted timestamp
+	if err != nil {
+		return nil, err
+	}
+	return machine.ParseSuspend(string(out)), nil
+}

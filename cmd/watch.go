@@ -361,8 +361,14 @@ type watcher struct {
 	dirty    bool
 	// feedID is the id of the last central feed event the watch printed,
 	// kept in its mark.
-	feedID   string
-	lastPoll time.Time
+	feedID          string
+	lastPoll        time.Time
+	suspendEntry    time.Time
+	suspendChecked  time.Time
+	suspendThrough  time.Time
+	suspendRecovery map[string]suspendWake
+	suspendResults  chan map[string]suspendWake
+	suspendDeliver  func(context.Context, suspendWake) error
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
 	refusedSince time.Time
@@ -1390,6 +1396,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 		owners[s.PID] = s.Name
 	}
 	w.owners.Store(&owners)
+	w.suspends(ctx, since, sessions)
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.tendFeedback(ctx)
