@@ -234,6 +234,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
+	// Core preserves the session core dump limits; by default commands disable both.
+	Core bool
 	// scope is assigned before slot acquisition, so setup stalls are recoverable.
 	scope string
 	// StopWith is a verified managed execution service, never a CLI flag.
@@ -409,6 +411,10 @@ func Run(o Options, argv []string) int {
 // run completes cleanup, including releasing the slot, before Run retries.
 func run(o Options, argv []string, boundedGo bool) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
+	var inherited syscall.Rlimit
+	if !o.Core && syscall.Getrlimit(syscall.RLIMIT_CORE, &inherited) == nil && (inherited.Cur != 0 || inherited.Max != 0) {
+		logf("core dumps off")
+	}
 	kubeEnv, cleanupKube, err := runKubeconfig()
 	if err != nil {
 		logf("scratch kubeconfig: %v", err)
@@ -420,7 +426,7 @@ func run(o Options, argv []string, boundedGo bool) int {
 	case capper.Available():
 	case o.Sandbox == nil:
 		logf("no user systemd here, running uncapped: %s", argv[0])
-		return runDirect(argv, kubeEnv, logf)
+		return runDirect(coreCommand(argv, o.Core), kubeEnv, logf)
 	case !o.Sandbox.Available():
 		logf("refused: the agent sandbox keeps the user systemd out of reach and no sandbox broker answers; " +
 			"the host runs it as beekeeper-sandbox.service (beekeeper install), an uncapped build would put the machine at risk")
@@ -429,7 +435,7 @@ func run(o Options, argv []string, boundedGo bool) int {
 		capper = o.Sandbox
 	}
 	if capper.Capped() {
-		return runDirect(argv, kubeEnv, logf)
+		return runDirect(coreCommand(argv, o.Core), kubeEnv, logf)
 	}
 	needKiB, err := ParseSize(o.Max)
 	if err != nil {
@@ -921,7 +927,7 @@ var (
 // record is written.
 func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) (int, func()) {
 	noop := func() {}
-	c, err := capper.Command(unit, o.cap(slot), argv)
+	c, err := capper.Command(unit, o.cap(slot), coreCommand(argv, o.Core))
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound, noop
@@ -1189,3 +1195,13 @@ func execve(argv []string, logf func(string, ...any)) int {
 }
 
 func holderStarted() time.Time { started, _ := proc.Started(os.Getpid()); return started }
+
+// coreCommand lowers both limits in the command payload inside either the
+// local or brokered scope. Every descendant of the command inherits them.
+// A fixed shell program preserves argument boundaries and fails closed.
+func coreCommand(argv []string, core bool) []string {
+	if core {
+		return argv
+	}
+	return append([]string{"sh", "-c", "ulimit -S -H -c 0 || exit 1; exec \"$@\"", "beekeeper-run"}, argv...)
+}
