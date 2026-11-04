@@ -368,3 +368,22 @@ func TestNoContextLine(t *testing.T) {
 		t.Errorf("two: %q", got)
 	}
 }
+
+// Workload namespaces stay distinct behind an exporter, with the same
+// precedence in normalized object locations and grouped snapshots.
+func TestSnapshotUsesWorkloadNamespace(t *testing.T) {
+	const failureName = "WorkloadFailed"
+	const scrapeNamespace = "monitoring"
+	a := alert("workload-a", failureName, notify, ourTeam, "", "namespace", scrapeNamespace, "exported_namespace", "jobs-a", "deployment", "worker")
+	b := alert("workload-b", failureName, notify, ourTeam, "", "namespace", scrapeNamespace, "exported_namespace", "jobs-b", "deployment", "worker")
+	c := alert("direct-a", failureName, notify, ourTeam, "", "namespace", "jobs-a", "deployment", "worker")
+	lines := rules.SnapshotLines(instA, ok(a, b, c), now)
+	groups := map[string]string{}
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		groups[fields[len(fields)-1]] = fields[len(fields)-2]
+	}
+	if len(lines) != 3 || groups["namespace=jobs-a"] != "2" || groups["namespace=jobs-b"] != "1" {
+		t.Fatalf("snapshot grouped the scrape namespace instead of workload namespaces: %v", lines)
+	}
+}

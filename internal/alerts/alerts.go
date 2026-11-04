@@ -182,7 +182,7 @@ func (r Rules) normalize(raw []Raw, installation string) (Set, []string) {
 			continue
 		}
 		cluster := first(l["cluster_id"], l["cluster"], l["installation"], installation)
-		namespace := first(l["exported_namespace"], l["namespace"])
+		namespace := alertNamespace(l)
 		exporter := l["service"] != "" && strings.HasPrefix(l["pod"], l["service"])
 		obj := ""
 		for _, k := range objectLabels {
@@ -251,6 +251,12 @@ func first(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// alertNamespace is the workload's namespace; an exporter's namespace is
+// only a fallback when the alert has no exported namespace.
+func alertNamespace(labels map[string]string) string {
+	return first(labels["exported_namespace"], labels["namespace"])
 }
 
 // mark prints a page and the team's alerts in capitals.
@@ -675,7 +681,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	var groups []*group
 	byKey := map[[5]string]*group{}
 	for _, a := range shown {
-		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, a.Labels["namespace"]}
+		k := [5]string{a.Severity, a.Team, a.Alertname, a.Cluster, alertNamespace(a.Labels)}
 		if g, ok := byKey[k]; ok {
 			g.n++
 			continue
@@ -694,7 +700,7 @@ func (r Rules) SnapshotLines(installation string, ans Answer, now time.Time) []s
 	for _, g := range groups {
 		s, t := r.mark(g.Alert)
 		line := fmt.Sprintf("  %-7s %-11s %-50s %-12s %3d", s, t, g.Alertname, g.Cluster, g.n)
-		if ns := g.Labels["namespace"]; ns != "" {
+		if ns := alertNamespace(g.Labels); ns != "" {
 			line += " namespace=" + ns
 		}
 		lines = append(lines, line)
