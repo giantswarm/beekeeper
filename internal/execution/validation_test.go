@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -223,5 +224,82 @@ func TestWorkspaceRefusesForeignOriginAndPreservesPartialClone(t *testing.T) {
 	}
 	if b, err := os.ReadFile(marker); err != nil || string(b) != "preserve" { //nolint:gosec // marker in this test's own partial workspace
 		t.Fatal("partial workspace lost")
+	}
+}
+
+func TestHostAdmissionReconcilesRunnerLoss(t *testing.T) {
+	for _, phase := range []string{Activating, Running} {
+		for _, state := range []string{unitInactive, Failed, unitActive, "deactivating", ""} {
+			t.Run(phase+"/"+state, func(t *testing.T) {
+				f := testFixture(t)
+				ctx := context.Background()
+				f.s.Config.MaxBusy = 1
+				digest, err := f.s.Prepare(f.s.Policy())
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.r.PolicyDigest = digest
+				if _, err := f.s.Start(ctx, f.r); err != nil {
+					t.Fatal(err)
+				}
+				f.r.RegistrationReceipt = Sign(f.r, f.key, f.s.now())
+				h, err := f.s.Start(ctx, f.r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error {
+					j.Phase, j.Ready, j.InTurn = phase, phase == Running, phase == Running
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				marker := filepath.Join(h.Workspace, "preserved.txt")
+				if err := os.WriteFile(marker, []byte("unpublished work"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				f.launcher.states[h.Unit] = state
+				want := 1
+				if state == unitInactive || state == Failed {
+					want = 0
+				}
+				if busy, err := f.s.busy(ctx, Ref{}); err != nil || busy != want {
+					t.Errorf("busy = %d, %v; want %d", busy, err, want)
+				}
+				refs, err := f.s.BusyExecutions(ctx, Ref{})
+				if err != nil || len(refs) != want {
+					t.Errorf("BusyExecutions = %v, %v; want %d", refs, err, want)
+				}
+				busy, release, err := f.s.Quiesce(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				release()
+				if busy != want {
+					t.Errorf("Quiesce busy = %d; want %d", busy, want)
+				}
+				// Repeating the old activation must never launch a replacement.
+				_, _ = f.s.Start(ctx, f.r)
+				next := f.r
+				next.Ref.Execution = ExecutionID(uuid.NewString())
+				next.RequestID, next.ConversationID, next.RegistrationReceipt = uuid.NewString(), uuid.NewString(), ""
+				_, err = f.s.Start(ctx, next)
+				if want == 0 && err != nil {
+					t.Errorf("successor preparation: %v", err)
+				}
+				if want == 1 && (err == nil || !strings.Contains(err.Error(), "maxBusy")) {
+					t.Errorf("successor should remain blocked: %v", err)
+				}
+				if len(f.launcher.starts) != 1 {
+					t.Errorf("launched %d runners; want only original", len(f.launcher.starts))
+				}
+				if data, err := os.ReadFile(marker); err != nil || string(data) != "unpublished work" {
+					t.Errorf("workspace changed: %q, %v", data, err)
+				}
+				j, err := f.s.Read(f.r.Ref)
+				if err != nil || j.Phase != phase {
+					t.Errorf("journal changed: %+v, %v", j, err)
+				}
+			})
+		}
 	}
 }

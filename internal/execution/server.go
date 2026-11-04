@@ -456,7 +456,9 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
 			continue
 		}
-		if j.Phase == Exited || j.Phase == Failed {
+		// A runner can terminate before recording its final journal state.
+		// Inspect its owned unit without changing the durable start identity.
+		if j.Phase == Activating || j.Phase == Running || j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
 				return nil, errors.New("cannot establish owned unit state")
