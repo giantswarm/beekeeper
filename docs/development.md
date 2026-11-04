@@ -72,6 +72,15 @@ BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmod
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
+The Kubernetes writer publishes `Ready=True` with reason `StatePersisted` on
+Notes, Holds, RosterEntries, Environments and MergeLanes after writing their
+status, including claims and releases. Each condition observes the object's
+current generation. Ready means the writer persisted the state; an active hold,
+a busy roster entry or a nonempty queue can all be Ready. Objects that have not
+yet been written by beekeeper have no Ready condition. For example,
+`kubectl wait --for=condition=Ready environment/<name>` waits for that first
+successful write; use the appropriate resource and namespace for other kinds.
+
 A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
 creates the object and writes its status separately; if the latter fails, the note still
 lists as open and can be answered, withdrawn or closed by its default. Older objects
