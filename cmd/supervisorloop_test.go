@@ -225,6 +225,9 @@ func newLoopRig(t *testing.T) *loopRig {
 	}
 	r.answer = func([]string) (string, int) { return "", 0 }
 	r.command = func(argv []string) (string, int) {
+		if len(argv) >= 4 && slices.Equal(argv[:4], strings.Fields(devctlBinary+" auth exec --")) {
+			argv = argv[4:]
+		}
 		if len(argv) > 2 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {
 			r.mu.Lock()
 			repo := r.pullRepo()
@@ -1618,7 +1621,7 @@ func TestLoopIsQuietWhenNothingHappens(t *testing.T) {
 }
 
 func TestParseLoopPull(t *testing.T) {
-	green := `{"state":"OPEN","url":"` + loopURL + `","headRefOid":"` + loopHead + `","mergeCommit":{"oid":"` + loopFixed + `"},
+	green := `{"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","url":"` + loopURL + `","headRefOid":"` + loopHead + `","mergeCommit":{"oid":"` + loopFixed + `"},
 	  "statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"SUCCESS"},{"status":"COMPLETED","conclusion":"SKIPPED"}],
 	  "author":{"login":"` + loopDesk + `"},"title":"fix: x","headRefName":"fix/x","files":[{"path":"a.go"}],"changedFiles":2,
 	  "reviews":[{"id":"R2","state":"COMMENTED","author":{"login":"` + loopDesk + `"},"authorAssociation":"OWNER","body":"Review: approved\nHead reviewed: ` + "`1111111`" + `","submittedAt":"2026-10-30T10:00:00Z","commit":{"oid":"abc"}},
@@ -1627,7 +1630,7 @@ func TestParseLoopPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.MergeCommit != loopFixed || !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
+	if p.ReviewDecision != reviewRequiredDecision || p.MergeCommit != loopFixed || !p.Green || len(p.Reviews) != 2 || p.Reviews[0].ID != "R1" || p.Reviews[1].Verdict != superloop.Approved || p.Reviews[1].Head != "1111111" {
 		t.Errorf("pull = %+v", p)
 	}
 	if p.Author != loopDesk || p.Title != "fix: x" || p.Branch != "fix/x" || !slices.Equal(p.Files, []string{"a.go"}) || p.ChangedFiles != 2 ||

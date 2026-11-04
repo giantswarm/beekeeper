@@ -487,6 +487,11 @@ func Run(o Options, argv []string) int {
 	case shared:
 		how = "shared " + how
 	}
+	if lock != nil {
+		if err := launchingHolder(o, slot); err != nil {
+			logf("updating the slot's startup deadline: %v", err)
+		}
+	}
 	o.record(VerbStart, fmt.Sprintf("%s.scope%s %s max %s: %s", unit, runrecord.Facts(o.Repo, o.Head), how, o.Max, head))
 	start := time.Now()
 	rc, drain := scope(capper, unit, o, slot, argv, env, logf)
@@ -826,6 +831,39 @@ func writeHolder(o Options, slot int, argv []string, scope ...string) {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(holderRecord{PID: os.Getpid(), Session: sessionID(), CWD: cwd, Cmd: cmd, Max: o.Max,
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME"), Scope: unit, Started: holderStarted(), StartDeadline: time.Now().Add(2*max(o.Wait, time.Second) + scopeStartWait)})
+}
+
+// launchingHolder ends the setup allowance once memory and cache waits have
+// finished. Recovery must not depend on the optional run.start event, nor wait
+// twice the background queue timeout after a launcher fails to start its scope.
+// Replace the record atomically so the watch never reads a partial update.
+func launchingHolder(o Options, slot int) error {
+	path := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	var h holderRecord
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return err
+	}
+	if h.PID != os.Getpid() || h.Scope != o.scope {
+		return errors.New("slot holder changed before launch")
+	}
+	h.StartDeadline = time.Now().Add(scopeStartWait)
+	f, err := os.CreateTemp(o.SlotDir, ".holder-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	writeErr := enc.Encode(h)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // drainWait bounds the wait for the last bytes of a run's output after the

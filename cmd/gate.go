@@ -414,6 +414,8 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	if pr == 0 {
 		_, pin, _ := merge.ParsePromote(argv)
 		switch {
+		case pin != "" && !strings.HasPrefix(pin, "v"):
+			return gateRefusedWith(3, "invalid promotion version %q: expected vX.Y.Z (for example v1.2.3 or v1.2.3-rc.1); nothing promoted", pin)
 		case pin != "":
 			g.candidate, g.candidateRead, g.pinned = pin, true, true
 		case !queued:
@@ -969,13 +971,9 @@ func (g *gateRun) checkOutside() string {
 	return ""
 }
 
-// readRelease reads, once per merge, whether a merge into the pull
-// request's base branch is tagged by its Auto-release workflow: the pull
-// request's base branch, and how that branch releases once per repository
-// and branch for the lane's pass (branchReleaseOf). Only a devctl merge
-// waits for a release. GitHub refusing a read under a spent limit is a wait
-// for its reset in the merge's place (spentWait); GitHub not answering
-// otherwise refuses, the place kept (refuseKeeping).
+// readRelease reads the pull request's release tree once before merging.
+// Commit reads bypass the branch cache because the PR may change workflows.
+// A post-merge refresh reads the tree that actually landed.
 func (g *gateRun) readRelease() (string, error) {
 	if g.release != nil || g.pr == 0 || !g.runsDevctl() {
 		return "", nil
@@ -993,7 +991,12 @@ func (g *gateRun) readRelease() (string, error) {
 	})
 	var r github.BaseRelease
 	if err == nil {
-		r, err = g.branchReleaseOf(what, p.Base)
+		err = g.readRetrying(what, func() (err error) {
+			ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+			defer cancel()
+			r, err = releaseAt(ctx, g.repo, p.Base, p.ReleaseRef())
+			return err
+		})
 	}
 	switch {
 	case github.RateLimited(err):
@@ -1004,62 +1007,6 @@ func (g *gateRun) readRelease() (string, error) {
 	r = p.Of(r)
 	g.release = &r
 	return "", nil
-}
-
-// branchReleaseFresh bounds how long the gate reuses a base branch's
-// release read: a merge in the pass may change its workflows.
-const branchReleaseFresh = time.Hour
-
-// branchReleaseOf is how the repository's branch base releases: the read
-// the lane's pass made (cachedRelease), else a fresh one, kept for the
-// merges after it.
-func (g *gateRun) branchReleaseOf(what, base string) (github.BaseRelease, error) {
-	if st, err := g.store.Read(); err == nil {
-		if r, ok := cachedRelease(st, g.repo, base, g.now); ok {
-			return r, nil
-		}
-	}
-	var r github.BaseRelease
-	err := g.readRetrying(what, func() (err error) {
-		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-		defer cancel()
-		r, err = branchRelease(ctx, g.repo, base)
-		return err
-	})
-	if err != nil {
-		return r, err
-	}
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.BranchReleases = slices.DeleteFunc(st.BranchReleases, func(c state.BranchRelease) bool {
-			return c.Repo == g.repo && c.Base == base || !passes(st, c, g.now)
-		})
-		st.BranchReleases = append(st.BranchReleases, state.BranchRelease{Repo: g.repo, Base: base, Auto: r.Auto, Plugins: r.Plugins,
-			ReleasePR: r.ReleasePR, At: g.now.UTC()})
-		return nil, nil
-	})
-	return r, nil
-}
-
-// cachedRelease is the release read of repo's branch base the lane's pass
-// made, if it still holds at now (passes).
-func cachedRelease(st *state.State, repo, base string, now time.Time) (github.BaseRelease, bool) {
-	for _, c := range st.BranchReleases {
-		if c.Repo == repo && c.Base == base && passes(st, c, now) {
-			return github.BaseRelease{Base: base, Auto: c.Auto, Plugins: c.Plugins, ReleasePR: c.ReleasePR}, true
-		}
-	}
-	return github.BaseRelease{}, false
-}
-
-// passes says the lane's pass that read c goes on at now: c is younger
-// than branchReleaseFresh and a place of its repository that was in the
-// gate when it was read still is. A repository whose places all left
-// starts a new pass, and its next merge reads again.
-func passes(st *state.State, c state.BranchRelease, now time.Time) bool {
-	if now.Sub(c.At) > branchReleaseFresh {
-		return false
-	}
-	return slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Repo == c.Repo && !m.Joined.After(c.At) })
 }
 
 // spentWait is the wait of a merge whose read GitHub refused under a spent
@@ -2145,10 +2092,72 @@ func (g *gateRun) record(base string, run childRun) error {
 	}
 	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool
-	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
+	r.out, ok, rc = parseRunOutcome(g.pr, doc, rc)
+	r.rc = rc
+	if merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
 	releaseLine := ""
+	// Refresh after merging: another merge may have changed the workflows
+	// since the preflight read. Never free a lane on an unread release flow.
+	if r.out.Merged && g.pr != 0 && g.release != nil {
+		baseBranch := g.release.Base
+		wasAuto := g.release.Auto
+		var fresh github.BaseRelease
+		err := g.readRetrying("the merged release workflow", func() (err error) {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), time.Minute)
+			defer cancel()
+			if sha := merge.MergeCommit(doc); sha != "" {
+				fresh, err = releaseAt(ctx, g.repo, baseBranch, sha)
+				fresh.Version = g.release.Version
+			} else {
+				var p github.PullBase
+				p, err = pullBase(ctx, g.repo, g.pr)
+				if err == nil && p.MergeOID == "" {
+					err = fmt.Errorf("no merge commit reported")
+				}
+				if err == nil {
+					fresh, err = releaseAt(ctx, g.repo, p.Base, p.MergeOID)
+					fresh = p.Of(fresh)
+				}
+			}
+			return err
+		})
+		if err == nil {
+			g.release = &fresh
+		}
+		if err != nil {
+			r.out.Unconfirmed, r.out.NoRelease = true, false
+			r.out.Release, rc = "", devctlUnconfirmed
+			g.release = &github.BaseRelease{Base: baseBranch, Auto: true}
+			releaseLine = fmt.Sprintf("%s merged; its release workflow cannot be read (%v): release unconfirmed, lane %s remains held", g.key(), err, g.lane.Name)
+		} else if g.release.Auto && r.out.Release == "" && (!r.out.NoRelease || !wasAuto) && !g.overlaps() {
+			r.out.NoRelease = false
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+			waited, _, ok := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
+			cancel()
+			if ok {
+				r.out.Release, r.out.NoRelease = waited.Release, waited.NoRelease
+				r.out.ReleaseFailed, r.out.Unconfirmed = waited.ReleaseFailed, waited.Unconfirmed
+			} else {
+				r.out.Unconfirmed = true
+			}
+			if r.out.Unconfirmed {
+				rc = devctlUnconfirmed
+			}
+			if r.out.ReleaseFailed {
+				rc = devctlReleaseFailed
+			}
+			releaseLine = fmt.Sprintf("%s merged into %s with Auto-release: release %s", g.key(), g.release.Base, cmp.Or(r.out.Release, "unconfirmed"))
+		} else if g.handCut() != "" {
+			r.out.NoRelease = true
+		} else if g.release.Auto && !wasAuto {
+			r.out.NoRelease = false
+		}
+		if err == nil && g.release.Auto && r.out.Release != "" && releaseLine == "" {
+			releaseLine = fmt.Sprintf("%s merged into %s with Auto-release: release %s", g.key(), g.release.Base, r.out.Release)
+		}
+	}
 	switch sha := merge.MergeCommit(doc); {
 	case g.plugins() && r.out.Merged && sha != "":
 		releaseLine = g.awaitPluginTags(&r.out, sha)
@@ -2167,6 +2176,7 @@ func (g *gateRun) record(base string, run childRun) error {
 			return nil, nil
 		}
 		r.confirming = confirm
+		st.Merges[i].HandCut = g.handCut()
 		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
 		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
@@ -2253,6 +2263,16 @@ func parseOutcome(pr int, doc []byte) (merge.Outcome, bool) {
 		return merge.ParsePromoteDocument(doc)
 	}
 	return merge.ParseDocument(doc)
+}
+
+// parseRunOutcome treats promote's usage exit as a certain refusal, even
+// without a JSON document. No GitHub mutation can have happened.
+func parseRunOutcome(pr int, doc []byte, rc int) (merge.Outcome, bool, int) {
+	if pr == 0 && rc == devctlUsage {
+		return merge.Outcome{}, true, 3
+	}
+	out, ok := parseOutcome(pr, doc)
+	return out, ok, rc
 }
 
 // toolMerge says whether the gate merges or promotes the merge tool's own

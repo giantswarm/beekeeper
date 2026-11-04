@@ -250,7 +250,7 @@ func (o *Ops) itemIdentity(recipient, inst string, listing func(vault string) ([
 	if len(holding) > 0 {
 		return fmt.Sprintf("an installation item (<installation>%s) of %s, by its recipient when read", ageInstallationSuffix, strings.Join(holding, ", ")), nil
 	}
-	return None + ": " + o.lacking(fmt.Sprintf("%q", AgeItemTitle(recipient)), nil), nil
+	return None + ": " + o.lacking(fmt.Sprintf("%q", AgeItemTitle(recipient)), 0), nil
 }
 
 // localAgeIdentityFor reports whether one of sops' own sources holds an
