@@ -238,7 +238,7 @@ func TestTeleportKeeperEnsuresContextsWithoutRenewal(t *testing.T) {
 	a.cfg.Teleport.Tsh = filepath.Join(dir, "tsh")
 	a.cfg.Alerts.Kubectl = filepath.Join(dir, "kubectl")
 	a.cfg.Alerts.Kubeconfig = []string{filepath.Join(dir, "kube", "keeper")}
-	a.cfg.Alerts.Installations = []config.Installation{{Name: "alpha"}, {Name: workerGitHubMissingRef}}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: alphaTeam}, {Name: workerGitHubMissingRef}}
 	a.cfg.Kube.ContextTemplate = "ctx-{installation}"
 	script := `#!/bin/sh
 case "$*" in

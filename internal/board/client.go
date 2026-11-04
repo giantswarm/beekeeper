@@ -64,7 +64,7 @@ const isOpen = "is:open"
 
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
+labels(first:20){nodes{name} pageInfo{hasNextPage endCursor}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item, the Status with
@@ -92,9 +92,7 @@ type issueJSON struct {
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
-	Labels struct {
-		Nodes []struct{ Name string } `json:"nodes"`
-	} `json:"labels"`
+	Labels    labelPage `json:"labels"`
 	Assignees struct {
 		Nodes []struct{ Login string } `json:"nodes"`
 	} `json:"assignees"`
@@ -150,6 +148,7 @@ func (j issueJSON) item() Item {
 		Ref: fmt.Sprintf("%s#%d", j.Repository.NameWithOwner, j.Number), URL: j.URL, Title: j.Title,
 		Created: j.CreatedAt, Updated: j.UpdatedAt, Blockers: j.BlockedBy.TotalCount, OpenBlockers: max(0, j.BlockedBy.TotalCount-len(j.BlockedBy.Nodes)), OpenSubIssues: j.Subs.Total - j.Subs.Completed,
 		subIssues: j.Subs.Total, BlockersClosed: j.blockersClosed(),
+		labelsMore: j.Labels.PageInfo.HasNextPage, labelsCursor: j.Labels.PageInfo.EndCursor,
 	}
 	for _, l := range j.Labels.Nodes {
 		it.Labels = append(it.Labels, l.Name)
@@ -387,10 +386,16 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if snap.Items, err = c.items(ctx, filter(c.Board, nil)); err != nil {
 		return nil, err
 	}
+	if err := c.readLabels(ctx, snap); err != nil {
+		return nil, err
+	}
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {
 		return nil, err
 	}
 	if err := c.blockerDetails(ctx, snap); err != nil {
+		return nil, err
+	}
+	if err := c.readLabels(ctx, snap); err != nil {
 		return nil, err
 	}
 	snap.Plans, err = c.plansOf(ctx, snap)
@@ -513,7 +518,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
-			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
+			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I} pageInfo{hasNextPage endCursor}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
 	seen := map[string]bool{}
@@ -536,7 +541,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				if p != nil {
 					missing = p.Errors
 				}
-				more, err := applyExtras(snap, project, epics, part, missing)
+				more, err := c.applyExtras(ctx, snap, project, epics, part, missing)
 				if err != nil {
 					return err
 				}
@@ -576,11 +581,8 @@ func subIssuesPart(i int, it Item, cursor string) (extrasPart, error) {
 
 // applyExtras keeps one batch's data and missing-field evidence together.
 // Each returned part continues the sub-issue connection of that batch only.
-func applyExtras(snap *Snapshot, project string, epics []int, r map[string]json.RawMessage, missing []GraphQLError) ([]extrasPart, error) {
+func (c *Client) applyExtras(ctx context.Context, snap *Snapshot, project string, epics []int, r map[string]json.RawMessage, missing []GraphQLError) ([]extrasPart, error) {
 	var next []extrasPart
-	type nodes struct {
-		Nodes []issueJSON `json:"nodes"`
-	}
 	open := func(ns []issueJSON) []Item {
 		var out []Item
 		for _, n := range ns {
@@ -660,12 +662,22 @@ func applyExtras(snap *Snapshot, project string, epics []int, r map[string]json.
 		}
 	}
 	for i := range snap.Order {
-		var s nodes
+		var s searchPage
 		if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return nil, fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
 			snap.Search[i] = open(s.Nodes)
+			if s.PageInfo.HasNextPage {
+				more, missing, err := c.searchAfter(ctx, snap.Order[i].Search, s.PageInfo.EndCursor)
+				if err != nil {
+					return nil, fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+				}
+				snap.Search[i] = append(snap.Search[i], more...)
+				for _, message := range missing {
+					snap.Missing = noted(snap.Missing, fmt.Sprintf("board.order %q: %s", snap.Order[i].Name, message))
+				}
+			}
 		}
 	}
 	return next, nil

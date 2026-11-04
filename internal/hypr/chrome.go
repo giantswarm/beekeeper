@@ -316,12 +316,14 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 	where := l.where(*w)
 	s := &Shown{Before: *w, Where: where}
 	fail := func(err error) (*Shown, error) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
 		at := "shown on the person's screen"
 		if where != "" {
 			at = "on " + where
 		}
 		return nil, fmt.Errorf("the shared Chrome window is %s; readying the off-screen output %s failed: %w",
-			at, Output, joinErr(err, run(ctx, ctl, "eval", redirectOff), s.removeOutput(ctx, ctl)))
+			at, Output, joinErr(err, s.rollback(cleanup, ctl)))
 	}
 	if l.output() == nil {
 		if err := rules.run(ctx, ctl); err != nil {
@@ -349,6 +351,34 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 		s.Moved = true
 	}
 	return s, nil
+}
+
+// rollback reads the actual placement: a command can take effect even when
+// its response is lost. Only remove an output this failed preparation made,
+// after its windows are safely returned and no redirect can refill it.
+func (s *Shown) rollback(ctx context.Context, ctl Ctl) error {
+	offErr := run(ctx, ctl, "eval", redirectOff)
+	var windows []Window
+	if err := query(ctx, ctl, &windows, "clients"); err != nil {
+		return joinErr(offErr, err)
+	}
+	var moves []error
+	for _, w := range windows {
+		if w.Workspace.Name != Surface {
+			continue
+		}
+		if offErr != nil {
+			return offErr
+		}
+		if s.Before.Workspace.Name == Surface {
+			return fmt.Errorf("the output %s stays: the original workspace is still occupied", Output)
+		}
+		moves = append(moves, moveTo(w.Address, s.Before.Workspace).run(ctx, ctl))
+	}
+	if err := joinErr(moves...); err != nil {
+		return fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output)
+	}
+	return joinErr(offErr, s.removeOutput(ctx, ctl))
 }
 
 // Redirect turns the redirect of the windows Chrome opens on, until hold at

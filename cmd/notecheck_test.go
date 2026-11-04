@@ -229,9 +229,12 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 		"7": `{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"IN_PROGRESS","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/7"}]}`,
 		"8": `{"state":"CLOSED","statusCheckRollup":[]}`,
 	}
+	// The PRD failure follows a page containing only missing stage output.
+	// Admission must read both pages and ignore the runner annotation.
 	annotations := map[string]string{
-		"2": `["p: index.html missing: the last p/index.html (2433d45) is older than the PRD's last change (350fb6c)","p: contrarian missing: this pull request changes p/PRD.md and no p/contrarian"]`,
-		"5": `["p: index.html missing: no p/index.html","p: PRD.md has no ### Slices table"]`,
+		"2": `[{"title":"plan-stages","message":"p: index.html missing: the last p/index.html (2433d45) is older than the PRD's last change (350fb6c)"},{"title":"plan-stages","message":"p: contrarian missing: this pull request changes p/PRD.md and no p/contrarian"}]`,
+		"5": `[{"title":"plan-stages","message":"p: index.html missing: no p/index.html"}]` + "\n" +
+			`[{"title":"runner","message":"Process completed with exit code 1"},{"title":"plan-stages","message":"p: PRD.md has no ### Slices table"}]`,
 		"6": `[]`,
 	}
 	var calls []string
@@ -240,7 +243,10 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if args[0] == noteCheckAPI {
-			return []byte(annotations[strings.Split(args[1], "/")[4]]), nil
+			if len(args) != 3 || args[1] != "--paginate" {
+				t.Fatalf("expected paginated annotation read, got %q", args)
+			}
+			return []byte(annotations[strings.Split(args[2], "/")[4]]), nil
 		}
 		return []byte(rollups[args[2]]), nil
 	}
@@ -302,7 +308,7 @@ func TestPlanStagesAdmitsPRDRevisionWithoutContrarianPlaceholder(t *testing.T) {
 		if args[0] == noteCheckAPI {
 			// The PRD already ran; the revision is now grilled before its next output.
 			// No contrarian file or missing-contrarian finding is needed.
-			return []byte(`["revision: index.html missing: the last revision/index.html is older than the PRD's last change"]`), nil
+			return []byte(`[{"title":"plan-stages","message":"revision: index.html missing: the last revision/index.html is older than the PRD's last change"}]`), nil
 		}
 		return []byte(`{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`), nil
 	}

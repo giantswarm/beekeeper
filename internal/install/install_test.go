@@ -24,6 +24,7 @@ import (
 const (
 	reload  = "reload"
 	start   = "start"
+	stop    = "stop"
 	halt    = "halt"
 	restart = "restart"
 )
@@ -34,6 +35,8 @@ const replacementExe = "/new/bin/beekeeper"
 // home's unit directory and a guard file beside it.
 type fakeSetup struct {
 	started bool
+	enabled bool
+	running bool
 	ran     []string
 }
 
@@ -54,19 +57,26 @@ func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
 }
 
 func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
-func (*fakeSetup) Reload() []string                       { return []string{reload} }
-func (*fakeSetup) Start(p string) []string                { return []string{start, filepath.Base(p)} }
-func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
-func (*fakeSetup) Halt(p string) []string                 { return []string{halt, filepath.Base(p)} }
-func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{restart, filepath.Base(p)}} }
+func (f *fakeSetup) NeedsStop(context.Context, string) bool {
+	return f.started || f.enabled || f.running
+}
+func (*fakeSetup) Reload() []string            { return []string{reload} }
+func (*fakeSetup) Start(p string) []string     { return []string{start, filepath.Base(p)} }
+func (*fakeSetup) Stop(p string) []string      { return []string{stop, filepath.Base(p)} }
+func (*fakeSetup) Halt(p string) []string      { return []string{halt, filepath.Base(p)} }
+func (*fakeSetup) Restart(p string) [][]string { return [][]string{{restart, filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	f.ran = append(f.ran, strings.Join(argv, " "))
 	switch argv[0] {
 	case start:
 		f.started = true
-	case "stop", halt:
+	case stop, halt:
 		f.started = false
+		f.running = false
+		if argv[0] == stop {
+			f.enabled = false
+		}
 	}
 	return nil
 }
@@ -1358,6 +1368,67 @@ func TestCodexHookUpgradeUpdatesWorker(t *testing.T) {
 	}
 }
 
+func TestCodexUninstallKeepsRepointedLinks(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		t.Run(map[bool]string{false: "existing targets", true: "dangling targets"}[dangling], func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.CodexSkills = filepath.Join(home, ".codex", "skills")
+			userAgentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+			write(t, userAgentsMD, "# User rules\n")
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			unchanged := filepath.Join(e.CodexSkills, "guide")
+			if _, err := os.Readlink(unchanged); err != nil {
+				t.Fatal(err)
+			}
+			links := []string{
+				filepath.Join(e.CodexSkills, "park"),
+				CodexWorkerSkills(e.StateDir),
+				filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"),
+			}
+			targets := make(map[string]string)
+			for i, link := range links {
+				target := filepath.Join(home, "custom", filepath.Base(link))
+				if !dangling {
+					write(t, target, "custom content\n")
+				}
+				if _, err := os.Readlink(link); err != nil {
+					t.Fatalf("installed link %d: %v", i, err)
+				}
+				if err := os.Remove(link); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				targets[link] = target
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			for link, target := range targets {
+				if got, err := os.Readlink(link); err != nil || got != target {
+					t.Errorf("changed link %s = %q, %v; want %q", link, got, err, target)
+				}
+				if !dangling {
+					if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != "custom content\n" {
+						t.Errorf("custom target changed: %q, %v", got, err)
+					}
+				}
+			}
+			if _, err := os.Lstat(unchanged); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("unchanged skill link remains: %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Clean(userAgentsMD)); err != nil || string(got) != "# User rules\n" {
+				t.Errorf("user rules changed: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCodexHooksAndSkills(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
@@ -1591,6 +1662,77 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 	}
 	if !prepared || !revoked {
 		t.Fatal("failed restart left its prepared state")
+	}
+}
+
+func TestUninstallStopsPartiallyStartedServices(t *testing.T) {
+	for _, state := range []struct {
+		name             string
+		enabled, running bool
+	}{
+		{"enabled inactive", true, false},
+		{"disabled running", false, true},
+		{"disabled inactive", false, false},
+	} {
+		for _, linked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/linked=%v", state.name, linked), func(t *testing.T) {
+				f := &fakeSetup{}
+				e, _ := env(t, t.TempDir(), f, f.run)
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				unit := filepath.Join(e.Spec.ConfigDir, "units", "notify.service")
+				target := filepath.Join(e.Spec.Home, "linked.service")
+				if linked {
+					if err := os.Rename(unit, target); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, unit); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.started, f.enabled, f.running = false, state.enabled, state.running
+				f.ran = nil
+				e.DryRun = true
+				if err := Uninstall(context.Background(), e, false); err != nil {
+					t.Fatal(err)
+				}
+				if len(f.ran) != 0 || !exists(unit) || !exists(e.manifest()) {
+					t.Fatal("dry run changed installation")
+				}
+				e.DryRun = false
+				if err := Uninstall(context.Background(), e, false); err != nil {
+					t.Fatal(err)
+				}
+				want := []string{reload}
+				if state.enabled || state.running {
+					verb := stop
+					if linked {
+						verb = halt
+					}
+					want = append([]string{verb + " notify.service"}, want...)
+				}
+				if !slices.Equal(f.ran, want) {
+					t.Errorf("commands = %v, want %v", f.ran, want)
+				}
+				if f.running || (!linked && f.enabled) {
+					t.Error("service state left behind")
+				}
+				if exists(e.manifest()) {
+					t.Error("manifest left behind")
+				}
+				if linked {
+					if _, err := os.Readlink(unit); err != nil {
+						t.Errorf("link removed: %v", err)
+					}
+					if exists(target) {
+						t.Error("owned target left behind")
+					}
+				} else if exists(unit) {
+					t.Error("owned unit left behind")
+				}
+			})
+		}
 	}
 }
 

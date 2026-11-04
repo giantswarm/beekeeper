@@ -48,8 +48,8 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 				default:
 					t.Fatal("unexpected extra request")
 				}
-				data["d"] = map[string]any{"nodes": nodes, "issueCount": 51, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": "draft-page-1"}}
-				out, err := json.Marshal(map[string]any{"data": data})
+				data["d"] = map[string]any{pageNodes: nodes, "issueCount": 51, pageInfoKey: map[string]any{pageHasNext: next, pageEndCursor: "draft-page-1"}}
+				out, err := json.Marshal(map[string]any{pageData: data})
 				if err == nil && calls == 2 {
 					err = tc.failure
 				}

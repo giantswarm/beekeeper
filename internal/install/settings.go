@@ -1189,9 +1189,23 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 	}
 	var toRemove []string
 	for _, dst := range m.CodexSkillLinks {
-		if symlink(dst) {
+		// Reconstruct the target install wrote, including the two worker
+		// links. Readlink also works when the original target is now missing.
+		wantTarget := filepath.Join(m.CodexSkillsDir, filepath.Base(dst))
+		switch dst {
+		case CodexWorkerSkills(e.StateDir):
+			wantTarget = m.CodexSkillsDir
+		case filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"):
+			if e.CodexSkills == "" {
+				continue // The original user rules location is unknown.
+			}
+			wantTarget = filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
+		}
+		if target, err := os.Readlink(dst); err == nil && m.CodexSkillsDir != "" && filepath.Clean(target) == filepath.Clean(wantTarget) {
 			toRemove = append(toRemove, dst)
 			removed[dst] = true
+		} else if symlink(dst) {
+			p.add("keep", dst, "changed since beekeeper install wrote it", nil)
 		}
 	}
 	agyStillUses := func() bool {

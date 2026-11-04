@@ -26,7 +26,7 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 	t.Helper()
 	a, out := stubApp(t)
 	since := start.UTC().Format(time.RFC3339Nano)
-	base := &alerts.State{Installations: map[string]*alerts.Installation{"alpha": {Reachable: true, Alerts: alerts.Set{
+	base := &alerts.State{Installations: map[string]*alerts.Installation{alphaTeam: {Reachable: true, Alerts: alerts.Set{
 		litFp1: {Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/app", Since: since},
 		"fp2":  {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
 		"fp3":  {Severity: alerts.Page, Team: otherTeam, Alertname: "TheirPage", Where: "ns/x", Since: since},
@@ -165,7 +165,7 @@ func twoInstances(t *testing.T, a *app, start time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.Installations["alpha"].Alerts["fp4"] = alerts.Alert{Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/other", Since: start.UTC().Format(time.RFC3339Nano)}
+	base.Installations[alphaTeam].Alerts["fp4"] = alerts.Alert{Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/other", Since: start.UTC().Format(time.RFC3339Nano)}
 	if err := st.Save(base); err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base.Installations["beta"] = &alerts.Installation{Reachable: true, Alerts: alerts.Set{"fp1": base.Installations["alpha"].Alerts["fp1"]}}
+			base.Installations["beta"] = &alerts.Installation{Reachable: true, Alerts: alerts.Set{"fp1": base.Installations[alphaTeam].Alerts["fp1"]}}
 			if err := store.Save(base); err != nil {
 				t.Fatal(err)
 			}
@@ -333,10 +333,10 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base.Installations["alpha"].Alerts = alerts.Set{}
+			base.Installations[alphaTeam].Alerts = alerts.Set{}
 			for i, labels := range [][2]string{{litClusterA, litNamespaceA}, {"cluster-a", "namespace-b"}, {"cluster-b", litNamespaceA}, {"cluster-b", "namespace-b"}} {
 				fp := []string{"fp1", "fp2", "fp3", "fp4"}[i]
-				base.Installations["alpha"].Alerts[fp] = alerts.Alert{Alertname: litPodrestarting, Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
+				base.Installations[alphaTeam].Alerts[fp] = alerts.Alert{Alertname: litPodrestarting, Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
 			}
 			if err := store.Save(base); err != nil {
 				t.Fatal(err)

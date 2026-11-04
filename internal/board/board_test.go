@@ -863,7 +863,7 @@ func TestStatusThenBoardOrderDecide(t *testing.T) {
 	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
 		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
 	}}
-	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", searchedFreeRef, "o/r#31"}
 	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
 	var got []string
 	for _, c := range cands {
@@ -1027,7 +1027,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 			for _, c := range Rank(snap, b, now) {
 				got[c.Ref] = c
 			}
-			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
+			for _, ref := range []string{ref4, partialSubIssue, searchedFreeRef} {
 				c, ok := got[ref]
 				if !ok {
 					t.Fatalf("missing candidate %s: %+v", ref, got)
