@@ -135,6 +135,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		}
 		v.Sessions = append(v.Sessions, sv)
 	}
+	v.attributeBrowseSessions()
 	slices.SortFunc(v.Sessions, func(x, y *sessionView) int { return y.LastActive.Compare(x.LastActive) })
 	if withWork {
 		v.Overlaps = claude.Overlaps(raw, work, claude.OverlapOptions{
@@ -143,6 +144,39 @@ func (a *app) collect(withWork bool) (*view, error) {
 		})
 	}
 	return v, nil
+}
+
+// attributeBrowseSessions uses browse's explicit start record: its CLI has
+// intentionally shed the caller's environment and may run outside a checkout.
+func (v *view) attributeBrowseSessions() {
+	for _, s := range v.Sessions {
+		for _, start := range v.st.Starts {
+			if start.Name != browseStart || !start.Is(s.Party()) {
+				continue
+			}
+			s.Parent = cmp.Or(start.By.Session, start.By.HostSession)
+			parent := &claude.Session{ID: start.By.Session, HostID: start.By.HostSession}
+			if s.Role == "" {
+				s.Role = roleOf(v.st, parent)
+			}
+			for _, p := range v.Sessions {
+				if p == s || !start.By.Is(p.Party()) {
+					continue
+				}
+				if s.Repo == "" {
+					s.Repo = p.Repo
+				}
+				if len(s.Work.Repos) == 0 {
+					s.Work.Repos = slices.Clone(p.Work.Repos)
+				}
+				if len(s.Work.Refs) == 0 {
+					s.Work.Refs = slices.Clone(p.Work.Refs)
+				}
+				break
+			}
+			break
+		}
+	}
 }
 
 func roleOf(st *state.State, s *claude.Session) string {
@@ -306,11 +340,12 @@ func (a *app) serveCmd() *cobra.Command {
 	var waits string
 	var clearOwn bool
 	c := &cobra.Command{
-		Use:   "serve <session> <owner/repo#n|owner/repo@version> | serve --clear",
-		Short: "Record the issue, epic or release a session serves and what it waits on",
-		Long: `Record, for any running session (a registered agent or not), the issue or
-epic or release (owner/repo@v1.2.3) it serves and what it waits on. A new
-record replaces the session's last one. sessions and the hand-over show it, and beekeeper watch prints one
+		Use:   "serve <session> <item> | serve --clear",
+		Short: "Record the item a session serves and what it waits on",
+		Long: `Record, for any running session (a registered agent or not), the item it
+serves and what it waits on: an issue or epic (owner/repo#n), a repository
+(owner/repo), or quoted free text. A new record replaces the session's
+last one. sessions and the hand-over show it, and beekeeper watch prints one
 line when the session ends, naming the issue to re-query. The session is a
 session id, a PID, a session's own name or a registered agent's roster name
 or task title (the roster name with a suffix such as " (opus, builds)"), or
@@ -334,8 +369,8 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if clearOwn {
 				return a.clearRecord()
 			}
-			if _, _, release := parseReleaseTarget(args[1]); !issueRef.MatchString(args[1]) && !release {
-				return usageErr("%q is not an issue (owner/repo#n) or release (owner/repo@v1.2.3)", args[1])
+			if strings.TrimSpace(args[1]) == "" {
+				return usageErr("served item must not be empty")
 			}
 			me, err := a.caller()
 			if err != nil {

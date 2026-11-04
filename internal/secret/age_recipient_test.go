@@ -111,6 +111,61 @@ func TestNoIdentityForTheRecipientNamesIt(t *testing.T) {
 	}
 }
 
+func TestAutomaticAgeVaultAccess(t *testing.T) {
+	id := isolateAge(t)
+	r := id.Recipient().String()
+	file := sopsFile(t, "", r)
+	const identity = "identity"
+	for _, entry := range []string{identity, "recipients"} {
+		for _, mode := range []struct {
+			name, token string
+			session     bool
+		}{
+			{name: "missing token"},
+			{name: "token", token: "synthetic-token"},
+			{name: "session", session: true},
+		} {
+			t.Run(entry+"/"+mode.name, func(t *testing.T) {
+				f := &itemTools{items: map[string]string{AgeItemTitle(r): id.String()}}
+				o := &Ops{Run: f.run, Vault: ageVault, Token: mode.token, Session: mode.session}
+				var err error
+				if entry == identity {
+					var values map[string]string
+					values, err = o.values(context.Background(), Ref{File: file})
+					if err == nil && values[agePasswordPath] != "x" {
+						t.Errorf("values = %v", values)
+					}
+				} else {
+					var recipients []Recipient
+					recipients, err = o.Recipients(context.Background(), file)
+					if err == nil && (len(recipients) != 1 || recipients[0].Missing()) {
+						t.Errorf("recipients = %+v", recipients)
+					}
+				}
+				if mode.token == "" && !mode.session {
+					if !errors.Is(err, ErrVault) {
+						t.Errorf("error = %v, want ErrVault", err)
+					}
+					if len(f.calls) != 0 {
+						t.Errorf("calls = %q, want no op or SOPS calls", f.calls)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := 1
+					if entry == identity {
+						want = 3 // listing, identity read, SOPS decrypt
+					}
+					if len(f.calls) != want {
+						t.Errorf("calls = %q, want %d calls", f.calls, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 // A fresh Ops instance reuses public metadata, while rotation and removal
 // invalidate the hint and resume the scan without reading any item twice.
 func TestAgeRecipientCache(t *testing.T) {
