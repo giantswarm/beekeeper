@@ -26,6 +26,11 @@ var ErrBusy = errors.New("an image import runs")
 // KindLabel is the label kind puts on its node containers.
 const KindLabel = "io.x-k8s.kind.cluster"
 
+const (
+	imageCommand   = "image"
+	builderCommand = "builder"
+)
+
 // Docker runs one docker CLI call and returns its stdout.
 type Docker func(ctx context.Context, args ...string) ([]byte, error)
 
@@ -147,7 +152,7 @@ func tagTimes(ctx context.Context, d Docker, images []Image) error {
 	if len(images) == 0 {
 		return nil
 	}
-	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}"}
+	args := []string{imageCommand, "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}"}
 	at := map[string]int{}
 	for i, img := range images {
 		args, at[img.ID] = append(args, img.ID), i
@@ -360,7 +365,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			if busy() {
 				return refused, ErrBusy
 			}
-			args := []string{"image", "rm"}
+			args := []string{imageCommand, "rm"}
 			if len(img.Refs) == 0 {
 				args = append(args, img.ID)
 			} else {
@@ -406,7 +411,7 @@ type CacheRecord struct {
 // CacheRecords reads the build cache's records with their sizes and ages
 // from `docker builder du`.
 func CacheRecords(ctx context.Context, d Docker) ([]CacheRecord, error) {
-	raw, err := d(ctx, "builder", "du", "--format", "{{json .}}")
+	raw, err := d(ctx, builderCommand, "du", "--format", "{{json .}}")
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +482,7 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 		if total-t.Freed <= keep {
 			break
 		}
-		if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+r.ID); err != nil {
+		if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
 			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
 			continue
 		}
@@ -537,7 +542,7 @@ func Importer(args []string) bool {
 			verbs: []string{"load", "create"},
 		},
 		"docker": {
-			flags: dockerFlags, groups: []string{"image", "builder"},
+			flags: dockerFlags, groups: []string{imageCommand, builderCommand},
 			verbs: []string{build, buildx, "load", "save", "import"},
 		},
 		"docker-buildx": {
@@ -550,7 +555,7 @@ func Importer(args []string) bool {
 		},
 		"ctr": {
 			flags:  []string{"--address", "-a", "--namespace", "-n", "--timeout", "--connect-timeout"},
-			groups: []string{"images", "image", "i"}, verbs: []string{"import"},
+			groups: []string{"images", imageCommand, "i"}, verbs: []string{"import"},
 		},
 	}[name]
 	words := commandArgs(args[1:], spec.flags)

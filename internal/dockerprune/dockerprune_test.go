@@ -25,13 +25,17 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef    = "docker.io/library/nginx:1"
-	kind        = "kind"
-	build       = "build"
-	docker      = "docker"
-	contextFlag = "--context"
-	image       = "image"
-	oldID       = "sha256:old"
+	loadCommand   = "load"
+	imagesCommand = "images"
+	execCommand   = "exec"
+	devRef        = "example:dev"
+	nginxRef      = "docker.io/library/nginx:1"
+	kind          = "kind"
+	build         = "build"
+	docker        = "docker"
+	contextFlag   = "--context"
+	image         = imageCommand
+	oldID         = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -54,20 +58,20 @@ func TestNormalize(t *testing.T) {
 
 func TestImporter(t *testing.T) {
 	yes := [][]string{
-		{kind, "load", "docker-image", "x:dev", "--name", "agentlab"},
+		{kind, loadCommand, "docker-image", "x:dev", "--name", "agentlab"},
 		{"/usr/bin/kind", "create", "cluster"},
 		{docker, build, "-t", "x", "."},
 		{docker, contextFlag, "default", build, "."},
-		{docker, image, "load", "-i", "x.tar"},
+		{docker, image, loadCommand, "-i", "x.tar"},
 		{docker, "save", "x"},
 		{"/usr/lib/docker/cli-plugins/docker-buildx", "buildx", build, "."},
-		{"ctr", "-n", "k8s.io", "images", "import", "x.tar"},
+		{"ctr", "-n", "k8s.io", imagesCommand, "import", "x.tar"},
 	}
 	no := [][]string{
 		{kind, "get", "kubeconfig"},
 		{docker, "ps"},
 		{docker, "run", "img", "make", build},
-		{docker, "exec", "node", "crictl", "images"},
+		{docker, execCommand, "node", "crictl", imagesCommand},
 		{"go", build, "./..."},
 		{"kind"},
 	}
@@ -88,15 +92,15 @@ func TestImporterWithGlobalOptions(t *testing.T) {
 		args []string
 		want bool
 	}{
-		{[]string{docker, "--config", "/tmp/docker-fixture", contextFlag, "default", image, "load", "-i", "/tmp/synthetic.tar"}, true},
-		{[]string{docker, "-H", "unix:///tmp/docker-fixture.sock", "-c", "local-fixture", "save", "example:dev"}, true},
-		{[]string{docker, "--config=/tmp/docker-fixture", "--context=default", "builder", build, "."}, true},
-		{[]string{kind, "--verbosity", "2", "--quiet", "load", "docker-image", "example:dev"}, true},
-		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", "images", "import", "/tmp/synthetic.tar"}, true},
+		{[]string{docker, "--config", "/tmp/docker-fixture", contextFlag, "default", image, loadCommand, "-i", "/tmp/synthetic.tar"}, true},
+		{[]string{docker, "-H", "unix:///tmp/docker-fixture.sock", "-c", "local-fixture", "save", devRef}, true},
+		{[]string{docker, "--config=/tmp/docker-fixture", "--context=default", builderCommand, build, "."}, true},
+		{[]string{kind, "--verbosity", "2", "--quiet", loadCommand, "docker-image", devRef}, true},
+		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", imagesCommand, "import", "/tmp/synthetic.tar"}, true},
 		{[]string{"buildctl", "--addr", "unix:///tmp/buildkit-fixture.sock", "--timeout=30", build}, true},
-		{[]string{docker, contextFlag, "load", "ps"}, false},
-		{[]string{docker, "run", "example:dev", build}, false},
-		{[]string{docker, "exec", "node", "load"}, false},
+		{[]string{docker, contextFlag, loadCommand, "ps"}, false},
+		{[]string{docker, "run", devRef, build}, false},
+		{[]string{docker, execCommand, "node", loadCommand}, false},
 	} {
 		if got := Importer(c.args); got != c.want {
 			t.Errorf("Importer(%v) = %v; want %v", c.args, got, c.want)
@@ -126,9 +130,9 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(f.df), nil
 	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
 		return []byte(f.dfv), nil
-	case args[0] == "builder" && args[1] == "du":
+	case args[0] == builderCommand && args[1] == "du":
 		return []byte(f.du), nil
-	case args[0] == "builder" && args[1] == "prune":
+	case args[0] == builderCommand && args[1] == "prune":
 		f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
 		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
@@ -146,7 +150,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(out), nil
 	case args[0] == "ps":
 		return []byte(f.nodes), nil
-	case args[0] == "exec":
+	case args[0] == execCommand:
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
 		f.removed = append(f.removed, args[2:])
