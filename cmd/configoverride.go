@@ -100,6 +100,9 @@ func (a *app) setOverride(path string, settings []config.Setting, spec overrideS
 	}
 	keys := make([]state.OverrideKey, 0, len(settings))
 	for _, s := range settings {
+		if s.Key == "stateDir" || strings.HasPrefix(s.Key, "stateDir.") {
+			return refused("stateDir cannot be overridden temporarily: restoring it would switch state history")
+		}
 		prev, found, err := config.Get(path, s.Key)
 		if err != nil {
 			return err
@@ -113,7 +116,7 @@ func (a *app) setOverride(path string, settings []config.Setting, spec overrideS
 		return err
 	}
 	if err := a.load(); err != nil {
-		return err
+		return a.undoOverride(path, keys, err)
 	}
 	me, err := a.caller()
 	if err != nil {
