@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const tPaneOutcome = "current pane outcome"
+
 func TestReopenedPaneDropsItsPreviousTail(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{{Text: "old transcript"}}}
 	m := newTestModel(t, src)
@@ -56,10 +58,10 @@ func TestDeliveryOutcomeBelongsToItsPaneOpening(t *testing.T) {
 					m.sel[sessionsTab] = 1
 				}
 				m.enter()
-				m.outcome, m.outcomeErr = "current pane outcome", true
+				m.outcome, m.outcomeErr = tPaneOutcome, true
 
 				m.Update(cmd())
-				if m.sending || m.outcome != "current pane outcome" || !m.outcomeErr {
+				if m.sending || m.outcome != tPaneOutcome || !m.outcomeErr {
 					t.Fatalf("the old delivery changed the current pane: sending %v, outcome %q, error %v", m.sending, m.outcome, m.outcomeErr)
 				}
 			})
@@ -69,7 +71,7 @@ func TestDeliveryOutcomeBelongsToItsPaneOpening(t *testing.T) {
 
 func TestLateTakeoverStillTracksOwnershipWithoutChangingAnotherPane(t *testing.T) {
 	src := &fakeSource{data: fixtureData()}
-	src.data.Sessions[0].ID = "sid-bee"
+	src.data.Sessions[0].ID = tBeeID
 	m := newTestModel(t, src)
 	t.Cleanup(m.cancel)
 	m.setTab(sessionsTab)
@@ -78,20 +80,20 @@ func TestLateTakeoverStillTracksOwnershipWithoutChangingAnotherPane(t *testing.T
 	m.closeDetail()
 	m.sel[sessionsTab] = 1
 	m.enter()
-	m.outcome = "current pane outcome"
+	m.outcome = tPaneOutcome
 
 	m.Update(cmd())
-	if !m.taken["sid-bee"] || m.acting {
+	if !m.taken[tBeeID] || m.acting {
 		t.Fatalf("the completion lost ownership: taken %v, acting %v", m.taken, m.acting)
 	}
-	if m.outcome != "current pane outcome" {
+	if m.outcome != tPaneOutcome {
 		t.Fatalf("the other session's take-over changed this pane: %q", m.outcome)
 	}
 }
 
 func TestLateApprovalErrorDoesNotChangeAnotherPane(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), answerErr: errors.New("old request expired")}
-	src.data.Sessions[0].ID = "sid-bee"
+	src.data.Sessions[0].ID = tBeeID
 	src.data.Sessions[0].Approvals = []Approval{{ID: "request", Gist: "old approval"}}
 	m := newTestModel(t, src)
 	t.Cleanup(m.cancel)
@@ -101,10 +103,10 @@ func TestLateApprovalErrorDoesNotChangeAnotherPane(t *testing.T) {
 	m.closeDetail()
 	m.sel[sessionsTab] = 1
 	m.enter()
-	m.outcome = "current pane outcome"
+	m.outcome = tPaneOutcome
 
 	m.Update(cmd())
-	if m.acting || m.outcome != "current pane outcome" || m.outcomeErr {
+	if m.acting || m.outcome != tPaneOutcome || m.outcomeErr {
 		t.Fatalf("the other session's error changed this pane: acting %v, outcome %q, error %v", m.acting, m.outcome, m.outcomeErr)
 	}
 }

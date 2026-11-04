@@ -16,6 +16,7 @@ import (
 // Fixture names shared by the model and view tests.
 const (
 	tBee        = "bee"
+	tBeeID      = "sid-bee"
 	tWasp       = "wasp"
 	tSup        = "sup"
 	tGuide      = "guide"
@@ -634,7 +635,7 @@ func run(m *model, c tea.Cmd) {
 
 func TestTakeOverFromThePane(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "about to clean"}}}
-	src.data.Sessions[0].ID = "sid-bee"
+	src.data.Sessions[0].ID = tBeeID
 	m := newTestModel(t, src)
 	m.tickFn = func() tea.Cmd { return nil }
 	m.key(keyText("2"))
@@ -643,7 +644,7 @@ func TestTakeOverFromThePane(t *testing.T) {
 
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.took) != 1 || src.took[0] != "sid-bee" || !m.taken["sid-bee"] {
+	if len(src.took) != 1 || src.took[0] != tBeeID || !m.taken[tBeeID] {
 		t.Fatalf("t took %v (screen holds %v), want bee's id", src.took, m.taken)
 	}
 	if v := m.screen(); !strings.Contains(v, "taken over") || !strings.Contains(v, "t hand back") {
@@ -699,7 +700,7 @@ func TestTakeOverFromThePane(t *testing.T) {
 	// t again hands back; quitting hands back what is still taken.
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.released) != 1 || m.taken["sid-bee"] {
+	if len(src.released) != 1 || m.taken[tBeeID] {
 		t.Fatalf("t did not hand back: released %v, taken %v", src.released, m.taken)
 	}
 	m.taken = map[string]bool{"sid-wasp": true}
