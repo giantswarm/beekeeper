@@ -41,7 +41,7 @@ func tailAccessApp(t *testing.T) (*app, []*claude.Session) {
 		for i, p := range parties[1:4] {
 			task := transcriptTestIssue
 			if i == 2 {
-				task = "https://github.com/giantswarm/devctl/issues/400"
+				task = "https://github.com/example/other/issues/400"
 			}
 			st.Agents = append(st.Agents, state.Agent{Party: p, Task: task})
 			st.Starts = append(st.Starts, state.Start{Party: p})
@@ -67,16 +67,16 @@ func TestSessionTailAppliesTranscriptAccess(t *testing.T) {
 			elapsed                  time.Duration
 			allowed                  bool
 		}{
-			{name: "own", caller: tailAccessWorker, target: tailAccessWorker, allowed: true},
+			{name: "calling worker conversation", caller: tailAccessWorker, target: tailAccessWorker, allowed: true},
 			{name: "same repository worker", caller: tailAccessWorker, target: tailAccessPeer, allowed: true},
 			{name: "guide denied", caller: tailAccessWorker, target: guideName},
 			{name: "other repository denied", caller: tailAccessWorker, target: tailAccessOther},
 			{name: "personal session denied", caller: tailAccessWorker, target: tailAccessPersonal},
 			{name: "guide override denied", caller: tailAccessWorker, target: guideName, as: guideName},
-			{name: "grant", caller: tailAccessWorker, target: guideName, grant: true, allowed: true},
+			{name: "active session grant", caller: tailAccessWorker, target: guideName, grant: true, allowed: true},
 			{name: "expired grant", caller: tailAccessWorker, target: guideName, grant: true, elapsed: 2 * time.Hour},
 			{name: "current guide", caller: transcriptTestGuideSession, target: tailAccessOther, allowed: true},
-			{name: "operator", target: guideName, allowed: true},
+			{name: "outside a harness", target: guideName, allowed: true},
 		} {
 			t.Run(fmt.Sprintf("%s/tools=%v", tc.name, tools), func(t *testing.T) {
 				a, sessions := tailAccessApp(t)
