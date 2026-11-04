@@ -292,3 +292,20 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 		t.Fatalf("an added note records its plan at the grill stage or ready for review, neither a merged one, a refused note's nor a folded one's: %q, want %q", plans, want)
 	}
 }
+
+func TestPlanStagesAdmitsPRDRevisionWithoutContrarianPlaceholder(t *testing.T) {
+	prev := notesGH
+	t.Cleanup(func() { notesGH = prev })
+	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "api" {
+			// The PRD already ran; the revision is now grilled before its next output.
+			// No contrarian file or missing-contrarian finding is needed.
+			return []byte(`["revision: index.html missing: the last revision/index.html is older than the PRD's last change"]`), nil
+		}
+		return []byte(`{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`), nil
+	}
+	p, err := planStages(t.Context(), config.Plans{Repositories: []string{"o/plans"}, Check: config.DefaultPlansCheck}, "https://github.com/o/plans/pull/9")
+	if err != nil || len(p.Refused) != 0 || !slices.Equal(p.Grilling, []string{"o/plans#9"}) {
+		t.Fatalf("PRD revision requires no placeholder: %+v, %v", p, err)
+	}
+}
