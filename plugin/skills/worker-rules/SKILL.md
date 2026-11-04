@@ -8,6 +8,7 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 One task; stricter desk rules win.
 
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
+- **Board** add filed issues with `beekeeper board add <owner/repo#n> --kind <kind>` (defaults to Backlog and sets the configured Team); inspect fields with `beekeeper board show <owner/repo#n>`. Avoid whole-board reads and raw `gh project` calls for adding or inspecting issues.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
 - **Supervisor** (`supervisor status`): park `agents park`, ask `note add`, no status to the guide; inbox wakes, register `agents register`.
 - **Review.** Push/green CI, then `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. HEAD must match; loop merges; omit `--post-merge` only if merge ends the task.

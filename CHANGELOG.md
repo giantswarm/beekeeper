@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper board add` adds an issue idempotently with Team, Status (default Backlog) and optional Kind; `beekeeper board show` prints its board fields using issue-scoped reads (https://github.com/giantswarm/beekeeper/issues/486).
+
 - `beekeeper disk holders` lists the state home's holders (each entry of `~/.local/state`, and each entry of its `aside` and `moved-aside` directories) by size and last write with an owner read from the name (a task number names the roster agent or session record working that issue or pull request number; otherwise the program), and says which are eligible for removal: unused for `disk.holders.staleAfter` (72h; aside entries after `disk.holders.asideRetention`, 168h), unused by any process, of no open task, holding no checkout outside an aside directory, and neither beekeeper's own state nor in `disk.holders.keep`. It removes nothing. Every `disk.holders.every` (6h) the watch says `STATE HOLDERS` with the largest eligible holders while they take `disk.holders.warnGiB` (10) or more, counting the ones holding a checkout without naming them, and `STATE HOLDERS unknown` while a process it cannot read leaves no holder judged; negative holder durations are refused ([https://github.com/giantswarm/beekeeper/issues/1581](https://github.com/giantswarm/beekeeper/issues/1581)).
 - Repository merge-outage holds (`hold set owner/repo --incident --except owner/repo#n`) pause the supervisor's workers, reviewers and fixers except the named repair; board selection skips other work in that repository until the repair release is proven and the hold lifted (https://github.com/giantswarm/beekeeper/issues/2236).
 

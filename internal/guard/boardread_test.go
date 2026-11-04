@@ -40,7 +40,7 @@ func TestBoardReadRefusal(t *testing.T) {
 			if !tc.refused {
 				return
 			}
-			for _, want := range []string{"gh project item-add", "--id <item-id>", "beekeeper board move", "GraphQL 4200 of 5000", "estimated"} {
+			for _, want := range []string{"beekeeper board add", "beekeeper board show", "beekeeper board move", "GraphQL 4200 of 5000", "estimated"} {
 				if !strings.Contains(r, want) {
 					t.Errorf("the refusal does not name %q: %q", want, r)
 				}
