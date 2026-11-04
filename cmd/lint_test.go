@@ -49,3 +49,39 @@ func TestLintBriefsCommandChecksFullURLs(t *testing.T) {
 		t.Fatalf("lint briefs good.md = %v, out %q", err, out.String())
 	}
 }
+
+func TestLintBriefsCommandChecksShellRedirects(t *testing.T) {
+	for _, tt := range []struct {
+		code    string
+		refused bool
+	}{
+		{"make test &>gate.log", true},
+		{"make test >1.log", true},
+		{"printf '%s\\n' 'a > b'", false},
+		{"# use >out to capture output", false},
+		{"cat <<'EOF'\na > b\nEOF", false},
+		{"if true; then\nmake test >out", true},
+	} {
+		t.Run(tt.code, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "brief.md")
+			if err := os.WriteFile(file, []byte("```sh\n"+tt.code+"\n```\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			a := &app{out: &out}
+			c := a.lintCmd()
+			c.SetArgs([]string{"briefs", file})
+			c.SetOut(&out)
+			c.SetErr(&out)
+			c.SilenceUsage, c.SilenceErrors = true, true
+			err := c.Execute()
+			if tt.refused {
+				if Code(err) != ExitRefused || !strings.Contains(out.String(), ":2: clobber:") && !strings.Contains(out.String(), ":3: clobber:") {
+					t.Fatalf("got %v, output %q; want refusal with source line", err, out.String())
+				}
+			} else if err != nil || out.Len() != 0 {
+				t.Fatalf("got %v, output %q; want clean", err, out.String())
+			}
+		})
+	}
+}

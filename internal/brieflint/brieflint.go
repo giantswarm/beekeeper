@@ -12,9 +12,11 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/post"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Finding is one line a rule refuses.
@@ -65,25 +67,65 @@ var (
 	// codeSpan is one inline code span.
 	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
-	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
-	// redirect is a > into a target: not >>, >|, >&, >=, -> or =>.
-	redirect = regexp.MustCompile(`(?:^|[^<>=&|\-])[0-9]?>[ \t]*([^\s>|&=;)` + "`" + `]+)`)
+	placeholder = regexp.MustCompile(`<[A-Za-z_][A-Za-z0-9_./-]*>`)
+	// inlineComparison preserves prose comparisons without exempting numeric file names.
+	inlineComparison = regexp.MustCompile(`^\s*[^\s]+\s+(>\s+[0-9]+|>=\s+[^\s]+)\s*$`)
 	// shellFences are the info strings whose blocks are shell examples.
 	shellFences = map[string]bool{"": true, "sh": true, "bash": true, "zsh": true, "shell": true, "console": true}
 )
 
-// clobbers says whether shell code redirects with a bare > into a file.
-func clobbers(code string) bool {
-	for _, m := range redirect.FindAllStringSubmatch(placeholder.ReplaceAllString(code, "P"), -1) {
-		t := strings.TrimLeft(m[1], `"'`)
-		switch {
-		case strings.HasPrefix(t, "/dev/"), strings.HasPrefix(t, "("), t == "" || t[0] >= '0' && t[0] <= '9':
-			// A device, a process substitution, a comparison with a number.
-		default:
+// clobberLines parses a complete example, preserving shell lexical context.
+// Parse failures are findings too: an incomplete example cannot prove that
+// its apparent redirects are safe. No example is ever executed or expanded.
+func clobberLines(code string, inline bool) map[int]string {
+	out := make(map[int]string)
+	if inline && inlineComparison.MatchString(code) {
+		return out
+	}
+	normalized := placeholder.ReplaceAllString(code, "PLACEHOLDER")
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(normalized), "")
+	if err != nil {
+		for i, line := range strings.Split(code, "\n") {
+			if strings.Contains(line, ">") {
+				out[i+1] = "cannot verify redirects in incomplete or unsupported shell syntax: complete the example and use >| or a fresh name per attempt"
+			}
+		}
+		return out
+	}
+	syntax.Walk(f, func(n syntax.Node) bool {
+		r, ok := n.(*syntax.Redirect)
+		if !ok || (r.Op != syntax.RdrOut && r.Op != syntax.RdrAll) {
 			return true
 		}
+		if len(r.Word.Parts) == 1 {
+			if _, ok := r.Word.Parts[0].(*syntax.ProcSubst); ok {
+				return true
+			}
+		}
+		if strings.HasPrefix(literalWord(r.Word.Parts), "/dev/") {
+			return true
+		}
+		out[int(r.OpPos.Line())] = clobberWhy
+		return true
+	})
+	return out
+}
+
+func literalWord(parts []syntax.WordPart) string {
+	var b strings.Builder
+	for _, part := range parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			b.WriteString(literalWord(p.Parts))
+		default:
+			return ""
+		}
 	}
-	return false
+	return b.String()
 }
 
 // Lint reads one file's lines and returns what the rules refuse in them.
@@ -100,6 +142,14 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
+	var block []string
+	var blockStart int
+	flush := func() {
+		for line, why := range clobberLines(strings.Join(block, "\n"), false) {
+			out = append(out, Finding{Path: name, Line: blockStart + line - 1, Rule: clobberRule, Why: why, Text: strings.TrimSpace(block[line-1])})
+		}
+		block = nil
+	}
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
@@ -117,23 +167,35 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 				add(fullURLRule, why)
 			}
 		}
-		var code string
 		switch m := fence.FindStringSubmatch(line); {
 		case m != nil && !inFence && (m[1][0] == '~' || !strings.ContainsRune(m[2]+m[3], '`')):
 			inFence, fenceMark, shellFence = true, m[1], shellFences[strings.ToLower(m[2])]
+			blockStart = n + 1
 			continue
 		case inFence && fenceClose.MatchString(line) && strings.HasPrefix(strings.TrimSpace(line), fenceMark):
+			if shellFence {
+				flush()
+			}
 			inFence = false
 			continue
 		case inFence && shellFence:
-			code = line
+			block = append(block, line)
 		case !inFence:
-			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
-		}
-		if clobbers(code) {
-			add(clobberRule, clobberWhy)
+			for _, span := range codeSpan.FindAllString(line, -1) {
+				if found := clobberLines(strings.Trim(span, "`"), true); len(found) > 0 {
+					for _, why := range found {
+						add(clobberRule, why)
+						break
+					}
+					break
+				}
+			}
 		}
 	}
+	if inFence && shellFence {
+		flush()
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Line < out[j].Line })
 	return out, sc.Err()
 }
 

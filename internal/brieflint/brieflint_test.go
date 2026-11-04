@@ -137,3 +137,58 @@ func TestLintPassesSafeRedirects(t *testing.T) {
 		}
 	}
 }
+
+func TestLintShellSyntax(t *testing.T) {
+	for _, tt := range []struct {
+		name, code string
+		lines      []int
+	}{
+		{"combined", "make test &>gate.log", []int{3}},
+		{"numeric filename", "make test >1.log", []int{3}},
+		{"numeric target", "make test >1", []int{3}},
+		{"quoted data", "printf '%s\\n' 'a > b'", nil},
+		{"double quoted data", `echo "a > b"`, nil},
+		{"comment", "# use >out to capture output", nil},
+		{"escaped operator", `echo a \> b`, nil},
+		{"literal heredoc", "cat <<'EOF'\na > b\nEOF", nil},
+		{"heredoc", "cat <<EOF\na > b\nEOF", nil},
+		{"multiline quote", "echo 'a\n> b'", nil},
+		{"substitution", `echo "$(make test >out)"`, []int{3}},
+		{"backticks", "echo `make test >out`", []int{3}},
+		{"heredoc substitution", "cat <<EOF\n$(make test >out)\nEOF", []int{4}},
+		{"process substitution", "cat <(make test >out)", []int{3}},
+		{"multiple lines", "echo ok\nmake test >out\nmake test 12>errors", []int{4, 5}},
+		{"continued command", "make test \\\n >out", []int{4}},
+		{"same line", "make test >out 2>errors", []int{3}},
+		{"safe", "make test >>out 2>&1\nmake test &>>out\nmake test >|out\nmake test >'/dev/null'", nil},
+		{"placeholder", "cat > <file>", []int{3}},
+		{"incomplete", "if true; then\nmake test >out", []int{4}},
+		{"incomplete heredoc", "cat >out <<EOF", []int{3}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := "Introduction\n```bash\n" + tt.code + "\n```\n"
+			got, err := Lint("brief.md", strings.NewReader(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.lines) {
+				t.Fatalf("got %+v, want lines %v", got, tt.lines)
+			}
+			for i, line := range tt.lines {
+				if got[i].Line != line || got[i].Rule != ruleClobber || got[i].Text != strings.TrimSpace(strings.Split(doc, "\n")[line-1]) {
+					t.Errorf("finding %+v, want line %d", got[i], line)
+				}
+			}
+			if !strings.HasPrefix(tt.name, "incomplete") {
+				for _, finding := range got {
+					if finding.Why != clobberWhy {
+						t.Errorf("unexpected fallback: %+v", finding)
+					}
+				}
+			}
+			if strings.HasPrefix(tt.name, "incomplete") && !strings.Contains(got[0].Why, "cannot verify") {
+				t.Errorf("fallback is not explicit: %+v", got)
+			}
+		})
+	}
+}

@@ -42,7 +42,9 @@ refuses, path:line: rule: why, followed by the line:
   clobber      a bare > into a file in a shell example (an inline code span,
                a fenced block without a language or with a shell's): a
                rerun under noclobber fails before the command runs and
-               leaves the first run's file; >|, >>, 2>&1 and >/dev/null pass
+               leaves the first run's file; >|, >>, 2>&1 and >/dev/null pass;
+               incomplete or unsupported shell syntax containing > is
+               refused because its redirects cannot be verified
 
 Skills and briefs say what holds now; the history lives in the issues and
 the changelog. A clean run prints nothing and exits 0; any finding exits 3,
