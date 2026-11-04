@@ -1361,16 +1361,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 		}
 	}
-	// A release claimed and not finished goes on, whatever --check says
-	// now that it is installed.
-	for key := range claims {
-		if v, ok := strings.CutPrefix(key, superloop.KindRelease+" "); ok {
-			in.Release = v
+	if !st.AutoInstallPaused {
+		// A release claimed and not finished goes on, whatever --check says
+		// now that it is installed.
+		for key := range claims {
+			if v, ok := strings.CutPrefix(key, superloop.KindRelease+" "); ok {
+				in.Release = v
+			}
 		}
-	}
-	if in.Release == "" && !l.dryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
-		l.releaseAt = a.timeNow()
-		in.Release = l.newerRelease(ctx)
+		if in.Release == "" && !l.dryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
+			l.releaseAt = a.timeNow()
+			in.Release = l.newerRelease(ctx)
+		}
 	}
 	if reexec, err := l.reexec(ctx); err != nil || reexec {
 		return err
@@ -3424,6 +3426,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 // while --check still finds it newer), the broker on the installed binary,
 // supervisor.postInstall (once), then --check finding it the latest.
 func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (string, error) {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return "", err
+	}
+	if st.AutoInstallPaused {
+		return "", errLoopLater
+	}
+
 	version := act.Version
 	if err := l.claim(act, version); err != nil {
 		return "", err

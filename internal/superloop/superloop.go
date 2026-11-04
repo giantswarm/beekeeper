@@ -1348,10 +1348,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// were about carries no fixes: it is that head, never a go.
 		merged := p.Green && in.baseMerged(p, reviewed)
 		if sameHead(p.Head, reviewed) || merged {
-			// The findings stand unfixed: the worker reworks once per park.
-			// Review and rework are the loop's; no merge question goes
-			// to the person, and an answered escalation of this head
-			// is handled above.
+			// The findings stand unfixed: the worker reworks, once for
+			// each such park. Review and rework are the loop's; no
+			// merge question goes to the person, and an answered
+			// escalation of this head is handled above.
 			if !escalated || !sameHead(esc.head, p.Head) {
 				a := base
 				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
