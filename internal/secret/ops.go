@@ -297,6 +297,11 @@ func place(doc *document, file, path string) (string, error) {
 	if err := checkRule(file, keys); err != nil {
 		return "", err
 	}
+	// Check the mutation on an isolated tree before obtaining a one-time value.
+	planned := &document{root: clone(doc.root)}
+	if err := planned.set(path, "beekeeper-preflight"); err != nil {
+		return "", fmt.Errorf("%s: %w", file, err)
+	}
 	return path, nil
 }
 
