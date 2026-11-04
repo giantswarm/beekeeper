@@ -13,9 +13,15 @@ const (
 	headPaginationBranch = "fix"
 )
 
-const pageEndCursor = "endCursor"
+const pageEndCursor = pageEndCursor
 
-const pageData = "data"
+const pageData = pageData
+
+const pageHasNext = "hasNextPage"
+
+const pageNodes = "nodes"
+
+const pageInfoKey = "pageInfo"
 
 func TestHeadPullsReadsPastForks(t *testing.T) {
 	var forks []headNode
@@ -42,7 +48,7 @@ func TestHeadPullsReadsPastForks(t *testing.T) {
 				}
 				q := args[len(args)-1]
 				page := func(nodes []headNode, next bool) any {
-					return map[string]any{"pullRequests": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": next, pageEndCursor: cursor}}}
+					return map[string]any{"pullRequests": map[string]any{pageNodes: nodes, pageInfoKey: map[string]any{pageHasNext: next, pageEndCursor: cursor}}}
 				}
 				data := map[string]any{}
 				switch calls {
@@ -114,8 +120,8 @@ func TestHeadPullsRejectsInvalidPagination(t *testing.T) {
 					t.Fatal("pagination did not terminate")
 				}
 				return json.Marshal(map[string]any{pageData: map[string]any{"h0": map[string]any{
-					"pullRequests": map[string]any{"nodes": []headNode{{Number: 9, Fork: true}},
-						"pageInfo": map[string]any{"hasNextPage": true, pageEndCursor: cursor}},
+					"pullRequests": map[string]any{pageNodes: []headNode{{Number: 9, Fork: true}},
+						pageInfoKey: map[string]any{pageHasNext: true, pageEndCursor: cursor}},
 				}}})
 			}
 			if _, err := HeadPulls(t.Context(), run, []Head{{Repo: headPaginationRepo, Branch: headPaginationBranch}}); err == nil {
