@@ -13,6 +13,7 @@ import (
 func TestGitHubStampedRunningCommitWithoutMatchingTagRef(t *testing.T) {
 	const (
 		current    = "v0.170.0"
+		nextTag    = "v0.171.0"
 		runningSHA = "1111111111111111111111111111111111111111"
 		staleSHA   = "2222222222222222222222222222222222222222"
 		nextSHA    = "3333333333333333333333333333333333333333"
@@ -23,7 +24,7 @@ func TestGitHubStampedRunningCommitWithoutMatchingTagRef(t *testing.T) {
 			name = "different"
 		}
 		t.Run(name, func(t *testing.T) {
-			refs := [][2]string{{"v0.172.0", staleSHA}, {"v0.171.0", nextSHA}}
+			refs := [][2]string{{"v0.172.0", staleSHA}, {nextTag, nextSHA}}
 			if withOldRef {
 				refs = append(refs, [2]string{current, "4444444444444444444444444444444444444444"})
 			}
@@ -48,7 +49,7 @@ func TestGitHubStampedRunningCommitWithoutMatchingTagRef(t *testing.T) {
 			currentCommit = func() string { return runningSHA }
 			res, err := Run(context.Background(), io.Discard, true)
 			wantCompared := []string{runningSHA + "..." + staleSHA, runningSHA + "..." + nextSHA}
-			if !errors.Is(err, ErrOutdated) || res.Latest != "v0.171.0" || !slices.Equal(compared, wantCompared) || !slices.Equal(requested, []string{"v0.171.0"}) {
+			if !errors.Is(err, ErrOutdated) || res.Latest != nextTag || !slices.Equal(compared, wantCompared) || !slices.Equal(requested, []string{nextTag}) {
 				t.Fatalf("result=%+v err=%v compared=%v requested=%v", res, err, compared, requested)
 			}
 		})
