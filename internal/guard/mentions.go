@@ -28,15 +28,16 @@ var ghPosts = map[string]bool{verbComment: true, verbCreate: true, verbEdit: tru
 // mentionHead is what may stand before an @-mention: the start, a space,
 // an opening bracket or punctuation; not a word, path, address or option
 // character (user@host, go install x@v1, body=@file, `@code`).
-var mention = regexp.MustCompile(`(?:^|[\s(\[{>,;:!?"'*_~])@([A-Za-z0-9][A-Za-z0-9-]{0,38})`)
+var mention = regexp.MustCompile(`(?:^|[\s(\[{>,;:!?"'*_~])@([A-Za-z0-9][A-Za-z0-9-]{0,38}(?:/[A-Za-z0-9][A-Za-z0-9_-]*)?)`)
 
-// mentions returns the GitHub handles text @-mentions, a scoped package
-// (@types/node) and a domain (@example.com) left out.
+// mentions returns the GitHub account and team handles text @-mentions,
+// leaving domains (@example.com) out. Scoped packages use the same syntax
+// as team mentions, so they are also refused in text posted to GitHub.
 func mentions(text string) []string {
 	var out []string
 	for _, m := range mention.FindAllStringSubmatchIndex(text, -1) {
 		rest := text[m[1]:]
-		if strings.HasPrefix(rest, "/") || len(rest) > 1 && rest[0] == '.' && isWord(rest[1]) {
+		if len(rest) > 1 && rest[0] == '.' && isWord(rest[1]) {
 			continue
 		}
 		out = append(out, text[m[2]:m[3]])
