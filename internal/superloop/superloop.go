@@ -563,11 +563,14 @@ type ledger struct {
 	overridden map[string]bool
 	// red are the checks the loop woke a worker for, by redKey.
 	red map[string]bool
+	// episode identifies a new tracking episode after a close.
+	episode map[string]string
 }
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
+		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}, episode: map[string]string{}}
+	taken, l.episode = episodeTaken(taken)
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
@@ -640,6 +643,55 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 		}
 	}
 	return l
+}
+
+// episodeTag gives every action after a reopen a distinct durable key,
+// including another review of the same head and another end of the same ref.
+const episodeTag = " reopened "
+
+// episodeTaken retains only the latest tracking episode of each pull request.
+// Legacy keys belong to its original episode. The planner uses keys without
+// the suffix internally; emitted actions restore it before execution.
+func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
+	episodes := map[string]string{}
+	for _, t := range taken {
+		if _, episode, ok := strings.Cut(t.Key, episodeTag); ok && t.Ref != "" {
+			episodes[t.Ref] = episode
+		}
+	}
+	var active []Taken
+	for _, t := range taken {
+		if t.Ref == "" {
+			active = append(active, t)
+			continue
+		}
+		key, episode, _ := strings.Cut(t.Key, episodeTag)
+		if t.Ref != "" && episode != episodes[t.Ref] {
+			continue
+		}
+		t.Key = key
+		active = append(active, t)
+	}
+	return active, episodes
+}
+
+// reopen discards the closed episode only after GitHub reports OPEN.
+func (l ledger) reopen(ref string) {
+	l.episode[ref] = l.keys[endKey(ref)].At.UTC().Format(time.RFC3339Nano)
+	for key, t := range l.keys {
+		if t.Ref == ref {
+			delete(l.keys, key)
+		}
+	}
+	delete(l.rounds, ref)
+	delete(l.escalated, ref)
+	delete(l.ended, ref)
+	delete(l.reviewer, ref)
+	delete(l.goAgent, ref)
+	delete(l.goHead, ref)
+	delete(l.acts, ref)
+	delete(l.asked, ref)
+	delete(l.overridden, ref)
 }
 
 func (l ledger) has(key string) bool { _, ok := l.keys[key]; return ok }
@@ -772,7 +824,10 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		}
 		// An open question about its ownership keeps it read: the owning
 		// team's reviews still reach its worker meanwhile.
-		if !l.ended[ref] || l.workerDue(ref, workers) {
+		requestedAgain := slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.ParkedOn == ref && w.ReviewRequested && w.ParkedAt.After(l.keys[endKey(ref)].At) && fresh[ref]
+		})
+		if !l.ended[ref] || requestedAgain || l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
@@ -838,7 +893,13 @@ func Plan(in Input) []Action {
 	rounds := max(in.Rounds, 1)
 	var out []Action
 	add := func(a Action) {
-		if !l.has(a.Key) && !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
+		if l.has(a.Key) {
+			return
+		}
+		if episode := l.episode[a.Ref]; episode != "" {
+			a.Key += episodeTag + episode
+		}
+		if !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
 			out = append(out, a)
 		}
 	}
@@ -885,6 +946,15 @@ func Plan(in Input) []Action {
 	slices.Sort(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
+		if p.State == Open && l.ended[ref] {
+			l.reopen(ref)
+			delete(swept.lastAct, ref)
+			for key := range swept.sweeps {
+				if strings.HasPrefix(key, ref+"@") {
+					delete(swept.sweeps, key)
+				}
+			}
+		}
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
 			// The end action durably marks when the merge was observed. A
 			// quiet worker retains its inbox while waiting for its release.
