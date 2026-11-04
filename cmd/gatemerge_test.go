@@ -63,7 +63,7 @@ func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane conf
 	t.Helper()
 	hostDevctls(t, 0)
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
-	me := state.Party{Name: "worker"}
+	me := state.Party{Name: workerRole}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
 		argv: mergeArgv(repo)}
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
@@ -192,8 +192,45 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	if err := g.runMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
 	}
+	raw, err := os.ReadFile(mergeBase(g.store.Dir(), scratchRepo, 7) + terminationExt)
+	if err != nil || !strings.Contains(string(raw), "runner disappeared") || !strings.Contains(string(raw), "no cap kill confirmed") {
+		t.Fatalf("missing runner-loss diagnostic: %q, %v", raw, err)
+	}
 	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "exit 137, release unconfirmed") {
 		t.Errorf("merged event: %q", d)
+	}
+}
+
+func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
+	for _, tc := range []struct{ name, script, want string }{
+		{"external", litKillKill, "no cap kill confirmed"},
+		{"cap", "echo 'beekeeper run: the 6G cap killed: 7 (worker) 6100 MiB (MemoryMax=6G)' >&2; kill -KILL $$", "MemoryMax=6G"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noSystemd(t)
+			fakeDevctl(t, tc.script)
+			stubGitHub(t, github.Open, "")
+			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+			out := gateStderr(t, func() {
+				if err := g.runMerge(); Code(err) != 137 {
+					t.Fatalf("exit %d, want 137", Code(err))
+				}
+			})
+			base := mergeBase(g.store.Dir(), scratchRepo, 7)
+			raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
+			if err != nil || !strings.Contains(string(raw), tc.want) {
+				t.Fatalf("persisted reason %q: %v", raw, err)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("gate output lacks reason: %s", out)
+			}
+			out = gateStderr(t, func() {
+				_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+			})
+			if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, tc.want) {
+				t.Fatalf("rerun lost reason: %s", out)
+			}
+		})
 	}
 }
 
@@ -957,12 +994,14 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 // is the caller's and stays the only one.
 func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		extra []string
-		want  string
+		name     string
+		extra    []string
+		want     string
+		override time.Duration
 	}{
-		{"none named", []string{"--update-branch"}, "--timeout 1h0m0s"},
-		{"named", []string{"--timeout", "9m"}, "--timeout 9m"},
+		{"90 minute pipeline", []string{"--update-branch"}, "--timeout 2h0m0s", 0},
+		{"repository override", nil, "--timeout 3h0m0s", 3 * time.Hour},
+		{"named", []string{"--timeout", "9m"}, "--timeout 9m", 3 * time.Hour},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			noSystemd(t)
@@ -971,7 +1010,12 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 *) echo '{"verdict":"timeout","reason":"timeout after 30m0s"}'; exit 2 ;; esac`)
 			stubGitHub(t, "", "")
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-			g.cfg.Merge.CITimeout = config.Duration{Duration: time.Hour}
+			cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.cfg.Merge.CITimeout = cfg.Merge.CITimeout
+			g.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: c.override}}
 			g.argv = mergeArgv(scratchRepo, c.extra...)
 			if err := g.runMerge(); err != nil {
 				t.Fatalf("exit %d, want 0", Code(err))
@@ -1014,9 +1058,49 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	want := "requested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
+	want := "command: devctl pr merge o/r 42\nrequested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
 	if !strings.HasPrefix(got, want) {
 		t.Fatalf("kept output missing requester header:\ngot:\n%s\nwant prefix:\n%s", got, want)
+	}
+}
+
+// The command remains the first line even without owner metadata and after
+// the transient run files are removed.
+func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
+	base := mergeBase(t.TempDir(), scratchRepo, 7)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := "devctl pr merge o/r 7 --rebase --update-branch"
+	writeRunInfo(base, runInfo{Command: command})
+	if err := os.WriteFile(base+".log", []byte("merge refused\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept := keepOutput(base, []byte(`{"verdict":"red"}`), time.Now())
+	removeMergeFiles(base)
+	raw, err := os.ReadFile(kept) //nolint:gosec // the test's file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "command: " + command + "\nmerge refused\n"; !strings.HasPrefix(string(raw), want) {
+		t.Fatalf("kept output %q, want prefix %q", raw, want)
+	}
+}
+
+func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "merge")
+	if err := os.WriteFile(base+".pid", []byte("2147483647"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := gateStderr(t, func() {
+		_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+	})
+	if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, "runner disappeared") || !strings.Contains(out, "no cap kill confirmed") {
+		t.Fatalf("rerun did not recover lost runner: %s", out)
+	}
+	raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
+	if err != nil || !strings.Contains(string(raw), "runner disappeared") {
+		t.Fatalf("lost diagnostic after cleanup: %q, %v", raw, err)
 	}
 }
 

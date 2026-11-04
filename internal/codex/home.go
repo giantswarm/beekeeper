@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
 // Harness is Session.Harness and Start.Harness for a Codex CLI session.
@@ -157,7 +159,7 @@ func HooksJSON(exe string) ([]byte, error) {
 					Hooks: []hookEntry{
 						{
 							Type:    keyCommand,
-							Command: bin + " hook pretooluse --format codex",
+							Command: guard.ShellQuote(bin) + " hook pretooluse --format codex",
 							Timeout: 30,
 						},
 					},

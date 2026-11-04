@@ -717,7 +717,11 @@ type Claim struct {
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
 type AlertOwner struct {
-	// Alert is the alert's key in the alert baseline (fingerprint@start).
+	// Cluster and Namespace are optional exact matchers used when taking ownership.
+	Cluster   string `json:"cluster,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	// Alert is the firing key (installation/fingerprint@start); legacy
+	// records use fingerprint@start with the installation recorded in Name.
 	Alert string    `json:"alert"`
 	Name  string    `json:"name"`
 	By    Party     `json:"by"`
@@ -1866,8 +1870,11 @@ func (s *FileStore) busy(waited time.Duration) error {
 func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
-// back atomically together with the events fn returns. When fn fails nothing
+// back with the events fn returns under the same lock. When fn fails nothing
 // is written, nor when a newer release wrote the state (StaleWriterError).
+// Event-log open failures leave state unchanged. Later event write/close failures
+// and crashes can still leave state and events inconsistent; this is not a
+// transaction across the two files.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1890,10 +1897,23 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
+	var log *os.File
+	if len(events) > 0 {
+		log, err = s.openEventLog()
+		if err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(s.path("state.json"), st); err != nil {
+		if log != nil {
+			_ = log.Close()
+		}
 		return err
 	}
-	return s.append(events)
+	if log == nil {
+		return nil
+	}
+	return appendEvents(log, events)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2054,10 +2074,19 @@ func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := s.openEventLog()
 	if err != nil {
 		return err
 	}
+	return appendEvents(f, events)
+}
+
+func (s *FileStore) openEventLog() (*os.File, error) {
+	return os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+}
+
+// appendEvents consumes and closes f, including on failure.
+func appendEvents(f *os.File, events []Event) error {
 	if err := endLine(f); err != nil {
 		_ = f.Close()
 		return err
@@ -2158,27 +2187,24 @@ func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) 
 	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	sc.Split(wholeLines)
-	for sc.Scan() {
-		at.offset += int64(len(sc.Bytes())) + 1
+	reader := bufio.NewReader(f)
+	for {
+		// Events can contain unbounded reports, just as in Events. Only
+		// advance past complete lines: a partial append is read again later.
+		line, readErr := reader.ReadBytes('\n')
+		if errors.Is(readErr, io.EOF) {
+			return slices.Clone(at.kept), nil
+		}
+		if readErr != nil {
+			return slices.Clone(at.kept), readErr
+		}
+		at.offset += int64(len(line))
 		var e Event
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			at.kept = append(at.kept, e)
 		}
 	}
-	return slices.Clone(at.kept), sc.Err()
-}
-
-// wholeLines splits the log into its complete lines: a line still being
-// appended, without its newline yet, is left for the next read.
-func wholeLines(data []byte, _ bool) (advance int, token []byte, err error) {
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	return 0, nil, nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);

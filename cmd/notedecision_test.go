@@ -138,7 +138,7 @@ const laneQuestion = "Which lane? (a: b)"
 
 func TestAnswerEventsParse(t *testing.T) {
 	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
-	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
+	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: litAgentOne}}
 	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
 	if !ok || an.About != privateThread || an.For != "Kim" || an.Audience != n.For || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {

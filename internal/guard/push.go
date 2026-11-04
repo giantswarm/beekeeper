@@ -402,7 +402,7 @@ func parseGitGlobal(gitWords []string, cwd string, known bool, vars map[string]s
 				dirKnown = hasFakeGit || isExistingDir(gitDir)
 			}
 			i++
-		case a == "--git-dir" || a == "--work-tree" || strings.HasPrefix(a, "--git-dir=") || strings.HasPrefix(a, "--work-tree="):
+		case a == litGitDir || a == litWorkTree || strings.HasPrefix(a, "--git-dir=") || strings.HasPrefix(a, "--work-tree="):
 			dirKnown = false
 			if !strings.Contains(a, "=") && i+1 < len(gitWords) {
 				i += 2

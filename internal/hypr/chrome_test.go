@@ -393,6 +393,70 @@ func TestBrowserIsTheLastFocused(t *testing.T) {
 	}
 }
 
+// Missing focus history must lose to every recorded focus ID, in either
+// client order. With no recorded history, keep the first browser.
+func TestBrowserMissingFocusHistory(t *testing.T) {
+	popup := with(chrome, func(w *Window) { w.Address, w.FocusHistoryID = "0xe", -1 })
+	for name, tc := range map[string]struct {
+		windows []Window
+		want    string
+	}{
+		"missing first":        {[]Window{popup, chrome}, chrome.Address},
+		"missing last":         {[]Window{chrome, popup}, chrome.Address},
+		"zero after missing":   {[]Window{popup, with(chrome, func(w *Window) { w.FocusHistoryID = 0 })}, chrome.Address},
+		"zero before missing":  {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = 0 }), popup}, chrome.Address},
+		"all missing":          {[]Window{claudeW, popup, with(chrome, func(w *Window) { w.FocusHistoryID = -1 })}, popup.Address},
+		"all missing reversed": {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = -1 }), popup}, chrome.Address},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := (layout{windows: tc.windows}).browser()
+			if b == nil || b.Address != tc.want {
+				t.Fatalf("browser = %+v, want %s", b, tc.want)
+			}
+		})
+	}
+}
+
+func TestShowIgnoresBrowserMissingFocusHistory(t *testing.T) {
+	main := with(chrome, func(w *Window) { w.Workspace = music })
+	popup := with(chrome, func(w *Window) { w.Address, w.FocusHistoryID = "0xe", -1 })
+	for _, popupFirst := range []bool{false, true} {
+		name := "main first"
+		windows := []Window{main, popup}
+		if popupFirst {
+			name, windows = "popup first", []Window{popup, main}
+		}
+		t.Run(name, func(t *testing.T) {
+			f := &fake{windows: windows, monitors: []Monitor{laptop}}
+			s, err := Show(t.Context(), f.ctl, hold)
+			if err != nil || s == nil || !s.Moved || s.Before != main {
+				t.Fatalf("Show = %+v, %v", s, err)
+			}
+			for _, w := range f.windows {
+				if w.Address == main.Address && w.Workspace != surface {
+					t.Errorf("main window workspace = %+v, want surface", w.Workspace)
+				}
+				if w.Address == popup.Address && w != popup {
+					t.Errorf("popup changed: %+v", w)
+				}
+			}
+			f.open(Window{Address: "0xf", Class: chromeClass})
+			if err := s.Restore(t.Context(), f.ctl); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range f.windows {
+				want := music
+				if w.Address == popup.Address {
+					want = popup.Workspace
+				}
+				if w.Workspace != want {
+					t.Errorf("window %s workspace = %+v, want %+v", w.Address, w.Workspace, want)
+				}
+			}
+		})
+	}
+}
+
 // A move that fails is undone by removing the output it created, and the
 // error names where the window is.
 func TestShowFailsNamingTheWorkspace(t *testing.T) {

@@ -83,8 +83,11 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 	for _, tc := range []struct {
 		name, on, waits, when string
 		offRoster             bool
+		guide                 bool
 		wantWake              bool
 	}{
+		{name: "guide note", on: "#3", guide: true},
+		{name: "guide external wait", guide: true, wantWake: true},
 		{name: "plain external wait", waits: "deployment ready", wantWake: true},
 		{name: "person without note", waits: "Timo's answer"},
 		{name: "local note", on: "#3"},
@@ -94,7 +97,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 		{name: "matching checks", on: claimIssue, when: "pr-checks o/r#7", wantWake: true},
 		{name: "another pull", on: claimIssue2, when: prMerged7},
 		{name: "lease wait", on: "lease agentlab-1"},
-		{name: "hold", on: parkedHoldWait},
+		{name: verbHold, on: parkedHoldWait},
 		{name: "alert", on: parkedAlertWait},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,6 +112,10 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 					q = p.By.Session
 				} else {
 					st.Agents = []state.Agent{{Party: p.By, Task: parkTask, Park: &p}}
+				}
+				if tc.guide {
+					guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: p.By}})
+					q = theGuide
 				}
 				return nil, nil
 			}); err != nil {
@@ -228,5 +235,47 @@ func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 	w.payOwed(t.Context(), o)
 	if len(*woke) != 1 || !strings.Contains((*woke)[0], o.Line) {
 		t.Fatalf("the CI result did not reach its waiting caller: %v", *woke)
+	}
+}
+
+func TestTimerGuideRoleFollowsRelay(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	woke := stubWakes(t)
+	timer, err := w.timerFrom(timerSpec{wake: theGuide}, relayNow)
+	if err != nil || timer.Wake != theGuide {
+		t.Fatalf("role timer: %+v, %v", timer, err)
+	}
+	for _, name := range []string{"previous guide", "successor guide"} {
+		if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			holder := state.Party{Name: name, Session: name + "-session"}
+			st.Agents = append(st.Agents, state.Agent{Party: holder})
+			guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: relayNow}})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		w.wakeTimer(t.Context(), timerFire{t: timer, reason: "due"})
+		if len(*woke) == 0 || !strings.Contains((*woke)[len(*woke)-1], name+"-session") {
+			t.Fatalf("timer did not reach current holder: %v", *woke)
+		}
+	}
+	if len(*woke) != 2 {
+		t.Fatalf("deliveries: %v", *woke)
+	}
+}
+
+func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	if _, err := w.timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
+		t.Fatalf("want supervisor service explanation, got %v", err)
+	}
+}
+
+func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	woke := stubWakes(t)
+	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: "due"})
+	if len(*woke) != 0 {
+		t.Fatalf("woke without a holder: %v", *woke)
 	}
 }

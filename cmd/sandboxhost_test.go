@@ -91,3 +91,48 @@ func TestScratchConfig(t *testing.T) {
 		t.Error("a relative scratch configuration: want a refusal")
 	}
 }
+
+func TestBrokeredBriefSymlinkParentTraversal(t *testing.T) {
+	a, _, _ := secretApp(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "home")
+	cwd := filepath.Join(home, "checkout")
+	for _, dir := range []string{cwd, filepath.Join(home, "private")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv(sandbox.Env, "1")
+	t.Setenv(sandbox.Brokered, "1")
+	t.Chdir(cwd)
+	a.cfg.Sandbox.AllowRead = []string{cwd}
+	if err := os.Symlink(filepath.Join(home, "private"), filepath.Join(cwd, "link")); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(home, "canary.txt")
+	const public = "public brief canary"
+	if err := os.WriteFile(canary, []byte(public), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"", cwd + string(filepath.Separator)} {
+		brief := prefix + "link/../canary.txt"
+		if target, err := filepath.EvalSymlinks(brief); err != nil || target != canary {
+			t.Fatalf("brief target = %q, %v", target, err)
+		}
+		if body, err := readBrief(brief); err != nil || body != public {
+			t.Fatalf("raw brief read = %q, %v", body, err)
+		}
+		for _, path := range []string{brief, prefix + "link/../missing/brief.txt"} {
+			if err := a.sandboxPaths([]string{path}, nil); Code(err) != ExitRefused {
+				t.Errorf("brokered read of %q: %v, want refusal", path, err)
+			}
+		}
+	}
+}

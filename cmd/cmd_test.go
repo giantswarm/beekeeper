@@ -204,7 +204,7 @@ func TestMinus(t *testing.T) {
 func TestUsageExitCode(t *testing.T) {
 	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, t.TempDir()+"/config.yaml"))
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", "extra"}, {"--nope"}} {
+	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", litExtra}, {"--nope"}} {
 		root := New()
 		root.SetArgs(args)
 		root.SetOut(io.Discard)
@@ -257,7 +257,7 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	}
 	h := guard.Hook{Self: "/bin/beekeeper", MaxLabs: func() int { return 2 }, Clusters: func() []string { return []string{"kind-1", "kind-2"} },
 		Leases: func() []lease.Holder { return a.namedHolders(sessions, hs) }}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "kind create cluster --name third"}, "cwd": "/"})
+	raw, _ := json.Marshal(map[string]any{executionHookTool: tToolBash, executionHookInput: map[string]any{hookTypeCommand: "kind create cluster --name third"}, "cwd": "/"})
 	var o struct {
 		D struct {
 			Reason string `json:"permissionDecisionReason"`
@@ -346,7 +346,7 @@ func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
 	holds := []state.Hold{
 		{Target: merge.AllMerges, Reason: "devctl window", LiftWhen: green},
 		{Target: "lane:gpu", Reason: "model load", LiftWhen: red},
-		{Target: "o/r", Reason: "no probe"},
+		{Target: repo, Reason: "no probe"},
 		{Target: "o/past", Reason: "past its time", LiftWhen: green, Until: now.Add(-time.Minute)},
 	}
 	passed := probeHoldLifts(context.Background(), holds, now)
