@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -132,5 +133,35 @@ func TestReviewMergeGoRevocations(t *testing.T) {
 		if !recordedMergeGo([]state.Event{grant, neutral}, worker, ref, head) {
 			t.Errorf("unrelated event revoked go: %s", neutral.Detail)
 		}
+	}
+}
+
+func TestHookMergeGoRefusesWhenLatestReviewRequestsChanges(t *testing.T) {
+	a, r := executionTestApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Party = state.Party{Name: r.Name, Session: "thread-id"}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	head := strings.Repeat("a", 40)
+	if err := a.store.Record(event(loopParty, "supervisor.go", "[go %s#7@%s] %s: merge go", r.Repository, head, r.Name)); err != nil {
+		t.Fatal(err)
+	}
+	old := readLoopPull
+	t.Cleanup(func() { readLoopPull = old })
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		return superloop.Pull{
+			State: superloop.Open,
+			Head:  head,
+			Green: true,
+			Reviews: []superloop.Review{
+				{ID: "r1", Head: head, Verdict: superloop.Approved, At: time.Unix(100, 0)},
+				{ID: "r2", Head: head, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+			},
+		}, nil
+	}
+	if why := a.hookMergeGo("thread-id", r.Repository, 7, head); !strings.Contains(why, "review requested changes") {
+		t.Fatalf("hookMergeGo allowed merge over changes requested: %q", why)
 	}
 }

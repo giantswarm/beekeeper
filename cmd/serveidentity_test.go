@@ -34,7 +34,7 @@ func identityApp(t *testing.T) *app {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // a stand-in token
-			"access_token": idToken, "issued_token_type": "urn:ietf:params:oauth:token-type:id_token", "expires_in": 1800})
+			"access_token": idToken, "issued_token_type": "urn:ietf:params:oauth:token-type:id_token", testExpiresIn: 1800})
 	}))
 	t.Cleanup(dex.Close)
 	file := filepath.Join(t.TempDir(), "token")

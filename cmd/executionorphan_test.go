@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 func TestHostsDrainNamesRecordedExecutions(t *testing.T) {
@@ -193,7 +194,12 @@ func TestPreInventoryHostUpgradeUnblocksMissingJournalReconciliation(t *testing.
 		return fake
 	}
 	digest := execution.Digest([]byte("upgraded host policy"))
-	a.executionUpdate = func(context.Context, execution.Host, string) (execution.HostUpdate, error) {
+	lookup := lookupRelease
+	t.Cleanup(func() { lookupRelease = lookup })
+	lookupRelease = func(_ context.Context, version string) (update.Release, error) {
+		return update.Release{Tag: version}, nil
+	}
+	a.executionUpdate = func(context.Context, execution.Host, string, []byte) (execution.HostUpdate, error) {
 		upgraded = true
 		return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}, nil
 	}

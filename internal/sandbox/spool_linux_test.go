@@ -352,3 +352,36 @@ func TestServeAnswersAHandlerPanicAndServesOn(t *testing.T) {
 		t.Errorf("the next request after a panic = %v", err)
 	}
 }
+
+func TestCapperReadsScopePopulationThroughBroker(t *testing.T) {
+	dir := t.TempDir()
+	broker(t, dir, func(_ context.Context, _ int, r Request) (Reply, error) {
+		if r.Op != OpScopeState {
+			return Reply{}, fmt.Errorf("unexpected op %s", r.Op)
+		}
+		switch r.Unit {
+		case "live":
+			return Reply{Out: "true"}, nil
+		case "empty":
+			return Reply{Out: "false"}, nil
+		case "invalid":
+			return Reply{Out: "unknown"}, nil
+		default:
+			return Reply{}, errors.New("cannot read scope")
+		}
+	})
+	c := Capper{Dir: dir}
+	reader, ok := any(c).(interface{ ScopePopulated(string) (bool, error) })
+	if !ok {
+		t.Fatal("sandbox capper has no scope watchdog")
+	}
+	for _, test := range []struct {
+		unit      string
+		live, bad bool
+	}{{"live", true, false}, {"empty", false, false}, {"invalid", false, true}, {"error", false, true}} {
+		live, err := reader.ScopePopulated(test.unit)
+		if live != test.live || (err != nil) != test.bad {
+			t.Errorf("%s: %v %v", test.unit, live, err)
+		}
+	}
+}

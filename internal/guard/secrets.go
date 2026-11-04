@@ -249,6 +249,12 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return nil
 	}
 	sc := scanShell(cmd)
+	// Check executable script text before shell segmentation discards path
+	// construction context. Here-document data is masked in plain; interpreter
+	// input is checked when inputLeak recursively scans its body.
+	if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(sc.plain) {
+		return &leak{never: true, transcript: true, unresolvedTranscript: true}
+	}
 	if len(g.transcripts.roots) > 0 {
 		for _, doc := range sc.heredocs {
 			if doc.quoted {

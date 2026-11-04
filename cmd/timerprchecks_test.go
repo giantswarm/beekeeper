@@ -51,7 +51,7 @@ func TestPRChecksConditionReadsTheRollup(t *testing.T) {
 		"status error":   {ciAnswer("OPEN", `{"state":"ERROR","context":"ci/x","targetUrl":"t"}`), true, "CI red on head abcdef012: ci/x t"},
 		"pending status": {ciAnswer("OPEN", `{"state":"PENDING","context":"ci/x"}`), false, "1 of 1 checks on head abcdef012 still running"},
 		"pr merged":      {ciAnswer("MERGED", ciRunning), true, "o/r#7 is merged at head abcdef012"},
-		"closed":         {ciAnswer("CLOSED"), true, "o/r#7 is closed at head abcdef012"},
+		overrideClosed:   {ciAnswer("CLOSED"), true, "o/r#7 is closed at head abcdef012"},
 	} {
 		r := c.result(tc.out, nil)
 		if r.unreadable || r.holds != tc.holds || r.reason != tc.reason {

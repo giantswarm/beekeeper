@@ -19,8 +19,11 @@ const (
 	FeedbackComment       = "comment"
 )
 
-// changesRequested is the state of a review that requests changes.
-const changesRequested = "CHANGES_REQUESTED"
+// The states of a review that approves and one that requests changes.
+const (
+	stateApproved    = "APPROVED"
+	changesRequested = "CHANGES_REQUESTED"
+)
 
 // maxNamedFeedback bounds the items the refusal's reason names; the
 // document lists all of them.
@@ -63,9 +66,53 @@ func (u ghUser) automation() bool {
 type ghReview struct {
 	User        ghUser    `json:"user"`
 	State       string    `json:"state"`
+	Body        string    `json:"body"`
 	SubmittedAt time.Time `json:"submitted_at"`
 	CommitID    string    `json:"commit_id"`
 	HTMLURL     string    `json:"html_url"`
+	// AuthorAssociation is the reviewer's relation to the repository:
+	// OWNER, MEMBER and COLLABORATOR are the owning team's.
+	AuthorAssociation string `json:"author_association"`
+}
+
+// member says whether the review is by the repository's owner, a member of
+// its organization or a collaborator.
+func (r ghReview) member() bool {
+	switch strings.ToUpper(r.AuthorAssociation) {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
+}
+
+// DeskVerdict is the verdict a review body's first line states, the desk
+// review's own words: APPROVED for one ending in ": approved",
+// CHANGES_REQUESTED for ": changes requested", trailing "." or "!" and case
+// aside; "" for any other body. A desk review posted from the pull request
+// author's login cannot approve on GitHub, so it carries its verdict there.
+func DeskVerdict(body string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	first = strings.ToLower(strings.TrimRight(strings.TrimSpace(first), ".!"))
+	switch {
+	case strings.HasSuffix(first, ": approved"):
+		return stateApproved
+	case strings.HasSuffix(first, ": changes requested"):
+		return changesRequested
+	}
+	return ""
+}
+
+// deskReviewVerdict reads the verdict of a desk review posted as a
+// COMMENTED review by a login the desk trusts: the caller's (the desk's own
+// gh login) or one of the repository's owning team (ghReview.member). Anyone
+// else's verdict line is a plain comment: on a public repository any GitHub
+// user can post one.
+func deskReviewVerdict(r ghReview, caller string) (string, bool) {
+	if r.State != "COMMENTED" || r.User.automation() || !strings.EqualFold(r.User.Login, caller) && !r.member() {
+		return "", false
+	}
+	v := DeskVerdict(r.Body)
+	return v, v != ""
 }
 
 type ghComment struct {
@@ -192,22 +239,45 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 	// verdict is each reviewer's latest review that decides: APPROVED,
 	// CHANGES_REQUESTED or DISMISSED, as GitHub's own review state counts.
 	verdict := map[string]ghReview{}
+	var deskVerdict ghReview
 
 	var items []UnansweredReview
 	for _, r := range f.reviews {
+		if vState, ok := deskReviewVerdict(r, caller); ok {
+			// A desk review from the author's or the caller's login still
+			// answers the feedback before it.
+			answered(r.User, r.SubmittedAt)
+			login := strings.ToLower(r.User.Login)
+			r.State = vState
+			if deskVerdict.State == "" || !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
+				deskVerdict = r
+			}
+			if vState == stateApproved {
+				if v, ok := verdict[login]; ok && !r.SubmittedAt.Before(v.SubmittedAt) {
+					verdict[login] = r
+				}
+				if r.SubmittedAt.After(approved[login]) {
+					approved[login] = r.SubmittedAt
+				}
+			}
+			continue
+		}
+		if r.State == stateApproved && !r.User.automation() && (strings.EqualFold(r.User.Login, caller) || r.member()) && deskVerdict.State != "" && !r.SubmittedAt.Before(deskVerdict.SubmittedAt) {
+			deskVerdict = r
+		}
 		answered(r.User, r.SubmittedAt)
 		if !reviewer(r.User) {
 			continue
 		}
 		login := strings.ToLower(r.User.Login)
 		switch r.State {
-		case "APPROVED", changesRequested, "DISMISSED":
+		case stateApproved, changesRequested, "DISMISSED":
 			if v, ok := verdict[login]; !ok || !r.SubmittedAt.Before(v.SubmittedAt) {
 				verdict[login] = r
 			}
 		}
 		switch r.State {
-		case "APPROVED":
+		case stateApproved:
 			if r.SubmittedAt.After(approved[login]) {
 				approved[login] = r.SubmittedAt
 			}
@@ -244,6 +314,9 @@ func (f feedback) unanswered(author, caller string) []UnansweredReview {
 		if r.State == changesRequested {
 			open = append(open, UnansweredReview{Kind: FeedbackReview, Login: r.User.Login, State: r.State, At: r.SubmittedAt, URL: r.HTMLURL})
 		}
+	}
+	if deskVerdict.State == changesRequested {
+		open = append(open, UnansweredReview{Kind: FeedbackReview, Login: deskVerdict.User.Login, State: deskVerdict.State, At: deskVerdict.SubmittedAt, URL: deskVerdict.HTMLURL})
 	}
 	slices.SortStableFunc(open, func(a, b UnansweredReview) int { return a.At.Compare(b.At) })
 	return open

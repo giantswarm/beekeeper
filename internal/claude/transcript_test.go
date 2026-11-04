@@ -3,6 +3,7 @@ package claude
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,5 +185,97 @@ func TestTurnDone(t *testing.T) {
 	}
 	if TurnDone(filepath.Join(t.TempDir(), "missing.jsonl")) || TurnDone("") {
 		t.Error("a missing transcript or no path proves a turn ended")
+	}
+}
+
+func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := []string{
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Merge?"}]}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions: \"Merge?\"=\"Merge\" user's notes: \"please wait for CI first\". You can now continue with the user's answers in mind."}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"annotations":{"Merge?":{"notes":"please wait for CI first"}}}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q2","content":"ignored timeout"}]},"toolUseResult":{"answers":{"Merge?":"Merge"},"afkTimeoutMs":5000}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","content":"The user responded: not a dialog"}]},"toolUseResult":{"response":"not a person","notes":"neither"}}`,
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:06Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q3","name":"AskUserQuestion","input":{"questions":[{"question":"Approach?"}]}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:07Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q3","content":"User has answered your questions: \"Approach?\"=\"Option A\" user's notes: \"keep the existing flag\"."}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:08Z","message":{"role":"user","content":"also update the docs"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userTexts []string
+	for _, turn := range turns {
+		if turn.Role == "user" {
+			userTexts = append(userTexts, turn.Text)
+		}
+	}
+	want := []string{
+		"Merge — please wait for CI first",
+		"Option A — keep the existing flag",
+		"also update the docs",
+	}
+	if len(userTexts) != len(want) {
+		t.Fatalf("user turns = %q, want %q", userTexts, want)
+	}
+	for i := range want {
+		if userTexts[i] != want[i] {
+			t.Errorf("user turn[%d] = %q, want %q", i, userTexts[i], want[i])
+		}
+	}
+
+	dialogs, err := DialogsSince(path, time.Date(2026, 10, 5, 10, 0, 6, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dialogs) != 1 || dialogs[0].Text != "Option A — keep the existing flag" || !slices.Equal(dialogs[0].Questions, []string{"Approach?"}) {
+		t.Fatalf("DialogsSince = %+v, want the Approach? answer alone", dialogs)
+	}
+}
+
+func TestTailAskUserQuestion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := strings.Join([]string{
+		`{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which retention policy?"}]}}]}}`,
+		`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"q1","content":"User has answered your questions: \"Which retention policy?\"=\"Keep 30 days with 2 GiB cap\"."}]},"toolUseResult":{"answers":{"Which retention policy?":"Keep 30 days with 2 GiB cap"}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].Role != "user" || !strings.Contains(turns[0].Text, "Keep 30 days with 2 GiB cap") {
+		t.Fatalf("Tail = %+v, want AskUserQuestion answer as user turn", turns)
+	}
+	followed, err := Follow(path, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(followed) != 2 || followed[0].Role != RoleTool || followed[0].Text != "AskUserQuestion: Which retention policy?" {
+		t.Fatalf("Follow = %+v, want AskUserQuestion tool turn and user answer", followed)
+	}
+}
+
+func TestTailKeepsDialogAlongsideText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed?"}]}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"additional instruction"},{"type":"tool_result","tool_use_id":"q1","content":"The user responded: Wait"}]},"toolUseResult":{"answers":{"Proceed?":"Wait"},"notes":"build the button first"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	turns, err := Tail(path, 10)
+	if err != nil || len(turns) != 1 || turns[0].Text != "additional instruction\nWait — build the button first" {
+		t.Fatalf("Tail = %+v, %v", turns, err)
+	}
+	dialogs, err := DialogsSince(path, time.Time{})
+	if err != nil || len(dialogs) != 1 || dialogs[0].Text != "Wait — build the button first" {
+		t.Fatalf("DialogsSince = %+v, %v", dialogs, err)
 	}
 }

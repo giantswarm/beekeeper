@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 // The kinds of action, each logged as "supervisor.<kind>".
@@ -183,9 +185,11 @@ const verdictSlack = 30 * time.Second
 // counts.
 func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 	since := rd.at.Add(-verdictSlack)
+	var onHead *Review
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
 		if r := p.Reviews[i]; r.Verdict != "" && sameHead(r.Head, rd.head) && !r.At.Before(since) {
-			return &p.Reviews[i]
+			onHead = &p.Reviews[i]
+			break
 		}
 	}
 	for i := len(p.Reviews) - 1; i >= 0; i-- {
@@ -193,11 +197,14 @@ func (p Pull) verdict(rd round, pushed func(Review) bool) *Review {
 		if r.Verdict == "" || r.Head == "" || r.At.Before(since) || !rd.until.IsZero() && !r.At.Before(rd.until) {
 			continue
 		}
+		if onHead != nil && (r.At.Before(onHead.At) || r.Verdict != ChangesRequested) {
+			continue
+		}
 		if !slices.ContainsFunc(rd.earlier, func(h string) bool { return sameHead(h, r.Head) }) && pushed(r) {
 			return &p.Reviews[i]
 		}
 	}
-	return nil
+	return onHead
 }
 
 // Worker is an agent on the roster.
@@ -1205,13 +1212,17 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	}
 	if escalated {
 		// The person answered: a release is the merge go for the head
-		// the escalation named; any other answer goes to the worker,
-		// and the pull request's review rounds go on from there.
+		// the escalation named unless a later review asked for changes;
+		// any other answer goes to the worker, and the pull request's
+		// review rounds go on from there.
 		// A release of a head the worker moved past goes on as the
 		// rounds say of the new head, unless the new head only merges
 		// the base into the released one.
 		an := esc.answer
-		released := Releases(an.Text)
+		laterChanges := slices.ContainsFunc(p.Reviews, func(r Review) bool {
+			return r.Verdict == ChangesRequested && r.At.After(an.At)
+		})
+		released := Releases(an.Text) && !laterChanges
 		if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
 			if p.Green {
 				why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
@@ -1222,7 +1233,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			}
 			return
 		}
-		if ak := answerKey(ref, an.Note); !released && !l.has(ak) {
+		if ak := answerKey(ref, an.Note); !Releases(an.Text) && !l.has(ak) {
 			a := base
 			a.Key, a.Kind = ak, KindAnswer
 			a.Message = answerMessage(p, esc.head, *an)
@@ -1249,7 +1260,24 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	last := rs[len(rs)-1]
+	// A head past the last round's asks for a park since that round
+	// opened, or for a verified park of that very head: a worker stopped
+	// on such a park cannot repeat it. A park of any other head from
+	// before the round is stale.
+	requested := w.ParkedAt.After(last.at) || sameHead(w.ParkedHead, p.Head)
 	v := p.verdict(last, l.pushed(p))
+	if v != nil && v.Verdict == Approved {
+		for i := len(p.Reviews) - 1; i >= 0; i-- {
+			r := p.Reviews[i]
+			if !r.At.After(v.At) || r.Verdict == "" || r.Head == "" {
+				continue
+			}
+			if r.Verdict == ChangesRequested && !slices.ContainsFunc(last.earlier, func(h string) bool { return sameHead(h, r.Head) }) && (sameHead(r.Head, v.Head) || l.pushed(p)(r)) {
+				v = &p.Reviews[i]
+			}
+			break
+		}
+	}
 	if v == nil {
 		// The round runs until its reviewer reports done. One done
 		// without a verdict on the round's head or on the head now
@@ -1258,7 +1286,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		done := slices.ContainsFunc(in.Events, func(e Event) bool {
 			return e.Verb == VerbDone && e.Agent == ReviewerName(ref, len(rs)) && e.At.After(last.at)
 		})
-		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !w.ParkedAt.After(last.at) {
+		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
 			return
 		}
 		review()
@@ -1283,8 +1311,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// --update-branch, the worker's merge of the base and its
 		// conflicts' resolution, a rebase onto it); any other change
 		// gets its own review. A base merge needs no new park: it brings no
-		// change of the worker's. Any other head asks for a park
-		// since the round opened.
+		// change of the worker's. Any other head asks for its park.
 		if !p.Green {
 			return
 		}
@@ -1299,7 +1326,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !isParked {
 			return
 		}
-		if !w.ParkedAt.After(last.at) {
+		if !requested {
 			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 			return
 		}
@@ -1321,10 +1348,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// were about carries no fixes: it is that head, never a go.
 		merged := p.Green && in.baseMerged(p, reviewed)
 		if sameHead(p.Head, reviewed) || merged {
-			// The findings stand unfixed: the worker reworks once per park.
-			// Review and rework are the loop's; no merge question goes
-			// to the person, and an answered escalation of this head
-			// is handled above.
+			// The findings stand unfixed: the worker reworks, once for
+			// each such park. Review and rework are the loop's; no
+			// merge question goes to the person, and an answered
+			// escalation of this head is handled above.
 			if !escalated || !sameHead(esc.head, p.Head) {
 				a := base
 				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
@@ -1353,8 +1380,16 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 	// Normalize issue-based serve records to the observed pull request. Keep
 	// the PR identity for tie-breaking, action keys and progress tracking.
 	pullRef := func(r string) string {
+		if r == "" {
+			return ""
+		}
 		if _, ok := in.Pulls[r]; ok {
 			return r
+		}
+		for key := range in.Pulls {
+			if strings.EqualFold(key, r) {
+				return key
+			}
 		}
 		var matches []string
 		for key, pull := range in.Pulls {
@@ -1369,6 +1404,14 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 		return r
 	}
 	w, isParked := parked[ref]
+	if !isParked {
+		for k, parkedWorker := range parked {
+			if strings.EqualFold(k, ref) {
+				w, isParked = parkedWorker, true
+				break
+			}
+		}
+	}
 	rs := l.rounds[ref]
 	for _, waiter := range in.Workers {
 		if !strings.EqualFold(waiter.ParkedOn, ref) || waiter.ReviewRequested || !waitsOnOtherPull(waiter, l) {
@@ -1426,7 +1469,7 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 			}
 			if strings.EqualFold(o.Name, owner) || strings.EqualFold(o.Name, PullWorkerName(ref)) || strings.EqualFold(pullRef(o.Serves), ref) {
 				liveOwner = o
-				if owner == "" || owner == PullWorkerName(ref) {
+				if owner == "" || strings.EqualFold(owner, PullWorkerName(ref)) {
 					owner = o.Name
 				}
 				break
@@ -1812,14 +1855,8 @@ func Verdict(state, body string) string {
 	case "CHANGES_REQUESTED":
 		return ChangesRequested
 	case stateCommented:
-		first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
-		first = strings.ToLower(strings.TrimRight(strings.TrimSpace(first), ".!"))
-		switch {
-		case strings.HasSuffix(first, ": "+Approved):
-			return Approved
-		case strings.HasSuffix(first, ": "+ChangesRequested):
-			return ChangesRequested
-		}
+		// The review guard reads the same line: one parser keeps them alike.
+		return Verdict(github.DeskVerdict(body), "")
 	}
 	return ""
 }
