@@ -46,6 +46,9 @@ func (s *Server) ReceiveSource(ctx context.Context, ref Ref, chunk SourceChunk) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if _, err := s.resourceInventory(ref); err != nil {
+		return err
+	}
 	p := s.sourcePath(ref)
 	if err := ownedDirectory(filepath.Dir(p)); err != nil {
 		return err

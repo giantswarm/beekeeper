@@ -239,5 +239,10 @@ func (a *app) releaseUnstarted(ref execution.Ref, sentAt time.Time, reason strin
 		}
 		return []state.Event{event(st.Starts[i].By, "execution.released", "%s: host %s never acknowledged its start: %s", st.Starts[i].Name, ref.Host, reason)}, nil
 	})
+	if err == nil && released {
+		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err = a.revokeWorkerGitHub(cleanup, ref)
+	}
 	return released, err
 }

@@ -87,6 +87,10 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 		}()
 	}
 	env := append(s.toolPath(s.codexEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
+	env, ownedErr := s.workerEnvironment(ref, env)
+	if ownedErr != nil {
+		return ownedErr
+	}
 	env, envErr := s.GitHubEnvironment(j, env)
 	if envErr != nil {
 		return envErr

@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/giantswarm/beekeeper/internal/platform"
-	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 type Journal struct {
@@ -287,6 +286,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 		}
 	}
 	if j.Phase == Preparing {
+		if _, err := s.resourceInventory(r.Ref); err != nil {
+			return j.Handle, err
+		}
 		if err := s.workspace(ctx, &j); err != nil {
 			j.Phase, j.LastError = Failed, "workspace preparation failed; inspect the preserved workspace"
 			if e := atomicFile(p, mustJSON(j)); e != nil {
@@ -457,7 +459,7 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 			continue
 		}
 		if j.Phase == Exited || j.Phase == Failed {
-			o, err := s.Inspect(ctx, j.Handle.Ref)
+			o, err := s.inspect(ctx, j.Handle.Ref)
 			if err != nil {
 				return nil, errors.New("cannot establish owned unit state")
 			}
@@ -471,6 +473,16 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 }
 
 func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
+	o, err := s.inspect(ctx, r)
+	if err == nil && (o.ProcessState == Exited || o.ProcessState == Failed) {
+		err = s.Retire(ctx, r)
+	}
+	return o, err
+}
+
+// Internal admission and policy callers may already hold journal/admission
+// locks. They inspect without starting another execution's retirement.
+func (s *Server) inspect(ctx context.Context, r Ref) (Observation, error) {
 	j, err := s.Read(r)
 	if err != nil {
 		return Observation{}, err
@@ -545,7 +557,9 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 		return Ack{}, errors.New("stop key reused with different content")
 	}
 	if j.StopAcknowledged {
-		s.cleanStoppedRuntime(r)
+		if err := s.retireLocked(ctx, j); err != nil {
+			return Ack{}, err
+		}
 		return Ack{ID: q.ID, Stage: Applied}, nil
 	}
 	j.StopRequest = &q
@@ -571,19 +585,10 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	if err := atomicFile(p, mustJSON(j)); err != nil {
 		return Ack{}, err
 	}
-	s.cleanStoppedRuntime(r)
-	return Ack{ID: q.ID, Stage: Applied}, nil
-}
-
-// Only the disposable MCP proxy home is runtime state. The workspace and
-// source bundle may contain unpublished work and are deliberately retained.
-func (s *Server) cleanStoppedRuntime(r Ref) {
-	if s.Root != "" {
-		mcpHome := s.agyMCPHomeDir(r)
-		if within(s.Root, mcpHome) {
-			_ = worktrees.RemoveAll(mcpHome)
-		}
+	if err := s.retireLocked(ctx, j); err != nil {
+		return Ack{}, err
 	}
+	return Ack{ID: q.ID, Stage: Applied}, nil
 }
 
 // RebindPolicy binds a running execution to the host's prepared policy. The
@@ -625,7 +630,7 @@ func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Obser
 	}); err != nil {
 		return Observation{}, err
 	}
-	return s.Inspect(ctx, r)
+	return s.inspect(ctx, r)
 }
 
 func (s *Server) Logs(_ context.Context, r Ref, q LogRequest) (LogPage, error) {

@@ -37,7 +37,7 @@ func (s *Server) GitHubEnvironment(j Journal, env []string) ([]string, error) {
 		return env, nil
 	}
 	dir := filepath.Join(s.Root, workerGitHubBinDir, string(j.Handle.Ref.Execution))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ownedDirectory(dir); err != nil {
 		return nil, err
 	}
 	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }

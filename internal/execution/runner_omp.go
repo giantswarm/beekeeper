@@ -72,6 +72,9 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 	defer stream.Close()
 	stream.encode = ompMessage
 	env, err := s.GitHubEnvironment(j, append(s.toolPath(s.ompEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath))
+	if err == nil {
+		env, err = s.workerEnvironment(ref, env)
+	}
 	if err != nil {
 		return err
 	}
