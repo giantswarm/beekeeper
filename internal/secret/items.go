@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
@@ -43,6 +45,9 @@ type ItemsOptions struct {
 	// EnvKeys reads each kept item for the keys of its env-style fields'
 	// KEY=VALUE lines and their values' lengths.
 	EnvKeys bool
+	// KeyPattern keeps only env keys containing this case-insensitive substring,
+	// and omits items with no matching keys. Requires EnvKeys.
+	KeyPattern string
 }
 
 // ListVaults are the vaults items lists: secret.vault, secret.vaults and
@@ -57,6 +62,9 @@ func (o *Ops) ListVaults() []string {
 // A value is read in this process for its length alone and answered
 // nowhere.
 func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item, error) {
+	if opt.KeyPattern != "" && !opt.EnvKeys {
+		return nil, errors.New("--key-pattern requires --env-keys")
+	}
 	ref := VaultRef(vault)
 	if vault == "" || strings.Contains(vault, "/") {
 		return nil, fmt.Errorf("%q: name a vault, op://<vault>", ref)
@@ -75,27 +83,50 @@ func (o *Ops) Items(ctx context.Context, vault string, opt ItemsOptions) ([]Item
 	var out []Item
 	for _, it := range listed {
 		item := Item{Title: it.Title, ID: it.ID, Category: it.Category, Tags: it.Tags, Updated: it.UpdatedAt}
-		if !item.matches(opt.Match) {
-			continue
+		if item.matches(opt.Match) {
+			out = append(out, item)
 		}
-		if opt.Fields || opt.EnvKeys {
-			var fields []FieldInfo
-			var keys []EnvKey
-			err := bounded(ctx, ref+"/"+it.Title, func(ctx context.Context) (err error) {
-				fields, keys, err = o.itemFields(ctx, vault, it.ID)
-				return err
+	}
+	if opt.Fields || opt.EnvKeys {
+		group, readCtx := errgroup.WithContext(ctx)
+		// Bound both subprocesses and goroutines, even for very large vaults.
+		const readers = 8
+		for worker := 0; worker < min(readers, len(out)); worker++ {
+			group.Go(func() error {
+				for i := worker; i < len(out); i += readers {
+					if err := readCtx.Err(); err != nil {
+						return err
+					}
+					item := &out[i]
+					var fields []FieldInfo
+					var keys []EnvKey
+					err := bounded(readCtx, ref+"/"+item.Title, func(ctx context.Context) (err error) {
+						fields, keys, err = o.itemFields(ctx, vault, item.ID)
+						return err
+					})
+					if err != nil {
+						return err
+					}
+					if opt.Fields {
+						item.Fields = fields
+					}
+					if opt.EnvKeys {
+						for _, key := range keys {
+							if strings.Contains(strings.ToLower(key.Key), strings.ToLower(opt.KeyPattern)) {
+								item.EnvKeys = append(item.EnvKeys, key)
+							}
+						}
+					}
+				}
+				return nil
 			})
-			if err != nil {
-				return nil, err
-			}
-			if opt.Fields {
-				item.Fields = fields
-			}
-			if opt.EnvKeys {
-				item.EnvKeys = keys
-			}
 		}
-		out = append(out, item)
+		if err := group.Wait(); err != nil {
+			return nil, err
+		}
+	}
+	if opt.KeyPattern != "" {
+		out = slices.DeleteFunc(out, func(it Item) bool { return len(it.EnvKeys) == 0 })
 	}
 	slices.SortStableFunc(out, func(a, b Item) int { return strings.Compare(strings.ToLower(a.Title), strings.ToLower(b.Title)) })
 	return out, nil
