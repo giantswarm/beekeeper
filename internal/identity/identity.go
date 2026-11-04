@@ -9,13 +9,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 )
+
+// issuerRequestTimeout bounds discovery and shared background key fetches,
+// including reading response bodies, independently of a Verify caller.
+const issuerRequestTimeout = 30 * time.Second
 
 // Caller is a verified person.
 type Caller struct {
@@ -59,6 +66,16 @@ func New(ctx context.Context, cfg config.Serve) (*Verifier, error) {
 	case len(cfg.Teams) == 0:
 		return nil, errors.New("serve.teams is not set: the Dex groups that name a caller's team")
 	}
+	// Copy the client so the issuer boundary cannot change a caller's client.
+	client := http.DefaultClient
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+		client = c
+	}
+	bounded := *client
+	if bounded.Timeout <= 0 || bounded.Timeout > issuerRequestTimeout {
+		bounded.Timeout = issuerRequestTimeout
+	}
+	ctx = oidc.ClientContext(ctx, &bounded)
 	p, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("the issuer %s: %w", cfg.Issuer, err)
