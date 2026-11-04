@@ -838,3 +838,31 @@ func TestParsePair(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyValueRefusesMalformedTrailingSkeleton(t *testing.T) {
+	dir, _ := scratch(t)
+	file := filepath.Join(dir, "skeleton.sops.yaml")
+	raw := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: example\nstringData: {}\n---\n*" + password + "\n"
+	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tools := secrettest.New(map[string]string{vaultRef: token})
+	n, err := ops(tools).CopyValue(context.Background(), secret.Ref{Op: vaultRef}, secret.Ref{File: file, Path: pwPath})
+	if err == nil {
+		t.Fatal("accepted malformed trailing YAML")
+	}
+	if n != 0 {
+		t.Errorf("refused copy returned %d bytes", n)
+	}
+	noValue(t, "refusal", err)
+	if len(tools.Calls) != 0 {
+		t.Errorf("refused copy ran %q", tools.Calls)
+	}
+	after, readErr := os.ReadFile(file)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != raw {
+		t.Error("refused copy changed the skeleton")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"slices"
@@ -41,8 +42,10 @@ func parseNode(raw []byte) (*yaml.Node, error) {
 		return nil, errors.New("no YAML document")
 	}
 	var extra yaml.Node
-	if dec.Decode(&extra) == nil {
+	if err := dec.Decode(&extra); err == nil {
 		return nil, errSeveralDocuments
+	} else if !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid trailing YAML content")
 	}
 	return n.Content[0], nil
 }
