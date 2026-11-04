@@ -115,7 +115,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 				}
 				if tc.guide {
 					guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: p.By}})
-					q = "the guide"
+					q = theGuide
 				}
 				return nil, nil
 			}); err != nil {
@@ -241,8 +241,8 @@ func TestCommandOutcomeCanCompletePullRequestWait(t *testing.T) {
 func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	timer, err := w.timerFrom(timerSpec{wake: "the guide"}, relayNow)
-	if err != nil || timer.Wake != "the guide" {
+	timer, err := w.timerFrom(timerSpec{wake: theGuide}, relayNow)
+	if err != nil || timer.Wake != theGuide {
 		t.Fatalf("role timer: %+v, %v", timer, err)
 	}
 	for _, name := range []string{"previous guide", "successor guide"} {
@@ -266,7 +266,7 @@ func TestTimerGuideRoleFollowsRelay(t *testing.T) {
 
 func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
-	if _, err := w.timerFrom(timerSpec{wake: "the supervisor"}, relayNow); err != errSupervisorMessage {
+	if _, err := w.timerFrom(timerSpec{wake: resumer}, relayNow); err != errSupervisorMessage {
 		t.Fatalf("want supervisor service explanation, got %v", err)
 	}
 }
@@ -274,7 +274,7 @@ func TestTimerSupervisorExplainsServiceRole(t *testing.T) {
 func TestTimerGuideWithoutHolderDoesNotWake(t *testing.T) {
 	w, _, _ := notifyingWatch(t, t.TempDir(), false)
 	woke := stubWakes(t)
-	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: "the guide"}, reason: "due"})
+	w.wakeTimer(t.Context(), timerFire{t: state.Timer{Wake: theGuide}, reason: "due"})
 	if len(*woke) != 0 {
 		t.Fatalf("woke without a holder: %v", *woke)
 	}

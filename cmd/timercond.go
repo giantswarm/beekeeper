@@ -285,7 +285,7 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
 		return
 	}
-	if strings.EqualFold(f.t.Wake, "the guide") {
+	if strings.EqualFold(f.t.Wake, guideRoleAlias) {
 		h := guideRole.get(st).Holder
 		if h == nil {
 			w.emitNow("timer", "TIMER WAKE FAILED: #%d: no session holds the guide role", f.t.ID)
