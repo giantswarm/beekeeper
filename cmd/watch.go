@@ -1476,6 +1476,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.clear("proc")
 		w.pollSessions(ctx, since, t)
 	}
+	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
 	w.pollToolWindow(ctx, watchParty)

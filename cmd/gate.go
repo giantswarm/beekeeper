@@ -700,6 +700,9 @@ func (g *gateRun) step() (string, error) {
 		return liveWait, nil
 	}
 	if liveWait == "" {
+		if done, err := g.takeover(); done || err != nil {
+			return "", err
+		}
 		g.pollToolWindow(g.ctx, g.me)
 		// Recover an ended devctl before pruning its place as lost. A
 		// queued handoff behind a live gate only registers its new PID;
@@ -746,6 +749,7 @@ func (g *gateRun) step() (string, error) {
 				g.me = m.By
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
+			m.Version = project.Version()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -790,6 +794,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; park until it lifts (beekeeper agents park --on %s%s \"<what>\"), merge then, do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, holdParkFlag, hold.Target)
 	case dup != nil && dup.Phase == state.Waiting:
+		if dup.By.Is(g.me) {
+			gateLine("%s reuses its existing place in lane %s (pid %d); its outcome reaches the owning session", g.key(), g.lane.Name, dup.PID)
+			return "", exitCode(ExitGateQueued)
+		}
 		why := fmt.Sprintf("%s is already queued in lane %s: since %s for %q (pid %d); its outcome reaches %q, do not merge again",
 			g.key(), g.lane.Name, clock(g.now, dup.Joined), dup.By.Name, dup.PID, dup.By.Name)
 		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
@@ -1709,7 +1717,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
-		m.HandCut = g.handCut()
+		m.HandCut, m.Version = g.handCut(), project.Version()
 		m.Finished, m.Exit, m.Reset = time.Time{}, 0, time.Time{}
 		ev := []state.Event{g.startEvent()}
 		if passed != "" {
