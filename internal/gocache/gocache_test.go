@@ -121,6 +121,42 @@ func TestDir(t *testing.T) {
 	}
 }
 
+func TestDirRejectsRelativeCache(t *testing.T) {
+	for _, dir := range []string{".", "cache", "../cache"} {
+		t.Run(dir, func(t *testing.T) {
+			t.Setenv("GOCACHE", dir)
+			if got := Dir(); got != "" {
+				t.Errorf("Dir with relative GOCACHE = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestDirRejectsRelativeCacheBeforeTrimming(t *testing.T) {
+	dir := cache(t, map[string][2]int{entryA: {100, 1}})
+	t.Chdir(dir)
+	t.Setenv("GOCACHE", ".")
+	discovered := Dir()
+	if discovered != "" {
+		t.Errorf("Dir = %q, want empty for invalid GOCACHE", discovered)
+	}
+	// Follow automatic callers: only scan and trim a discovered cache.
+	if discovered != "" {
+		u, err := Scan(discovered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Trim(u, 0, func() bool { return false }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, entryA)); err != nil {
+		t.Errorf("working file was not preserved: %v", err)
+	} else if len(data) != 100 {
+		t.Errorf("working file has %d bytes, want 100", len(data))
+	}
+}
+
 // A trim waits for the commands that use the cache, and a command for the
 // trim under way.
 func TestUseAndTrimExcludeEachOther(t *testing.T) {

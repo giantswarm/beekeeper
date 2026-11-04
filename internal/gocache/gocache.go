@@ -139,10 +139,10 @@ func ModDir() string {
 const busyEvery = 256
 
 // Dir is the build cache the go command uses: $GOCACHE, else go-build in
-// the user's cache directory; "" when it is off or unknown.
+// the user's cache directory; "" when it is off, invalid or unknown.
 func Dir() string {
 	if d := os.Getenv("GOCACHE"); d != "" {
-		if d == "off" {
+		if d == "off" || !filepath.IsAbs(d) {
 			return ""
 		}
 		return d
