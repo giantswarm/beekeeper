@@ -1617,8 +1617,18 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		_ = g.installTool(g.ctx, g.me, "merge.update", "before "+g.key())
 	}
 	toolFrom := ""
+	openToolWindow := g.toolMerge()
 	if g.toolMerge() {
 		toolFrom = devctlVersion(g.ctx)
+		// A merged pull request cannot publish a new release on a rerun.
+		// Keep an existing window intact, but do not open another one on
+		// the installed release. Promotions (PR zero) still need a window.
+		// If GitHub cannot answer, retain the conservative window behavior.
+		if g.pr != 0 {
+			if p, err := pullState(g.ctx, g.repo, g.pr); err == nil && p.State == github.Merged {
+				openToolWindow = false
+			}
+		}
 	}
 	why := ""
 	var settled []state.Merge
@@ -1668,7 +1678,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		if passed != "" {
 			ev[0].Detail += ", ahead of " + passed + " (not arrived)"
 		}
-		if g.toolMerge() {
+		if openToolWindow {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
 				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s runs and every new devctl run refuses from its release on until updated, so the other merges are held once its release is coming (its pull request merged, a promotion's at once); the gate runs `devctl version update` once it merged, until the release's binary verifies, and lifts this once `devctl version` reports the release, or at a release candidate, which no update installs", g.key())}
