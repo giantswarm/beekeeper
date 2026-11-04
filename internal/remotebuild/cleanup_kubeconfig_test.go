@@ -12,9 +12,11 @@ import (
 )
 
 const (
-	sweepContext     = "sweep-builders"
-	sweepContextFlag = "--context"
-	sweepNamespace   = "sweep-workers"
+	sweepContext        = "sweep-builders"
+	sweepContextFlag    = "--context"
+	sweepNamespace      = "sweep-workers"
+	sweepKubeconfig     = "build.yaml"
+	sweepKubeconfigFlag = "--kubeconfig"
 )
 
 func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
@@ -30,12 +32,12 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			kubeconfig := filepath.Join(origin, "build.yaml")
+			kubeconfig := filepath.Join(origin, sweepKubeconfig)
 			if err := os.WriteFile(kubeconfig, []byte("original connection"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if conflicting {
-				if err := os.WriteFile(filepath.Join(desk, "build.yaml"), []byte("wrong connection"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(desk, sweepKubeconfig), []byte("wrong connection"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -47,7 +49,7 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 				t.Fatal(err)
 			}
 			name := builderName(host, origin)
-			runner := Runner{StateDir: state, Config: Config{Kubeconfig: "build.yaml", Context: sweepContext, Namespace: sweepNamespace}}
+			runner := Runner{StateDir: state, Config: Config{Kubeconfig: sweepKubeconfig, Context: sweepContext, Namespace: sweepNamespace}}
 			if err := runner.remember(origin, host, name); err != nil {
 				t.Fatal(err)
 			}
@@ -65,11 +67,11 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 				t.Fatalf("saved record = %+v, want %+v", saved, rec)
 			}
 			t.Chdir(desk)
-			runner.Config = Config{Kubeconfig: "build.yaml", Context: "different", Namespace: "different"}
+			runner.Config = Config{Kubeconfig: sweepKubeconfig, Context: "different", Namespace: "different"}
 			calls := 0
 			runner.Command = func(_ context.Context, _ io.Reader, _ io.Writer, args ...string) error {
 				calls++
-				want := []string{"--kubeconfig", kubeconfig, sweepContextFlag, sweepContext, "--namespace", sweepNamespace}
+				want := []string{sweepKubeconfigFlag, kubeconfig, sweepContextFlag, sweepContext, "--namespace", sweepNamespace}
 				if !slices.Equal(args[:6], want) {
 					t.Fatalf("connection = %v, want %v", args[:6], want)
 				}
@@ -95,7 +97,7 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 func TestSweepRetainsLegacyRelativeKubeconfig(t *testing.T) {
 	state, root := t.TempDir(), t.TempDir()
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile("build.yaml", []byte("unrelated connection"), 0o600); err != nil {
+	if err := os.WriteFile(sweepKubeconfig, []byte("unrelated connection"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(state, "remote-build")
@@ -107,7 +109,7 @@ func TestSweepRetainsLegacyRelativeKubeconfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := builderName(host, root)
-	rec := builderRecord{root, host, "build.yaml", sweepContext, sweepNamespace}
+	rec := builderRecord{root, host, sweepKubeconfig, sweepContext, sweepNamespace}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
