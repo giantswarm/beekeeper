@@ -2314,11 +2314,12 @@ may be an alias) and its turns keep it. The desktop's import of a start often dr
 the desktop then records its own default once it warms the session's CLI; the desktop refuses a
 session's switch of its own model, so a steward, another session beekeeper started, sets it with
 `set_session_model` on the session's row. A record holding another model than the start's counts as
-lost as much as one holding none: the reopen restores it through a steward too. While the desktop
-records another model, the task's turn and every wake run headless on the start's model instead of
-as desktop turns, and the start's last lines say so: `its desktop turns run on <model>` when it
-holds, else `the model <m> could not be set` with the call that sets it, which the starter can
-make. `agents handover` keeps the start's model unless `--model` overrides it, and `agents wake`
+lost as much as one holding none: the reopen restores it through a steward too. If the desktop
+records another model and no steward can restore it, a seeded desktop start
+fails before sending its task or launching a headless task. The seed and roster entry stay
+recorded for inspection; restore the desktop model before waking the session. A later wake
+still runs headless on the requested model while the desktop records another model.
+`agents handover` keeps the start's model unless `--model` overrides it, and `agents wake`
 resumes on it.
 
 **The start gate.** Before anything is recorded, the start is judged as `beekeeper capacity`

@@ -159,9 +159,9 @@ it shows in the sidebar as local_<id>, titled with <name> (beekeeper appends
 the name's custom-title line to the transcript first, and a steward restores
 a title or model the import dropped; the session never sets its own model,
 which the desktop refuses). --model is the model its turns keep: while the
-desktop records another, its turns run headless on --model, and start says
-so with the call that sets it. A headless turn on a model runs its security
-reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
+desktop records another and no steward can restore it, the seeded start
+is refused before its task runs. Its seed stays recorded for inspection.
+A headless turn on a model runs its security reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
 window to the new session for a moment and back to the session it showed
 (claude://code/continue); the window's focus does not hold it, the person's
 typing for 1 minute at most, and a locked screen not at all.
@@ -1019,8 +1019,9 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // the desktop's import reads), the desktop imports it under its name once
 // the seed ended, past the window's focus and the person's typing within
 // desktopTurnWait, and the task's first turn then runs as a desktop turn
-// (turnInDesktop). Only a desktop that cannot run it gets the turn headless,
-// as agents wake resumes a session, and sa.turn says why.
+// (turnInDesktop). A model mismatch refuses the start before its task;
+// other desktop failures get the turn headless, as agents wake resumes a
+// session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
 	seed, err := withReviewModel(sp.model, []string{toolsFlag, "", strictMCPConfigFlag})
@@ -1071,13 +1072,24 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
-		sa.turn += " on " + w.model
+		sa.turn = fmt.Sprintf("start refused before its task: %v", err)
 	}
 	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
-	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
+	if err := resumeSeededTask(err, func() error {
+		return a.resumeTurn(ctx, by, w, taskTurn)
+	}); err != nil {
 		return sa, err
 	}
 	return sa, nil
+}
+
+// resumeSeededTask refuses a seeded desktop start whose requested model
+// could not be restored. Other desktop failures still permit a headless task.
+func resumeSeededTask(desktopErr error, resume func() error) error {
+	if errors.As(desktopErr, new(modelNotHeld)) {
+		return fmt.Errorf("start refused before its task: %w; the seed stays recorded; restore its desktop model before waking it", desktopErr)
+	}
+	return resume()
 }
 
 // importVisible imports a seeded session into the running desktop once the
