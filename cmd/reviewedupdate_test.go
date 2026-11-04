@@ -144,6 +144,12 @@ func TestReviewedMergeOfAnUpdatedBranchStopsShort(t *testing.T) {
 				}
 			}
 		}},
+		"changes requested on source head meanwhile": {github.SquashRefused, "requested changes", func(b *behindRig) {
+			b.onPause = func(int) {
+				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
+				b.verdict("R2", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nThe source head still needs its guard fixed")
+			}
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := newBehindRig(t)

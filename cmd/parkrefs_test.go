@@ -362,3 +362,39 @@ func TestParkSuggestionMatchesWholeIssueReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestParkRefusesSettledReference(t *testing.T) {
+	for _, target := range []struct{ kind, status string }{
+		{github.RefIssue, github.Closed},
+		{github.RefPullRequest, github.Closed},
+		{github.RefPullRequest, github.Merged},
+	} {
+		t.Run(target.kind+"/"+target.status, func(t *testing.T) {
+			for _, offRoster := range []bool{false, true} {
+				w := parkingWatch(t, nil)
+				refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+					return map[github.PR]github.RefState{refs[0]: {Kind: target.kind, State: target.status}}, nil
+				}
+				var err error
+				if offRoster {
+					_, err = w.park(offSession, refOne, "wait for target")
+				} else {
+					err = park(t, w, "--on", refOne, "wait for target")
+				}
+				if err == nil || !strings.Contains(err.Error(), "already "+strings.ToLower(target.status)) {
+					t.Fatalf("settled target: %v", err)
+				}
+				st, err := w.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if st.Agents[0].Park != nil || len(st.Parks) != 0 || len(st.ReviewParks) != 0 {
+					t.Fatal("settled target recorded a park")
+				}
+				if settled := w.settledParks(t.Context(), st); len(settled) != 0 {
+					t.Fatalf("refused park can resume: %+v", settled)
+				}
+			}
+		})
+	}
+}

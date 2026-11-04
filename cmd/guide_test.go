@@ -319,3 +319,46 @@ func TestGuideQueueSkipsAgentsThatReportedAfterTheWait(t *testing.T) {
 		t.Fatalf("an agent off the roster waits: %+v", q)
 	}
 }
+
+const guideNoteReader = "Reader"
+
+func TestGuideCentralFeedLifecycle(t *testing.T) {
+	for _, verb := range []string{answerRecorded, noteDone, noteDefaulted, noteOvertaken} {
+		t.Run(verb, func(t *testing.T) {
+			a := &app{cfg: &config.Config{}}
+			a.cfg.Guide.Person = guideNoteReader
+			a.cfg.Central.Context = centralKey
+			st := &state.State{Notes: []state.Note{{ID: 1, For: guideNoteReader, Text: "local?"}}}
+			notes := []state.Note{{ID: 1, Central: centralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: centralKey, For: "Someone else", Text: "other?"}}
+			lines, changed := a.centralGuideLines(st, nil, notes, nil, true)
+			if !changed || len(lines) != 1 || !strings.Contains(lines[0], "GUIDE DECISION: central#1") {
+				t.Fatalf("first poll: %q, %v", lines, changed)
+			}
+			a.feedLines(st, nil, nil, nil) // local delivery must retain the central mark
+			if lines, changed := a.centralGuideLines(st, nil, notes, nil, true); len(lines) != 0 || changed {
+				t.Fatalf("repeat: %q", lines)
+			}
+			if lines, changed := a.centralGuideLines(st, nil, nil, nil, false); len(lines) != 0 || changed {
+				t.Fatalf("outage: %q", lines)
+			}
+			if lines, changed := a.centralGuideLines(st, nil, notes, nil, true); len(lines) != 0 || changed {
+				t.Fatalf("recovery: %q", lines)
+			}
+			closed := map[int]state.Event{1: {Verb: verb, Detail: verbAnswer, By: state.Party{Name: mailGuide}}}
+			lines, changed = a.centralGuideLines(st, nil, nil, closed, true)
+			want := "GUIDE CLOSED"
+			if verb == answerRecorded {
+				want = "GUIDE ANSWERED"
+			}
+			if verb == noteDefaulted {
+				want = "GUIDE DEFAULTED"
+			}
+			if !changed || len(lines) != 1 || !strings.HasPrefix(lines[0], want) || !strings.Contains(lines[0], "central#1") {
+				t.Fatalf("closure: %q", lines)
+			}
+			if lines, changed := a.centralGuideLines(st, nil, nil, closed, true); len(lines) != 0 || changed {
+				t.Fatalf("closed twice: %q", lines)
+			}
+		})
+	}
+}
