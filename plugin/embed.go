@@ -18,7 +18,7 @@ const SkillsDir = "skills"
 
 // Topics are the worker rules' topic skills, in the order the rules name
 // them: the detail a worker loads before the step that needs it.
-var Topics = []string{"lease", "merge", "github", "park"}
+var Topics = []string{"lease", "merge", "github", "park", "alerts", "long-proofs"}
 
 // SkillNames are the plugin's skills, by name, sorted.
 func SkillNames() []string {

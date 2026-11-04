@@ -191,9 +191,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			picked := m.selectedSession()
 			m.data = msg.data
 			m.err = nil
+			m.updated = time.Now()
 			m.keepSelection(picked)
 		}
-		m.updated = time.Now()
 		m.clampAll()
 		m.noticeHandedBack()
 		return m, nil
