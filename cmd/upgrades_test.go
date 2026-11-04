@@ -447,4 +447,4 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 	}
 }
 
-const snapshotInstallation = snapshotInstallation
+const snapshotInstallation = "prod"
