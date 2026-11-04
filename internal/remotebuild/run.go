@@ -80,6 +80,9 @@ func (r Runner) kubectl(ctx context.Context, in io.Reader, out io.Writer, args .
 	}
 	c := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec // fixed executable and typed arguments; test commands use owned fixtures
 	c.Stdin, c.Stdout, c.Stderr = in, out, io.Discard
+	// Credential helpers may outlive kubectl with an inherited output pipe.
+	// Bound draining after exit/cancellation; incomplete output is an error.
+	c.WaitDelay = time.Second
 	return c.Run()
 }
 
