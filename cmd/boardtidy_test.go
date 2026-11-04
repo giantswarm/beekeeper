@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -61,5 +62,40 @@ func TestBoardTidySaysWhatItDidWithTheRestore(t *testing.T) {
 		if want := map[bool]int{false: 2, true: 0}[dry]; writes != want || len(evs) != want/2 {
 			t.Errorf("dry %t: %d writes, %d events", dry, writes, len(evs))
 		}
+	}
+}
+
+func TestBoardTidyLogsConfirmedStatusBeforeReturningArchiveError(t *testing.T) {
+	a, out := noteApp(t)
+	a.now = time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)
+	a.cfg.Board = config.Board{Owner: "o", Project: 7, ArchiveAfter: config.Duration{Duration: config.DefaultBoardArchiveAfter}}
+	writeErr := errors.New("injected archive failure")
+	var writes int
+	answer := tidyAnswers(&writes)
+	was := boardGH
+	boardGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[3], "archiveProjectV2Item") {
+			return nil, writeErr
+		}
+		return answer(ctx, args...)
+	}
+	t.Cleanup(func() { boardGH = was })
+	c := a.boardTidyCmd()
+	c.SetArgs([]string{})
+	c.SetOut(out)
+	c.SilenceUsage, c.SilenceErrors = true, true
+	if err := c.Execute(); !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v, want injected archive failure", err)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "board.tidy" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 || len(evs) != 1 {
+		t.Fatalf("%d successful writes, %d events; want one of each", writes, len(evs))
+	}
+	want := "https://github.com/o/r/issues/1 closed 2026-10-01: In Progress → Done"
+	if evs[0].Detail != want {
+		t.Errorf("logged detail = %q, want %q", evs[0].Detail, want)
 	}
 }
