@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,7 +141,7 @@ func TestNewGuideRunWithoutAGuide(t *testing.T) {
 		t.Errorf("brief:\n%s", brief)
 	}
 	st, _ := a.store.Read()
-	if st.Guide.Relay != nil || !guideRole.startedAs(st, state.Party{Session: bgID}) {
+	if st.Guide.Relay == nil || st.Guide.Relay.To.Session != bgID || !guideRole.startedAs(st, state.Party{Session: bgID}) {
 		t.Fatalf("relay %+v, starts %+v", st.Guide.Relay, st.Starts)
 	}
 	a.as = ""
@@ -150,7 +151,7 @@ func TestNewGuideRunWithoutAGuide(t *testing.T) {
 	if err := a.runStart(context.Background(), guideRole, false); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := a.store.Read(); st.Guide.Holder == nil || st.Guide.Holder.Session != bgID || st.Guide.Run != 12 {
+	if st, _ := a.store.Read(); st.Guide.Holder == nil || st.Guide.Holder.Session != bgID || st.Guide.Run != 12 || st.Guide.Relay != nil {
 		t.Errorf("guide %+v", st.Guide)
 	}
 }
@@ -219,5 +220,106 @@ func TestResumeStartsAGoneGuide(t *testing.T) {
 	}
 	if err := a.resume(t.Context()); err != nil || len(runs) != 1 {
 		t.Fatalf("no guide recorded: %v, runs %+v", err, runs)
+	}
+}
+
+// The first background launch reserves its run before the daemon returns.
+func TestInitialGuideRunReservesLaunch(t *testing.T) {
+	for _, run := range []int{0, 11} {
+		t.Run(guideRole.runName(run+1), func(t *testing.T) {
+			a, _ := stubApp(t)
+			plat.Machine = tableMachine{plat.Machine}
+			a.now = relayNow
+			a.cfg.Agents.Mode = config.ModeBackground
+			a.cfg.Guide.Dir = t.TempDir()
+			a.cfg.Guide.RelayTTL.Duration = 15 * time.Minute
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Guide = nil
+				if run > 0 {
+					st.Guide = &state.Role{Run: run}
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			calls := stubBackground(t, "backgrounded · "+bgShortID+" · guide\n", bgSession{ID: bgShortID, SessionID: bgID})
+			launch := bgRun
+			nested := false
+			bgRun = func(ctx context.Context, dir string, env, argv []string) (string, error) {
+				if !nested {
+					nested = true
+					_, _, err := a.newRun(ctx, guideRole, state.Party{Name: personAsker}, true)
+					if Code(err) != ExitRefused || !strings.Contains(err.Error(), "is starting already") {
+						t.Errorf("second launch: %v", err)
+					}
+					waitCtx, cancel := context.WithCancel(ctx)
+					waiting := make(chan error, 1)
+					go func() {
+						waiting <- a.awaitRoleStart(waitCtx, guideRole, state.Party{Session: bgID, Name: guideRole.runName(run + 1)})
+					}()
+					select {
+					case err := <-waiting:
+						t.Errorf("role start returned before launch was recorded: %v", err)
+					case <-time.After(50 * time.Millisecond):
+					}
+					cancel()
+					select {
+					case <-waiting:
+					case <-time.After(time.Second):
+						t.Error("role start did not honor cancellation")
+					}
+					st, err := a.store.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if r := guideRole.get(st).Relay; !r.Open(a.now) || r.To.Session != "" || r.To.Name != guideRole.runName(run+1) {
+						t.Errorf("pending launch: %+v", r)
+					}
+				}
+				return launch(ctx, dir, env, argv)
+			}
+			to, _, err := a.newRun(t.Context(), guideRole, state.Party{Name: personAsker}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(*calls) != 1 {
+				t.Errorf("daemon launches = %d, want 1", len(*calls))
+			}
+			st, _ := a.store.Read()
+			if !guideRole.startedAs(st, to) {
+				t.Fatal("start not recorded")
+			}
+		})
+	}
+}
+
+func TestInitialGuideRunLaunchFailureWithdrawsReservation(t *testing.T) {
+	a, _ := stubApp(t)
+	plat.Machine = tableMachine{plat.Machine}
+	a.now = relayNow
+	a.cfg.Agents.Mode = config.ModeBackground
+	a.cfg.Guide.Dir = t.TempDir()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide = nil; return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	calls := stubBackground(t, "backgrounded · "+bgShortID+" · guide\n", bgSession{ID: bgShortID, SessionID: bgID})
+	launch := bgRun
+	bgRun = func(context.Context, string, []string, []string) (string, error) {
+		return "", errors.New("launch failed")
+	}
+	if _, _, err := a.newRun(t.Context(), guideRole, state.Party{Name: personAsker}, false); err == nil {
+		t.Fatal("launch succeeded")
+	}
+	st, _ := a.store.Read()
+	if st.Guide.Relay != nil || st.Guide.Holder != nil {
+		t.Fatalf("failed launch left reservation: %+v", st.Guide)
+	}
+	bgRun = launch
+	to, _, err := a.newRun(t.Context(), guideRole, state.Party{Name: personAsker}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if to.Name != guideRole.runName(2) || len(*calls) != 1 {
+		t.Fatalf("retry: %+v, launches %d", to, len(*calls))
 	}
 }

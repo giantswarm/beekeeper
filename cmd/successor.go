@@ -107,9 +107,10 @@ func (a *app) startSuccessor(ctx context.Context, rl role, from, by state.Party,
 }
 
 // startRun is startSuccessor, where from may be the zero party: no holder is
-// recorded, so no relay opens and the run's `<role> start` takes the role
-// as a start of beekeeper's (role.mayTake). check, when set, refuses the
-// run under the state's lock before anything starts.
+// recorded. An initial run reserves a pending relay too, so another start
+// cannot launch the same run while its session is being created. Its
+// `<role> start` takes the role as a start of beekeeper's (role.mayTake).
+// check, when set, refuses the run under the state's lock before anything starts.
 func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir string, check func(*state.State) error) (state.Party, string, error) {
 	id := uuid.NewString()
 	holder := from != (state.Party{})
@@ -143,6 +144,9 @@ func (a *app) startRun(ctx context.Context, rl role, from, by state.Party, dir s
 			fromLabel = fmt.Sprintf("%s (%s)", from.Name, rl.runName(r.Run))
 		}
 		if !holder {
+			r.Relay = &state.Relay{To: to, At: a.now.UTC(), Expires: a.now.Add(rl.cfg(a.cfg).RelayTTL.Duration).UTC()}
+			r.Run = n
+			rl.set(st, r)
 			msg = fmt.Sprintf("no %s is recorded: %q's `beekeeper %s start` takes the role", rl.name, to.Name, rl.name)
 			return []state.Event{event(by, rl.name+".run", "starting %s: no %s is recorded", to.Name, rl.name)}, nil
 		}
