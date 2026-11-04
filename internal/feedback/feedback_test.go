@@ -108,3 +108,40 @@ func TestRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteUnicodeCaseFold(t *testing.T) {
+	for _, c := range []struct {
+		name, prefix string
+	}{
+		{"Maße", "MAẞE"},
+		{"MAẞE", "Maße"},
+		{"Keeper", "Keeper"},
+		{"Keeper", "Keeper"},
+	} {
+		t.Run(c.name+"/"+c.prefix, func(t *testing.T) {
+			text := c.prefix + ": check the CI"
+			if to, msg := feedback.Route(text, []string{c.name}); to != c.name || msg != "check the CI" {
+				t.Errorf("Route(%q) = %q, %q; want %q, %q", text, to, msg, c.name, "check the CI")
+			}
+		})
+	}
+}
+
+func TestRouteColonNames(t *testing.T) {
+	for _, names := range [][]string{
+		{"Maße", "Maße: build"},
+		{"Maße: build", "Maße"},
+	} {
+		for _, c := range []struct{ text, to, msg string }{
+			{"MAẞE: BUILD:  check the CI  ", "Maße: build", "check the CI"},
+			{"MAẞE: BUILD: \t", "Maße", "BUILD:"},
+			{"MAẞE: \t", "", "MAẞE: \t"},
+			{"MAẞE", "", "MAẞE"},
+			{"MAẞE extra: check the CI", "", "MAẞE extra: check the CI"},
+		} {
+			if to, msg := feedback.Route(c.text, names); to != c.to || msg != c.msg {
+				t.Errorf("Route(%q, %q) = %q, %q; want %q, %q", c.text, names, to, msg, c.to, c.msg)
+			}
+		}
+	}
+}

@@ -127,11 +127,19 @@ func Later(a, b string) bool {
 // none, "" and the whole text.
 func Route(text string, names []string) (to, msg string) {
 	for _, n := range names {
-		if len(n) <= len(to) || len(text) <= len(n) || !strings.EqualFold(text[:len(n)], n) {
+		if len(n) <= len(to) {
 			continue
 		}
-		if rest, ok := strings.CutPrefix(text[len(n):], ":"); ok && strings.TrimSpace(rest) != "" {
-			to, msg = n, strings.TrimSpace(rest)
+		// Compare complete prefixes: case folding can change UTF-8 byte length.
+		// Every colon is a candidate because agent names may contain colons.
+		for i, r := range text {
+			if r != ':' || !strings.EqualFold(text[:i], n) {
+				continue
+			}
+			if rest := strings.TrimSpace(text[i+1:]); rest != "" {
+				to, msg = n, rest
+				break
+			}
 		}
 	}
 	if to == "" {
