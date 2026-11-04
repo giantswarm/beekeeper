@@ -37,6 +37,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -488,7 +489,7 @@ func (s *Store) holder(name string, change func(*v1alpha1.Environment) (bool, er
 		if err != nil || !changed {
 			return false, err
 		}
-		env.Status.ObservedGeneration = env.Generation
+		setObserved(env)
 		err = s.c.Status().Update(ctx, env)
 		if apierrors.IsConflict(err) {
 			return true, nil
@@ -1325,19 +1326,33 @@ func restoreStatus(o client.Object, status any) {
 	}
 }
 
+// setObserved marks a successful writer operation. Ready means that the
+// object's state has been persisted, not that a hold is active or a queue empty.
 func setObserved(o client.Object) {
 	g := o.GetGeneration()
+	var conditions *[]metav1.Condition
 	switch o := o.(type) {
 	case *v1alpha1.Environment:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.MergeLane:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.Hold:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.Note:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.RosterEntry:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
+	}
+	if conditions != nil {
+		meta.SetStatusCondition(conditions, metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionTrue, ObservedGeneration: g,
+			Reason: "StatePersisted", Message: "The writer has persisted the object's state.",
+		})
 	}
 }
 
