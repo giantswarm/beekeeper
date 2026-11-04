@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // toolEvents are the events agy fires for a tool call: their items are
@@ -19,15 +18,13 @@ var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 
 // EntryRejects is why agy refuses the named hook entry raw, an object of
 // event lists, or "" when agy accepts it: a tool event's items are matchers
-// with at least one hook, a lifecycle event's items are command hooks, and
-// every hook of type "command" (or of no type) names its command.
+// with optional command hooks, a lifecycle event's items are command hooks, and
+// every hook of type "command" (or of no type) names its command. Null named
+// entries and matchers without hooks are accepted no-ops, not proof of a guard.
 func EntryRejects(raw json.RawMessage) string {
 	var events map[string][]json.RawMessage
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return "not an object of hook lists: " + err.Error()
-	}
-	if events == nil {
-		return "not an object of hook lists"
 	}
 	for _, event := range ordered(raw) {
 		for _, item := range events[event] {
@@ -49,9 +46,6 @@ func itemRejects(event string, item json.RawMessage) string {
 	if err := json.Unmarshal(item, &e); err != nil {
 		return event + ": " + err.Error()
 	}
-	if len(e.Hooks) == 0 {
-		return event + ": a matcher without hooks"
-	}
 	for _, h := range e.Hooks {
 		if why := commandRejects(event, h); why != "" {
 			return why
@@ -68,7 +62,7 @@ func commandRejects(event string, item json.RawMessage) string {
 	if err := json.Unmarshal(item, &h); err != nil {
 		return event + ": " + err.Error()
 	}
-	if (h.Type == nil || *h.Type == "command") && strings.TrimSpace(h.Command) == "" {
+	if (h.Type == nil || *h.Type == "command") && h.Command == "" {
 		return event + ": command hook must specify 'command'"
 	}
 	return ""

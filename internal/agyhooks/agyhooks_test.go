@@ -10,10 +10,9 @@ const guard = `{
   "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]
 }`
 
-// agy refuses an entry whose lifecycle event lists a matcher wrapper, whose
-// tool event lists a command without a matcher's hooks, or whose command hook
-// names no command; it accepts flat lifecycle commands and matchers with
-// commands under the tool events.
+// agy refuses lifecycle matcher wrappers and command handlers without a
+// command; it accepts inert matchers, flat lifecycle commands and matchers
+// with commands under the tool events.
 func TestEntryRejects(t *testing.T) {
 	const invalidHookLists = "not an object of hook lists"
 	for _, c := range []struct {
@@ -27,13 +26,13 @@ func TestEntryRejects(t *testing.T) {
 			"PreInvocation: command hook must specify 'command'"},
 		{"a matcher under another lifecycle event", `{"PostInvocation": [{"hooks": [{"type": "command", "command": "/usr/bin/true"}]}]}`,
 			"PostInvocation: command hook must specify 'command'"},
-		{"a blank command", `{"PreInvocation": [{"type": "command", "command": "  "}]}`, "PreInvocation: command hook must specify 'command'"},
-		{"a matcher without hooks", `{"PreToolUse": [{"matcher": "*"}]}`, "PreToolUse: a matcher without hooks"},
-		{"a flat command under PreToolUse", `{"PreToolUse": [{"type": "command", "command": "/usr/bin/true"}]}`, "PreToolUse: a matcher without hooks"},
+		{"a blank command", `{"PreInvocation": [{"type": "command", "command": "  "}]}`, ""},
+		{"a matcher without hooks", `{"PreToolUse": [{"matcher": "*"}]}`, ""},
+		{"a flat command under PreToolUse", `{"PreToolUse": [{"type": "command", "command": "/usr/bin/true"}]}`, ""},
 		{"a matcher hook without its command", `{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command"}]}]}`, "PreToolUse: command hook must specify 'command'"},
 		{"an event that is no list", `{"PreToolUse": {"matcher": "*"}}`, invalidHookLists},
 		{"an entry that is no object", `"/usr/bin/true"`, invalidHookLists},
-		{"null", `null`, invalidHookLists},
+		{"null", `null`, ""},
 	} {
 		got := EntryRejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {
@@ -46,7 +45,7 @@ func TestEntryRejects(t *testing.T) {
 // it: Rejects names the first such entry in file order, whoever owns it.
 func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 	stale := `{"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]}`
-	broken := `{"PreToolUse": [{"matcher": "*"}]}`
+	broken := `{"PreToolUse": [{"hooks": [{}]}]}`
 	for _, c := range []struct {
 		name, raw, want string
 	}{
@@ -63,6 +62,46 @@ func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 		got := Rejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {
 			t.Errorf("%s: Rejects = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestInertDefinitionsPreserveSiblingGuard(t *testing.T) {
+	for _, raw := range []string{
+		`{"PreToolUse":[{"matcher":"*","hooks":[]}]}`,
+		`{"PreToolUse":[{"matcher":"*"}]}`,
+		`{"PreToolUse":[{"matcher":"*","hooks":null}]}`,
+		`{"PreToolUse":[null]}`,
+		`null`,
+		`{"Stop":[{"command":"   "}]}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			if got := EntryRejects([]byte(raw)); got != "" {
+				t.Errorf("EntryRejects = %q", got)
+			}
+			if got := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + raw + `}`)); got != "" {
+				t.Errorf("Rejects = %q", got)
+			}
+		})
+	}
+}
+
+func TestInertDefinitionsStillValidateActualHandlers(t *testing.T) {
+	for _, handler := range []string{`{}`, `null`, `{"command":""}`, `{"command":null}`, `{"type":"command"}`} {
+		for _, event := range []string{"Stop", "PreToolUse", "PostToolUse"} {
+			t.Run(event+"/"+handler, func(t *testing.T) {
+				items := handler
+				if toolEvents[event] {
+					items = `{"hooks":[` + handler + `]}`
+				}
+				raw := `{"` + event + `":[` + items + `]}`
+				if got := EntryRejects([]byte(raw)); got == "" {
+					t.Error("accepted a command handler without a command")
+				}
+				if got := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + raw + `}`)); got == "" {
+					t.Error("accepted a file with an invalid command handler")
+				}
+			})
 		}
 	}
 }

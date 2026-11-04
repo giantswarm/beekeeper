@@ -1384,3 +1384,34 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 		t.Fatal("failed restart left its prepared state")
 	}
 }
+
+// Parser acceptance of inert entries must not imply that beekeeper has a guard.
+func TestAgyInertEntriesAndGuardPresence(t *testing.T) {
+	const exe = "/opt/bin/beekeeper"
+	for _, inert := range []string{
+		`{"PreToolUse":[{"matcher":"*","hooks":[]}]}`,
+		`{"PreToolUse":[{"matcher":"*"}]}`,
+		`{"PreToolUse":[{"matcher":"*","hooks":null}]}`,
+		`{"PreToolUse":[null]}`,
+		`null`,
+		`{"Stop":[{"command":"   "}]}`,
+	} {
+		t.Run(inert, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hooks.json")
+			write(t, path, `{"beekeeper":`+string(AgyHook(exe))+`,"other":`+inert+`}`)
+			if got := CheckAgyHooks(path, exe, ""); got != "" {
+				t.Errorf("guarded doctor check: %s", got)
+			}
+			if got := AgyHooksUnguarded(path); got != "" {
+				t.Errorf("guarded admission: %s", got)
+			}
+			write(t, path, `{"beekeeper":`+inert+`}`)
+			if got := CheckAgyHooks(path, exe, ""); got == "" {
+				t.Error("doctor accepted inert beekeeper entry as a guard")
+			}
+			if got := AgyHooksUnguarded(path); got == "" {
+				t.Error("admission accepted inert beekeeper entry as a guard")
+			}
+		})
+	}
+}
