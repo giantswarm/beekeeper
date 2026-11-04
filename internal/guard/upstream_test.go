@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+const (
+	upstreamOutside     = "outside github.allowedOrgs"
+	upstreamLiteralPath = "literal repos/<owner>/<repo>/..."
+)
+
 // The worktrees of the upstream tests: a fork clone with an upstream remote,
 // a clone of ours, a clone of theirs, a fork clone whose gh default is the
 // fork (gh repo set-default), a clone of a repository off GitHub.
@@ -212,18 +217,18 @@ func TestUpstreamAPIRepositoryVariables(t *testing.T) {
 		name, command, reason string
 	}{
 		{"literal allowed", `gh api -X POST repos/giantswarm/x/issues/1/comments`, ""},
-		{"literal external", `gh api -X POST repos/outside/x/issues/1/comments`, "outside github.allowedOrgs"},
+		{"literal external", `gh api -X POST repos/outside/x/issues/1/comments`, upstreamOutside},
 		{"assignment allowed", `R=giantswarm/x; gh api -X POST "repos/$R/issues/1/comments"`, ""},
-		{"assignment external", `R=outside/x; gh api -X POST "repos/$R/issues/1/comments"`, "outside github.allowedOrgs"},
+		{"assignment external", `R=outside/x; gh api -X POST "repos/$R/issues/1/comments"`, upstreamOutside},
 		{"environment allowed", `gh api -X POST "repos/$BEEKEEPER_TEST_REPO/issues/1/comments"`, ""},
-		{"environment external", `gh api -X POST "repos/${BEEKEEPER_TEST_EXTERNAL}/issues/1/comments"`, "outside github.allowedOrgs"},
+		{"environment external", `gh api -X POST "repos/${BEEKEEPER_TEST_EXTERNAL}/issues/1/comments"`, upstreamOutside},
 		{"multiple variables", `O=giantswarm; R=x; gh api -X POST "repos/$O/$R/issues/1/comments"`, ""},
 		{"variable name boundary", `R=outside/x; REPO=giantswarm/x; gh api -X POST "repos/$REPO/issues/1/comments"`, ""},
 		{"loop allowed", `for R in giantswarm/x giantswarm/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, ""},
-		{"loop external", `for R in giantswarm/x outside/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, "outside github.allowedOrgs"},
-		{"unknown", `gh api -X POST "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
-		{"empty", `gh api -X POST "repos/$BEEKEEPER_TEST_EMPTY/issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
-		{"expanded away", `gh api -X POST "repos//issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
+		{"loop external", `for R in giantswarm/x outside/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, upstreamOutside},
+		{"unknown", `gh api -X POST "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1/comments"`, upstreamLiteralPath},
+		{"empty", `gh api -X POST "repos/$BEEKEEPER_TEST_EMPTY/issues/1/comments"`, upstreamLiteralPath},
+		{"expanded away", `gh api -X POST "repos//issues/1/comments"`, upstreamLiteralPath},
 		{"suffix unknown", `R=giantswarm/x; gh api -X POST "repos/$R/issues/$1/dependencies/blocked_by"`, ""},
 		{"unknown read", `gh api "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1"`, ""},
 	}
