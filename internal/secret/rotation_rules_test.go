@@ -39,7 +39,7 @@ func TestRotationChecksEveryCarrierEncryptionRule(t *testing.T) {
 				originals := make([][]byte, len(files))
 				for i, file := range files {
 					var err error
-					originals[i], err = os.ReadFile(file)
+					originals[i], err = os.ReadFile(file) //nolint:gosec // a path of this test
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -71,7 +71,7 @@ func TestRotationChecksEveryCarrierEncryptionRule(t *testing.T) {
 					t.Fatal("preflight changed vault")
 				}
 				for i, file := range files {
-					after, err := os.ReadFile(file)
+					after, err := os.ReadFile(file) //nolint:gosec // a path of this test
 					if err != nil || string(after) != string(originals[i]) {
 						t.Fatal("preflight changed carrier")
 					}
