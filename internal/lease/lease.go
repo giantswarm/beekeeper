@@ -152,7 +152,9 @@ func (d Dir) Release(res string) error {
 	return os.RemoveAll(d.path(res))
 }
 
-// List returns every held lease, oldest first.
+// List returns every readable held lease, oldest first, and reports any
+// holder records it could not read. A failed read must not look like a
+// successful listing of free resources.
 func (d Dir) List() ([]Holder, error) {
 	entries, err := os.ReadDir(string(d))
 	if errors.Is(err, os.ErrNotExist) {
@@ -162,12 +164,17 @@ func (d Dir) List() ([]Holder, error) {
 		return nil, err
 	}
 	var out []Holder
+	var errs []error
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		h, err := d.Get(e.Name())
-		if err != nil || h == nil {
+		if err != nil {
+			errs = append(errs, fmt.Errorf("reading lease %s: %w", e.Name(), err))
+			continue
+		}
+		if h == nil {
 			continue
 		}
 		if h.Env == "" {
@@ -176,7 +183,7 @@ func (d Dir) List() ([]Holder, error) {
 		out = append(out, *h)
 	}
 	slices.SortFunc(out, func(a, b Holder) int { return strings.Compare(a.Since, b.Since) })
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 // Refusal is why a claim is not allowed. A claim queued behind earlier

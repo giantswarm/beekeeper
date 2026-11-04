@@ -2,6 +2,8 @@ package lease
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -102,6 +104,44 @@ func TestDirClaimRelease(t *testing.T) {
 	}
 	if cur, _ := d.Get("browser"); cur != nil {
 		t.Fatalf("released lease still held: %+v", cur)
+	}
+}
+
+// A damaged holder record still occupies its resource. List must report
+// the read failure so callers cannot classify that resource as free or
+// expire its waiting grants. Other readable holders remain available.
+func TestDirListReportsDamagedHolder(t *testing.T) {
+	for _, kind := range []string{"truncated JSON", "record is a directory"} {
+		t.Run(kind, func(t *testing.T) {
+			d := Dir(t.TempDir())
+			if _, err := d.Claim("healthy", Holder{Env: "healthy", Session: "fixture"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, res := range []string{"damaged", "pending"} {
+				if err := os.Mkdir(d.path(res), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(d.path("damaged"), "holder.json")
+			var err error
+			if kind == "truncated JSON" {
+				err = os.WriteFile(path, []byte(`{"env":`), 0o600)
+			} else {
+				err = os.Mkdir(path, 0o700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			holders, err := d.List()
+			if err == nil || !strings.Contains(err.Error(), "damaged") {
+				t.Errorf("List = %+v, %v; want an error identifying the damaged lease", holders, err)
+			}
+			for _, res := range []string{"healthy", "pending"} {
+				if !slices.ContainsFunc(holders, func(h Holder) bool { return h.Env == res }) {
+					t.Errorf("List lost the %s lease: %+v", res, holders)
+				}
+			}
+		})
 	}
 }
 
