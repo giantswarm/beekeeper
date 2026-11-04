@@ -62,6 +62,11 @@ func (f *fakeSource) TakeOver(_ context.Context, id string) error {
 	return nil
 }
 
+// ReleaseOwned records cleanup of this fake screen's takeovers.
+func (f *fakeSource) ReleaseOwned(ctx context.Context, id string) error {
+	return f.Release(ctx, id)
+}
+
 // Release records the hand-back and unmarks the session.
 func (f *fakeSource) Release(_ context.Context, id string) error {
 	f.released = append(f.released, id)

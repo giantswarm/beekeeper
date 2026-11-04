@@ -547,7 +547,7 @@ func (m *model) closeDetail() {
 // is closing.
 func (m *model) releaseAll() {
 	for id := range m.taken {
-		_ = m.src.Release(context.Background(), id)
+		_ = m.src.ReleaseOwned(context.Background(), id)
 	}
 	m.taken = nil
 }

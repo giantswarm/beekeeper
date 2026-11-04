@@ -49,6 +49,8 @@ type collector struct {
 	// the network: the screen shows the last reading until a new one
 	// lands.
 	mu sync.Mutex
+	// owned records the exact flag this collector wrote, for shutdown cleanup.
+	owned map[string]takeover.Flag
 	// budgetTry is when the probe was last started, budgetAt when it last
 	// succeeded with the reading itself; budgetErr is the last attempt's
 	// error, "" when it succeeded.
@@ -235,18 +237,50 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)
 	}
 	person := c.a.uiPerson()
-	if err := takeover.Take(c.takeoverDir(), s.ID, takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}); err != nil {
+	if err := c.takeOwned(s.ID, takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}); err != nil {
 		return err
 	}
 	_ = c.a.store.Log(event(state.Party{Name: person}, "ui.takeover", "%s: its approvals come to the screen", s.Name))
 	return nil
 }
 
+// takeOwned remembers this screen's flag while serializing its local actions.
+func (c *collector) takeOwned(id string, flag takeover.Flag) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := takeover.Take(c.takeoverDir(), id, flag); err != nil {
+		return err
+	}
+	if c.owned == nil {
+		c.owned = map[string]takeover.Flag{}
+	}
+	c.owned[id] = flag
+	return nil
+}
+
+// ReleaseOwned is shutdown cleanup: it cannot release another screen's flag.
+func (c *collector) ReleaseOwned(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flag, ok := c.owned[id]
+	if !ok {
+		return nil
+	}
+	if err := takeover.ReleaseOwned(c.takeoverDir(), id, flag); err != nil {
+		return err
+	}
+	delete(c.owned, id)
+	return nil
+}
+
 // Release hands the approvals of session id back to its own window.
 func (c *collector) Release(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := takeover.Release(c.takeoverDir(), id); err != nil {
 		return err
 	}
+	delete(c.owned, id)
 	_ = c.a.store.Log(event(state.Party{Name: c.a.uiPerson()}, "ui.release", "%s: its approvals go to its own window", id))
 	return nil
 }

@@ -85,7 +85,9 @@ func Take(dir, session string, f Flag) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	return withSessionLock(context.Background(), dir, session, func() error {
+		return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	})
 }
 
 // Release hands session back: its held requests go to its own window at
@@ -94,11 +96,30 @@ func Release(dir, session string) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
-	err := os.Remove(filepath.Join(dir, session+flagExt))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return withSessionLock(context.Background(), dir, session, func() error {
+		err := os.Remove(filepath.Join(dir, session+flagExt))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
+}
+
+// ReleaseOwned hands session back only if owner still names its current
+// takeover. Manual Release remains unconditional. The comparison and removal
+// share Take's lock, so a replacement cannot slip between them.
+func ReleaseOwned(dir, session string, owner Flag) error {
+	return withSessionLock(context.Background(), dir, session, func() error {
+		current, taken := Taken(dir, session, func(int) bool { return true })
+		if !taken || current.PID != owner.PID || current.By != owner.By || !current.Since.Equal(owner.Since) {
+			return nil
+		}
+		err := os.Remove(filepath.Join(dir, session+flagExt))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
 }
 
 // Taken returns session's flag when one exists and alive says its screen
