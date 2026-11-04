@@ -527,7 +527,26 @@ func (a *app) catalogHost(selector string) (execution.Host, error) {
 	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
 	}
-	return h, h.ValidateCatalog()
+	if err := h.ValidateCatalog(); err != nil {
+		return h, err
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return h, err
+	}
+	// Retained journals can still be inspected, stopped or reconciled after
+	// exit. Keep their route until their records are retired, including when
+	// another selector names the same physical host.
+	for _, start := range st.Starts {
+		r := start.Execution
+		if r == nil || r.Endpoint == nil || (r.Selector != selector && r.Handle.Ref.Host != h.Identity) {
+			continue
+		}
+		if r.Handle.Ref.Host != h.Identity || *r.Endpoint != h.Endpoint {
+			return h, refused("execution host %s route changed while retained execution %s depends on its approved endpoint; restore the original host identity and SSH executable/config route before continuing", selector, r.Handle.Ref.Execution)
+		}
+	}
+	return h, nil
 }
 
 // executionHost is the agents.hosts entry selector names, pinned to the

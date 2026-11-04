@@ -12,6 +12,23 @@ executions require expiring coordinator leases and live supervisor merge grants.
 The component command below is the supported remote merge path; local approvals
 and raw merge commands do not authorize an SSH execution.
 
+## Retained execution routes
+
+New reservations persist the approved SSH destination, executable and configuration
+path with the execution. While that record is retained, catalog operations refuse
+a different endpoint or host identity for its selector (or a different endpoint
+under another selector for the same physical host). Restore the original catalog
+route to inspect, stop, reconcile or recover those executions. Policy updates do
+not change this route pin. Exited records retain the protection because their
+journals and transcripts can still be needed. Capacity remains counted by physical
+host identity, independent of selectors and endpoints.
+
+Records created before endpoint pins existed have no reconstructible original
+route and retain their previous catalog behavior. Keep their original catalog
+routes until they have been reconciled. The pin identifies the configuration
+path, not its contents: do not repoint an existing host configuration path to a
+new execution-state directory while its journals are retained.
+
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
