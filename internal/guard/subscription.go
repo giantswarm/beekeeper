@@ -135,16 +135,17 @@ var refPattern = regexp.MustCompile(`\bref_\d+\b`)
 
 // refLines are the clicked tab's Chrome page-read labels, joined to their
 // actual tool calls. Unrelated tools and other tabs cannot replace a label.
-// An ambiguous batch may add a subscription label, but cannot clear one
-// using a benign label that could belong to another tab.
+// A batch mixing tabs or page reads with other tools may add a subscription
+// label, but cannot clear one using a benign label that could come from
+// another tab or a non-read action.
 func refLines(transcript, tab string) map[string]string {
 	lines := map[string]string{}
 	scanJoined(transcript, func(call chromeAction, text string) {
-		tabs := refReadTabs(call.name, call.input)
+		tabs, readsOnly := refReadTabs(call.name, call.input)
 		if len(tabs) == 0 || tab != "" && !slices.Contains(tabs, tab) && !slices.Contains(tabs, "") {
 			return
 		}
-		certain := tab != "" && len(tabs) == 1 && tabs[0] == tab
+		certain := readsOnly && tab != "" && len(tabs) == 1 && tabs[0] == tab
 		for l := range strings.SplitSeq(text, "\n") {
 			if !certain && !controlWords.MatchString(l) {
 				continue
@@ -157,21 +158,25 @@ func refLines(transcript, tab string) map[string]string {
 	return lines
 }
 
-// refReadTabs names the tabs whose page reads a call's result contains.
-func refReadTabs(tool string, input map[string]any) []string {
+// refReadTabs names the tabs whose page reads a call's result contains,
+// and whether every result in the call comes from a page read.
+func refReadTabs(tool string, input map[string]any) ([]string, bool) {
 	switch chromeTool(tool) {
 	case chromeReadPage, chromeFind:
-		return []string{tabOf(input[tabKey])}
+		return []string{tabOf(input[tabKey])}, true
 	case chromeBatch:
 		var tabs []string
+		readsOnly := true
 		for _, action := range batchActions(input) {
-			for _, tab := range refReadTabs(action.name, action.input) {
+			actionTabs, only := refReadTabs(action.name, action.input)
+			readsOnly = readsOnly && only
+			for _, tab := range actionTabs {
 				if !slices.Contains(tabs, tab) {
 					tabs = append(tabs, tab)
 				}
 			}
 		}
-		return tabs
+		return tabs, readsOnly
 	}
-	return nil
+	return nil, false
 }

@@ -20,13 +20,27 @@ func TestSubscriptionLabelsComeFromTheClickedTabsBrowserReads(t *testing.T) {
 		"single tab batch read": {read(tab7, ordinary), turnCall{tool: browserTools + chromeBatch, input: map[string]any{actionsKey: []any{
 			batchAction(chromeReadPage, map[string]any{tabKey: tab7}),
 		}}, result: subscribed}, true},
+		"mixed batch cannot clear": {read(tab7, subscribed), turnCall{tool: batchTool, input: map[string]any{actionsKey: []any{
+			batchAction(chromeReadPage, map[string]any{tabKey: tab7}),
+			batchAction(chromeScript, map[string]any{tabKey: tab7}),
+		}}, result: subscribed + "\n" + ordinary}, true},
+		"nested mixed batch cannot clear": {read(tab7, subscribed), turnCall{tool: batchTool, input: map[string]any{actionsKey: []any{
+			batchAction(chromeBatch, map[string]any{actionsKey: []any{
+				batchAction(chromeFind, map[string]any{tabKey: tab7}),
+				batchAction(chromeScript, map[string]any{tabKey: tab7}),
+			}}),
+		}}, result: ordinary}, true},
+		"single tab batch can clear": {read(tab7, subscribed), turnCall{tool: batchTool, input: map[string]any{actionsKey: []any{
+			batchAction(chromeReadPage, map[string]any{tabKey: tab7}),
+			batchAction(chromeFind, map[string]any{tabKey: tab7}),
+		}}, result: ordinary}, false},
 		"ambiguous batch cannot clear": {read(tab7, subscribed), turnCall{tool: browserTools + chromeBatch, input: map[string]any{actionsKey: []any{
 			batchAction(chromeReadPage, map[string]any{tabKey: tab7}),
 			batchAction(chromeReadPage, map[string]any{tabKey: "8"}),
 		}}, result: subscribed + "\n" + ordinary}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ev := toolEvent(browserTools+chromeComputer, tabInput(leftClick, map[string]any{refKey: "ref_45", summaryKey: "Clicks the button"}))
+			ev := toolEvent(browserTools+chromeComputer, tabInput(leftClick, map[string]any{refKey: subscriptionRef, summaryKey: "Clicks the button"}))
 			ev["transcript_path"] = turnTranscript(t, tc.first, tc.later)
 			d := decideEvent(t, Hook{}, ev)
 			if got := d != nil && d.PermissionDecision == decisionDeny; got != tc.deny {
