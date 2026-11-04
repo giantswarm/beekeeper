@@ -161,6 +161,8 @@ func (s *Store) Peek() (*state.State, error) { return s.Read() }
 // written before it included. An update that changes more than one object
 // other than Notes, or anything without a home in the resources, is refused
 // with nothing written.
+// A successful create whose initial status write fails is reported without
+// rerunning fn: its spec already exists.
 //
 // A note number above the last one handed out (State.NextNote) advances the
 // note counter first, under the resourceVersion read: of two concurrent
@@ -221,6 +223,11 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		var written []client.Object
 		for _, c := range changes {
 			obj, err := s.write(ctx, c)
+			if c.create && obj != nil && err != nil {
+				// The create succeeded. Replaying fn after a status conflict
+				// could issue another note number and create a second note.
+				return false, errors.Join(err, s.record(ctx, written, events, false))
+			}
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || (c.delete && apierrors.IsNotFound(err)) {
 				break
 			}
@@ -1269,7 +1276,7 @@ func (s *Store) write(ctx context.Context, c change) (client.Object, error) {
 		err := s.c.Status().Update(ctx, c.obj)
 		if err != nil {
 			if _, ok := c.obj.(*v1alpha1.Note); ok {
-				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; it remains open and listed: %w", key(c.obj), err)
+				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; read its retained state before retrying: %w", key(c.obj), err)
 			}
 		}
 		return c.obj, err
