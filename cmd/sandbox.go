@@ -127,7 +127,7 @@ readable parent read-only over a writable child.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
+	c.AddCommand(a.sandboxBrokerCmd(), a.sandboxScratchCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
 	return c
 }
 
@@ -168,7 +168,8 @@ func sandboxInstallSteps(dir, stateDir string, b []byte) ([]string, error) {
 const brokerTick = 50 * time.Millisecond
 
 func (a *app) sandboxBrokerCmd() *cobra.Command {
-	return &cobra.Command{
+	var secretsOnly bool
+	c := &cobra.Command{
 		Use:   "broker",
 		Short: "Serve the sandboxed sessions' capped runs on the host",
 		Long: `broker runs on the host, outside the sandbox, as the user unit
@@ -231,8 +232,10 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			// a state directory made after the install lacks them as well
-			if err := a.sandboxPolicy().MountPoints(); err != nil {
-				return err
+			if !secretsOnly {
+				if err := a.sandboxPolicy().MountPoints(); err != nil {
+					return err
+				}
 			}
 			// the broker logs the calls that logged themselves not, and the
 			// vault keeper's sign-ins, in the state's event log
@@ -263,18 +266,20 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			if err != nil {
 				return err
 			}
-			serveEgress, err := a.listenEgress(ctx)
-			if err != nil {
-				return err
-			}
 			egress := make(chan error, 1)
-			go func() { egress <- serveEgress() }()
+			if !secretsOnly {
+				serveEgress, err := a.listenEgress(ctx)
+				if err != nil {
+					return err
+				}
+				go func() { egress <- serveEgress() }()
+			}
 			secretCall := func(env []string) sandbox.Handler {
 				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv(a.cfg.Secret.Session)))
 			}
 			spool := make(chan error, 1)
 			go func() {
-				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
+				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, secretBrokerOnly(secretsOnly, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
 					sandbox.OpScopeState: brokeredScopeState(plat.Capper),
 					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
 					sandbox.OpVault:      brokeredVaultState(keeper),
@@ -290,7 +295,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpLab:    brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
 					sandbox.OpSign:   brokeredSign(hostGPG(ctx)),
 					sandbox.OpPerson: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredPersonArgv),
-				}))
+				})))
 			}()
 			// either one ending ends the broker, which its unit restarts
 			select {
@@ -304,6 +309,8 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			}
 		},
 	}
+	c.Flags().BoolVar(&secretsOnly, "secrets-only", false, "Serve secret calls without starting the egress proxy or changing sandbox mounts")
+	return c
 }
 
 var (
