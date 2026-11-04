@@ -1693,6 +1693,8 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+	// NoteTeam identifies the note owner independently of the event actor.
+	NoteTeam string `json:"noteTeam,omitempty"`
 }
 
 // NoteLookup is the optional complete history of a store that retains closed notes.
