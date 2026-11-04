@@ -1219,6 +1219,8 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 
 // recordGuardPanic keeps stack traces in the event log, never tool responses.
 func (a *app) recordGuardPanic(check string, stack []byte) {
+	// Recording runs inside a recover: a panic here must not skip the deny.
+	defer func() { _ = recover() }()
 	if a.cfg == nil {
 		_ = a.loadConfig()
 	}
@@ -1254,7 +1256,7 @@ func hookPanicTool(raw []byte) string {
 		ev.Tool = ev.ToolCall.Name
 	}
 	if ev.Tool == "" {
-		return "unknown"
+		return kindUnknown
 	}
 	return ev.Tool
 }

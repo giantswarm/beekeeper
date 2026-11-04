@@ -104,7 +104,7 @@ func TestAnnotationHookPanicsLogAndStayOpen(t *testing.T) {
 			if err != nil || len(events) != 1 {
 				t.Fatalf("events=%v err=%v", events, err)
 			}
-			for _, want := range []string{hook, "Bash", "injected annotation failure", "goroutine"} {
+			for _, want := range []string{hook, tToolBash, "injected annotation failure", "goroutine"} {
 				if !strings.Contains(events[0].Detail, want) {
 					t.Fatalf("missing %q: %s", want, events[0].Detail)
 				}
