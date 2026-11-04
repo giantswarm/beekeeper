@@ -184,6 +184,10 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	// devctl kills the merge's runner (its parent), as a person or an OOM would.
 	fakeDevctl(t, `echo $PPID >`+pidFile+`; kill -KILL $PPID; sleep 1`)
 	stubGitHub(t, github.Merged, "")
+	// The script would kill this test binary if the recovery ran it too.
+	was := releaseWait
+	t.Cleanup(func() { releaseWait = was })
+	releaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	if err := g.runMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
