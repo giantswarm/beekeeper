@@ -138,6 +138,14 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			return r
 		}
 	}
+	if p.Files && !dry {
+		// A checkout may have appeared anywhere in the root during the
+		// scan or process refresh. Revalidate before removing any file:
+		// unchanged file timestamps do not mean it is still disposable.
+		if _, ok := scanFiles(p.Root, refs, &r); !ok {
+			return r
+		}
+	}
 	left := r.Held
 	emptied := map[string]bool{}
 	var root *os.Root

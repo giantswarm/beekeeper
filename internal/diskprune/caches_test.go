@@ -208,3 +208,41 @@ func TestCacheFilesRecheckKeepsARootOpenedDuringTheScan(t *testing.T) {
 		t.Fatalf("files recheck: %+v", r)
 	}
 }
+
+func TestCacheFilesKeepsCheckoutCreatedDuringScan(t *testing.T) {
+	for _, location := range []string{".", "child"} {
+		for _, metadata := range []string{"directory", "gitfile"} {
+			t.Run(location+"/"+metadata, func(t *testing.T) {
+				root := t.TempDir()
+				files := []string{
+					cacheFile(t, root, "old", 1000, 10*day),
+					cacheFile(t, root, "child/source.go", 1000, 10*day),
+				}
+				git := filepath.Join(root, location, ".git")
+				rechecked := false
+				p := Policy{Root: root, Files: true, OlderThan: 7 * day, Recheck: func() ([]string, error) {
+					rechecked = true
+					var err error
+					if metadata == "directory" {
+						err = os.Mkdir(git, 0700)
+					} else {
+						err = os.WriteFile(git, []byte("gitdir: synthetic-metadata\n"), 0600)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					return nil, nil
+				}}
+				r := Cache(p, time.Now(), false, nil, nil, false)
+				if !rechecked || r.Freed != 0 || r.Removed != 0 || r.Held != 2000 || r.Kept[whyCheckout] != 1 || len(r.Errors) != 0 {
+					t.Fatalf("checkout created during scan: %+v (rechecked %v)", r, rechecked)
+				}
+				for _, file := range append(files, git) {
+					if !exists(file) {
+						t.Errorf("removed %s", file)
+					}
+				}
+			})
+		}
+	}
+}
