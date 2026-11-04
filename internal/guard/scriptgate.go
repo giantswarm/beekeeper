@@ -51,7 +51,7 @@ var (
 	perl   = interpreter{code: []string{"-e", "-E"}, combined: "eE", values: []string{"-I"}}
 	ruby   = interpreter{code: []string{"-e"}, combined: "e", values: []string{"-I", "-r", "-C", "-E"}}
 	// runSub is the subcommand a script follows (deno run, bun run).
-	runSub = []string{"run"}
+	runSub = []string{executionRunCommand}
 	// interpreters run a script file, the code behind one of their options,
 	// or the program on their input.
 	interpreters = map[string]interpreter{
