@@ -112,6 +112,9 @@ delivers it to the filing session.`,
 			if err := s.watch(ctx, rc); err != nil {
 				return err
 			}
+			if err := s.startFleetWatch(ctx); err != nil {
+				return err
+			}
 			srv := &http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() {
 				<-ctx.Done()
