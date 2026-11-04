@@ -78,6 +78,50 @@ func TestCheckInputFiles(t *testing.T) {
 	}
 }
 
+func TestCheckInputExecutionHome(t *testing.T) {
+	for _, inExecutionHome := range []bool{true, false} {
+		name := "file only in managed home"
+		if inExecutionHome {
+			name = "file only in execution home"
+		}
+		t.Run(name, func(t *testing.T) {
+			managed, actual := t.TempDir(), t.TempDir()
+			t.Setenv("HOME", managed)
+			t.Setenv("USERPROFILE", managed)
+			t.Setenv("BEEKEEPER_EXECUTION_HOME", actual)
+			fixtureHome := managed
+			if inExecutionHome {
+				fixtureHome = actual
+			}
+			if err := os.WriteFile(filepath.Join(fixtureHome, "fixture.toml"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(file, []byte("codex: {configFile: ~/fixture.toml}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(actual, "fixture.toml"); loaded.Codex.ConfigFile != want {
+				t.Fatalf("loaded configFile = %q; want %q", loaded.Codex.ConfigFile, want)
+			}
+			findings, err := Check(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inExecutionHome {
+				if len(findings) != 0 {
+					t.Fatalf("findings = %v; want none", findings)
+				}
+			} else if len(findings) != 1 || findings[0] != "codex.configFile: referenced file does not exist" {
+				t.Fatalf("findings = %v; want missing codex.configFile", findings)
+			}
+		})
+	}
+}
+
 func TestCheckReviewRegressions(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
