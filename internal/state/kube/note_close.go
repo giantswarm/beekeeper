@@ -2,8 +2,6 @@ package kube
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,13 +37,7 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 		var closing *state.Event
 		for i := range events {
 			e := &events[i]
-			detail := e.Detail
-			if e.Verb == noteAnsweredEvent {
-				_, detail, _ = strings.Cut(detail, ", note #")
-				detail = "#" + detail
-			}
-			m := noteRef.FindStringSubmatch(detail)
-			if len(m) < 2 || m[1] != strconv.Itoa(old.Spec.ID) {
+			if id, ok := eventNote(*e); !ok || id != old.Spec.ID {
 				continue
 			}
 			switch e.Verb {
