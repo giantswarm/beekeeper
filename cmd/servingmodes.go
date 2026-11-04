@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -621,7 +623,25 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	unlock := func() { _ = os.Remove(path) }
+	// Keep the kernel lock's file in place: removing it would let another
+	// caller lock a different inode. The PID marker remains for diagnostics
+	// and compatibility with switches started by an earlier binary.
+	lock := flock.New(path + ".lock")
+	if ok, err := lock.TryLock(); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, refused("another serving-mode switch of %s runs; only one runs at a time", name)
+	}
+	held := false
+	defer func() {
+		if !held {
+			_ = lock.Unlock()
+		}
+	}()
+	unlock := func() {
+		_ = os.Remove(path)
+		_ = lock.Unlock()
+	}
 	take := func() (bool, error) {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the lock file beside the state, its own name
 		if err != nil {
@@ -639,6 +659,7 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 		return nil, err
 	}
 	if ok {
+		held = true
 		return unlock, nil
 	}
 	// A switch whose process is gone left its lock: reap it, so a crashed
@@ -651,6 +672,7 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 			if ok, err := take(); err != nil {
 				return nil, err
 			} else if ok {
+				held = true
 				return unlock, nil
 			}
 		}
