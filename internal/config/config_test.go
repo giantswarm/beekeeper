@@ -1266,3 +1266,31 @@ func TestWatchBatchInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectsPaths(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/state")
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != "" || c.Projects.Worktrees != "/state/beekeeper/worktrees" {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects:\n  dir: /projects\n  worktrees: /worktrees\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != "/projects" || c.Projects.Worktrees != "/worktrees" {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects: {worktrees: relative}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("accepted relative worktree root")
+	}
+}
