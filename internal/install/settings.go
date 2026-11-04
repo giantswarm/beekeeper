@@ -158,7 +158,6 @@ func writeVerb(existed bool) string {
 
 // find locates an identical hook, an owned previous version, the same
 // binary's command with an older matcher, or another binary's hook.
-
 func find(list []json.RawMessage, want Hook, added []Hook) (int, fileState) {
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
 		return 0, fileSame

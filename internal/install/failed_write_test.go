@@ -10,10 +10,11 @@ import (
 )
 
 func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
+	const editedFile = "edited file"
 	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		t.Skip("requires Unix directory permissions for an offline write failure")
 	}
-	for _, recovery := range []string{"retry", "uninstall", "edited file"} {
+	for _, recovery := range []string{"retry", "uninstall", editedFile} {
 		t.Run(recovery, func(t *testing.T) {
 			f := &fakeSetup{}
 			e, _ := env(t, t.TempDir(), f, f.run)
@@ -37,7 +38,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 				t.Fatal("write failure was not injected")
 			}
 			unit := filepath.Join(e.Spec.ConfigDir, "units", "notify.service")
-			if recovery == "edited file" {
+			if recovery == editedFile {
 				write(t, unit, "the person's service definition\n")
 			}
 			if recovery == "retry" {
@@ -52,7 +53,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 					t.Error("successful recovery did not clear previous ownership")
 				}
 				for _, path := range []string{e.Settings, e.AgyHooks, e.CodexHooks, CodexWorkerHooks(e.StateDir), filepath.Join(e.Spec.ConfigDir, "units", "notify.service")} {
-					raw, err := os.ReadFile(path)
+					raw, err := os.ReadFile(filepath.Clean(path))
 					if err != nil || strings.Contains(string(raw), previousExe) || !strings.Contains(string(raw), e.Exe) {
 						t.Errorf("retry lost ownership of %s: %v", path, err)
 					}
@@ -62,8 +63,8 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, path := range []string{e.Settings, e.AgyHooks, e.CodexHooks, CodexWorkerHooks(e.StateDir), filepath.Join(e.Spec.ConfigDir, "units", "notify.service")} {
-				if recovery == "edited file" && path == unit {
-					raw, err := os.ReadFile(path)
+				if recovery == editedFile && path == unit {
+					raw, err := os.ReadFile(filepath.Clean(path))
 					if err != nil || string(raw) != "the person's service definition\n" {
 						t.Error("recovery removed a file edited after the failure")
 					}
