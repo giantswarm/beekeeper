@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -268,5 +269,82 @@ func TestOverrideUsage(t *testing.T) {
 	}
 	if v, ok := r.get("grantTTL"); ok {
 		t.Errorf("grantTTL = %q after the refusals", v)
+	}
+}
+
+// A valid config write can still fail while opening state. The settings
+// must be restored even when load fails before an override is recorded.
+func TestOverrideLoadFailureRestoresConfig(t *testing.T) {
+	r := newOverrideRig(t, "grantTTL: 20m\n")
+	blocked := filepath.Join(t.TempDir(), "state-file")
+	if err := os.WriteFile(blocked, []byte("regular file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Set(r.cfg, []config.Setting{{Key: "stateDir", Value: blocked}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := execute(t, configName, "set", "grantTTL", "1h", "capacity.local.ceiling", "8", untilFlag, "1h", overrideReason, "review", overrideAs, "tester")
+	if err == nil || !strings.Contains(err.Error(), "values before are restored") {
+		t.Fatalf("set = %v, want load failure with rollback", err)
+	}
+	if v, _ := r.get("grantTTL"); v != overrideTTL {
+		t.Errorf("grantTTL = %q after failed load", v)
+	}
+	if v, ok := r.get("capacity"); ok {
+		t.Errorf("capacity = %q after failed load, want absent", v)
+	}
+}
+
+// Changing the state directory would record the override in a different
+// history and strand it when restored, whether the new path loads or not.
+func TestOverrideRejectsStateDir(t *testing.T) {
+	for _, regularFile := range []bool{false, true} {
+		t.Run(fmt.Sprint(regularFile), func(t *testing.T) {
+			r := newOverrideRig(t, "grantTTL: 20m\n")
+			target := filepath.Join(t.TempDir(), "new-state")
+			if regularFile {
+				if err := os.WriteFile(target, []byte("file"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadFile(r.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = execute(t, configName, "set", "grantTTL", "1h", "stateDir", target, untilFlag, "1h", overrideReason, "review", overrideAs, "tester")
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), "stateDir cannot be overridden") {
+				t.Fatalf("set = %v, want stateDir refusal", err)
+			}
+			after, err := os.ReadFile(r.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("refused override changed config")
+			}
+			if st := r.state(); len(st.Overrides) != 0 {
+				t.Fatalf("refused override recorded: %+v", st.Overrides)
+			}
+		})
+	}
+}
+
+// Opening state can succeed while recording the override fails. Neither
+// existing nor newly introduced settings may remain as untracked changes.
+func TestOverrideRecordFailureRestoresConfig(t *testing.T) {
+	r := newOverrideRig(t, "grantTTL: 20m\n")
+	a := r.app(time.Now())
+	if err := os.WriteFile(filepath.Join(a.store.Dir(), "state.json"), []byte("invalid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := execute(t, configName, "set", "grantTTL", "1h", "capacity.local.ceiling", "8", untilFlag, "1h", overrideReason, "review", overrideAs, "tester")
+	if err == nil || !strings.Contains(err.Error(), "values before are restored") {
+		t.Fatalf("set = %v, want record failure with rollback", err)
+	}
+	if v, _ := r.get("grantTTL"); v != overrideTTL {
+		t.Errorf("grantTTL = %q after failed record", v)
+	}
+	if v, ok := r.get("capacity"); ok {
+		t.Errorf("capacity = %q after failed record, want absent", v)
 	}
 }
