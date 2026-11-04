@@ -64,7 +64,7 @@ func TestAmbiguousWholeFilePathsRefused(t *testing.T) {
 				}
 			}
 			for file, original := range originals {
-				got, err := os.ReadFile(file)
+				got, err := os.ReadFile(file) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
