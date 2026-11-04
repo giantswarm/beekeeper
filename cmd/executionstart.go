@@ -122,6 +122,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
 	}
+	if o.Force {
+		if _, err := fmt.Fprintln(a.out, "--force overrides coordinator capacity only; execution-host admission still enforces memory, swap, load, disk, build slots (with --builds) and maxBusy, plus authentication, identity, version and policy checks. Remote preparation can still be refused."); err != nil {
+			return err
+		}
+	}
 	id := execution.ExecutionID(uuid.NewString())
 	control, err := execution.NewControlKey()
 	if err != nil {

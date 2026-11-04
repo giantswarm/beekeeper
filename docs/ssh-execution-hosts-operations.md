@@ -12,6 +12,16 @@ executions require expiring coordinator leases and live supervisor merge grants.
 The component command below is the supported remote merge path; local approvals
 and raw merge commands do not authorize an SSH execution.
 
+For remote starts, `--force` overrides coordinator capacity only. Execution-host
+admission still enforces memory, swap, load, disk, build slots (with `--builds`)
+and `maxBusy`. The CLI explains these limits before remote preparation; a
+passing host check does not reserve room or guarantee that preparation will
+succeed. Authentication, identity, version and policy checks remain required.
+If the host refuses preparation before acknowledging a start and inspection
+confirms no execution exists, the coordinator releases the reservation: no
+worker remains registered and no host or desk slot is held. Start anew after
+resolving the host's refusal.
+
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
