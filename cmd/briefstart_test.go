@@ -60,7 +60,7 @@ func TestAgentsStartRefusesLintFinding(t *testing.T) {
 	}
 	a := &app{cfg: &config.Config{}}
 	c := a.agentStartCmd()
-	c.SetArgs([]string{"--harness=codex", "--model=gpt-5", "--force", "worker", path})
+	c.SetArgs([]string{"--harness=codex", "--model=gpt-5", "--force", workerRole, path})
 	err := c.Execute()
 	if err == nil || Code(err) != ExitRefused || !strings.Contains(err.Error(), path+":2: workaround:") {
 		t.Fatalf("agents start = %v; want brief lint refusal even with --force", err)
