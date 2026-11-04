@@ -62,7 +62,7 @@ func (a *app) doctorLabs(ctx context.Context, sessions []*claude.Session, r doct
 		for _, h := range holders {
 			// Claims store whole seconds. Protect that entire second so a
 			// claim made after the process snapshot cannot appear older.
-			if a.leaseView(sessions, h).State != holderGone || h.Host != "" && h.Host != a.cfg.Identity.Host || !h.SinceTime().Before(a.now.Truncate(time.Second)) {
+			if a.leaseViewState(st, sessions, h).State != holderGone || h.Host != "" && h.Host != a.cfg.Identity.Host || !h.SinceTime().Before(a.now.Truncate(time.Second)) {
 				continue
 			}
 			// Handover keeps the original claim time, but records the
