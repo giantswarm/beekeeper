@@ -58,8 +58,8 @@ func (a *app) leaseCmd() *cobra.Command {
 		Short: "Hold a shared resource: a kind lab, an installation, the browser",
 		Long: `Hold one of the machine's shared resources, one session at a time: the
 environments listed under resources in the configuration (kind labs,
-shared installations) and the browser. A lab lease named under labs in the
-configuration stands for its kind cluster: the list shows whether that
+shared installations), installations under alerts.installations, and the browser.
+A lab lease named under labs in the configuration stands for its kind cluster: the list shows whether that
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
