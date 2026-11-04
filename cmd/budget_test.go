@@ -335,3 +335,18 @@ func TestBudgetGateBucket(t *testing.T) {
 		})
 	}
 }
+
+func TestBudgetGateKeepsReaderFloorForBoundedMergeBudget(t *testing.T) {
+	a, _ := budgetApp(t)
+	previous := readBudget
+	t.Cleanup(func() { readBudget = previous })
+	readBudget = func(*app, context.Context) (github.Budget, error) {
+		return github.Budget{Remaining: 2438, Limit: 5000, Reset: time.Now().Add(time.Hour)}, nil
+	}
+	budgetCredentials = func(context.Context) []github.BudgetCredential { return nil }
+	c := a.budgetCmd()
+	c.SetArgs([]string{"--gate"})
+	if err := c.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "wait for the reset") {
+		t.Fatalf("reader budget: %v; want reset wait below floor", err)
+	}
+}

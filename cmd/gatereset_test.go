@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -171,5 +172,38 @@ func TestBudgetGateLetsTheMergesQueuedForTheResetGoFirst(t *testing.T) {
 	a.now = reset.Add(a.cfg.Merge.ResetFirst.Duration)
 	if _, err := gate(); err != nil {
 		t.Errorf("budget --gate past the window: %v, want the waits let through", err)
+	}
+}
+
+// Ordinary one-PR merges need their own reserve, rather than the reader floor.
+func TestBoundedMergeUnderTheBudgetFloor(t *testing.T) {
+	for _, remaining := range []int{2438, mergeBudgetReserve} {
+		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
+			noSystemd(t)
+			fakeDevctl(t, `echo '`+mergedDoc+`'`)
+			stubGitHub(t, github.Merged, "")
+			stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
+			a := queueApp(t)
+			a.cfg.GitHub.Floor = 2500
+			a.cfg.Merge.BudgetFresh = config.Duration{Duration: time.Hour}
+			setBudget(t, a, remaining)
+			if err := a.gate(context.Background(), mergeArgv(scratchRepo), time.Minute, 0, false); err != nil {
+				t.Fatalf("bounded merge: exit %d (%v)", Code(err), err)
+			}
+			if d := lastEventOf(t, a, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
+				t.Errorf("merged event %q", d)
+			}
+		})
+	}
+}
+
+func TestMergeBelowItsReserveStillWaitsForReset(t *testing.T) {
+	a, _ := resetApp(t)
+	a.cfg.GitHub.Floor = 2500
+	setBudget(t, a, mergeBudgetReserve-1)
+	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),
+		me: state.Party{Session: "s1", Name: ownerName}, pid: os.Getpid(), queued: true}
+	if why, err := g.step(); err != nil || !strings.Contains(why, "until the reset") {
+		t.Fatalf("step: %q, %v; want reset wait", why, err)
 	}
 }
