@@ -419,7 +419,7 @@ func sentFiles(args []string) []string {
 }
 
 // gitValue are git's global options that take a value.
-var gitValue = map[string]bool{"-C": true, "-c": true, litGitDir: true, "--work-tree": true, "--namespace": true}
+var gitValue = map[string]bool{"-C": true, "-c": true, litGitDir: true, litWorkTree: true, "--namespace": true}
 
 // gitSends: a commit (its message), a tag, a remote's URL, a push (the
 // commits it publishes).

@@ -42,7 +42,7 @@ func TestLabConfigLease(t *testing.T) {
 		{"free lab", writeTool, map[string]any{filePathKey: filepath.Join(t.TempDir(), "agentlab.yaml")}, dir, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, session := range []string{litOther, "owner", "desktop", ""} {
+			for _, session := range []string{litOther, ownerKey, "desktop", ""} {
 				h := Hook{Labs: func() []lease.Holder { return []lease.Holder{holder} }}
 				ev := toolEvent(tc.tool, tc.input)
 				ev["cwd"] = tc.cwd
@@ -69,7 +69,7 @@ func TestLabConfigLeaseCodexPatch(t *testing.T) {
 	holder := lease.Holder{Env: "lab-1", Name: "lab-holder", Session: "owner", LabConfig: &lease.LabConfig{Path: filepath.Join(dir, "agentlab.yaml")}}
 	h := Hook{Labs: func() []lease.Holder { return []lease.Holder{holder} }}
 	for _, header := range []string{"Add File", "Update File", "Delete File", "Move to"} {
-		for _, session := range []string{"other", "owner"} {
+		for _, session := range []string{litOther, "owner"} {
 			patch := "*** Begin Patch\n*** " + header + ": agentlab.yaml\n*** End Patch\n"
 			reason, _ := h.checkCodexApplyPatch(event{Session: session}, patch, dir)
 			if (reason != "") != (session == "other") {

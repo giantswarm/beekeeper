@@ -143,7 +143,7 @@ func TestFreshLabsBeforeAHoldersCommand(t *testing.T) {
 	var got [][]string
 	h := hook()
 	h.Labs = func() []lease.Holder {
-		return []lease.Holder{{Env: labB, Session: "s7"}, {Env: labA, HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+		return []lease.Holder{{Env: labB, Session: "s7"}, {Env: labA, HostSession: "local_s7"}, {Env: "lab-c", Session: litOther}}
 	}
 	h.FreshLabs = func(labs []string) { got = append(got, labs) }
 	run := func(tool, session string) {

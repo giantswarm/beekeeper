@@ -984,7 +984,7 @@ var (
 	writeCmdsMap = map[string]bool{
 		"cp": true, "mv": true, "ln": true, "ins" + "tall": true, "dd": true,
 		"rm": true, "rmdir": true, unlinkCmd: true, "shred": true, trashCmd: true, trashPutCmd: true,
-		teeCmd: true, "trun" + "cate": true, "touch": true, litMkdir: true, "chmod": true, "chown": true,
+		teeCmd: true, "trun" + "cate": true, transcriptTouch: true, litMkdir: true, "chmod": true, "chown": true,
 		codexPatchKey: true,
 	}
 )

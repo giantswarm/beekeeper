@@ -134,7 +134,7 @@ func entryArgs(args []string, short string, long ...string) []string {
 
 func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string) {
 	switch name {
-	case litMkdir, "touch":
+	case litMkdir, transcriptTouch:
 		short := "m"
 		longs := []string{"--mode"}
 		if name == "touch" {
@@ -188,7 +188,7 @@ func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string
 					return
 				}
 				args = args[2:]
-			} else if (a == "-c" || a == litGitDir || a == "--work-tree") && len(args) > 1 {
+			} else if (a == "-c" || a == litGitDir || a == litWorkTree) && len(args) > 1 {
 				args = args[2:]
 			} else if strings.HasPrefix(a, "-") {
 				args = args[1:]

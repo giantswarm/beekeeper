@@ -37,7 +37,7 @@ func TestDefaultClass(t *testing.T) {
 		{[]string{testShell, "-c", "agentlab --help"}, ClassBuild},
 		{[]string{testShell, "-c", "python3 benchmark_preset.py"}, ClassBuild},
 		{[]string{testShell, "-c", "grep agentlab README.md"}, ClassBuild},
-		{[]string{"go", "build", runAllPackages}, ClassBuild},
+		{[]string{"go", ClassBuild, runAllPackages}, ClassBuild},
 	} {
 		if got := DefaultClass(c.argv); got != c.want {
 			t.Errorf("DefaultClass(%q) = %q, want %q", c.argv, got, c.want)

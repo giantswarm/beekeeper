@@ -14,7 +14,7 @@ func TestRunGoBuildRetry(t *testing.T) {
 		wantRC, attempts             int
 	}{
 		{"killed build recovers", ClassBuild, "137", "0", 0, 2},
-		{"retry is bounded", "build", "137", "137", 137, 2},
+		{"retry is bounded", ClassBuild, "137", "137", 137, 2},
 		{"ordinary failure", "build", "1", "0", 1, 1},
 		{"successful build", "build", "0", "0", 0, 1},
 		{"other go command", testCommand, "137", "0", 137, 1},

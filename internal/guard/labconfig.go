@@ -109,7 +109,7 @@ func (w *targetWalk) configWrites(st *deleteState, dir, name string, raw, words 
 				}
 			}
 		}
-	case "rm", "unlink", transcriptTouch, "truncate":
+	case "rm", "unlink", transcriptTouch, litTruncate:
 		for _, r := range raw {
 			if !strings.HasPrefix(r, "-") {
 				w.add(st, dir, r)

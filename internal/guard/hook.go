@@ -1052,7 +1052,7 @@ var backgroundExport = "export " + BackgroundEnv + "=1; "
 // foreground call's timeout raised to the Bash tool's 10 minutes; a
 // detected background run inherits backgroundExport.
 func (h Hook) rewrite(input map[string]any, cwd, cmd string, changed, bg bool) []byte {
-	if bg && backgroundRun(cmd, cwd, 0) {
+	if bg && (backgroundRun(cmd, cwd, 0) || h.Self != "" && strings.Contains(cmd, ShellQuote(h.Self)+" run --")) {
 		cmd, changed = backgroundExport+cmd, true
 	}
 	if !changed {

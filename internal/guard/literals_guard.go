@@ -2,6 +2,9 @@ package guard
 
 // Shared literals, kept as constants for goconst.
 const (
+	litKsh       = "ksh"
+	litTruncate  = "truncate"
+	litWorkTree  = "--work-tree"
 	litClone     = "clone"
 	litConfig    = "config"
 	litDevctl    = "devctl"

@@ -16,7 +16,7 @@ func ProcessRun(argv, runPrefix, gatePrefix []string) ([]string, string) {
 	if len(argv) == 0 {
 		return nil, ""
 	}
-	if len(argv) < 3 || argv[1] != "-c" || !slices.Contains([]string{"sh", bashCmd, "zsh", "dash", "ksh"}, filepath.Base(argv[0])) {
+	if len(argv) < 3 || argv[1] != "-c" || !slices.Contains([]string{"sh", bashCmd, "zsh", "dash", litKsh}, filepath.Base(argv[0])) {
 		if at := ownedRunArg(argv); at >= 0 {
 			result := append(slices.Clone(argv[:at]), gatePrefix...)
 			result = append(result, argv[at:]...)

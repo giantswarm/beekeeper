@@ -280,7 +280,7 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, "tool_input": map[string]any{"command": command, "run_in_background": bg}})
+	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, "tool_input": map[string]any{hookTypeCommand: command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
@@ -605,7 +605,7 @@ func TestHookPreToolUseFormatAgy(t *testing.T) {
 		}
 		var out strings.Builder
 		c := New()
-		c.SetArgs([]string{"--" + configFlag, cfgPath, configHookVerb, "pretooluse", "--format=agy"})
+		c.SetArgs([]string{"--" + configFlag, cfgPath, configHookVerb, configPreToolUse, "--format=agy"})
 		c.SetIn(strings.NewReader(string(raw)))
 		c.SetOut(&out)
 		c.SetErr(&out)

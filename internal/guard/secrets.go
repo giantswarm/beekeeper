@@ -162,7 +162,7 @@ var (
 	// codeFile: a file name that holds code or prose, not a secret's values.
 	codeFile = regexp.MustCompile(`(?i)\.(?:go|md|ts|tsx|js|mjs|py|sh|rs|java|kt|rb|tf|html|css|tpl|snap|golden|mod|sum)$`)
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
-	shells   = map[string]bool{"sh": true, bashCmd: true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
+	shells   = map[string]bool{"sh": true, bashCmd: true, "zsh": true, litKsh: true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
 	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.

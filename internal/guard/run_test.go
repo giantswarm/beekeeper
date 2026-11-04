@@ -336,6 +336,7 @@ func TestRunStopsWhatTheCommandLeavesInItsScope(t *testing.T) {
 	// The next run takes the slot at once, and a command that leaves
 	// nothing behind has nothing reaped and says nothing about it.
 	stderr.Reset()
+	o.Core = true // the core limit line is not what this run is about
 	if rc := Run(o, trueCmd); rc != 0 || stderr.Len() != 0 {
 		t.Errorf("the next run: exit %d, said %q; want 0 and nothing", rc, stderr.String())
 	}
