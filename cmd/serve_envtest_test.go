@@ -88,7 +88,25 @@ func envtestKube(t *testing.T) (*rest.Config, *kube.Store, ctrlclient.Client) {
 	return rc, store, c
 }
 
+// newServeEnv includes mailbox notifications and decision delivery, so it
+// requires Postgres. HTTP boundary tests use newServeHTTPEnv instead.
 func newServeEnv(t *testing.T) *serveEnv {
+	t.Helper()
+	mail, err := mailbox.Open(context.Background(), mailboxtest.URL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mail.Close)
+	return newServeTestEnv(t, mail)
+}
+
+// newServeHTTPEnv exercises the real handler without mailbox storage or watches.
+func newServeHTTPEnv(t *testing.T) *serveEnv {
+	t.Helper()
+	return newServeTestEnv(t, nil)
+}
+
+func newServeTestEnv(t *testing.T, mail *mailbox.Store) *serveEnv {
 	t.Helper()
 	rc, store, c := envtestKube(t)
 	ctx := context.Background()
@@ -123,18 +141,15 @@ func newServeEnv(t *testing.T) *serveEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mail, err := mailbox.Open(ctx, mailboxtest.URL(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(mail.Close)
 	log := &syncBuffer{}
 	ctrllog.SetLogger(logr.Discard())
 	s := newServer(cfg, store, mail, ids, slog.New(slog.NewJSONHandler(log, nil)))
-	wctx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-	if err := s.watch(wctx, rc); err != nil {
-		t.Fatal(err)
+	if mail != nil {
+		wctx, cancel := context.WithCancel(ctx)
+		t.Cleanup(cancel)
+		if err := s.watch(wctx, rc); err != nil {
+			t.Fatal(err)
+		}
 	}
 	srv := httptest.NewServer(s.handler())
 	t.Cleanup(srv.Close)
@@ -236,7 +251,8 @@ func (e *serveEnv) events(t *testing.T) int {
 }
 
 func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
-	e := newServeEnv(t)
+	t.Setenv(mailboxtest.Env, "")
+	e := newServeHTTPEnv(t)
 	body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	for name, header := range map[string]string{
 		"no token":     "",
@@ -265,7 +281,8 @@ func TestEnvtestServeRefusesWithoutAValidToken(t *testing.T) {
 // A body over mcpMaxBody is refused before the MCP library has read more
 // than the bound.
 func TestEnvtestServeBoundsTheBody(t *testing.T) {
-	e := newServeEnv(t)
+	t.Setenv(mailboxtest.Env, "")
+	e := newServeHTTPEnv(t)
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"pad":"` + strings.Repeat("x", mcpMaxBody) + `"}}`
 	req, _ := http.NewRequest(http.MethodPost, e.url, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
