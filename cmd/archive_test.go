@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const retryHostSession = "local_retry"
+
 var (
 	archiveNow = time.Date(2026, 10, 1, 14, 0, 0, 0, time.UTC)
 	// worker is a finished worker off the roster.
@@ -333,11 +335,11 @@ func TestTakenOverGuideStaysThePersons(t *testing.T) {
 }
 
 func TestRetryGivenUpArchive(t *testing.T) {
-	for _, id := range []string{"w", "local_retry"} {
+	for _, id := range []string{"w", retryHostSession} {
 		t.Run(id, func(t *testing.T) {
 			st := &state.State{FinishedSeeded: true, DoneSeeded: true, Starts: []state.Start{{Party: worker}}}
-			st.Starts[0].HostSession = "local_retry"
-			failed := archiveOutcome{agent: worker, host: "local_retry", asked: true, line: "not archived"}
+			st.Starts[0].HostSession = retryHostSession
+			failed := archiveOutcome{agent: worker, host: retryHostSession, asked: true, line: "not archived"}
 			now := archiveNow
 			for cycle := 0; cycle < 2; cycle++ {
 				if err := retryArchive(st, id, unarchived, now); err != nil {
@@ -374,25 +376,25 @@ func TestRetryGivenUpArchive(t *testing.T) {
 }
 
 func TestRetryArchiveSafety(t *testing.T) {
-	for _, kind := range []string{"unknown", "roster", "role", "harness", "no desktop", "missing", "archived"} {
+	for _, kind := range []string{"unknown start", "on roster", "keeps role", "other harness", "no desktop", "missing desktop", "already archived"} {
 		t.Run(kind, func(t *testing.T) {
 			st := &state.State{Starts: []state.Start{{Party: worker}}}
-			st.Starts[0].HostSession = "local_retry"
+			st.Starts[0].HostSession = retryHostSession
 			record := unarchived
 			switch kind {
-			case "unknown":
+			case "unknown start":
 				st.Starts = nil
-			case "roster":
+			case "on roster":
 				st.Agents = []state.Agent{{Party: worker}}
-			case "role":
+			case "keeps role":
 				st.Guide = &state.Role{Holder: &state.Supervisor{Party: worker}}
-			case "harness":
-				st.Starts[0].Harness = "codex"
+			case "other harness":
+				st.Starts[0].Harness = transcriptTestCodex
 			case "no desktop":
 				st.Starts[0].HostSession = ""
-			case "missing":
+			case "missing desktop":
 				record = func(string) (*claude.Record, bool) { return nil, false }
-			case "archived":
+			case "already archived":
 				record = func(string) (*claude.Record, bool) { return &claude.Record{IsArchived: true}, true }
 			}
 			if err := retryArchive(st, worker.Session, record, archiveNow); err == nil {
@@ -406,8 +408,8 @@ func TestRetryArchiveSafety(t *testing.T) {
 }
 
 func TestRetryArchiveResetsExistingBudget(t *testing.T) {
-	st := &state.State{Starts: []state.Start{{Party: worker}}, Archives: []state.Archive{{Party: worker, Host: "local_retry", Since: archiveNow.Add(-48 * time.Hour), Tries: 4, Tried: archiveNow, Looked: archiveNow, Warmed: archiveNow}}}
-	st.Starts[0].HostSession = "local_retry"
+	st := &state.State{Starts: []state.Start{{Party: worker}}, Archives: []state.Archive{{Party: worker, Host: retryHostSession, Since: archiveNow.Add(-48 * time.Hour), Tries: 4, Tried: archiveNow, Looked: archiveNow, Warmed: archiveNow}}}
+	st.Starts[0].HostSession = retryHostSession
 	if err := retryArchive(st, worker.Session, unarchived, archiveNow); err != nil {
 		t.Fatal(err)
 	}
@@ -422,14 +424,14 @@ func TestDoctorRetryArchiveCommand(t *testing.T) {
 	writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_retry.json"), `{}`)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		p := worker
-		p.HostSession = "local_retry"
+		p.HostSession = retryHostSession
 		st.Starts = append(st.Starts, state.Start{Party: p})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	cmd := a.doctorCmd()
-	cmd.SetArgs([]string{"retry-archive", "local_retry"})
+	cmd.SetArgs([]string{"retry-archive", retryHostSession})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +439,7 @@ func TestDoctorRetryArchiveCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Archives) != 1 || st.Archives[0].Host != "local_retry" || st.Archives[0].Tries != 0 {
+	if len(st.Archives) != 1 || st.Archives[0].Host != retryHostSession || st.Archives[0].Tries != 0 {
 		t.Fatalf("queued: %+v", st.Archives)
 	}
 	if !strings.Contains(out.String(), "archive retry queued") {
