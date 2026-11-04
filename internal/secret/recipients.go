@@ -83,6 +83,9 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 	// each vault's item listing, read once when a recipient needs it
 	listings := map[string][]vaultItem{}
 	listing := func(vault string) ([]vaultItem, error) {
+		if err := o.checkVaultIn(Ref{Op: "op://" + vault}, o.ageVaults()...); err != nil {
+			return nil, err
+		}
 		if items, ok := listings[vault]; ok {
 			return items, nil
 		}

@@ -385,6 +385,9 @@ func (o *Ops) itemEnv(ctx context.Context, file string, recipients []string) ([]
 		hint = AgeInstallationItem(inst)
 	}
 	for _, vault := range o.ageVaults() {
+		if err := o.checkVaultIn(Ref{Op: "op://" + vault}, o.ageVaults()...); err != nil {
+			return nil, err
+		}
 		items, err := o.vaultItems(ctx, vault)
 		if err != nil {
 			return nil, fmt.Errorf("%s: the age identity in the vault %s: %w: %w", file, vault, ErrVault, err)
