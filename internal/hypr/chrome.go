@@ -414,6 +414,9 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 		return nil
 	}
 	errs := []error{run(ctx, ctl, "eval", redirectOff)}
+	if err := errs[0]; err != nil {
+		return fmt.Errorf("%w; the output %s stays until the Chrome redirect is stopped", err, Output)
+	}
 	s.redirecting = false
 	l, err := read(ctx, ctl)
 	if err != nil {
