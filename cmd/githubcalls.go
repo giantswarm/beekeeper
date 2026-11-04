@@ -13,6 +13,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+// verbGitHubCall is the event of one admitted GraphQL invocation.
+const verbGitHubCall = "github.call"
+
 // Only admitted invocations are recorded. PreToolUse cannot prove execution
 // or measure points, but retains callers after their processes have exited.
 func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
@@ -23,7 +26,7 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 		} `json:"hookSpecificOutput"`
 	}
 	_ = json.Unmarshal(output, &decision)
-	if decision.Decision == "deny" || decision.Specific.Decision == "deny" || a.cfg == nil {
+	if decision.Decision == guardDeny || decision.Specific.Decision == guardDeny || a.cfg == nil {
 		return
 	}
 	session, calls := guard.GitHubCalls(raw, format)
@@ -38,7 +41,7 @@ func (a *app) recordGitHubCalls(raw []byte, format string, output []byte) {
 	var events []state.Event
 	for _, call := range calls {
 		detail, _ := json.Marshal(call)
-		events = append(events, state.Event{At: time.Now(), By: who, Verb: "github.call", Detail: string(detail)})
+		events = append(events, state.Event{At: time.Now(), By: who, Verb: verbGitHubCall, Detail: string(detail)})
 	}
 	_ = store.RecordWithin(100*time.Millisecond, events...)
 }
@@ -60,7 +63,7 @@ func githubWindowCallers(a *app, g *github.GraphQL) ([]githubCaller, error) {
 	}
 	since := reset.Add(-time.Hour)
 	events, err := a.store.Events(0, func(e state.Event) bool {
-		return e.Verb == "github.call" && !e.At.Before(since) && !e.At.After(a.now)
+		return e.Verb == verbGitHubCall && !e.At.Before(since) && !e.At.After(a.now)
 	})
 	if err != nil {
 		return nil, err

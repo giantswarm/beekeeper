@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	ghHostnameFlag = "--hostname"
+	ghReleaseSub   = "release"
+)
+
 // GitHubCall describes an invocation, not measured GraphQL points. Arguments
 // are deliberately omitted: queries and flags can contain private information.
 type GitHubCall struct {
@@ -48,7 +53,7 @@ func graphQLCalls(command string) []GitHubCall {
 		// commandAt handles env assignments and common command wrappers.
 		for i, word := range words {
 			tool := filepath.Base(word)
-			if tool != "gh" && tool != "beekeeper" {
+			if tool != "gh" && tool != selfCmd {
 				continue
 			}
 			if commandAt(words) != i {
@@ -57,11 +62,11 @@ func graphQLCalls(command string) []GitHubCall {
 			args := words[i+1:]
 			if tool == "gh" {
 				for len(args) > 0 {
-					if (args[0] == "-R" || args[0] == "--repo" || args[0] == "--hostname") && len(args) > 1 {
+					if (args[0] == "-R" || args[0] == "--repo" || args[0] == ghHostnameFlag) && len(args) > 1 {
 						args = args[2:]
 						continue
 					}
-					if strings.HasPrefix(args[0], "--repo=") || strings.HasPrefix(args[0], "--hostname=") {
+					if strings.HasPrefix(args[0], "--repo=") || strings.HasPrefix(args[0], ghHostnameFlag+"=") {
 						args = args[1:]
 						continue
 					}
@@ -72,28 +77,28 @@ func graphQLCalls(command string) []GitHubCall {
 				break
 			}
 			class := ""
-			if tool == "beekeeper" && args[0] == "board" {
+			if tool == selfCmd && args[0] == "board" {
 				class = "beekeeper board"
 			}
 			if tool == "gh" && len(args) >= 2 {
 				switch args[0] {
 				case "project":
-					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", "list", "view", "create", "edit", "close", "copy", "delete", "field-list", "field-create", "field-delete", "link", "unlink", "mark-template"}, args[1]) {
+					if slices.Contains([]string{"item-list", "item-add", "item-edit", "item-delete", "item-archive", "list", "view", "create", "edit", "close", "copy", verbDelete, "field-list", "field-create", "field-delete", "link", "unlink", "mark-template"}, args[1]) {
 						class = "gh project " + args[1]
 					}
 				case "api":
-					if args[1] == "graphql" {
+					if args[1] == executionGraphQL {
 						class = "gh api graphql"
 					}
 				case "pr":
 					if slices.Contains([]string{"view", "list", "checks"}, args[1]) {
 						class = "gh pr " + args[1]
 					}
-				case "issue":
+				case ghIssueSub:
 					if slices.Contains([]string{"view", "list"}, args[1]) {
 						class = "gh issue " + args[1]
 					}
-				case "release":
+				case ghReleaseSub:
 					if args[1] == "list" {
 						class = "gh release list"
 					}
