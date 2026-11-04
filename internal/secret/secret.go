@@ -375,6 +375,10 @@ func (o *Ops) op(ctx context.Context, stdin io.Reader, args ...string) ([]byte, 
 
 // decrypt reads a SOPS file into its document.
 func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
+	raw, err := os.ReadFile(file) //nolint:gosec // the caller's SOPS file snapshot
+	if err != nil {
+		return nil, err
+	}
 	env, err := o.ageEnv(ctx, file)
 	if err != nil {
 		return nil, err
@@ -388,7 +392,7 @@ func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
-	return doc, nil
+	return doc, doc.remember(file, raw, true)
 }
 
 // encrypt writes doc to file encrypted under the creation rules of the
@@ -411,7 +415,7 @@ func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", file, err)
 	}
-	return writeFile(file, out)
+	return doc.commit(ctx, file, out)
 }
 
 // sopsTypes are the flags that tell sops a file is YAML when its name

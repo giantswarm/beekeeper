@@ -27,6 +27,10 @@ const (
 // a copy keeps its keys' order and comments.
 type document struct {
 	root *yaml.Node
+	// The source snapshot is ciphertext (or an empty plaintext skeleton).
+	source   string
+	original []byte
+	existed  bool
 }
 
 // errSeveralDocuments refuses a YAML stream of several documents.

@@ -271,7 +271,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	raw, err := os.ReadFile(file) //nolint:gosec // the caller's SOPS file
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return doc, nil
+		return doc, doc.remember(file, nil, false)
 	case err != nil:
 		return nil, err
 	}
@@ -280,7 +280,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	case err != nil:
 		return nil, fmt.Errorf("%s: %w", file, err)
 	case skel != nil:
-		return skel, nil
+		return skel, skel.remember(file, raw, true)
 	}
 	return o.decrypt(ctx, file)
 }
