@@ -252,6 +252,21 @@ func (c *Client) MoveHeld(ctx context.Context, ref, in, by string) (*Moved, *Hel
 		mv, err := c.Move(ctx, ref, in)
 		return mv, nil, err
 	}
+	// The dependency is written before the Status, so reject invalid move
+	// inputs before recording it. Block accepts a PR's closing issue, while
+	// Move requires the target itself to be an issue.
+	if _, err := c.team(m); err != nil {
+		return nil, nil, &Refusal{err.Error()}
+	}
+	if _, err := ResolveGate(c.Board.Epics, names, m.Fields[KindField].names()); err != nil {
+		return nil, nil, &Refusal{err.Error()}
+	}
+	if by != "" {
+		ref = fmt.Sprintf("%s/%s#%d", owner, repo, n)
+		if _, _, _, err := c.lookup(github.ActingOn(ctx, owner+"/"+repo), m, ref, owner, repo, n); err != nil {
+			return nil, nil, err
+		}
+	}
 	var h *Held
 	if by == "" {
 		if h, err = c.blockers(ctx, owner, repo, n); err != nil {
