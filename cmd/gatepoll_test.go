@@ -5,6 +5,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
 // The first run of a command leads, a second one while the leader's
@@ -102,4 +105,69 @@ func TestFollowRunCopiesTheLeadersStderr(t *testing.T) {
 		!strings.Contains(errs.String(), "/kept.log") {
 		t.Errorf("rc %d, stdout %q, stderr %q", rc, out.String(), errs.String())
 	}
+}
+
+// A follower can attach before the leader has a PID. A failed launch must
+// leave an outcome for that follower even after the startup files are removed.
+func TestWaitFollowerGetsLeaderStartupFailure(t *testing.T) {
+	a := queueApp(t)
+	marker := filepath.Join(t.TempDir(), "devctl-ran")
+	fakeDevctl(t, "touch "+marker+"; exit 9")
+	argv := strings.Fields("devctl pr wait o/r 7")
+	base := ownedBase(a.store.Dir(), argv, os.Getpid())
+	done := make(chan int, 1)
+	attached := false
+	was := userSystemd
+	userSystemd = func() bool { return true }
+	t.Cleanup(func() { userSystemd = was })
+	useLauncher(t, &startupFailureLauncher{attach: func() {
+		lead, polls := claimLead(a.store.Dir(), argv, base+"-follower")
+		if polls || lead != base {
+			t.Fatalf("startup wait did not follow leader: %q, polls %v", lead, polls)
+		}
+		if pid := readPID(lead); pid != 0 {
+			t.Fatalf("leader already published PID %d", pid)
+		}
+		attached = true
+		go func() { done <- followRun(lead, io.Discard, io.Discard) }()
+	}})
+	if err := a.ownedRun(context.Background(), argv, 0); Code(err) != 127 {
+		t.Fatalf("leader exit %d, want 127", Code(err))
+	}
+	if !attached {
+		t.Fatal("launcher was not called")
+	}
+	select {
+	case rc := <-done:
+		if rc != 127 {
+			t.Errorf("follower exit %d, want 127", rc)
+		}
+	case <-time.After(3 * time.Second):
+		// Join the reader even on the broken implementation.
+		writeResult(base, runResult{RC: 127})
+		<-done
+		t.Fatal("follower hung after the leader failed to start")
+	}
+	if r, ok := readResult(base); !ok || r.RC != 127 {
+		t.Errorf("startup outcome not retained: %+v, present %v", r, ok)
+	}
+	if _, err := os.Stat(base + ".spec"); !os.IsNotExist(err) {
+		t.Errorf("startup spec was not cleaned up: %v", err)
+	}
+	if _, err := os.Stat(leadFile(a.store.Dir(), argv)); !os.IsNotExist(err) {
+		t.Errorf("failed leader was not released: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("devctl ran during failed startup: %v", err)
+	}
+}
+
+type startupFailureLauncher struct {
+	platform.Launcher
+	attach func()
+}
+
+func (l *startupFailureLauncher) Start(platform.Unit) error {
+	l.attach()
+	return errors.New("synthetic launch failure")
 }
