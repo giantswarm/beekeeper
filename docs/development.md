@@ -72,6 +72,15 @@ BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmod
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
 
+The Kubernetes writer publishes `Ready=True` with reason `StatePersisted` on
+Notes, Holds, RosterEntries, Environments and MergeLanes after writing their
+status, including claims and releases. Each condition observes the object's
+current generation. Ready means the writer persisted the state; an active hold,
+a busy roster entry or a nonempty queue can all be Ready. Objects that have not
+yet been written by beekeeper have no Ready condition. For example,
+`kubectl wait --for=condition=Ready environment/<name>` waits for that first
+successful write; use the appropriate resource and namespace for other kinds.
+
 A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
 creates the object and writes its status separately; if the latter fails, the note still
 lists as open and can be answered, withdrawn or closed by its default. Older objects
@@ -162,14 +171,32 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
 reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
-the rewrite, and run what it prints:
+the rewrite, and run what it prints. A hook proof requires a **real in-scope
+session ID**, never a made-up ID: out-of-scope events pass through without
+exercising the guard. Run `beekeeper sessions` with the configuration being
+proved and copy the ID of a session beekeeper started or knows; in a Claude
+Code tool shell, `$CLAUDE_CODE_SESSION_ID` supplies the current session ID.
+For agy, use the real conversation ID from its session record. Include that
+session's actual `cwd` (agy: `workspacePaths`). Scope also includes directories
+under `hooks.scope.dirs`; when that setting is unset, every session is in scope.
+A scope check verifies membership, not session liveness, so obtaining a real ID
+is still required.
+
+Save the exact event and check it before each proof. Use the same configuration,
+state and environment for the preflight and hook. `check-scope` exits nonzero
+with an explicit out-of-scope error rather than treating a pass-through as proof:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"devctl pr merge giantswarm/marge 1"}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse
-echo '{"conversationId":"s1","workspacePaths":["/tmp"],"toolCall":{"name":"run_command","args":{"CommandLine":"devctl pr merge giantswarm/marge 1"}}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse --format agy
-PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
+# Set SESSION_ID to the real ID obtained above, and SESSION_CWD to its cwd.
+: "${SESSION_ID:?real in-scope session ID required}"
+: "${SESSION_CWD:?session working directory required}"
+jq -n --arg id "$SESSION_ID" --arg cwd "$SESSION_CWD" \
+  '{session_id:$id,cwd:$cwd,tool_name:"Bash",tool_input:{command:"devctl pr merge giantswarm/marge 1"}}' > /tmp/bk-event.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-event.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse < /tmp/bk-event.json
+# For agy, save its event shape with conversationId and workspacePaths instead;
+# check the same event, then invoke pretooluse --format agy.
+PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID="$SESSION_ID" \
   ./beekeeper gate --wait 10s -- devctl pr merge giantswarm/marge 1
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
@@ -189,8 +216,10 @@ it is quiet, then `agents handover`. The started sessions get the scratch config
 `agents handover --prompt` shows the prompt without starting anything.
 
 ```bash
-echo '{"hook_event_name":"PermissionRequest","session_id":"<id>","permission_mode":"acceptEdits","tool_name":"WebSearch"}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest
+jq -n --arg id "${SESSION_ID:?real started session ID required}" \
+  '{hook_event_name:"PermissionRequest",session_id:$id,permission_mode:"acceptEdits",tool_name:"WebSearch"}' > /tmp/bk-permission.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-permission.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest < /tmp/bk-permission.json
 ```
 
 The hook's merge rewrite is pinned against real commands: `internal/guard/testdata/merges.jsonl`

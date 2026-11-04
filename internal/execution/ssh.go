@@ -162,6 +162,7 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 		return nil, errors.New("missing SSH command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed SSH executable and validated argument vector
+	c.WaitDelay = commandDrainWait
 	c.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{limit: MaxWire}
 	// Stderr may carry remote diagnostics or credentials. Never reflect it

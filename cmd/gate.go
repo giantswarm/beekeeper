@@ -386,11 +386,17 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
+		argv = merge.RequireRebase(argv)
+	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
 	if len(reviewedHead) > 0 {
 		g.reviewedHead = reviewedHead[0]
+	}
+	if err := g.checkMergeRoute(); err != nil {
+		return err
 	}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
@@ -1848,6 +1854,9 @@ func (g *gateRun) runMerge() error {
 // hand-cut base, or the plain squash merge for a repository devctl does not
 // serve.
 func (g *gateRun) mergeArgv() ([]string, error) {
+	if err := g.checkMergeRoute(); err != nil {
+		return nil, err
+	}
 	if g.reviewedHead != "" {
 		self, err := selfExe()
 		if err != nil {
@@ -1868,7 +1877,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		argv = squashArgv(self, g.repo, g.pr, g.argv)
 	}
 	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
@@ -2075,8 +2084,8 @@ func (g *gateRun) failureWake(run childRun) string {
 // warranted no release or whose lane has no installation to roll leaves it
 // once its release is known, and so does one with nothing merged. A run without
 // its document or ended by a signal is GitHub's to judge: merged, its
-// release is unconfirmed; unanswered, the lane settles by the settle rule as
-// for a lost merge. The run's files go with the record; a save the newer
+// release is recovered with release wait; unanswered, the lane settles by
+// the settle rule as for a lost merge. The run's files go with the record; a save the newer
 // release that wrote the state refuses leaves them, document and exit code,
 // for the watch, which records the run from them at its next poll.
 func (g *gateRun) record(base string, run childRun) error {
@@ -2096,6 +2105,19 @@ func (g *gateRun) record(base string, run childRun) error {
 	r.rc = rc
 	if merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
+	}
+	// Keep the running place until recovery finishes, so an unknown release
+	// cannot enter settling while this gate can still identify it. A gate
+	// that was itself stopped ends now: lanes settle --release names it later.
+	if r.out.Merged && r.out.Unconfirmed && r.unanswered == nil && g.pr != 0 && g.handCut() == "" && !run.stopped {
+		gateLine("%s merged per GitHub; recovering its release (%s release wait %s --pr %d)", g.key(), merge.Tool, g.repo, g.pr)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+		recovered, _, found := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
+		cancel()
+		if found && !recovered.Unconfirmed && (recovered.Release != "" || recovered.NoRelease || recovered.ReleaseFailed) {
+			recovered.MergedAt = r.out.MergedAt
+			r.out = recovered
+		}
 	}
 	releaseLine := ""
 	// Refresh after merging: another merge may have changed the workflows
@@ -2221,8 +2243,8 @@ func (g *gateRun) record(base string, run childRun) error {
 		gateLine("%s merged and its release failed (exit %d): nothing rolls, lane %s settles at once; the fix is the next pull request or a rerun of the failed workflow, do not merge again",
 			g.key(), rc, g.lane.Name)
 	case out.Unconfirmed:
-		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
-			rc, g.repo, g.pr, g.repo, g.pr)
+		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, recover it with `devctl release wait %s --pr %d`, then name it with `beekeeper lanes settle %s %d --release <version>`; do not merge again",
+			rc, g.repo, g.pr, g.repo, g.pr, g.repo, g.pr)
 	case !out.Merged && (rc == devctlUsage || rc == devctlAuth):
 		gateLine("%s (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
 			nothingDone(g.pr, out), rc, output, g.key(), g.lane.Name)
@@ -2283,6 +2305,15 @@ func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.Tool
 // merge of a repository devctl serves; any other merge takes the plain
 // squash merge.
 func (g *gateRun) runsDevctl() bool { return g.pr == 0 || g.cfg.Merge.DevctlServes(g.repo) }
+
+// checkMergeRoute refuses flags the plain squash route cannot honor, before
+// queuing and again before launch for runs resumed from an earlier version.
+func (g *gateRun) checkMergeRoute() error {
+	if !g.runsDevctl() && merge.UpdatesBranch(g.argv) {
+		return gateRefused("--update-branch is unsupported for repositories outside merge.devctlOwners: the squash merge route cannot update the branch; nothing merged")
+	}
+	return nil
+}
 
 // judgeTries is how often the gate asks GitHub about a run without its
 // document, judgeWait the pause between the tries.
@@ -2481,8 +2512,8 @@ func toolMergeRuns(st *state.State) bool {
 // release, the moment the release's binary assets exist and verify: a
 // window whose pull request merged, or a promotion's, runs the tool's update
 // (updateTool) also while the merge's devctl still waits for the release
-// workflow, and lifts once the tool reports another version than at its
-// opening (the release, once the merge recorded it). Once no merge of the
+// workflow, and lifts once the tool reports the release tagged on the merge
+// commit (or a later release). Once no merge of the
 // tool's repository runs, a window whose pull request GitHub reports not
 // merged lifts too: its merge ended without the gate recording it (a gate
 // killed, GitHub unanswered). It reads the tool and GitHub every time: a
@@ -2496,9 +2527,17 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	v := devctlVersion(ctx)
 	pulls := map[int]github.Pull{}
 	for _, h := range st.Holds {
-		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (running || v == "" || !merge.Installed(h, v)) {
+		if h.Tool != "" && h.ToolPR != 0 && (!h.ToolMerged || h.ToolRelease == "") {
 			if p, err := pullState(ctx, merge.ToolRepo, h.ToolPR); err == nil {
 				pulls[h.ToolPR] = p
+			}
+		}
+	}
+	releases := map[int]string{}
+	for pr, p := range pulls {
+		if p.State == github.Merged {
+			if tag, err := toolRelease(ctx, p.MergeCommit.OID); err == nil {
+				releases[pr] = tag
 			}
 		}
 	}
@@ -2507,6 +2546,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			for i, h := range st.Holds {
 				if p, ok := pulls[h.ToolPR]; ok && h.Tool != "" && p.State == github.Merged {
 					st.Holds[i].ToolMerged = true
+					if h.ToolRelease == "" {
+						st.Holds[i].ToolRelease = releases[h.ToolPR]
+					}
 				}
 			}
 			return nil, nil
@@ -2514,6 +2556,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	}
 	if v != "" && a.updateTool(ctx, v, by) {
 		v = devctlVersion(ctx)
+	}
+	if current, err := a.store.Read(); err == nil {
+		st = current
 	}
 	candidates := publishedCandidates(ctx, st, pulls)
 	if v == "" && len(candidates) == 0 && (running || len(pulls) == 0) {
@@ -2571,10 +2616,10 @@ func awaitsCandidate(h state.Hold, pulls map[int]github.Pull) bool {
 func publishedCandidates(ctx context.Context, st *state.State, pulls map[int]github.Pull) map[int]string {
 	found := map[int]string{}
 	for _, h := range st.Holds {
-		if !awaitsCandidate(h, pulls) {
+		if !awaitsCandidate(h, pulls) || h.ToolRelease == "" {
 			continue
 		}
-		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && (h.ToolRelease == "" || merge.Bare(c) == merge.Bare(h.ToolRelease)) {
+		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && merge.Bare(c) == merge.Bare(h.ToolRelease) {
 			found[h.ToolPR] = c
 		}
 	}
