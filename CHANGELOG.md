@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
 - Honor saved Go cache settings, including GOENV selection and persisted GOPATH, when discovering build and module cache directories (https://github.com/giantswarm/beekeeper/issues/2758).
