@@ -3,11 +3,14 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/board"
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -112,5 +115,94 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 	st.Holds = []state.Hold{h}
 	if why := incidentStartReason(st, time.Now(), other); why != "" {
 		t.Fatalf("ordinary hold blocked starts: %s", why)
+	}
+}
+
+func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
+	for _, path := range []string{"worker", "reviewer", "fixer"} {
+		for _, repair := range []bool{false, true} {
+			name := "held"
+			if repair {
+				name = "repair"
+			}
+			t.Run(path+"/"+name, func(t *testing.T) {
+				r := newLoopRig(t)
+				brief := filepath.Join(t.TempDir(), "worker.md")
+				if err := os.WriteFile(brief, []byte("Work {{.URL}}."), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				r.a.cfg.Supervisor.WorkerBrief = brief
+				r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: "test-model"}}
+				prepared := false
+				setHold := func() {
+					t.Helper()
+					prepared = true
+					except := incidentRepairIssue
+					if repair {
+						except = loopPR
+					}
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Except: except, Incident: true, Reason: incidentReason, At: time.Now()})
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				r.answer = func(args []string) (string, int) {
+					if args[0] == loopCapacity {
+						if path != "fixer" {
+							setHold()
+						}
+						return `{"room":1}`, 0
+					}
+					return "", 0
+				}
+				readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+					setHold()
+					return r.pull, nil
+				}
+				l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+				act := superloop.Action{Key: "incident-preparation", Ref: loopPR, URL: loopURL, Head: loopHead, Round: 1}
+				st, err := r.a.store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch path {
+				case "worker":
+					_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
+				case "reviewer":
+					_, err = l.startReviewer(context.Background(), act)
+				case "fixer":
+					err = l.startFixer(context.Background(), st, act)
+				}
+				if !prepared {
+					t.Fatal("preparation hook was not reached")
+				}
+				if repair {
+					if err != nil {
+						t.Fatalf("repair start: %v", err)
+					}
+				} else if !errors.Is(err, errLoopLater) {
+					t.Errorf("held start returned %v, want errLoopLater", err)
+				}
+				starts := 0
+				for _, c := range r.calls {
+					if len(c) > 1 && c[0] == agentsName && c[1] == agentStartName {
+						starts++
+					}
+				}
+				claims, readErr := r.a.store.Events(0, func(e state.Event) bool { return e.Verb == loopClaimVerb })
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				want := 0
+				if repair {
+					want = 1
+				}
+				if starts != want || len(claims) != want {
+					t.Fatalf("starts=%d claims=%d, want %d each", starts, len(claims), want)
+				}
+			})
+		}
 	}
 }
