@@ -310,7 +310,7 @@ func (p Policy) Readable(path, cwd string) bool {
 // Writable reports whether a file tool may write path: under a path of
 // Write or ToolWrite, the temporary directory, or the session's working
 // directory when that is itself readable (a checkout, never the home
-// directory or a credential's).
+// directory or a credential's), without crossing into a closed directory.
 func (p Policy) Writable(path, cwd string) bool {
 	path = resolve(path, cwd)
 	if p.denied(path) {
@@ -320,7 +320,11 @@ func (p Policy) Writable(path, cwd string) bool {
 		return true
 	}
 	if cwd != "" {
-		if dir := resolve(cwd, ""); under(path, dir) && p.listed(dir) {
+		if dir := resolve(cwd, ""); under(path, dir) && p.listed(dir) &&
+			!slices.ContainsFunc(p.closed(), func(d string) bool {
+				closed := resolve(d, "")
+				return under(path, closed) && !under(dir, closed)
+			}) {
 			return true
 		}
 	}

@@ -185,6 +185,51 @@ func TestHomeAsWorkingDirectoryOpensNothing(t *testing.T) {
 	}
 }
 
+func TestAncestorWorkingDirectoryDoesNotOpenClosedTrees(t *testing.T) {
+	p, home := policy(t)
+	p.Runtime = filepath.Join(filepath.Dir(home), "runtime-parent", "runtime")
+	p.Write = append(p.Write, filepath.Join(p.Runtime, "writable"))
+	p.ToolWrite = append(p.ToolWrite, filepath.Join(p.Runtime, "tool-writable"))
+	p.Deny = append(p.Deny, filepath.Join(p.Runtime, "writable", "scan"))
+	for _, cwd := range []string{"/", filepath.Dir(home), filepath.Dir(p.Runtime)} {
+		t.Run(cwd, func(t *testing.T) {
+			for _, path := range []string{
+				home, filepath.Join(home, "private", "canary"),
+				p.Runtime, filepath.Join(p.Runtime, "private", "canary"),
+				filepath.Join(home, ".local/state/beekeeper/scan/canary"),
+				filepath.Join(p.Runtime, "writable", "scan", "canary"),
+			} {
+				if p.Writable(path, cwd) || p.Readable(path, cwd) {
+					t.Errorf("ancestor cwd opened %s", path)
+				}
+			}
+			for _, path := range []string{
+				filepath.Join(home, "go/pkg/mod/cache"),
+				filepath.Join(home, ".claude/projects/p/memory/note.md"),
+				filepath.Join(p.Runtime, "writable", "file"),
+				filepath.Join(p.Runtime, "tool-writable", "file"),
+			} {
+				if !p.Writable(path, cwd) || !p.Readable(path, cwd) {
+					t.Errorf("ancestor cwd lost explicit grant for %s", path)
+				}
+			}
+			path := filepath.Join(home, "projects/repo/go.mod")
+			if !p.Readable(path, cwd) || p.Writable(path, cwd) {
+				t.Error("ancestor cwd changed a read-only grant")
+			}
+		})
+	}
+	checkout := filepath.Join(home, "projects/repo")
+	if !p.Writable("new/file", checkout) || !p.Readable("new/file", checkout) {
+		t.Error("ordinary checkout lost its working-directory grant")
+	}
+	// A readable checkout outside the closed trees retains its implicit grant too.
+	checkout = filepath.Join(filepath.Dir(home), "checkout")
+	if !p.Writable("new/file", checkout) || !p.Readable("new/file", checkout) {
+		t.Error("external checkout lost its working-directory grant")
+	}
+}
+
 func TestTheScannersDirectoryIsDeniedInsideTheState(t *testing.T) {
 	p, home := policy(t)
 	state := filepath.Join(home, ".local/state/beekeeper")
