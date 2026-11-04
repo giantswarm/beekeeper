@@ -904,6 +904,13 @@ func (a *app) runServeMode(ctx context.Context, p config.Provider) (config.Serve
 	return config.ServeModeReading{Mode: fields[0]}, nil
 }
 
+// codexAccountSnapshot retains explicit account stops as well as healthy usage.
+// A transport failure cannot establish that an earlier stop has cleared.
+type codexAccountSnapshot struct {
+	usageReading
+	Stopped bool `json:"stopped,omitempty"`
+}
+
 func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading, error) {
 	var stateDir, sessionsDir string
 	if a.cfg != nil {
@@ -920,19 +927,24 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	if err != nil && !errors.Is(err, codex.ErrNoUsage) && (cr.At.IsZero() || now.Sub(cr.At) <= u.EffectiveEvery()) {
 		return usageReading{}, err
 	}
-	if err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
-		return codexUsageToReading(cr), nil
-	}
 	// Prefer a fresh account snapshot over an older rollout. Still read local
 	// events first so a new explicit stop cannot hide behind the snapshot.
-	var cached usageReading
+	var snapshot codexAccountSnapshot
 	haveCached := false
 	if a.store != nil {
-		found, e := a.store.ReadFile(codexAccountUsageFile, &cached)
-		haveCached = e == nil && found && !cached.SourceAt.IsZero()
-		if haveCached && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
-			return cached, nil
-		}
+		found, e := a.store.ReadFile(codexAccountUsageFile, &snapshot)
+		haveCached = e == nil && found && !snapshot.SourceAt.IsZero()
+	}
+	cached := snapshot.usageReading
+	stopped := haveCached && snapshot.Stopped && !cached.SourceAt.Before(cr.At)
+	if stopped && now.Sub(cached.SourceAt) <= u.EffectiveEvery() {
+		return usageReading{}, codex.ErrUsageStopped
+	}
+	if !stopped && err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
+		return codexUsageToReading(cr), nil
+	}
+	if haveCached && !snapshot.Stopped && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
+		return cached, nil
 	}
 	dir := filepath.Join(stateDir, "usage", "codex")
 	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
@@ -954,9 +966,18 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 		return r, nil
 	}
 	if errors.Is(probeErr, codex.ErrUsageStopped) {
+		if a.store != nil {
+			snapshot = codexAccountSnapshot{usageReading: usageReading{At: now.UTC(), SourceAt: now.UTC()}, Stopped: true}
+			if writeErr := a.store.WriteFile(codexAccountUsageFile, snapshot); writeErr != nil {
+				return usageReading{}, fmt.Errorf("%w: persist account stop: %v", probeErr, writeErr)
+			}
+		}
 		return usageReading{}, probeErr
 	}
-	if haveCached && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
+	if stopped {
+		return usageReading{}, codex.ErrUsageStopped
+	}
+	if haveCached && !snapshot.Stopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
 		cached.At = now.UTC()
 		if validateReadingAt(cached, u, now) == nil {
 			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
