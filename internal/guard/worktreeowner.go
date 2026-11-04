@@ -5,12 +5,18 @@ import (
 	"strings"
 )
 
+const (
+	worktreeAdd    = "add"
+	worktreeCommit = "commit"
+	worktreeReason = "--reason"
+)
+
 func (h Hook) checkWorktreeOwner(args []string, dir string, known bool) string {
 	if h.WorktreeOwner == nil || h.mergeSession == "" || len(args) == 0 {
 		return ""
 	}
-	create := len(args) > 1 && args[0] == "worktree" && args[1] == "add"
-	if !create && args[0] != "commit" && args[0] != "push" {
+	create := len(args) > 1 && args[0] == "worktree" && args[1] == worktreeAdd
+	if !create && args[0] != worktreeCommit && args[0] != pushSubcmd {
 		return ""
 	}
 	if !known {
@@ -26,7 +32,7 @@ func (h Hook) checkWorktreeOwner(args []string, dir string, known bool) string {
 				rest = true
 				continue
 			}
-			if !rest && (a == "-b" || a == "-B" || a == "--reason") {
+			if !rest && (a == "-b" || a == "-B" || a == worktreeReason) {
 				i++
 				continue
 			}

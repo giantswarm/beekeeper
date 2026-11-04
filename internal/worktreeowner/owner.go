@@ -44,7 +44,7 @@ func Check(stateDir, session, dir string, create bool, live func(string) (bool, 
 		return unavailable
 	}
 	defer func() { _ = lock.Unlock() }()
-	raw, err := os.ReadFile(p)
+	raw, err := os.ReadFile(filepath.Clean(p))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return unavailable
 	}

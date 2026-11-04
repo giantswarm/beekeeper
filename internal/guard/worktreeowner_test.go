@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const worktreeVisitor = "visitor"
+
 func TestWorktreeOwnerCommands(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {
@@ -24,9 +26,9 @@ func TestWorktreeOwnerCommands(t *testing.T) {
 	} {
 		t.Run(tc.cmd, func(t *testing.T) {
 			calls := 0
-			h := Hook{mergeSession: "visitor", WorktreeOwner: func(session, path string, create bool) string {
+			h := Hook{mergeSession: worktreeVisitor, WorktreeOwner: func(session, path string, create bool) string {
 				calls++
-				if session != "visitor" || path != tc.want || create != tc.create {
+				if session != worktreeVisitor || path != tc.want || create != tc.create {
 					t.Fatalf("got %q %q %v", session, path, create)
 				}
 				return "Refused: owner-session"
@@ -36,7 +38,7 @@ func TestWorktreeOwnerCommands(t *testing.T) {
 			}
 		})
 	}
-	h := Hook{mergeSession: "visitor", WorktreeOwner: func(string, string, bool) string { t.Fatal("read-only command checked"); return "" }}
+	h := Hook{mergeSession: worktreeVisitor, WorktreeOwner: func(string, string, bool) string { t.Fatal("read-only command checked"); return "" }}
 	if r := h.pushRefusal("git status", dir); r != "" {
 		t.Fatal(r)
 	}
@@ -44,12 +46,12 @@ func TestWorktreeOwnerCommands(t *testing.T) {
 
 func TestWorktreeOwnerHook(t *testing.T) {
 	h := Hook{WorktreeOwner: func(session, dir string, create bool) string {
-		if session != "visitor" {
+		if session != worktreeVisitor {
 			t.Fatalf("session %q", session)
 		}
 		return "Refused: owner-session"
 	}}
-	raw, err := json.Marshal(map[string]any{"session_id": "visitor", "cwd": t.TempDir(), "tool_name": "Bash", "tool_input": map[string]string{"command": "git commit -am change"}})
+	raw, err := json.Marshal(map[string]any{sessionKey: worktreeVisitor, "cwd": t.TempDir(), "tool_name": bashTool, executionToolInput: map[string]string{commandKey: "git commit -am change"}})
 	if err != nil {
 		t.Fatal(err)
 	}

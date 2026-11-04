@@ -9,7 +9,7 @@ func (a *app) hookWorktreeOwner(session, dir string, create bool) string {
 			return false, err
 		}
 		for _, s := range sessions {
-			if (s.ID == owner || s.HostID == owner) && s.State != "ended" {
+			if (s.ID == owner || s.HostID == owner) && s.State != transcriptStatusEnded {
 				return true, nil
 			}
 		}
