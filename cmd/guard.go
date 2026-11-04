@@ -167,6 +167,11 @@ test's files stay out of the tmpfs /tmp, whose files take RAM. A caller's
 GOTMPDIR or TMPDIR off tmpfs wins, so a nested run keeps its outer run's
 directory. The disk step reclaims unused leftovers unchanged for an hour (disk.prune).
 
+A run gives the command a scratch KUBECONFIG and removes it afterward, so
+builds and tests using client-go's default loading rules cannot rewrite the
+machine kubeconfig. A nonempty inherited KUBECONFIG or an assignment in the
+command wins. Commands needing a cluster must name its kubeconfig explicitly.
+
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
 later (snapshot, watch) names them after the run has ended. Logging never
