@@ -96,13 +96,40 @@ func Release(dir, session string) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
+	return withSessionLock(context.Background(), dir, session, func() error { return removeFlag(dir, session) })
+}
+
+// ReleaseOwned hands session back only if its flag still matches the exact
+// generation the caller wrote. Replacement and removal share the same lock.
+func ReleaseOwned(dir, session string, owner Flag) error {
+	if err := checkName(session); err != nil {
+		return err
+	}
 	return withSessionLock(context.Background(), dir, session, func() error {
-		err := os.Remove(filepath.Join(dir, session+flagExt))
+		b, err := os.ReadFile(filepath.Join(dir, session+flagExt)) //nolint:gosec // validated session under the takeover folder
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		var current Flag
+		if err := json.Unmarshal(b, &current); err != nil {
+			return err
+		}
+		if current.PID != owner.PID || current.By != owner.By || !current.Since.Equal(owner.Since) {
+			return nil
+		}
+		return removeFlag(dir, session)
 	})
+}
+
+func removeFlag(dir, session string) error {
+	err := os.Remove(filepath.Join(dir, session+flagExt))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // Taken returns session's flag when one exists and alive says its screen
