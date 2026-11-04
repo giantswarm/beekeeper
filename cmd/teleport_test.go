@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -221,3 +225,112 @@ func mustRecord(t *testing.T, a *app) teleport.Record {
 
 // teleportKeeper is the name the keeper's unit runs as.
 const teleportKeeper = "teleport keeper"
+
+func TestTeleportMissedRetryWaitsForBrowser(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		for _, grant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("missing=%t/grant=%t", missing, grant), func(t *testing.T) {
+				a := teleportApp(t)
+				a.as = teleportKeeper
+				start := a.now
+				every := 10 * time.Minute
+				until := start.Add(-time.Hour)
+				if missing {
+					until = time.Time{}
+				}
+				raw := `{"active":null}`
+				if !missing {
+					raw = fmt.Sprintf(`{"active":{"valid_until":%q}}`, until.Format(time.RFC3339))
+				}
+				dir := t.TempDir()
+				a.cfg.StateDir = t.TempDir()
+				attempts := filepath.Join(dir, "attempts")
+				tsh := filepath.Join(dir, "tsh")
+				script := "#!/bin/sh\ncase \"$1\" in\nstatus) echo '" + raw + "';;\nlogin) echo attempt >> '" + attempts + "'; exit 1;;\n*) exit 2;;\nesac\n"
+				if err := os.WriteFile(tsh, []byte(script), 0o700); err != nil { //nolint:gosec // a test-owned executable
+					t.Fatal(err)
+				}
+				a.cfg.Teleport = config.Teleport{Proxy: goTestSubcmd, Tsh: tsh, Home: filepath.Join(dir, "home"), Every: config.Duration{Duration: every}, RenewBefore: config.Duration{Duration: 90 * time.Minute}, LoginTimeout: config.Duration{Duration: time.Second}}
+				initial := teleport.Record{CheckedAt: start, FailedAt: start, FailedFor: until, Reason: "previous failure"}
+				if err := a.store.WriteFile(teleportFile, initial); err != nil {
+					t.Fatal(err)
+				}
+				browser := lease.Dir(a.cfg.LeaseDir)
+				if grant {
+					if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Grants = append(st.Grants, state.Grant{Resource: config.Browser, To: state.Party{Session: goTestSubcmd, Name: goTestSubcmd}, At: start.Add(time.Hour)})
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := browser.Claim(config.Browser, lease.Holder{Env: config.Browser, Name: goTestSubcmd, Purpose: goTestSubcmd}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				run := func(at time.Time) error {
+					a.now = at
+					c := a.teleportRenewCmd()
+					c.SetContext(context.Background())
+					if err := c.Flags().Set("keeper", "true"); err != nil {
+						t.Fatal(err)
+					}
+					return c.RunE(c, nil)
+				}
+				count := func() int {
+					b, err := os.ReadFile(attempts) //nolint:gosec // a path of this test
+					if err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					return strings.Count(string(b), "attempt\n")
+				}
+				for i := 0; i < 2; i++ {
+					at := start.Add(time.Hour + time.Duration(i)*every)
+					if err := run(at); err != nil {
+						t.Fatal(err)
+					}
+					rec := mustRecord(t, a)
+					if !rec.PendingMiss || rec.AfterMiss || rec.Waiting == "" || !rec.CheckedAt.Equal(at) || !rec.FailedAt.Equal(initial.FailedAt) || count() != 0 {
+						t.Fatalf("wait %d: record %+v, attempts %d", i, rec, count())
+					}
+				}
+				if grant {
+					if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Grants = nil; return nil, nil }); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := browser.Release(config.Browser); err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < 2; i++ {
+					at := start.Add(time.Hour + time.Duration(i+2)*every)
+					if err := run(at); err == nil || !strings.Contains(err.Error(), "tsh login") {
+						t.Fatalf("attempt %d: %v", i, err)
+					}
+					rec := mustRecord(t, a)
+					if rec.PendingMiss || rec.AfterMiss != (i == 0) || rec.Waiting != "" || !rec.FailedAt.Equal(at) || count() != i+1 {
+						t.Fatalf("attempt %d: record %+v, attempts %d", i, rec, count())
+					}
+					st, err := a.store.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(st.Notes) != i {
+						t.Fatalf("attempt %d: notes %d", i, len(st.Notes))
+					}
+				}
+				for i := 0; i < 2; i++ {
+					if err := run(start.Add(time.Hour + time.Duration(i+4)*every)); err != nil {
+						t.Fatal(err)
+					}
+					st, err := a.store.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if count() != 2 || len(st.Notes) != 1 {
+						t.Fatalf("suppressed run: attempts %d, notes %d", count(), len(st.Notes))
+					}
+				}
+			})
+		}
+	}
+}
