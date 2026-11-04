@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const kubeWithdrawnReason = "#1 withdrawn: no longer needed"
+
 // A note whose create succeeded without its status can be answered or
 // withdrawn directly, retaining the filer recovered while it was open.
 func TestNoteCloseRecoversFiler(t *testing.T) {
@@ -20,9 +22,9 @@ func TestNoteCloseRecoversFiler(t *testing.T) {
 		name, verb, detail string
 		legacy             bool
 	}{
-		{name: "withdrawn", verb: noteDoneEvent, detail: "#1 withdrawn: no longer needed"},
+		{name: "withdrawn", verb: noteDoneEvent, detail: kubeWithdrawnReason},
 		{name: "answered", verb: noteAnsweredEvent, detail: `acme/app#999 answered by "bo" via cli, note #1 asked by "ana": "ship?": yes`},
-		{name: "legacy", verb: noteDoneEvent, detail: "#1 withdrawn: no longer needed", legacy: true},
+		{name: "legacy", verb: noteDoneEvent, detail: kubeWithdrawnReason, legacy: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme, err := Scheme()
@@ -33,7 +35,7 @@ func TestNoteCloseRecoversFiler(t *testing.T) {
 			original := state.Party{Team: team, Session: "filer-session", Name: "filer"}
 			actor := state.Party{Team: "other-team", Session: "closer-session", Name: "closer"}
 			filer := apiParty(original)
-			raw := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-1", CreationTimestamp: metav1.NewTime(filedAt.Add(-time.Hour))},
+			raw := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: kubeNoteOne, CreationTimestamp: metav1.NewTime(filedAt.Add(-time.Hour))},
 				Spec: v1alpha1.NoteSpec{ID: 1, Text: asked, Kind: state.NoteDecision, Filer: &filer, FiledAt: apiTime(filedAt)}}
 			if tc.legacy {
 				raw.Spec.Filer, raw.Spec.FiledAt = nil, nil

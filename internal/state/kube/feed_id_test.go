@@ -23,6 +23,8 @@ type failingFeedListClient struct {
 
 var errFeedList = errors.New("feed list unavailable")
 
+const kubeNoteAdd = "note.add"
+
 func (c *failingFeedListClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	_, notes := list.(*v1alpha1.NoteList)
 	if c.fail && notes == c.failNotes {
@@ -79,7 +81,7 @@ func TestFeedIDContinuesFromRetainedClosure(t *testing.T) {
 	// has expired. Claim events are normally dated at the second boundary.
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(note).Build()
 	s := New(c)
-	if err := s.recordOn(context.Background(), note, state.Event{At: at, Verb: "note.add", Detail: "#2 added"}); err != nil {
+	if err := s.recordOn(context.Background(), note, state.Event{At: at, Verb: kubeNoteAdd, Detail: "#2 added"}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := s.Feed(0)
@@ -89,7 +91,7 @@ func TestFeedIDContinuesFromRetainedClosure(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("feed has %d events, want retained closure and new event", len(events))
 	}
-	if events[0].ID != closureID || events[1].Kind != "note.add" || events[1].ID <= closureID {
+	if events[0].ID != closureID || events[1].Kind != kubeNoteAdd || events[1].ID <= closureID {
 		t.Fatalf("new event must remain readable after closure cursor %s: %+v", closureID, events)
 	}
 }

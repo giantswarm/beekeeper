@@ -15,6 +15,12 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const kubeNoteOne = "note-1"
+
+const kubeNoteTwo = "note-2"
+
+const kubeWithdrawn = "#1 withdrawn"
+
 func TestNoteEventsWaitForTheirNote(t *testing.T) {
 	first := &v1alpha1.Note{Spec: v1alpha1.NoteSpec{ID: 1}}
 	second := &v1alpha1.Note{Spec: v1alpha1.NoteSpec{ID: 2}}
@@ -42,11 +48,11 @@ func TestAnswerEventRoutesPastCollectedNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	old := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-1"},
+	old := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: kubeNoteOne},
 		Spec: v1alpha1.NoteSpec{ID: 1, Text: "old question"},
 		Status: v1alpha1.NoteStatus{State: noteClosed, By: apiParty(ana), At: metav1.NewTime(now.Add(-noteClosureRetention - time.Hour)),
-			Closure: &v1alpha1.NoteClosure{ID: "0000000000000000001", Verb: noteDoneEvent, Detail: "#1 withdrawn", At: metav1.NewTime(now.Add(-noteClosureRetention - time.Hour))}}}
-	open := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-2"},
+			Closure: &v1alpha1.NoteClosure{ID: "0000000000000000001", Verb: noteDoneEvent, Detail: kubeWithdrawn, At: metav1.NewTime(now.Add(-noteClosureRetention - time.Hour))}}}
+	open := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: kubeNoteTwo},
 		Spec:   v1alpha1.NoteSpec{ID: 2, Text: asked, Kind: state.NoteDecision},
 		Status: v1alpha1.NoteStatus{State: noteOpen, By: apiParty(ana), At: metav1.NewTime(now)}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(old, open).Build()
@@ -61,7 +67,7 @@ func TestAnswerEventRoutesPastCollectedNote(t *testing.T) {
 	if err := c.List(context.Background(), events); err != nil {
 		t.Fatal(err)
 	}
-	if len(events.Items) != 1 || events.Items[0].InvolvedObject.Name != "note-2" {
+	if len(events.Items) != 1 || events.Items[0].InvolvedObject.Name != kubeNoteTwo {
 		t.Fatalf("answer Event on the wrong Note: %+v", events.Items)
 	}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(open), open); err != nil {

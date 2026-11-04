@@ -7,27 +7,31 @@ import (
 	"testing"
 )
 
+const followReport = "agents.report"
+
+const followAfter = "after"
+
 func TestFollowReadsLargeEventsAndContinuesPastThem(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	const readerName = "large-events"
-	keep := func(e Event) bool { return e.Verb != "agents.report" }
+	keep := func(e Event) bool { return e.Verb != followReport }
 	if err := s.Record(Event{Verb: "before"}); err != nil {
 		t.Fatal(err)
 	}
 	if events, err := s.Follow(readerName, keep); err != nil || len(events) != 1 {
 		t.Fatalf("before the report: %d events, %v", len(events), err)
 	}
-	report := Event{Verb: "agents.report", Detail: strings.Repeat("large report\n", 100000)}
-	if err := s.Record(report, Event{Verb: "after"}); err != nil {
+	report := Event{Verb: followReport, Detail: strings.Repeat("large report\n", 100000)}
+	if err := s.Record(report, Event{Verb: followAfter}); err != nil {
 		t.Fatal(err)
 	}
 	// Even a reader whose filter rejects the report must get past it.
 	for range 2 {
 		events, err := s.Follow(readerName, keep)
-		if err != nil || len(events) != 2 || events[0].Verb != "before" || events[1].Verb != "after" {
+		if err != nil || len(events) != 2 || events[0].Verb != "before" || events[1].Verb != followAfter {
 			t.Fatalf("past the report: %d events, %v", len(events), err)
 		}
 	}
@@ -42,7 +46,7 @@ func TestFollowLeavesLargePartialEventsForTheNextRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event := Event{Verb: "agents.report", Detail: strings.Repeat("x", 2<<20)}
+	event := Event{Verb: followReport, Detail: strings.Repeat("x", 2<<20)}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
@@ -65,12 +69,12 @@ func TestFollowLeavesLargePartialEventsForTheNextRead(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Record(Event{Verb: "after"}); err != nil {
+	if err := s.Record(Event{Verb: followAfter}); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
 		events, err := s.Follow(readerName, nil)
-		if err != nil || len(events) != 2 || events[0].Detail != event.Detail || events[1].Verb != "after" {
+		if err != nil || len(events) != 2 || events[0].Detail != event.Detail || events[1].Verb != followAfter {
 			t.Fatalf("completed report: %d events, %v", len(events), err)
 		}
 	}

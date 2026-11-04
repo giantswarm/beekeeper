@@ -34,7 +34,7 @@ func (w *withdrawBeforeInitialStatusWriter) Update(ctx context.Context, obj clie
 		w.c.withdrawn = true
 		if err := New(w.c.Client).Update(func(st *state.State) ([]state.Event, error) {
 			st.Notes = nil
-			return []state.Event{{By: ana, Verb: noteDoneEvent, Detail: "#1 withdrawn: no longer needed"}}, nil
+			return []state.Event{{By: ana, Verb: noteDoneEvent, Detail: kubeWithdrawnReason}}, nil
 		}); err != nil {
 			return err
 		}

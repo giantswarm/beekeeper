@@ -66,7 +66,7 @@ func TestFeedPublicationKeepsDelayedWritesBeforeLaterEvents(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC().Truncate(time.Second)
-			note := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-1"},
+			note := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: kubeNoteOne},
 				Spec: v1alpha1.NoteSpec{ID: 1, Text: asked}, Status: v1alpha1.NoteStatus{State: noteOpen, By: apiParty(ana), At: metav1.NewTime(now)}}
 			c := &delayedPublication{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(note).
 				WithObjects(note, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: teamNamespace(team)}}).Build(),
@@ -80,7 +80,7 @@ func TestFeedPublicationKeepsDelayedWritesBeforeLaterEvents(t *testing.T) {
 				if closure {
 					first <- s.Update(func(st *state.State) ([]state.Event, error) {
 						st.Notes = nil
-						return []state.Event{{At: now, By: ana, Verb: noteDoneEvent, Detail: "#1 withdrawn"}}, nil
+						return []state.Event{{At: now, By: ana, Verb: noteDoneEvent, Detail: kubeWithdrawn}}, nil
 					})
 				} else {
 					first <- s.Audit(nil, team, state.Event{At: now, By: ana, Verb: "test.first"})
