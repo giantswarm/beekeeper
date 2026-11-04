@@ -25,7 +25,6 @@ description: Load before GitHub scans, builds, browser or waits.
 - **Builds/tests/lints**: `beekeeper run` (hook does it). Exit 75: no slot, rerun in
   background, never a loop. Exit 137: cap, bound parallelism. Avoid heavy work under
   `beekeeper watch` load or memory pressure.
-- **Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`.
 - **Browser:** headless: CLI Claude in Chrome; desktop: `beekeeper browse "<steps>"`.
   No site-approval waits. Own App grants: `beekeeper app allow` first; refusals are
   barriers. Sign-in: `muster auth login --no-browser`, the printed URL in a browse step.
