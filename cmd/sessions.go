@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
 
 // sessionView is a session with what the state and its transcript add.
@@ -859,6 +860,18 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	}
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
+	}
+	// Authorize before opening the raw harness transcript. CLI and UI tails
+	// share the same caller identity and grants as normalized transcript reads.
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	caller, _ := a.resolveTranscriptCaller(st)
+	meta := transcripts.Meta{ID: s.ID, HostSession: s.HostID, Name: s.Name, Repo: s.Repo, Cwd: s.Cwd, Harness: s.Harness}
+	a.enrichMetaFromState(st, &meta, s.Party(), claude.ByCLI(a.cfg))
+	if !transcripts.Allowed(caller, meta, st.TranscriptGrants, now) {
+		return nil, refused("transcript of %q requires access; request it with `beekeeper transcripts request --session %s --reason <why>`", s.Name, s.ID)
 	}
 	h := harnessForSession(s)
 	if tools {

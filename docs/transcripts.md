@@ -30,7 +30,7 @@ Before any turn or tool result is written to `<stateDir>/transcripts`, its text 
 
 ## Access Control
 
-Transcript access is enforced both in `beekeeper transcripts` (local and coordinator RPC) and in the pre-tool-use file guard (`guard.TranscriptAccess`, which includes `<stateDir>/transcripts` in its guarded roots):
+Transcript access is enforced in `beekeeper transcripts` (local and coordinator RPC), `beekeeper tail` and the UI Tail operation, and in the pre-tool-use file guard (`guard.TranscriptAccess`, which includes `<stateDir>/transcripts` in its guarded roots):
 
 - **Guide:** The session holding the `guide` role (and the operator outside a managed worker session) can list, search and read **all** transcripts across every repository, harness and host.
 - **Worker default (same repository):** A worker session can list, search and read:
