@@ -436,7 +436,7 @@ func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 }
 
 func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	paths, err := s.journalPaths()
 	if err != nil {
 		return nil, err
 	}
@@ -767,4 +767,21 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		}
 	}
 	return json.NewEncoder(output).Encode(reply)
+}
+
+// journalPaths enumerates Root literally: state directories may contain glob
+// metacharacters. Leave journal validation to callers so invalid journals fail
+// closed rather than disappearing from capacity and inventory checks.
+func (s *Server) journalPaths() ([]string, error) {
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(s.Root, entry.Name()))
+		}
+	}
+	return paths, nil
 }
