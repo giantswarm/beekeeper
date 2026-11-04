@@ -2555,6 +2555,11 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	}
 	found := map[string]bool{}
 	for _, h := range holders {
+		if h.Damaged != "" {
+			found["lease-damaged:"+h.Env] = true
+			w.emit("lease-damaged:"+h.Env, "DAMAGED LEASE: %s's holder record cannot be read (%s): it stays held until beekeeper lease release %s --force", h.Env, h.Damaged, h.Env)
+			continue
+		}
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
 		if overrun := w.leaseOverrun(h); overrun != "" {
@@ -2569,4 +2574,5 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.clearMissing("lease-round:", found)
+	w.clearMissing("lease-damaged:", found)
 }

@@ -49,6 +49,10 @@ type Holder struct {
 	// LabChange is the change the lab's previous release left, shown to
 	// this holder at its claim.
 	LabChange *LabChange `json:"labChange,omitempty"`
+	// Damaged is why the resource's record could not be read, empty for a
+	// readable one. A damaged lease stays held: only a forced release frees
+	// it.
+	Damaged string `json:"-"`
 }
 
 // Label is the resource with the budget its claim carries.
@@ -75,7 +79,9 @@ type Dir string
 
 func (d Dir) path(res string) string { return filepath.Join(string(d), res) }
 
-// Get returns the holder of res, or nil when it is free.
+// Get returns the holder of res, or nil when it is free. A record that
+// cannot be read or decoded is a damaged holder: the resource stays held,
+// named, and the error is the caller's only for the lease directory itself.
 func (d Dir) Get(res string) (*Holder, error) {
 	raw, err := os.ReadFile(filepath.Join(d.path(res), "holder.json"))
 	switch {
@@ -86,13 +92,23 @@ func (d Dir) Get(res string) (*Holder, error) {
 		}
 		return nil, nil
 	case err != nil:
-		return nil, err
+		return damaged(res, err), nil
 	}
 	h := &Holder{}
 	if err := json.Unmarshal(raw, h); err != nil {
-		return nil, fmt.Errorf("%s: %w", res, err)
+		return damaged(res, err), nil
 	}
 	return h, nil
+}
+
+// damaged is the holder of res whose record failed with err.
+func damaged(res string, err error) *Holder {
+	return &Holder{
+		Env:     res,
+		Holder:  "?",
+		Purpose: fmt.Sprintf("(unreadable holder record: beekeeper lease release %s --force frees it)", res),
+		Damaged: err.Error(),
+	}
 }
 
 // Claim takes res for h. It returns the current holder instead when res is
@@ -111,11 +127,7 @@ func (d Dir) Claim(res string, h Holder) (*Holder, error) {
 		}
 		return nil, err
 	}
-	raw, err := json.Marshal(h)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(d.path(res), "holder.json"), append(raw, '\n'), 0o600); err != nil {
+	if err := d.write(res, h); err != nil {
 		_ = os.RemoveAll(d.path(res))
 		return nil, err
 	}
@@ -125,11 +137,17 @@ func (d Dir) Claim(res string, h Holder) (*Holder, error) {
 // Hand gives the lease h.Env, held, to h: its record is replaced in one
 // rename, so a reader sees the old holder or the new one, never none.
 func (d Dir) Hand(h Holder) error {
+	return d.write(h.Env, h)
+}
+
+// write puts h as the record of res in one rename, so a reader or a crash
+// never leaves a partly written record.
+func (d Dir) write(res string, h Holder) error {
 	raw, err := json.Marshal(h)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(d.path(h.Env), ".holder-*.json")
+	f, err := os.CreateTemp(d.path(res), ".holder-*.json")
 	if err != nil {
 		return err
 	}
@@ -139,7 +157,7 @@ func (d Dir) Hand(h Holder) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp, filepath.Join(d.path(h.Env), "holder.json"))
+		err = os.Rename(tmp, filepath.Join(d.path(res), "holder.json"))
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -152,8 +170,8 @@ func (d Dir) Release(res string) error {
 	return os.RemoveAll(d.path(res))
 }
 
-// List returns readable held leases, oldest first, and reports any holder
-// records it could not read. A nil error means the listing is complete.
+// List returns every held lease, oldest first; a damaged record is listed as
+// its damaged holder, so a listing never calls an occupied resource free.
 func (d Dir) List() ([]Holder, error) {
 	entries, err := os.ReadDir(string(d))
 	if errors.Is(err, os.ErrNotExist) {
@@ -163,15 +181,13 @@ func (d Dir) List() ([]Holder, error) {
 		return nil, err
 	}
 	var out []Holder
-	var errs []error
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		h, err := d.Get(e.Name())
 		if err != nil {
-			errs = append(errs, fmt.Errorf("read lease %q: %w", e.Name(), err))
-			continue
+			return nil, err
 		}
 		if h == nil {
 			continue
@@ -181,8 +197,8 @@ func (d Dir) List() ([]Holder, error) {
 		}
 		out = append(out, *h)
 	}
-	slices.SortFunc(out, func(a, b Holder) int { return strings.Compare(a.Since, b.Since) })
-	return out, errors.Join(errs...)
+	slices.SortStableFunc(out, func(a, b Holder) int { return strings.Compare(a.Since, b.Since) })
+	return out, nil
 }
 
 // Refusal is why a claim is not allowed. A claim queued behind earlier

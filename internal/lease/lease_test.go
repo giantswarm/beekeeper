@@ -1,11 +1,9 @@
 package lease
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +17,8 @@ const (
 	agentOne = "Agent one"
 	// since is the holders' claim time, matching now.
 	since = "2026-09-24T20:00:00Z"
+	// damagedOne is a resource whose holder record a test damages.
+	damagedOne = "damaged"
 )
 
 var (
@@ -26,7 +26,7 @@ var (
 	ttl  = 30 * time.Minute
 	loop = state.Party{Name: "supervisor loop"}
 	// damagedRes are the resources whose holder records a test damages.
-	damagedRes = []string{"damaged", "also-damaged"}
+	damagedRes = []string{damagedOne, "also-damaged"}
 	one        = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
 	two        = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
 	alex       = state.Party{Name: "alex"}
@@ -220,36 +220,37 @@ func TestDirListReportsDamagedHolder(t *testing.T) {
 				}
 			}
 			holders, err := d.List()
-			if err == nil {
-				t.Fatal("List succeeded with damaged holder records")
+			if err != nil {
+				t.Fatalf("List failed on damaged holder records: %v", err)
 			}
-			for _, res := range damagedRes {
-				if !strings.Contains(err.Error(), res) {
-					t.Errorf("List error %q does not identify %s", err, res)
+			var got []string
+			for _, h := range holders {
+				got = append(got, h.Env)
+				if !slices.Contains(damagedRes, h.Env) {
+					continue
+				}
+				if h.Damaged == "" || h.Holder != "?" || !strings.Contains(h.Purpose, "release "+h.Env+" --force") {
+					t.Errorf("damaged lease %s listed as %+v", h.Env, h)
 				}
 			}
-			if kind == "truncated JSON" {
-				var syntax *json.SyntaxError
-				if !errors.As(err, &syntax) {
-					t.Errorf("List error does not wrap JSON error: %v", err)
-				}
-			} else {
-				var pathErr *os.PathError
-				if !errors.As(err, &pathErr) {
-					t.Errorf("List error does not wrap read error: %v", err)
-				}
+			// The damaged leases are held, named, next to the readable ones.
+			if want := []string{"also-damaged", damagedOne, "pending", "healthy"}; !slices.Equal(got, want) {
+				t.Errorf("List = %q, want %q", got, want)
 			}
-			want := []Holder{{Env: "pending", Holder: "?", Purpose: "(being claimed)"}, healthy}
-			if !reflect.DeepEqual(holders, want) {
-				t.Errorf("List holders = %+v, want %+v", holders, want)
+			// Another resource is claimed; a damaged one stays held.
+			if cur, err := d.Claim("other", Holder{Env: "other", Since: since}); err != nil || cur != nil {
+				t.Errorf("claim of another resource: %+v, %v", cur, err)
+			}
+			if cur, err := d.Claim(damagedOne, Holder{Env: damagedOne, Since: since}); err != nil || cur == nil || cur.Damaged == "" {
+				t.Errorf("claim of a damaged lease: %+v, %v; want its damaged holder", cur, err)
 			}
 			for _, res := range damagedRes {
 				if err := d.Release(res); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if holders, err := d.List(); err != nil || !reflect.DeepEqual(holders, want) {
-				t.Errorf("List after removing damaged records = %+v, %v; want %+v, nil", holders, err, want)
+			if h, err := d.Get(damagedOne); err != nil || h != nil {
+				t.Errorf("Get after release = %+v, %v; want free", h, err)
 			}
 		})
 	}

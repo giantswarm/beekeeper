@@ -598,6 +598,9 @@ lab's next claim.`,
 					msg = res + " was free"
 					return nil, nil
 				}
+				if cur.Damaged != "" && !force {
+					return nil, refused("%s's holder record cannot be read (%s): beekeeper lease release %s --force frees it", res, cur.Damaged, res)
+				}
 				if !mine && !force {
 					return nil, refused("%s is held by %q, not by you, and no grant of it to you waits: only --force frees another holder's lease", res, cur.Name)
 				}
