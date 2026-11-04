@@ -114,10 +114,11 @@ func TestEnvtestNoteCloseAudit(t *testing.T) {
 }
 
 func TestNoteCloseReasons(t *testing.T) {
-	for _, tc := range []struct{ verb, detail string }{
-		{noteDoneEvent, "#1 withdrawn: no longer needed"},
-		{"note.overtaken", "#1 overtaken: settled"},
-		{noteAnsweredEvent, `acme/app#999 answered by "bo" via cli, note #1 asked by "ana": "ship?": yes`},
+	for _, tc := range []struct{ verb, detail, answer string }{
+		{noteDoneEvent, "#1 withdrawn: no longer needed", ""},
+		{"note.overtaken", "#1 overtaken: settled", ""},
+		{noteAnsweredEvent, `acme/app#999 answered by "display name" via cli, note #1 asked by "ana": "ship?": yes`, "yes"},
+		{noteAnsweredEvent, "acme/app#999 answered by \"display name\" via slack, note #1 asked by \"ana\" for \"team:example\": \"ship: \\\"now\\\"?\": first: yes\nthen ship", "first: yes\nthen ship"},
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
 			scheme, err := Scheme()
@@ -162,6 +163,15 @@ func TestNoteCloseReasons(t *testing.T) {
 			after, err := New(c).Feed(0)
 			if err != nil || len(after) != 1 || after[0].ID != before[0].ID || after[0].Line != before[0].Line {
 				t.Fatalf("feed after expiry: %+v %v", after, err)
+			}
+			if tc.verb == noteAnsweredEvent {
+				raw := &v1alpha1.Note{}
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(NoteObject(team, 1)), raw); err != nil {
+					t.Fatal(err)
+				}
+				if raw.Status.State != noteAnswered || raw.Status.Answer != tc.answer || raw.Status.AnsweredBy != pia.Person || raw.Status.AnsweredAt == nil || !raw.Status.AnsweredAt.Time.Equal(now) {
+					t.Fatalf("retained answer status: %+v", raw.Status)
+				}
 			}
 			st, err := s.Read()
 			if err != nil || len(st.Notes) != 0 {
