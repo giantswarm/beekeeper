@@ -321,7 +321,11 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 				detail = oneLine(err.Error())
 			}
 			why := fmt.Sprintf("canary %s failed: %s", name, detail)
-			a.skipRelease(version, why)
+			// Live budget, status and capacity failures can be transient. Only
+			// the offline version probe diagnoses a broken local candidate.
+			if name == "version" && ctx.Err() == nil {
+				a.skipRelease(version, why)
+			}
 			_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
 			return fmt.Errorf("skipping %s: %s", version, why)
 		}

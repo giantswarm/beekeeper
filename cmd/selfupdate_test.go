@@ -43,7 +43,7 @@ func TestLeftBehind(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
+func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 	const (
 		cfgSwitch            = "--" + configFlag
 		canaryCurrentVersion = "v1.4.0"
@@ -111,17 +111,17 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 || !strings.Contains(evs[0].Detail, canaryFailedVersion) || !strings.Contains(evs[0].Detail, "budget --gate") {
+	if len(evs) != 0 {
 		t.Fatalf("canary events = %+v", evs)
 	}
 
-	// Subsequent --check skips the failed release.
+	// Budget failures leave the candidate discoverable and retryable.
 	root = New()
 	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, "--check"})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
-	if err := root.Execute(); err != nil {
-		t.Fatalf("self-update --check after skip = %v", err)
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), canaryFailedVersion+" is newer") {
+		t.Fatalf("self-update --check after budget failure = %v", err)
 	}
 
 	// Verify all four canary checks run with --config when healthy.

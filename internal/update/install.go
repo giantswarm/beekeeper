@@ -42,7 +42,7 @@ mv -f -- "$dir/beekeeper" "$target"
 // update account, and sudo never prompts or downloads anything. When a canary
 // is configured on ctx, the verified binary is staged and checked before it
 // replaces the target executable.
-func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
+func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string, source selfupdate.Source) error {
 	canary := optionsFrom(ctx).Canary
 	version := "v" + strings.TrimPrefix(rel.Version(), "v")
 	target, err := filepath.EvalSymlinks(path)
@@ -61,6 +61,9 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 		if werr := os.WriteFile(staged, nil, mode); werr == nil {
 			err = installVerified(ctx, up, rel, staged)
 			if err == nil {
+				if err := checkEvidence(ctx, source, rel, staged); err != nil {
+					return err
+				}
 				if canary != nil {
 					_ = os.Chmod(staged, mode|0o700)
 					if err := canary(ctx, staged, version); err != nil {
@@ -91,6 +94,9 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	}
 	if err := installVerified(ctx, up, rel, staged); err != nil {
 		return fmt.Errorf("verifying staged release: %w", err)
+	}
+	if err := checkEvidence(ctx, source, rel, staged); err != nil {
+		return err
 	}
 	if canary != nil {
 		_ = os.Chmod(staged, mode|0o700)

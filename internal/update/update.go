@@ -178,7 +178,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := installRelease(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
 		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
 	}
 	res.Updated = true
@@ -277,7 +277,7 @@ func installVersion(ctx context.Context, w io.Writer, version string, newSource 
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := installRelease(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
 		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
 	}
 	res.Updated = true
