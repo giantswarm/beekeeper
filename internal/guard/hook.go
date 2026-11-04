@@ -324,6 +324,10 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("storageRefusal")
+	if r := storageRefusal(ev, h.Shared); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("subscriptionRefusal")
 	if r := subscriptionRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
