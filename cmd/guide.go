@@ -27,7 +27,7 @@ func (a *app) guideCmd() *cobra.Command {
 		Long: `The guide is the session that walks the person through the decisions
 waiting on them and takes their answers back to the sessions that asked.
 The supervisor is the supervisor loop, no session. The guide has no grant
-power.
+power outside the explicit, expiring controls in beekeeper emergency.
 
 The role moves in two steps that leave no gap: the relay starts the next run, "Guide run N+1", as a fresh session, and its
 start takes the role (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `
@@ -44,13 +44,32 @@ guide.relayAt (exit 3 when none runs, 4 in the session a relay relieved).`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error { return a.roleStatus(guideRole) },
 	}
-	var takeOver, force bool
+	var takeOver, force, newRun bool
 	start := &cobra.Command{
-		Use:   "start",
-		Short: "Make the calling session the guide, or take the role relayed to it",
-		Args:  cobra.NoArgs,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return a.runStart(cmd.Context(), guideRole, takeOver) },
+		Use:   "start [--new]",
+		Short: "Take the guide's role in a run beekeeper started, or start the next run (--new)",
+		Long: `Without --new, make the calling session the guide: a "Guide run N" beekeeper
+started (the guide's relay, the standby watch after a crash, --new or
+beekeeper resume) takes the role, relayed to it or from a holder whose
+session is gone; the guide itself takes it again after a restart of its
+CLI. A session started by any other means is refused.
+
+With --new, beekeeper starts the next "Guide run N" as a fresh session, the
+person's "start the guide", from a terminal: in guide.dir, with the
+configured skill, model and mode (agents.mode; a background run has Remote
+Control), named by its run. It takes the role over from a guide whose
+session runs no CLI (a reboot, a crash), or takes it when none is
+recorded. A guide whose CLI runs is relieved only with --take-over; a run
+that is starting already refuses it.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if newRun {
+				return a.runNewRun(cmd.Context(), guideRole, takeOver)
+			}
+			return a.runStart(cmd.Context(), guideRole, takeOver)
+		},
 	}
+	start.Flags().BoolVar(&newRun, "new", false, "start the next guide run as a fresh session, which takes the role")
 	start.Flags().BoolVar(&takeOver, "take-over", false, "replace a guide whose session still runs without its relay")
 	stop := &cobra.Command{
 		Use:   "stop",

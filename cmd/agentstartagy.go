@@ -18,6 +18,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/install"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -50,6 +51,9 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	}
 	bin, err := exec.LookPath(agy.Comm)
 	if err != nil {
+		return err
+	}
+	if err := refuseUnguardedAgy(); err != nil {
 		return err
 	}
 	model, err := agyModel(sp.model, func() ([]string, error) { return agyModels(ctx, bin) })
@@ -99,13 +103,24 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	}
 	if err := sendAgyWhenOpen(ctx, inbox, sp.brief, inboxWait); err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
+		qerr := agy.ReadQuotaErrorForInbox(inbox)
 		_, _ = agy.RemoveInbox(inbox)
+		if qerr != nil {
+			return a.failAgyQuotaStart(by, s.Party, id, model, qerr)
+		}
 		return a.undelivered(by, s.Party, fmt.Errorf("the brief did not reach its inbox: %w (journalctl --user -u %s)", err, unit))
 	}
 	convID, err := awaitAgyBrief(ctx, stream, func() bool { return unitEnded(ctx, unit) }, agyBriefWait)
 	if err != nil {
 		_ = plat.Launcher.Stop(ctx, unit)
+		var qerr *agy.QuotaError
+		if !errors.As(err, &qerr) {
+			qerr = agy.ReadQuotaErrorForInbox(inbox)
+		}
 		_, _ = agy.RemoveInbox(inbox)
+		if qerr != nil {
+			return a.failAgyQuotaStart(by, s.Party, id, model, qerr)
+		}
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
 	}
 	var remoteLine string
@@ -144,6 +159,26 @@ func (a *app) dryRunAgyStart(sp agentStart, gaps []string) error {
 	}
 	_, err = fmt.Fprintf(a.out, "first prompt: %d bytes\n%s\n", len(sp.brief), sp.brief)
 	return err
+}
+
+// agyUnguarded is why an agy started here would load none of beekeeper's
+// hooks from its hooks.json, "" when it loads them; tests stub it.
+var agyUnguarded = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "no home directory to find agy's hooks.json in: " + err.Error()
+	}
+	return install.AgyHooksUnguarded(agyHooksPath(home, true))
+}
+
+// refuseUnguardedAgy refuses to start agy while its hooks.json would leave
+// it without beekeeper's guard: agy drops the whole file for one entry it
+// rejects, beekeeper's PreInvocation and PreToolUse hooks with it.
+func refuseUnguardedAgy() error {
+	if why := agyUnguarded(); why != "" {
+		return refused("agy would run without beekeeper's guard: %s", why)
+	}
+	return nil
 }
 
 // agyModel validates the model an agy agent starts on: --model is required
@@ -217,6 +252,22 @@ func sendAgyWhenOpen(ctx context.Context, inbox, msg string, wait time.Duration)
 	}
 }
 
+func (a *app) failAgyQuotaStart(by, p state.Party, id, model string, qerr *agy.QuotaError) error {
+	a.recordAgyQuotaExhaustedForID(id, model, qerr, a.now)
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }); i >= 0 {
+			removeAgent(st, i)
+		}
+		for i := range st.Records {
+			if st.Records[i].Session.Is(p) {
+				st.Records[i].Ended, st.Records[i].Waits = a.now.UTC(), ""
+			}
+		}
+		return []state.Event{event(by, "agents.quota", "%s: start ended with quota error on %s (%v); slot freed", p.Name, model, qerr)}, nil
+	})
+	return fmt.Errorf("starting %s on %s: %w", p.Name, model, qerr)
+}
+
 // awaitAgyBrief waits up to wait for the stream log at streamPath to show the
 // started session's init event (conversation_id) and its first user_input
 // step_update, confirming the brief arrived in its own conversation.
@@ -226,6 +277,9 @@ func awaitAgyBrief(ctx context.Context, streamPath string, ended func() bool, wa
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		if qerr := agy.ReadQuotaErrorForInbox(streamPath); qerr != nil {
+			return "", qerr
+		}
 		convID, accepted, err := readAgyBriefStream(streamPath)
 		if err != nil {
 			return convID, err
@@ -234,6 +288,9 @@ func awaitAgyBrief(ctx context.Context, streamPath string, ended func() bool, wa
 			return convID, nil
 		}
 		if ended != nil && ended() {
+			if qerr := agy.ReadQuotaErrorForInbox(streamPath); qerr != nil {
+				return convID, qerr
+			}
 			convID, accepted, err = readAgyBriefStream(streamPath)
 			if err != nil {
 				return convID, err
@@ -245,6 +302,9 @@ func awaitAgyBrief(ctx context.Context, streamPath string, ended func() bool, wa
 		}
 		select {
 		case <-ctx.Done():
+			if qerr := agy.ReadQuotaErrorForInbox(streamPath); qerr != nil {
+				return convID, qerr
+			}
 			return convID, fmt.Errorf("the brief did not enter the agy conversation within %s", wait)
 		case <-tick.C:
 		}
@@ -382,6 +442,7 @@ func (a *app) endAgy(ctx context.Context, id string) string {
 		}
 		done = append(done, "stopped its agy unit "+unit)
 	}
+	a.syncAgyQuotaForID(id, "")
 	removed, err := agy.RemoveInbox(agy.InboxPath(a.cfg.StateDir, id))
 	switch {
 	case err != nil:

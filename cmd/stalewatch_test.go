@@ -30,7 +30,7 @@ func TestStaleWatches(t *testing.T) {
 	claudeCLI := &proc.Process{PID: 10, PPID: 1, Comm: "claude", Args: []string{"claude"}}
 	supervisorWatch := bk(100, 10, "watch", "--notify")
 	self := bk(os.Getpid(), 10, "watch")
-	everything := table(claudeCLI, supervisorWatch, self, bk(101, 10, "watch", "--once"), bk(102, 10, "status"))
+	everything := table(claudeCLI, supervisorWatch, self, bk(101, 10, "watch", "--once"), bk(102, 10, testStatusWord))
 
 	var out bytes.Buffer
 	replaced := map[int]bool{}

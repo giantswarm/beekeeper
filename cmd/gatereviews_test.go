@@ -4,13 +4,16 @@ package cmd
 
 import (
 	"context"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // changesRequested is the reason github.ReviewGuard gives for a standing
@@ -91,7 +94,7 @@ func TestAReviewerHoldsAMergeAtItsTurn(t *testing.T) {
 			t.Errorf("the refused merge keeps its running place")
 		}
 	}
-	if d := lastEvent(t, g, "merged"); d != "" {
+	if d := lastEvent(t, g, testMergedWord); d != "" {
 		t.Errorf("merged: %q", d)
 	}
 }
@@ -130,3 +133,74 @@ func TestGateCheckIsTheDryPath(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// the gate refuses any merge whose head has no approved desk review and no
+// exact-head supervisor go, whichever process asks.
+func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *testing.T) {
+	stubGitHub(t, github.Open, devctlFrom)
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
+	r.pull.Head = loopFixed
+	oldAuth := mergeAuthority
+	t.Cleanup(func() { mergeAuthority = oldAuth })
+	mergeAuthority = gateMergeHeadAuthority
+
+	g := &gateRun{
+		app:  r.a,
+		ctx:  t.Context(),
+		repo: loopMergeRepo,
+		pr:   7,
+		lane: r.a.cfg.LaneOf(loopMergeRepo),
+		me:   state.Party{Name: loopWorker},
+		pid:  os.Getpid(),
+		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7", "--head", loopFixed},
+	}
+	why, err := g.reviewHold()
+	if err != nil {
+		t.Fatalf("reviewHold err = %v", err)
+	}
+	if !strings.Contains(why, "no approved desk review") || !strings.Contains(why, "no supervisor go") {
+		t.Fatalf("reviewHold why = %q, want refusal for missing approved desk review and supervisor go", why)
+	}
+
+	// Recording an explicit supervisor.go for that exact head clears the hold,
+	// including when reviewGuard sees the earlier changes-requested review.
+	reviewGuard = func(context.Context, string, int) (string, error) {
+		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
+	}
+	if err := r.a.store.Record(about(event(loopParty, "supervisor.go", "[go %s@%s] %s: %s", loopPR, loopFixed, loopWorker, loopWorkerMergeGo), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	why, err = g.reviewHold()
+	if err != nil || why != "" {
+		t.Fatalf("reviewHold after exact-head supervisor.go = %q, %v; want empty", why, err)
+	}
+}
+
+// Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
+// the gate takes the loop's exact-head merge claim as the go, as
+// reviewedMerge does: the planner's go for a head that carries the last
+// round's fixes merges on either route.
+func TestGateTakesTheLoopClaimAsTheExactHeadGo(t *testing.T) {
+	stubGitHub(t, github.Open, devctlFrom)
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
+	r.pull.Head = loopFixed
+	mergeAuthority = gateMergeHeadAuthority
+	g := &gateRun{app: r.a, ctx: t.Context(), repo: loopMergeRepo, pr: 7, lane: r.a.cfg.LaneOf(loopMergeRepo),
+		me: loopParty, pid: os.Getpid(), reviewedHead: loopFixed,
+		argv: []string{merge.Tool, "pr", superloop.KindMerge, loopMergeRepo, "7"}}
+	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
+		t.Fatalf("reviewHold without a claim = %q, %v; want a refusal", why, err)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopFixed, loopWorker), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	reviewGuard = func(context.Context, string, int) (string, error) {
+		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
+	}
+	if why, err := g.reviewHold(); err != nil || why != "" {
+		t.Fatalf("reviewHold with the loop's exact-head claim = %q, %v; want none", why, err)
+	}
+}

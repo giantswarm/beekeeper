@@ -83,7 +83,7 @@ func TestABusyBaseRunsDevctlAgainInItsLanePlace(t *testing.T) {
 			t.Errorf("stderr lacks %q:\n%s", want, stderr)
 		}
 	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event: %q", d)
 	}
 }

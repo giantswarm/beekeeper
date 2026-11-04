@@ -36,7 +36,7 @@ const (
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
-	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", "gone", "parked", "parked-small"}
+	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", holderGone, "parked", "parked-small"}
 	for _, id := range ids {
 		agents = append(agents, state.Agent{Party: party(id), LastTask: countTask})
 	}
@@ -93,7 +93,7 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 	now := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	const finished, late, closed = "reported-done", "stale-record", "ended-record"
-	ids := []string{"report", "merged", "landed", "ci", finished, late, closed}
+	ids := []string{"report", testMergedWord, "landed", "ci", finished, late, closed}
 	st := &state.State{}
 	var sessions []*claude.Session
 	for _, id := range ids {
@@ -106,7 +106,7 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 	}
 	st.Records = []state.Record{
 		rec("report", "writing the report", 10*time.Minute),
-		rec("merged", "PR 61 merged, the proof runs", 5*time.Minute),
+		rec(testMergedWord, "PR 61 merged, the proof runs", 5*time.Minute),
 		rec("ci", "CI of PR 61", time.Minute),
 		rec(late, "the report", time.Hour),
 		rec(closed, "the report", time.Minute),
@@ -132,9 +132,9 @@ func TestHandoversHeldInTheLastStep(t *testing.T) {
 		t.Fatalf("due = %+v, want every agent but the done one", got)
 	}
 	held := map[string]string{
-		"report": `it waits on "writing the report"`,
-		"merged": `it waits on "PR 61 merged, the proof runs"`,
-		"landed": scratchRepo + "#61 merged",
+		"report":       `it waits on "writing the report"`,
+		testMergedWord: `it waits on "PR 61 merged, the proof runs"`,
+		"landed":       scratchRepo + "#61 merged",
 	}
 	for id, why := range held {
 		if d := got[id]; d.held != why || d.was != "" {

@@ -421,3 +421,6 @@ func Size(path string) int64 {
 	})
 	return n
 }
+
+// Allocated is the space one file takes on disk.
+func Allocated(fi fs.FileInfo) int64 { return allocated(fi) }

@@ -102,6 +102,13 @@ of --wait (queueing). On expiry run stops the whole scope before releasing
 the slot and exits 124. Direct golangci-lint run commands also get a matching
 --timeout unless they already supply one. Compound shell commands are bounded
 by the scope deadline. Lab and benchmark runs have no default deadline.
+A launcher whose scope becomes empty is stopped and releases its slot;
+when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
+position only when its turn reaches a free slot. While builds occupy the
+slots, waiters keep FIFO order. The host watch also recovers expired, empty
+slot holders after checking their lifecycle and process identity. The run exits 1
+and reports the empty scope. Queue diagnostics also name an empty holder
+scope. Scope read errors leave the command running.
 Bound the command's parallelism rather than raising --max.
 
 --class names what kind of run it is. A build (the default: a build, test
@@ -478,7 +485,11 @@ an Edit, Write or NotebookEdit, a git commit or push, a devctl pr merge or
 release promote, a gh pr merge or review, a GitHub connector tool that
 merges, reviews or pushes, and a browser (claude-in-chrome) action other
 than opening, reading or looking at a page are refused with the hint to
-hand the work to the supervisor in one line. Its AskUserQuestion is checked
+file the work in that turn as an issue on the board and tell the person
+in one line, never to hand it back to them; stuck operational state (a
+hold, a pinned release, a parked session) it sets, narrows or lifts itself
+with beekeeper to carry out what the person decided, then reports. Its
+AskUserQuestion is checked
 as note add checks a note for the person: every question asks, carries a
 "Status quo: …" and a "Why: …" part, a "Checked: …" part for a claim that
 something is merged, green, released, rolled or closed, the full URL of
@@ -604,7 +615,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer,
+			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,

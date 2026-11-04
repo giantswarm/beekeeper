@@ -143,10 +143,10 @@ func reviews(ref, name string, rounds int) bool {
 // head that conflicts, is red, carries a review's unfixed changes request,
 // or is behind a base its merge does not update; the merge go again for a
 // green head whose go was given and never carried out; a reviewer for a
-// green head awaiting its review; a worker to take it over and park once
-// its reviews are used. A head with checks still running waits. Each
-// stretch without an owner gets one action, a head at most MaxSweeps; an
-// escalation or ownership question still open is the person's.
+// green head awaiting its review, however many rounds it had. A head with
+// checks still running waits. Each stretch without an owner gets one action,
+// a head at most MaxSweeps; an escalation or ownership question still open
+// is the person's.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
 	since, ok := in.Ownerless[ref]
 	if !ok || since.IsZero() {
@@ -200,7 +200,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	}
 	reviewedHere := slices.ContainsFunc(rs, func(rd round) bool { return sameHead(rd.head, p.Head) })
 	switch {
-	case p.Mergeable == "CONFLICTING" || p.MergeState == "DIRTY":
+	case p.Mergeable == mergeableConflicting || p.MergeState == mergeStateDirty:
 		fix(fmt.Sprintf("head %s conflicts with %s: merge %s into the branch and resolve the conflicts", short(p.Head), baseName(p), baseName(p)))
 	case len(p.Red) > 0:
 		var names []string
@@ -222,8 +222,6 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 		add(a)
 	case v != nil && v.Verdict == Approved && (sameHead(v.Head, p.Head) || in.baseMerged(p, v.Head)):
 		// planPull gives its go.
-	case len(rs) >= MaxReviews:
-		fix(fmt.Sprintf("its %d reviews are used and head %s has none: take it over", len(rs), short(p.Head)))
 	case reviewedHere || l.has(reviewKey(ref, p.Head)):
 		// A review of this head started and ended without a verdict.
 		review(sweepKey("review", ref, p.Head, since))

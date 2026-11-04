@@ -239,3 +239,26 @@ func TestUngatedMergesUnderRunners(t *testing.T) {
 		t.Errorf("a merge under the gate is said:\n%s", s)
 	}
 }
+
+// A merge a script starts beneath a shell's -c is still visible to both
+// watch and doctor if it slips past the hook; shell ancestry is no gate.
+func TestUngatedMergesInShellCode(t *testing.T) {
+	for _, command := range []string{"bash merge.sh", ". merge.sh", "./merge.sh", "sh -c 'bash merge.sh'"} {
+		t.Run(command, func(t *testing.T) {
+			tb := ungatedTable()
+			tb.ByPID[60] = &proc.Process{PID: 60, PPID: 10, Comm: testShell, Args: []string{testShell, "-c", command}}
+			tb.ByPID[11].PPID = 60
+			sessions := []*claude.Session{{PID: 10, ID: workerSession, Name: ungatedWorker}}
+			want := `devctl pr merge o/r 1 (pid 12, session "Worker A", under bash /home/u/scratch/merge.sh (pid 11)` + ungatedWhat
+			if got := ungatedLines(sessions, tb); len(got) != 3 || got[0] != want {
+				t.Fatalf("doctor's ungated lines = %q", got)
+			}
+			w, _, out := notifyingWatch(t, t.TempDir(), false)
+			w.now = time.Now()
+			w.ungated(sessions, tb)
+			if strings.Count(out.String(), "UNGATED MERGE "+want) != 1 {
+				t.Fatalf("watch did not report the script's merge: %s", out.String())
+			}
+		})
+	}
+}

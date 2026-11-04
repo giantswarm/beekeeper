@@ -1,12 +1,17 @@
 package cmd
 
 import (
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // agyRunCmdName is the hidden command an agy agent's user unit runs to drive
@@ -68,9 +73,35 @@ func (a *app) agyRunCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return agy.Run(cmd.Context(), args[0], args[1], args[2:], os.Stderr)
+			err := agy.Run(cmd.Context(), args[0], args[1], args[2:], os.Stderr)
+			var qerr *agy.QuotaError
+			if errors.As(err, &qerr) {
+				a.handleAgyRunQuota(args[0], qerr)
+			}
+			return err
 		},
 	}
 	c.Flags().SetInterspersed(false)
 	return c
+}
+
+func (a *app) handleAgyRunQuota(inbox string, qerr *agy.QuotaError) {
+	if qerr == nil {
+		return
+	}
+	if a.cfg == nil {
+		_ = a.loadConfig()
+	}
+	stateDir := filepath.Dir(filepath.Dir(inbox))
+	if a.store == nil && stateDir != "" && stateDir != "." {
+		if s, err := state.Open(stateDir); err == nil {
+			a.store = s
+		}
+	}
+	id := strings.TrimSuffix(filepath.Base(inbox), ".in")
+	a.recordAgyQuotaExhaustedForID(id, qerr.Model, qerr, time.Time{})
+	if a.store != nil {
+		by := state.Party{HostSession: agy.HostPrefix + id, Name: os.Getenv(agy.EnvName)}
+		_ = a.store.Record(event(by, "agents.quota", "%s: %s", by.Name, qerr.Error()))
+	}
 }

@@ -139,7 +139,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 		if _, ok := os.LookupEnv(gateRunningEnv); ok {
 			t.Error("the running marker is left in the environment, devctl would inherit it")
 		}
-		if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+		if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 			t.Errorf("merged event: %q", d)
 		}
 		if st := gateState(t, g); len(st.Merges) != 0 {
@@ -172,7 +172,7 @@ func TestAReplacedGateFollowsItsDevctlOnUnderTheInstalledOne(t *testing.T) {
 			!strings.Contains(said, "the new binary does not start (text file busy): carrying on under") {
 			t.Errorf("stderr:\n%s", said)
 		}
-		if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+		if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 			t.Errorf("merged event: %q", d)
 		}
 		if st := gateState(t, g); len(st.Merges) != 0 {

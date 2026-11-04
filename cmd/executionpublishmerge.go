@@ -5,8 +5,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 var publicationIdent = regexp.MustCompile(`^(.*) <([^<>\r\n]+)> [0-9]+ [+-][0-9]{4}$`)
@@ -14,11 +17,19 @@ var publicationIdent = regexp.MustCompile(`^(.*) <([^<>\r\n]+)> [0-9]+ [+-][0-9]
 // Query only Git's resolved author/committer metadata using the worker's normal
 // configuration. git var performs no checkout, hooks, signing or network I/O.
 // Copy the identities, not the global configuration, into the sanitized merge.
+// A harness may run under a managed HOME of its own (agy does) that holds no
+// Git configuration; the execution user's home, as the host names it, is the
+// one whose global configuration carries the worker's identity.
 func publicationIdentity(ctx context.Context, workspace string) ([]string, error) {
+	env := os.Environ()
+	if home := os.Getenv(execution.EnvHome); filepath.IsAbs(home) {
+		env = append(env, "HOME="+filepath.Clean(home))
+	}
 	var identity []string
 	for _, role := range []string{"AUTHOR", "COMMITTER"} {
 		c := exec.CommandContext(ctx, "git", "-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "var", "GIT_"+role+"_IDENT") //nolint:gosec // fixed git var identity queries; role is an internal enumeration, no shell
 		c.Dir = workspace
+		c.Env = env
 		out, err := c.Output()
 		if err != nil {
 			return nil, errors.New("cannot resolve worker Git commit identity for base merge; configure user.name and user.email")

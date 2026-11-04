@@ -259,7 +259,7 @@ func TestTrimWorktreesWithoutThePullRequestsRemovesNothing(t *testing.T) {
 // gitfile dangling, and returns its path relative to root.
 func orphanT(t *testing.T, root string) string {
 	t.Helper()
-	clone, rel := filepath.Join(t.TempDir(), "gone"), filepath.Join("gone", "fix", "x")
+	clone, rel := filepath.Join(t.TempDir(), "gone"), filepath.Join("gone", testFixWord, "x")
 	gitT(t, filepath.Dir(clone), "init", "-q", "-b", "main", clone)
 	gitT(t, clone, "commit", "-q", "--allow-empty", "-m", "init")
 	gitT(t, clone, "worktree", "add", "-q", "-b", "fix/x", filepath.Join(root, rel), "main")
@@ -288,5 +288,36 @@ func TestTrimWorktreesMovesOrphansAside(t *testing.T) {
 	}
 	if again := a.trimWorktrees(true, machine); len(again.orphaned) != 0 || again.err != nil {
 		t.Errorf("the next run = %q, want the moved orphan out of sight", again)
+	}
+}
+
+func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
+	a, read, root := worktreeApp(t)
+	var finished []string
+	var dry bool
+	machine := func() (worktreeMachine, error) {
+		m, err := read()
+		m.retire = func(_ context.Context, paths []string, dryRun bool) error {
+			finished = append(finished, paths...)
+			dry = dryRun
+			return nil
+		}
+		return m, err
+	}
+	r := a.trimWorktrees(true, machine)
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !dry {
+		t.Fatal("dry run reached live cleanup")
+	}
+	if !slices.Contains(finished, filepath.Join(root, mergedPR)) {
+		t.Fatal(finished)
+	}
+	if slices.Contains(finished, filepath.Join(root, "open")) {
+		t.Fatal(finished)
+	}
+	if !exists(filepath.Join(root, mergedPR)) {
+		t.Fatal("dry run removed worktree")
 	}
 }
