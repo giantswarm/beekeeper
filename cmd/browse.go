@@ -87,6 +87,15 @@ const connectionWords = "The Chrome connection can drop mid-turn: a call answers
 	"list_connected_browsers again and select_browser on the browser it lists, then retry the step. When it lists none, stop, and end " +
 	"your report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line. "
 
+// sitePermissionWords handle the extension's transient site refusal inside the
+// turn, where the Chrome tools run. Retry before the fresh-tab fallback; a
+// classifier or hook refusal is a different decision and must stay refused.
+const sitePermissionWords = "When a Chrome tool answers 'Permission denied for this action on this domain', before any fresh-tab fallback, " +
+	"wait 1 second with the Chrome computer wait action, then retry that same tool call with identical arguments once. " +
+	"If the retry succeeds, continue the steps and note the site-permission retry in your report. If the retry is refused too, " +
+	"stop that step and report it as refused with the refusal's reason; do not retry it again or work around it in another tab. " +
+	"This retry applies only to that site-permission message, never to a Claude Code auto mode classifier denial or a beekeeper hook refusal. "
+
 // reconnectWords are the reconnect turn's prompt, around the call the
 // connection went at: a fresh CLI resuming the session, with a fresh Chrome
 // connection, goes on with the steps not done or reports them.
@@ -233,8 +242,14 @@ func (a *app) browseCmd() *cobra.Command {
 CLI's own Claude in Chrome tools and nothing else: "claude -p --chrome
 --tools '' --strict-mcp-config --permission-mode dontAsk --allowedTools
 'mcp__claude-in-chrome__*'", no shell, no file tools, no other MCP server,
-and every call outside the Chrome tools refused rather than asked. The
-CLI's Chrome connection takes the site permissions of the Chrome extension,
+and every call outside the Chrome tools refused rather than asked.
+
+A Chrome tool's "Permission denied for this action on this domain" is retried
+once with the same arguments after a one-second wait. A successful retry is
+noted in the report; a repeated refusal is reported as refused. Classifier
+and hook refusals are not retried under this rule.
+
+The CLI's Chrome connection takes the site permissions of the Chrome extension,
 so a navigate to a site no session was allowed on never waits on a person's
 site approval.
 
@@ -764,7 +779,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(yctx, browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true), wait)
+		report, err = turn(yctx, browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0])+" "+sitePermissionWords, self, rules, true), wait)
 		found, ferr = readFindings(path)
 		found.Reconnected = true
 	}
@@ -1423,7 +1438,7 @@ func browseArgv(id, model, prompt, self string, rules []string, reconnect bool) 
 // when one is declared, the Apps on record and the lab sign-in the steps
 // name, then the steps.
 func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared []sharedFile) string {
-	p := browsePreamble + connectionWords + frontWords + drawWords + leaveWords + windowWords + uploadPrompt(shared)
+	p := browsePreamble + connectionWords + sitePermissionWords + frontWords + drawWords + leaveWords + windowWords + uploadPrompt(shared)
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}

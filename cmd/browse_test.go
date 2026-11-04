@@ -122,12 +122,12 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -449,7 +449,7 @@ func TestBrowseReconnects(t *testing.T) {
 	first, second := argvOf("1"), argvOf("2")
 	id := first[slices.Index(first, sessionIDFlag)+1]
 	if i := slices.Index(second, resumeFlag); i < 0 || second[i+1] != id || slices.Contains(second, sessionIDFlag) ||
-		second[len(second)-1] != fmt.Sprintf(reconnectWords, deployCall) || !slices.Contains(second, chromeFlag) ||
+		second[len(second)-1] != fmt.Sprintf(reconnectWords, deployCall)+" "+sitePermissionWords || !slices.Contains(second, chromeFlag) ||
 		!slices.Equal(second[:i], first[:slices.Index(first, sessionIDFlag)]) {
 		t.Errorf("the reconnect ran with %q, the first turn with %q", second, first)
 	}
@@ -689,7 +689,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
-	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
@@ -863,7 +863,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		!strings.Contains(p, "file_upload refuses every other path") || !strings.Contains(p, guard.UploadTargetScript) || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
-	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
 		t.Error("a prompt without shared files names uploads")
 	}
 
