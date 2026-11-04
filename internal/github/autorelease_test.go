@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -262,6 +263,46 @@ func TestTagExists(t *testing.T) {
 		got, err := TagExists(context.Background(), run, "o/r", "gs-plans/v0.3.0")
 		if got != c.want || (err != nil) != c.wantErr {
 			t.Errorf("%v: got %v, %v", c.err, got, err)
+		}
+	}
+}
+
+// Workflow presence is read from the pushed tree, while branch filters
+// continue to describe the destination branch.
+func TestReadBaseReleaseUsesPullTree(t *testing.T) {
+	for _, merged := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, base    string
+			present, auto bool
+		}{
+			{"adds workflow", "main", true, true},
+			{"removes workflow", "main", false, false},
+			{"excluded branch", "maintenance", true, false},
+		} {
+			t.Run(fmt.Sprintf("%s/merged=%t", tc.name, merged), func(t *testing.T) {
+				ref := "head-oid"
+				mergeOID := ""
+				if merged {
+					ref, mergeOID = "merge-oid", "merge-oid"
+				}
+				run := func(_ context.Context, args ...string) ([]byte, error) {
+					call := strings.Join(args, " ")
+					if strings.Contains(call, "pulls/7") {
+						return []byte(fmt.Sprintf(`{"base":%q,"headOid":"head-oid","mergeOid":%q}`, tc.base, mergeOID)), nil
+					}
+					if !strings.HasSuffix(call, "?ref="+ref) {
+						t.Fatalf("read wrong tree: %s", call)
+					}
+					if strings.Contains(call, AutoReleaseWorkflow+"?") && tc.present {
+						return []byte(mainLineWorkflow), nil
+					}
+					return nil, errNotFound
+				}
+				got, err := ReadBaseRelease(context.Background(), run, "o/r", 7)
+				if err != nil || got.Auto != tc.auto || got.Base != tc.base {
+					t.Fatalf("got %+v, %v", got, err)
+				}
+			})
 		}
 	}
 }
