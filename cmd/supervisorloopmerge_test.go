@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -841,5 +842,82 @@ func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
 	if doc.ExitCode != 0 || len(r.cmds) != 1 {
 		t.Fatalf("expected merge with explicit supervisor.go, got %+v cmds=%v", doc, r.cmds)
+	}
+}
+
+// A review or supervisor go can be withdrawn while merge-result checks run.
+// Refresh both public reviews and durable desk policy before invoking gh.
+func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
+	const revokedGoCase = "revoked go"
+	const changesRequestedCase = "changes requested"
+	const unreadableCase = "unreadable authority"
+	for _, scenario := range []string{"unchanged", changesRequestedCase, "dismissed approval", revokedGoCase, "moved head", "closed", "red CI", "draft", "conflicting", unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
+		t.Run(scenario, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.verdict("R1", loopHead, superloop.Approved, loopApproved)
+			if scenario == revokedGoCase {
+				r.pull.Reviews = nil
+				if err := r.a.store.Record(about(event(loopParty, loopGoVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+				t.Fatal(err)
+			}
+			// The queue lookup is the last read after merge-result validation,
+			// including runs that skip local checks because no checkout exists.
+			readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) {
+				switch scenario {
+				case changesRequestedCase:
+					r.verdict("R2", loopHead, superloop.ChangesRequested, "Review: changes requested")
+				case "dismissed approval":
+					r.pull.Reviews = nil
+				case revokedGoCase:
+					if err := r.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[go %s@%s] withdrawn", loopPR, loopHead), loopPR)); err != nil {
+						t.Fatal(err)
+					}
+				case "moved head":
+					r.pull.Head = loopFixed
+				case "closed":
+					r.pull.State = superloop.Closed
+				case "red CI":
+					r.pull.Green = false
+				case "draft":
+					r.pull.Draft = true
+				case "conflicting":
+					r.pull.Mergeable = mergeableConflicting
+				case unreadableCase:
+					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						return superloop.Pull{}, errors.New("reviews unavailable")
+					}
+				case reviewedStoppedCase, reviewedHeldCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						if scenario == reviewedStoppedCase {
+							st.Stop = &state.Stop{}
+						} else {
+							st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+						}
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return true, nil
+			}
+			doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+			if scenario == "unchanged" {
+				if doc.ExitCode != 0 || len(r.cmds) != 1 {
+					t.Fatalf("approved merge: %+v commands=%v", doc, r.cmds)
+				}
+				return
+			}
+			want := github.SquashRefused
+			if scenario == unreadableCase {
+				want = github.SquashTooling
+			}
+			if doc.ExitCode != want || len(r.cmds) != 0 {
+				t.Fatalf("stale authority: %+v commands=%v; want exit %d without mutation", doc, r.cmds, want)
+			}
+		})
 	}
 }
