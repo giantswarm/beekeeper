@@ -150,3 +150,18 @@ func TestClipboardAndTheFilesAValueComesFrom(t *testing.T) {
 		t.Errorf("the other download: %v", err)
 	}
 }
+
+func TestCopyValueToVaultChecksDestinationBeforeReading(t *testing.T) {
+	for _, dst := range []string{"op://Other/app/client-secret", storeRef + "#KEY"} {
+		t.Run(dst, func(t *testing.T) {
+			tools := secrettest.New(map[string]string{vaultRef: storedValue})
+			_, err := ops(tools).CopyValue(context.Background(), secret.Ref{Op: vaultRef}, secret.Ref{Op: dst})
+			if err == nil {
+				t.Fatal("copy accepted an unwritable destination")
+			}
+			if len(tools.Calls) != 0 {
+				t.Fatalf("refused copy ran commands: %v", tools.Calls)
+			}
+		})
+	}
+}
