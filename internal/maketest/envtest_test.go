@@ -26,7 +26,7 @@ func TestEnvtestTarget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			for _, name := range []string{"Makefile", "Makefile.custom.mk", "Makefile.gen.go.mk", "Makefile.gen.app.mk"} {
-				data, err := os.ReadFile(filepath.Join(root, name))
+				data, err := os.ReadFile(filepath.Join(root, name)) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -79,7 +79,7 @@ esac
 
 func write(t *testing.T, path, data string, mode os.FileMode) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(data), mode); err != nil {
+	if err := os.WriteFile(path, []byte(data), mode); err != nil { //nolint:gosec // a path of this test
 		t.Fatal(err)
 	}
 }
