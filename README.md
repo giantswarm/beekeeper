@@ -581,7 +581,7 @@ session's scratchpad in the worker rules.
 
 ## Kube contexts and production writes
 
-With `kube.production` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
+With `kube.production` or `kube.protectedContexts` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
 `kubectl`, `helm` or `flux` command without an explicit target fails instead of reaching production.
 The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
 kube guard is off and `beekeeper snapshot` says so):
@@ -603,7 +603,8 @@ kube guard is off and `beekeeper snapshot` says so):
   --kube-cluster`, `kind create cluster` and `kind export kubeconfig` when they write the machine
   kubeconfig (a `KUBECONFIG` or `--kubeconfig` of the command's own passes). `beekeeper snapshot` names a
   current context the machine kubeconfig gained anyway.
-- A write to production, the clusters of the installation `kube.production` (a context or cluster
+- A write to production or a context listed in `kube.protectedContexts` (including full test
+  installations), the clusters of the installation `kube.production` (a context or cluster
   name with it as a component, its workload clusters included): `kubectl`
   apply/create/patch/edit/delete/replace/scale/annotate/label/cordon/uncordon/drain/taint/set/expose/
   autoscale/run/exec/cp/attach/debug, `rollout restart|undo|pause|resume`; `helm`
@@ -3596,7 +3597,8 @@ The organisation and desk keys, and their defaults:
 
 | Key | Default | What it sets |
 |---|---|---|
-| `kube.production` | unset: the kube guard is off | The installation whose clusters agents never write to, and the no-current-context rule of the machine kubeconfig |
+| `kube.protectedContexts` | none | Additional production-class contexts whose clusters refuse direct writes; include full test installation contexts |
+| `kube.production` | unset | The installation whose clusters agents never write to, and the no-current-context rule of the machine kubeconfig |
 | `kube.contextTemplate` | unset: the context named after the installation, else `*@<name>` | An installation's kube context, `{installation}` its name (`login.example.com-{installation}`) |
 | `kube.kubeconfig` | `KUBECONFIG`'s files, else `~/.kube/config` | The kubeconfig files a `k8s://` source of `beekeeper secret` resolves its context in, merged as kubectl merges a `KUBECONFIG` list (`~/` allowed); a kind lab's context reads through kind instead |
 | `alerts.installations`, `lanes`, `resources` | none | The installations whose alerts are read, the merge lanes, the leasable environments |
