@@ -903,4 +903,19 @@ func TestSettlesFrom(t *testing.T) {
 	}
 }
 
+func TestRequireRebase(t *testing.T) {
+	for _, flags := range []string{"", "--rebase", "--rebase=true", "--rebase=false", "--rebase=false --rebase=true"} {
+		argv := strings.Fields("devctl pr merge o/r 7 " + flags + " -- --rebase=false")
+		before := slices.Clone(argv)
+		got := RequireRebase(argv)
+		want := strings.Fields("devctl pr merge --rebase o/r 7 -- --rebase=false")
+		if !slices.Equal(got, want) {
+			t.Errorf("%v: got %v, want %v", argv, got, want)
+		}
+		if !slices.Equal(argv, before) {
+			t.Errorf("changed caller arguments: %v", argv)
+		}
+	}
+}
+
 const toolNextVersion = "8.0.1"

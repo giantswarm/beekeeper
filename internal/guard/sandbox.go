@@ -88,6 +88,10 @@ func (h Hook) sandboxRefusal(ev event) string {
 			". The home directory is denied apart from the paths the sandbox re-allows (beekeeper sandbox render lists them); " +
 			"credentials stay unreadable by design. A path the desk needs goes into sandbox.allowRead in beekeeper's config."
 	}
+	if (ev.ToolName == grepTool || ev.ToolName == globTool) && !h.Sandbox.Searchable(path, cwd) {
+		return "Refused: the agent sandbox does not let this session recursively search " + path +
+			" because it contains denied subtrees. Search a permitted checkout or a narrower permitted path."
+	}
 	return ""
 }
 

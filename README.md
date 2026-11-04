@@ -674,7 +674,9 @@ beekeeper keeps that login:
   (`teleport.home`, default `$TELEPORT_HOME` or `~/.tsh`) swap in one step, so the old certificate
   serves until the new one is in place; the profile before is kept as `teleport/previous` in the
   state directory, and the person's kubeconfig is not touched. tsh's output carries the one-time
-  login URL: it goes to `teleport/login.log` (mode 0600) and is never printed.
+  login URL: it goes to `teleport/login.log` (mode 0600) and is never printed. Backup cleanup and
+  preparation finish before the active profile changes; a failure preparing the backup leaves the
+  active login available.
 - The renewal holds the browser lease. A session renewing by hand (`beekeeper teleport renew`) claims
   it first; the keeper claims it itself when it is free and granted to nobody, and otherwise waits
   for its next run, which the `TELEPORT LOGIN` line names.
@@ -1649,6 +1651,12 @@ interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < m
 <<'EOF'`). Shell `-c` strings also follow the script files they execute, source or pass to
 an interpreter (`zsh -c 'bash merge.sh'`, `sh -c '. merge.sh'`, `bash -c './merge.sh'`).
 Nested `-c` strings share the script recursion bound; a refusal names the script and its line.
+
+Configure a fork repository with `merge.methods: {example/fork: rebase}` to keep
+its upstream-ready commits separate and linear. The gate adds `--rebase` before
+checking or queuing its devctl PR merges, including when the worker omits the flag or
+passes `--rebase=false`. Repositories without this setting keep the default squash
+method; an explicit worker `--rebase` still works.
 
 A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
 merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
