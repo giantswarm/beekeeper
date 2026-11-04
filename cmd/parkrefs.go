@@ -139,7 +139,7 @@ func (a *app) parkSuggestion(me state.Party, on string) string {
 	return suggestion
 }
 
-// resolveParkRef refuses a target only when GitHub answers that it is missing.
+// resolveParkRef refuses targets GitHub confirms are missing or already settled.
 // A failed read leaves the type empty for lazy classification after the park.
 func resolveParkRef(ctx context.Context, on string) (string, error) {
 	r, ok := parseRef(on)
@@ -150,9 +150,13 @@ func resolveParkRef(ctx context.Context, on string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	kind := reads[r].Kind
+	read := reads[r]
+	kind := read.Kind
 	if kind != github.RefIssue && kind != github.RefPullRequest {
 		return "", refused("%s is not a readable issue or pull request", on)
+	}
+	if read.State == github.Closed || read.State == github.Merged {
+		return "", refused("%s is already %s: continue the task without parking", on, strings.ToLower(read.State))
 	}
 	return kind, nil
 }
