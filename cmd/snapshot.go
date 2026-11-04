@@ -29,6 +29,7 @@ import (
 
 // snapshot is one tick of the machine and its sessions.
 type snapshot struct {
+	DiskPaths   []diskPath          `json:"diskPaths,omitempty"`
 	At          time.Time           `json:"at"`
 	Load        [3]float64          `json:"load"`
 	Cores       int                 `json:"cores"`
@@ -165,6 +166,7 @@ changed; a first snapshot and a person at a terminal get the whole screen.
 			if err != nil {
 				return err
 			}
+			diskPathGrowth(s.DiskPaths, prev.DiskPaths)
 			if err := a.store.WriteFile(file, s); err != nil {
 				return err
 			}
@@ -251,6 +253,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Models, _ = hostModels(ctx, a.cfg)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
+	s.DiskPaths = readDiskPaths(ctx)
 	s.Slots = machine.ReadSlots(a.slotView())
 	s.BuildCPU = machine.ReadBuildCPU(free.BuildCPUSample)
 	s.KubeContext = guard.CurrentContext(machineKubeconfig())
@@ -468,6 +471,9 @@ func (a *app) printSnapshot(s *snapshot) {
 		p("desktop scope: none found")
 	}
 	p("tmpfs /tmp %d MiB used  disk / %d GiB free", s.Tmp.UsedMiB, s.Root.FreeMiB/1024)
+	for _, line := range diskPathLines(s.DiskPaths) {
+		p("%s", line)
+	}
 	var slots []string
 	for _, sl := range s.Slots {
 		if sl.Free {
@@ -683,6 +689,9 @@ func graphqlReadingText(a *app, g *github.GraphQL) string {
 // diffSnapshots says what changed between two ticks, in the words a report uses.
 func diffSnapshots(prev, cur *snapshot) []string {
 	var out []string
+	if len(topDiskPaths(cur.DiskPaths, true, 1)) > 0 {
+		out = append(out, diskPathLines(cur.DiskPaths)...)
+	}
 	num := func(name string, p, c, threshold int, unit string) {
 		if d := c - p; d >= threshold || -d >= threshold {
 			out = append(out, fmt.Sprintf("%s %d → %d %s (%+d)", name, p, c, unit, d))
