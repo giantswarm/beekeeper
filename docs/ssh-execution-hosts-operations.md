@@ -276,7 +276,9 @@ that host.
 
 Prepare and pin a matching policy bundle before running `agents hosts check`.
 The bundle binds an explicit omp extension. The check validates the pinned
-version, asks `omp models --json --no-extensions` for available model metadata
+version from the packaged CLI's `omp/<version>` output (or the previously
+supported `omp v<version>` banner); it still requires an exact match to the
+configured pin. It asks `omp models --json --no-extensions` for available model metadata
 without a model call, and starts a bounded RPC session without sending a
 prompt to verify the extension starts. A missing login/model, extension error
 or absent readiness event leaves omp unavailable. No credential value is
@@ -427,6 +429,12 @@ and reports `versionCheck`, `login` and `guard` as `passed`, `failed` or
 `not checked`. The version is the configured pin; `versionCheck: passed`
 confirms that the executable matched it. A failed version check leaves the
 login check `not checked`, rather than claiming a login failure.
+
+When every configured harness fails, `hosts check` still prints its JSON
+`readiness` and `unavailable` reports and exits nonzero. No failed harness is
+advertised or admitted. A rejected agy hooks file reports a failed guard.
+Policy, identity or transport failures before probing can prevent a readiness
+report; they must not be interpreted as a passing check.
 
 The guard result covers the installed policy and conformance check. For omp
 it also requires the actual harness to load the bound extension without a
@@ -972,3 +980,24 @@ not proof that no rerun started: inspect CI before trying again.
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
+
+## Remote harness acceptance evidence
+
+Adapter tests use temporary repositories and fake harnesses and transports;
+they do not establish a live provider or fleet proof. Complete the following
+on a provisioned host, in order: Codex, omp, then agy with accepted guard hooks.
+Use the independently provisioned host login described above; never transfer
+coordinator credentials.
+
+For each harness, retain the host identity, installed beekeeper and harness
+versions, `hosts check` report, execution ID/generation, published commit and
+PR URL. Start with explicit `--host`, `--harness` and `--model`; verify inspect,
+logs, a parked wake on the same conversation, and acknowledged stop on a
+separate disposable execution. Confirm the worker occupies its coordinator
+provider pool and does not introduce another usage reader or ceiling.
+
+Have the worker publish through `agents publish`. Record independent review
+of the exact published head, the coordinator's go, and the merge receipt/URL
+from `agents merge`. Verify raw host merge commands remain denied. Record
+failed steps explicitly; a successful launch or fake-harness test alone does
+not complete the PR/review/go/merge proof for that harness.
