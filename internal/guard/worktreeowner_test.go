@@ -51,7 +51,7 @@ func TestWorktreeOwnerHook(t *testing.T) {
 		}
 		return "Refused: owner-session"
 	}}
-	raw, err := json.Marshal(map[string]any{sessionKey: worktreeVisitor, "cwd": t.TempDir(), "tool_name": bashTool, executionToolInput: map[string]string{commandKey: "git commit -am change"}})
+	raw, err := json.Marshal(map[string]any{sessionKey: worktreeVisitor, ompWorkingDir: t.TempDir(), executionToolName: bashTool, executionToolInput: map[string]string{commandKey: "git commit -am change"}})
 	if err != nil {
 		t.Fatal(err)
 	}
