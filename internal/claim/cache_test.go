@@ -24,7 +24,7 @@ func TestClaimReadDiscardsBrokenCache(t *testing.T) {
 			if _, err := cl.Read(ctx, issue); err != nil {
 				t.Fatal(err)
 			}
-			raw, err := os.ReadFile(path)
+			raw, err := os.ReadFile(path) //nolint:gosec // fixed cache filename inside t.TempDir
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestClaimReadDiscardsBrokenCache(t *testing.T) {
 			case "truncated":
 				raw = raw[:len(raw)-1]
 			}
-			if err := os.WriteFile(path, raw, 0o600); err != nil {
+			if err := os.WriteFile(path, raw, 0o600); err != nil { //nolint:gosec // fixed cache filename inside t.TempDir; only synthetic data
 				t.Fatal(err)
 			}
 			cs, err := cl.Read(ctx, issue)
