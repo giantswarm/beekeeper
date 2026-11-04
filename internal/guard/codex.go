@@ -647,6 +647,9 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 		if r := h.transcriptFileRefusal(writeEv); r != "" {
 			return r, ""
 		}
+		if r := h.labConfigRefusal(writeEv); r != "" {
+			return r, ""
+		}
 		if r := h.folderRefusal(writeEv); r != "" {
 			return r, ""
 		}
