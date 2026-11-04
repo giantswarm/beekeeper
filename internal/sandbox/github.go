@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -57,6 +58,30 @@ func EgressDir(runtimeDir string) string {
 	return filepath.Join(runtimeDir, "beekeeper", "egress")
 }
 
+// BrokerDir selects the runtime files owned by a broker. The default state
+// keeps the installed policy's path; other states get a readable name and a
+// digest of the absolute path so equally named states cannot collide.
+func BrokerDir(runtimeDir, stateDir, home string) string {
+	if runtimeDir == "" {
+		return ""
+	}
+	base := filepath.Join(runtimeDir, "beekeeper")
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		stateHome = filepath.Join(home, ".local", "state")
+	}
+	absolute := func(p string) string {
+		p, _ = filepath.Abs(p)
+		return p
+	}
+	state := absolute(stateDir)
+	if stateDir == "" || state == absolute(filepath.Join(stateHome, "beekeeper")) {
+		return base
+	}
+	sum := sha256.Sum256([]byte(state))
+	return filepath.Join(base, "brokers", fmt.Sprintf("%s-%x", filepath.Base(state), sum[:16]))
+}
+
 // WriteEgress puts the proxy's CA, the bundle of the system's roots and the
 // CA, gh's login and git's gpg.program, which runs exe, into dir, each
 // replaced in one rename.
@@ -109,7 +134,12 @@ func RemoveMaskedGitHub(runtimeDir string) error {
 	if runtimeDir == "" {
 		return nil
 	}
-	dir := filepath.Join(runtimeDir, "beekeeper", "github")
+	return RemoveMaskedGitHubIn(filepath.Join(runtimeDir, "beekeeper"))
+}
+
+// RemoveMaskedGitHubIn removes obsolete token files belonging to one broker.
+func RemoveMaskedGitHubIn(brokerDir string) error {
+	dir := filepath.Join(brokerDir, "github")
 	for _, name := range []string{"hosts.yml", "git-credential"} {
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
