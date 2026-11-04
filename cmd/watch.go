@@ -167,7 +167,9 @@ note it filed, and one DOCTOR FAULT line while a known fault lasts. Every
 doctor.freeEvery (1h) one watch frees what dead sessions and dead go
 commands left in the tmpfs /tmp (beekeeper free --apply --only
 session-dirs,go-build): one FREED line when it freed something, FREE
-FAILED while it fails; the TMPFS line says when it ran last.
+FAILED while it fails; the TMPFS line says when it ran last. Above the
+tmpfs warning threshold it also names the three largest entries, their
+sizes, and the commands and worker sessions referencing them when known.
 
 A running beekeeper watch, this one included, whose binary self-update
 replaced keeps the code it started with: one WATCH STALE line names the
@@ -1229,7 +1231,16 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
-		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB; %s", d.UsedMiB, w.lastFreeNote())
+		large := d.UsedMiB > th.TmpMax(d.TotalMiB)
+		var largest string
+		if large {
+			var owners map[int]string
+			if o := w.owners.Load(); o != nil {
+				owners = *o
+			}
+			largest = "; " + tmpfsLargest("/tmp", table, owners, proc.References)
+		}
+		w.check("tmp", large, "TMPFS /tmp: %d MiB; %s%s", d.UsedMiB, w.lastFreeNote(), largest)
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
 		var owners map[int]string
