@@ -570,6 +570,42 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 }
 
+// Callback records use their provider's consent prompt on the first turn.
+func TestBrowseConsentPromptProviders(t *testing.T) {
+	const steps = "Authorize the application."
+	app := guard.App{Name: "example-app", Callbacks: []string{"callback.example.org"}}
+	base := browsePrompt(steps, "", nil, false, nil)
+	for _, provider := range []string{"GitHub", "GitLab"} {
+		t.Run(provider, func(t *testing.T) {
+			app := app
+			if provider == "GitLab" {
+				app.GitLab = "gitlab.example.org"
+			}
+			got := browsePrompt(steps, "", []guard.App{app}, false, nil)
+			if provider == "GitHub" {
+				want := strings.TrimSuffix(base, browseSteps+steps) +
+					"The person's own App example-app is declared and on record (callback callback.example.org): once the steps reach GitHub's page 'Authorize example-app' " +
+					"with that callback, click Authorize once; click nothing else that grants access. " + browseSteps + steps
+				if got != want {
+					t.Errorf("GitHub prompt changed: %q", got)
+				}
+				if strings.Contains(got, guard.GitLabFormScript) {
+					t.Error("GitHub prompt includes the GitLab form script")
+				}
+				return
+			}
+			for _, want := range []string{"GitLab's page 'Authorize example-app'", "on " + app.GitLab + " at /oauth/authorize", "callback " + app.Callbacks[0], guard.GitLabFormScript, "a call of its own (not in a batch)", "then click Authorize once"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("GitLab prompt missing %q", want)
+				}
+			}
+			if strings.Contains(got, "GitHub's page") {
+				t.Error("GitLab prompt includes GitHub consent wording")
+			}
+		})
+	}
+}
+
 // Steps that name an App on record, by name or one of its callback hosts, give the turn
 // that App's auto mode rule and prompt words; steps that name a loopback
 // host give it the lab's; the rules stand after the shipped ones beside a
