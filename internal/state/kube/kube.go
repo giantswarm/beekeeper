@@ -978,14 +978,7 @@ func (snap *snapshot) state() *state.State {
 		}
 	}
 	for _, name := range sortedKeys(snap.holds) {
-		h := snap.holds[name]
-		hold := state.Hold{Target: h.Spec.Target, Reason: h.Spec.Reason, By: party(h.Status.By), At: h.Status.At.Time,
-			Until: timeOf(h.Spec.Until), Except: h.Spec.Except, UpgradeTo: h.Spec.UpgradeTo, LiftedAt: timeOf(h.Status.LiftedAt)}
-		if h.Status.LiftedBy != nil {
-			p := party(*h.Status.LiftedBy)
-			hold.LiftedBy = &p
-		}
-		st.Holds = append(st.Holds, hold)
+		st.Holds = append(st.Holds, holdOf(snap.holds[name]))
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
@@ -1004,6 +997,16 @@ func (snap *snapshot) state() *state.State {
 	}
 	canonical(st)
 	return st
+}
+
+func holdOf(h *v1alpha1.Hold) state.Hold {
+	hold := state.Hold{Target: h.Spec.Target, Reason: h.Spec.Reason, By: party(h.Status.By), At: h.Status.At.Time,
+		Until: timeOf(h.Spec.Until), Except: h.Spec.Except, UpgradeTo: h.Spec.UpgradeTo, LiftedAt: timeOf(h.Status.LiftedAt)}
+	if h.Status.LiftedBy != nil {
+		p := party(*h.Status.LiftedBy)
+		hold.LiftedBy = &p
+	}
+	return hold
 }
 
 func noteOf(n *v1alpha1.Note) state.Note {
@@ -1120,6 +1123,12 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		}
 		hold := &v1alpha1.Hold{ObjectMeta: metav1.ObjectMeta{Name: name}}
 		if cur, ok := snap.holds[name]; ok {
+			if equal(h, holdOf(cur)) {
+				// Expiry alone must not turn another object's update into a
+				// multi-object write, or block pruning several expired holds.
+				want.holds[name] = cur
+				continue
+			}
 			hold = cur.DeepCopy()
 		}
 		hold.Spec.Target, hold.Spec.Reason, hold.Spec.Until = h.Target, h.Reason, apiTime(h.Until)
