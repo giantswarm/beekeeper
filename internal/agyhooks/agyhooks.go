@@ -18,11 +18,22 @@ import (
 var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 
 // EntryRejects is why agy refuses the named hook entry raw, an object of
-// event lists, or "" when agy accepts it: a tool event's items are matchers
+// event lists and optional enabled metadata, or "" when agy accepts it.
+// Unknown fields are ignored. A tool event's items are matchers
 // with at least one hook, a lifecycle event's items are command hooks, and
 // every hook of type "command" (or of no type) names its command.
 func EntryRejects(raw json.RawMessage) string {
-	var events map[string][]json.RawMessage
+	var events *struct {
+		Enabled        bool              `json:"enabled"`
+		SessionStart   []json.RawMessage `json:"SessionStart"`
+		PreInvocation  []json.RawMessage `json:"PreInvocation"`
+		PostInvocation []json.RawMessage `json:"PostInvocation"`
+		Stop           []json.RawMessage `json:"Stop"`
+		PreToolUse     []json.RawMessage `json:"PreToolUse"`
+		PostToolUse    []json.RawMessage `json:"PostToolUse"`
+	}
+	// Decode typed fields before inspecting the final event values. agy
+	// rejects a type error even if a later duplicate field replaces it.
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return "not an object of hook lists: " + err.Error()
 	}
@@ -30,7 +41,25 @@ func EntryRejects(raw json.RawMessage) string {
 		return "not an object of hook lists"
 	}
 	for _, event := range ordered(raw) {
-		for _, item := range events[event] {
+		var items []json.RawMessage
+		switch strings.ToLower(event) {
+		case "sessionstart":
+			items = events.SessionStart
+		case "preinvocation":
+			items = events.PreInvocation
+		case "postinvocation":
+			items = events.PostInvocation
+		case "stop":
+			items = events.Stop
+		case "pretooluse":
+			event, items = "PreToolUse", events.PreToolUse
+		case "posttooluse":
+			event, items = "PostToolUse", events.PostToolUse
+		default:
+			// enabled is metadata; all other fields are ignored by agy.
+			continue
+		}
+		for _, item := range items {
 			if why := itemRejects(event, item); why != "" {
 				return why
 			}
