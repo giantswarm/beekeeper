@@ -665,7 +665,7 @@ func TestConsumerKubectlExec(t *testing.T) {
 			t.Errorf("Consumer(%q) = %v, want allowed %v", argv, err, ok)
 		}
 	}
-	if c := secret.ConsumerContext(strings.Fields(pod + "x")); c != "kind-lab" {
+	if c := secret.ConsumerContext(strings.Fields(pod + "gh secret set X")); c != "kind-lab" {
 		t.Errorf("ConsumerContext = %q", c)
 	}
 	if c := secret.ConsumerContext([]string{"gh", "secret", "set", "--context", "x"}); c != "" {
@@ -835,6 +835,59 @@ func TestParsePair(t *testing.T) {
 	for _, bad := range []string{"op://Shared/app/f", aFile + "=k", "op://Shared/app/f=", "op://Shared/app/f=a#b", "op://Shared/app=k"} {
 		if _, err := secret.ParsePair(bad); err == nil {
 			t.Errorf("ParsePair(%q) took it", bad)
+		}
+	}
+}
+
+func TestConsumerKubectlAmbiguousContext(t *testing.T) {
+	for _, flags := range []string{
+		"--context lab --context production",
+		"--context=lab --context=production",
+		"--context lab --context=production",
+		"--context=lab --context production",
+		"--context lab --context lab",
+		"--context lab -n --context=production",
+		"--context lab --namespace --context production",
+		"--context lab --container=--context=production",
+		"--context --stdin",
+		"--context=",
+		"--context lab --unknown value",
+		"--context lab --unknown=--context=production",
+		"--context lab --stdin=false",
+	} {
+		t.Run(flags, func(t *testing.T) {
+			argv := strings.Fields("kubectl exec -i " + flags + " pod -- gh secret set X")
+			wantErr := secret.Consumer(argv)
+			if wantErr == nil {
+				t.Fatal("ambiguous consumer accepted")
+			}
+			if got := secret.ConsumerContext(argv); got != "" {
+				t.Fatalf("invalid consumer context = %q", got)
+			}
+			// A zero Ops panics if validation reaches source reads or writes.
+			o := new(secret.Ops)
+			if _, _, err := o.CopyToConsumer(context.Background(), secret.Ref{Op: vaultRef}, argv, secret.Stdin{}); err == nil || err.Error() != wantErr.Error() {
+				t.Fatalf("copy must refuse before reading source: %v", err)
+			}
+			file := filepath.Join(t.TempDir(), "missing.sops.yaml")
+			if _, err := o.Set(context.Background(), secret.Ref{File: file, Path: pwPath}, secret.SetOptions{Consumer: argv}); err == nil || err.Error() != wantErr.Error() {
+				t.Fatalf("set must refuse before touching destination: %v", err)
+			}
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				t.Fatalf("set touched destination: %v", err)
+			}
+		})
+	}
+	for _, flags := range []string{
+		"--context lab -n team -c app",
+		"--namespace=team --context=lab --container=app",
+	} {
+		argv := strings.Fields("kubectl exec -i " + flags + " pod -- gh secret set X")
+		if err := secret.Consumer(argv); err != nil {
+			t.Fatal(err)
+		}
+		if got := secret.ConsumerContext(argv); got != "lab" {
+			t.Fatalf("context = %q", got)
 		}
 	}
 }
