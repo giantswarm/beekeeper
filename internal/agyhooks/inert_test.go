@@ -9,7 +9,7 @@ func TestInertDefinitionsPreserveSiblingGuard(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{"case 0: null definition", `null`},
+		{"case 0: null definition", nullDefinition},
 		{"case 1: no matcher hooks", `{"PreToolUse":[{"matcher":"*"}]}`},
 		{"case 2: empty matcher hooks", `{"PostToolUse":[{"matcher":"*","hooks":[]}]}`},
 		{"case 3: null matcher hooks", `{"PreToolUse":[{"hooks":null}]}`},

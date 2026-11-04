@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const nullDefinition = `null`
+
 const guard = `{
   "PreInvocation": [{"type": "command", "command": "/opt/bin/beekeeper hook preinvocation", "timeout": 30}],
   "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]
@@ -33,7 +35,7 @@ func TestEntryRejects(t *testing.T) {
 		{"a matcher hook without its command", `{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command"}]}]}`, "PreToolUse: command hook must specify 'command'"},
 		{"an event that is no list", `{"PreToolUse": {"matcher": "*"}}`, invalidHookLists},
 		{"an entry that is no object", `"/usr/bin/true"`, invalidHookLists},
-		{"null", `null`, ""},
+		{"null", nullDefinition, ""},
 	} {
 		got := EntryRejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {
@@ -46,7 +48,7 @@ func TestEntryRejects(t *testing.T) {
 // it: Rejects names the first such entry in file order, whoever owns it.
 func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 	stale := `{"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]}`
-	broken := `{"PreToolUse": [{"matcher": "*"}]}`
+	broken := `{"PreToolUse": [{"matcher": "*", "hooks": [{}]}]}`
 	for _, c := range []struct {
 		name, raw, want string
 	}{
