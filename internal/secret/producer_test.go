@@ -22,6 +22,10 @@ var fluxPull = &secret.NewSecret{Name: pullUser, Namespace: "flux-giantswarm"}
 
 const azGenerate = "cmd://az acr token credential generate --registry gsociprivate --name " + pullUser + " --password1 -o json#passwords.0.value"
 
+const producerEmpty = "empty"
+
+const producerPassword = "password"
+
 // fakeAz puts an az where producers resolve that prints the token's JSON on stdout, the
 // password on stderr too (as --debug would), records that it ran, and
 // exits with code.
@@ -191,8 +195,8 @@ func TestAFailingProducerStoresNothing(t *testing.T) {
 
 func TestMissingCreationRuleRefusesBeforeProduction(t *testing.T) {
 	for name, rules := range map[string]string{
-		"empty":     "creation_rules: []\n",
-		"unmatched": "creation_rules:\n  - path_regex: '^other/'\n",
+		producerEmpty: "creation_rules: []\n",
+		"unmatched":   "creation_rules:\n  - path_regex: '^other/'\n",
 	} {
 		for _, operation := range []string{"SecretKeys", "Capture", "CopyValue", "CopyValues", "CopyDocker"} {
 			t.Run(name+"/"+operation, func(t *testing.T) {
@@ -213,10 +217,10 @@ func TestMissingCreationRuleRefusesBeforeProduction(t *testing.T) {
 				switch operation {
 				case "SecretKeys":
 					_, err = o.SecretKeys(ctx, file, secret.SecretKeysOptions{
-						Keys: []string{"password"}, New: fluxPull,
+						Keys: []string{producerPassword}, New: fluxPull,
 						Produce: func(context.Context) (map[string]string, error) {
 							callbacks++
-							return map[string]string{"password": "one-time-value"}, nil
+							return map[string]string{producerPassword: "one-time-value"}, nil
 						},
 					})
 				case "Capture":
@@ -226,7 +230,7 @@ func TestMissingCreationRuleRefusesBeforeProduction(t *testing.T) {
 				case "CopyValue":
 					_, err = o.CopyValue(ctx, src, secret.Ref{File: file, Path: pwPath})
 				case "CopyValues":
-					_, err = o.CopyValues(ctx, []secret.Pair{{Src: src, Path: "password"}}, file, fluxPull)
+					_, err = o.CopyValues(ctx, []secret.Pair{{Src: src, Path: producerPassword}}, file, fluxPull)
 				case "CopyDocker":
 					_, err = o.CopyDocker(ctx, src, file, secret.DockerConfig{Registry: "registry", Username: "test"}, fluxPull)
 				}
