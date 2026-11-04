@@ -469,24 +469,26 @@ var (
 // ParseOOM pairs the kernel's oom-kill and "Killed process" lines by pid.
 func ParseOOM(journal string) []OOMKill {
 	var kills []OOMKill
-	idx := map[int]int{}
+	// A PID can be reused after its victim dies. Only summaries still
+	// waiting for their first detail may match a later line.
+	pending := map[int]int{}
 	for line := range strings.SplitSeq(journal, "\n") {
 		at := journalTime(line)
 		if m := oomLine.FindStringSubmatch(line); m != nil {
 			pid, _ := strconv.Atoi(m[5])
-			idx[pid] = len(kills)
+			pending[pid] = len(kills)
 			kills = append(kills, OOMKill{At: at, PID: pid, Task: m[4], Constraint: m[1], Memcg: m[2], TaskMemcg: m[3]})
 			continue
 		}
 		if m := killedLine.FindStringSubmatch(line); m != nil {
 			pid, _ := strconv.Atoi(m[1])
 			kb, _ := strconv.Atoi(m[3])
-			i, ok := idx[pid]
+			i, ok := pending[pid]
 			if !ok {
-				idx[pid] = len(kills)
 				kills = append(kills, OOMKill{At: at, PID: pid, Task: m[2]})
 				i = len(kills) - 1
 			}
+			delete(pending, pid)
 			kills[i].AnonMiB = kb / 1024
 		}
 	}
