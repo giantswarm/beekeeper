@@ -27,11 +27,11 @@ func TestManagedSupervisorStatusRefusesInsteadOfListingAgents(t *testing.T) {
 	}
 	s.OwnUnit = func() string { return j.Handle.Unit }
 	t.Setenv(execution.EnvID, string(request.Ref.Execution))
-	for _, args := range [][]string{{"supervisor", testStatusWord}, {"supervisor"}} {
+	for _, args := range [][]string{{supervisorName, testStatusWord}, {supervisorName}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out bytes.Buffer
 			a.out = &out
-			root := &cobra.Command{Use: "beekeeper", SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, _ []string) error { return a.checkExecutionCommand(cmd) }}
+			root := &cobra.Command{Use: pluginName, SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, _ []string) error { return a.checkExecutionCommand(cmd) }}
 			root.AddCommand(a.supervisorCmd())
 			root.SetArgs(args)
 			root.SetOut(&out)

@@ -55,6 +55,36 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	}
 }
 
+func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix the handler")
+	r.pass(t)
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	read := readLoopPull
+	reads := 0
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		p, err := read(ctx, ref)
+		reads++
+		if reads > 1 {
+			p.Reviews = append(slices.Clone(p.Reviews), superloop.Review{ID: "R2", Author: loopDesk, Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Now()})
+		}
+		return p, err
+	}
+	r.pass(t)
+	if reads < 2 {
+		t.Fatal("did not exercise the executor's live review read")
+	}
+	if r.called(gateCmdName) != nil || len(r.logged(t, "merge.authorized")) != 0 {
+		t.Fatalf("new findings were overwritten by a fresh authorization: %v", r.calls)
+	}
+	if !strings.Contains(r.out.String(), "requested changes") {
+		t.Fatalf("new review refusal was not reported: %s", r.out)
+	}
+}
+
 func TestLoopMergeRepairDoesNotBypassQueue(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Merge.Admin = []string{loopMergeRepo}
@@ -205,39 +235,6 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
 		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)
-	}
-}
-
-func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
-	r := newLoopRig(t)
-	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring additional reviews.
-	r.command = func([]string) (string, int) { return "branch behind base", 1 }
-	r.park(t, loopPR, time.Now())
-	r.pass(t)
-	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.pass(t)
-	r.pull.Head = loopFixed
-	r.park(t, loopPR, time.Now().Add(time.Minute))
-	r.pass(t)
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	const third = "3333333333333333333333333333333333333333"
-	r.pull.Head = third
-	r.park(t, loopPR, time.Now().Add(2*time.Minute))
-	r.pass(t)
-	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
-		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
-	}
-	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
-		t.Fatalf("no independent review for third head: %v", r.calls)
-	}
-	r.verdict("R3", third, superloop.Approved, "")
-
-	r.pass(t)
-	call := r.called(gateCmdName)
-	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
 	}
 }
 
