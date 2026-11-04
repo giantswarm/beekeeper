@@ -103,8 +103,13 @@ func (u Upstream) allows(owner string) bool {
 	return slices.ContainsFunc(u.Orgs, func(o string) bool { return strings.EqualFold(o, owner) })
 }
 
+const unresolvedAPIRepo = "an unresolved gh api repository"
+
 // reason is the one-line refusal of w.
 func (u Upstream) reason(w upstreamWrite) string {
+	if w.repo == unresolvedAPIRepo {
+		return "Refused: cannot resolve the gh api repository; write the literal repos/<owner>/<repo>/... path."
+	}
 	review := u.Review
 	if review == "" {
 		review = "the team's upstream review list"
@@ -151,7 +156,7 @@ func (u Upstream) scan(cmd, cwd string, forceUnknown bool, depth int) *upstreamW
 		sg := st.seg
 		rawWords := shellWords(sc.plain[sg.start:sg.end])
 		known := st.known && !lineMoved && !forceUnknown
-		for _, words := range expandWordsList(rawWords, vars) {
+		for _, words := range expandAPIRepository(rawWords, vars) {
 			if w := u.write(words, st.dir, known, st.vars); w != nil {
 				w.command = strings.TrimSpace(cmd[sg.start:sg.end])
 				return w
@@ -188,6 +193,57 @@ func (u Upstream) scan(cmd, cwd string, forceUnknown bool, depth int) *upstreamW
 		}
 	}
 	return nil
+}
+
+// expandAPIRepository resolves endpoint variables before checking the target.
+// Keep every literal loop/assignment candidate so an allowed value cannot hide
+// a write outside the configured organizations. Never execute shell expansion.
+func expandAPIRepository(words []string, vars map[string][]string) [][]string {
+	k := commandAt(words)
+	if k == len(words) || path.Base(words[k]) != "gh" {
+		return expandWordsList(words, vars)
+	}
+	ep := ghAPIEndpoint(words)
+	if ep == "" {
+		return expandWordsList(words, vars)
+	}
+	endpoints := []string{ep}
+	for _, ref := range pathVar.FindAllString(ep, -1) {
+		name := strings.Trim(ref[1:], "{}")
+		vals, ok := vars[name]
+		if !ok {
+			if value, exists := os.LookupEnv(name); exists {
+				vals = []string{value}
+			}
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		var next []string
+		for _, endpoint := range endpoints {
+			for _, value := range vals {
+				next = append(next, pathVar.ReplaceAllStringFunc(endpoint, func(candidate string) string {
+					if candidate == ref {
+						return value
+					}
+					return candidate
+				}))
+			}
+		}
+		endpoints = next
+	}
+	var out [][]string
+	for _, endpoint := range endpoints {
+		cp := slices.Clone(words)
+		for i := k + 1; i < len(cp); i++ {
+			if cp[i] == ep {
+				cp[i] = endpoint
+				break
+			}
+		}
+		out = append(out, expandWordsList(cp, vars)...)
+	}
+	return out
 }
 
 // write is the refused write of one simple command, nil for none.
@@ -370,10 +426,18 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string, known bool) (what, 
 		return "", ""
 	}
 	what = "gh api -X " + method + " " + ep
+	if strings.HasPrefix(strings.TrimPrefix(ep, "/"), "repos//") {
+		return what, unresolvedAPIRepo
+	}
 	m := githubAPI.FindStringSubmatch(ep)
 	switch {
 	case m == nil:
+		if strings.HasPrefix(strings.TrimPrefix(ep, "/"), "repos/") || strings.ContainsAny(ep, "$`") {
+			return what, unresolvedAPIRepo
+		}
 		return "", ""
+	case strings.ContainsAny(m[1]+m[2]+m[3], "$`"):
+		return what, unresolvedAPIRepo
 	case m[3] != "":
 		return what, m[3] + "/*"
 	case m[1] == "{owner}" || m[2] == "{repo}":

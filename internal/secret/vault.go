@@ -48,13 +48,18 @@ type Keeper struct {
 	end *time.Timer
 	// changed hears the state after every unlock and lock.
 	changed func(VaultState)
+	// pending and notifying serialize callbacks in transition order under mu.
+	pending   []VaultState
+	notifying bool
 	// ready is closed when the vault unlocks and replaced by the next
 	// lock, so that every waiting call wakes at once.
 	ready chan struct{}
 }
 
 // NewKeeper is a locked keeper that holds a session for lifetime and tells
-// changed (nil: no one) each new state.
+// changed (nil: no one) each new state in transition order. Callbacks may
+// read and reenter the keeper. Transitions during a callback queue their
+// notifications for delivery after that callback returns.
 func NewKeeper(lifetime time.Duration, changed func(VaultState)) *Keeper {
 	if changed == nil {
 		changed = func(VaultState) {}
@@ -83,9 +88,7 @@ func (k *Keeper) unlock(env string, now time.Time) {
 		k.end.Stop()
 	}
 	k.end = time.AfterFunc(k.lifetime, func() { k.lockSession(now) })
-	st := k.stateLocked()
-	k.mu.Unlock()
-	k.changed(st)
+	k.notifyLocked()
 }
 
 // Lock forgets the session: the person's lock, or one op no longer takes.
@@ -127,9 +130,30 @@ func (k *Keeper) lockLocked() {
 		k.end.Stop()
 	}
 	k.ready = make(chan struct{})
-	st := k.stateLocked()
+	k.notifyLocked()
+}
+
+// notifyLocked queues the current state with mu held and releases mu.
+// The first caller drains the queue; concurrent or reentrant transitions
+// only append, so callbacks never overlap or hold the keeper mutex.
+func (k *Keeper) notifyLocked() {
+	k.pending = append(k.pending, k.stateLocked())
+	if k.notifying {
+		k.mu.Unlock()
+		return
+	}
+	k.notifying = true
+	for len(k.pending) > 0 {
+		st := k.pending[0]
+		k.pending[0] = VaultState{}
+		k.pending = k.pending[1:]
+		k.mu.Unlock()
+		k.changed(st)
+		k.mu.Lock()
+	}
+	k.pending = nil
+	k.notifying = false
 	k.mu.Unlock()
-	k.changed(st)
 }
 
 // State is whether the keeper holds a session, since when and until when.
