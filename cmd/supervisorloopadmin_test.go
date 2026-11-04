@@ -180,3 +180,34 @@ func TestLoopRestartKeepsGenuineBranchRepair(t *testing.T) {
 		t.Fatalf("genuine branch repair was undone: attempts=%d output=%s", attempts, r.out)
 	}
 }
+
+func TestLoopDryRunPreservesOlderAdminPolicyRepair(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	seedOlderRepair(t, r, adminPolicyTestReason)
+	before, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.dryRunSupervisorLoop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := r.a.store.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("dry run appended %d events, including %d unstages and %d unclaims", len(after)-len(before), len(r.logged(t, loopUnstageVerb)), len(r.logged(t, loopClaimEndVerb)))
+	}
+	if !strings.Contains(r.out.String(), "SUPERVISOR WOULD GO") {
+		t.Fatalf("dry run did not preview the recovered merge: %s", r.out)
+	}
+	// A subsequent real pass must still perform and record the recovery.
+	r.command = func([]string) (string, int) { return adminPolicyTestReason, 1 }
+	r.pass(t)
+	if len(r.logged(t, loopUnstageVerb)) != 1 || len(r.logged(t, loopClaimEndVerb)) != 1 {
+		t.Fatalf("real pass did not close the saved repair exactly once: %s", r.out)
+	}
+}
