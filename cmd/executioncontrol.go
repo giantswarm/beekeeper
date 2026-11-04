@@ -418,7 +418,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("hold is not active")
 			}
 		} else if v.On != "" {
-			if _, ok := parseRef(v.On); !ok {
+			_, _, release := parseReleaseTarget(v.On)
+			if _, ok := parseRef(v.On); !ok && !release {
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
