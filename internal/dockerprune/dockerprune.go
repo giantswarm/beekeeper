@@ -353,6 +353,9 @@ type Trimmed struct {
 // its parent, as long as a pass removes one.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
 	var t Trimmed
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	left := total
 	over := func() (bool, error) {
 		if left > target || size == nil {
@@ -368,8 +371,11 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 	pass := func(images []Image) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
-			if more, err := over(); err != nil || !more {
+			if err := ctx.Err(); err != nil {
 				return refused, err
+			}
+			if more, err := over(); err != nil || !more {
+				return refused, errors.Join(err, ctx.Err())
 			}
 			if busy() {
 				return refused, ErrBusy
@@ -382,6 +388,9 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				args = append(args, img.Refs...)
 			}
 			if _, err := d(ctx, args...); err != nil {
+				if canceled := ctx.Err(); canceled != nil {
+					return refused, canceled
+				}
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
@@ -470,9 +479,12 @@ type CacheTrim struct {
 // can remove nothing, so fresh records confirm progress and remaining size.
 // Records blocked by children are retried while a pass removes a record.
 func PruneBuildCache(ctx context.Context, d Docker, keep int64) (t CacheTrim, err error) {
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	records, err := CacheRecords(ctx, d)
 	if err != nil {
-		return t, err
+		return t, errors.Join(err, ctx.Err())
 	}
 	var total int64
 	for _, r := range records {
@@ -488,26 +500,33 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (t CacheTrim, er
 		return cmp.Or(cmp.Compare(b.UsedAgo, a.UsedAgo), cmp.Compare(a.ID, b.ID))
 	})
 	var refused []error
+	var canceled error
 	defer func() {
 		for _, r := range records {
 			t.Kept++
 			t.KeptBytes += r.Size
 		}
 	}()
-	for len(candidates) > 0 && total > keep {
+	for len(candidates) > 0 && total > keep && canceled == nil {
 		var retry []CacheRecord
 		before := t.Removed
 		for _, r := range candidates {
+			if canceled = ctx.Err(); canceled != nil {
+				break
+			}
 			if total <= keep {
 				break
 			}
 			if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
+				if canceled = ctx.Err(); canceled != nil {
+					break
+				}
 				refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
 				continue
 			}
 			current, err := CacheRecords(ctx, d)
 			if err != nil {
-				return t, err
+				return t, errors.Join(err, ctx.Err())
 			}
 			records, total = current, 0
 			for _, remaining := range records {
@@ -524,6 +543,12 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (t CacheTrim, er
 			break
 		}
 		candidates = retry
+	}
+	if canceled != nil {
+		return t, canceled
+	}
+	if canceled != nil {
+		return t, canceled
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)
