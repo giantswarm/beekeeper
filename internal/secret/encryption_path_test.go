@@ -15,6 +15,8 @@ import (
 
 const encryptionAPIPassword = "api.password"
 
+const encryptionRegex = "encrypted_regex: '^password$'"
+
 const encryptionOldLine = "api.password: old\n"
 
 func TestCreationRuleChecksResolvedDottedKeys(t *testing.T) {
@@ -22,11 +24,11 @@ func TestCreationRuleChecksResolvedDottedKeys(t *testing.T) {
 		name, plain, path, rule string
 		allowed                 bool
 	}{
-		{"terminal regex", encryptionOldLine, encryptionAPIPassword, "encrypted_regex: '^password$'", false},
-		{"intermediate regex", "api.password:\n  value: old\n", "api.password.value", "encrypted_regex: '^password$'", false},
+		{"terminal regex", encryptionOldLine, encryptionAPIPassword, encryptionRegex, false},
+		{"intermediate regex", "api.password:\n  value: old\n", "api.password.value", encryptionRegex, false},
 		{"suffix", "api_secret.password: old\n", "api_secret.password", "encrypted_suffix: _secret", false},
 		{"unencrypted regex", encryptionOldLine, encryptionAPIPassword, "unencrypted_regex: '^api[.]password$'", false},
-		{"new suffix", "api.password: {}\n", "api.password.value", "encrypted_regex: '^password$'", false},
+		{"new suffix", "api.password: {}\n", "api.password.value", encryptionRegex, false},
 		{"actual key selected", encryptionOldLine, encryptionAPIPassword, "encrypted_regex: '^api[.]password$'", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
