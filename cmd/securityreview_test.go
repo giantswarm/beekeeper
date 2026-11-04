@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,54 @@ func TestWithReviewModelMergesTheProfile(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Clean(path)); strings.Contains(string(raw), securityReviewEnv) {
 		t.Errorf("the profile's own file changed: %s", raw)
+	}
+}
+
+// Concurrent workers sharing a profile and model must only publish complete JSON.
+func TestWithReviewModelConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.json")
+	if err := os.WriteFile(path, []byte(`{"env":{"KEEP":"1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags := []string{settingsFlag, path}
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for range 32 {
+		workers.Go(func() {
+			<-start
+			for range 10 {
+				got, err := withReviewModel("opus", flags)
+				if err != nil {
+					t.Errorf("prepare settings: %v", err)
+					continue
+				}
+				raw, err := os.ReadFile(got[1])
+				if err != nil {
+					t.Errorf("read settings: %v", err)
+					continue
+				}
+				var settings struct {
+					Env map[string]string `json:"env"`
+				}
+				if err := json.Unmarshal(raw, &settings); err != nil {
+					t.Errorf("decode settings %q: %v", raw, err)
+					continue
+				}
+				if settings.Env["KEEP"] != "1" || settings.Env[securityReviewEnv] != "opus" {
+					t.Errorf("settings %s: want the profile and review model", raw)
+				}
+			}
+		})
+	}
+	close(start)
+	workers.Wait()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("settings directory has %d entries, want only source and published settings", len(entries))
 	}
 }
 

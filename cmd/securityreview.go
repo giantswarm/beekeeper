@@ -55,14 +55,23 @@ func withReviewModel(model string, flags []string) ([]string, error) {
 	if raw, err = json.MarshalIndent(s, "", "  "); err != nil {
 		return nil, err
 	}
-	// one file per profile and model, rewritten whole: workers of one
-	// profile on different models never share it
+	// Publish a complete file per profile and model. Each writer owns its
+	// temporary file so concurrent workers cannot truncate or rename it.
 	out := strings.TrimSuffix(path, ".json") + "." + unsafeKey.ReplaceAllString(model, "_") + ".json"
-	tmp := out + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
+	tmp, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+".tmp-*")
+	if err != nil {
 		return nil, err
 	}
-	if err := os.Rename(tmp, out); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.Write(append(raw, '\n'))
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return nil, writeErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if err := os.Rename(tmp.Name(), out); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
 		return nil, err
 	}
 	flags = slices.Clone(flags)
