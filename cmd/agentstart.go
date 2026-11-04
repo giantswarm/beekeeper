@@ -145,6 +145,11 @@ verdict without room refuses the start with exit 3, the guards named,
 and no session is created; --force starts it anyway and records the
 verdict overridden in the event log (agents.start).
 
+For SSH --host starts, --force overrides coordinator capacity only. The
+execution host still enforces memory, swap, load, disk, build slots (with
+--builds) and maxBusy during admission, so remote preparation can still be
+refused. Authentication, identity, version and policy checks remain required.
+
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
 user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
@@ -611,7 +616,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
+	c.Flags().BoolVar(&force, "force", false, "override coordinator capacity or another desk's issue claim; SSH execution-host admission limits still apply; record overrides")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
