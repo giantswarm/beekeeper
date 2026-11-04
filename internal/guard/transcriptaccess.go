@@ -251,7 +251,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 	}
 	text := k < len(words) && isBeekeeperTextSubcommand(name, words[k+1:])
 	// Exempt only content-free utilities whose names are not shadowed.
-	metadata := name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
+	metadata := name == "du" || name == "df" || name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
 	if name == findCmd {
 		metadata = true
 		for _, arg := range words {
@@ -295,7 +295,13 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 		for _, component := range transcriptHomeComponent.FindAllString(word, -1) {
 			candidates = append(candidates, strings.Trim(component, `"'`))
 		}
-		for _, literal := range transcriptLiteralPath.FindAllString(word, -1) {
+		for _, match := range transcriptLiteralPath.FindAllStringIndex(word, -1) {
+			// A slash inside a relative path is not an absolute-path start.
+			// Keep quoted literals and assignment values in interpreter code.
+			if match[0] > 0 && !strings.ContainsRune(" \t\r\n\"'`(=,:+", rune(word[match[0]-1])) {
+				continue
+			}
+			literal := word[match[0]:match[1]]
 			// A slash in a jq operator or a shell parameter is not an absolute path.
 			if strings.Trim(literal, "/") != "" && !strings.Contains(word, "${") {
 				candidates = append(candidates, literal)

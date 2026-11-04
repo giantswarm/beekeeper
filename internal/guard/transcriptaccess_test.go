@@ -400,3 +400,34 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		t.Errorf("here-document data refused: %+v", d)
 	}
 }
+
+func TestTranscriptOrdinaryWorktreeCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "worktrees", "task")
+	for _, command := range []string{
+		`grep -n 'TestTranscript' cmd/*_test.go`,
+		"grep token fixture" + filepath.Join(home, ".codex", "sessions", "synthetic.jsonl"),
+		"python3 <<'PY'\nfrom pathlib import Path\nPath('cmd/example_test.go').write_text('package cmd\\n')\nPY",
+		`du -sh ~/.cache/go-build ~/.local/state/example/worktrees ~/.local/state/beekeeper/runs ~/.local/state/beekeeper/tmp`,
+		`ssh "$REMOTE" 'sed -n 1,20p projects/desk/config/config.yaml'`,
+		`du -sh ~/.claude/projects ~/.codex/sessions`,
+		`df ~/.codex/sessions`,
+		`stat ~/.codex/sessions/other.jsonl`,
+	} {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("ordinary command refused: %s: %+v", command, d)
+		}
+	}
+	for _, command := range []string{
+		`cat ~/.codex/sessions/other.jsonl`,
+		`grep token ~/.claude/projects/project/other.jsonl`,
+		`du -sh < ~/.codex/sessions/other.jsonl`,
+		`du(){ cat "$1"; }; du ~/.codex/sessions/other.jsonl`,
+	} {
+		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("transcript reader passed: %s: %+v", command, d)
+		}
+	}
+}
