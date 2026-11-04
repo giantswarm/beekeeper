@@ -624,12 +624,14 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.Reason = "a review requested changes; new supervisor approval required"
 			return doc
 		}
-		if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, up, up.Head); authErr != nil {
-			doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
-			return doc
-		} else if why != "" {
-			doc.ExitCode, doc.Reason = github.SquashRefused, why
-			return doc
+		if slices.ContainsFunc(up.Reviews, func(r superloop.Review) bool { return r.Verdict == superloop.ChangesRequested }) {
+			if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, up, up.Head); authErr != nil {
+				doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
+				return doc
+			} else if why != "" {
+				doc.ExitCode, doc.Reason = github.SquashRefused, why
+				return doc
+			}
 		}
 		p, merging = up, up.Head
 	}
