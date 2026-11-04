@@ -212,10 +212,12 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 	}
 	switch {
 	case !changed:
-	case m.SettingsCreated && len(s.top) == 0:
+	case m.SettingsCreated && len(s.top) == 0 && !symlink(e.Settings):
 		removed[e.Settings] = true
 		p.add("remove", e.Settings, "", func() error { return os.Remove(e.Settings) })
 	default:
+		// A link introduced since install belongs to the user. Keep it and
+		// remove our hooks through it, even when that leaves an empty object.
 		raw := s.encode()
 		p.add("update", e.Settings, "", func() error { return writeFile(e.Settings, raw) })
 	}
