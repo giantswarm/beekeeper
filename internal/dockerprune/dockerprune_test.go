@@ -190,7 +190,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == execCommand:
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
-		if args[2] != "--no-prune" {
+		if args[len(args)-1] != "--no-prune" {
 			return nil, errors.New("image removal must disable parent pruning")
 		}
 		f.removed = append(f.removed, args[3:])
@@ -844,7 +844,7 @@ func TestTrimImagesRechecksReferencesAcrossPasses(t *testing.T) {
 			}
 			return []byte(`["example:new"]`), nil
 		}
-		switch args[2] {
+		switch args[len(args)-1] {
 		case retryRef, retryID:
 			attempts++
 			return nil, errors.New("dependent child")
@@ -875,7 +875,7 @@ func TestTrimImagesStopsWhenInspectionBecomesBusy(t *testing.T) {
 			busy = true
 			return []byte("null"), nil
 		}
-		if args[2] == retryRef || args[2] == retryID {
+		if args[len(args)-1] == retryRef || args[len(args)-1] == retryID {
 			attempts++
 			return nil, errors.New("partial removal")
 		}

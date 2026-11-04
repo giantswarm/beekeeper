@@ -581,7 +581,7 @@ func TestFreeKeepsHeldDirsThroughTempAlias(t *testing.T) {
 						t.Fatalf("deleted fixture exists: %v", err)
 					}
 				}
-				r.Table = proc.NewTable(&proc.Process{PID: 7, Comm: "worker"})
+				r.Table = proc.NewTable(&proc.Process{PID: 7, Comm: litWorker})
 				r.holds = func(int) []string { return []string{heldPath} }
 				freed := r.Free()
 				if _, err := os.Stat(filepath.Join(realRoot, held, "scratchpad", "a")); err != nil {

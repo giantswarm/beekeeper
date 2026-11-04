@@ -21,7 +21,7 @@ func TestOrphansDoNotMatchTaskText(t *testing.T) {
 	for _, p := range []*proc.Process{
 		{PID: 10, Args: []string{"claude", "-p", "Investigate jest-worker and processChild.js"}},
 		{PID: 11, Args: []string{orphanPython, "-c", `print("claude --output-format stream-json")`}},
-		{PID: 12, Args: []string{"node", orphanApp, "--label", "jest-worker processChild.js"}},
+		{PID: 12, Args: []string{litNode, orphanApp, "--label", "jest-worker processChild.js"}},
 		{PID: 20, Args: []string{"/usr/bin/node", "/app/node_modules/jest-worker/build/workers/processChild.js"}},
 		{PID: 21, Args: []string{"node", "--expose-gc", orphanChildScript}},
 		{PID: 22, Args: []string{"/usr/bin/claude", "--output-format", "stream-json"}},

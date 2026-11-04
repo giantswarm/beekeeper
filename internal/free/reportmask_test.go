@@ -23,7 +23,7 @@ func TestReportsMaskProcessArguments(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r, out := newRun(t, Options{Summary: summary, HeavyMiB: 1, Only: []string{Orphans}, Orphan: 30 * time.Minute})
 			r.Table = proc.NewTable(
-				&proc.Process{PID: 10, PPID: 2, Comm: "worker", RSSKiB: 4096, Start: now.Add(-time.Hour),
+				&proc.Process{PID: 10, PPID: 2, Comm: litWorker, RSSKiB: 4096, Start: now.Add(-time.Hour),
 					Args: []string{"worker", reportTokenFlag, "fixture-token", "PASSWORD=fixture-password", "https://user:fixture-url@host.invalid/path"}},
 				&proc.Process{PID: 20, PPID: 1, Comm: reportNode, RSSKiB: 4096, Start: now.Add(-time.Hour),
 					Args: []string{reportNode, reportChildScript, reportTokenFlag, "fixture-orphan"}},
