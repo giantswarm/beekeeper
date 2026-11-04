@@ -12,7 +12,7 @@ import (
 func TestStdinRejectsJSONNullBeforeReadingOrWriting(t *testing.T) {
 	for _, template := range []string{"null", " \nnull\t"} {
 		t.Run(template, func(t *testing.T) {
-			in := Stdin{Template: template, Field: "password"}
+			in := Stdin{Template: template, Field: ageItemField}
 			if err := in.Check(); err == nil {
 				t.Fatal("null was accepted as a JSON object")
 			}
@@ -33,7 +33,7 @@ func TestStdinRejectsJSONNullBeforeReadingOrWriting(t *testing.T) {
 				t.Fatal(err)
 			}
 			file := filepath.Join(dir, "example.yaml")
-			if _, err := o.Set(context.Background(), Ref{File: file, Path: "password"}, SetOptions{Literal: "public-value", Consumer: consumer, Stdin: in}); err == nil {
+			if _, err := o.Set(context.Background(), Ref{File: file, Path: ageItemField}, SetOptions{Literal: "public-value", Consumer: consumer, Stdin: in}); err == nil {
 				t.Fatal("set accepted null")
 			}
 			if calls != 0 {
