@@ -392,6 +392,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	if len(reviewedHead) > 0 {
 		g.reviewedHead = reviewedHead[0]
 	}
+	if err := g.checkMergeRoute(); err != nil {
+		return err
+	}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
 	if paired {
@@ -1848,6 +1851,9 @@ func (g *gateRun) runMerge() error {
 // hand-cut base, or the plain squash merge for a repository devctl does not
 // serve.
 func (g *gateRun) mergeArgv() ([]string, error) {
+	if err := g.checkMergeRoute(); err != nil {
+		return nil, err
+	}
 	if g.reviewedHead != "" {
 		self, err := selfExe()
 		if err != nil {
@@ -2296,6 +2302,15 @@ func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.Tool
 // merge of a repository devctl serves; any other merge takes the plain
 // squash merge.
 func (g *gateRun) runsDevctl() bool { return g.pr == 0 || g.cfg.Merge.DevctlServes(g.repo) }
+
+// checkMergeRoute refuses flags the plain squash route cannot honor, before
+// queuing and again before launch for runs resumed from an earlier version.
+func (g *gateRun) checkMergeRoute() error {
+	if !g.runsDevctl() && merge.UpdatesBranch(g.argv) {
+		return gateRefused("--update-branch is unsupported for repositories outside merge.devctlOwners: the squash merge route cannot update the branch; nothing merged")
+	}
+	return nil
+}
 
 // judgeTries is how often the gate asks GitHub about a run without its
 // document, judgeWait the pause between the tries.

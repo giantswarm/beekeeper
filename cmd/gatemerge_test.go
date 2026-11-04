@@ -548,6 +548,39 @@ func TestSquashArgv(t *testing.T) {
 	}
 }
 
+func TestNonDevctlUpdateBranchRefused(t *testing.T) {
+	for _, flag := range []string{"--update-branch", "--update-branch=true"} {
+		t.Run(flag, func(t *testing.T) {
+			a := busyLaneApp(t)
+			const repo = "other/project"
+			var err error
+			stderr := gateStderr(t, func() {
+				err = a.gate(context.Background(), mergeArgv(repo, flag), 0, 0, false)
+			})
+			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") ||
+				!strings.Contains(stderr, "outside merge.devctlOwners") || !strings.Contains(stderr, "cannot update the branch") {
+				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
+			}
+			if placeOf(t, a) >= 0 {
+				t.Fatal("refused merge took a lane place")
+			}
+
+			// A queued run from an older version must not launch a squash merge.
+			g := &gateRun{app: a, repo: repo, pr: 7, argv: mergeArgv(repo, flag)}
+			stderr = gateStderr(t, func() {
+				argv, routeErr := g.mergeArgv()
+				err = routeErr
+				if len(argv) != 0 {
+					t.Errorf("refused route produced argv %v", argv)
+				}
+			})
+			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") {
+				t.Fatalf("launch exit %d (%v), stderr %q", Code(err), err, stderr)
+			}
+		})
+	}
+}
+
 // A finished run's stderr and document are kept for its owner outside the
 // run's own files; kept outputs past keptFor are pruned.
 func TestKeepOutput(t *testing.T) {
