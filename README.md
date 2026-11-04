@@ -659,7 +659,9 @@ beekeeper keeps that login:
   login URL: it goes to `teleport/login.log` (mode 0600) and is never printed.
 - The renewal holds the browser lease. A session renewing by hand (`beekeeper teleport renew`) claims
   it first; the keeper claims it itself when it is free and granted to nobody, and otherwise waits
-  for its next run, which the `TELEPORT LOGIN` line names.
+  for its next run, which the `TELEPORT LOGIN` line names. Only one renewal runs at a time on a
+  desk, including commands from the same session. A second manual command is refused while it
+  runs; the keeper leaves that renewal in charge and tries at its next run.
 - A login that does not complete within `teleport.loginTimeout` (default 3m: the browser's SSO
   session is gone, or the sign-in needs a click) leaves the profile as it was. The keeper does not
   try that login again: it leaves a sign-in note for `guide.person` that closes by itself once the
