@@ -23,10 +23,10 @@ func TestExecutionOmpCoordinatorAdmission(t *testing.T) {
 	h := a.cfg.Agents.Hosts[sshTestSelector]
 	h.Harnesses = []string{omp.Harness}
 	a.cfg.Agents.Hosts[sshTestSelector] = h
-	if _, err := runAgents(a, agentStartName, "--name", "remote-omp", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
+	if _, err := runAgents(a, agentStartName, "--name", "remote-omp", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto, effortFlag, testEffortHigh); err != nil {
 		t.Fatal(err)
 	}
-	if len(*requests) != 2 || (*requests)[1].Harness != omp.Harness || (*requests)[1].Model != "fixture/model" || !(*requests)[1].Messaging || !(*requests)[1].LeaseRequired {
+	if len(*requests) != 2 || (*requests)[1].Harness != omp.Harness || (*requests)[1].Model != "fixture/model" || (*requests)[1].Effort != testEffortHigh || !(*requests)[1].Messaging || !(*requests)[1].LeaseRequired {
 		t.Fatalf("request %+v", *requests)
 	}
 	st, err := a.store.Read()
