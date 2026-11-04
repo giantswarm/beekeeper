@@ -31,6 +31,7 @@ const (
 	systemCommand  = "system"
 	inspectCommand = "inspect"
 	loadCommand    = "load"
+	importCommand  = "import"
 	imagesCommand  = "images"
 	execCommand    = "exec"
 	devRef         = "example:dev"
@@ -70,7 +71,7 @@ func TestImporter(t *testing.T) {
 		{docker, image, loadCommand, "-i", "x.tar"},
 		{docker, "save", "x"},
 		{"/usr/lib/docker/cli-plugins/docker-buildx", "buildx", build, "."},
-		{"ctr", "-n", "k8s.io", imagesCommand, "import", "x.tar"},
+		{"ctr", "-n", "k8s.io", imagesCommand, importCommand, "x.tar"},
 	}
 	no := [][]string{
 		{kind, "get", "kubeconfig"},
@@ -101,11 +102,11 @@ func TestImporterWithGlobalOptions(t *testing.T) {
 		{[]string{docker, "-H", "unix:///tmp/docker-fixture.sock", "-c", "local-fixture", "save", devRef}, true},
 		{[]string{docker, "--config=/tmp/docker-fixture", "--context=default", builderCommand, build, "."}, true},
 		{[]string{kind, "--verbosity", "2", "--quiet", loadCommand, "docker-image", devRef}, true},
-		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", imagesCommand, "import", "/tmp/synthetic.tar"}, true},
+		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", imagesCommand, importCommand, "/tmp/synthetic.tar"}, true},
 		{[]string{"buildctl", "--addr", "unix:///tmp/buildkit-fixture.sock", "--timeout=30", build}, true},
 		// The old three-word scan matched these; a prune must keep waiting.
 		{[]string{docker, "compose", "-f", "/tmp/compose-fixture.yaml", build}, true},
-		{[]string{docker, "container", "import", "/tmp/synthetic.tar"}, true},
+		{[]string{docker, "container", importCommand, "/tmp/container-fixture.tar"}, true},
 		{[]string{docker, "compose", "ps"}, false},
 		{[]string{docker, contextFlag, loadCommand, "ps"}, false},
 		{[]string{docker, "run", devRef, build}, false},
