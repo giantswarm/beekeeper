@@ -696,7 +696,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 			case missingOperation:
 				value, err = s.Missing(ctx, req.Ref)
-			case "check":
+			case checkOperation:
 				value, err = s.Check(ctx)
 			case "source-chunk":
 				var chunk SourceChunk
@@ -760,7 +760,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 				// Readiness diagnostics remain available when no harness passes.
 				// Other failed operations never expose a partial result.
-				if req.Operation == "check" {
+				if req.Operation == checkOperation {
 					reply.Payload, _ = json.Marshal(value)
 				}
 				reply.Error = err.Error()

@@ -18,7 +18,7 @@ func TestExecutionOmpPinnedVersionOutputFormats(t *testing.T) {
 		{"packaged", packagedPrefix + fixtureOmpVersion, true},
 		{"bare", fixtureOmpVersion, true},
 		{"mismatched", "omp/18.14.3", false},
-		{"foreign", "other/" + fixtureOmpVersion, false},
+		{"other program", "other/" + fixtureOmpVersion, false},
 		{"trailing", packagedPrefix + fixtureOmpVersion + " extra", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
