@@ -26,12 +26,15 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	cacheIDPrefix = "id="
+	cacheOld      = "old"
+	age5d         = "5 days ago"
+	nginxRef      = "docker.io/library/nginx:1"
+	kind          = "kind"
+	build         = "build"
+	docker        = "docker"
+	image         = "image"
+	oldID         = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -110,10 +113,10 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(f.du), nil
 	case args[0] == "builder" && args[1] == "prune":
 		f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
-		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
-			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
+		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], cacheIDPrefix)] {
+			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], cacheIDPrefix))
 		}
-		id := strings.TrimPrefix(args[4], "id=")
+		id := strings.TrimPrefix(args[4], cacheIDPrefix)
 		if f.pruneNoop[id] {
 			return []byte("Total:\t0B\n"), nil
 		}
@@ -369,7 +372,7 @@ func duRows(rows ...duRow) string {
 // while its reserved-space floor sits above the target, is gone.
 func TestPruneBuildCacheRemovesTheOldestReclaimableToTheTarget(t *testing.T) {
 	f := &fake{du: duRows(
-		duRow{"old", 2, true, "5 days ago"},
+		duRow{cacheOld, 2, true, age5d},
 		duRow{"mid", 1, true, age2d},
 		duRow{"new", 3, true, "1 hour ago"},
 		duRow{"busy", 2, false, "3 minutes ago"},
@@ -423,8 +426,8 @@ func TestPruneBuildCacheUnderTheTargetAndWithRefusals(t *testing.T) {
 }
 
 func TestPruneBuildCacheChecksActualProgress(t *testing.T) {
-	f := &fake{du: duRows(duRow{"old", 4, true, "5 days ago"}, duRow{"next", 2, true, age2d}),
-		pruneNoop: map[string]bool{"old": true}}
+	f := &fake{du: duRows(duRow{cacheOld, 4, true, age5d}, duRow{"next", 2, true, age2d}),
+		pruneNoop: map[string]bool{cacheOld: true}}
 	trimmed, err := PruneBuildCache(context.Background(), f.run, 3e9)
 	if err != nil || trimmed.Removed != 1 || trimmed.Freed != 2e9 || trimmed.Kept != 1 || trimmed.KeptBytes != 4e9 {
 		t.Fatalf("trim = %+v, %v; want next removed and the unchanged old record kept", trimmed, err)
@@ -433,7 +436,7 @@ func TestPruneBuildCacheChecksActualProgress(t *testing.T) {
 		t.Fatalf("remaining cache = %s; want only old", f.du)
 	}
 	// A pass with no real progress must end even if every prune exits 0.
-	f = &fake{du: duRows(duRow{"old", 4, true, age2d}), pruneNoop: map[string]bool{"old": true}}
+	f = &fake{du: duRows(duRow{cacheOld, 4, true, age2d}), pruneNoop: map[string]bool{cacheOld: true}}
 	trimmed, err = PruneBuildCache(context.Background(), f.run, 0)
 	if err != nil || trimmed.Removed != 0 || trimmed.Freed != 0 || trimmed.KeptBytes != 4e9 || len(f.pruneArgs) != 1 {
 		t.Fatalf("no-op trim = %+v, %v after %d prunes", trimmed, err, len(f.pruneArgs))
@@ -441,7 +444,7 @@ func TestPruneBuildCacheChecksActualProgress(t *testing.T) {
 }
 
 func TestPruneBuildCacheRetriesAnUnblockedParent(t *testing.T) {
-	f := &fake{du: duRows(duRow{"parent", 2, true, "5 days ago"}, duRow{"child", 2, true, age2d})}
+	f := &fake{du: duRows(duRow{"parent", 2, true, age5d}, duRow{"child", 2, true, age2d})}
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
 		if args[1] == "prune" && args[4] == "id=parent" && strings.Contains(f.du, `"ID":"child"`) {
 			f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
@@ -483,7 +486,7 @@ func TestParseUsedAgo(t *testing.T) {
 	}{
 		{"10 minutes ago", 10 * time.Minute},
 		{"26 hours ago", 26 * time.Hour},
-		{"5 days ago", 5 * 24 * time.Hour},
+		{age5d, 5 * 24 * time.Hour},
 		{"3 weeks ago", 3 * 7 * 24 * time.Hour},
 		{"Less than a second ago", -1},
 		{"", -1},
