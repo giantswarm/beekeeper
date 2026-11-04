@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/spf13/cobra"
+
+	"github.com/giantswarm/beekeeper/internal/execution"
 )
 
 func TestManagedSupervisorStatusRefusesInsteadOfListingAgents(t *testing.T) {
