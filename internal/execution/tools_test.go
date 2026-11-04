@@ -78,6 +78,9 @@ func TestCheckRequiresTheToolchainTheServedRepositoriesName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !caps.CIWait {
+				t.Fatal("prepared host did not advertise its built-in CI wait")
+			}
 			if caps.Tools[ToolGo] != test.pinned || caps.Tools[ToolGitHub] != fixtureGitHubVersion {
 				t.Fatalf("check reported tools %v", caps.Tools)
 			}
