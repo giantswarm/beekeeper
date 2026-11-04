@@ -10,6 +10,14 @@ import (
 )
 
 func TestFreeKeepsHeldDirsThroughTempAlias(t *testing.T) {
+	// Exercise an aliased test-runner root as well as the configured root.
+	// This also occurs on hosts where /var resolves to /private/var.
+	runnerTmp := t.TempDir()
+	runnerAlias := filepath.Join(t.TempDir(), "runner-alias")
+	if err := os.Symlink(runnerTmp, runnerAlias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("TMPDIR", runnerAlias)
 	for section, dir := range map[string]string{
 		SessionDirs: sessionDir(deadSID),
 		GoBuild:     "go-build-held",

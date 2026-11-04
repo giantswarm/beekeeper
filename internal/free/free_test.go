@@ -67,7 +67,12 @@ func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 
 func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 	t.Helper()
-	tmp := t.TempDir()
+	// Synthetic held paths must have the resolved spelling returned by /proc,
+	// even when the test runner's TMPDIR itself contains a symlink.
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := &bytes.Buffer{}
 	r := &Run{
 		Options: o,
