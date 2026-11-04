@@ -8,17 +8,18 @@ import (
 )
 
 func TestSessionDirsStayInsideScratch(t *testing.T) {
-	for _, link := range []string{"project", "session"} {
+	const sessionLink = "session"
+	for _, link := range []string{"project", sessionLink} {
 		t.Run(link, func(t *testing.T) {
 			r, out := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
 			outside := t.TempDir()
 			rel := filepath.Join(deadSID, "scratchpad", "keep")
-			if link == "session" {
+			if link == sessionLink {
 				rel = filepath.Join("scratchpad", "keep")
 			}
 			fixture(t, outside, rel, 1, 5*time.Hour)
 			path := filepath.Join(r.Scratch, "-outside")
-			if link == "session" {
+			if link == sessionLink {
 				path = filepath.Join(path, deadSID)
 			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
