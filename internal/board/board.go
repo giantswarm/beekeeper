@@ -43,6 +43,8 @@ type Item struct {
 	Blockers      int      `json:"blockers,omitempty"`
 	OpenBlockers  int      `json:"openBlockers,omitempty"`
 	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
+	// BlockerDetails names blockers and their linked unmerged pull requests.
+	BlockerDetails []string `json:"blockerDetails,omitempty"`
 	// StatusSet is when its Status was last set, BlockersClosed when the
 	// last of its recorded blockers closed; zero when unknown.
 	StatusSet      time.Time `json:"statusSet,omitzero"`
