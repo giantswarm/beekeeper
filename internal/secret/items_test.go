@@ -14,6 +14,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+const itemsCredential = "credential"
+
+const itemsCreate = "create"
+
+const itemsPasswordKind = "PASSWORD"
+
+const itemsUsername = "username"
+
 // The listing answers titles and field labels with their lengths, never a
 // value, also in its JSON form.
 func TestItemsAnswerTitlesFieldsAndLengthsOnly(t *testing.T) {
@@ -43,7 +51,7 @@ func TestItemsAnswerTitlesFieldsAndLengthsOnly(t *testing.T) {
 	for _, f := range got[0].Fields {
 		lengths[f.Label] = f.Length
 	}
-	if lengths["credential"] != len(password) || lengths["username"] != 3 {
+	if lengths[itemsCredential] != len(password) || lengths[itemsUsername] != 3 {
 		t.Errorf("field lengths = %v", lengths)
 	}
 	raw, err := json.Marshal(got)
@@ -114,8 +122,8 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 	const base = "op://Shared/widget/"
 	values := map[string]string{
 		"first/notes": "FIRST=one\n", "second/notes": "SECOND=two\n",
-		"first/username": "CUSTOM=three\n", "username": "BUILTIN=four\n",
-		"notesPlain": "PLAIN=five\n", "credential": "original",
+		"first/username": "CUSTOM=three\n", itemsUsername: "BUILTIN=four\n",
+		"notesPlain": "PLAIN=five\n", itemsCredential: "original",
 	}
 	tools := secrettest.New(nil)
 	tools.Types = map[string]string{}
@@ -123,10 +131,10 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 	wantKeys := map[string]secret.EnvKey{}
 	for name, value := range values {
 		typ, purpose := "STRING", ""
-		if name == "credential" {
+		if name == itemsCredential {
 			typ = concealedType
 		}
-		if name == "username" {
+		if name == itemsUsername {
 			purpose = "USERNAME"
 		}
 		if name == "notesPlain" {
@@ -174,13 +182,13 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 		}
 	}
 	check()
-	if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: "credential", Value: "updated"}}); err != nil {
+	if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: itemsCredential, Value: "updated"}}); err != nil {
 		t.Fatal(err)
 	}
-	values["credential"] = "updated"
-	f := wantFields["credential"]
-	f.Length = len(values["credential"])
-	wantFields["credential"] = f
+	values[itemsCredential] = "updated"
+	f := wantFields[itemsCredential]
+	f.Length = len(values[itemsCredential])
+	wantFields[itemsCredential] = f
 	if len(tools.Vault) != len(values) || len(tools.Types) != len(values) {
 		t.Errorf("edit changed field references: values=%v types=%v", tools.Vault, tools.Types)
 	}
@@ -197,16 +205,16 @@ func TestItemsMatchCategoryAfterCreateAndEdit(t *testing.T) {
 	tools := secrettest.New(nil)
 	o := ops(tools)
 	ctx := context.Background()
-	for _, phase := range []string{"create", "edit"} {
+	for _, phase := range []string{itemsCreate, "edit"} {
 		t.Run(phase, func(t *testing.T) {
-			if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: "credential", Value: "synthetic-" + phase}}); err != nil {
+			if _, err := o.StoreFields(ctx, shared, "widget", []secret.ItemField{{Label: itemsCredential, Value: "synthetic-" + phase}}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := o.Items(ctx, shared, secret.ItemsOptions{Match: "password", Fields: true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 1 || got[0].Title != "widget" || got[0].Category != "PASSWORD" {
+			if len(got) != 1 || got[0].Title != "widget" || got[0].Category != itemsPasswordKind {
 				t.Fatalf("matched items = %+v, want widget with category PASSWORD", got)
 			}
 			raw, err := tools.Run(ctx, "", []string{"OP_SERVICE_ACCOUNT_TOKEN=" + saToken}, nil, "op", "item", "get", got[0].ID, "--vault", shared, "--format", "json")
@@ -217,7 +225,7 @@ func TestItemsMatchCategoryAfterCreateAndEdit(t *testing.T) {
 			if err := json.Unmarshal(raw, &item); err != nil {
 				t.Fatal(err)
 			}
-			if item.Category != "PASSWORD" {
+			if item.Category != itemsPasswordKind {
 				t.Fatalf("read category = %q, want PASSWORD", item.Category)
 			}
 			if tools.Vault["op://"+shared+"/widget/credential"] != "synthetic-"+phase {

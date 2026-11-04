@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+const trustCertHost = "cert.invalid:22"
+
 func syntheticSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
@@ -130,15 +132,15 @@ func TestParseablePreservesCertificateAuthority(t *testing.T) {
 	authority := "@cert-authority " + knownhosts.Line([]string{"cert.invalid"}, ca.PublicKey())
 	t.Run("authority", func(t *testing.T) {
 		checkFilteredTrust(t, []string{authority}, nil, []trustDecision{
-			{name: "signed certificate", host: "cert.invalid:22", key: valid, allow: true},
-			{name: "wrong principal", host: "cert.invalid:22", key: wrongPrincipal},
-			{name: "unknown signer", host: "cert.invalid:22", key: unknownSigner},
+			{name: "signed certificate", host: trustCertHost, key: valid, allow: true},
+			{name: "wrong principal", host: trustCertHost, key: wrongPrincipal},
+			{name: "unknown signer", host: trustCertHost, key: unknownSigner},
 			{name: "outside authority scope", host: "other.invalid:22", key: wrongPrincipal},
 		})
 	})
 	t.Run("revoked authority in second source", func(t *testing.T) {
 		checkFilteredTrust(t, []string{authority}, []string{"@revoked " + knownhosts.Line([]string{"*"}, ca.PublicKey())}, []trustDecision{
-			{name: "revoked certificate authority", host: "cert.invalid:22", key: valid},
+			{name: "revoked certificate authority", host: trustCertHost, key: valid},
 		})
 	})
 }
