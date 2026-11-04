@@ -57,7 +57,19 @@ func parseDocument(raw []byte) (*document, error) {
 	if n.Kind != yaml.MappingNode {
 		return nil, errors.New("no YAML mapping")
 	}
-	return &document{root: n}, nil
+	d := &document{root: n}
+	seen := map[string]bool{}
+	var ambiguous string
+	d.walkLeaves(func(path, _ string) {
+		if seen[path] {
+			ambiguous = path
+		}
+		seen[path] = true
+	})
+	if ambiguous != "" {
+		return nil, fmt.Errorf("ambiguous dotted path %q: literal dotted keys and nested keys overlap", ambiguous)
+	}
+	return d, nil
 }
 
 // topKeys are the mapping's keys in their order.
@@ -90,6 +102,12 @@ func (d *document) encode() ([]byte, error) {
 // leaves maps the dotted path of every scalar to its value.
 func (d *document) leaves() map[string]string {
 	out := map[string]string{}
+	d.walkLeaves(func(path, value string) { out[path] = value })
+	return out
+}
+
+// walkLeaves visits every scalar, including paths that have the same spelling.
+func (d *document) walkLeaves(visit func(path, value string)) {
 	var walk func(n *yaml.Node, path string)
 	walk = func(n *yaml.Node, path string) {
 		join := func(k string) string {
@@ -100,7 +118,7 @@ func (d *document) leaves() map[string]string {
 		}
 		switch n.Kind {
 		case yaml.ScalarNode:
-			out[path] = n.Value
+			visit(path, n.Value)
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				walk(n.Content[i+1], join(n.Content[i].Value))
@@ -114,7 +132,6 @@ func (d *document) leaves() map[string]string {
 		}
 	}
 	walk(d.root, "")
-	return out
 }
 
 // get is the scalar at a dotted path.
