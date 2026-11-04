@@ -592,6 +592,7 @@ func TestKeepOutput(t *testing.T) {
 	if err := os.WriteFile(base+".log", []byte("not found error\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	writeRunInfo(base, runInfo{Command: "devctl pr merge o/r 7 --rebase"})
 	old := filepath.Join(dir, keptOutputs, "old.log")
 	if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
 		t.Fatal(err)
@@ -607,6 +608,9 @@ func TestKeepOutput(t *testing.T) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's file
 	if err != nil || !strings.Contains(string(raw), "not found error") || !strings.Contains(string(raw), `"exitCode":7`) {
 		t.Fatalf("kept %q: %q, %v", path, raw, err)
+	}
+	if !strings.HasPrefix(string(raw), "devctl pr merge o/r 7 --rebase\n") {
+		t.Fatalf("kept output missing command as first line: %q", raw)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Errorf("the old output is not pruned: %v", err)
@@ -1105,7 +1109,7 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	want := "requested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
+	want := "devctl pr merge o/r 42\nrequested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
 	if !strings.HasPrefix(got, want) {
 		t.Fatalf("kept output missing requester header:\ngot:\n%s\nwant prefix:\n%s", got, want)
 	}
