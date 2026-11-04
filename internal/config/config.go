@@ -3398,6 +3398,7 @@ func (c *Config) defaults() error {
 	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
 	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
+	c.Serve.Gateway.TokenFile = homePath(home, c.Serve.Gateway.TokenFile)
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
 	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
@@ -3457,6 +3458,7 @@ func (c *Config) defaults() error {
 		c.Apps.Secrets[in] = s
 	}
 	c.Sandbox.defaults(home)
+	c.Run.Remote.Kubeconfig = homePath(home, c.Run.Remote.Kubeconfig)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}
@@ -3531,6 +3533,8 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	c.Omp.SessionsDir = homePath(home, c.Omp.SessionsDir)
+	c.Omp.ModelsFile = homePath(home, c.Omp.ModelsFile)
 	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
 	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
 	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
