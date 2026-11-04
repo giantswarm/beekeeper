@@ -411,3 +411,46 @@ func TestExecutionSyncSkipsUnsentReservation(t *testing.T) {
 		t.Fatal("host sync contacted the host about an unsent reservation or released it inside its window")
 	}
 }
+
+// Force admits the coordinator reservation but does not override the host's
+// own capacity limits. Explain that boundary before sending preparation and
+// release the reservation when the host confirms that no execution exists.
+func TestExecutionForcedRemoteCapacityRefusalReleasesReservation(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	const block = "1m load 53 over 14"
+	probe := a.executionProbe
+	a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
+		caps, err := probe(ctx, h)
+		caps.Resources.Blocks = []string{block}
+		return caps, err
+	}
+	sends := 0
+	a.executionTransport = func(execution.Host) execution.Transport {
+		return &testExecutionTransport{inspect: notFound, start: func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+			sends++
+			if !strings.Contains(fmt.Sprint(a.out), "--force overrides coordinator capacity only") || !strings.Contains(fmt.Sprint(a.out), "load, disk, build slots (with --builds) and maxBusy") {
+				t.Fatal("remote preparation preceded explanation of force limits")
+			}
+			st, err := a.store.Read()
+			if err != nil || executionHostBusy(st, r.Ref.Host) != 1 {
+				t.Fatal("forced start did not reserve coordinator capacity before preparation")
+			}
+			return execution.Handle{}, errors.New("execution host has no room: " + block)
+		}}
+	}
+	out, err := runAgents(a, agentStartName, "--name", "remote-worker", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel, "--force")
+	if err == nil || !strings.Contains(err.Error(), block) || !strings.Contains(err.Error(), "reservation is released") || sends != 1 {
+		t.Fatalf("forced refusal: sends=%d, output=%s, error=%v", sends, out, err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Starts) != 1 || st.Starts[0].Execution == nil {
+		t.Fatal("forced refusal lost its execution history")
+	}
+	rec := st.Starts[0].Execution
+	if !rec.Released() || !rec.Terminal() || executionHostBusy(st, rec.Handle.Ref.Host) != 0 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 0 || len(st.Agents) != 0 || len(st.Records) != 0 {
+		t.Fatal("remote capacity refusal kept a reservation, worker, host or desk slot")
+	}
+}
