@@ -341,17 +341,29 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
+	stdoutPipe, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	stderrPipe, err := cmd.StderrPipe()
+	defer func() { _ = stdoutPipe.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
+	stderrPipe, stderrWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	defer func() { _ = stderrPipe.Close() }()
+	defer func() { _ = stderrWriter.Close() }()
+	// Own the output pipes so Wait can reap agy without closing readers
+	// before their final output has been drained.
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
 
 	var (
 		quotaMu   sync.Mutex
@@ -483,8 +495,8 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		busy = true
 	}
 
-	// drain waits for both readers to reach EOF before cmd.Wait closes
-	// their pipes, so no line agy wrote last (its AGY_ERROR) is lost. Only
+	// drain waits for both readers to reach EOF so no line agy wrote last
+	// (its AGY_ERROR) is lost. Only
 	// a descendant holding a pipe open past drainWait gets it closed under
 	// its reader.
 	drain := func(events <-chan streamEvent, stderrDone <-chan struct{}) {
@@ -513,30 +525,39 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		}
 	}
 
+	finish := func(events <-chan streamEvent, waitErr *error) error {
+		_ = fifo.Close()
+		_ = stdinPipe.Close()
+		drain(events, stderrDone)
+		var err error
+		if waitErr != nil {
+			err = *waitErr
+		} else {
+			err = <-waitCh
+		}
+		if qerr := getQuotaErr(); qerr != nil {
+			_ = WriteQuotaError(inbox, qerr)
+			return qerr
+		}
+		return err
+	}
+
 	for {
 		select {
+		case err := <-waitCh:
+			return finish(events, &err)
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			return finish(events, nil)
 		case <-quotaCh:
 			_ = stdinPipe.Close()
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
-			drain(events, stderrDone)
-			_ = cmd.Wait()
-			_ = fifo.Close()
-			qerr := getQuotaErr()
-			_ = WriteQuotaError(inbox, qerr)
-			return qerr
+			return finish(events, nil)
 		case ev, ok := <-events:
 			if !ok {
-				_ = stdinPipe.Close()
-				drain(nil, stderrDone)
-				err := cmd.Wait()
-				_ = fifo.Close()
-				if qerr := getQuotaErr(); qerr != nil {
-					_ = WriteQuotaError(inbox, qerr)
-					return qerr
-				}
-				return err
+				return finish(nil, nil)
 			}
 			switch ev.Event {
 			case eventInit:

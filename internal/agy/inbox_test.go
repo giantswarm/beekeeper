@@ -658,3 +658,89 @@ func testRunQuota429(t *testing.T, mode string) {
 		t.Fatalf("ReadQuotaError after RemoveInbox = %+v, want nil", got)
 	}
 }
+
+// A descendant retains both output pipes until cleanup explicitly releases it.
+func TestRunBoundsInheritedOutput(t *testing.T) {
+	for _, mode := range []string{"exit", "failure", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			release := filepath.Join(dir, "release")
+			if err := MakeInbox(release); err != nil {
+				t.Fatal(err)
+			}
+			gate, err := os.OpenFile(release, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = gate.Close() }()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			inbox := InboxPath(dir, "inherited-output")
+			logPath := StreamPath(dir, "inherited-output")
+			ready := filepath.Join(dir, "ready")
+			done := filepath.Join(dir, "done")
+			script := `
+(read -r line < "$1"; echo released > "$3") &
+echo '{"event":"result"}'
+echo 'final stderr' >&2
+echo ready > "$2"
+case "$4" in
+cancel) read -r line ;;
+failure) exit 23 ;;
+esac
+`
+			errCh := make(chan error, 1)
+			var stderr bytes.Buffer
+			go func() {
+				errCh <- Run(ctx, inbox, logPath, []string{"sh", "-c", script, "fixture", release, ready, done, mode}, &stderr)
+			}()
+			// Always release the descendant, including when the regression fails.
+			defer func() {
+				cancel()
+				_, _ = gate.Write([]byte("release\n"))
+				deadline := time.Now().Add(3 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, err := os.Stat(done); err == nil {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				t.Error("fixture descendant did not finish")
+			}()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("fixture did not become ready")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if mode == "cancel" {
+				cancel()
+			}
+			select {
+			case err := <-errCh:
+				if (mode == "exit") != (err == nil) {
+					t.Errorf("Run error = %v, mode %s", err, mode)
+				}
+			case <-time.After(drainWait + 2*time.Second):
+				// Release before waiting, so a broken runner cannot leak into later tests.
+				_, _ = gate.Write([]byte("release\n"))
+				<-errCh
+				t.Fatal("Run exceeded output drain allowance")
+			}
+			if err := Send(inbox, "late wake"); !errors.Is(err, ErrNotRunning) {
+				t.Errorf("Send after Run = %v, want ErrNotRunning", err)
+			}
+			output, err := os.ReadFile(logPath)
+			if err != nil || !bytes.Contains(output, []byte(`{"event":"result"}`)) {
+				t.Errorf("final stdout = %q, %v", output, err)
+			}
+			if !strings.Contains(stderr.String(), "final stderr") {
+				t.Errorf("final stderr = %q", stderr.String())
+			}
+		})
+	}
+}
