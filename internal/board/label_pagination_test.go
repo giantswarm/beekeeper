@@ -89,7 +89,7 @@ func TestLabelContinuationReportsUnreadLabels(t *testing.T) {
 				}
 				return []byte(`{"data":{"repository":{"issue":{"labels":null}}},"errors":[{"path":["repository","issue","labels"],"message":"unread labels"}]}`), nil
 			}}
-			snap := &Snapshot{Items: []Item{{Ref: ref1, labelsMore: true, labelsCursor: "next"}}}
+			snap := &Snapshot{Items: []Item{{Ref: ref1, labelsMore: true, labelsCursor: "labels-continuation"}}}
 			err := c.readLabels(t.Context(), snap)
 			if err == nil || canceled && !errors.Is(err, context.Canceled) {
 				t.Fatalf("unread continuation: %v", err)
