@@ -78,6 +78,47 @@ func TestWorkerRulesBudget(t *testing.T) {
 	}
 }
 
+// Keep room for new worker reminders without increasing the topic budget.
+func TestGitHubSkillHeadroom(t *testing.T) {
+	const budget, headroom = 1890, 150
+	if n := len(SkillFile("github")); n > budget-headroom {
+		t.Errorf("github skill: %d bytes, want at least %d bytes free under %d", n, headroom, budget)
+	}
+}
+
+func TestGitHubSkillPersonalAccountGraphQL(t *testing.T) {
+	if !strings.Contains(Skill("github"), "**Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`") {
+		t.Error("the github skill must name GH_REPO for personal-account GraphQL")
+	}
+}
+
+// The on-demand reference must ship with the skill and retain its guidance.
+func TestGitHubSkillBrowserAndSecurityReference(t *testing.T) {
+	const reference = "references/browser-and-security.md"
+	if !strings.Contains(Skill("github"), "before either, read ["+reference+"]("+reference+")") {
+		t.Fatal("the github skill must load the reference before browser or Dependabot work")
+	}
+	raw, err := Skills.ReadFile(SkillsDir + "/github/" + reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	for _, want := range []string{
+		"before/after remediation, `beekeeper security alert <owner/repo> <number>`",
+		"Unreadable or dismissed is not fixed",
+		"App: Dependabot alerts read, accepted on installation",
+		"No personal scopes or security-scan bypass",
+		"headless: CLI Claude in Chrome tools; desktop: `beekeeper browse",
+		"Never wait on site approval",
+		"Own App grants: `beekeeper app allow` first; refusals are barriers",
+		"Sign-in: `muster auth login --no-browser`, the printed URL in a browse step",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("github reference lacks %q", want)
+		}
+	}
+}
+
 // An over-budget text fails naming its file, its size and the budget.
 func TestOverBudgetNamesFileSizeAndBudget(t *testing.T) {
 	const want = "skills/worker-rules/SKILL.md (the worker rules): 2,731 bytes, budget 2,700 (1,000 tokens at 2.7 bytes per token)"
