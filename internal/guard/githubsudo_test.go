@@ -4,12 +4,12 @@ import "testing"
 
 func TestGitHubSudoBarrier(t *testing.T) {
 	for _, tc := range []struct{ path, title, want string }{
-		{"/organizations/example/settings/apps/demo", "Confirm access", "token_expiry,device_flow,callback_urls"},
+		{"/organizations/example/settings/apps/demo", sudoTitle, "token_expiry,device_flow,callback_urls"},
 		{"/organizations/example/settings/apps/demo/permissions", "Confirm access · GitHub", "permissions"},
-		{"/organizations/example/settings/installations/123", "Confirm access", "repository_selection"},
-		{"/sessions/sudo", "Confirm access", "access_confirmation"},
+		{"/organizations/example/settings/installations/123", sudoTitle, "repository_selection"},
+		{"/sessions/sudo", sudoTitle, "access_confirmation"},
 		{"/organizations/example/settings/apps/demo", "App settings", ""},
-		{"/organizations/example/settings/installations", "Confirm access", ""},
+		{"/organizations/example/settings/installations", sudoTitle, ""},
 	} {
 		t.Run(tc.path+tc.title, func(t *testing.T) {
 			want := tc.want

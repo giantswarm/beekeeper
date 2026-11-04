@@ -7,10 +7,12 @@ import (
 )
 
 // GitHubSudoBarrier identifies metadata hidden by GitHub's access confirmation.
+const sudoPermissions = "permissions"
+
 // It deliberately includes no URL, account, App name, or challenge value.
 func GitHubSudoBarrier(page Page) string {
 	u, err := url.Parse(page.URL)
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, githubHost) ||
+	if err != nil || u.Scheme != executionHTTPS || !strings.EqualFold(u.Host, githubHost) ||
 		!strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(page.Title, " · GitHub")), "Confirm access") {
 		return ""
 	}
@@ -22,8 +24,8 @@ func GitHubSudoBarrier(page Page) string {
 			setting = "repository_selection"
 		case p[3] == "apps" && len(p) == 5:
 			setting = "token_expiry,device_flow,callback_urls"
-		case p[3] == "apps" && len(p) == 6 && p[5] == "permissions":
-			setting = "permissions"
+		case p[3] == "apps" && len(p) == 6 && p[5] == sudoPermissions:
+			setting = sudoPermissions
 		}
 	}
 	// GitHub can redirect to its sudo endpoint instead of keeping the target URL.

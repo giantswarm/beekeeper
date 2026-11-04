@@ -9,6 +9,14 @@ import (
 	"testing"
 )
 
+const (
+	sudoKeyType    = "type"
+	sudoKeyMessage = "message"
+	sudoKeyContent = "content"
+	sudoKeyName    = "name"
+	sudoRoleUser   = "user"
+)
+
 func TestBrowseSudoFindings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "turn.jsonl")
 	var transcript strings.Builder
@@ -21,11 +29,11 @@ func TestBrowseSudoFindings(t *testing.T) {
 		transcript.WriteByte('\n')
 	}
 	// The browser's tab metadata, rather than the agent's report, identifies the barrier.
-	write(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": "tabs", "name": chromeToolPrefix + "tabs_context_mcp", "input": map[string]any{}}}}})
+	write(map[string]any{sudoKeyType: "assistant", sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_use", "id": "tabs", sudoKeyName: chromeToolPrefix + "tabs_context_mcp", "input": map[string]any{}}}}})
 	tabs := `{"availableTabs":[{"tabId":7,"title":"Confirm access","url":"https://github.com/organizations/example/settings/apps/demo"}]}`
-	write(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "tabs", "content": tabs}}}})
+	write(map[string]any{sudoKeyType: sudoRoleUser, sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_result", "tool_use_id": "tabs", sudoKeyContent: tabs}}}})
 	// A later page on the same tab must not erase evidence of the barrier.
-	write(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "tabs", "content": strings.ReplaceAll(tabs, "Confirm access", "Other page")}}}})
+	write(map[string]any{sudoKeyType: sudoRoleUser, sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_result", "tool_use_id": "tabs", sudoKeyContent: strings.ReplaceAll(tabs, "Confirm access", "Other page")}}}})
 	if err := os.WriteFile(path, []byte(transcript.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
