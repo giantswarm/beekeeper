@@ -640,6 +640,38 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
+	// Validation and branch-update waits can outlive the review that admitted
+	// this run. Refresh authority after all checks, immediately before the
+	// mutation; --match-head-commit alone cannot detect a withdrawn approval.
+	p, err = readLoopPull(ctx, ref)
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if p.State != superloop.Open || p.Head != merging || !p.Green {
+		doc.ExitCode, doc.Reason = github.SquashRefused, "merge head moved or current CI is not green"
+		return doc
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, merging); authErr != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
+		return doc
+	} else if why != "" {
+		doc.ExitCode, doc.Reason = github.SquashRefused, why
+		return doc
+	}
+	if st.Stop != nil {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonDeskStopped
+		return doc
+	}
+	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
+		return doc
+	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	// A merge queue retests the merge group when the base advances; --admin
 	// would bypass it. Without a queue the lane's own merge-result check
