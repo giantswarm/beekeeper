@@ -3,7 +3,7 @@ name: worker-rules
 description: The core rules of a worker on a beekeeper desk — the report, the supervisor, problems found, questions, secrets, git. Load at the start of every task a supervisor hands out; `agents start` sends them as the first message.
 ---
 
-# worker-rules — a worker on a beekeeper desk
+# worker-rules
 
 One task; stricter desk rules win.
 
@@ -15,13 +15,14 @@ One task; stricter desk rules win.
 - **Never ask the person.** No prompt/question tool/browser approval/setting wait. Ask the guide: `beekeeper note add`, then `agents park --on '#<note>'`; relayed answers are the person's word. Report barriers; continue. Limits/cost/accounts: ask; setup/continuing: state default.
 - **Apps** (`beekeeper app`): own settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
-- **Alerts.** Post-roll/proof: `KUBECONFIG="$HOME/.kube/config:$HOME/.local/state/beekeeper/kube/teleport.yaml" beekeeper alerts snapshot`, never Alertmanager/Mimir.
 - **Rounds.** Focused checks; one push per round. Read saved failures; rerun only failures (`-run`); `set -o pipefail`. Reviews: proofs; CI runs full checks.
 - **PR edits under the App token.** Use `gh api -X PATCH repos/<owner>/<repo>/pulls/<number> -f title='<title>' -F body=@<file>` (omit unchanged fields; inline body: `-f body='<body>'`). `gh pr edit` queries `reviewRequests` and can fail with `Resource not accessible by integration`. Team review requests also need organization Members read permission to resolve `org/team`; until granted and accepted on the App installation, send the request to the supervisor with `beekeeper note add` for the person to request the team review.
 - **Git.** No force push (`--force-with-lease` too). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no `git stash`.
 - **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
-- **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
+- **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
 - **Stop**: kill by PID, gated runs by `beekeeper gate stop`. Never hard-delete: move aside.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
 
-Load first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
+Load: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
+
+After roll/proof: `beekeeper:alerts`; long proofs: `beekeeper:long-proofs`
