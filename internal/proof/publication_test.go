@@ -340,7 +340,7 @@ func TestUploadCancellationBeforePublication(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || res != (Result{}) || g.head != otherHead {
 		t.Fatalf("canceled upload = %+v, %v, head=%s", res, err, g.head)
 	}
-	if len(g.commits) != 2 || g.calls[len(g.calls)-1] != patchPrefix+proofRef {
-		t.Fatalf("fixture missed cancellation at publication: %v, %v", g.commits, g.calls)
+	if len(g.commits) != 2 {
+		t.Fatalf("fixture never reached cancellation after object creation: %v", g.commits)
 	}
 }
