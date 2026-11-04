@@ -165,13 +165,35 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 
 	// 2. Standalone codex processes (user-started interactive/exec sessions, or
 	// tests that place a codex process directly in the process table).
+	// Reserve explicit thread matches before heuristics can assign those
+	// transcripts to a different process in the same working directory.
+	assigned := map[int]file{}
+	var unmatched []*proc.Process
+	for _, p := range standalone {
+		f, ok := byID[resumeThreadArg(p.Args)]
+		if !ok || taken[f.path] {
+			if env, err := proc.Environ(p.PID); err == nil {
+				if id := strings.TrimSpace(env[EnvAgent]); id != "" {
+					f, ok = byID[ReadThread(stateDir, InboxPath(stateDir, id))]
+				}
+			}
+		}
+		if ok && !taken[f.path] {
+			assigned[p.PID] = f
+			taken[f.path] = true
+		} else {
+			unmatched = append(unmatched, p)
+		}
+	}
 	var remainingFiles []file
 	for _, f := range files {
 		if !taken[f.path] {
 			remainingFiles = append(remainingFiles, f)
 		}
 	}
-	assigned := assign(remainingFiles, standalone, proc.Cwd)
+	for pid, f := range assign(remainingFiles, unmatched, proc.Cwd) {
+		assigned[pid] = f
+	}
 	for _, p := range standalone {
 		cwd := proc.Cwd(p.PID)
 		s := &claude.Session{
@@ -189,23 +211,7 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 			}
 			s.Name = envName
 		}
-		var matched file
-		var hasFile bool
-		if tid := resumeThreadArg(p.Args); tid != "" {
-			if f, ok := byID[tid]; ok && !taken[f.path] {
-				matched, hasFile = f, true
-			}
-		}
-		if !hasFile && agentID != "" {
-			if tid := ReadThread(stateDir, InboxPath(stateDir, agentID)); tid != "" {
-				if f, ok := byID[tid]; ok && !taken[f.path] {
-					matched, hasFile = f, true
-				}
-			}
-		}
-		if !hasFile {
-			matched, hasFile = assigned[p.PID]
-		}
+		matched, hasFile := assigned[p.PID]
 		if hasFile {
 			taken[matched.path] = true
 			fillFromFile(s, matched.path, true)
