@@ -51,17 +51,24 @@ func TestNested(t *testing.T) {
 // A tool command belongs to its nearest session CLI, including a worker
 // the daemon handed its spare. The daemon and terminal host are no owners.
 func TestOwnCLI(t *testing.T) {
+	var (
+		daemon  = []string{cliComm, "daemon"}
+		ptyHost = []string{cliComm + " bg-pty-host"}
+		spare   = []string{cliComm + " bg-spare"}
+		shell   = []string{"bash"}
+		caller  = []string{"beekeeper"}
+	)
 	for _, tc := range []struct {
 		name string
 		argv [][]string
 		want int
 	}{
-		{"case 0: desktop session", [][]string{{desktopEntrypoint}, {cliComm}, {"bash"}, {"beekeeper"}}, 2},
-		{"case 1: worker in a spare", [][]string{{cliComm, "daemon"}, {cliComm + " bg-pty-host"}, {cliComm + " bg-spare"}, {"bash"}, {"beekeeper"}}, 3},
-		{"case 2: spare before retitling", [][]string{{cliComm, "daemon"}, {cliComm, "--bg-spare", "s"}, {"bash"}, {"beekeeper"}}, 2},
-		{"case 3: nested session inside a spare", [][]string{{cliComm + " bg-spare"}, {"bash"}, {cliComm, "-p", "task"}, {"bash"}, {"beekeeper"}}, 3},
-		{"case 4: helper processes only", [][]string{{cliComm, "daemon"}, {cliComm + " bg-pty-host"}, {"bash"}, {"beekeeper"}}, 0},
-		{"case 5: no session", [][]string{{"bash"}, {"beekeeper"}}, 0},
+		{"case 0: desktop session", [][]string{{desktopEntrypoint}, {cliComm}, shell, caller}, 2},
+		{"case 1: worker in a spare", [][]string{daemon, ptyHost, spare, shell, caller}, 3},
+		{"case 2: spare before retitling", [][]string{daemon, {cliComm, "--bg-spare", "s"}, shell, caller}, 2},
+		{"case 3: nested session inside a spare", [][]string{spare, shell, {cliComm, "-p", "task"}, shell, caller}, 3},
+		{"case 4: helper processes only", [][]string{daemon, ptyHost, shell, caller}, 0},
+		{"case 5: no session", [][]string{shell, caller}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tab := chain(tc.argv...)
