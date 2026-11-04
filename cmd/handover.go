@@ -254,6 +254,7 @@ func eventText(a *app, e state.Event) string {
 func isRun(e state.Event) bool { return strings.HasPrefix(e.Verb, "run.") }
 
 func (a *app) logCmd() *cobra.Command {
+	var short bool
 	var n int
 	var verb, since, until string
 	c := &cobra.Command{
@@ -268,7 +269,10 @@ for the state lock rather than give up on a busy one.
 
 --since and --until bound the window (--until: before then); a bare date
 (2026-10-08) is that day's 00:00 local time. Without either, -n shows the
-latest 50 events; with one, every event in the window unless -n is given too.`,
+latest 50 events; with one, every event in the window unless -n is given too.
+
+Plain output prints full details on indented lines. Use --short for a compact
+single line per event with truncated details.`,
 		Example: `  beekeeper log --verb agents.problem --since 19:06
   beekeeper log --since 2026-10-08 --until 2026-10-09 --json   # the whole of October 8`,
 		Args: cobra.NoArgs,
@@ -304,13 +308,20 @@ latest 50 events; with one, every event in the window unless -n is given too.`,
 			if a.json {
 				return a.printJSON(evs)
 			}
+			if !short {
+				for _, e := range evs {
+					_, _ = fmt.Fprintf(a.out, "%s %s (%s):\n  %s\n", clock(a.now, e.At), e.Verb, e.By.Name, strings.ReplaceAll(e.Detail, "\n", "\n  "))
+				}
+				return nil
+			}
 			w := a.table()
 			for _, e := range evs {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", clock(a.now, e.At), e.Verb, truncate(e.By.Name, 30), truncate(e.Detail, 100))
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", clock(a.now, e.At), oneLine(e.Verb), truncate(e.By.Name, 30), truncate(e.Detail, 100))
 			}
 			return w.Flush()
 		},
 	}
+	c.Flags().BoolVar(&short, "short", false, "one line per event with truncated details")
 	c.Flags().IntVarP(&n, "lines", "n", 50, "how many of the latest events (0: all; default all with --since or --until)")
 	c.Flags().StringVar(&verb, "verb", "", "only the events whose verb starts with this (run.: the build runs)")
 	c.Flags().StringVar(&since, "since", "", "only the events from this on: a duration before --until (1h, 30d), a time (15:04), a date (2006-01-02: its 00:00) or RFC 3339")

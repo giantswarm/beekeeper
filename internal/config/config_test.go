@@ -516,6 +516,9 @@ func TestExampleConfig(t *testing.T) {
 		c.Shell != "zsh" || c.KindClusters(1<<30) != 2 || c.MemcapMax(1<<30) != "12G" {
 		t.Errorf("kube %+v, shell %q, kind %d, memcap %s", c.Kube, c.Shell, c.KindClusters(1<<30), c.MemcapMax(1<<30))
 	}
+	if got := strings.Join(c.Kube.ProtectedContexts, ","); got != "full-test,full-test-operations" {
+		t.Errorf("protected contexts = %q", got)
+	}
 	w := c.Watch
 	for got, want := range map[int]int{w.AvailMin(1): 10240, w.SwapMax(1): 10000, w.OOMDHeadroomMin(1): 1024,
 		w.ScopeAnonMax(1): 28000, w.GTTMax(1): 24576, w.TmpMax(1): 20000, w.DiskMin(1): 102400} {

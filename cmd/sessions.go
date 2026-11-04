@@ -664,7 +664,7 @@ func servedBy(st *state.State, p state.Party) state.Party {
 func rosterRole(st *state.State, me state.Party) string {
 	switch {
 	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
-		return "the guide"
+		return guideRoleAlias
 	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
 		return workerRole
 	}

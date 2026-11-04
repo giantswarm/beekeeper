@@ -28,7 +28,7 @@ var (
 func parkedState(ref string) (*state.State, []*claude.Session) {
 	st := &state.State{
 		Agents: []state.Agent{
-			{Party: parkedWorker, Task: "fix " + ref, Park: &state.Park{By: parkedWorker, On: "#12", Waits: "the person's answer"}},
+			{Party: parkedWorker, Task: "fix " + ref, Park: &state.Park{By: parkedWorker, On: "#12", Waits: litThePersonSAnswer}},
 			{Party: activeWorker, Task: "fix example/tool#7"},
 		},
 		Records: []state.Record{
