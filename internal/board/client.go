@@ -361,8 +361,7 @@ func filterOf(who string, order []config.BoardStep, extra ...string) string {
 	return strings.Join(parts, " ")
 }
 
-// Read reads all open board items of the team, including ancestors no step
-// offers whose Status or blockers can hold a candidate,
+// Read reads the board items the order can offer and the epic gate holds,
 // the open sub-issues of the items a SubIssues step matches, the search
 // steps' issues, and the plans of the epics the gate watches: one request
 // for the fields, one per 100 items, one per extrasBudget sub-issues for the
@@ -384,7 +383,7 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 		return nil, err
 	}
 	snap := &Snapshot{Order: order, Statuses: m.Fields[StatusField].names(), Search: map[int][]Item{}, Gate: gate}
-	if snap.Items, err = c.items(ctx, filter(c.Board, nil)); err != nil {
+	if snap.Items, err = c.items(ctx, filter(c.Board, order, gate.statuses()...)); err != nil {
 		return nil, err
 	}
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {
