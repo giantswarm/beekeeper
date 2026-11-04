@@ -75,7 +75,7 @@ func TestOthersSplitsLiveAndStaleOfOtherDesks(t *testing.T) {
 	now := t0.Add(30 * time.Hour)
 	cs := []claim.Comment{
 		{ID: 5, Marker: claim.Marker{Desk: deskTwo, At: t0, Seen: now.Add(-time.Hour)}},
-		{ID: 3, Marker: claim.Marker{Desk: "three", At: t0, Seen: now.Add(-time.Hour)}},
+		{ID: 3, Marker: claim.Marker{Desk: deskThree, At: t0, Seen: now.Add(-time.Hour)}},
 		{ID: 4, Marker: claim.Marker{Desk: "four", At: t0}}, // 30h unrefreshed
 		{ID: 6, Marker: claim.Marker{Desk: "five", At: t0, Seen: now, Released: now}},
 		{ID: 2, Marker: claim.Marker{Desk: "ONE", At: t0, Seen: now}},

@@ -15,6 +15,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const execArg = "exec"
+
+const beekeeperArg = "beekeeper"
+
+const codexRunArg = "codex-run"
+
 func TestMergeConfigTOML(t *testing.T) {
 	// User config has top-level keys and [features]/[mcp_servers] both before
 	// and after [projects.*] sections.
@@ -264,8 +270,8 @@ func TestDiscoverReservesExplicitThreads(t *testing.T) {
 				if err := os.Chtimes(path, now, now); err != nil {
 					t.Fatal(err)
 				}
-				explicit := &proc.Process{PID: -100, PPID: 1, Comm: Comm, Args: []string{Comm, "exec", "resume", "resumed-thread", "-"}, Start: now.Add(-time.Minute)}
-				fresh := &proc.Process{PID: -101, PPID: 1, Comm: Comm, Args: []string{Comm, "exec", "-"}, Start: now.Add(-30 * time.Second)}
+				explicit := &proc.Process{PID: -100, PPID: 1, Comm: Comm, Args: []string{Comm, execArg, "resume", "resumed-thread", "-"}, Start: now.Add(-time.Minute)}
+				fresh := &proc.Process{PID: -101, PPID: 1, Comm: Comm, Args: []string{Comm, execArg, "-"}, Start: now.Add(-30 * time.Second)}
 				if explicitNewer {
 					explicit.Start, fresh.Start = fresh.Start, explicit.Start
 				}
@@ -274,12 +280,12 @@ func TestDiscoverReservesExplicitThreads(t *testing.T) {
 					if err := RecordThread(stateDir, inbox, "resumed-thread"); err != nil {
 						t.Fatal(err)
 					}
-					explicit.Comm = "beekeeper"
-					explicit.Args = []string{"beekeeper", "codex-run", inbox, LogPath(stateDir, "test-agent"), Comm, testModel}
+					explicit.Comm = beekeeperArg
+					explicit.Args = []string{beekeeperArg, codexRunArg, inbox, LogPath(stateDir, "test-agent"), Comm, testModel}
 				}
 				if source == "fresh-runner" {
-					fresh.Comm = "beekeeper"
-					fresh.Args = []string{"beekeeper", "codex-run", InboxPath(stateDir, "fresh-agent"), LogPath(stateDir, "fresh-agent"), Comm, testModel}
+					fresh.Comm = beekeeperArg
+					fresh.Args = []string{beekeeperArg, codexRunArg, InboxPath(stateDir, "fresh-agent"), LogPath(stateDir, "fresh-agent"), Comm, testModel}
 				}
 				sessions := Discover(stateDir, sessionsDir, proc.NewTable(explicit, fresh), now)
 				if len(sessions) != 2 {
@@ -320,15 +326,15 @@ func TestDiscoverAndEnded(t *testing.T) {
 	pRunner := &proc.Process{
 		PID:   100,
 		PPID:  1,
-		Comm:  "beekeeper",
-		Args:  []string{"beekeeper", "codex-run", inbox, LogPath(stateDir, agentID), Comm, testModel},
+		Comm:  beekeeperArg,
+		Args:  []string{beekeeperArg, codexRunArg, inbox, LogPath(stateDir, agentID), Comm, testModel},
 		Start: now.Add(-time.Minute),
 	}
 	pCodex := &proc.Process{
 		PID:   101,
 		PPID:  100,
 		Comm:  Comm,
-		Args:  []string{Comm, "exec", "--json", "-m", testModel, "-"},
+		Args:  []string{Comm, execArg, "--json", "-m", testModel, "-"},
 		Start: now.Add(-30 * time.Second),
 	}
 	pZsh := &proc.Process{

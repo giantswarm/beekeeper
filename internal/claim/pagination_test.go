@@ -32,13 +32,17 @@ type pagedDiscussion struct {
 	fail     func(context.Context) ([]byte, error)
 }
 
+const deskThree = "three"
+
+const malformedJSONMode = "malformed JSON"
+
 func newPagedDiscussion(t *testing.T) *pagedDiscussion {
 	t.Helper()
 	d := &pagedDiscussion{t: t}
 	for id := int64(1); id <= 205; id++ {
 		d.comments = append(d.comments, claimtest.Comment{ID: id, Body: "Ordinary discussion."})
 	}
-	for id, desk := range map[int]string{2: deskOne, 101: deskTwo, 205: "three"} {
+	for id, desk := range map[int]string{2: deskOne, 101: deskTwo, 205: deskThree} {
 		d.comments[id-1].Body = claim.Marker{Desk: desk, Session: "s", At: t0, Seen: t0}.Body()
 	}
 	return d
@@ -107,7 +111,7 @@ func assertDiscussionClaims(t *testing.T, cs []claim.Comment, released bool) {
 	want := []claim.Comment{
 		{ID: 2, Marker: claim.Marker{Desk: deskOne, Session: "s", At: t0, Seen: t0}},
 		{ID: 101, Marker: claim.Marker{Desk: deskTwo, Session: "s", At: t0, Seen: t0}},
-		{ID: 205, Marker: claim.Marker{Desk: "three", Session: "s", At: t0, Seen: t0}},
+		{ID: 205, Marker: claim.Marker{Desk: deskThree, Session: "s", At: t0, Seen: t0}},
 	}
 	if released {
 		want[1].Released = t0.Add(time.Hour)
@@ -145,7 +149,7 @@ func TestReadAllCommentPagesAndLaterRelease(t *testing.T) {
 
 func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 	failure := errors.New("continuation failed")
-	for _, mode := range []string{"failure", "malformed JSON", "cancellation"} {
+	for _, mode := range []string{"failure", malformedJSONMode, "cancellation"} {
 		t.Run(mode, func(t *testing.T) {
 			d := newPagedDiscussion(t)
 			cache := filepath.Join(t.TempDir(), "cache.json")
@@ -157,7 +161,7 @@ func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertDiscussionClaims(t, cs, false)
-			before, err := os.ReadFile(cache)
+			before, err := os.ReadFile(cache) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +171,7 @@ func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 			switch mode {
 			case "failure":
 				d.fail = func(context.Context) ([]byte, error) { return nil, failure }
-			case "malformed JSON":
+			case malformedJSONMode:
 				wantErr = nil
 				d.fail = func(context.Context) ([]byte, error) { return []byte("HTTP/2.0 200 OK\r\n\r\n[{"), nil }
 			case "cancellation":
@@ -181,7 +185,7 @@ func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 			if wantErr != nil && !errors.Is(err, wantErr) {
 				t.Fatalf("error = %v, want %v", err, wantErr)
 			}
-			if mode == "malformed JSON" {
+			if mode == malformedJSONMode {
 				var syntax *json.SyntaxError
 				if !errors.As(err, &syntax) {
 					t.Fatalf("error = %v, want a JSON syntax error", err)
@@ -190,7 +194,7 @@ func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 			if !strings.Contains(err.Error(), issue) {
 				t.Fatalf("error lacks issue identity: %v", err)
 			}
-			after, err := os.ReadFile(cache)
+			after, err := os.ReadFile(cache) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +212,7 @@ func TestReadLaterPageFailurePreservesCompleteCache(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertDiscussionClaims(t, cs, true)
-			recovered, err := os.ReadFile(cache)
+			recovered, err := os.ReadFile(cache) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}

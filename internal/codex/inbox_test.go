@@ -591,7 +591,7 @@ func TestQueueOperationsPreserveUnreadableQueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := QueuePath(inbox)
-			before, err := os.ReadFile(path)
+			before, err := os.ReadFile(path) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -599,7 +599,7 @@ func TestQueueOperationsPreserveUnreadableQueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = os.Chmod(path, 0o600) }()
-			if _, err := os.ReadFile(path); err == nil {
+			if _, err := os.ReadFile(path); err == nil { //nolint:gosec // a path of this test
 				t.Skip("environment permits reading files with mode 000")
 			} else if !errors.Is(err, os.ErrPermission) {
 				t.Fatal(err)
@@ -610,7 +610,7 @@ func TestQueueOperationsPreserveUnreadableQueue(t *testing.T) {
 			if err := os.Chmod(path, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			after, err := os.ReadFile(path)
+			after, err := os.ReadFile(path) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}

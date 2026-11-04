@@ -19,7 +19,7 @@ func TestBinaryLiteralEndpoint(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			bin, _ := Binary(t, endpoint, "synthetic-token")
-			out, err := exec.Command(bin, "context", "show", "lab", "-o", "json").CombinedOutput()
+			out, err := exec.Command(bin, "context", "show", "lab", "-o", "json").CombinedOutput() //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatalf("context show: %v: %s", err, out)
 			}
@@ -53,7 +53,7 @@ func TestBinaryQuotedTempDir(t *testing.T) {
 			if err := os.WriteFile(tokenFile, []byte(token), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command(bin, "auth", "token", "--context", "lab").CombinedOutput()
+			out, err := exec.Command(bin, "auth", "token", "--context", "lab").CombinedOutput() //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatalf("auth token: %v: %s", err, out)
 			}

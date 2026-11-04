@@ -36,14 +36,14 @@ func TestGitInfoOutsideCheckout(t *testing.T) {
 func TestGitInfoCheckout(t *testing.T) {
 	dir := t.TempDir()
 	gitdir := filepath.Join(dir, ".git")
-	if err := os.Mkdir(gitdir, 0o755); err != nil {
+	if err := os.Mkdir(gitdir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
 		"HEAD":   "ref: refs/heads/topic\n",
 		"config": "[remote \"origin\"]\nurl = owner/repo.git\n",
 	} {
-		if err := os.WriteFile(filepath.Join(gitdir, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(gitdir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

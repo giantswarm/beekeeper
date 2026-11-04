@@ -19,7 +19,7 @@ import (
 func TestClaimCacheClosesFailedWrites(t *testing.T) {
 	const child = "BEEKEEPER_TEST_FAILED_CACHE_WRITES"
 	if os.Getenv(child) != "1" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestClaimCacheClosesFailedWrites$", "-test.count=1")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestClaimCacheClosesFailedWrites$", "-test.count=1") //nolint:gosec // a path of this test
 		cmd.Env = append(os.Environ(), child+"=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("isolated cache test: %v\n%s", err, out)
@@ -99,7 +99,7 @@ func TestClaimCacheClosesFailedWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			if existing {
-				raw, err := os.ReadFile(cache)
+				raw, err := os.ReadFile(cache) //nolint:gosec // a path of this test
 				if err != nil || !bytes.Equal(raw, original) {
 					t.Fatalf("previous cache changed: %q, %v", raw, err)
 				}
