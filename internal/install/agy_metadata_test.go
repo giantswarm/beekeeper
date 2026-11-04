@@ -17,6 +17,10 @@ func TestAgyMetadataPreservesGuardState(t *testing.T) {
 		{"case 1: disabled guard", `"enabled":false,`, false},
 		{"case 2: default enabled guard", `"enabled":null,`, true},
 		{"case 3: ignored field", `"FutureEvent":17,`, true},
+		{"case 4: disabled case variant", `"Enabled":false,`, false},
+		{"case 5: disabled then null", `"enabled":false,"enabled":null,`, false},
+		{"case 6: later case variant disables", `"enabled":true,"ENABLED":false,`, false},
+		{"case 7: later case variant enables", `"enabled":false,"Enabled":true,`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()

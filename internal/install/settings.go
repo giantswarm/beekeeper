@@ -266,11 +266,13 @@ func agyHookBinary(raw json.RawMessage) (string, int) {
 	if json.Unmarshal(raw, &events) != nil {
 		return "", 0
 	}
-	if value, ok := events["enabled"]; ok {
-		var enabled *bool
-		if json.Unmarshal(value, &enabled) != nil || enabled != nil && !*enabled {
-			return "", 0
-		}
+	// Match agy's typed decoding: case variants and duplicates apply in
+	// source order, and null leaves the current boolean unchanged.
+	metadata := struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: true}
+	if json.Unmarshal(raw, &metadata) != nil || !metadata.Enabled {
+		return "", 0
 	}
 	var list []hookEntry
 	if json.Unmarshal(events["PreToolUse"], &list) != nil || len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
