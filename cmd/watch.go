@@ -494,7 +494,8 @@ type watcher struct {
 	polls atomic.Int64
 	// failed counts the reads that failed (fail): --once exits non-zero on
 	// any, so a silent run means no change.
-	failed atomic.Int64
+	failed        atomic.Int64
+	resolverState resolverWatch
 	// missing are the sections whose platform part this build does not
 	// have, said once each.
 	missing map[string]bool
@@ -1167,6 +1168,9 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 // emitNow records every event immediately, then batches only known routine lines.
 func (w *watcher) emitNow(key string, format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
+	if key != "resolver" && w.resolverFailure(line) {
+		return
+	}
 	if w.store != nil {
 		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
 	}
