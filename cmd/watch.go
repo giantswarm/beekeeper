@@ -2475,9 +2475,10 @@ func reportLines(r state.WorkerReport) []string {
 	return lines
 }
 
-// parkOnPerson reports whether p names a note or an issue or pull request
-// waiting on a person's word. Operational targets and untargeted waits do
-// not become person waits merely because their descriptions mention a person.
+// parkOnPerson reports whether park p waits on a person's word: a note, or
+// waits that name a person's answer, review or reply, or person; waits that
+// name only the supervisor or the guide wait on an operational handoff,
+// including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
 	if p.Checks {
 		return false
@@ -2493,7 +2494,7 @@ func parkOnPerson(p *state.Park, person string) bool {
 	if _, _, note := parkCentralNote(p.On); note {
 		return true
 	}
-	if _, ref := parseRef(p.On); !ref {
+	if _, lease := parkLease(p.On); lease {
 		return false
 	}
 	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person)
