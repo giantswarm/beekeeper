@@ -42,10 +42,18 @@ const (
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
 		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
 		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
-		"or of what stopped you. " + controlWords
+		"or of what stopped you. " + controlWords + githubSudoWords
 
 	browseSteps = "The steps:\n\n"
 )
+
+// githubSudoWords stop access confirmation before a short-lived challenge starts.
+const githubSudoWords = "When GitHub shows 'Confirm access', stop the pending steps immediately. " +
+	"Never start or answer a GitHub Mobile, passkey, security key, authenticator or email challenge. " +
+	"Read the tab context so its URL and title are recorded, then report one typed line: " +
+	"'barrier: github_sudo setting=<setting>', using repository_selection for installation Configure, " +
+	"token_expiry,device_flow,callback_urls for App settings, permissions for App permissions, " +
+	"or access_confirmation when the target is unknown. Include no URL, account or challenge value in that line. "
 
 // storageWords keep data discovery in the visible UI, even for read-only tasks.
 const storageWords = "Never read page storage (localStorage, sessionStorage, cookies, IndexedDB) or session tokens, and never call a site's API with them. Work through the visible UI only, including when listing a site's data such as Slack user groups. If the UI cannot complete a step or the hook refuses a call, report that barrier and the steps not completed; never work around it with storage or direct API requests. "
@@ -895,6 +903,7 @@ type browseFindings struct {
 	Reconnected bool
 	CleanedUp   bool
 	Left        guard.Tabs
+	Sudo        []string
 }
 
 // lost reports whether the connection is gone at the transcript's end: lost
@@ -964,6 +973,7 @@ func readFindings(transcript string) (browseFindings, error) {
 	})
 	f.Recovered = len(f.Lost) > 0 && !lost
 	f.Left = guard.ReadTabs(transcript)
+	f.Sudo = guard.GitHubSudoBarriers(transcript)
 	return f, err
 }
 
@@ -1081,7 +1091,7 @@ func (f browseFindings) lostErr(report string) error {
 // line for the tabs and the windows the turn used, and one "connection
 // lost:" line.
 func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bool) []string {
-	var out []string
+	out := slices.Clone(f.Sudo)
 	if deploy != "" {
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
