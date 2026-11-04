@@ -876,9 +876,13 @@ func (e Env) planCodexHooks(p *plan, m *Manifest) error {
 	if e.CodexHooks == "" {
 		return nil
 	}
+	previous := m.CodexHook
 	if err := e.planCodexHooksFile(p, m, e.CodexHooks, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
 		return err
 	}
+	// Both files share one ownership record. Keep the user file's earlier
+	// entry available while planning the worker file as well.
+	m.rememberPrevious(Manifest{CodexHook: previous})
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
 		if err := e.planCodexHooksFile(p, m, workerHooks, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
 			return err

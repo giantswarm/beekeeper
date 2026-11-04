@@ -14,7 +14,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		t.Skip("requires Unix directory permissions for an offline write failure")
 	}
-	for _, recovery := range []string{"retry", "uninstall", editedFile} {
+	for _, recovery := range []string{"retry", "uninstall", editedFile, "partial retry", "partial uninstall"} {
 		t.Run(recovery, func(t *testing.T) {
 			f := &fakeSetup{}
 			e, _ := env(t, t.TempDir(), f, f.run)
@@ -26,12 +26,15 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 			previousExe := e.Exe
 			e.Exe, e.Spec.Exe = replacementExe, replacementExe
 			dir := filepath.Dir(e.Settings)
-			if err := os.Chmod(dir, 0o500); err != nil {
+			if strings.HasPrefix(recovery, "partial ") {
+				dir = filepath.Dir(CodexWorkerHooks(e.StateDir))
+			}
+			if err := os.Chmod(dir, 0o500); err != nil { // #nosec G302 -- directory traversal is required to inject only a write failure.
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // #nosec G302 -- restore owner access to a temporary directory.
 			err := Install(context.Background(), e)
-			if restore := os.Chmod(dir, 0o750); restore != nil {
+			if restore := os.Chmod(dir, 0o700); restore != nil { // #nosec G302 -- restore owner access to a temporary directory.
 				t.Fatal(restore)
 			}
 			if err == nil {
@@ -41,7 +44,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 			if recovery == editedFile {
 				write(t, unit, "the person's service definition\n")
 			}
-			if recovery == "retry" {
+			if recovery == "retry" || recovery == "partial retry" {
 				if err := Install(context.Background(), e); err != nil {
 					t.Fatal(err)
 				}
