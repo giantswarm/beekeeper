@@ -56,7 +56,7 @@ func New(t *testing.T, backend, server string) *Muster {
 	t.Helper()
 	m := &Muster{}
 	m.srv = httptest.NewServer(m.handler(backend, server))
-	t.Cleanup(m.srv.Close)
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m
 }
@@ -93,7 +93,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 		return context.WithValue(ctx, connKey{}, conns.Add(1))
 	}
 	m.srv.StartTLS()
-	t.Cleanup(m.srv.Close)
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m, m.srv.Client().Transport.(*http.Transport)
 }
@@ -166,7 +166,13 @@ func (m *Muster) Updated(uri string) int {
 func (m *Muster) Down(down bool) { m.down.Store(down) }
 
 // Close stops muster itself.
-func (m *Muster) Close() { m.srv.Close() }
+func (m *Muster) Close() {
+	// Server.Close waits for active handlers, including subscriptions and
+	// deliberately stalled requests. Stop accepting and disconnect clients
+	// before waiting, including clients reconnecting during shutdown.
+	_ = m.srv.Config.Close()
+	m.srv.Close()
+}
 
 // dial is an initialized client of the backend at url as token's person.
 func dial(ctx context.Context, url, token string) (*client.Client, error) {
