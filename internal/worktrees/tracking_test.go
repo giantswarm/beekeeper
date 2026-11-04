@@ -13,18 +13,18 @@ func TestInspectTrackingConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name, remote, destination, source, want string
 	}{
-		{"standard", "origin", "refs/remotes/origin/feature", "refs/heads/feature", "feature"},
-		{"custom namespace", "origin", "refs/cache/origin/feature", "refs/heads/feature", "feature"},
+		{"standard", "origin", "refs/remotes/origin/feature", "refs/heads/feature", automaticFeature},
+		{"custom namespace", "origin", "refs/cache/origin/feature", "refs/heads/feature", automaticFeature},
 		{"other remote", "other", "refs/remotes/other/feature", "refs/heads/feature", ""},
 		{"local upstream", ".", "refs/heads/feature", "refs/heads/feature", ""},
 		{"no upstream", "", "refs/remotes/origin/feature", "", ""},
-		{"default upstream", "origin", "refs/remotes/origin/main", "refs/heads/main", "main"},
+		{"default upstream", "origin", "refs/remotes/origin/main", "refs/heads/main", automaticDefault},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			repo := filepath.Join(t.TempDir(), "repo")
 			git := func(ctx context.Context, dir string, args ...string) ([]byte, error) {
-				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own repository
 				return cmd.Output()
 			}
 			run := func(dir string, args ...string) []byte {
@@ -58,7 +58,7 @@ func TestInspectTrackingConfiguration(t *testing.T) {
 					t.Fatalf("pruned=%v: Pushed=%q, want %q", pruned, tree.Pushed, tc.want)
 				}
 				wantHead := "wt/feature"
-				if tc.want == "feature" {
+				if tc.want == automaticFeature {
 					wantHead = tc.want
 				}
 				if tree.HeadBranch() != wantHead {
@@ -76,13 +76,13 @@ func TestInspectTrackingConfiguration(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if gone != (tc.want == "feature") || !published {
+				if gone != (tc.want == automaticFeature) || !published {
 					t.Fatalf("pruned=%v: gone=%v published=%v", pruned, gone, published)
 				}
 				tree.Touched = time.Now().Add(-2 * Grace)
 				verdict := Automatic(tree, nil, gone, false, false, published, time.Now())
 				wantAction := Keep
-				if tc.want == "feature" {
+				if tc.want == automaticFeature {
 					wantAction = Remove
 				}
 				if verdict.Action != wantAction {
