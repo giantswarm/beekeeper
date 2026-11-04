@@ -76,14 +76,19 @@ func (s *Server) ReceiveSource(ctx context.Context, ref Ref, chunk SourceChunk) 
 	if info.Size() < chunk.Offset || info.Size() > chunk.Total {
 		return errors.New("out-of-order source chunk")
 	}
-	if info.Size() > chunk.Offset {
-		old := make([]byte, len(chunk.Data))
-		if _, err := f.ReadAt(old, chunk.Offset); err != nil || !bytes.Equal(old, chunk.Data) {
+	// Compare the entire existing overlap before changing any bytes. A retry
+	// may encounter only a prefix after an interrupted chunk write.
+	overlap := min(info.Size()-chunk.Offset, int64(len(chunk.Data)))
+	if overlap > 0 {
+		old := make([]byte, int(overlap))
+		if _, err := f.ReadAt(old, chunk.Offset); err != nil || !bytes.Equal(old, chunk.Data[:overlap]) {
 			return errors.New("conflicting source chunk retry")
 		}
-		return nil
+		if overlap == int64(len(chunk.Data)) {
+			return nil
+		}
 	}
-	if _, err := f.WriteAt(chunk.Data, chunk.Offset); err != nil {
+	if _, err := f.WriteAt(chunk.Data[overlap:], chunk.Offset+overlap); err != nil {
 		return err
 	}
 	return f.Sync()
