@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -319,9 +320,9 @@ func prArgs(args []string) (int, error) {
 }
 
 func (a *app) settleCmd() *cobra.Command {
-	var forName string
+	var forName, release string
 	c := &cobra.Command{
-		Use:   "settle <owner/repo> <n> [--for <session>]",
+		Use:   "settle <owner/repo> <n> [--for <session>] [--release <version>]",
 		Short: "Register a merge run outside the gate as its lane's head",
 		Long: `settle registers a merge the gate did not wrap (one in flight when the gate
 went live, one run without the hook) in its lane. Until the pull request is
@@ -334,7 +335,11 @@ for merge.settle from the merge.
 
 settle asks GitHub for the pull request's state once; while the entry waits
 without its merge, a merge waiting behind it asks again at most once a minute.
-The entry is kept for merge.seedTTL; lanes drop takes it out.`,
+The entry is kept for merge.seedTTL; lanes drop takes it out.
+
+--release names the release of an already settling merge whose release is
+unknown. It then settles once that release rolls or no range admits it.
+A known release cannot be replaced.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := prArgs(args)
@@ -344,6 +349,12 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 			me, err := a.caller()
 			if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("release") {
+				if !semver.IsValid("v" + strings.TrimPrefix(release, "v")) {
+					return usageErr("--release must be a semantic version")
+				}
+				return a.nameSettlingRelease(me, args[0], pr, release)
 			}
 			by := me
 			if strings.TrimSpace(forName) != "" {
@@ -396,7 +407,31 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 		},
 	}
 	c.Flags().StringVar(&forName, "for", "", "the session whose merge this is (default: you)")
+	c.Flags().StringVar(&release, "release", "", "name the unknown release of an already settling merge")
 	return c
+}
+
+// nameSettlingRelease changes only an unknown release, atomically with its event.
+func (a *app) nameSettlingRelease(by state.Party, repo string, pr int, release string) error {
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Merges {
+			m := &st.Merges[i]
+			if m.Repo != repo || m.PR != pr {
+				continue
+			}
+			if m.Phase != state.Settling || m.Release != "" || m.ReleaseFailed || m.Releasing {
+				return nil, refused("%s must be settling with an unknown release", m.Key())
+			}
+			m.Release, m.Outside = release, false
+			return []state.Event{event(by, "merge.release", "%s: release %s named, lane %s settles by its release", m.Key(), release, m.Lane)}, nil
+		}
+		return nil, refused("%s#%d is not settling", repo, pr)
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.out, "%s#%d now settles on release %s\n", repo, pr, release)
+	return err
 }
 
 // laneViews are the configured lanes, then every other lane with a merge or

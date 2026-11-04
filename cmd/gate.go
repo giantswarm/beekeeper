@@ -2075,8 +2075,8 @@ func (g *gateRun) failureWake(run childRun) string {
 // warranted no release or whose lane has no installation to roll leaves it
 // once its release is known, and so does one with nothing merged. A run without
 // its document or ended by a signal is GitHub's to judge: merged, its
-// release is unconfirmed; unanswered, the lane settles by the settle rule as
-// for a lost merge. The run's files go with the record; a save the newer
+// release is recovered with release wait; unanswered, the lane settles by
+// the settle rule as for a lost merge. The run's files go with the record; a save the newer
 // release that wrote the state refuses leaves them, document and exit code,
 // for the watch, which records the run from them at its next poll.
 func (g *gateRun) record(base string, run childRun) error {
@@ -2096,6 +2096,19 @@ func (g *gateRun) record(base string, run childRun) error {
 	r.rc = rc
 	if merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
+	}
+	// Keep the running place until recovery finishes, so an unknown release
+	// cannot enter settling while this gate can still identify it. A gate
+	// that was itself stopped ends now: lanes settle --release names it later.
+	if r.out.Merged && r.out.Unconfirmed && r.unanswered == nil && g.pr != 0 && g.handCut() == "" && !run.stopped {
+		gateLine("%s merged per GitHub; recovering its release (%s release wait %s --pr %d)", g.key(), merge.Tool, g.repo, g.pr)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+		recovered, _, found := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
+		cancel()
+		if found && !recovered.Unconfirmed && (recovered.Release != "" || recovered.NoRelease || recovered.ReleaseFailed) {
+			recovered.MergedAt = r.out.MergedAt
+			r.out = recovered
+		}
 	}
 	releaseLine := ""
 	// Refresh after merging: another merge may have changed the workflows
@@ -2221,8 +2234,8 @@ func (g *gateRun) record(base string, run childRun) error {
 		gateLine("%s merged and its release failed (exit %d): nothing rolls, lane %s settles at once; the fix is the next pull request or a rerun of the failed workflow, do not merge again",
 			g.key(), rc, g.lane.Name)
 	case out.Unconfirmed:
-		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
-			rc, g.repo, g.pr, g.repo, g.pr)
+		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, recover it with `devctl release wait %s --pr %d`, then name it with `beekeeper lanes settle %s %d --release <version>`; do not merge again",
+			rc, g.repo, g.pr, g.repo, g.pr, g.repo, g.pr)
 	case !out.Merged && (rc == devctlUsage || rc == devctlAuth):
 		gateLine("%s (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
 			nothingDone(g.pr, out), rc, output, g.key(), g.lane.Name)

@@ -357,6 +357,9 @@ type childRun struct {
 	// ended says the follow returned as its caller went away, for a run that
 	// ends with it (withCaller): its merge-child stops the command.
 	ended bool
+	// stopped says a SIGTERM aimed at the gate stopped the command: the gate
+	// ends with it and leaves its release to lanes settle --release.
+	stopped bool
 }
 
 // emit writes a held document to the gate's stdout.
@@ -516,7 +519,7 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 		case time.Since(term) >= stopGrace:
 			gateLine("SIGTERM with the caller still there: stopping devctl (pid %d); the run is recorded as one ended by a signal", pid)
 			signalPID(pid, syscall.SIGTERM)
-			term, said = time.Time{}, true
+			term, said, r.stopped = time.Time{}, true, true
 		}
 	}
 }

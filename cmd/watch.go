@@ -1806,6 +1806,9 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		if since := now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
+			if m.Release == "" && !m.ReleaseFailed {
+				why += fmt.Sprintf("; recover with devctl release wait %s --pr %d, then name the release with beekeeper lanes settle %s %d --release <version>", m.Repo, m.PR, m.Repo, m.PR)
+			}
 			w.emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",
 				lane.Name, m.Key(), dur(since), why, lane.Name)
 		}
