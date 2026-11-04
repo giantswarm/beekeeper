@@ -189,11 +189,12 @@ func (m Marker) Says(now time.Time, staleAfter time.Duration) string {
 // quote is v as a marker value: bare when it is one token, quoted
 // otherwise, never closing the HTML comment.
 func quote(v string) string {
-	v = clean(v)
-	if v != "" && !strings.ContainsAny(v, " \t\r\n\"=\\") && strconv.CanBackquote(v) {
+	if v != "" && !strings.Contains(v, "--") && !strings.ContainsAny(v, " \t\r\n\"=\\") && strconv.CanBackquote(v) {
 		return v
 	}
-	return strconv.Quote(v)
+	// Go escapes preserve identity without putting a literal double hyphen
+	// inside the HTML comment, even when the value contains its terminator.
+	return strings.ReplaceAll(strconv.Quote(v), "--", `-\x2d`)
 }
 
 // clean keeps v on one line and out of the way of the comment's end.

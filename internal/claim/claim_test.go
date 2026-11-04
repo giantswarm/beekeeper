@@ -24,6 +24,7 @@ func TestMarkerRoundTrips(t *testing.T) {
 	for name, m := range map[string]claim.Marker{
 		"open":     {Desk: "platform-desk", Session: "0b5c1d2e-aaaa", At: t0, Seen: t0.Add(time.Hour)},
 		"released": {Desk: "desk two", Session: "id with \"quotes\"", At: t0, Seen: t0, Released: t0.Add(2 * time.Hour)},
+		"escaped":  {Desk: " desk--two\n  three ", Session: "x\\y\t\"quoted\" -->", At: t0, Seen: t0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := m.Body()
@@ -50,8 +51,27 @@ func TestMarkerKeepsItsValuesInside(t *testing.T) {
 		t.Fatalf("body %q", body)
 	}
 	got, ok := claim.Parse(body)
-	if !ok || got.Desk != "a->b" || got.Session != "x <!- y ->" {
+	if !ok || got != m {
 		t.Errorf("Parse = %+v, %v", got, ok)
+	}
+}
+
+// The configured desk must recognize its own published identity; changing
+// it during rendering makes the desk's own claim hold it off its work.
+func TestClaimIdentitySurvivesRendering(t *testing.T) {
+	for _, desk := range []string{"desk--one", "desk  one", " desk one ", "desk\none"} {
+		t.Run(desk, func(t *testing.T) {
+			m := claim.Marker{Desk: desk, Session: "synthetic-session", At: t0, Seen: t0}
+			got, ok := claim.Parse(m.Body())
+			if !ok {
+				t.Fatal("rendered marker did not parse")
+			}
+			cs := []claim.Comment{{ID: 1, Marker: got}}
+			live, stale := claim.Others(cs, desk, t0, time.Hour)
+			if len(live) != 0 || len(stale) != 0 || claim.Desk(cs, desk) == nil {
+				t.Fatalf("desk %q rendered as %q and became another desk's claim", desk, got.Desk)
+			}
+		})
 	}
 }
 
