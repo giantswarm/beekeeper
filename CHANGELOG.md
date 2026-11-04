@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).
+
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
