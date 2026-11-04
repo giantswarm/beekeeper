@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -59,7 +60,7 @@ const (
 	nameAgentsLeave    = "agents_leave"
 )
 
-// callerOptions are the arguments every tool takes: who the calling agent is
+// callerOptions are the identity arguments for tools that use the caller: who it is
 // and where it runs. One person's agents share the person's token, so only
 // these tell them apart.
 func callerOptions(required bool) []mcp.ToolOption {
@@ -77,11 +78,15 @@ type hints struct {
 	readOnly, destructive, idempotent, openWorld bool
 	// identified: the tool needs agent and host, it acts on the agent itself.
 	identified bool
+	// auditOnly: caller identity is accepted for auditing but not advertised.
+	auditOnly bool
 }
 
 var (
 	// hintRead changes nothing in the shared state.
 	hintRead = hints{readOnly: true, idempotent: true}
+	// hintAuditRead reads state and uses caller identity only in its audit.
+	hintAuditRead = hints{readOnly: true, idempotent: true, auditOnly: true}
 	// hintAdd adds or updates the caller's own record; again changes nothing.
 	hintAdd = hints{idempotent: true}
 	// hintRemove takes a record away, another's too where the role allows;
@@ -99,28 +104,32 @@ func newTool(name, summary, details string, h hints, opts ...mcp.ToolOption) mcp
 		mcp.WithIdempotentHintAnnotation(h.idempotent),
 		mcp.WithOpenWorldHintAnnotation(h.openWorld),
 	}, opts...)
-	return mcp.NewTool(name, append(opts, callerOptions(h.identified)...)...)
+	if !h.auditOnly {
+		opts = append(opts, callerOptions(h.identified)...)
+	}
+	return mcp.NewTool(name, opts...)
 }
 
 func (s *server) tools() []serveTool {
 	return []serveTool{
-		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintRead), toolLeaseList},
+		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintAuditRead), toolLeaseList},
 		{newTool("lease_claim", "Claim a shared installation for the calling agent.",
-			"Refused while another holds it or while it upgrades.", hintAdd,
+			"Returns held, queued or refused first. Queued behind a holder with your grant; refused otherwise or during upgrades. wait retries every 10s, at most 9m.", hintAdd,
+			mcp.WithString("wait", mcp.Description("foreground wait duration, at most 9m (default: claim once)")),
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
-		{newTool("hold_list", "List the holds on merges into a repository or lane, or on every merge, until lifted.", "", hintRead), toolHoldList},
-		{newTool("hold_set", "Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.",
-			"", hintRemove,
-			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
+		{newTool("hold_list", "List the holds on merges into a repository or lane until lifted.", "", hintAuditRead), toolHoldList},
+		{newTool("hold_set", "Hold merges in a central repository or lane: owner/repo or lane:<name>.",
+			"The merges and github targets are machine-local; use the local CLI for them.", hintRemove,
+			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo or lane:<name>")),
 			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why")),
 			mcp.WithString("until", mcp.Description("when it ends by itself: a time (15:30) or a duration (2h)")),
 			mcp.WithString("except", mcp.Description("the one owner/repo or owner/repo#n the hold lets through"))), toolHoldSet},
 		{newTool("hold_lift", "Lift a hold: your own, or as its setter's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("the held target"))), toolHoldLift},
-		{newTool("lanes", "List the merge lanes: each lane's running merge, settling merge and queue.", "", hintRead), toolLanes},
+		{newTool("lanes", "List the merge lanes: each lane's running merge, settling merge and queue.", "", hintAuditRead), toolLanes},
 		{newTool("lane_queue", "Queue a pull request's merge at the end of its repository's merge lane.",
 			fmt.Sprintf("Queue it again while it waits: a waiting place not queued again for merge.queueTTL (default %s) holds up nobody.", shortDur(config.DefaultQueueTTL)), hintAdd,
 			prOptions()...), toolLaneQueue},
@@ -128,7 +137,7 @@ func (s *server) tools() []serveTool {
 			"", hintAdd,
 			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles until its release rolled")))...), toolLaneSettle},
 		{newTool("lane_turn", "Tell whether a queued merge is its lane's next, and which merges are ahead of it.",
-			"It does not keep the place: lane_queue does.", hintRead, prOptions()...), toolLaneTurn},
+			"It does not keep the place: lane_queue does.", hintAuditRead, prOptions()...), toolLaneTurn},
 		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up.",
 			"", hintRemove,
 			append(prOptions(), mcp.WithString(paramReason, mcp.Description("why it leaves: rolled, nothing merged, refused")))...), toolLaneLeave},
@@ -145,18 +154,13 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
 			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
 			mcp.WithNumber(paramFoldInto, mcp.Description("an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned"))), toolNoteAdd},
-		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintRead), toolNoteList},
+		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintAuditRead), toolNoteList},
 		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
 			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
-		{newTool(toolAnswerVerifyName, "Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.",
-			fmt.Sprintf("Verified: through an authenticated channel (central, slack), at most %s old and, with head, naming that commit; for the answering person, their team or its supervisor role.", shortDur(answerFresh)), hintRead,
-			mcp.WithNumber(paramNote, mcp.Description("the note's number")),
-			mcp.WithString(paramAbout, mcp.Description("the issue or pull request, owner/repo#n")),
-			mcp.WithString(paramHead, mcp.Description("the commit its question or words must name"))), toolAnswerVerify},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
@@ -168,9 +172,9 @@ func (s *server) tools() []serveTool {
 			mcp.WithBoolean(paramDone, mcp.Description("the agent reported its work finished: ended on the roster"))), toolAgentsRegister},
 		{newTool(nameAgentsLeave, "Take the calling agent off the roster: its machine no longer runs it.", "",
 			hints{destructive: true, idempotent: true, identified: true}), toolAgentsLeave},
-		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
+		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintAuditRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
-		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintRead), toolSnapshot},
+		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintAuditRead), toolSnapshot},
 		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "After an id, every event above it the instance still holds; gap set when it no longer holds that event, so events right after it may have aged out.", hintRead,
 			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one, all of them the instance still holds"))), toolReadFeed},
 	}
@@ -258,17 +262,59 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	wait, err := time.ParseDuration(req.GetString("wait", "0s"))
+	if err != nil || wait < 0 || wait > claimWaitMax {
+		return nil, usageErr("wait must be a duration from 0s to %s", dur(claimWaitMax))
+	}
+	var result any
+	for waited := time.Duration(0); ; {
+		result, err = c.claimInstallation(name, purpose)
+		if err == nil {
+			return result, nil
+		}
+		var r *claimRefusal
+		if !errors.As(err, &r) {
+			if Code(err) != ExitRefused {
+				return nil, err
+			}
+			r = &claimRefusal{res: name, why: err.Error()}
+		}
+		if waited >= wait {
+			r.waited = waited
+			return nil, refused("%s", r.line())
+		}
+		step := min(claimPoll, wait-waited)
+		if err := claimPause(c.ctx, step); err != nil {
+			return nil, err
+		}
+		waited += step
+		c.app.now = c.app.now.Add(step)
+	}
+}
+
+func (c *call) claimInstallation(name, purpose string) (any, error) {
 	env, err := c.environment(name)
 	if err != nil {
 		return nil, err
+	}
+	st := &state.State{}
+	for _, g := range env.Status.Queue {
+		st.Grants = append(st.Grants, state.Grant{Resource: name, To: kube.PartyOf(g.To), By: kube.PartyOf(g.By), At: g.At.Time})
+	}
+	if env.Status.Released != nil {
+		st.Released = map[string]time.Time{name: env.Status.Released.Time}
 	}
 	if u := env.Status.Upgrade; u != nil {
 		return nil, refused("%s upgrades to %s since %s: claims wait until the upgrade ends", name, u.To, clock(c.app.now, u.Since.Time))
 	}
 	if h := env.Status.Holder; h != nil {
 		if kube.PartyOf(h.Party).Is(c.me) {
-			_, err := fmt.Fprintf(c.out, "%s is already yours (since %s)\n", name, clock(c.app.now, h.Since.Time))
+			_, err := fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, name+" was yours already"))
 			return heldLease{Environment: name, Holder: c.me, Purpose: h.Purpose, Since: h.Since.Time}, err
+		}
+		q := lease.Pending(st, name, true, c.app.now, c.app.cfg.GrantTTL.Duration)
+		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(c.me) }); i >= 0 {
+			return nil, &claimRefusal{res: name, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s", i+1, partyName(kube.PartyOf(h.Party)), name, clock(c.app.now, h.Since.Time), h.Purpose)}
 		}
 		return nil, c.heldBy(name, *h)
 	}
@@ -280,7 +326,7 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.store.wrote = true
-	_, err = fmt.Fprintf(c.out, "claimed %s\n", name)
+	_, err = fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, "claimed "+name))
 	return heldLease{Environment: name, Holder: c.me, Purpose: purpose, Since: h.Since.Time}, err
 }
 
@@ -370,10 +416,27 @@ func (c *call) hold(target string) (*state.Hold, error) {
 	return nil, nil
 }
 
+// guardHold repeats ownership authorization inside the reused CLI verb's
+// write callback, against the hold that attempt will actually change.
+func (c *call) guardHold(target string) {
+	c.store.authorize = func(st *state.State) error {
+		for _, h := range st.Holds {
+			if h.Target == target && h.Active(c.app.now) {
+				return c.may("the hold on "+target, h.By)
+			}
+		}
+		return nil
+	}
+}
+
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
-	target, err := required(req, paramTarget, "owner/repo, lane:<name>, merges or github")
+	target, err := required(req, paramTarget, "owner/repo or lane:<name>")
 	if err != nil {
 		return nil, err
+	}
+	// Machine-wide holds belong to the local budget and guard, not central lanes.
+	if target == merge.AllMerges || target == holdGitHub {
+		return nil, usageErr("%s is a machine-local hold target; use the local CLI, or hold a central repository (owner/repo) or lane (lane:<name>)", target)
 	}
 	c.concern = kube.HoldObject(target)
 	args := []string{"set", target, flagNoteReason, req.GetString(paramReason, "")}
@@ -389,6 +452,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	if cur, err := c.hold(target); err != nil {
 		return nil, err
 	} else if cur != nil && cur.Active(c.app.now) {
@@ -411,6 +475,7 @@ func toolHoldLift(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	cur, err := c.hold(target)
 	if err != nil {
 		return nil, err
@@ -718,6 +783,13 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	reason := strings.TrimSpace(req.GetString(paramReason, ""))
 	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, x := range st.Merges {
+			if x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr {
+				if err := c.may(key+"'s place in lane "+lane, x.By); err != nil {
+					return nil, err
+				}
+			}
+		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(x state.Merge) bool {
 			return x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr
 		})
@@ -891,9 +963,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 	published = published || req.GetArguments()[paramDone] != nil
 	pubTask, done := strings.TrimSpace(req.GetString(paramTask, "")), req.GetBool(paramDone, false)
 	task := ""
+	registered := c.me
 	err := c.app.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, x := range st.Agents {
-			if !strings.EqualFold(x.Name, c.me.Name) || x.Host != c.me.Host {
+			if !strings.EqualFold(x.Name, registered.Name) || x.Host != c.me.Host {
 				continue
 			}
 			// An address, local:<host>/<name>, names one agent.
@@ -903,7 +976,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 			// Registered again: the call's audit Event records it, since
 			// within the same second nothing the resource stores changes.
 			task = x.Task
-			st.Agents[i].Party, st.Agents[i].Registered = c.me, c.app.now.UTC()
+			// Keep the persisted spelling and object key for this address.
+			registered.Name = x.Name
+			c.concern = kube.RosterObject(registered)
+			st.Agents[i].Party, st.Agents[i].Registered = registered, c.app.now.UTC()
 			if published {
 				task = pubTask
 				publish(&st.Agents[i], pubTask, done, c.app.now.UTC())
@@ -920,11 +996,11 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	if task != "" {
-		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", c.me.Name, task)
+		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", registered.Name, task)
 	} else {
-		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", c.me.Name)
+		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", registered.Name)
 	}
-	return map[string]any{"agent": c.me, "task": task}, err
+	return map[string]any{"agent": registered, "task": task}, err
 }
 
 // publish sets a machine's agent's task and whether it is done, the fields

@@ -396,6 +396,8 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
+	case strings.Contains(q, "closedByPullRequestsReferences"):
+		return []byte(`{"data":{}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
 	case strings.Contains(q, boardItemsQuery):
@@ -585,6 +587,33 @@ func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// GitHub can omit a cross-owner board from projectItems even for the
+// issue owner's login. Adding again returns that existing item and its fields.
+func TestMovePersonalIssueToItsCurrentStatusWithHiddenBoardItem(t *testing.T) {
+	for _, ref := range []string{"personal/private#7", "https://github.com/personal/private/issues/7"} {
+		t.Run(ref, func(t *testing.T) {
+			f := &fakeGH{t: t, item: issue7OffBoard,
+				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}}}}`}
+			c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+			mv, err := c.Move(context.Background(), ref, "backlog")
+			if err != nil || *mv != (Moved{Ref: "personal/private#7", From: backlog, To: backlog}) {
+				t.Fatalf("Move = %+v, %v", mv, err)
+			}
+			if !slices.Equal(f.mutations, []string{addIssue7}) {
+				t.Errorf("same-status proof changed fields: %v", f.mutations)
+			}
+			for _, repo := range f.repos {
+				if repo != "personal/private" {
+					t.Errorf("call acts on %q, want issue repository", repo)
+				}
+			}
+			if readsItems(f.queries) {
+				t.Errorf("move read the board's items: %q", f.queries)
+			}
+		})
 	}
 }
 
@@ -975,7 +1004,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
 			state, summary := stateClosed, 1
 			if open {
-				state, summary = "OPEN", 0
+				state, summary = stateOpen, 0
 			}
 			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
 			f := &fakeGH{t: t, pages: []string{
@@ -1007,8 +1036,12 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
 				}
 			}
-			if len(f.queries) != 3 {
-				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			wantQueries := 3
+			if open {
+				wantQueries++
+			}
+			if len(f.queries) != wantQueries {
+				t.Errorf("read made %d requests, want %d", len(f.queries), wantQueries)
 			}
 			for _, q := range f.queries {
 				if strings.Contains(q, "issueDependenciesSummary") {

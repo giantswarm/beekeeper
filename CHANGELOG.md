@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `beekeeper lease kubeconfig <lab>` prints the bare path for use with `kubectl --kubeconfig`; `--export` prints the shell export line (#690).
+
 ### Added
 
 - `beekeeper disk holders` lists the state home's holders (each entry of `~/.local/state`, and each entry of its `aside` and `moved-aside` directories) by size and last write with an owner read from the name (a task number names the roster agent or session record working that issue or pull request number; otherwise the program), and says which are eligible for removal: unused for `disk.holders.staleAfter` (72h; aside entries after `disk.holders.asideRetention`, 168h), unused by any process, of no open task, holding no checkout outside an aside directory, and neither beekeeper's own state nor in `disk.holders.keep`. It removes nothing. Every `disk.holders.every` (6h) the watch says `STATE HOLDERS` with the largest eligible holders while they take `disk.holders.warnGiB` (10) or more, counting the ones holding a checkout without naming them, and `STATE HOLDERS unknown` while a process it cannot read leaves no holder judged; negative holder durations are refused ([https://github.com/giantswarm/beekeeper/issues/1581](https://github.com/giantswarm/beekeeper/issues/1581)).
@@ -25,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with host-side GitHub clients and lifecycle revocation on the coordinator.
 
 - SSH hosts can admit repositories by owner with `repositoryOrgs` and provision an isolated workspace from the coordinator's pinned source bundle without preseeded checkouts. Idle hosts provision missing pinned Go and GitHub CLI installations from checksum-verified official releases; host checks flag a coordinator release mismatch, and preparation checks the actual workspace's Go requirement (https://github.com/giantswarm/beekeeper/issues/2111).
+- Resume identical source uploads after an interrupted chunk write, preserving conflicting bytes and prepared-source immutability (https://github.com/giantswarm/beekeeper/issues/2738).
 
 - SSH execution hosts pin the worker toolchain under `agents.execution.tools` (`go` and `gh`, each an absolute executable and its version). `agents hosts check`, and every start, refuses a host whose `gh` or, for a served repository whose source checkout has a `go.mod`, whose Go is missing, differs from its pin or is older than that `go.mod`'s `toolchain` (or `go`) line, and reports the provisioned versions under `tools`. The runner puts the pinned tools' directories on the worker's PATH right after the component's ([https://github.com/giantswarm/beekeeper/issues/2077](https://github.com/giantswarm/beekeeper/issues/2077)).
 
@@ -37,10 +42,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
+- Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
+- Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
+- Honor saved Go cache settings, including GOENV selection and persisted GOPATH, when discovering build and module cache directories (https://github.com/giantswarm/beekeeper/issues/2758).
+- Dispatch recovered merge confirmations to the workflow sink once per pull request and preserve saved results when recording fails (https://github.com/giantswarm/beekeeper/issues/3023).
+- Apply the five-minute local lint deadline when `golangci-lint` is invoked by an absolute or relative executable path (https://github.com/giantswarm/beekeeper/issues/2327).
+
+- Keep subscription-control labels scoped to browser reads of the clicked tab so unrelated output cannot replace them.
+- Concurrent fingerprint index saves publish separate complete snapshots instead of colliding on one temporary filename (https://github.com/giantswarm/beekeeper/issues/2917).
+- Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
+- Check Glob patterns against workspace, transcript and sandbox boundaries, including absolute and parent-relative search targets.
+- Refuse browser batches containing a denied consent even when an earlier action needs no consent decision.
+- Inspect scripts for protected-file reads from the directory where their command runs after a literal cd.
+- Secret destination preflight checks encryption selectors against the actual resolved YAML keys (https://github.com/giantswarm/beekeeper/issues/3030).
+- Secret producers refuse structurally unwritable destinations before producing credentials (https://github.com/giantswarm/beekeeper/issues/3078).
+- Multi-value secret copies refuse quoted and escaped aliases of the same destination before reading sources (https://github.com/giantswarm/beekeeper/issues/3100).
+- Partial secret rotations retain recovery fingerprints and retry remaining carriers without generating another replacement (https://github.com/giantswarm/beekeeper/issues/3120).
+- Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
+- Secret capture writes quoted, escaped and embedded-document paths consistently with its encryption preflight (https://github.com/giantswarm/beekeeper/issues/2982).
+- Secret copies to remote files reject blank source values before encoding (https://github.com/giantswarm/beekeeper/issues/2991).
+- Secret rotation checks current encryption selectors for every carrier before changing values (https://github.com/giantswarm/beekeeper/issues/3129).
+- Prefer an observed release change, then a due schedule, then a lingering upgrade mark (https://github.com/giantswarm/beekeeper/issues/3148).
+- Require an active hold to match the running upgrade target before retaining it (https://github.com/giantswarm/beekeeper/issues/3151).
+- Preserve whole-machine OOM kill constraints and victim cgroups so snapshots identify global exhaustion and capped runs can find their victims (https://github.com/giantswarm/beekeeper/issues/2896).
+- Keep separate OOM victims when a PID is reused, preserving each kill's time, task, memory and cap attribution (https://github.com/giantswarm/beekeeper/issues/2906).
+- Stop worktree cleanup when pull-request reads fail or leave any requested branch unanswered, preserving harness checkouts when PR data is unavailable (https://github.com/giantswarm/beekeeper/issues/3093).
+- Broker replies use exclusively created temporary files so planted staging links cannot overwrite other files; failed publication cleans up its temporary file (#3034).
+- Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).
+- Compile the Unix disk reader on FreeBSD and keep exhausted signed availability from wrapping into positive free space (https://github.com/giantswarm/beekeeper/issues/2927).
+- Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
+- Preserve untracked files named like build directories during worktree cleanup. (https://github.com/giantswarm/beekeeper/issues/3089).
+- Keep the active Teleport profile unchanged when backup preparation fails (https://github.com/giantswarm/beekeeper/issues/3017).
+- Serialize a sender's mailbox sends across destinations so concurrent retries return one delivery instead of a uniqueness error (https://github.com/giantswarm/beekeeper/issues/2919).
+- An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
+- Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
 
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
+- Bound SSH RPC and host readiness output draining after command exit or cancellation when descendants retain the output pipes (https://github.com/giantswarm/beekeeper/issues/2768).
 
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
 
@@ -64,8 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run merge-result checks and Git diagnostics with `LC_ALL=C`, and keep checker launch, cancellation and host-resource failures out of pull-request branch repair (https://github.com/giantswarm/beekeeper/issues/2240).
 - Codex web tool aliases use the shared read guard in local and managed workers; unknown tool names remain refused (https://github.com/giantswarm/beekeeper/issues/2074).
 - Stopping or inspecting an expired SSH execution preserves its workspace, Git metadata and source artifacts, including unpublished commits and local edits. Termination acknowledgement no longer authorizes irreversible workspace deletion (https://github.com/giantswarm/beekeeper/issues/2175).
+- Release SSH host admission and update capacity when the owned supervisor confirms a runner has ended, even if its final journal write was lost (https://github.com/giantswarm/beekeeper/issues/2717).
 - Enable the code-mode host in managed Codex configuration so execution-host workers can use tools (https://github.com/giantswarm/beekeeper/issues/2266).
 - Codex execution workers receive workspace trust on the command line for first and resumed turns, keeping startup from rewriting the policy-bound managed configuration and invalidating the host (https://github.com/giantswarm/beekeeper/issues/2265).
+- Treat execution journal roots as literal directories so brackets and other pattern characters cannot hide active workers from admission, host updates or inventory (https://github.com/giantswarm/beekeeper/issues/2864).
 
 - The guide skill opens with its first rule: a direct request from the person that the guide's own tools allow is carried out at once and its outcome reported; one outside its role is filed as an issue on the board in the same turn and said in one line, never handed back to the person. The guide is the escalation point for stuck operational state (a hold, a pinned release, a parked session): it sets, narrows or lifts that state itself to carry out what the person decided, then reports. The hook's refusal hint in the guide's session says both and points to filing the work, not to the person (https://github.com/giantswarm/beekeeper/issues/2197).
 - A relay no longer stops or archives the relieved guide's session: its conversation stays in the person's session list until they close it. The relay's start message and the watch's `RELAY TAKEN` line say where it is (`claude attach <id>` continues a background session, `claude stop <id>` ends it). The revive guard lets a relieved run the person or the desktop brings back run on, and neither the watch nor the doctor stops, archives, seeds or reseeds an archive of it; an archive owed by an earlier version is dropped. A session whose start took the guide's role stays the person's also after a take-over (a crash or reboot without a relay) and once its relief is forgotten.
@@ -74,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Report local leases held past their purpose’s duration (or `leaseRound`, default `1h`) in the watch and queued claims, with the holder, claim time and overrun.
 - Execution sync reconciles host-only journals once, settles a missing journal only after confirming its unit inactive, and names the executions blocking a host update (https://github.com/giantswarm/beekeeper/issues/2170).
+- No person is asked whether to merge. Past its reviews the supervisor loop now gives the go for a reviewed, green head itself, where it used to ask the guide's person in a note ("Merge … without a third review, or have it reworked?"). `note add` refuses a decision from anyone that asks whether to merge a pull request and logs it as `note.redirected`. `beekeeper answer verify`, the `answer_verify` tool, the computed answer channel with its relay attribution and guide dialog receipt, and the verified-answer suffix on `merge.merged` are removed; `answer --via cli|slack` stays a plain record of how the words came (https://github.com/giantswarm/beekeeper/issues/2207).
 - A message an omp, agy or codex worker sends by `agents wake` names the sender's roster name (or role) to reply to, and a `SendMessage` by that name reaches the worker's inbox; a `SendMessage` to a peer socket that ended (a relay turn's) is refused with that hint instead of failing with ENOENT. The worker rules say workers send the guide no status (https://github.com/giantswarm/beekeeper/issues/2143).
 - `self-update` and `--check` never ask GitHub anonymously: without `GH_TOKEN`, `GITHUB_TOKEN` or a gh login they say so and stop, and a rate-limited lookup names the limit with its reset. `agents hosts update` looks the release up on the coordinator with its gh login and hands it to the execution host over SSH, which downloads the binary and bundle from the release's public download URLs instead of asking GitHub's API anonymously from an IP whose limit other machines share ([https://github.com/giantswarm/beekeeper/issues/643](https://github.com/giantswarm/beekeeper/issues/643)).
 
