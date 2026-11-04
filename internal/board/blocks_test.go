@@ -269,13 +269,17 @@ func TestMoveHeldRecordsWhatHoldsABlockedItem(t *testing.T) {
 		len(gh.mutations)+len(deps.mutations) != 0 {
 		t.Fatalf("unexplained block = %v; mutations %v %v", err, gh.mutations, deps.mutations)
 	}
-	// A pull request, or a closed issue, holds no item.
+	// A pull request without a closing issue, or a closed issue named
+	// directly or through a pull request, holds no item.
 	deps.nodes["r#6"] = closedIssue
-	for by, want := range map[string]string{pr7: pr7 + " is a pull request", "o/r#6": "o/r#6 is closed: it holds nothing"} {
+	openPR := deps.nodes["q#13"]
+	deps.nodes["q#13"] = strings.ReplaceAll(openPR, `"OPEN"`, `"CLOSED"`)
+	for by, want := range map[string]string{pr7: pr7 + " is a pull request", "o/r#6": "o/r#6 is closed: it holds nothing", "o/q#13": "o/q#3 is closed: it holds nothing"} {
 		if _, _, err := c.MoveHeld(ctx, issue5, "waiting", by); !refusedWith(err, want) || len(gh.mutations)+len(deps.mutations) != 0 {
 			t.Errorf("--by %s = %v; mutations %v %v", by, err, gh.mutations, deps.mutations)
 		}
 	}
+	deps.nodes["q#13"] = openPR
 	// --by names what holds a blocked item only.
 	if _, _, err := c.MoveHeld(ctx, issue5, "progress", issue9); !refusedWith(err, "In Progress ⛏️ is none") || len(gh.mutations)+len(deps.mutations) != 0 {
 		t.Errorf("--by with In Progress = %v", err)
@@ -293,5 +297,12 @@ func TestMoveHeldRecordsWhatHoldsABlockedItem(t *testing.T) {
 	// Any other move is Move.
 	if mv, h, err := c.MoveHeld(ctx, issue5, "up next", ""); err != nil || h != nil || mv.To != upNext {
 		t.Errorf("MoveHeld to Up Next = %+v, %+v, %v", mv, h, err)
+	}
+	// A pull request closing an open issue still records that issue and moves.
+	deps.mutations, gh.mutations = nil, nil
+	mv, h, err = c.MoveHeld(ctx, issue5, "blocked", "o/q#13")
+	if err != nil || mv == nil || mv.To != "Blocked / Waiting ⛔️" || h == nil || h.By != issueQ3 || !h.ByOpen || !h.Changed ||
+		!slices.Equal(deps.mutations, []string{addBlockedR5Q3}) || !slices.Equal(gh.mutations, []string{"I1=s4"}) {
+		t.Fatalf("MoveHeld --by PR = %+v, %+v, %v; mutations %v %v", mv, h, err, deps.mutations, gh.mutations)
 	}
 }
