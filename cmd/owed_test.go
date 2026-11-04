@@ -219,3 +219,29 @@ func TestTheWatchLeavesAnOutcomeItsMergeChildHandsOver(t *testing.T) {
 		t.Errorf("woke %q, owed %+v", *woke, ownedState(t, a))
 	}
 }
+
+func TestRequestedCancellationSurvivesDeferredWatchDelivery(t *testing.T) {
+	a, r, woke := stoppedMerge(t)
+	r.stoppedBy = state.Party{Name: "supervisor", Session: "s9"}
+	stubPull(t, github.Pull{}, errors.New("unreachable"))
+	a.tellOwner(context.Background(), r)
+	if owed := ownedState(t, a); len(owed) != 1 || !owed[0].Cancelled {
+		t.Fatalf("owed %+v", owed)
+	}
+	stubPull(t, github.Pull{State: github.Open}, nil)
+	laterWatch(t, a, owedRetry).owedOutcomes(context.Background())
+	if len(*woke) != 1 || !strings.Contains((*woke)[0], "cancelled on request") || !strings.Contains((*woke)[0], "do not rerun it") {
+		t.Fatalf("woke %q", *woke)
+	}
+}
+
+func TestRequestedCancellationWhenGitHubRemainsUnavailable(t *testing.T) {
+	a, r, _ := stoppedMerge(t)
+	r.stoppedBy = state.Party{Name: "supervisor", Session: "s9"}
+	stubPull(t, github.Pull{}, errors.New("unreachable"))
+	o := r.owed(time.Now().Add(-owedAsk))
+	line, ok := a.owedLine(t.Context(), o)
+	if !ok || !strings.Contains(line, "cancelled on request") || !strings.Contains(line, "do not rerun it") {
+		t.Fatalf("line %q, ready %v", line, ok)
+	}
+}

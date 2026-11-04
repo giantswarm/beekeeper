@@ -403,7 +403,7 @@ func (a *app) loadRun(r childResult) error {
 func (r childResult) outcome() string {
 	o, _ := merge.ParseDocument(r.doc)
 	if r.stoppedBy != (state.Party{}) && !o.Merged {
-		return fmt.Sprintf("%s did not settle: %q stopped it (beekeeper gate stop, exit %d) and nothing waits for it any more: check the pull request or release it waited for and run it again if it still needs to",
+		return fmt.Sprintf("%s was cancelled on request: %q stopped it (beekeeper gate stop, exit %d) and nothing waits for it any more: do not rerun it",
 			r.command(), r.stoppedBy.Name, r.rc)
 	}
 	if r.stop != 0 && !o.Merged {
