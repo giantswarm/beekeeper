@@ -35,7 +35,7 @@ func TestStdinRejectsNullBeforeSideEffects(t *testing.T) {
 						calls++
 						return nil, errors.New("unexpected Runner call")
 					}}
-					dst := Ref{File: filepath.Join(t.TempDir(), "destination.sops.yaml"), Path: "stringData.password"}
+					dst := Ref{File: filepath.Join(t.TempDir(), "destination.sops.yaml"), Path: agePasswordPath}
 					consumer := []string{"sh", "-c", "exit 99", "--password-stdin"}
 					var err error
 					if operation == "CopyToConsumer" {
