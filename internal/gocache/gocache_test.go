@@ -3,6 +3,7 @@ package gocache
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,6 +62,71 @@ func TestScanMissingCacheIsEmpty(t *testing.T) {
 	u, err := Scan(filepath.Join(t.TempDir(), "absent"))
 	if err != nil || u.Bytes != 0 || len(u.Entries) != 0 {
 		t.Fatalf("scan = %+v, %v; want empty", u, err)
+	}
+}
+
+func TestScanReportsUnreadableEntry(t *testing.T) {
+	dir := cache(t, map[string][2]int{"00/a": {100, 1}})
+	shard := filepath.Join(dir, "00")
+	t.Cleanup(func() {
+		if err := os.Chmod(shard, 0o750); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Chmod(shard, 0o400); err != nil {
+		t.Skipf("cannot enforce directory permissions: %v", err)
+	}
+	entries, err := os.ReadDir(shard)
+	if err != nil || len(entries) != 1 {
+		t.Skipf("fixture requires readable directory names: %v", err)
+	}
+	if _, err := entries[0].Info(); !errors.Is(err, fs.ErrPermission) {
+		t.Skipf("fixture cannot enforce metadata permissions: %v", err)
+	}
+	u, err := Scan(dir)
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Scan error = %v, want permission denied", err)
+	}
+	if u.Dir != dir || u.Bytes != 0 || len(u.Entries) != 0 {
+		t.Fatalf("Scan usage = %+v, want empty partial usage for cache", u)
+	}
+}
+
+type infoErrorEntry struct {
+	os.DirEntry
+	err error
+}
+
+func (e infoErrorEntry) Info() (fs.FileInfo, error) { return nil, e.err }
+
+func TestScanEntryMetadataErrors(t *testing.T) {
+	ioErr := errors.New("metadata I/O failure")
+	for _, tt := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"disappeared", fs.ErrNotExist, nil},
+		{"permission", fs.ErrPermission, fs.ErrPermission},
+		{"io", ioErr, ioErr},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := cache(t, map[string][2]int{"00/a": {20, 1}, "00/b": {100, 2}})
+			shard := filepath.Join(dir, "00")
+			u, err := scan(dir, func(path string) ([]os.DirEntry, error) {
+				entries, err := os.ReadDir(path)
+				if err == nil && path == shard {
+					entries[1] = infoErrorEntry{DirEntry: entries[1], err: &fs.PathError{Op: "lstat", Path: filepath.Join(shard, "b"), Err: tt.err}}
+				}
+				return entries, err
+			})
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Scan error = %v, want %v", err, tt.want)
+			}
+			if u.Dir != dir || u.Bytes != 20 || len(u.Entries) != 1 || u.Entries[0].Path != filepath.Join(shard, "a") {
+				t.Fatalf("Scan usage = %+v, want the readable 20-byte entry", u)
+			}
+		})
 	}
 }
 

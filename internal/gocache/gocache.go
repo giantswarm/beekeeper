@@ -173,10 +173,15 @@ type Usage struct {
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
 // subdirectories. Everything else (its README, trim.txt, fuzz corpora) is
-// left out, and a missing cache is empty.
+// left out, and a missing cache is empty. On error, it returns the usage
+// collected so far.
 func Scan(dir string) (Usage, error) {
+	return scan(dir, os.ReadDir)
+}
+
+func scan(dir string, readDir func(string) ([]os.DirEntry, error)) (Usage, error) {
 	u := Usage{Dir: dir}
-	subs, err := os.ReadDir(dir)
+	subs, err := readDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return u, nil
 	}
@@ -187,7 +192,7 @@ func Scan(dir string) (Usage, error) {
 		if !s.IsDir() || !hexByte(s.Name()) {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(dir, s.Name()))
+		files, err := readDir(filepath.Join(dir, s.Name()))
 		if err != nil {
 			return u, err
 		}
@@ -196,8 +201,11 @@ func Scan(dir string) (Usage, error) {
 				continue
 			}
 			info, err := f.Info()
-			if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
 				continue // removed since the directory was read
+			}
+			if err != nil {
+				return u, err
 			}
 			u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, s.Name(), f.Name()), Size: info.Size(), Used: info.ModTime()})
 			u.Bytes += info.Size()
