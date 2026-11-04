@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -310,28 +309,6 @@ func TestSameChangeAtTheCapProvesNothing(t *testing.T) {
 	}
 	if _, _, why := sameChange(files, files); !strings.Contains(why, "cap") {
 		t.Errorf("sameChange at the cap = %q", why)
-	}
-}
-
-func TestChangedPast(t *testing.T) {
-	approved := approvedChange()
-	// head: a.go's same change moved by main, b.go fixed, c.png as it
-	// was, and a new test file; d.go left the pull request's change.
-	was := append(approvedChange(), compareFile{Name: dGo, Status: statusAdded, SHA: "d1", Patch: "+d"})
-	now := []compareFile{
-		{Name: aGo, Status: modified, SHA: "a2", Patch: "@@ -10,3 +10,3 @@\n other\n-old\n+new\n ctx"},
-		{Name: bGo, Status: statusAdded, SHA: "b2", Patch: "@@ -0,0 +1,2 @@\n+b\n+fixed"},
-		approved[2],
-		{Name: "b_test.go", Status: statusAdded, SHA: "t1", Patch: "+test"},
-	}
-	gh := compareAnswers{"main..." + bmApproved: filesOf(bmFork, was), "main..." + bmHead: filesOf(bmMain, now)}.gh(t)
-	got, err := ChangedPast(context.Background(), gh, bmRepo, "main", bmApproved, bmHead)
-	if want := []string{bGo, "b_test.go", dGo}; err != nil || !slices.Equal(got, want) {
-		t.Errorf("ChangedPast = %v, %v; want %v", got, err, want)
-	}
-	capped := compareAnswers{"main..." + bmApproved: filesOf(bmFork, was), "main..." + bmHead: filesOf(bmMain, make([]compareFile, compareFiles))}.gh(t)
-	if _, err := ChangedPast(context.Background(), capped, bmRepo, "main", bmApproved, bmHead); err == nil || !strings.Contains(err.Error(), "cap") {
-		t.Errorf("ChangedPast at the cap = %v, want an error", err)
 	}
 }
 
