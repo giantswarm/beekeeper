@@ -21,6 +21,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+// sshTool is the program the remote copy runs.
+const sshTool = "ssh"
+
 const (
 	remoteHost  = "host.example"
 	remoteOwner = "app:app"
@@ -41,7 +44,7 @@ func remoteOps(t *testing.T, calls *[]sshCall, fail error) *secret.Ops {
 	tools := secrettest.New(map[string]string{vaultRef: token})
 	o := ops(tools)
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if name != "ssh" {
+		if name != sshTool {
 			return tools.Run(ctx, dir, env, stdin, name, args...)
 		}
 		in, _ := io.ReadAll(stdin)
@@ -145,7 +148,7 @@ func TestCopyToRemoteValueOnStdinAlone(t *testing.T) {
 	if strings.Contains(argv, token) {
 		t.Errorf("the value is on ssh's command line: %q", c.argv)
 	}
-	want := []string{"ssh", "-T", "-o", "BatchMode=yes", "--", remoteHost}
+	want := []string{sshTool, "-T", "-o", "BatchMode=yes", "--", remoteHost}
 	if !slices.Equal(c.argv[:len(want)], want) || len(c.argv) != len(want)+1 {
 		t.Errorf("argv %q, want %q and the script", c.argv, want)
 	}
@@ -452,7 +455,7 @@ func TestStoreSourceToRemoteUsesStdinOnly(t *testing.T) {
 // Exercise the real runner so the SSH status survives its error formatting.
 func TestCopyToRemoteConnectionFailure(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\ncat >&2\nexit 255\n"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, sshTool), []byte("#!/bin/sh\ncat >&2\nexit 255\n"), 0o700); err != nil { //nolint:gosec // an executable test ssh
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -460,7 +463,7 @@ func TestCopyToRemoteConnectionFailure(t *testing.T) {
 	o := remoteOps(t, &calls, nil)
 	next := o.Run
 	o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
-		if name == "ssh" {
+		if name == sshTool {
 			return secret.Exec(ctx, dir, env, in, name, args...)
 		}
 		return next(ctx, dir, env, in, name, args...)
@@ -500,10 +503,10 @@ func TestRemoteScriptReplacesSymlink(t *testing.T) {
 	if !info.Mode().IsRegular() {
 		t.Fatal("target is not a regular file")
 	}
-	if got, err := os.ReadFile(target); err != nil || string(got) != token {
+	if got, err := os.ReadFile(target); err != nil || string(got) != token { //nolint:gosec // the test's scratch file
 		t.Fatal("target content differs")
 	}
-	if got, err := os.ReadFile(referent); err != nil || string(got) != "original" {
+	if got, err := os.ReadFile(referent); err != nil || string(got) != "original" { //nolint:gosec // the test's scratch file
 		t.Fatal("referent changed")
 	}
 }
