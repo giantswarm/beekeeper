@@ -842,12 +842,10 @@ func codexHookBinary(raw json.RawMessage) (bin, matcher string, timeout int) {
 	if json.Unmarshal(raw, &e) != nil || len(e.Hooks) != 1 || e.Hooks[0].Type != hookTypeCommand {
 		return "", "", 0
 	}
-	f := strings.Fields(e.Hooks[0].Command)
-	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "codex" {
-		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
-	}
-	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=codex" {
-		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
+	for _, suffix := range []string{" hook pretooluse --format codex", " hook pretooluse --format=codex"} {
+		if exe := installedHookBinary(e.Hooks[0].Command, suffix); exe != "" {
+			return exe, e.Matcher, e.Hooks[0].Timeout
+		}
 	}
 	return "", "", 0
 }
