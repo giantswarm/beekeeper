@@ -50,7 +50,7 @@ func onlyWaits(p *proc.Process) bool {
 	case devctlComm, "gh":
 		return IsWait(p)
 	case project.Name:
-		sub := beekeeperSubcommand(p)
+		sub := BeekeeperSubcommand(p)
 		return sub == "gate" || sub == "lease" && slices.ContainsFunc(p.Args, func(a string) bool {
 			return a == "--wait" || strings.HasPrefix(a, "--wait=")
 		})
@@ -62,9 +62,9 @@ func onlyWaits(p *proc.Process) bool {
 // one is no subcommand.
 var globalValueFlags = []string{"--config", "--as"}
 
-// beekeeperSubcommand is beekeeper's subcommand in p's arguments: the first word
+// BeekeeperSubcommand is beekeeper's subcommand in p's arguments: the first word
 // after the program that is no flag nor a global flag's value; "" for none.
-func beekeeperSubcommand(p *proc.Process) string {
+func BeekeeperSubcommand(p *proc.Process) string {
 	for i := 1; i < len(p.Args); i++ {
 		a := p.Args[i]
 		switch {

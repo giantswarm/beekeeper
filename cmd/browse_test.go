@@ -26,6 +26,26 @@ const (
 	tabsContext = "tabs_context_mcp"
 )
 
+func TestBrowseReactAriaCoordinateClick(t *testing.T) {
+	for name, guidance := range map[string]string{
+		"prompt": browsePrompt("Click the Dev Portal's 'Sign in' button by coordinate.", "", nil, false, nil),
+		"help":   (&app{}).browseCmd().Long,
+	} {
+		for _, want := range []string{
+			"React-aria Buttons (bui components)", "need a coordinate click",
+			"computer left_click with coordinate", "current position from a screenshot",
+			"silently does nothing", "action_summary", "check the resulting page or window",
+		} {
+			if !strings.Contains(guidance, want) {
+				t.Errorf("%s guidance lacks %q", name, want)
+			}
+		}
+	}
+	if help := (&app{}).browseCmd().Long; !strings.Contains(help, "Dev Portal's 'Sign in' button by coordinate at its current position") {
+		t.Error("browse help lacks a coordinate-click step for the portal Sign in button")
+	}
+}
+
 // selfSettings are the settings of a turn browse runs in this test binary.
 func selfSettings(t *testing.T, rules []string) string {
 	t.Helper()
@@ -547,6 +567,42 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	}
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
 		t.Errorf("the flag changed the turn's mode: %q", argv)
+	}
+}
+
+// Callback records use their provider's consent prompt on the first turn.
+func TestBrowseConsentPromptProviders(t *testing.T) {
+	const steps = "Authorize the application."
+	app := guard.App{Name: "example-app", Callbacks: []string{"callback.example.org"}}
+	base := browsePrompt(steps, "", nil, false, nil)
+	for _, provider := range []string{"GitHub", "GitLab"} {
+		t.Run(provider, func(t *testing.T) {
+			app := app
+			if provider == "GitLab" {
+				app.GitLab = "gitlab.example.org"
+			}
+			got := browsePrompt(steps, "", []guard.App{app}, false, nil)
+			if provider == "GitHub" {
+				want := strings.TrimSuffix(base, browseSteps+steps) +
+					"The person's own App example-app is declared and on record (callback callback.example.org): once the steps reach GitHub's page 'Authorize example-app' " +
+					"with that callback, click Authorize once; click nothing else that grants access. " + browseSteps + steps
+				if got != want {
+					t.Errorf("GitHub prompt changed: %q", got)
+				}
+				if strings.Contains(got, guard.GitLabFormScript) {
+					t.Error("GitHub prompt includes the GitLab form script")
+				}
+				return
+			}
+			for _, want := range []string{"GitLab's page 'Authorize example-app'", "on " + app.GitLab + " at /oauth/authorize", "callback " + app.Callbacks[0], guard.GitLabFormScript, "a call of its own (not in a batch)", "then click Authorize once"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("GitLab prompt missing %q", want)
+				}
+			}
+			if strings.Contains(got, "GitHub's page") {
+				t.Error("GitLab prompt includes GitHub consent wording")
+			}
+		})
 	}
 }
 
@@ -1342,5 +1398,29 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
 		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}
+
+func TestBrowseStorageBarrier(t *testing.T) {
+	p := browsePrompt("List Slack user groups", "", nil, false, nil)
+	for _, word := range []string{"localStorage", "sessionStorage", "cookies", "IndexedDB", "session tokens", "visible UI only", "Slack user groups", "report that barrier"} {
+		if !strings.Contains(p, word) {
+			t.Errorf("prompt missing %q", word)
+		}
+	}
+	reason, _ := json.Marshal("PreToolUse hook error: " + guard.BrowseStorageBarrier)
+	lines := chromeUse("s1", scriptTool, `{"action":"javascript_exec","text":"localStorage.getItem('key')","tabId":1}`) +
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","is_error":true,"content":` + string(reason) + `}]}}` + "\n"
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, transcript, lines)
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Refused) != 1 || !f.Refused[0].Hook || f.Refused[0].Reason != "Storage and Session Tokens" {
+		t.Fatalf("findings = %+v", f)
+	}
+	if got := strings.Join(f.lines("List Slack user groups", "", nil, false), "\n"); !strings.Contains(got, "beekeeper's hook refused it as [Storage and Session Tokens]") {
+		t.Errorf("report = %s", got)
 	}
 }
