@@ -48,6 +48,30 @@ func TestUserScanFailsClosedOnAmbiguousMappingNewlines(t *testing.T) {
 	}
 }
 
+func TestReferencesPreserveLiteralDeletedSuffix(t *testing.T) {
+	root := mappingFixture(t, "unused")
+	if err := os.WriteFile(filepath.Join(root, "42", fixtureMappings), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(root, "open (deleted)")
+	if err := os.WriteFile(candidate, []byte("open data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(candidate, filepath.Join(root, "42", "fd", "3")); err != nil {
+		t.Skip(err)
+	}
+	refs, err := referencesAt(root, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, paths := range map[string][]string{"References": refs, "Held": held(root, 42)} {
+		result := diskprune.Output(candidate, time.Time{}, paths, true)
+		if result.Removed != 0 || result.Kept["in use"] != 1 {
+			t.Errorf("%s lost a live filename ending in the deletion marker", name)
+		}
+	}
+}
+
 func mappingFixture(t *testing.T, name string) string {
 	t.Helper()
 	root := t.TempDir()

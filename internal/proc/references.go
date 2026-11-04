@@ -51,7 +51,7 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 			return nil, err
 		}
 		if err == nil && filepath.IsAbs(p) {
-			paths = append(paths, strings.TrimSuffix(p, " (deleted)"))
+			paths = appendReference(paths, p)
 		}
 	}
 	for _, name := range []string{"environ", "maps"} {
@@ -82,17 +82,22 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 					if strings.Contains(p, `\012`) {
 						return nil, errors.New("process mapping path contains an ambiguous escaped newline")
 					}
-					paths = append(paths, p)
-					// The suffix may be the kernel's deletion marker or
-					// part of a live filename. Keep both interpretations.
-					if original := strings.TrimSuffix(p, " (deleted)"); original != p {
-						paths = append(paths, original)
-					}
+					paths = appendReference(paths, p)
 				}
 			}
 		}
 	}
 	return paths, nil
+}
+
+// The suffix may be the kernel's deletion marker or part of a live
+// filename. Keep both interpretations so neither looks unreferenced.
+func appendReference(paths []string, path string) []string {
+	paths = append(paths, path)
+	if original := strings.TrimSuffix(path, " (deleted)"); original != path {
+		paths = append(paths, original)
+	}
+	return paths
 }
 
 // UserScan scans every numeric process entry, including entries the
