@@ -3,7 +3,6 @@ package install
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,7 +13,7 @@ func TestInstallRetriesFailedServiceChanges(t *testing.T) {
 		refusedRestart = "refusal"
 		canceledRun    = "cancellation"
 	)
-	for _, failure := range []string{reload, "restart", refusedRestart, canceledRun} {
+	for _, failure := range []string{reload, restart, refusedRestart, canceledRun} {
 		t.Run(failure, func(t *testing.T) {
 			f := &fakeSetup{}
 			e, _ := env(t, t.TempDir(), f, f.run)
@@ -65,8 +64,8 @@ func TestInstallRetriesFailedServiceChanges(t *testing.T) {
 // A launchd restart unloads the old agent before bootstrapping the new one.
 type splitRestartSetup struct{ fakeSetup }
 
-func (*splitRestartSetup) Restart(path string) [][]string {
-	return [][]string{{"halt", filepath.Base(path)}, {"start", filepath.Base(path)}}
+func (f *splitRestartSetup) Restart(path string) [][]string {
+	return [][]string{f.Halt(path), f.Start(path)}
 }
 
 func TestInstallRetriesPartiallyCompletedRestart(t *testing.T) {
@@ -77,7 +76,7 @@ func TestInstallRetriesPartiallyCompletedRestart(t *testing.T) {
 	}
 	e.Exe, e.Spec.Exe = replacementExe, replacementExe
 	e.Run = func(ctx context.Context, argv []string) error {
-		if argv[0] == "start" {
+		if argv[0] == start {
 			return errors.New("synthetic bootstrap failure")
 		}
 		return f.run(ctx, argv)
