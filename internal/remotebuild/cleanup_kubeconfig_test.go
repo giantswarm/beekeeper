@@ -15,6 +15,7 @@ const (
 	sweepContext        = "sweep-builders"
 	sweepContextFlag    = "--context"
 	sweepNamespace      = "sweep-workers"
+	sweepNamespaceFlag  = "--namespace"
 	sweepKubeconfig     = "build.yaml"
 	sweepKubeconfigFlag = "--kubeconfig"
 )
@@ -71,7 +72,7 @@ func TestSweepKubeconfigAcrossDirectories(t *testing.T) {
 			calls := 0
 			runner.Command = func(_ context.Context, _ io.Reader, _ io.Writer, args ...string) error {
 				calls++
-				want := []string{sweepKubeconfigFlag, kubeconfig, sweepContextFlag, sweepContext, "--namespace", sweepNamespace}
+				want := []string{sweepKubeconfigFlag, kubeconfig, sweepContextFlag, sweepContext, sweepNamespaceFlag, sweepNamespace}
 				if !slices.Equal(args[:6], want) {
 					t.Fatalf("connection = %v, want %v", args[:6], want)
 				}
