@@ -379,6 +379,12 @@ func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) err
 	return modelNotHeld{recorded: r.Model, want: w.model, why: err}
 }
 
+// desktopDeliveryError means a running CLI did not accept its task. The
+// caller must not treat its presence as successful delivery or resume beside it.
+type desktopDeliveryError struct{ error }
+
+func (e desktopDeliveryError) Unwrap() error { return e.error }
+
 // turnInDesktop has the desktop run msg as a turn of the session w, whose
 // row the person sees it run in: its desktop CLI, when one runs or the
 // desktop warms one within warm, takes msg by its socket; else a steward's
@@ -410,14 +416,17 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 		}
 	}
 	if sock := desktopSocketWithin(ctx, w.id, warm); sock != "" {
-		if err := a.peerSend(ctx, "uds:"+sock, msg); err != nil {
-			return "", fmt.Errorf("sending to its desktop CLI: %w", err)
+		if err := cliSend(ctx, a, "uds:"+sock, msg); err != nil {
+			return "", desktopDeliveryError{fmt.Errorf("sending to its desktop CLI: %w", err)}
 		}
 		return fmt.Sprintf("its desktop CLI took the message as its turn, in the desktop's row %s", w.host), nil
 	}
 	running := func() bool {
 		t, err := plat.Machine.Processes()
 		return err == nil && desktopTwin(t, w.id) != nil
+	}
+	if running() {
+		return "", desktopDeliveryError{errors.New("its desktop CLI runs and takes no message yet")}
 	}
 	s, err := a.sendThroughDesktop(ctx, w.host, msg, running)
 	if err != nil {
