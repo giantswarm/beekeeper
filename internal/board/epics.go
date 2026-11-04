@@ -384,10 +384,8 @@ const mergedPlans = 30
 
 // mergedPlan is the most recently updated merged pull request of the plans
 // repositories whose Epic line names the epic ref, nil for none: one search
-// of the merged pull requests carrying the epic's number, which a
-// description naming it as owner/repo#n has too where the URL phrase
-// FindPlans searches is missing, and which open pull requests mentioning
-// the epic do not crowd out.
+// of the merged pull requests carrying the epic's number, which open
+// pull requests mentioning the epic do not crowd out.
 func (c *Client) mergedPlan(ctx context.Context, ref string) (*Plan, error) {
 	if len(c.Plans) == 0 {
 		return nil, nil
@@ -433,7 +431,7 @@ func (c *Client) searchPlans(ctx context.Context, refs []string, past map[string
 			if err != nil {
 				return nil, err
 			}
-			query := fmt.Sprintf("%s is:pr %q sort:updated-desc", strings.Join(repos, " "), fmt.Sprintf("%s/%s/issues/%d", owner, repo, n))
+			query := fmt.Sprintf("%s is:pr (%q OR %q) sort:updated-desc", strings.Join(repos, " "), fmt.Sprintf("%s/%s/issues/%d", owner, repo, n), fmt.Sprintf("%s/%s#%d", owner, repo, n))
 			var gone string
 			if past[strings.ToLower(ref)] {
 				gone = fmt.Sprintf(" comments(last:%d){nodes{body url createdAt}} commits(last:%d){nodes{commit{oid}}}", goComments, goCommits)

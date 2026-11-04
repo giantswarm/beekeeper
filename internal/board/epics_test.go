@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,6 +172,63 @@ func planNode(n int, state string, draft, merged bool, body string) string {
 		n, n, n, n, state, draft, merged, n, body)
 }
 
+// Search candidates must contain one of the submitted reference phrases.
+func TestFindPlansDiscoversAShortEpicReference(t *testing.T) {
+	for _, reference := range []string{epicRef, "https://github.com/o/r/issues/50"} {
+		t.Run(reference, func(t *testing.T) {
+			for _, open := range []bool{true, false} {
+				t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
+					c := &Client{Plans: []string{plansRepo}, GH: func(ctx context.Context, args ...string) ([]byte, error) {
+						// Decode the GraphQL string, then read its quoted search phrases.
+						quoted := regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+						query, err := strconv.Unquote(quoted.FindString(args[3]))
+						if err != nil {
+							t.Fatal(err)
+						}
+						terms := quoted.FindAllString(query, -1)
+						if len(terms) > 1 && !strings.Contains(query, " OR ") {
+							t.Fatalf("reference alternatives must use OR: %s", query)
+						}
+						var nodes []string
+						add := func(n int, state string, merged bool, body string) {
+							for _, term := range terms {
+								phrase, err := strconv.Unquote(term)
+								if err != nil {
+									t.Fatal(err)
+								}
+								if strings.Contains(strings.ToLower(body), strings.ToLower(phrase)) {
+									nodes = append(nodes, planNode(n, state, false, merged, body))
+									break
+								}
+							}
+						}
+						// Newer candidates that mention the epic without naming it.
+						add(5, "OPEN", false, "Epic: "+reference+"0")
+						add(4, "OPEN", false, "Epic: o/r#1\n\nSlice: "+reference)
+						add(3, "CLOSED", false, "Epic: "+reference)
+						add(2, "MERGED", true, "Epic: "+reference)
+						if open {
+							add(1, "OPEN", false, "Epic: "+reference)
+						}
+						return []byte(`{"data":{"p0":{"nodes":[` + strings.Join(nodes, ",") + `]}}}`), nil
+					}}
+					got, err := c.FindPlans(context.Background(), []string{"O/R#50"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantRef, wantState := "o/plans#2", "merged"
+					if open {
+						wantRef, wantState = planRef, "open"
+					}
+					if p := got[epicRef]; p == nil || p.Ref != wantRef || p.State != wantState || !p.Private {
+						t.Fatalf("plan = %+v, want private %s (%s)", p, wantRef, wantState)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestFindPlansTakesTheOpenPlanNamingTheEpic(t *testing.T) {
 	var queries, repos []string
 	c := &Client{Plans: []string{plansRepo, "o/more"}, GH: func(ctx context.Context, args ...string) ([]byte, error) {
@@ -196,7 +255,7 @@ func TestFindPlansTakesTheOpenPlanNamingTheEpic(t *testing.T) {
 	if p, ok := got["o/r#940"]; ok {
 		t.Errorf("plan of #940 = %+v", p)
 	}
-	if len(queries) != 1 || !strings.Contains(queries[0], `p0:search(query:"repo:o/plans repo:o/more is:pr \"o/r/issues/938\" sort:updated-desc",type:ISSUE`) ||
+	if len(queries) != 1 || !strings.Contains(queries[0], `p0:search(query:"repo:o/plans repo:o/more is:pr (\"o/r/issues/938\" OR \"o/r#938\") sort:updated-desc",type:ISSUE`) ||
 		!slices.Equal(repos, []string{plansRepo}) {
 		t.Errorf("queries %q acting on %q", queries, repos)
 	}
