@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -90,13 +91,13 @@ func TestPassThrough(t *testing.T) {
 	}
 }
 
-func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
+func TestHeavyCommandSegments(t *testing.T) {
 	cmd := "cd ~/src/x && export GOFLAGS=-mod=vendor && go test -p 2 ./... 2>&1 | tail -40"
 	d := decide(t, hook(), "/", cmd, map[string]any{"timeout": 120000, "description": "tests"})
 	if d == nil || d.PermissionDecision != decisionAllow {
 		t.Fatalf("want allow, got %+v", d)
 	}
-	want := self + " run -- zsh -c " + ShellQuote(cmd)
+	want := "cd ~/src/x && export GOFLAGS=-mod=vendor && " + self + " run -- zsh -c " + ShellQuote("go test -p 2 ./... 2>&1") + " | tail -40"
 	if got := d.UpdatedInput["command"]; got != want {
 		t.Errorf("command = %q, want %q", got, want)
 	}
@@ -120,6 +121,61 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	}
 }
 
+func TestCloneThenBuild(t *testing.T) {
+	dir := t.TempDir()
+	// The stand-in runner reports a slot timeout. Setup must already have run
+	// when the runner is reached, even though the build never starts.
+	runner := filepath.Join(dir, "runner")
+	if err := os.WriteFile(runner, []byte("#!/bin/sh\ntest -f cloned || exit 99\nprintf '%s\\n' \"$@\" > args\nexit 75\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	git := filepath.Join(dir, "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\nmkdir checkout && touch checkout/cloned\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	h := hook()
+	h.Self, h.Shell = runner, "bash"
+	d := decide(t, h, dir, "git clone source checkout && cd checkout && govulncheck ./...", nil)
+	if d == nil || d.PermissionDecision != decisionAllow {
+		t.Fatalf("want rewrite, got %+v", d)
+	}
+	c := exec.Command("bash", "-c", d.UpdatedInput["command"].(string))
+	c.Dir = dir
+	c.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if out, err := c.CombinedOutput(); err == nil {
+		t.Fatal("want slot timeout")
+	} else if e, ok := err.(*exec.ExitError); !ok || e.ExitCode() != 75 {
+		t.Fatalf("want exit 75, got %v: %s", err, out)
+	}
+	args, err := os.ReadFile(filepath.Join(dir, "checkout", "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(args) != "run\n--\nbash\n-c\ngovulncheck ./...\n" {
+		t.Fatalf("runner arguments: %q", args)
+	}
+}
+
+func TestBuildSegmentOperators(t *testing.T) {
+	wrap := func(s string) string { return self + " run -- zsh -c " + ShellQuote(s) }
+	for _, tc := range []struct{ cmd, want string }{
+		{"git clone source checkout && cd checkout && govulncheck ./...", "git clone source checkout && cd checkout && " + wrap("govulncheck ./...")},
+		{"echo ready; go build ./... | tail -5", "echo ready; " + wrap("go build ./...") + " | tail -5"},
+		{"go build ./... && go test ./...", wrap("go build ./...") + " && " + wrap("go test ./...")},
+		{"false || go test ./...", "false || " + wrap("go test ./...")},
+		{`echo 'quoted && ; |'; go test ./...`, `echo 'quoted && ; |'; ` + wrap("go test ./...")},
+		{"if true; then go test ./...; fi", wrap("if true; then go test ./...; fi")},
+		{"x=$(go test ./...)", wrap("x=$(go test ./...)")},
+	} {
+		t.Run(tc.cmd, func(t *testing.T) {
+			d := decide(t, hook(), "/", tc.cmd, nil)
+			if d == nil || d.UpdatedInput["command"] != tc.want {
+				t.Fatalf("want %q, got %+v", tc.want, d)
+			}
+		})
+	}
+}
+
 // An agentlab e2e proof builds nothing and waits on its lab, its model and
 // GitHub: the hook passes it unwrapped, so it takes no build slot, whatever
 // "test" its subcommand or a package script names; a build beside it in the
@@ -136,10 +192,13 @@ func TestAgentlabProofTakesNoSlot(t *testing.T) {
 			t.Errorf("%q: want pass-through, got %+v", cmd, d)
 		}
 	}
-	for _, cmd := range []string{"go test ./...", "agentlab backstage-test && go test ./..."} {
-		d := decide(t, hook(), "/", cmd, nil)
-		if d == nil || d.UpdatedInput["command"] != self+" run -- zsh -c "+ShellQuote(cmd) {
-			t.Errorf("%q: want wrapped, got %+v", cmd, d)
+	for _, tc := range []struct{ cmd, want string }{
+		{"go test ./...", self + " run -- zsh -c 'go test ./...'"},
+		{"agentlab backstage-test && go test ./...", "agentlab backstage-test && " + self + " run -- zsh -c 'go test ./...'"},
+	} {
+		d := decide(t, hook(), "/", tc.cmd, nil)
+		if d == nil || d.UpdatedInput["command"] != tc.want {
+			t.Errorf("%q: want %q, got %+v", tc.cmd, tc.want, d)
 		}
 	}
 }
@@ -419,7 +478,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"timeout 600 devctl pr merge o/r 1", "timeout 600 " + g + "devctl pr merge o/r 1", false},
 		{"cd x && devctl pr merge o/r 1", "cd x && " + g + "devctl pr merge o/r 1", false},
 		{"devctl pr merge o/r 1", backgroundExport + self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
-		{"make && devctl pr merge o/r 1", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 1'", false},
+		{"make && devctl pr merge o/r 1", self + " run -- zsh -c make && " + g + "devctl pr merge o/r 1", false},
 		// The live case: only the devctl invocation is wrapped, the pipeline runs as written.
 		{`flock ~/.local/state/lab/locks/merge-marge.lock devctl pr merge --update-branch o/r 7 | tee "$(scripts/scratch orch merge-7.json)" | ./orchestration/ledger.sh record o/r#7 --agent orchestrator`,
 			`flock ~/.local/state/lab/locks/merge-marge.lock ` + g + `devctl pr merge --update-branch o/r 7 | tee "$(scripts/scratch orch merge-7.json)" | ./orchestration/ledger.sh record o/r#7 --agent orchestrator`, false},
@@ -717,7 +776,7 @@ func TestHookGatesTheProgramItRuns(t *testing.T) {
 	for _, c := range []struct{ cmd, want string }{
 		{"bash <<'EOF'\nset -e\ndevctl pr merge o/r 7\nEOF", "bash <<'EOF'\nset -e\n" + g + "devctl pr merge o/r 7\nEOF"},
 		{"cat <<'EOF' | sh\ndevctl release promote o/r\nEOF", "cat <<'EOF' | sh\n" + g + "devctl release promote o/r\nEOF"},
-		{"make && devctl pr merge o/r 7", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 7'"},
+		{"make && devctl pr merge o/r 7", self + " run -- zsh -c make && " + g + "devctl pr merge o/r 7"},
 	} {
 		if d := decide(t, h, dir, c.cmd, nil); d == nil || d.UpdatedInput["command"] != c.want {
 			t.Errorf("%q: got %+v, want %q", c.cmd, d, c.want)

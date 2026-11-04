@@ -518,7 +518,47 @@ func (h Hook) decide(ev event) []byte {
 	if !isHeavy(cmd) {
 		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
-	return h.rewrite(ev.ToolInput, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
+	return h.rewrite(ev.ToolInput, h.wrapBuilds(cmd), true, bg)
+}
+
+// wrapBuilds leaves setup commands and pipeline consumers outside the build
+// slot. For shell programs with nested syntax or here-documents, retain the
+// whole-program wrapper: splitting those can change scope or shell syntax.
+func (h Hook) wrapBuilds(cmd string) string {
+	wrap := func(s string) string {
+		return ShellQuote(h.Self) + " run -- " + ShellQuote(h.Shell) + " -c " + ShellQuote(s)
+	}
+	sc := scanShell(cmd)
+	segs := sc.segments()
+	if len(sc.heredocs) > 0 {
+		return wrap(cmd)
+	}
+	for _, sg := range segs {
+		switch sg.after {
+		case "", "&&", "||", ";", "|", "&", "\n":
+		default:
+			return wrap(cmd)
+		}
+		words := shellWords(sc.plain[sg.start:sg.end])
+		if len(words) > 0 {
+			switch words[0] {
+			case "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "{", "}":
+				return wrap(cmd)
+			}
+		}
+	}
+	for i := len(segs) - 1; i >= 0; i-- {
+		sg := segs[i]
+		s := cmd[sg.start:sg.end]
+		if wrapped.MatchString(s) || !isHeavy(s) {
+			continue
+		}
+		build := strings.TrimSpace(s)
+		start := sg.start + strings.Index(s, build)
+		end := start + len(build)
+		cmd = cmd[:start] + wrap(build) + cmd[end:]
+	}
+	return cmd
 }
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a

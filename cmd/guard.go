@@ -381,8 +381,11 @@ that does not load keeps the guards on.`,
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- <shell> -c '<command>'"
 (the absolute path of this binary, the configured shell), the tool timeout
-raised to 10 minutes; a background run gets a 60-minute wait instead. A
-command that would start a kind cluster past maxKindClusters is refused with
+raised to 10 minutes; a background run gets a 60-minute wait instead.
+In lists and pipelines, only build segments enter the slot; setup commands
+and output consumers run directly. Nested shell programs and here-documents
+retain a whole-program wrapper to preserve shell scope.
+A command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
 machine kubeconfig. A configuration that does not load refuses every Bash
