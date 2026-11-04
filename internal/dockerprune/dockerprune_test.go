@@ -53,6 +53,16 @@ func TestNormalize(t *testing.T) {
 
 func TestImporter(t *testing.T) {
 	yes := [][]string{
+		{docker, "--config", "/tmp/docker-fixture", "--context", "default", image, "load", "-i", "/tmp/synthetic.tar"},
+		{docker, "--config", "/tmp/docker-fixture", "--context", "default", "save", "example:dev"},
+		{docker, "--config=/tmp/docker-fixture", "-cdefault", image, "import", "x.tar"},
+		{docker, "-D", "-l", "debug", image, build, "."},
+		{docker, "buildx", "--builder", "fixture", "bake"},
+		{docker, "builder", build, "."},
+		{"docker-buildx", "--builder=fixture", build, "."},
+		{"buildctl", "--addr", "/tmp/buildkit.sock", "--timeout", "10", build},
+		{"ctr", "--address", "/tmp/containerd.sock", "--namespace", "fixture", "images", "import", "x.tar"},
+		{kind, "--loglevel", "debug", "load", "docker-image", "example:dev"},
 		{kind, "load", "docker-image", "x:dev", "--name", "agentlab"},
 		{"/usr/bin/kind", "create", "cluster"},
 		{docker, build, "-t", "x", "."},
@@ -63,6 +73,17 @@ func TestImporter(t *testing.T) {
 		{"ctr", "-n", "k8s.io", "images", "import", "x.tar"},
 	}
 	no := [][]string{
+		{docker, "run", "example:dev", build},
+		{docker, "exec", "fixture", "load"},
+		{docker, image, "inspect", build},
+		{docker, "buildx", "inspect", build},
+		{"docker-buildx", "ls", build},
+		{"buildctl", "debug", build},
+		{"ctr", "images", "list", "import"},
+		{kind, "get", "clusters", "create"},
+		{docker, "--context", build, "ps"},
+		{docker, "--config"},
+		{},
 		{kind, "get", "kubeconfig"},
 		{docker, "ps"},
 		{docker, "run", "img", "make", build},

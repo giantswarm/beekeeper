@@ -520,33 +520,87 @@ func parseUsedAgo(s string) time.Duration {
 	return time.Duration(v * float64(mult))
 }
 
-// Importer says an argument vector loads or builds images: kind load and
-// kind create (which loads its node image), docker build, load, save and
-// import, buildx, and containerd's ctr import. The verb is one of the first
-// three words that are no flag: docker image load, docker --context x
-// build, ctr -n k8s.io images import.
+// Importer says whether the executable's command path loads, saves or builds
+// images. Command arguments are never interpreted as commands.
 func Importer(args []string) bool {
 	if len(args) < 2 {
 		return false
 	}
 	name := args[0][strings.LastIndex(args[0], "/")+1:]
-	var words []string
-	for _, a := range args[1:] {
-		if !strings.HasPrefix(a, "-") {
-			if words = append(words, a); len(words) == 3 {
-				break
+	var values []string
+	switch name {
+	case "docker":
+		values = []string{"--config", "--context", "-c", "--host", "-H", "--log-level", "-l", "--tlscacert", "--tlscert", "--tlskey"}
+	case "docker-buildx":
+		values = []string{"--builder"}
+	case "kind":
+		values = []string{"--loglevel", "--verbosity", "-v"}
+	case "buildctl":
+		values = []string{"--addr", "--timeout", "--connhelper", "--tlscacert", "--tlscert", "--tlskey", "--tlsservername"}
+	case "ctr":
+		values = []string{"--address", "-a", "--namespace", "-n", "--timeout", "--connect-timeout"}
+	default:
+		return false
+	}
+	command, rest := importerCommand(args[1:], values)
+	switch name {
+	case "kind":
+		return command == "load" || command == "create"
+	case "docker":
+		switch command {
+		case "image":
+			command, _ = importerCommand(rest, values)
+		case "builder":
+			command, _ = importerCommand(rest, values)
+			return command == "build"
+		case "buildx":
+			command, _ = importerCommand(rest, append(values, "--builder"))
+			return command == "build" || command == "bake"
+		}
+		return slices.Contains([]string{"build", "load", "save", "import"}, command)
+	case "docker-buildx":
+		// Docker invokes the plugin with the buildx command prefix.
+		if command == "buildx" {
+			command, _ = importerCommand(rest, values)
+		}
+		return command == "build" || command == "bake"
+	case "buildctl":
+		return command == "build"
+	case "ctr":
+		if command != "images" && command != "image" && command != "i" {
+			return false
+		}
+		command, _ = importerCommand(rest, values)
+		return command == "import"
+	}
+	return false
+}
+
+// importerCommand consumes global flags and their values, then returns only
+// the next command and its remaining arguments. Values may be separate,
+// joined with '=', or attached to a short flag (for example -cdefault).
+func importerCommand(args, values []string) (string, []string) {
+	for len(args) > 0 {
+		a := args[0]
+		args = args[1:]
+		if a == "--" {
+			if len(args) == 0 {
+				return "", nil
 			}
+			return args[0], args[1:]
+		}
+		if !strings.HasPrefix(a, "-") {
+			return a, args
+		}
+		flag, _, inline := strings.Cut(a, "=")
+		if slices.Contains(values, flag) && !inline {
+			if len(args) == 0 {
+				return "", nil
+			}
+			args = args[1:]
 		}
 	}
-	const build = "build"
-	verbs := map[string][]string{
-		"kind":          {"load", "create"},
-		"docker":        {build, "buildx", "load", "save", "import"},
-		"docker-buildx": {build, "bake"},
-		"buildctl":      {build},
-		"ctr":           {"import"},
-	}[name]
-	return slices.ContainsFunc(words, func(a string) bool { return slices.Contains(verbs, a) })
+	return "", nil
 }
 
 // ParseSize reads a size as docker prints it: decimal units, "1.5GB",
