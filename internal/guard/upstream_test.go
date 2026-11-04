@@ -203,3 +203,38 @@ func TestUpstreamRefusesConnectorPosts(t *testing.T) {
 	passed(t, decideEvent(t, h, toolEvent("mcp__github__get_pull_request",
 		map[string]any{ownerKey: "kagent-dev", repoKey: theirName})), "connector read")
 }
+
+func TestUpstreamAPIRepositoryVariables(t *testing.T) {
+	t.Setenv("BEEKEEPER_TEST_REPO", "giantswarm/x")
+	t.Setenv("BEEKEEPER_TEST_EXTERNAL", "outside/x")
+	t.Setenv("BEEKEEPER_TEST_EMPTY", "")
+	tests := []struct {
+		name, command, reason string
+	}{
+		{"literal allowed", `gh api -X POST repos/giantswarm/x/issues/1/comments`, ""},
+		{"literal external", `gh api -X POST repos/outside/x/issues/1/comments`, "outside github.allowedOrgs"},
+		{"assignment allowed", `R=giantswarm/x; gh api -X POST "repos/$R/issues/1/comments"`, ""},
+		{"assignment external", `R=outside/x; gh api -X POST "repos/$R/issues/1/comments"`, "outside github.allowedOrgs"},
+		{"environment allowed", `gh api -X POST "repos/$BEEKEEPER_TEST_REPO/issues/1/comments"`, ""},
+		{"environment external", `gh api -X POST "repos/${BEEKEEPER_TEST_EXTERNAL}/issues/1/comments"`, "outside github.allowedOrgs"},
+		{"multiple variables", `O=giantswarm; R=x; gh api -X POST "repos/$O/$R/issues/1/comments"`, ""},
+		{"variable name boundary", `R=outside/x; REPO=giantswarm/x; gh api -X POST "repos/$REPO/issues/1/comments"`, ""},
+		{"loop allowed", `for R in giantswarm/x giantswarm/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, ""},
+		{"loop external", `for R in giantswarm/x outside/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, "outside github.allowedOrgs"},
+		{"unknown", `gh api -X POST "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
+		{"empty", `gh api -X POST "repos/$BEEKEEPER_TEST_EMPTY/issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
+		{"expanded away", `gh api -X POST "repos//issues/1/comments"`, "literal repos/<owner>/<repo>/..."},
+		{"suffix unknown", `R=giantswarm/x; gh api -X POST "repos/$R/issues/$1/dependencies/blocked_by"`, ""},
+		{"unknown read", `gh api "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1"`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := decide(t, upstreamHook(nil), oursDir, tt.command, nil)
+			if tt.reason == "" {
+				passed(t, d, tt.command)
+			} else {
+				refused(t, d, tt.command, tt.reason)
+			}
+		})
+	}
+}
