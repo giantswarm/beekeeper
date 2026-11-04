@@ -38,8 +38,10 @@ func codexArgs(model, workspace, thread string, effort ...string) []string {
 	}
 	// Supply trust in memory so Codex does not persist it in the policy-bound
 	// config.toml. Resumed turns need the same override as the first turn.
+	// Override the table: the CLI splits override keys on dots without TOML
+	// quoted-key parsing, so a quoted workspace in a dotted key fails strict mode.
 	project, _ := json.Marshal(workspace)
-	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects."+string(project)+".trust_level=\"trusted\"")
+	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects={"+string(project)+"={trust_level=\"trusted\"}}")
 	if len(effort) > 0 && effort[0] != "" {
 		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort[0]))
 	}
@@ -266,18 +268,32 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		prompt += "\n"
 	}
 	c.Dir, c.Env, c.Stdin = j.Handle.Workspace, env, strings.NewReader(prompt)
-	// Authentication diagnostics must not leak values into logs or replies.
-	c.Stderr = io.Discard
+	// Keep bounded startup diagnostics without exposing authentication output.
+	stderr := &codexStderr{}
+	c.Stderr = stderr
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		return thread, false, err
 	}
 	if err := c.Start(); err != nil {
+		// An exec/chdir error has no child stderr. Preserve its OS diagnostic
+		// through the same bounded, redacted log path as child diagnostics.
+		_, _ = stderr.Write([]byte(err.Error()))
+		if logErr := stderr.writeLog(log); logErr != nil {
+			return thread, false, logErr
+		}
 		return thread, false, errors.New("harness process could not start")
+	}
+	wait := func() error {
+		err := c.Wait()
+		if logErr := stderr.writeLog(log); logErr != nil {
+			return logErr
+		}
+		return err
 	}
 	kill := func(err error) (string, bool, error) {
 		_ = c.Process.Kill()
-		_ = c.Wait()
+		_ = wait()
 		return thread, false, err
 	}
 	accepted, failed := false, false
@@ -330,7 +346,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	if scan.Err() != nil {
 		_ = c.Process.Kill()
 	}
-	err = c.Wait()
+	err = wait()
 	if err == nil {
 		err = scan.Err()
 	}
