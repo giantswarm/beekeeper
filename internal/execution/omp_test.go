@@ -39,6 +39,7 @@ test -z "${OPENAI_API_KEY+x}"
 case " $* " in *' --no-extensions '*) ;; *) exit 2;; esac
 case " $* " in *' --extension '*) ;; *) exit 2;; esac
 case " $* " in *' --tools bash,read,write '*) ;; *) exit 2;; esac
+printf '%s\n' "$*" >> "$root/args"
 if test -e "$root/github-path"; then first=${PATH%%:*}; test -x "$first/gh" && test -x "$first/git" || exit 3; fi
 if test -e "$root/extension-error"; then echo '{"type":"extension_error"}'; exit 1; fi
 echo '{"type":"ready"}'
@@ -114,6 +115,28 @@ func TestExecutionOmpRunnerSingleTurn(t *testing.T) {
 	j, err := f.s.Read(f.r.Ref)
 	if err != nil || j.Phase != Exited || !j.Ready || j.InTurn || j.Thread != "fixture-omp-thread" {
 		t.Fatalf("journal %+v: %v", j, err)
+	}
+}
+
+func TestExecutionOmpRunnerCarriesEffort(t *testing.T) {
+	for _, level := range []string{"", testEffortHigh} {
+		t.Run("level="+level, func(t *testing.T) {
+			f, dir := ompFixture(t)
+			f.r.Effort = level
+			ctx := startOmpFixture(t, f)
+			if err := f.s.Run(ctx, f.r.Ref); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "args")) //nolint:gosec // this test's temporary directory
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.TrimSpace(string(raw))
+			args = args[strings.LastIndex(args, "\n")+1:]
+			if got := strings.Contains(args, "--thinking"); got != (level != "") || level != "" && !strings.HasSuffix(args, "--thinking "+level) {
+				t.Fatalf("effort %q launched omp with %q", level, args)
+			}
+		})
 	}
 }
 
