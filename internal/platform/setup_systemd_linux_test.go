@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,4 +88,24 @@ func TestCalendar(t *testing.T) {
 			t.Errorf("calendar(%s) = %q, want %q", every, got, want)
 		}
 	}
+}
+
+func TestTeleportBotService(t *testing.T) {
+	files, _ := (systemdSetup{}).Files(SetupSpec{ConfigDir: "/config", TeleportEvery: time.Minute, TeleportBotBinary: "/bin/tbot", TeleportBotConfig: "/config/bot.yaml"})
+	for _, f := range files {
+		if filepath.Base(f.Path) != teleportServiceUnit {
+			continue
+		}
+		unit := string(f.Content)
+		for _, want := range []string{`ExecStart="/bin/tbot" start --config "/config/bot.yaml"`, "Restart=always", "UMask=0077"} {
+			if !strings.Contains(unit, want) {
+				t.Fatalf("unit lacks %q: %s", want, unit)
+			}
+		}
+		if !f.Service || strings.Contains(unit, "renew") || strings.Contains(unit, "graphical") {
+			t.Fatalf("not a headless supervised service: %s", unit)
+		}
+		return
+	}
+	t.Fatal("bot unit missing")
 }

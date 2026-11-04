@@ -233,7 +233,8 @@ type SetupSpec struct {
 	DesktopScope string
 	// TeleportEvery is how often the Teleport login's keeper reads the
 	// expiry (teleport.every); zero writes no keeper.
-	TeleportEvery time.Duration
+	TeleportEvery                        time.Duration
+	TeleportBotConfig, TeleportBotBinary string
 	// Notify runs the standby watch with --notify (watch.notify).
 	Notify bool
 	// ConfigPath is the explicit configuration the loop service reads.
