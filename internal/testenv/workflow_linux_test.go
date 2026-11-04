@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := syscall.Exec("/work/bin/fixture", append([]string{"fixture"}, os.Args[3:]...), testenv.WorkflowEnv()); err != nil {
+		if err := syscall.Exec("/work/bin/fixture", append([]string{"fixture"}, os.Args[3:]...), testenv.WorkflowEnv()); err != nil { //nolint:gosec // the test binary and fixture commands
 			panic(err)
 		}
 	}

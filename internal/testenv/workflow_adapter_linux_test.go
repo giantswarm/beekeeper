@@ -332,7 +332,7 @@ func gitRemote(args []string) error {
 			fmt.Println("unsupported")
 		case line == "connect git-upload-pack" || line == "connect git-receive-pack":
 			fmt.Println()
-			return syscall.Exec("/usr/bin/git", []string{"git", strings.TrimPrefix(line, "connect git-"), "/work/origin.git"}, os.Environ())
+			return syscall.Exec("/usr/bin/git", []string{"git", strings.TrimPrefix(line, "connect git-"), "/work/origin.git"}, os.Environ()) //nolint:gosec // the test binary and fixture commands
 		default:
 			return fmt.Errorf("unknown Git transport call %q", line)
 		}
