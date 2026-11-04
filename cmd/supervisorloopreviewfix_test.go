@@ -590,8 +590,8 @@ func TestContinuationWaitsWhenCoordinatorCapacityCannotBeRead(t *testing.T) {
 		out  string
 		code int
 	}{
-		{name: "empty"},
-		{name: "failed", out: loopRoomJSON, code: 1},
+		{name: "empty capacity response"},
+		{name: "capacity command failure", out: loopRoomJSON, code: 1},
 		{name: "malformed", out: "{"},
 		{name: "missing room", out: "{}"},
 		{name: "full", out: `{"room":0}`},
