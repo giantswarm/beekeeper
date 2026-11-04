@@ -422,3 +422,17 @@ func TestKubeGuardOffWithoutProduction(t *testing.T) {
 		t.Error("KubeGuardOff reports the guard wrong")
 	}
 }
+
+// Token requests must use api-read so credentials cannot reach tool output.
+func TestKubeProductionDirectTokensRefused(t *testing.T) {
+	h := kubeHook(machineKC)
+	for _, command := range []string{
+		"kubectl --context gazelle create token writer",
+		"kubectl --context gazelle create token writer --duration=5m",
+		"kubectl --context gazelle create token reader",
+		"kubectl --context gazelle create token reader --duration=5m",
+	} {
+		wantRefused(t, h, command, prodMsg)
+	}
+	wantPassed(t, h, "beekeeper api-read ate-api Reader/List --duration=5m")
+}
