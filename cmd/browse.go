@@ -482,7 +482,8 @@ the front window of a monocle workspace) is drawn off the person's screen
 for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
 far from every monitor with its own workspace beekeeper-browse (number 31337), moves
 the window silently onto it, and puts it back on its own workspace and
-removes the output once the turn ends. Every window Chrome opens while the
+keeps the empty output for later turns to avoid transient numbered workspaces.
+Every window Chrome opens while the
 turn runs and the person's keyboards and pointers are quiet (desktop.typingQuiet;
 a sign-in pop-up, a new window), the shared window shown or not, maps on
 that output too, silently, without the focus and deaf to
