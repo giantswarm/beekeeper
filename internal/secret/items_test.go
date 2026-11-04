@@ -22,6 +22,8 @@ const itemsPasswordKind = "PASSWORD"
 
 const itemsUsername = "username"
 
+const itemsNotes = "notesPlain"
+
 // The listing answers titles and field labels with their lengths, never a
 // value, also in its JSON form.
 func TestItemsAnswerTitlesFieldsAndLengthsOnly(t *testing.T) {
@@ -123,7 +125,7 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 	values := map[string]string{
 		"first/notes": "FIRST=one\n", "second/notes": "SECOND=two\n",
 		"first/username": "CUSTOM=three\n", itemsUsername: "BUILTIN=four\n",
-		"notesPlain": "PLAIN=five\n", itemsCredential: "original",
+		itemsNotes: "PLAIN=five\n", itemsCredential: "original",
 	}
 	tools := secrettest.New(nil)
 	tools.Types = map[string]string{}
@@ -137,7 +139,7 @@ func TestItemsFakePreservesFieldSections(t *testing.T) {
 		if name == itemsUsername {
 			purpose = "USERNAME"
 		}
-		if name == "notesPlain" {
+		if name == itemsNotes {
 			purpose = "NOTES"
 		}
 		tools.Vault[base+name], tools.Types[base+name] = value, typ
