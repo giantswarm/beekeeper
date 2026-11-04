@@ -162,6 +162,11 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 	if current.Author != result.Author || current.Head != reviewed || current.Commit != reviewed || current.Verdict != result.Verdict || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
+	for _, later := range pull.Reviews[currentIndex+1:] {
+		if later.Verdict == superloop.ChangesRequested && (current.At.IsZero() || later.At.IsZero() || !later.At.Before(current.At)) {
+			return refused("a later review requested changes; new supervisor approval required")
+		}
+	}
 	// The loop's own merge presents no grant: it is the merge authority, so
 	// only a worker's grant is checked against the review it was issued for.
 	if use.ID == "" {

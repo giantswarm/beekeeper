@@ -33,9 +33,10 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old := readLoopPull
-	t.Cleanup(func() { readLoopPull = old })
+	old, login := readLoopPull, readDeskLogin
+	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
+	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
@@ -314,6 +315,38 @@ func TestExecutionMergeRejectsEditedAuthenticatedReview(t *testing.T) {
 	}
 }
 
+func TestExecutionMergeRejectsEarlierApprovalOverriddenByChangesRequested(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	const resolvedHead = "2222222222222222222222222222222222222222"
+	pull.Head = resolvedHead
+	use.Head = resolvedHead
+	oldBaseMerge := readBaseMerge
+	t.Cleanup(func() { readBaseMerge = oldBaseMerge })
+	readBaseMerge = func(_ context.Context, p superloop.Pull, approved string) (bool, error) {
+		return p.Head == resolvedHead && approved == pull.Reviews[0].Head, nil
+	}
+	pull.Reviews = append(pull.Reviews, superloop.Review{
+		ID:      "later-changes-requested",
+		Author:  "reviewer-2",
+		Head:    resolvedHead,
+		Commit:  resolvedHead,
+		Verdict: superloop.ChangesRequested,
+		Body:    "Review: changes requested\ndropped guard in conflict resolution",
+		At:      pull.Reviews[0].At.Add(time.Minute),
+	})
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.executionMergeLive(context.Background(), st, use); err == nil || !strings.Contains(err.Error(), "later review requested changes") {
+		t.Fatalf("later changes-requested review did not override earlier approval: %v", err)
+	}
+	if _, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty); err == nil {
+		t.Fatal("later changes-requested review still granted merge authority")
+	}
+}
+
 func TestExecutionReviewAssignmentRequiresActualSupervisorStart(t *testing.T) {
 	a, use, _ := mergeReviewRig(t)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -476,5 +509,32 @@ func TestLoopClaimMergesAuthenticatedReviewFixes(t *testing.T) {
 				t.Fatal("modified reviewer result admitted")
 			}
 		})
+	}
+}
+
+func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	assignMergeReview(t, a, use, 1)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		round := executionReviewRound(st, use)
+		round.Reviewer.Host = "spaceage"
+		round.Reviewer.HostSession = "remote-review-session"
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completeMergeReview(t, a, use, &pull.Reviews[0])
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.authenticateExecutionReview(context.Background(), st, use, *pull); err != nil {
+		t.Fatalf("authenticated remote review refused: %v", err)
+	}
+	forged := executionReviewRound(st, use).Reviewer
+	forged.HostSession = "another-remote-session"
+	forged.Session = "another-session"
+	if sameReviewSession(forged, executionReviewRound(st, use).Result.By) {
+		t.Fatal("another remote session authenticated as reviewer")
 	}
 }

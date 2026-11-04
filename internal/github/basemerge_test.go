@@ -181,7 +181,15 @@ func TestApprovalCovers(t *testing.T) {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: resolved(), base: mainChangedA,
 			want: true, why: "rebases the approved head aaaaaaa onto main, resolving its conflicts in a.go",
 		},
-		"a rebase resolving a conflict by combining both sides of a line": {
+		"a rebase resolving a conflict by keeping the union of both sides' lines": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			now: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a3", Patch: "@@ -1,3 +1,4 @@\n ctx\n newer\n+new\n ctx"},
+			}, approvedChange()[1:]...),
+			base: mainChangedA,
+			want: true, why: resolvingConflictA,
+		},
+		"a rebase resolving a conflict by combining both sides into a new line": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
 			was: append([]compareFile{
 				{Name: aGo, Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", cloneSource, workspace); err != nil {\n ctx"},
@@ -192,13 +200,22 @@ func TestApprovalCovers(t *testing.T) {
 			base: []compareFile{
 				{Name: aGo, Status: modified, SHA: "a9", Patch: "@@ -1,3 +1,3 @@\n ctx\n-\tif _, err := s.git(ctx, \"\", \"clone\", \"--no-local\", source, workspace); err != nil {\n+\tif _, err := s.git(ctx, \"\", \"clone\", \"--bare\", \"--no-local\", source, repository); err != nil {\n ctx"},
 			},
-			want: true, why: resolvingConflictA,
+			want: false, why: "a line neither the approved head nor the base changed",
 		},
 		"a rebase resolving a conflict by keeping main's version of a file": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
 			now:   approvedChange()[1:],
 			base:  mainChangedA,
 			want:  true, why: resolvingConflictA,
+		},
+		"a rebase dropping an unconflicted hunk when keeping main's version of a file": {
+			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)),
+			was: append([]compareFile{
+				{Name: aGo, Status: modified, SHA: "a1", Patch: "@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n ctx\n@@ -20,3 +20,3 @@\n ctx\n-guard\n+strictGuard\n ctx"},
+			}, approvedChange()[1:]...),
+			now:  approvedChange()[1:],
+			base: mainChangedA,
+			want: false, why: `a.go drops "-guard", a line the base did not change`,
 		},
 		"a rebase with another change": {
 			added: commitsOf(compareDiverged, 1, commitOf(bmHead, bmMain)), now: unreviewed(), base: mainChangedA,
@@ -316,9 +333,9 @@ func TestResolvedPreservesEdits(t *testing.T) {
 			originalGuard, authorizedGuard,
 			auditedGuard, "return enabled && authorized && audited", false,
 		},
-		"disjoint edits retained": {
+		"intra-line edit splice rejected": {
 			originalGuard, "return active && checked",
-			auditedGuard, "return active && audited", true,
+			auditedGuard, "return active && audited", false,
 		},
 		"disjoint edit partially dropped": {
 			originalGuard, "return active && checked",
@@ -339,5 +356,34 @@ func TestResolvedPreservesEdits(t *testing.T) {
 				t.Fatalf("resolved rejection = %q, want acceptance %v", why, tc.want)
 			}
 		})
+	}
+	// Union of both sides' lines is accepted; dropping an unconflicted hunk is rejected.
+	unionHead := compareFile{Name: aGo, Patch: "@@ -1 +1,2 @@\n-" + auditedGuard + "\n+" + auditedGuard + "\n+" + authorizedGuard}
+	if why := resolved(patch(originalGuard, authorizedGuard), unionHead, []compareFile{patch(originalGuard, auditedGuard)}); why != "" {
+		t.Fatalf("union of both sides' lines rejected: %q", why)
+	}
+}
+
+func TestResolvedDropsOnlyItsConflict(t *testing.T) {
+	approved := compareFile{Name: aGo, Patch: "@@ -1 +1 @@\n-modeOld\n+modeApproved\n@@ -20,0 +21,3 @@\n+if !authorized {\n+ return denied\n+}"}
+	base := []compareFile{{Name: aGo, Patch: "@@ -1 +1 @@\n-modeOld\n+modeBase"}}
+	// Keeping the base's mode line drops the approved one with it, but the
+	// guard the approved head inserts away from the conflict must stay.
+	for name, tc := range map[string]struct {
+		head compareFile
+		why  string
+	}{
+		"an unconflicted insertion dropped with the file": {head: compareFile{}, why: `drops "+if !authorized {", a line outside its conflict`},
+		"an unconflicted insertion dropped":               {head: compareFile{Name: aGo, Patch: "@@ -1,3 +1,3 @@\n ctx\n ctx\n ctx"}, why: "outside its conflict"},
+		"the base's side kept with the guard":             {head: compareFile{Name: aGo, Patch: "@@ -20,0 +21,3 @@\n+if !authorized {\n+ return denied\n+}"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if why := resolved(approved, tc.head, base); tc.why == "" && why != "" || !strings.Contains(why, tc.why) {
+				t.Errorf("resolved = %q, want %q", why, tc.why)
+			}
+		})
+	}
+	if got := changeBlocks(approved.Patch); len(got) != 2 || got[0].start != 1 || got[0].end != 2 || got[1].start != 21 || got[1].end != 21 {
+		t.Errorf("changeBlocks = %+v", got)
 	}
 }

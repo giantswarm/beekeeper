@@ -68,7 +68,8 @@ func Install(ctx context.Context, e Env) error {
 	if err := e.planHooks(p, &m); err != nil {
 		return err
 	}
-	if err := e.planAgyHooks(p, &m); err != nil {
+	agyRejected, err := e.planAgyHooks(p, &m)
+	if err != nil {
 		return err
 	}
 	if err := e.planAgySkills(p, &m); err != nil {
@@ -83,6 +84,7 @@ func Install(ctx context.Context, e Env) error {
 	e.planConfig(p, &m)
 	e.planSetup(ctx, p, &m)
 	m.addDirs(e.StateDir)
+	failAgyHooks(p, e.AgyHooks, agyRejected)
 	if after := m.encode(); !bytes.Equal(before, after) {
 		p.first("record", e.manifest(), "what install writes, for uninstall", func() error {
 			return writeFile(e.manifest(), after)

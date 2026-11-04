@@ -95,6 +95,7 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 	}
 	var n *state.Note
 	text := strings.TrimSpace(words)
+	verbatim := text
 	if n := utf8.RuneCountInString(text); n > answerMax {
 		return usageErr("the answer has %d characters, at most %d", n, answerMax)
 	}
@@ -109,8 +110,17 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		if text, err = answerText(n, choice, text); err != nil {
 			return err
 		}
+		if err := a.refuseOptionLabelOnly(st, me, n, choice, verbatim); err != nil {
+			return err
+		}
 	} else if text == "" {
 		return usageErr("an answer is the person's words")
+	} else if st, err := a.store.Read(); err == nil {
+		if asking, _ := answerable(st, guideRole.get(st).LocalAsking(), a.now); asking != nil && len(asking.Refs) > 0 && strings.EqualFold(asking.Refs[0], about) {
+			if err := a.refuseOptionLabelOnly(st, me, asking, 0, verbatim); err != nil {
+				return err
+			}
+		}
 	}
 	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
 	if post {

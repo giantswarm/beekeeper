@@ -256,6 +256,22 @@ func TestHelperMockAgy(t *testing.T) {
 		runHook(1)
 		appendTranscript("PLANNER_RESPONSE", "tool_call_1", "")
 
+		if mode == "quota-429-hang" {
+			_, _ = fmt.Fprintln(os.Stderr, "error: Individual quota reached for this model, resets in 4h46m32s")
+			_, _ = fmt.Fprintln(os.Stderr, `AGY_ERROR: {"short_error":"Individual quota reached for this model, resets in 4h46m32s","error_code":429,"status":"RESOURCE_EXHAUSTED","retryable":false}`)
+			// Simulate agy hanging mid-turn waiting on stdin without emitting result.
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			os.Exit(1)
+		}
+		if mode == "quota-429-exit" {
+			// agy closes its stream, then prints its error and exits:
+			// stdout's EOF comes before the stderr line Run must not lose.
+			_ = os.Stdout.Close()
+			time.Sleep(50 * time.Millisecond)
+			_, _ = fmt.Fprintln(os.Stderr, `AGY_ERROR: {"short_error":"Individual quota reached for this model, resets in 4h46m32s","error_code":429,"status":"RESOURCE_EXHAUSTED","retryable":false}`)
+			os.Exit(1)
+		}
+
 		if turnNum == 1 && signalFile != "" {
 			// Signal the test that tool_call_1 has completed inside turn 1.
 			_ = os.WriteFile(signalFile, []byte("tool_call_1\n"), 0o600) //nolint:gosec // test helper path
@@ -577,4 +593,68 @@ func readTestTranscript(t *testing.T, path string) []transcriptEntry {
 		out = append(out, e)
 	}
 	return out
+}
+
+func TestRunDetectsAndEndsMidTurnQuota429(t *testing.T) {
+	testRunQuota429(t, "quota-429-hang")
+}
+
+// The AGY_ERROR line agy prints after its stdout closed is still read.
+func TestRunReadsQuota429AfterStdoutEOF(t *testing.T) {
+	testRunQuota429(t, "quota-429-exit")
+}
+
+func testRunQuota429(t *testing.T, mode string) {
+	t.Helper()
+	stateDir := t.TempDir()
+	agentID := "agent-quota-429"
+	convID := "conv-quota-429"
+	inbox := InboxPath(stateDir, agentID)
+	logPath := StreamPath(stateDir, agentID)
+	transcriptPath := filepath.Join(stateDir, "transcript.jsonl")
+
+	if err := MakeInbox(inbox); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_WANT_HELPER_MOCK_AGY", "1")
+	t.Setenv("MOCK_AGY_STATE_DIR", stateDir)
+	t.Setenv("MOCK_AGY_TRANSCRIPT", transcriptPath)
+	t.Setenv("MOCK_AGY_CONV_ID", convID)
+	t.Setenv("MOCK_AGY_MODE", mode)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var stderr bytes.Buffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, inbox, logPath, []string{os.Args[0], "-test.run=TestHelperMockAgy", "--", flagModel, testOpusModel}, &stderr)
+	}()
+
+	for range 200 {
+		if Send(inbox, "work the issue") == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	err := <-errCh
+	var qerr *QuotaError
+	if !errors.As(err, &qerr) {
+		t.Fatalf("Run error = %v, want *QuotaError", err)
+	}
+	wantReset := 4*time.Hour + 46*time.Minute + 32*time.Second
+	if qerr.ErrorCode != 429 || qerr.Status != "RESOURCE_EXHAUSTED" || qerr.ResetsIn != wantReset || qerr.Model != testOpusModel {
+		t.Fatalf("QuotaError = %+v", qerr)
+	}
+	saved := ReadQuotaError(stateDir, agentID)
+	if saved == nil || saved.ErrorCode != 429 || saved.ResetsIn != wantReset || saved.Model != testOpusModel {
+		t.Fatalf("ReadQuotaError = %+v", saved)
+	}
+	if _, err := RemoveInbox(inbox); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadQuotaError(stateDir, agentID); got != nil {
+		t.Fatalf("ReadQuotaError after RemoveInbox = %+v, want nil", got)
+	}
 }

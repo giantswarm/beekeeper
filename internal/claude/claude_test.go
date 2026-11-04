@@ -132,7 +132,7 @@ func TestParseTurnsTools(t *testing.T) {
 	line := `{"type":"assistant","timestamp":"2026-09-24T19:00:00Z","message":{"content":[{"type":"text","text":"testing"},` +
 		`{"type":"tool_use","name":"Bash","input":{"command":"go test ./...","description":"Run the tests"}},` +
 		`{"type":"tool_use","name":"Read","input":{"file_path":"/w/a.go"}},{"type":"tool_use","name":"TodoWrite","input":{"todos":[]}}]}}`
-	got := parseTurns([]byte(line), true)
+	got := (&turnParser{tools: true}).parse([]byte(line))
 	want := []string{"assistant testing", "tool Bash: Run the tests", "tool Read: /w/a.go", "tool TodoWrite"}
 	if len(got) != len(want) {
 		t.Fatalf("parseTurns = %+v, want %v", got, want)
@@ -142,11 +142,11 @@ func TestParseTurnsTools(t *testing.T) {
 			t.Errorf("turn %d = %s %s, want %s", i, tu.Role, tu.Text, want[i])
 		}
 	}
-	if got := parseTurns([]byte(line), false); len(got) != 1 {
+	if got := (&turnParser{tools: false}).parse([]byte(line)); len(got) != 1 {
 		t.Errorf("without tools = %+v, want the text alone", got)
 	}
 	only := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls\nrm"}}]}}`
-	if got := parseTurns([]byte(only), true); len(got) != 1 || got[0].Text != "Bash: ls" {
+	if got := (&turnParser{tools: true}).parse([]byte(only)); len(got) != 1 || got[0].Text != "Bash: ls" {
 		t.Errorf("a call alone = %+v, want its first command line", got)
 	}
 }

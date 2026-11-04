@@ -154,7 +154,8 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
-			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number"))), toolNoteDone},
+			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
+			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why the note is withdrawn, retained in its closure"))), toolNoteDone},
 		{newTool(nameAgentsRegister, "Register the calling agent on its team's roster: idle, or busy with its task.",
 			"A machine publishing its agents passes each one's task and whether it is done; an agent registering itself passes neither and keeps its task.",
 			hints{idempotent: true, identified: true},
@@ -370,7 +371,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.concern = kube.HoldObject(target)
-	args := []string{"set", target, "--reason", req.GetString(paramReason, "")}
+	args := []string{"set", target, flagNoteReason, req.GetString(paramReason, "")}
 	if u := req.GetString("until", ""); u != "" {
 		args = append(args, "--until", u)
 	}
@@ -859,12 +860,16 @@ func toolNoteDone(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.may(fmt.Sprintf("note #%d", id), n.By); err != nil {
 		return nil, err
 	}
-	if err := c.verb(c.app.noteCmd(), "done", strconv.Itoa(id)); err != nil {
+	reason, err := required(req, paramReason, "why the note is withdrawn")
+	if err != nil {
 		return nil, err
 	}
-	c.s.closeDecision(c.ctx, n, outcomeWithdrawn, "")
-	_, err = fmt.Fprintf(c.out, "note #%d done\n", id)
-	return map[string]any{paramNote: id}, err
+	if err := c.verb(c.app.noteCmd(), "done", strconv.Itoa(id), flagNoteReason, reason); err != nil {
+		return nil, err
+	}
+	c.s.closeDecision(c.ctx, n, outcomeWithdrawn, reason)
+	_, err = fmt.Fprintf(c.out, "note #%d done: %s\n", id, reason)
+	return map[string]any{paramNote: id, paramReason: reason}, err
 }
 
 func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {

@@ -91,6 +91,12 @@ func (g *gateRun) requeue(base string, h state.Hold) error {
 		return nil
 	}
 	removeMergeFiles(base)
+	return g.toWaiting(h, "devctl ended before it merged")
+}
+
+// toWaiting puts the running merge back to waiting in its place, a hold h
+// letting another pull request through first; when says where its run was.
+func (g *gateRun) toWaiting(h state.Hold, when string) error {
 	why := fmt.Sprintf("held in lane %s (%s) by %q: %s goes first; %s keeps its place", g.lane.Name, holdTarget(h), h.By.Name, h.Except, g.key())
 	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
@@ -100,7 +106,7 @@ func (g *gateRun) requeue(base string, h state.Hold) error {
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Child, m.HandCut = state.Waiting, time.Time{}, nil, 0, ""
 		m.Seen = time.Now().UTC()
-		return []state.Event{event(g.me, "merge.preempted", "%s: devctl ended before it merged, %s", g.key(), why)}, nil
+		return []state.Event{event(g.me, "merge.preempted", "%s: %s, %s", g.key(), when, why)}, nil
 	})
 	g.requeued = true
 	return &preemptedError{why: why}

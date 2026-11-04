@@ -51,7 +51,7 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 // requires its durable pending exact-head claim before performing the merge.
 func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, use execution.MergeUse, loopDecision bool) error {
 	r, _ := executionRecord(st, use.Ref)
-	if r == nil || r.Request.Repository != use.Repository || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || st.Stop != nil {
+	if r == nil || (!r.Request.GitHub && !strings.EqualFold(r.Request.Repository, use.Repository)) || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || st.Stop != nil {
 		return refused("execution merge authority stopped or mismatched")
 	}
 	if use.ID != "" && (r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || r.StopRequest != nil || r.Completed || r.Terminal()) {
@@ -232,7 +232,7 @@ func (a *app) executionMergeCmd() *cobra.Command {
 			return err
 		}
 		use := execution.MergeUse{ID: id, Ref: j.Handle.Ref, Repository: args[0], PR: pr, Head: head}
-		if use.Repository != j.Request.Repository || id == "" {
+		if (!j.Request.GitHub && !strings.EqualFold(use.Repository, j.Request.Repository)) || id == "" {
 			return refused("merge request does not match the owned repository")
 		}
 		var result execution.MergeResult

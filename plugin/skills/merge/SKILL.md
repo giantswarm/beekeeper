@@ -11,8 +11,8 @@ description: "Load before merges/promotions/tags: the gate, exits, protection, h
 - **Personal loop merge:** after the go, `gh pr merge <n> --repo <owner/repo> --squash --match-head-commit <reviewed-head-sha> --subject "<PR title> (#<n>)"`.
 - **Protection:** `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
 - **No rollout during cluster upgrades.**
-- **Overlap:** read open PRs/recent commits; never repair another PR's change in yours — `board block <yours> --by <other>`, `agents park --on <other-pr>`.
-- **Release candidates:** prove live, promote routinely; never ask the person.
-- **Commits:** Conventional subjects, ≤72 characters; no major bumps.
+- **Overlap:** read PRs/commits; name it in your PR or build on the other. If blocked: `board block <yours> --by <other>`, `agents park --on <other-pr>`. No supervisor coordination wait.
+- **RCs:** prove live, promote; never ask the person.
+- **Commits:** Conventional, ≤72 characters; no major bumps.
 - **Behind:** before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. A conflict or merge commit (77): a fresh branch and PR off base.
 - **Desk review** after push/green CI, one call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. Other dirs or unpushed heads record plain waits; re-run there.

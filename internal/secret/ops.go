@@ -147,6 +147,19 @@ func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
 	return len(v), o.write(ctx, doc, dst, v)
 }
 
+// SetSOPSValue writes v into a path of a SOPS file, checking the creation rule
+// before encrypting the document.
+func (o *Ops) SetSOPSValue(ctx context.Context, dst Ref, v string) error {
+	if dst.Op != "" || dst.IsSource() || dst.Path == "" {
+		return fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
+	}
+	doc, dst, err := o.target(ctx, dst, nil)
+	if err != nil {
+		return err
+	}
+	return o.write(ctx, doc, dst, v)
+}
+
 // Pair is one value of a copy into a new file: the reference it is read
 // from and the path it takes there.
 type Pair struct {

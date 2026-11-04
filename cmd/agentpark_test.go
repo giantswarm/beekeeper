@@ -495,7 +495,7 @@ func TestPlainPullWaitWakesOnMergeOrClose(t *testing.T) {
 			w := parkingWatch(t, refs)
 			w.cfg.Agents.AutoResume = true
 			woke := stubWakes(t)
-			if err := park(t, w, "--on", refOne, "another worker's pull request"); err != nil {
+			if err := park(t, w, "--on", refOne, "overlap with another worker's pull request"); err != nil {
 				t.Fatal(err)
 			}
 			if agentOf(t, w).Park.ReviewHead != "" {
@@ -757,5 +757,26 @@ func TestSettledParksKeepsPartialBatchResultsOnError(t *testing.T) {
 	}
 	if st.Agents[0].Park == nil || st.Agents[0].Park.RefKind != github.RefPullRequest {
 		t.Fatalf("partial batch result did not cache RefKind: %+v", st.Agents[0].Park)
+	}
+}
+
+func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
+	for _, on := range []string{"", "#3", "hold:merges", "alert:Down"} {
+		w := parkingWatch(t, nil)
+		_, err := w.park(state.Party{Name: agentOne}, on, "Supervisor OVERLAP coordination")
+		if err == nil || !strings.Contains(err.Error(), "--on <owner/repo#n>") {
+			t.Fatalf("target %q: %v", on, err)
+		}
+		if agentOf(t, w).Park != nil {
+			t.Fatalf("refused overlap recorded a park on %q", on)
+		}
+	}
+	for _, on := range []string{refOne, "https://github.com/o/r/pull/1"} {
+		if err := validateOverlapPark(on, "overlap coordination"); err != nil {
+			t.Fatalf("tracked target %q: %v", on, err)
+		}
+	}
+	if err := validateOverlapPark("", "waiting for a manual resume"); err != nil {
+		t.Fatal(err)
 	}
 }

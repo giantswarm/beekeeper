@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -200,10 +201,11 @@ func ApprovalCovers(ctx context.Context, gh GH, repo, base, approved, head strin
 // resolved says why head's change to a file is no resolution of a conflict
 // between approved's change to it and the base's since (moved), "" when it
 // is: every line head's patch adds or removes beyond approved's is a line
-// approved's or the base's patch of the file adds or removes, whichever
-// side the resolution kept, or exactly combines non-overlapping edits to
-// a shared original line. A file without a patch on either side, or one the base left alone,
-// had no conflict to resolve.
+// approved's or the base's patch of the file adds or removes (whichever
+// side the resolution kept, or the union of both sides' lines), and any
+// line of approved's patch that head drops was part of a conflict with the
+// base's patch. A file without a patch on either side, or one the base left
+// alone, had no conflict to resolve.
 func resolved(approved, head compareFile, moved []compareFile) string {
 	name := cmp.Or(head.Name, approved.Name)
 	i := slices.IndexFunc(moved, func(f compareFile) bool { return f.Name == name || f.Previous == name })
@@ -216,6 +218,7 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 	approvedLines := lineChanges(approved.Patch)
 	baseLines := lineChanges(moved[i].Patch)
 	sides := map[string]bool{}
+	baseSides := map[string]bool{}
 	left := map[string]int{}
 	for _, l := range approvedLines {
 		sides[l[1:]] = true
@@ -223,118 +226,106 @@ func resolved(approved, head compareFile, moved []compareFile) string {
 	}
 	for _, l := range baseLines {
 		sides[l[1:]] = true
+		baseSides[l[1:]] = true
 	}
 	for _, l := range lineChanges(head.Patch) {
 		if left[l] > 0 {
 			left[l]--
 			continue
 		}
-		if !sides[l[1:]] && (l[0] != '+' || !mergedLine(l[1:], approvedLines, baseLines)) {
+		if !sides[l[1:]] {
 			return fmt.Sprintf("%s adds or removes %q, a line neither the approved head nor the base changed", name, strings.TrimSpace(l))
+		}
+	}
+	for _, l := range approvedLines {
+		if left[l] > 0 && l[0] == '-' && !baseSides[l[1:]] {
+			return fmt.Sprintf("%s drops %q, a line the base did not change", name, strings.TrimSpace(l))
+		}
+	}
+	// A dropped line must belong to a change of approved's that overlaps
+	// one of the base's: lines are matched by content, so as many of a
+	// line's copies as head drops must lie in such a conflict.
+	baseBlocks := changeBlocks(moved[i].Patch)
+	inConflict := map[string]int{}
+	for _, b := range changeBlocks(approved.Patch) {
+		if !slices.ContainsFunc(baseBlocks, b.overlaps) {
+			continue
+		}
+		for _, l := range b.lines {
+			inConflict[l]++
+		}
+	}
+	for _, l := range approvedLines {
+		if left[l] > inConflict[l] {
+			return fmt.Sprintf("%s drops %q, a line outside its conflict with the base", name, strings.TrimSpace(l))
 		}
 	}
 	return ""
 }
 
-// mergedLine accepts only the exact composition of non-overlapping edits to
-// a shared original line. Comparing complete byte sequences preserves literals,
-// punctuation and whitespace; token membership cannot prove an edit survived.
-func mergedLine(line string, approved, base []string) bool {
-	for _, original := range approved {
-		if original[0] != '-' || !slices.Contains(base, original) {
-			continue
-		}
-		for _, a := range approved {
-			if a[0] != '+' {
+// changeBlock is a run of a patch's added and removed lines without
+// context between them, at the lines [start, end) of the file before it.
+type changeBlock struct {
+	start, end int
+	lines      []string
+}
+
+// overlaps says whether two changes of the same file touch: they share a
+// line, or one inserts at or next to the other's lines, as git's merge
+// counts a conflict.
+func (b changeBlock) overlaps(o changeBlock) bool {
+	return b.start <= o.end && o.start <= b.end
+}
+
+// changeBlocks are a patch's changes with their positions; a line ahead
+// of any hunk header has none and lies outside every conflict.
+func changeBlocks(patch string) []changeBlock {
+	var out []changeBlock
+	n, known, open := 0, false, false
+	for l := range strings.SplitSeq(patch, "\n") {
+		switch {
+		case strings.HasPrefix(l, "@@"):
+			n, known = hunkStart(l)
+			open = false
+		case strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+"):
+			if !known {
 				continue
 			}
-			for _, b := range base {
-				if b[0] != '+' {
-					continue
-				}
-				if merged, ok := combineLineEdits(original[1:], a[1:], b[1:]); ok && merged == line {
-					return true
-				}
+			if !open {
+				out = append(out, changeBlock{start: n, end: n})
+				open = true
 			}
+			b := &out[len(out)-1]
+			b.lines = append(b.lines, l)
+			if l[0] == '-' {
+				n++
+				b.end = n
+			}
+		case strings.HasPrefix(l, " "):
+			n++
+			open = false
 		}
 	}
-	return false
+	return out
 }
 
-type lineEdit struct {
-	start, end int
-	text       string
-}
-
-// lineEdits uses a longest common subsequence to describe actual byte edits.
-// Large lines fail closed rather than allocate an unbounded quadratic table.
-func lineEdits(original, changed string) ([]lineEdit, bool) {
-	if len(original) > 1024 || len(changed) > 1024 {
-		return nil, false
+// hunkStart is the first line of the file before a hunk that its header
+// ("@@ -12,4 +12,5 @@") names: an insertion's ("@@ -20,0 +21,3 @@") is the
+// line after the one it follows. ok is false for a header without one.
+func hunkStart(header string) (int, bool) {
+	f := strings.Fields(header)
+	if len(f) < 3 || !strings.HasPrefix(f[1], "-") {
+		return 0, false
 	}
-	width := len(changed) + 1
-	lcs := make([]int, (len(original)+1)*width)
-	for i := len(original) - 1; i >= 0; i-- {
-		for j := len(changed) - 1; j >= 0; j-- {
-			if original[i] == changed[j] {
-				lcs[i*width+j] = 1 + lcs[(i+1)*width+j+1]
-			} else {
-				lcs[i*width+j] = max(lcs[(i+1)*width+j], lcs[i*width+j+1])
-			}
-		}
+	start, count, _ := strings.Cut(f[1][1:], ",")
+	n, err := strconv.Atoi(start)
+	if err != nil {
+		return 0, false
 	}
-	var edits []lineEdit
-	for i, j := 0, 0; i < len(original) || j < len(changed); {
-		if i < len(original) && j < len(changed) && original[i] == changed[j] {
-			i++
-			j++
-			continue
-		}
-		start, from := i, j
-		for i < len(original) || j < len(changed) {
-			if i < len(original) && j < len(changed) && original[i] == changed[j] {
-				break
-			}
-			if j < len(changed) && (i == len(original) || lcs[i*width+j+1] > lcs[(i+1)*width+j]) {
-				j++
-			} else {
-				i++
-			}
-		}
-		edits = append(edits, lineEdit{start, i, changed[from:j]})
+	if count == "0" {
+		n++
 	}
-	return edits, true
-}
-
-func combineLineEdits(original, a, b string) (string, bool) {
-	left, ok := lineEdits(original, a)
-	if !ok {
-		return "", false
-	}
-	right, ok := lineEdits(original, b)
-	if !ok {
-		return "", false
-	}
-	// Even boundary insertions are ambiguous: require a separating original
-	// byte between distinct edits from different sides.
-	for _, l := range left {
-		for _, r := range right {
-			if l.start <= r.end && r.start <= l.end {
-				return "", false
-			}
-		}
-	}
-	edits := append(left, right...)
-	slices.SortFunc(edits, func(a, b lineEdit) int { return cmp.Compare(a.start, b.start) })
-	var out strings.Builder
-	pos := 0
-	for _, edit := range edits {
-		out.WriteString(original[pos:edit.start])
-		out.WriteString(edit.text)
-		pos = edit.end
-	}
-	out.WriteString(original[pos:])
-	return out.String(), true
+	return n, true
 }
 
 // lineChanges are a patch's added and removed lines, each with its sign.

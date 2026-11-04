@@ -103,6 +103,9 @@ func (claudeHarness) HostPrefix() string { return "local_" }
 func (claudeHarness) EnvAgent() string   { return "" }
 
 func (claudeHarness) Start(ctx context.Context, a *app, sp agentStart) error {
+	if sp.effort != "" {
+		a.say("effort: %s", sp.effort)
+	}
 	sa, err := a.startAgent(ctx, sp)
 	if err != nil {
 		return err
@@ -181,6 +184,9 @@ func (ompHarness) HostPrefix() string { return omp.HostPrefix }
 func (ompHarness) EnvAgent() string   { return omp.EnvAgent }
 
 func (ompHarness) Start(ctx context.Context, a *app, sp agentStart) error {
+	if sp.effort != "" {
+		a.say("effort: %s", sp.effort)
+	}
 	return a.startOmpAgent(ctx, sp)
 }
 
@@ -232,10 +238,16 @@ func (agyHarness) HostPrefix() string { return agy.HostPrefix }
 func (agyHarness) EnvAgent() string   { return agy.EnvAgent }
 
 func (agyHarness) Start(ctx context.Context, a *app, sp agentStart) error {
+	if err := refuseAgyEffort(sp.effort); err != nil {
+		return err
+	}
 	return a.startAgyAgent(ctx, sp)
 }
 
 func (agyHarness) DryRun(_ context.Context, a *app, sp agentStart, gaps []string) error {
+	if err := refuseAgyEffort(sp.effort); err != nil {
+		return err
+	}
 	return a.dryRunAgyStart(sp, gaps)
 }
 
@@ -284,6 +296,9 @@ func (codexHarness) HostPrefix() string { return codex.HostPrefix }
 func (codexHarness) EnvAgent() string   { return codex.EnvAgent }
 
 func (codexHarness) Start(ctx context.Context, a *app, sp agentStart) error {
+	if sp.effort != "" {
+		a.say("effort: %s", sp.effort)
+	}
 	return a.startCodexAgent(ctx, sp)
 }
 

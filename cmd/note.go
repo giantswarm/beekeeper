@@ -36,7 +36,7 @@ Without a subcommand, lists the open notes.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return a.noteList(cmd.ErrOrStderr(), "", false) },
 	}
-	var forWho, due, overtaken string
+	var forWho, due, overtaken, reason string
 	var foldInto int
 	var foldArg string
 	var holds bool
@@ -344,7 +344,8 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 	done := &cobra.Command{
 		Use:   "done <id>...",
 		Short: "Mark notes done",
-		Long: `Mark notes done. --overtaken "<why>" closes them as overtaken
+		Long: `Mark notes done with --reason "<why the note is withdrawn>". The reason
+is retained in the audit record and shown by note show. --overtaken "<why>" closes them as overtaken
 instead: what they ask about is settled without an answer, logged as
 note.overtaken with the reason, as the watch does.
 
@@ -365,6 +366,10 @@ notes' only.`,
 				return err
 			}
 			why := strings.TrimSpace(overtaken)
+			reason = strings.TrimSpace(reason)
+			if !cmd.Flags().Changed("overtaken") && reason == "" {
+				return usageErr("--reason is required: why the note is withdrawn")
+			}
 			if cmd.Flags().Changed("overtaken") && why == "" {
 				return usageErr("--overtaken needs the reason")
 			}
@@ -373,10 +378,10 @@ notes' only.`,
 				return err
 			}
 			if len(centralIDs) > 0 && why != "" {
-				return usageErr("--overtaken is for this machine's notes: a central note is withdrawn (note done %s#%d) without a reason", a.cfg.Central.Context, centralIDs[0])
+				return usageErr("--overtaken is for this machine's notes: a central note is withdrawn (note done %s#%d) with --reason", a.cfg.Central.Context, centralIDs[0])
 			}
 			if len(ids) == 0 {
-				return a.doneCentral(cmd.Context(), me, centralIDs)
+				return a.doneCentral(cmd.Context(), me, centralIDs, reason)
 			}
 			var evs []state.Event
 			var closed []state.Note
@@ -394,7 +399,7 @@ notes' only.`,
 						if why != "" {
 							evs = append(evs, overtakenEvent(me, n, why))
 						} else {
-							evs = append(evs, event(me, noteDone, "#%d withdrawn: %s", n.ID, n.Text))
+							evs = append(evs, withdrawnEvent(me, n, reason))
 						}
 						return true
 					}
@@ -414,7 +419,7 @@ notes' only.`,
 					return err
 				}
 			}
-			if err := a.doneCentral(cmd.Context(), me, centralIDs); err != nil {
+			if err := a.doneCentral(cmd.Context(), me, centralIDs, reason); err != nil {
 				return err
 			}
 			if len(evs) < len(ids) {
@@ -423,7 +428,9 @@ notes' only.`,
 			return nil
 		},
 	}
+	done.Flags().StringVar(&reason, "reason", "", "why the note is withdrawn, retained in its closure")
 	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
+	done.MarkFlagsMutuallyExclusive("reason", "overtaken")
 	var choice int
 	var via string
 	var post bool

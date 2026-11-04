@@ -683,10 +683,15 @@ Withdraw a note, closing it without an answer: its filer's, or the filer's team'
     "note": {
       "description": "the note's number",
       "type": "number"
+    },
+    "reason": {
+      "description": "why the note is withdrawn, retained in its closure",
+      "type": "string"
     }
   },
   "required": [
-    "note"
+    "note",
+    "reason"
   ],
   "type": "object"
 }

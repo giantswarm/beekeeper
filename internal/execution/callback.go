@@ -51,6 +51,9 @@ func VerifyCallback(r CallbackRequest, key string) bool {
 	return hmac.Equal([]byte(r.Proof), []byte(callbackProof(r.WireRequest, key)))
 }
 
+// CIRerun requests a coordinator-owned CI rerun without exporting credentials.
+const CIRerun = "ci-rerun"
+
 func CoordinatorCall(ctx context.Context, endpoint Endpoint, host, op string, ref Ref, payload any, key string, result any, run CommandRunner) error {
 	if err := endpoint.Validate(); err != nil {
 		return err
@@ -68,7 +71,12 @@ func CoordinatorCall(ctx context.Context, endpoint Endpoint, host, op string, re
 	if err != nil || len(b) > MaxWire {
 		return errors.New("invalid callback size")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	bound := 30 * time.Second
+	// A cold devctl may renew its coordinator credentials before starting CI.
+	if op == CIRerun {
+		bound = 3 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	if run == nil {
 		run = SSHCommand

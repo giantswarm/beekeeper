@@ -128,6 +128,17 @@ func isCodexShellTool(toolName string) bool {
 	}
 }
 
+// Keep this allowlist explicit: similarly named tools must still fail closed.
+// Both local and managed workers send web reads through the shared guard.
+func isCodexWebTool(toolName string) bool {
+	switch toolName {
+	case codexWebTool, "web_run", "web.run", "web__run", "WebFetch", webSearchTool:
+		return true
+	default:
+		return false
+	}
+}
+
 func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok bool) {
 	if s, ok := toolInput[commandKey].(string); ok {
 		return s, commandKey, true
@@ -203,7 +214,7 @@ func validateCodexInput(input []byte, coordinatorMCP bool) string {
 			return "Refused: view_image call is missing a non-empty string `path` in tool_input; failing closed."
 		}
 	// Web tools are read-only and go through the shared guard, like Claude web calls.
-	case toolName == codexUpdatePlanTool || toolName == codexWebTool || toolName == "WebFetch" || toolName == webSearchTool:
+	case toolName == codexUpdatePlanTool || isCodexWebTool(toolName):
 		return ""
 	case toolName == readTool || toolName == writeTool || toolName == editTool || toolName == multiEditTool:
 		p, ok := toolInput[filePathKey].(string)
@@ -1277,7 +1288,9 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 			break
 		}
 		if a == flagConfig || a == flagAs || a == "--for" || a == "--ref" || a == "--due" ||
-			a == "--default" || a == "--status-quo" || a == "--why" || a == "--on" || a == "--report" {
+			a == "--default" || a == "--status-quo" || a == "--why" || a == "--on" || a == "--report" ||
+			a == flagRepo || a == "--harness" || a == "--host" || a == "--session" || a == "--since" ||
+			a == "--ttl" || a == "--reason" || a == "-n" || a == "--turns" {
 			i++
 			continue
 		}
@@ -1288,6 +1301,9 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		if len(sub) == 2 {
 			break
 		}
+	}
+	if len(sub) >= 1 && sub[0] == "transcripts" {
+		return true
 	}
 	if len(sub) < 2 {
 		return false

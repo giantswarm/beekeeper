@@ -1,6 +1,9 @@
 package guard
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"strings"
 )
 
@@ -10,6 +13,9 @@ const SendMessageTool = "SendMessage"
 // desktopPrefix starts a Claude Desktop session id, the target shape the
 // desktop routes (and caps) itself.
 const desktopPrefix = "local_"
+
+// SocketPrefix starts a SendMessage target that is a CLI's peer socket.
+const SocketPrefix = "uds:"
 
 // sendMessage decides a SendMessage call. A message to "the guide" goes to
 // the session holding the role now: Role names it, so no brief has to name
@@ -29,7 +35,12 @@ const desktopPrefix = "local_"
 // Absent says: no CLI runs, and whether an import is pending. A message by
 // a name several running CLIs carry goes to the roster agent's of that name
 // through its own socket (Agent), so a hand-over's follow-up gets it while
-// the session it replaces still runs. Every other call passes unchanged.
+// the session it replaces still runs. A message by name to a roster agent
+// whose harness reads an inbox (omp, agy, codex) is delivered there by
+// Inbox, and the call is refused with where it went: SendMessage reaches
+// only Claude sessions. A peer socket (uds:…) that no longer exists is
+// refused with the sender's roster name to reply by: a relay turn's socket
+// ends with the turn. Every other call passes unchanged.
 func (h Hook) sendMessage(session string, input map[string]any) []byte {
 	to, _ := input["to"].(string)
 	to = strings.TrimSpace(to)
@@ -46,6 +57,23 @@ func (h Hook) sendMessage(session string, input map[string]any) []byte {
 		}
 		why = append(why, "the "+role+" is "+holder+" now")
 		to = holder
+	}
+	if path, sock := strings.CutPrefix(to, SocketPrefix); sock && path != "" {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: the peer socket " + path +
+				" is gone: it was a turn's own, which ended (a message sent by beekeeper agents wake comes from a relay turn). Reply by the sender's roster name, which its message names"})
+		}
+	}
+	if !ok && h.Inbox != nil && !strings.HasPrefix(to, desktopPrefix) && !strings.HasPrefix(to, SocketPrefix) {
+		msg, _ := input["message"].(string)
+		where, err := h.Inbox(session, to, msg)
+		if err != nil {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused by beekeeper: " + err.Error()})
+		}
+		if where != "" {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Delivered by beekeeper, not by SendMessage: " + where +
+				". Nothing more to send; do not repeat the message"})
+		}
 	}
 	if !ok && h.Absent != nil && !strings.HasPrefix(to, desktopPrefix) {
 		if r := h.Absent(to); r != "" {

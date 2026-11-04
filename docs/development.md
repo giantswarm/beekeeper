@@ -81,14 +81,17 @@ another object's update. Apply the generated Note CRD before running the new ser
 Kubernetes preserves these optional spec fields.
 
 `note show <id>` reads one note in full, with its status, audience and retained answer;
-`--json` returns the note fields plus `status`, `answer` and `closure`. Open central
+`--json` returns the note fields plus `status`, `answer`, `reason` and `closure`. Open central
 notes use `<context>#<n>`; a bare ID present locally and centrally is refused,
 while `#<n>` selects the local record. The central instance's own CLI can also
 read retained closed Note resources. File-backed stores can recover answered
 notes while their full `answer.recorded` event remains, without a record-size cap.
 New answer events retain the original audience separately from the answerer;
 older events without that audience show it as unknown rather than naming the
-answerer as the addressee. Other removed or expired
+answerer as the addressee. `note done <id> --reason "<why>"` (or the
+`note_done` tool's required `reason`) retains the withdrawal reason and original
+question; `note show` reads these from new file-backed withdrawal events too.
+Older withdrawal events without this record remain unavailable. Other removed or expired
 records are reported as unavailable, never reconstructed from a truncated log.
 
 A note answer reaches its filing session by session or harness ID even when
@@ -565,6 +568,48 @@ on-demand commands and the doctor's Go-cache and worktree trims. Tmpfs
 freeing (`doctor.freeEvery`) and Docker reclamation remain independent
 in both modes.
 
+### State holders
+
+The state home (`disk.holders.root`, default `~/.local/state`) collects
+holders no disk step owns: a task's `GOCACHE` or `CARGO_TARGET_DIR`, its
+scratch named after its issue, saved release-candidate binaries, worktrees
+moved aside. `beekeeper disk holders` lists each entry of the root, and
+each entry of its aside directories (`disk.holders.asideDirs`, default
+`aside` and `moved-aside`), largest first, with its size, when anything in
+it was last written, its owner and whether it is eligible for removal.
+`--json` has every holder; `--min-mib` (100) hides the small ones.
+
+The owner is read from the name: a task number of three digits or more
+(`ao1011`, `go-build-153`) names the roster agent or session record whose
+task or issue is that issue or pull request number, open tasks first; a name without one is its
+program's (`~/.local/state/<program>`), and a number nobody mentions is
+`unowned`. A holder is eligible once nothing in it was written for
+`disk.holders.staleAfter` (72h; an aside entry: its retention window
+`disk.holders.asideRetention`, 168h), no running process uses it, its task
+is not open, it holds no git checkout outside an aside directory, and it
+is neither beekeeper's own state nor named in `disk.holders.keep` (model
+weights, say).
+
+Nothing is removed: the listing tells a person or a worker what to
+reclaim. Every `disk.holders.every` (6h) one watch lists the holders and
+says `STATE HOLDERS` with the largest eligible ones while the eligible
+holders take `disk.holders.warnGiB` (10) or more; one that holds a
+checkout is only counted there, its work to be checked first. While a
+process cannot be read, no holder is judged eligible and the watch says
+`STATE HOLDERS unknown` with the reason. A negative `warnGiB` turns the
+look off; a negative duration is refused. "Unused" means not written: a
+reader that never writes (a model server reading its weights) does not
+count, so such data goes into `disk.holders.keep`.
+
+```yaml
+disk:
+  holders:
+    keep: [hf-cache]
+    staleAfter: 72h
+    asideRetention: 168h
+    warnGiB: 10
+```
+
 ## Central note closure audit
 
 A central Note closes only with a recognised close event (`answer.recorded`,
@@ -575,7 +620,9 @@ Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first
 preserves the note counter, so expired numbers are never issued again.
 `beekeeper log` includes the retained line even after Kubernetes Events expire
-or an Event write fails. An answer after the default-answer window explicitly
+or an Event write fails. Due decisions with legacy passive or empty defaults also close and retain the
+24-hour late-answer window. Filing a new decision still requires an action.
+An answer after the default-answer window explicitly
 reports that the note was closed by its default. Folding a new question into an
 open note leaves the existing note open and logs `note.folded`.
 
@@ -767,3 +814,39 @@ This cleanup history grants no permissions to the start or permission hooks.
 Ownership and roster protection both use Claude session IDs or normalized
 Codex, omp and agy host-session IDs; a hosted harness takes precedence over
 a launching Claude session inherited in the same environment.
+
+## Session effort
+
+An `agents.models` rule may carry `effort: low|medium|high|xhigh|max` beside
+or instead of its model; the first matching rule (same `match` and `kind`
+semantics as the model) with a nonempty effort selects it. Rules without an
+effort are skipped for effort, so model-only and effort-only rules compose.
+`agents start --effort <level>` overrides the rules, independently of
+`--model`. Without either, no effort option is sent and the harness keeps
+its own default. The `agents.start` event names the effort, or
+`harness default`.
+
+```yaml
+agents:
+  models:
+    - {match: "^(scan|file|draft|close)", effort: high}
+    - {match: ".", kind: review, model: opus, effort: xhigh}
+```
+
+Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
+`-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
+The selected model must support the level. agy has no session effort option:
+an effort from the flag or a rule is refused instead of silently ignored, on
+local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude
+and Codex starts carry effort in the owned execution request and reuse it for
+later turns.
+
+A Claude desktop-mode start with an effort runs its task headless, with its
+normal tool profile and sidebar import. Its wakes stay headless on that
+effort, since a desktop-spawned CLI cannot be given this override.
+Background starts keep Remote Control. Start records persist effort for
+wakes and handovers; no user settings file is changed.
+
+`guide.effort` selects the guide's session effort, ahead of the rules. The
+supervisor is a loop, so `supervisor.effort` is the default it passes to the
+sessions it starts; a matching rule's effort wins over it. Both are optional.

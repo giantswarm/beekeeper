@@ -35,7 +35,8 @@ board's epics in planning and past their go with their plans (each plan's URL,
 state and head), the standing instructions (standing.md in the state directory,
 in full),
 open notes with their defaults, the decisions answered
-within 72 hours, timers, what the alert watch reads and the latest
+within 72 hours, timers, the configuration overrides in effect (config set
+--until) with their reasons and ends, what the alert watch reads and the latest
 events. Everything comes from the state and the machine, so a reader acts
 on it instead of a prose brief.
 
@@ -91,19 +92,20 @@ complete.`,
 			if a.json {
 				return a.printJSON(struct {
 					*view
-					Leases     *leaseList      `json:"leases"`
-					Holds      []state.Hold    `json:"holds"`
-					Lanes      []laneView      `json:"lanes"`
-					Agents     []agentView     `json:"agents"`
-					Records    []state.Record  `json:"records"`
-					BoardHolds *boardHoldsView `json:"board_holds,omitempty"`
-					Epics      *epicsView      `json:"epics,omitempty"`
-					Notes      []state.Note    `json:"notes"`
-					Answered   []answered      `json:"answered"`
-					Timers     []state.Timer   `json:"timers"`
-					Alerts     *alertsView     `json:"alerts"`
-					Events     []state.Event   `json:"events"`
-				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, al, evs})
+					Leases     *leaseList       `json:"leases"`
+					Holds      []state.Hold     `json:"holds"`
+					Lanes      []laneView       `json:"lanes"`
+					Agents     []agentView      `json:"agents"`
+					Records    []state.Record   `json:"records"`
+					BoardHolds *boardHoldsView  `json:"board_holds,omitempty"`
+					Epics      *epicsView       `json:"epics,omitempty"`
+					Notes      []state.Note     `json:"notes"`
+					Answered   []answered       `json:"answered"`
+					Timers     []state.Timer    `json:"timers"`
+					Overrides  []state.Override `json:"overrides"`
+					Alerts     *alertsView      `json:"alerts"`
+					Events     []state.Event    `json:"events"`
+				}{v, l, holds, a.laneViews(v.st), agents, v.st.Records, bv, ep, v.st.Notes, ans.All, v.st.Timers, v.st.Overrides, al, evs})
 			}
 			lanes := a.laneViews(v.st)
 			notes := a.splitNotes(v.st.Notes)
@@ -137,6 +139,7 @@ complete.`,
 				}},
 				{"answers", "Answers", func(all bool) { a.printAnswers(ans, all) }},
 				{"timers", "Timers", func(bool) { a.printTimers(v.st.Timers, false) }},
+				{"overrides", "Configuration overrides", func(bool) { a.printOverrides(v.st.Overrides) }},
 				{"alerts", "Alerts", func(bool) { a.printAlerts(al) }},
 				{"events", "Latest events", func(bool) {
 					for _, e := range evs {
@@ -187,7 +190,7 @@ complete.`,
 }
 
 // handoverSections names the sections --section takes, in their order.
-const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, alerts, events"
+const handoverSections = "supervisor, sessions, leases, holds, lanes, agents, records, board-holds, epics, standing, notes, answers, timers, overrides, alerts, events"
 
 // epicsView is the board's epics in planning and past their go with their
 // plans, or why they were not read; nil without a board.

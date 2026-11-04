@@ -19,10 +19,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/merge"
+	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
@@ -382,10 +386,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
-	me, err := a.caller()
-	if err != nil {
-		me = state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
-	}
+	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
 	if len(reviewedHead) > 0 {
@@ -416,7 +417,7 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		case pin != "":
 			g.candidate, g.candidateRead, g.pinned = pin, true, true
 		case !queued:
-			if err = g.readRetrying("the release candidate of "+repo, func() (err error) {
+			if err := g.readRetrying("the release candidate of "+repo, func() (err error) {
 				g.candidate, err = promoteCandidate(ctx, repo)
 				return err
 			}); err != nil {
@@ -741,6 +742,9 @@ func (g *gateRun) step() (string, error) {
 		merge.Retry(st, g.repo, g.pr)
 		if i := g.mine(st, state.Waiting); i >= 0 {
 			m := &st.Merges[i]
+			if strings.HasPrefix(g.me.Name, "pid ") && m.By.Name != "" && !strings.HasPrefix(m.By.Name, "pid ") {
+				g.me = m.By
+			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
 			g.seeded = m.Seeded
 			if g.candidateRead {
@@ -1193,10 +1197,134 @@ func (g *gateRun) reviewHold() (string, error) {
 	err := g.readRetrying("the reviews of "+g.key(), func() (err error) {
 		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
 		defer cancel()
+		authWhy, hasExplicitGo, err := mergeAuthority(ctx, g.app, g.repo, g.pr, g.mergeTargetHead())
+		if err != nil {
+			return err
+		}
+		if authWhy != "" {
+			why = authWhy
+			return nil
+		}
 		why, err = reviewGuard(ctx, g.repo, g.pr)
-		return err
+		if err != nil {
+			return err
+		}
+		if why != "" && hasExplicitGo {
+			why = ""
+		}
+		return nil
 	})
 	return why, err
+}
+
+// headFlag is the flag naming a head: a commit to merge, a branch to open.
+const headFlag = "--head"
+
+// mergeTargetHead is the head the gated merge pins: --reviewed-head, else
+// the command's --head or --match-head-commit.
+func (g *gateRun) mergeTargetHead() string {
+	if g.reviewedHead != "" {
+		return g.reviewedHead
+	}
+	for i, arg := range g.argv {
+		if (arg == headFlag || arg == "--match-head-commit") && i+1 < len(g.argv) {
+			return g.argv[i+1]
+		}
+		if v, ok := strings.CutPrefix(arg, headFlag+"="); ok && v != "" {
+			return v
+		}
+		if v, ok := strings.CutPrefix(arg, "--match-head-commit="); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// gateCaller resolves the session or agent asking for a gated command when
+// standard caller env vars are absent (for example in a detached or queued
+// child or a subprocess whose environment was stripped).
+func (a *app) gateCaller(repo string, pr int, argv []string, queued bool) state.Party {
+	if me, err := a.caller(); err == nil {
+		return me
+	}
+	if a.store != nil {
+		if queued {
+			if from, err := strconv.Atoi(os.Getenv(gateFromEnv)); err == nil && from > 0 {
+				if info, ok := readRunInfo(ownedBase(a.store.Dir(), argv, from)); ok && info.Owner.Name != "" && !strings.HasPrefix(info.Owner.Name, "pid ") {
+					return info.Owner
+				}
+			}
+		}
+		if st, err := a.store.Read(); err == nil {
+			if repo != "" {
+				for _, m := range st.Merges {
+					if m.Repo == repo && m.PR == pr && m.By.Name != "" && !strings.HasPrefix(m.By.Name, "pid ") {
+						return m.By
+					}
+				}
+			}
+			if loopPID := a.loopPID(); loopPID > 0 && os.Getppid() == loopPID {
+				return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+			}
+			sessions, t, serr := a.sessions()
+			if serr == nil && t != nil {
+				loopPID := a.loopPID()
+				byPID := make(map[int]*claude.Session, len(sessions))
+				for _, s := range sessions {
+					byPID[s.PID] = s
+				}
+				envKeys := []string{
+					orphanSessionEnv, "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_SESSION_NAME",
+					omp.EnvAgent, omp.EnvName,
+					agy.EnvAgent, agy.EnvName,
+					codex.EnvAgent, codex.EnvName,
+				}
+				for _, anc := range t.Ancestors(os.Getpid()) {
+					if loopPID > 0 && anc.PID == loopPID {
+						return state.Party{Name: loopParty.Name, Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
+					}
+					if s, ok := byPID[anc.PID]; ok {
+						p := s.Party()
+						p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
+						return p
+					}
+					if _, env, err := a.requesterOrigin(anc.PID, envKeys); err == nil && len(env) > 0 {
+						getenv := func(k string) string {
+							prefix := k + "="
+							for _, kv := range env {
+								if v, ok := strings.CutPrefix(kv, prefix); ok {
+									return v
+								}
+							}
+							return ""
+						}
+						p := envParty(getenv)
+						if p.Name != "" || p.Session != "" || p.HostSession != "" {
+							if p.Name == "" && p.HostSession != "" {
+								if r, ok := claude.ReadRecord(a.cfg, p.HostSession); ok && r.Title != "" {
+									p.Name = r.Title
+								}
+							}
+							if p.Name == "" {
+								for _, ag := range st.Agents {
+									if ag.Is(p) && ag.Name != "" {
+										p.Name = ag.Name
+										break
+									}
+								}
+							}
+							if p.Name == "" {
+								p.Name = cmp.Or(p.Session, p.HostSession)
+							}
+							p.Person, p.Team, p.Host = a.cfg.Identity.Person, a.cfg.Identity.Team, a.cfg.Identity.Host
+							return p
+						}
+					}
+				}
+			}
+		}
+	}
+	return state.Party{Name: fmt.Sprintf("pid %d", os.Getppid())}
 }
 
 // checkReviews refuses a pull request merge a reviewer holds, through
@@ -1467,14 +1595,14 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 // lane without an installation has nothing to roll, but a merge whose
 // release is unknown (its run lost, merged without a confirmed release)
 // settles it by the settle rule all the same: its release may be cutting
-// now, and a promotion behind it would race that. An installation that
-// cannot be read refuses.
+// now, and a promotion behind it would race that. A merge whose release its
+// gate confirms (merge.Confirming) lets an overlapping merge start
+// (overlaps), which merges only once that release is known (awaitReleases).
+// An installation that cannot be read refuses.
 func (g *gateRun) laneReady(q merge.Lane) ([]merge.HelmRelease, string, error) {
 	if g.lane.Installation == "" {
-		for _, s := range q.AllSettling {
-			if ready, why := merge.Ready(g.lane, nil, s, g.now, g.cfg.Merge.Settle.Duration); !ready {
-				return nil, fmt.Sprintf("next in lane %s, %s", g.lane.Name, why), nil
-			}
+		if why := q.Unsettled(g.now, g.cfg.Merge.Settle.Duration, g.overlaps(), proc.Alive); why != "" {
+			return nil, fmt.Sprintf("next in lane %s, %s", g.lane.Name, why), nil
 		}
 		return nil, "", nil
 	}
@@ -1571,7 +1699,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		}
 		g.startPair(st)
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
-			if m.Lane == g.lane.Name && m.Phase == state.Settling {
+			if m.Lane == g.lane.Name && m.Phase == state.Settling && !merge.Confirming(m, proc.Alive) {
 				settled = append(settled, m)
 				return true
 			}
@@ -1753,6 +1881,9 @@ func (g *gateRun) runMerge() error {
 		gateLine("%s merges into %s, %s: devctl ends at the merge (--no-release-wait), this merge awaits no release and frees lane %s then",
 			g.key(), g.release.Base, g.releasePRFlow(), g.lane.Name)
 	}
+	if err := g.awaitReleases(); err != nil {
+		return err
+	}
 	base, err := g.mergeFiles()
 	if err != nil {
 		gateLine("%v", err)
@@ -1775,7 +1906,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		argv := []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), "--head", g.reviewedHead}
+		argv := []string{self, squashMergeCmd, g.repo, fmt.Sprint(g.pr), headFlag, g.reviewedHead}
 		if g.release != nil && g.release.Auto {
 			argv = append(argv, "--release-wait")
 		}
@@ -1792,7 +1923,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
 	}
-	if g.handCut() != "" || g.plugins() || g.releasePR() {
+	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
 	}
 	return merge.AcceptRed(argv, g.acceptRed), nil
@@ -2024,18 +2155,31 @@ func (g *gateRun) record(base string, run childRun) error {
 	case g.releasePR() && r.out.Merged && r.unanswered == nil:
 		releaseLine = g.awaitReleasePR(&r.out)
 	}
+	// devctl ended at the merge (overlaps): a clean merge's release is
+	// confirmed once its lane place is releasing; a run judged by GitHub
+	// settles by the settle rule, as without the overlap.
+	confirm := g.overlaps() && rc == 0 && r.out.Merged && r.unanswered == nil && !r.out.Unconfirmed && !r.out.NoRelease && r.out.Release == ""
 	settles := false
 	err := g.store.Update(func(st *state.State) ([]state.Event, error) {
 		i := g.mine(st, state.Running)
 		if i < 0 {
+			confirm = false
 			return nil, nil
 		}
+		r.confirming = confirm
 		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
-		settles = slices.ContainsFunc(st.Merges, func(m state.Merge) bool {
+		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
 		})
+		settles = j >= 0
+		if confirm = confirm && settles; confirm {
+			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
+		}
 		return ev, nil
 	})
+	if confirm && err == nil {
+		releaseLine, rc = g.confirmRelease(&r.out, rc)
+	}
 	var stale *state.StaleWriterError
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
@@ -2163,6 +2307,9 @@ type runOutcome struct {
 	rc         int
 	reason     string
 	unanswered error
+	// confirming marks a merge whose release its gate confirms after the
+	// merge (gateRun.overlaps): the verdict follows as merge.release.
+	confirming bool
 }
 
 // recordRun records the outcome of the running merge st.Merges[i] in lane:
@@ -2229,13 +2376,15 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	case handCut != "":
 		release = "none awaited (" + handCut + " has no auto-release)"
 	case out.NoRelease:
-		release = "none warranted"
+		release = noneWarranted
 	case out.ReleaseFailed && release != "":
 		release += " failed, nothing rolls"
 	case out.ReleaseFailed:
 		release = "failed, nothing rolls"
 	case out.Unconfirmed:
 		release = "unconfirmed (merged per GitHub)"
+	case r.confirming:
+		release = "being confirmed, its verdict follows as merge.release"
 	case release == "":
 		release = "unknown"
 	}
