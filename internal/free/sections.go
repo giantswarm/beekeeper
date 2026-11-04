@@ -285,10 +285,10 @@ func (r *Run) orphans() {
 		if !r.Table.Orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
 			continue
 		}
-		c := p.Cmdline()
-		if !strings.Contains(c, "processChild.js") && !strings.Contains(c, "jest-worker") && !strings.Contains(c, "claude --output-format stream-json") {
+		if !orphanWorker(p) {
 			continue
 		}
+		c := p.Cmdline()
 		kib := r.anonKiB(p.PID)
 		r.tally(Orphans, kib)
 		r.act("kill pid %d (%d MiB, up %s): %s", p.PID, kib/1024, uptime(p.Elapsed(r.Now)), truncate(c, 90))
@@ -304,6 +304,33 @@ func (r *Run) orphans() {
 	if r.Apply {
 		r.kill(pids)
 	}
+}
+
+// orphanWorker recognizes worker arguments without matching text embedded in
+// another program's task, label or source code.
+func orphanWorker(p *proc.Process) bool {
+	if len(p.Args) == 0 {
+		return false
+	}
+	switch p.Comm {
+	case "claude":
+		return filepath.Base(p.Args[0]) == "claude" && len(p.Args) >= 3 &&
+			p.Args[1] == "--output-format" && p.Args[2] == "stream-json"
+	case "jest-worker":
+		return filepath.Base(p.Args[0]) == "jest-worker"
+	case "node", "nodejs":
+		return slices.ContainsFunc(p.Args[1:], func(arg string) bool {
+			if strings.HasPrefix(arg, "-") {
+				return false
+			}
+			switch filepath.Ext(arg) {
+			case ".js", ".cjs", ".mjs":
+				return filepath.Base(arg) == "processChild.js" || strings.Contains(filepath.ToSlash(arg), "/jest-worker/")
+			}
+			return false
+		})
+	}
+	return false
 }
 
 // terminate sends TERM, and KILL to what survives two seconds.
