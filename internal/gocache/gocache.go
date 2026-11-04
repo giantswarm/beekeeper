@@ -190,7 +190,7 @@ func Scan(dir string) (Usage, error) {
 	if err != nil {
 		return u, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	u.rootInfo, err = root.Stat(".")
 	if err != nil {
 		return u, err
@@ -294,7 +294,7 @@ func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, er
 	if err != nil {
 		return 0, 0, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	info, err := root.Stat(".")
 	if err != nil {
 		return 0, 0, err
