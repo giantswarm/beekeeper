@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Apply the five-minute local lint deadline when `golangci-lint` is invoked by an absolute or relative executable path (https://github.com/giantswarm/beekeeper/issues/2327).
 
+- Keep subscription-control labels scoped to browser reads of the clicked tab so unrelated output cannot replace them.
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - Check Glob patterns against workspace, transcript and sandbox boundaries, including absolute and parent-relative search targets.
 - Refuse browser batches containing a denied consent even when an earlier action needs no consent decision.
