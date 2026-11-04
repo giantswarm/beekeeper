@@ -66,7 +66,7 @@ func TestOwedArchiveStewardTimeout(t *testing.T) {
 		}
 	}
 	line := owe(st, []archiveOutcome{timeout}, now)[0]
-	if len(st.Archives) != 0 || !strings.Contains(line, "gives it up: 5 stewards' turns") {
+	if len(st.Archives) != 0 || !strings.Contains(line, "gives it up: 5 archive command attempts") {
 		t.Errorf("after %d tries: owed %+v, line %q", archiveTries, st.Archives, line)
 	}
 }

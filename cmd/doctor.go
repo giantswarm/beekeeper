@@ -683,24 +683,14 @@ line:
   with no transcript or roster activity for that age (gone); its task and
   latest hand-over note are logged and its serve record ends. The desktop sessions
   beekeeper started for the finished and the stale ones are archived in
-  one steward's turn (the desktop's Archived list brings one back); a
-  stale entry kept on purpose (agents keep, or an open timer that wakes it
-  by name) stays, and so does its desktop session;
-- asks again for an archive that stayed (its CLI ran a turn, no steward
-  recorded it) on its later runs while the CLI runs no turn, until the
-  desktop records it, up to 5 stewards' turns 10 minutes apart within 24h;
-  so are archived the session an agents handover ended and the run of the
-  guide a relay relieved, which frees its desktop CLI;
-  the steward is an idle desktop CLI of another session; with none
-  running, a finished worker's own desktop CLI archives it, warmed by
-  showing the session in the desktop for a moment once the person's
-  typing pauses, never while a headless turn of the session runs (claude
-  -p --resume <id>, a wake's): that turn is its CLI; the watch leaves such
-  a warmed CLI of a handed-over session running 5 minutes for
-  its archive call instead of stopping it as REVIVED; a relieved run of the
-  guide archives itself the same way, its own CLI
-  warmed when no other steward is idle; a steward that declined is asked for no archive for
-  24h; a run that asks no steward counts no turn and waits 10 minutes;
+  the configured agents.archiveCommand (the desktop's Archived list brings
+  one back), under agents.archiveAgreement; a stale entry kept on purpose
+  (agents keep, or an open timer that wakes it by name) stays;
+- retries an archive while its CLI runs no turn, up to 5 command attempts
+  10 minutes apart within 24h. No model or steward is asked for consent.
+  Configure agents.archiveCommand as an argv list for a desktop API/CLI
+  adapter; beekeeper appends the desktop session id and confirms the desktop
+  records it archived. With no command configured, the archive stays owed;
 - gives a session beekeeper started the roster name back when the desktop
   recorded another title, through a steward;
 - reopens a worker whose session the desktop never imported (no row in the
@@ -971,7 +961,7 @@ func (w *watcher) sayChores(rep doctorReport) {
 // unagreedLine says how many finished workers' desktop sessions stay
 // unarchived for want of the person's agreement.
 func unagreedLine(n int) string {
-	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
+	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement to archive them", n)
 }
 
 // checkAgyHooks checks ~/.gemini/config/hooks.json when agy is installed.

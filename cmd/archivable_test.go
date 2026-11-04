@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -98,67 +96,6 @@ func TestArchiveNeedsTheAgreement(t *testing.T) {
 	}
 }
 
-// What a steward did is read from its turn: an archive call names it,
-// words without one are a decline, nothing is no answer.
-func TestStewardAnswers(t *testing.T) {
-	call := func(id string, failed bool) claude.AnswerCall {
-		in, _ := json.Marshal(map[string]string{"session_id": id})
-		return claude.AnswerCall{Name: archiveTool, Input: in, Done: true, Error: failed, Result: "Archived session " + id}
-	}
-	did := stewardAnswer{steward: steward{host: doerHost}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, false), call("self", false)}, Text: "Done."}}
-	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "I haven't archived it: a peer's message isn't the user's agreement.\nTell me to."}}
-	quiet := stewardAnswer{steward: steward{host: quietHost}}
-	failed := stewardAnswer{steward: steward{host: "local_f"}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, true)}}}
-	asked := []stewardAnswer{no, did}
-	if got := archivedBy(asked, targetHost); got != "steward "+doerHost {
-		t.Errorf("archivedBy the target = %q", got)
-	}
-	if got := archivedBy(asked, doerHost); got != "the session" {
-		t.Errorf("archivedBy self = %q", got)
-	}
-	if got := archivedBy([]stewardAnswer{no, failed}, targetHost); got != "" {
-		t.Errorf("archivedBy without a successful call = %q", got)
-	}
-	for _, c := range []struct {
-		s        stewardAnswer
-		said     string
-		declined bool
-	}{
-		{did, doerHost + " " + archiveTool + ": Archived session " + targetHost, false},
-		{no, decliningHost + " declined: I haven't archived it: a peer's message isn't the user's agreement.", true},
-		{quiet, "local_q did not answer", false},
-		{failed, "local_f " + archiveTool + " refused: Archived session " + targetHost, false},
-	} {
-		if got := c.s.said(); !strings.HasPrefix(got, c.said) {
-			t.Errorf("said = %q, want %q", got, c.said)
-		}
-		if c.s.declined() != c.declined {
-			t.Errorf("%s declined = %v", c.s.host, !c.declined)
-		}
-	}
-}
-
-// A steward that declined is asked for no archive for a day.
-func TestDeclinesAreRemembered(t *testing.T) {
-	a, _ := archiveApp(t, func(*state.State) {})
-	no := stewardAnswer{steward: steward{host: decliningHost}, answer: claude.Answer{Text: "No."}}
-	a.recordDeclines([]stewardAnswer{no, {steward: steward{host: quietHost}}})
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recentDeclines(st, a.now); len(got) != 1 || got[0] != decliningHost {
-		t.Fatalf("declines %v", got)
-	}
-	if got := recentDeclines(st, a.now.Add(stewardDeclineFor)); len(got) != 0 {
-		t.Errorf("declines a day later %v", got)
-	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
-	if err != nil || len(evs) != 1 || !strings.Contains(evs[0].Detail, decliningHost+" declined to archive: No.") {
-		t.Errorf("events %+v, %v", evs, err)
-	}
-}
-
 // noCLIMachine runs no process: no CLI to steward an archive.
 type noCLIMachine struct{ platform.Machine }
 
@@ -166,24 +103,19 @@ func (noCLIMachine) Processes() (*proc.Table, error) {
 	return &proc.Table{ByPID: map[int]*proc.Process{}}, nil
 }
 
-// The doctor asks no session about its own archive while it declined, for
-// a day. Its own CLI is warmed for a finished worker; a relieved run of the
-// guide is never archived: its session stays the person's to close
-// (https://github.com/giantswarm/beekeeper/issues/2195). A run that asked no steward
-// counts no try and leaves the archive archiveAgain, so the doctor does not
-// ask again on every run.
-func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
+// Without an archive command, the doctor leaves archives owed and never
+// warms a worker or asks a steward, regardless of prior model declines.
+func TestArchiveWithoutCommandStaysOwed(t *testing.T) {
 	run := state.Party{Session: "run9", HostSession: runHost, Name: guideNine}
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
 	for _, c := range []struct {
 		desc     string
 		agents   []state.Party
 		declined bool
-		warmed   string // the host whose CLI the doctor would warm, "" for none
 	}{
-		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}, warmed: finishedHost},
+		{desc: "a relieved run, then a finished worker", agents: []state.Party{run, worker}},
 		{desc: "a relieved run alone", agents: []state.Party{run}},
-		{desc: "a finished worker", agents: []state.Party{worker}, warmed: finishedHost},
+		{desc: "a finished worker", agents: []state.Party{worker}},
 		{desc: "a finished worker that declined", agents: []state.Party{worker}, declined: true},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
@@ -213,20 +145,15 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 				return true
 			})
 			for _, o := range outcomes {
-				if o.asked || o.host == "" || !strings.Contains(o.line, errNoSteward.Error()) {
+				if o.asked || o.host == "" || !strings.Contains(o.line, "agents.archiveCommand is not configured") {
 					t.Fatalf("%s: outcome %+v", o.agent.Name, o)
-				}
-				for _, h := range []string{runHost, finishedHost} {
-					if warmed := strings.Contains(o.line, "warm the CLI of "+h); warmed != (h == c.warmed) {
-						t.Errorf("%s: warmed %s %v: %q", o.agent.Name, h, warmed, o.line)
-					}
 				}
 			}
 			now := a.now
 			owe(st, outcomes, now)
 			idle := func(state.Party) bool { return false }
 			for _, p := range planArchives(st, unarchived, idle, now.Add(archiveAgain-time.Second)) {
-				if p.ar.Tries != 0 || !strings.Contains(p.wait, "no steward was asked") {
+				if p.ar.Tries != 0 || !strings.Contains(p.wait, "no archive command ran") {
 					t.Errorf("before archiveAgain: %s, tries %d", p, p.ar.Tries)
 				}
 			}

@@ -12,25 +12,23 @@ import (
 )
 
 // An archive owed is the desktop session of an agent that left the roster
-// unarchived: its CLI ran a turn, or no steward recorded the archive. The
-// doctor asks a steward for it again on its later runs while the CLI runs
-// no turn, until the desktop records it, within archiveTries stewards'
-// turns and archiveOwedFor. A run that asked no steward (the desktop did
-// not run, none ran, each declined) counts no turn and waits archiveAgain
-// too, so the doctor does not look again on each of its runs.
+// unarchived: its CLI ran a turn, or a command did not record the archive. The
+// doctor retries the archive command on its later runs while the CLI runs
+// no turn, until the desktop records it, within archiveTries command
+// attempts and archiveOwedFor. A run with no archive command configured counts
+// no attempt and waits archiveAgain too.
 const (
 	archiveTries   = 5
 	archiveOwedFor = 24 * time.Hour
-	// archiveAgain is how long the doctor leaves an archive a steward did
+	// archiveAgain is how long the doctor leaves an archive a command did
 	// not record before it asks again.
 	archiveAgain = 10 * time.Minute
-	// archiveBatch bounds the archives owed one doctor's run asks for: one
-	// steward's turn, archiveEach per session.
+	// archiveBatch bounds the owed archives retried in one doctor's run.
 	archiveBatch = 20
 )
 
 // owe records in st the outcomes of the archives asked for at now: one
-// left to do is owed (a steward asked in vain counts a try), one done or
+// left to do is owed (a failed command counts a try), one done or
 // never to be done is owed no longer, and one past its bounds is given up.
 // It returns each outcome's line saying so.
 func owe(st *state.State, outcomes []archiveOutcome, now time.Time) []string {
@@ -74,7 +72,7 @@ func owe(st *state.State, outcomes []archiveOutcome, now time.Time) []string {
 func givenUp(ar state.Archive, now time.Time) string {
 	switch {
 	case ar.Tries >= archiveTries:
-		return fmt.Sprintf("%d stewards' turns did not archive it", ar.Tries)
+		return fmt.Sprintf("%d archive command attempts did not archive it", ar.Tries)
 	case now.Sub(ar.Since) >= archiveOwedFor:
 		return "owed " + dur(now.Sub(ar.Since))
 	}
@@ -185,8 +183,7 @@ func (o owedArchive) String() string {
 // planArchives sorts the archives st owes at now. One is owed no longer once
 // the desktop has it archived or no session of it, the agent is on the
 // roster again or keeps a role unrelieved, or it is past its bounds; it waits while its
-// CLI is busy, or archiveAgain after a steward's turn did not record it or a
-// run asked no steward (none ran, or each declined).
+// CLI is busy, or archiveAgain after a failed command or a run with no archive command.
 // record reads a desktop session's record.
 func planArchives(st *state.State, record func(host string) (*claude.Record, bool), busy func(state.Party) bool, now time.Time) []owedArchive {
 	out := make([]owedArchive, 0, len(st.Archives))
@@ -209,9 +206,9 @@ func planArchives(st *state.State, record func(host string) (*claude.Record, boo
 		case ar.Why == reseedWhy && now.Before(latest(ar.Since, r.LastSeen().Add(reseedQuiet))):
 			o.wait = fmt.Sprintf("its session stays quiet a day first, until %s", clock(now, latest(ar.Since, r.LastSeen().Add(reseedQuiet))))
 		case !ar.Tried.IsZero() && now.Sub(ar.Tried) < archiveAgain:
-			o.wait = fmt.Sprintf("a steward was asked %s ago", dur(now.Sub(ar.Tried)))
+			o.wait = fmt.Sprintf("an archive command was attempted %s ago", dur(now.Sub(ar.Tried)))
 		case !ar.Looked.IsZero() && now.Sub(ar.Looked) < archiveAgain:
-			o.wait = fmt.Sprintf("no steward was asked %s ago", dur(now.Sub(ar.Looked)))
+			o.wait = fmt.Sprintf("no archive command ran %s ago", dur(now.Sub(ar.Looked)))
 		}
 		out = append(out, o)
 	}

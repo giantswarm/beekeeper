@@ -2458,33 +2458,33 @@ by an agent", which its own titling never overwrites.
 the desktop's Archived list brings it back), and prints and logs (`agents.archive`) what it did.
 It does so only for a session beekeeper started that runs no turn and holds or held no role, unless
 a relay relieved it;
-`--keep-desktop` leaves it in the sidebar. When no other steward is idle, the session's own
-desktop CLI archives it: beekeeper shows the session in the desktop for a moment once the person's
-typing pauses, as a reopen does, which warms its CLI, and the window then shows the session it
-showed before. When that cannot be done (the desktop does not run, the person keeps typing, the
-desktop at its cap of CLIs) it says so and the removal still stands; the doctor then owes the
-archive (below), and a run that asked no steward counts none of its tries.
+`--keep-desktop` leaves it in the sidebar.
 
-The desktop's `archive_session` may be used only on the person's explicit agreement, and a
-peer's message is not that, so beekeeper archives only under `agents.archiveAgreement`: where the
-person agreed that the desktop sessions of finished workers beekeeper started are archived
-without asking, never a session they started themselves (a standing instruction in their user
-`CLAUDE.md`, say). The request quotes it and has the steward run `beekeeper agents archivable
-<local_id>…` first, which confirms each session is such a finished worker (one of beekeeper's
-starts, off the roster, no role a relay did not relieve, unarchived, its CLI in no turn) and exits
-3 for any other, a session the person started included; the steward archives only what it
-confirms. Without `agents.archiveAgreement` no steward is asked and the line says so. An archive
-counts once the desktop records it, and the line names the steward whose `archive_session` call
-did it. A steward that archived nothing is read from its turn: one that declined is reported with
-the first line of its reply (`agents.archive`, "steward local_… declined to archive: …") and asked
-for no archive for 24 hours; one that did not answer is reported as such.
+Desktop archiving requires `agents.archiveAgreement`, recording the person's standing
+agreement to archive finished workers beekeeper started, and `agents.archiveCommand`, an
+argv list for an installed deterministic desktop API/CLI adapter. Beekeeper appends one
+`local_` session id as the final argument, without shell expansion. The adapter must archive
+that desktop row without a model turn and exit nonzero on failure. For example, an adapter
+installed as `desktop-session-control` accepting `archive <id>` is configured as:
+
+```yaml
+agents:
+  archiveAgreement: "Standing agreement to archive finished beekeeper workers"
+  archiveCommand: [desktop-session-control, archive]
+```
+
+The adapter is installation-specific and is not bundled with beekeeper. Beekeeper checks
+worker eligibility and a quiet CLI before invoking it, bounds execution and confirmation to
+45 seconds, and counts success only when the desktop record says archived. An absent adapter,
+failed command or unconfirmed archive leaves the archive owed for a later doctor run. There
+is no model or steward fallback, and no worker CLI is warmed to request its own archive.
 
 `beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
 background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
 supervisor's or the guide's role (a relieved role relays, it never hands over), or once it stayed
 idle `agents.staleAfter` (24h) with no CLI running; the desktop sessions beekeeper started for the
-finished and the stale ones are archived in one steward's turn, under the rules above. An entry
+finished and the stale ones are archived through the configured command, under the rules above. An entry
 kept on purpose is never removed for staleness and its desktop session never archived by the
 doctor: `beekeeper agents keep <agent> [--until <time>] [--reason <text>]` marks a judge or
 reviewer session a person returns to, a spare or a worker parked on a long external wait, and an

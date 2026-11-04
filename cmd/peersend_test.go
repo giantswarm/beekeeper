@@ -49,7 +49,7 @@ func relayed(t *testing.T, sent string) []string {
 	return tos
 }
 
-// A broadcast and a steward's archive ask reach a running CLI through the
+// A broadcast and a steward's title request reach a running CLI through the
 // relay turn; when the relay turn cannot run, both name its error.
 func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	a, _ := noteApp(t)
@@ -57,7 +57,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	agents := []state.Agent{{Party: four}, {Party: state.Party{Session: "s5", Name: agentFive}}}
 	sessions := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}, {ID: "s5", Name: agentFive}}
 	s := steward{host: "local_steward", sock: "/run/user/1000/cc-socks/1.sock"}
-	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor", "agreed")
+	ask := retitleRequest("local_worker", "worker")
 	done := func() bool { return true }
 
 	sent := fakeRelay(t, false)
