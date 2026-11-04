@@ -32,11 +32,11 @@ func ghMergeNeedsBranchRepair(reason string) bool {
 	return strings.Contains(lower, "conflict") || strings.Contains(lower, "behind") || strings.Contains(lower, "out of date") || strings.Contains(lower, "out-of-date") || strings.Contains(lower, "cannot be cleanly created")
 }
 
-// An admin suggestion is a desk configuration refusal, even when GitHub's
-// merge state also says BEHIND. It cannot be repaired by changing the branch.
-func ghMergeNeedsAdmin(reason string) bool {
+// A branch policy refusal belongs to the coordinator, even when GitHub's
+// merge state also says BEHIND. A branch edit cannot supply missing review.
+func ghMergePolicyRefused(reason string) bool {
 	lower := strings.ToLower(reason)
-	return strings.Contains(lower, "base branch policy") && strings.Contains(lower, "--admin")
+	return strings.Contains(lower, "base branch policy") || strings.Contains(lower, "review_required") || strings.Contains(lower, "required approving review")
 }
 
 // mergePull executes the planner's exact-head decision in the coordinator,
@@ -101,7 +101,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 		return "", errLoopLater
 	}
 	for _, f := range st.Failed {
-		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && ghMergeNeedsAdmin(f.Reason) {
+		if f.Repo == ref.Repo && f.PR == ref.N && f.By.Name == loopParty.Name && ghMergePolicyRefused(f.Reason) {
 			// An older gate may have recorded this as a branch failure.
 			// Drop only that failed attempt so the unchanged head can rejoin.
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
@@ -167,13 +167,17 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if mutationResult {
 		policyReason = reply.Reason
 	}
-	if ghMergeNeedsAdmin(policyReason) {
+	if ghMergePolicyRefused(policyReason) {
 		stage := act.Key + " admin configuration"
 		l.mu.Lock()
 		reported := l.stages[stage]
 		l.mu.Unlock()
 		if !reported {
-			message := fmt.Sprintf("SUPERVISOR MERGE CONFIGURATION REFUSED %s: check merge.admin for %s; retrying next round: %s", act.URL, ref.Repo, oneLine(policyReason))
+			guidance := "repository merge policy remains unmet"
+			if strings.Contains(policyReason, "--admin") {
+				guidance = "check merge.admin for " + ref.Repo
+			}
+			message := fmt.Sprintf("SUPERVISOR MERGE POLICY REFUSED %s: %s; reviewDecision=%s; retrying next round: %s", act.URL, guidance, p.ReviewDecision, oneLine(policyReason))
 			if err := a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", stage, message), act.Ref)); err != nil {
 				return "", err
 			}
@@ -230,7 +234,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 }
 
 // dropAdminRepairs undoes a branch repair an older loop requested for a
-// merge refused by base branch policy with an admin suggestion: no branch
+// merge refused by base branch policy: no branch
 // change repairs that refusal. Its repair stage and the go it completed are
 // closed durably, so the unchanged approved head is merged again on this
 // pass without a new review or the worker's action. A repair stage for any
@@ -238,14 +242,14 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[string]bool, stageDetail map[string]string) ([]superloop.Taken, error) {
 	for stage, detail := range stageDetail {
 		key, ok := strings.CutSuffix(stage, " repair")
-		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergeNeedsAdmin(detail) {
+		if !ok || !stages[stage] || !strings.HasPrefix(key, superloop.KindGo+" ") || !ghMergePolicyRefused(detail) {
 			continue
 		}
 		ref := strings.TrimPrefix(key, superloop.KindGo+" ")
 		if i := strings.LastIndex(ref, "@"); i >= 0 {
 			ref = ref[:i]
 		}
-		why := "base branch policy refusal is merge configuration, not branch repair"
+		why := "base branch policy refusal requires coordinator policy resolution"
 		// A preview reconciles only its in-memory plan. Leave the durable
 		// records for the next real pass, which holds the loop lock.
 		if !l.dryRun {
@@ -264,7 +268,7 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
 		}
 		if !l.dryRun {
-			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; check merge.admin for its repository\n", key, why)
+			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; retrying with configured merge identity and policy\n", key, why)
 		}
 	}
 	return taken, nil
@@ -668,6 +672,12 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	if !queue && a.cfg.Merge.AdminMerge(repo) {
 		argv = append(argv, "--admin")
 	}
+	// Use the configured owner's devctl identity without letting pr merge
+	// follow a new head during its wait. All gates above still govern this
+	// exact-head mutation; no extra admin or auto flag is granted.
+	if a.cfg.Merge.DevctlServes(repo) {
+		argv = append([]string{devctlBinary, "auth", "exec", "--"}, argv...)
+	}
 	out, stderr, code, runErr := loopCommand(ctx, "", argv)
 	doc.Reason = oneLine(out + stderr)
 	if runErr != nil {
@@ -695,8 +705,9 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if doc.Reason == "" {
 			doc.Reason = "merge head moved or current CI is not green"
 		}
-	case ghMergeNeedsAdmin(doc.Reason):
+	case ghMergePolicyRefused(doc.Reason):
 		doc.ExitCode = github.SquashRefused
+		doc.Reason = fmt.Sprintf("repository merge policy refused (reviewDecision=%s): %s", p.ReviewDecision, doc.Reason)
 	case pullNeedsBranchRepair(p) || runErr == nil && code != 0 && ghMergeNeedsBranchRepair(doc.Reason):
 		doc.ExitCode = github.SquashNotApplicable
 		if doc.Reason == "" {

@@ -115,6 +115,7 @@ type Pull struct {
 	Closes                []string
 	Draft                 bool
 	Mergeable, MergeState string
+	ReviewDecision        string
 	Ref                   string // owner/repo#n
 	URL                   string
 	State                 string
