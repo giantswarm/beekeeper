@@ -307,6 +307,9 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
+	release := toolRelease
+	t.Cleanup(func() { toolRelease = release })
+	toolRelease = func(context.Context, string) (string, error) { return devctlTo, nil }
 	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority
 	t.Cleanup(func() {
 		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
