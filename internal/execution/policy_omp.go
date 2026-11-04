@@ -24,10 +24,13 @@ func (s *Server) ompGuardBytes() []byte {
 func (s *Server) ompEnvironment() []string {
 	return append(cleanEnvironment("", s.Executable), "PI_CODING_AGENT_DIR="+s.Config.Harnesses[HarnessOmp].ConfigDir)
 }
-func (s *Server) ompArgs(model string) []string {
+func (s *Server) ompArgs(model, effort string) []string {
 	args := []string{"--mode", "rpc", "--no-ui", "--no-extensions", "--extension", s.ompGuardFile(), "--tools", "bash,read,write", "--approval-mode", "yolo", "--append-system-prompt", filepath.Join(s.Root, "CLAUDE.md")}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--thinking", effort)
 	}
 	return args
 }
