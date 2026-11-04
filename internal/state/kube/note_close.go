@@ -2,6 +2,7 @@ package kube
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,10 @@ const (
 	noteDoneEvent      = "note.done"
 	noteDefaultedEvent = "note.defaulted"
 )
+
+// answerNoteDetail matches the quoted note provenance followed by the verbatim
+// answer in answer.recorded. Quoted questions may themselves contain colons.
+var answerNoteDetail = regexp.MustCompile(`(?s), note #(\d+) asked by "(?:[^"\\]|\\.)*"(?: for "(?:[^"\\]|\\.)*")?: "(?:[^"\\]|\\.)*": (.*)$`)
 
 // closeNotes refuses a silent close and keeps its reason in the same status
 // write as its outcome. Closed resources stay out of the open state document.
@@ -89,6 +94,13 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 			return err
 		}
 		n.Status.Closure = &v1alpha1.NoteClosure{ID: id, Verb: closing.Verb, Detail: closing.Detail, By: apiParty(closing.By), At: metav1.NewTime(at)}
+		if closing.Verb == noteAnsweredEvent {
+			if m := answerNoteDetail.FindStringSubmatch(closing.Detail); m != nil && m[1] == strconv.Itoa(old.Spec.ID) {
+				n.Status.Answer = m[2]
+				n.Status.AnsweredBy = closing.By.Person
+				n.Status.AnsweredAt = &metav1.Time{Time: at}
+			}
+		}
 	}
 	return nil
 }

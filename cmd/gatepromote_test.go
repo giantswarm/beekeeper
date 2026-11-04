@@ -572,3 +572,58 @@ bash "$gate" "$TAG"
 		t.Fatalf("patch release at new HEAD failed: %v\n%s", err, out)
 	}
 }
+
+func TestPromoteUsageExitIsARefusal(t *testing.T) {
+	noSystemd(t)
+	newest := candidateA
+	stubCandidate(t, &newest)
+	const message = "invalid version: expected vX.Y.Z"
+	for _, doc := range []string{"", `{"exitCode":7,"reason":"invalid version: expected vX.Y.Z"}`} {
+		t.Run(doc, func(t *testing.T) {
+			fakeDevctl(t, `echo '`+doc+`'; echo '`+message+`' >&2; exit 7`)
+			a, g := promotePlace(t)
+			var err error
+			stderr := gateStderr(t, func() { _, err = g.step() })
+			if Code(err) != 3 || !strings.Contains(stderr, message) || strings.Contains(stderr, "unknown") {
+				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
+			}
+			if d := lastEventOf(t, a, "merge.unknown"); d != "" {
+				t.Fatalf("uncertain outcome: %s", d)
+			}
+			if d := lastEventOf(t, a, "merge.failed"); !strings.Contains(d, message) {
+				t.Fatalf("missing usage reason: %s", d)
+			}
+			st, err := a.store.Read()
+			if err != nil || len(st.Merges) != 0 {
+				t.Fatalf("refused promotion kept its lane: %+v, %v", st, err)
+			}
+		})
+	}
+}
+
+func TestPromoteRefusesBareVersionBeforeDevctl(t *testing.T) {
+	for _, version := range []string{"1.2.3", "4.152.0-rc.1"} {
+		for _, flags := range [][]string{{"--version", version}, {"--version=" + version}} {
+			a, _ := promotePlace(t)
+			fakeDevctl(t, `echo unexpected devctl invocation >&2; exit 99`)
+			var err error
+			stderr := gateStderr(t, func() { err = a.gate(context.Background(), promoteArgv(flags...), 0, 0, false) })
+			if Code(err) != 3 || !strings.Contains(stderr, "vX.Y.Z") || strings.Contains(stderr, "unexpected devctl invocation") {
+				t.Fatalf("flags %v: exit %d (%v), stderr %q", flags, Code(err), err, stderr)
+			}
+		}
+	}
+}
+
+func TestPromoteUsageOutcomeNeedsNoJudging(t *testing.T) {
+	for _, rc := range []int{7, 1, 143} {
+		out, ok, got := parseRunOutcome(0, nil, rc)
+		if rc == 7 {
+			if got != 3 || out.Merged || merge.NeedsJudging(ok, got) {
+				t.Fatalf("usage: %+v, %t, %d", out, ok, got)
+			}
+		} else if got != rc || !merge.NeedsJudging(ok, got) {
+			t.Fatalf("uncertain exit %d: %+v, %t, %d", rc, out, ok, got)
+		}
+	}
+}
