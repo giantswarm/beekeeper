@@ -141,3 +141,32 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
 	}
 }
+
+// Global flag values and later arguments must not be mistaken for commands.
+func TestReexecs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args string
+		want bool
+	}{
+		{"no arguments", "", false},
+		{"program only", "beekeeper", false},
+		{"gate wrapper", "beekeeper gate -- devctl pr merge o/r 1", true},
+		{"merge child", "beekeeper merge-child /state/merge", true},
+		{"config gate", "beekeeper --config /config.yaml gate -- devctl pr merge o/r 1", true},
+		{"config merge child", "beekeeper --config /config.yaml merge-child /state/merge", true},
+		{"inline config", "beekeeper --config=/config.yaml gate", true},
+		{"multiple globals", "beekeeper --json --as worker --config /config.yaml merge-child /state/merge", true},
+		{"gate config value", "beekeeper --config gate version", false},
+		{"merge child identity value", "beekeeper --as merge-child version", false},
+		{"later gate", "beekeeper version gate", false},
+		{"separator", "beekeeper -- gate", false},
+		{"missing config value", "beekeeper --config", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reexecs(&proc.Process{Args: strings.Fields(tc.args)}); got != tc.want {
+				t.Errorf("reexecs(%q) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
