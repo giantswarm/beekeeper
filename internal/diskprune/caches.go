@@ -181,7 +181,8 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				continue
 			}
 			if errors.Is(err, os.ErrNotExist) {
-				continue // gone already: nothing freed by this run
+				left -= u.size // gone already: the budget no longer holds it
+				continue       // nothing freed by this run
 			}
 			if err != nil {
 				r.Errors = append(r.Errors, fmt.Errorf("cache removal: %w", err))
