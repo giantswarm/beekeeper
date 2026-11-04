@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -200,17 +201,23 @@ func bootTime(root string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("reading the process table needs Linux /proc: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "btime "); ok {
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return time.Time{}, err
+		}
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
 			s, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
 				return time.Time{}, err
 			}
 			return time.Unix(s, 0), nil
 		}
+		if errors.Is(err, io.EOF) {
+			return time.Time{}, errors.New("no btime in /proc/stat")
+		}
 	}
-	return time.Time{}, errors.New("no btime in /proc/stat")
 }
 
 // Ancestors returns the parent chain of pid, nearest first.
