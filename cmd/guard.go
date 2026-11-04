@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
@@ -139,6 +140,13 @@ exports MEMCAP_BACKGROUND=1 only for a detected beekeeper run, directly,
 after a cd or export chain, or in a readable shell wrapper. A wrapper
 that cannot be detected needs an explicit --wait 60m.
 
+A shell command containing recognized builds and output commands runs
+without a slot: each build acquires its own slot only when it starts and
+releases it when it ends, even if the shell keeps waiting or tailing.
+Gate-owned devctl waits and merges run through beekeeper gate without a
+build slot. Unknown shell programs retain the whole-command cap; an explicit
+--class also retains the declared cap.
+
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
 off. Without a user systemd (containers, CI) the command runs uncapped. In
@@ -260,6 +268,21 @@ machine's files stay untouched.`,
 				return usageErr("%v", err)
 			}
 			if !f.Changed("class") {
+				// The shell stays slotless; only the nested heavy processes queue.
+				// Forward explicit flags so splitting retains resource overrides.
+				exe, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				runPrefix := []string{exe, "run"}
+				f.Visit(func(flag *pflag.Flag) {
+					runPrefix = append(runPrefix, "--"+flag.Name+"="+flag.Value.String())
+				})
+				runPrefix = append(runPrefix, "--")
+				if planned, reason := guard.ProcessRun(args, runPrefix, []string{exe, "gate", "--"}); planned != nil {
+					fmt.Fprintln(os.Stderr, guard.LogPrefix+reason)
+					return &exitError{code: guard.Exec(planned, os.Stderr)}
+				}
 				if guard.BuildsNothing(args) {
 					return &exitError{code: guard.Exec(args, os.Stderr)}
 				}
