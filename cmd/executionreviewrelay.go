@@ -18,6 +18,7 @@ import (
 )
 
 const executionReviewRelay = "review-relay"
+const reviewRelayRawField = "--raw-field"
 
 type executionReviewRequest struct {
 	Diff bool   `json:"diff,omitempty"`
@@ -64,7 +65,7 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 		// Reconcile a lost response before posting again. Only this round's exact
 		// content, commit and time qualify; completion still authenticates its URL.
 		path := "repos/" + r.Repo + "/pulls/" + number + "/reviews"
-		raw, err := github.RunGH(ctx, "api", path, "--paginate", "--slurp")
+		raw, err := github.RunGH(ctx, workerGitHubAPIGroup, path, "--paginate", "--slurp")
 		if err != nil {
 			return "", err
 		}
@@ -84,7 +85,7 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 				}
 			}
 		}
-		out, err := github.RunGH(ctx, "api", "repos/"+r.Repo+"/pulls/"+number+"/reviews", "--method", "POST", "--raw-field", "event=COMMENT", "--raw-field", "commit_id="+round.Head, "--raw-field", "body="+request.Body)
+		out, err := github.RunGH(ctx, workerGitHubAPIGroup, "repos/"+r.Repo+"/pulls/"+number+"/reviews", "--method", "POST", reviewRelayRawField, "event=COMMENT", reviewRelayRawField, "commit_id="+round.Head, reviewRelayRawField, "body="+request.Body)
 		if err != nil {
 			return "", err
 		}

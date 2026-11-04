@@ -501,8 +501,8 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.DeskReviews = nil
 		start := &st.Starts[len(st.Starts)-1]
-		start.Party.Host = "review-host"
-		start.Party.Session = "remote-codex-review-session"
+		start.Host = "review-host"
+		start.Session = "remote-codex-review-session"
 		start.Harness = execution.HarnessCodex
 		record := *st.Starts[0].Execution
 		record.Handle.Ref.Execution = "independent-review-execution"
@@ -514,7 +514,7 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.assignExecutionReview(context.Background(), superloop.Action{Ref: use.Repository + "#7", Head: use.Head, Round: 1, Agent: "remote-worker"}); err != nil {
+	if err := a.assignExecutionReview(context.Background(), superloop.Action{Ref: use.Repository + "#7", Head: use.Head, Round: 1, Agent: hostFixtureWorker}); err != nil {
 		t.Fatal(err)
 	}
 	approved := superloop.Review{ID: "remote-review", Verdict: superloop.Approved}

@@ -53,8 +53,10 @@ func sshCodexTestApp(t *testing.T, offered map[string]string) (*app, string, *[]
 	return a, brief, &requests
 }
 
+const reviewCodexVersion = "0.166.0"
+
 func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, codex.Harness: reviewCodexVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-codex", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func TestExecutionRefusesCodexTheHostDoesNotOffer(t *testing.T) {
 }
 
 func TestExecutionAutoPicksRemoteCodex(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: reviewCodexVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +194,7 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 }
 
 func TestExecutionCodexReviewerUsesCoordinatorRelayWithoutWorkerApp(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: reviewCodexVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-codex-review", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel, "--review"); err != nil {
 		t.Fatal(err)
 	}

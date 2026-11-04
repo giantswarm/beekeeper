@@ -28,8 +28,11 @@ updated is held. With
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
 and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`). Reviewers stay on the coordinator, where they can
-read GitHub and post the public review required for merge authorization.
+`capacity.local.ceiling`). Reviewers follow the same host preferences, including
+Codex reviewers without a worker GitHub App. On an execution host,
+`beekeeper agents review` reads the assigned PR and its closing issues,
+`--diff` reads the diff, and `--body-file <file>` posts the exact-head comment
+review through the coordinator for merge authorization.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 

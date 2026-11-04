@@ -62,13 +62,13 @@ func TestExecutionReviewRelayReadsAndPostsAssignedHead(t *testing.T) {
 		case "pr diff":
 			return []byte("assigned diff"), nil
 		default:
-			if len(args) == 4 && args[0] == "api" && args[2] == "--paginate" && args[3] == "--slurp" {
+			if len(args) == 4 && args[0] == workerGitHubAPIGroup && args[2] == "--paginate" && args[3] == "--slurp" {
 				if posts == 0 {
 					return []byte(`[[]]`), nil
 				}
 				return json.Marshal([][]map[string]any{{{"body": body, "commit_id": pull.Head, "html_url": url, "submitted_at": time.Now().UTC().Format(time.RFC3339)}}})
 			}
-			want := []string{"api", "repos/" + r.Repository + "/pulls/7/reviews", "--method", "POST", "--raw-field", "event=COMMENT", "--raw-field", "commit_id=" + pull.Head, "--raw-field", "body=" + body}
+			want := []string{workerGitHubAPIGroup, "repos/" + r.Repository + "/pulls/7/reviews", "--method", "POST", reviewRelayRawField, "event=COMMENT", reviewRelayRawField, "commit_id=" + pull.Head, reviewRelayRawField, "body=" + body}
 			if fmt.Sprint(args) != fmt.Sprint(want) {
 				t.Fatalf("unscoped review write: %v", args)
 			}
@@ -106,19 +106,25 @@ func TestExecutionReviewRelayReadsAndPostsAssignedHead(t *testing.T) {
 }
 
 func TestExecutionReviewRelayRefusesUnassignedExpiredAndChangedHeads(t *testing.T) {
-	for _, failure := range []string{"unassigned", "expired", "changed", "closed", "held", "bad body", "bad caller", "oversized", "mixed request", "completed"} {
+	for _, failure := range []string{"unassigned", "expired review lease", "changed review head", "closed review pull", "held review publication", "bad body", "bad caller", "oversized", "mixed request", workerGitHubCompleted, reviewedStoppedCase, "outside allowlist", "global stop"} {
 		t.Run(failure, func(t *testing.T) {
 			a, r, pull := reviewRelayRig(t)
 			request := executionReviewRequest{}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				switch failure {
+				case reviewedStoppedCase:
+					st.Starts[0].Execution.StopRequest = &execution.StopRequest{}
+				case "outside allowlist":
+					a.cfg.GitHub.AllowedOrgs = nil
+				case "global stop":
+					st.Stop = &state.Stop{}
 				case "unassigned":
 					st.DeskReviews = nil
-				case "expired":
+				case "expired review lease":
 					st.Starts[0].Execution.Lease.ExpiresAt = time.Now().Add(-time.Minute)
-				case "held":
+				case "held review publication":
 					st.Holds = append(st.Holds, state.Hold{Target: holdGitHub})
-				case "completed":
+				case workerGitHubCompleted:
 					st.Starts[0].Execution.Completed = true
 				}
 				return nil, nil
@@ -126,9 +132,9 @@ func TestExecutionReviewRelayRefusesUnassignedExpiredAndChangedHeads(t *testing.
 				t.Fatal(err)
 			}
 			switch failure {
-			case "changed":
+			case "changed review head":
 				pull.Head = strings.Repeat("b", 40)
-			case "closed":
+			case "closed review pull":
 				pull.State = superloop.Merged
 			case "bad body":
 				request.Body = "Review: approved\nHead reviewed: `" + strings.Repeat("b", 40) + "`"
