@@ -32,7 +32,8 @@ const mailboxRetry = time.Minute
 // and drains the mailbox once the subscription stands and on each update.
 // A subscription that ends is one MAILBOX UNSUBSCRIBED line and is opened
 // again after mailboxRetry; meanwhile, and while a message waits for an
-// agent that did not take it, the mailbox is drained every watch interval.
+// agent that did not take it or an acknowledgement that failed, the mailbox
+// is drained every watch interval.
 func (w *watcher) watchMailbox(ctx context.Context) {
 	person := mailbox.Key(w.cfg.Identity.Person)
 	if person == "" {
@@ -113,7 +114,7 @@ type mailEnvelope struct {
 // a wake's turn. A message to an agent that does not take it stays, and so
 // do the later ones to that agent, in their order; one to another machine's
 // agent is left to that machine. An expiry notice is said and acked. It
-// reports whether a message waits for one of the machine's agents.
+// reports whether a message waits for delivery or acknowledgement.
 func (w *watcher) drainMailbox(ctx context.Context) bool {
 	host := w.cfg.Identity.Host
 	me := state.Party{Name: w.cfg.Identity.Person, Host: host}
@@ -192,6 +193,7 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 		// A watch that stops meanwhile still acks what it delivered.
 		if _, err := w.callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
 			w.emitNow(mailboxKey, "MAILBOX: %d delivered not acked, delivered again: %s", len(acks), unreadableReason(err))
+			return true
 		}
 	}
 	return len(held) > 0
