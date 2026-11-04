@@ -277,16 +277,22 @@ func (s *server) postDecision(ctx context.Context, by state.Party, n *state.Note
 // closeDecision rewrites a closed decision's message, by whichever path it
 // closed; the failure is logged and audited, the note stays closed.
 func (s *server) closeDecision(ctx context.Context, n *state.Note, outcome, text string) {
+	_ = s.deliverDecisionClose(ctx, n, outcome, text)
+}
+
+// deliverDecisionClose returns the logged failure so a reconciler can retry it.
+func (s *server) deliverDecisionClose(ctx context.Context, n *state.Note, outcome, text string) error {
 	if s.gw == nil || n.Posted == "" {
-		return
+		return nil
 	}
 	err := s.gw.close(ctx, n.Posted, outcome, text)
 	if err == nil {
-		return // the call's line and Event, or the default's, say it
+		return nil // the call's line and Event, or the default's, say it
 	}
 	s.log.Error("decision close", "note", n.ID, "decision", n.Posted, "outcome", outcome, "detail", err.Error())
 	ev := event(serveParty, "note.close-failed", "#%d decision %s (%s): %v", n.ID, n.Posted, outcome, err)
 	_ = s.store.Audit(kube.NoteObject(n.By.Team, n.ID), n.By.Team, ev)
+	return err
 }
 
 // defaultLoop closes the decisions due unanswered with their default, every
@@ -309,23 +315,31 @@ func (s *server) defaultLoop(ctx context.Context) {
 // defaultDue closes the decisions due now: note.defaulted on each, its
 // message rewritten.
 func (s *server) defaultDue(ctx context.Context, now time.Time) error {
-	var due []state.Note
-	err := s.store.Update(func(st *state.State) ([]state.Event, error) {
-		_, evs, notes := closeDefaulted(st, s.cfg.Guide.Person, serveParty, now)
-		due = notes
+	updateErr := s.store.Update(func(st *state.State) ([]state.Event, error) {
+		_, evs, _ := closeDefaulted(st, s.cfg.Guide.Person, serveParty, now)
 		return evs, nil
 	})
+	// A status commit survives an Event error or a later conflict in the batch.
+	// Reconcile the durable closures, including those left by a previous process.
+	pending, err := s.store.PendingDefaults()
 	if err != nil {
-		return err
+		return errors.Join(updateErr, err)
 	}
-	for i := range due {
-		s.log.Info("default", "note", due[i].ID, "for", due[i].For, "default", due[i].Default)
-		s.closeDecision(ctx, &due[i], outcomeDefaulted, due[i].Default)
-		if err := s.mailFiler(ctx, &due[i], defaultedLine(&due[i])); err != nil {
-			s.log.Error("default", "note", due[i].ID, "filer", due[i].By.Name, "host", due[i].By.Host, "detail", "telling the filer: "+err.Error())
+	var deliveryErr error
+	for _, p := range pending {
+		n := p.Note
+		s.log.Info("default", "note", n.ID, "for", n.For, "default", n.Default)
+		if err := s.deliverDecisionClose(ctx, &n, outcomeDefaulted, n.Default); err != nil {
+			deliveryErr = errors.Join(deliveryErr, err)
+			continue
 		}
+		if err := s.mailFiler(ctx, &n, defaultedLine(&n)); err != nil {
+			deliveryErr = errors.Join(deliveryErr, err)
+			continue
+		}
+		deliveryErr = errors.Join(deliveryErr, s.store.DefaultDelivered(n.By.Team, n.ID, p.ClosureID))
 	}
-	return nil
+	return errors.Join(updateErr, deliveryErr)
 }
 
 // mailFiler queues line in the mailbox of the person whose agent filed n,
