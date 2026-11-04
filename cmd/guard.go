@@ -376,6 +376,48 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(&cobra.Command{
+		Use:   "check-scope",
+		Short: "Verify a proof event has a session ID and is in the hook's scope",
+		Long: `Read the proof's hook event from stdin, using the same configuration,
+state and environment as the hook invocation. Use a real session ID from
+beekeeper sessions (or the current harness session), never an invented ID.
+An out-of-scope event fails instead of silently passing through the hook.
+This checks scope, not whether the session is currently alive.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			var ev struct {
+				Session string `json:"session_id"`
+			}
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				return fmt.Errorf("invalid proof event: %w", err)
+			}
+			if strings.TrimSpace(ev.Session) == "" && strings.TrimSpace(guard.AgySession(raw)) == "" && strings.TrimSpace(guard.CodexSession(raw)) == "" {
+				return fmt.Errorf("proof requires a real in-scope session ID; obtain one from beekeeper sessions or the current harness session")
+			}
+			// Proofs must not mistake the hook's fail-open scope fallback
+			// for evidence that a session belongs to the configured scope.
+			if err := a.loadConfig(); err != nil {
+				return err
+			}
+			store, err := state.Open(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			if _, err := store.Peek(); err != nil {
+				return err
+			}
+			if !a.inScope(raw) {
+				return fmt.Errorf("proof event is out of scope: use a real in-scope session ID and its working directory with the same configuration and state as the hook")
+			}
+			_, err = fmt.Fprintln(a.out, "proof event is in scope")
+			return err
+		},
+	})
 	var formatFlag string
 	preCmd := &cobra.Command{
 		Use:   "pretooluse",
