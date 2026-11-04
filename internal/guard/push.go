@@ -32,7 +32,7 @@ const (
 var (
 	// guardedKeyword matches commands where unbalanced quotes or unreadable
 	// wrappers must fail closed.
-	guardedKeyword = regexp.MustCompile(`\b(?:push|gh|--admin)\b`)
+	guardedKeyword = regexp.MustCompile(`\b(?:commit|push|gh|--admin)\b`)
 	// shortForcePush matches short option clusters on git push that include -f.
 	shortForcePush = regexp.MustCompile(`^-[A-Za-z]*f[A-Za-z]*$`)
 	// shortDeletePush matches short option clusters on git push that include -d.
@@ -256,6 +256,9 @@ const unknownBranchReason = "Refused: the guard cannot tell which branch this pu
 
 func (h Hook) checkGitPush(gitWords []string, cwd string, known, hasCDOnLine bool, vars map[string]string, hasFakeGit bool) string {
 	args, gitDir, dirKnown, explicitC := parseGitGlobal(gitWords, cwd, known, vars, hasFakeGit)
+	if r := h.checkWorktreeOwner(args, gitDir, dirKnown); r != "" {
+		return r
+	}
 	if len(args) == 0 || args[0] != pushSubcmd {
 		return ""
 	}

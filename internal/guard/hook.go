@@ -252,6 +252,8 @@ type Hook struct {
 	// read only for a command that moves or removes an existing directory
 	// (liveworktrees.go); nil guards no worktree.
 	LiveDirs func() []string
+	// WorktreeOwner reserves a new worktree or checks its live session owner.
+	WorktreeOwner func(session, dir string, create bool) string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
