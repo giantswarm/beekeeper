@@ -396,6 +396,8 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
+	case strings.Contains(q, "closedByPullRequestsReferences"):
+		return []byte(`{"data":{}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
 	case strings.Contains(q, boardItemsQuery):
@@ -1007,8 +1009,12 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
 				}
 			}
-			if len(f.queries) != 3 {
-				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			wantQueries := 3
+			if open {
+				wantQueries++
+			}
+			if len(f.queries) != wantQueries {
+				t.Errorf("read made %d requests, want %d", len(f.queries), wantQueries)
 			}
 			for _, q := range f.queries {
 				if strings.Contains(q, "issueDependenciesSummary") {
