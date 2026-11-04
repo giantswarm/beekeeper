@@ -391,7 +391,7 @@ const (
 // lost error naming the steps the report lists; a connection the turn got
 // back by itself runs no reconnect.
 func TestBrowseReconnects(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, reportFile, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "report"), filepath.Join(bin, "count")
 	// The fake claude counts its runs, records each run's arguments, appends
@@ -502,7 +502,7 @@ func TestBrowseReconnects(t *testing.T) {
 // allows it and a prompt that names it; the report and the lines below it
 // come from the turn's output and its transcript.
 func TestBrowseRunsTheTurn(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl")
 	// The fake claude records its arguments NUL-separated (a prompt holds
@@ -738,7 +738,7 @@ func TestBrowseLocalhostLabSignIn(t *testing.T) {
 // has the hook act in the turn wherever it runs, exists while the turn runs
 // and is gone after it, the turn logged.
 func TestBrowseTurnWithARecord(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, startsFile := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "starts")
 	// The fake claude records its arguments, copies the state's starts as it
@@ -802,7 +802,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 // keeps no file tool and no settings; the copy goes with the turn, and a line
 // below the report names the file.
 func TestBrowseSharesFiles(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, seen := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "seen")
 	// The fake claude records its arguments and what it finds under the stage
@@ -1278,7 +1278,7 @@ func TestReadFindingsNotDrawn(t *testing.T) {
 func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 	// Leave room for shell startup under race instrumentation on a busy runner.
 	const turnTimeout = 3 * time.Second
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "count")
 	// The fake claude counts its runs, records each run's arguments, appends
@@ -1353,7 +1353,7 @@ func TestShotLines(t *testing.T) {
 // writes no file, and the saved shot's path; a turn that took none prints no
 // shot path.
 func TestBrowseReportsSavedShots(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
 	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +

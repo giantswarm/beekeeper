@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -272,7 +273,9 @@ the turn alone. The report is printed as the turn wrote it.
 Steps asking for one are refused before the turn starts; report the refusal
 to the supervisor at once.
 
-The turn shares the person's Chrome: hold the browser lease while it runs.
+The turn shares the person's Chrome: it refuses to run unless you hold the
+browser lease or have a valid grant for the free browser, which it claims.
+Hold the lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
 a page that waits on a person (a sign-in form, a dialog) is the usual cause.
 
@@ -642,12 +645,58 @@ for a timer to park on.`,
 	}
 }
 
+// browseLease admits the holder, or atomically claims a free browser for a
+// caller with a valid grant. A grant never overrides an existing holder.
+func (a *app) browseLease() error {
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	dir := lease.Dir(a.cfg.LeaseDir)
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		h, err := dir.Get(browserResource)
+		if err != nil {
+			return nil, err
+		}
+		if h != nil {
+			if h.Party().Is(me) {
+				return nil, nil
+			}
+			name := h.Name
+			if name == "" {
+				name = h.Holder
+			}
+			return nil, refused("browse needs the browser lease: browser is held by %q; claim it first (beekeeper lease claim browser)", name)
+		}
+		idx, err := lease.Check(st, lease.Gate{Resource: browserResource, Caller: me, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+		if err != nil {
+			return nil, refused("browse needs the browser lease: %v", err)
+		}
+		if idx < 0 {
+			return nil, refused("browse needs the browser lease: held by nobody; claim it first (beekeeper lease claim browser)")
+		}
+		cur, err := dir.Claim(browserResource, lease.Holder{Env: browserResource, Session: me.Session, HostSession: me.HostSession,
+			Name: me.Name, Person: me.Person, Team: me.Team, Host: me.Host, Purpose: "browser steps", UpgradeUnblock: st.Grants[idx].UpgradeUnblock, Since: a.now.UTC().Format(time.RFC3339)})
+		if err != nil {
+			return nil, err
+		}
+		if cur != nil {
+			return nil, refused("browser lease is held by %q", cur.Name)
+		}
+		st.Grants = slices.Delete(st.Grants, idx, idx+1)
+		return []state.Event{event(me, verbLeaseClaim, "browser: browser steps")}, nil
+	})
+}
+
 // browse runs the steps in a headless turn and prints its report and
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
 	if permanentDeletionSteps.MatchString(steps) {
 		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
+	}
+	if err := a.browseLease(); err != nil {
+		return err
 	}
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
