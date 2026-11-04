@@ -7,6 +7,7 @@ package gocache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -172,6 +173,9 @@ type Usage struct {
 	Dir     string
 	Entries []Entry
 	Bytes   int64
+
+	// rootInfo identifies the directory actually scanned, even if Dir is replaced.
+	rootInfo fs.FileInfo
 }
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
@@ -180,10 +184,19 @@ type Usage struct {
 // missing cache is empty.
 func Scan(dir string) (Usage, error) {
 	u := Usage{Dir: dir}
-	subs, err := os.ReadDir(dir)
+	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return u, nil
 	}
+	if err != nil {
+		return u, err
+	}
+	defer func() { _ = root.Close() }()
+	u.rootInfo, err = root.Stat(".")
+	if err != nil {
+		return u, err
+	}
+	subs, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return u, err
 	}
@@ -191,7 +204,7 @@ func Scan(dir string) (Usage, error) {
 		if !s.IsDir() || !hexByte(s.Name()) {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(dir, s.Name()))
+		files, err := fs.ReadDir(root.FS(), s.Name())
 		if err != nil {
 			return u, err
 		}
@@ -271,8 +284,25 @@ func hexByte(name string) bool {
 // most target bytes, and returns the bytes and entries it removed. It asks
 // busy before it starts and every few hundred removals, and stops with
 // ErrBusy once a build runs. An entry gone already is skipped; the go
-// command takes a missing entry for a miss and builds it again.
+// command takes a missing entry for a miss and builds it again. Removals
+// are confined to the opened root even when paths change concurrently. For
+// Usage returned by Scan, the root must still identify the scanned directory.
 func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, err error) {
+	if u.Bytes <= target || len(u.Entries) == 0 {
+		return 0, 0, nil
+	}
+	root, err := os.OpenRoot(u.Dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(".")
+	if err != nil {
+		return 0, 0, err
+	}
+	if u.rootInfo != nil && !os.SameFile(u.rootInfo, info) {
+		return 0, 0, errors.New("cache root changed since scan")
+	}
 	left := u.Bytes
 	for i, e := range u.Entries {
 		if left <= target {
@@ -281,8 +311,24 @@ func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, er
 		if i%busyEvery == 0 && busy() {
 			return freed, removed, ErrBusy
 		}
+		// Detect replacement since opening as well as between Scan and Trim.
+		// The open root confines Remove even if paths change after this check.
+		current, err := os.Stat(u.Dir)
+		if err != nil {
+			return freed, removed, err
+		}
+		if !os.SameFile(info, current) {
+			return freed, removed, errors.New("cache root changed since scan")
+		}
+		name, err := filepath.Rel(u.Dir, e.Path)
+		if err != nil {
+			return freed, removed, err
+		}
+		if !filepath.IsLocal(name) || name == "." {
+			return freed, removed, fmt.Errorf("invalid cache entry %q", name)
+		}
 		left -= e.Size
-		if err := os.Remove(e.Path); err != nil {
+		if err := root.Remove(name); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}

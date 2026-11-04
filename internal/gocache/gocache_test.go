@@ -3,6 +3,7 @@ package gocache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -256,5 +257,134 @@ func TestModDir(t *testing.T) {
 	t.Setenv("HOME", "/h")
 	if got := ModDir(); got != "/h/go/pkg/mod" {
 		t.Errorf("home: %s", got)
+	}
+}
+
+// Replacements happen in busy, after scanning and before a removal.
+func TestTrimDoesNotFollowReplacedShard(t *testing.T) {
+	testTrimReplacement(t, false, false)
+}
+
+func TestTrimDoesNotFollowReplacedRoot(t *testing.T) {
+	testTrimReplacement(t, true, false)
+}
+
+func TestTrimReportsProgressBeforeReplacementFailure(t *testing.T) {
+	testTrimReplacement(t, false, true)
+}
+
+func testTrimReplacement(t *testing.T, root, partial bool) {
+	t.Helper()
+	entries := map[string][2]int{entryA: {7, 1}}
+	if partial {
+		for i := 0; i < busyEvery; i++ {
+			entries[fmt.Sprintf("01/%03d", i)] = [2]int{3, 2}
+		}
+	}
+	dir := cache(t, entries)
+	outside := cache(t, map[string][2]int{entryA: {11, 1}})
+	outsideFile := filepath.Join(outside, entryA)
+	u, err := Scan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	moved := dir + "-moved"
+	t.Cleanup(func() { _ = os.RemoveAll(moved) })
+	freed, removed, err := Trim(u, 0, func() bool {
+		calls++
+		if partial && calls == 1 {
+			return false
+		}
+		old, replacement, saved := filepath.Join(dir, "00"), filepath.Join(outside, "00"), filepath.Join(dir, "saved")
+		if root {
+			old, replacement, saved = dir, outside, moved
+		}
+		if err := os.Rename(old, saved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(replacement, old); err != nil {
+			t.Fatal(err)
+		}
+		return false
+	})
+	wantFreed, wantRemoved := int64(0), 0
+	if partial {
+		wantFreed, wantRemoved = 3*busyEvery, busyEvery
+	}
+	if err == nil || freed != wantFreed || removed != wantRemoved {
+		t.Errorf("trim = %d, %d, %v; want %d, %d, error", freed, removed, err, wantFreed, wantRemoved)
+	}
+	if data, err := os.ReadFile(outsideFile); err != nil || len(data) != 11 { //nolint:gosec // a path of this test
+		t.Errorf("outside file changed: size %d, error %v", len(data), err)
+	}
+	original := filepath.Join(dir, "saved/a")
+	if root {
+		original = filepath.Join(moved, entryA)
+	}
+	if data, err := os.ReadFile(original); err != nil || len(data) != 7 { //nolint:gosec // a path of this test
+		t.Errorf("original file changed: size %d, error %v", len(data), err)
+	}
+}
+
+func TestTrimRejectsRootReplacedBetweenScanAndTrim(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		t.Run(fmt.Sprintf("symlink=%t", symlink), func(t *testing.T) {
+			dir := cache(t, map[string][2]int{entryA: {7, 1}})
+			u, err := Scan(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			moved := dir + "-moved"
+			t.Cleanup(func() { _ = os.RemoveAll(moved) })
+			if err := os.Rename(dir, moved); err != nil {
+				t.Fatal(err)
+			}
+			outside := dir
+			if symlink {
+				outside = cache(t, map[string][2]int{entryA: {11, 1}})
+				if err := os.Symlink(outside, dir); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Join(dir, "00"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, entryA), make([]byte, 11), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			freed, removed, err := Trim(u, 0, func() bool { return false })
+			if err == nil || freed != 0 || removed != 0 {
+				t.Fatalf("trim = %d, %d, %v", freed, removed, err)
+			}
+			for path, size := range map[string]int{filepath.Join(outside, entryA): 11, filepath.Join(moved, entryA): 7} {
+				if data, err := os.ReadFile(path); err != nil || len(data) != size { //nolint:gosec // a path of this test
+					t.Errorf("file changed: size %d, error %v", len(data), err)
+				}
+			}
+		})
+	}
+}
+
+func TestScanExcludesSymlinkShards(t *testing.T) {
+	dir := t.TempDir()
+	outside := cache(t, map[string][2]int{entryA: {11, 1}})
+	if err := os.Symlink(filepath.Join(outside, "00"), filepath.Join(dir, "00")); err != nil {
+		t.Fatal(err)
+	}
+	u, err := Scan(dir)
+	if err != nil || u.Bytes != 0 || len(u.Entries) != 0 {
+		t.Fatalf("scan = %+v, %v", u, err)
+	}
+}
+
+// Other cache callers construct Usage directly and use deeper layouts.
+func TestTrimCallerProvidedUsage(t *testing.T) {
+	dir := cache(t, map[string][2]int{"a/b/file": {7, 1}})
+	u := Usage{Dir: dir, Bytes: 7, Entries: []Entry{{Path: filepath.Join(dir, "a/b/file"), Size: 7}}}
+	freed, removed, err := Trim(u, 0, func() bool { return false })
+	if err != nil || freed != 7 || removed != 1 {
+		t.Fatalf("trim = %d, %d, %v", freed, removed, err)
 	}
 }
