@@ -26,7 +26,8 @@ func TestCacheDirectoriesUseGoEnvSettings(t *testing.T) {
 }
 
 func TestCacheDirectoriesSettingsPrecedence(t *testing.T) {
-	for _, name := range []string{"process overrides", "persisted GOPATH", "cache off", "settings off", "missing settings"} {
+	const missingSettings = "missing settings"
+	for _, name := range []string{"process overrides", "persisted GOPATH", "cache off", "settings off", missingSettings} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("GOCACHE", "")
@@ -53,7 +54,7 @@ func TestCacheDirectoriesSettingsPrecedence(t *testing.T) {
 			case "cache off":
 				content = "GOCACHE=off\nGOMODCACHE=" + modules + "\n"
 				build = ""
-			case "settings off", "missing settings":
+			case "settings off", missingSettings:
 				cache, err := os.UserCacheDir()
 				if err != nil {
 					t.Fatal(err)
@@ -64,7 +65,7 @@ func TestCacheDirectoriesSettingsPrecedence(t *testing.T) {
 					t.Setenv("GOENV", "off")
 				}
 			}
-			if name != "missing settings" {
+			if name != missingSettings {
 				if err := os.WriteFile(settings, []byte(content), 0o600); err != nil {
 					t.Fatal(err)
 				}
