@@ -362,7 +362,7 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			noSystemd(t)
-			fakeDevctl(t, `echo '{"mergeCommitSha":"abc","verdict":"merged","release":null}'`)
+			fakeDevctl(t, `echo '{"mergeCommitSha":"def","verdict":"merged","release":null}'`)
 			stubGitHub(t, github.Merged, "")
 			stubBaseRelease(t, github.BaseRelease{Base: mainBranch}, nil)
 			wasAt, wasWait := releaseAt, releaseWait
@@ -380,7 +380,7 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 			releaseAt = func(_ context.Context, repo, base, ref string) (github.BaseRelease, error) {
 				refs = append(refs, ref)
 				auto := tc.before
-				if ref == "abc" {
+				if ref == "def" {
 					auto = tc.after
 				}
 				return github.BaseRelease{Base: base, Auto: auto}, nil
@@ -393,19 +393,19 @@ func TestMergeRefreshesItsReleaseTree(t *testing.T) {
 				if st := gateState(t, g); len(st.Merges) != 1 {
 					t.Error("lane freed before release settled")
 				}
-				return []byte(`{"verdict":"available","tag":"v1.2.4"}`)
+				return []byte(`{"verdict":"available","tag":"v1.2.5"}`)
 			}
 			var err error
 			output := gateStderr(t, func() { err = startMerge(t, g) })
 			if err != nil {
 				t.Fatalf("merge: %v\n%s", err, output)
 			}
-			if strings.Join(refs, ",") != "head-oid,abc" {
+			if strings.Join(refs, ",") != "head-oid,def" {
 				t.Fatalf("release refs: %v", refs)
 			}
 			st := gateState(t, g)
 			if tc.after {
-				if waits != 1 || len(st.Merges) != 1 || st.Merges[0].Release != "v1.2.4" || st.Merges[0].HandCut != "" {
+				if waits != 1 || len(st.Merges) != 1 || st.Merges[0].Release != "v1.2.5" || st.Merges[0].HandCut != "" {
 					t.Fatalf("release not held: waits=%d merges=%+v", waits, st.Merges)
 				}
 				if strings.Contains(output, "a tag of main is cut by hand") {
