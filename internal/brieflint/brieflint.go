@@ -64,8 +64,6 @@ var (
 	// fence opens a fenced code block; its info string names the language.
 	fence      = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)\\s*(.*)$")
 	fenceClose = regexp.MustCompile("^\\s*(```+|~~~+)\\s*$")
-	// codeSpan is one inline code span.
-	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
 	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
 	// redirect is a > into a target: not >>, >|, >&, >=, -> or =>.
@@ -99,6 +97,8 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	text := string(raw)
 	here := post.SingleRepo(text)
 	unlinked := post.UnlinkedLines(text, here)
+	inline := post.InlineCodeRanges(text)
+	offset := 0
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
@@ -106,6 +106,12 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
+		lineStart := offset
+		if nl := strings.IndexByte(text[offset:], '\n'); nl >= 0 {
+			offset += nl + 1
+		} else {
+			offset = len(text)
+		}
 		add := func(rule, why string) {
 			out = append(out, Finding{Path: name, Line: n, Rule: rule, Why: why, Text: strings.TrimSpace(line)})
 		}
@@ -130,7 +136,18 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 		case inFence && shellFence:
 			code = line
 		case !inFence:
-			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
+			// Intersect document-wide spans with this original source line.
+			for len(inline) > 0 && inline[0][1] <= lineStart {
+				inline = inline[1:]
+			}
+			var parts []string
+			for _, span := range inline {
+				if span[0] >= lineStart+len(line) {
+					break
+				}
+				parts = append(parts, text[max(span[0], lineStart):min(span[1], lineStart+len(line))])
+			}
+			code = strings.Join(parts, " ")
 		}
 		if clobbers(code) {
 			add(clobberRule, clobberWhy)

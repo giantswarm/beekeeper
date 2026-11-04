@@ -170,3 +170,39 @@ func TestLintPassesSafeRedirects(t *testing.T) {
 		}
 	}
 }
+
+func TestLintInlineCodeBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		doc  string
+		line int
+		text string
+	}{
+		{"multiline", "Capture with `printf ok\n>out.log`.", 2, ">out.log`."},
+		{"literal backticks", "Capture with ``echo `printf ok >out.log` ``.", 1, "Capture with ``echo `printf ok >out.log` ``."},
+		{"long delimiter", "Capture with ```echo ``printf ok >out.log`` ```.", 1, "Capture with ```echo ``printf ok >out.log`` ```."},
+		{"CRLF", "Capture with `printf ok\r\n>out.log`.\r\n", 2, ">out.log`."},
+		{"unmatched", "Capture with `printf ok >out.log.", 0, ""},
+		{"different delimiter lengths", "Capture with ``printf ok >out.log`.", 0, ""},
+		{"prose after span", "Capture with `printf ok\ndone` then >out.log.", 0, ""},
+		{"non-shell fence", "```text\nCapture with ``echo `printf ok >out.log` ``.\n```", 0, ""},
+		{"span interrupted by fence", "Capture with `printf ok >out.log\n```text\nend`\n```", 0, ""},
+		{"after non-shell fence", "```text\n`ignore >out.log`\n```\nCapture with ``echo `printf ok >out.log` ``.", 4, "Capture with ``echo `printf ok >out.log` ``."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Lint("brief.md", strings.NewReader(tt.doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.line == 0 {
+				if len(got) != 0 {
+					t.Fatalf("Lint() = %+v, want no findings", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Rule != ruleClobber || got[0].Line != tt.line || got[0].Text != tt.text || got[0].Path != "brief.md" {
+				t.Fatalf("Lint() = %+v, want clobber finding on line %d with text %q", got, tt.line, tt.text)
+			}
+		})
+	}
+}
