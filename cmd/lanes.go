@@ -24,6 +24,9 @@ import (
 // laneView is one lane's queue with its installation and hold.
 type laneView struct {
 	merge.Lane
+	Installation   string            `json:"installation,omitempty"`
+	Hold           *state.Hold       `json:"hold,omitempty"`
+	ToolWaiting    map[string]bool   `json:"toolWaiting,omitempty"`
 	WaitingReasons map[string]string `json:"waitingReasons,omitempty"`
 	Installation   string            `json:"installation,omitempty"`
 	Hold           *state.Hold       `json:"hold,omitempty"`
@@ -492,6 +495,12 @@ func (a *app) laneViews(st *state.State) []laneView {
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
 		for _, m := range v.Waiting {
+			if h, held := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, a.cfg.LaneOf(m.Repo)); held && h.Tool != "" {
+				if v.ToolWaiting == nil {
+					v.ToolWaiting = map[string]bool{}
+				}
+				v.ToolWaiting[m.Key()] = true
+			}
 			if v.WaitingReasons == nil {
 				v.WaitingReasons = map[string]string{}
 			}
@@ -696,6 +705,8 @@ func (a *app) printLanes(views []laneView) {
 			}
 			how := "waiting"
 			switch {
+			case v.ToolWaiting[m.Key()]:
+				how = "waiting for the devctl window"
 			case proc.Alive(m.PID):
 			case m.Outside:
 				how = fmt.Sprintf("settled outside the gate, not merged at %s, heads the lane", clock(a.now, m.Checked))
