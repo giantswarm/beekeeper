@@ -339,6 +339,9 @@ type Trimmed struct {
 // its parent, as long as a pass removes one.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
 	var t Trimmed
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	left := total
 	over := func() (bool, error) {
 		if left > target || size == nil {
@@ -354,8 +357,11 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 	pass := func(images []Image) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
-			if more, err := over(); err != nil || !more {
+			if err := ctx.Err(); err != nil {
 				return refused, err
+			}
+			if more, err := over(); err != nil || !more {
+				return refused, errors.Join(err, ctx.Err())
 			}
 			if busy() {
 				return refused, ErrBusy
@@ -367,6 +373,9 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				args = append(args, img.Refs...)
 			}
 			if _, err := d(ctx, args...); err != nil {
+				if canceled := ctx.Err(); canceled != nil {
+					return refused, canceled
+				}
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
@@ -454,9 +463,12 @@ type CacheTrim struct {
 // reclaimable is never touched and is counted in Kept.
 func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
 	var t CacheTrim
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	records, err := CacheRecords(ctx, d)
 	if err != nil {
-		return t, err
+		return t, errors.Join(err, ctx.Err())
 	}
 	var total int64
 	for _, r := range records {
@@ -473,11 +485,18 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 	})
 	var refused []error
 	removed := map[string]bool{}
+	var canceled error
 	for _, r := range candidates {
+		if canceled = ctx.Err(); canceled != nil {
+			break
+		}
 		if total-t.Freed <= keep {
 			break
 		}
 		if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+r.ID); err != nil {
+			if canceled = ctx.Err(); canceled != nil {
+				break
+			}
 			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
 			continue
 		}
@@ -490,6 +509,9 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 			t.Kept++
 			t.KeptBytes += r.Size
 		}
+	}
+	if canceled != nil {
+		return t, canceled
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)

@@ -306,6 +306,39 @@ func TestTrimImagesRetriesNothingAfterAPassRemovedNothing(t *testing.T) {
 	}
 }
 
+func TestTrimImagesCancellation(t *testing.T) {
+	for _, before := range []bool{true, false} {
+		t.Run(strconv.FormatBool(before), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if before {
+				cancel()
+			}
+			calls := 0
+			run := func(context.Context, ...string) ([]byte, error) {
+				calls++
+				if calls == 2 {
+					cancel()
+				}
+				if ctx.Err() != nil {
+					// CommandContext can report a killed process without
+					// wrapping the context error.
+					return nil, errors.New("Docker process was killed")
+				}
+				return nil, nil
+			}
+			trimmed, err := TrimImages(ctx, run, []Image{{ID: "a", Size: 1}, {ID: "b", Size: 1}, {ID: "c", Size: 1}}, 3, 0, nil, func() bool { return false })
+			wantCalls, wantRemoved := 2, 1
+			if before {
+				wantCalls, wantRemoved = 0, 0
+			}
+			if !errors.Is(err, context.Canceled) || calls != wantCalls || len(trimmed.Removed) != wantRemoved {
+				t.Fatalf("trim = %+v, %v after %d calls; want cancellation, %d calls and %d completed removals", trimmed, err, calls, wantCalls, wantRemoved)
+			}
+		})
+	}
+}
+
 func TestReadUsage(t *testing.T) {
 	f := &fake{df: `{"Size":"81.58GB","Type":"Images"}
 {"Size":"8.1GB","Type":"Containers"}
@@ -402,6 +435,48 @@ func TestPruneBuildCacheUnderTheTargetAndWithRefusals(t *testing.T) {
 		pruneRefused: map[string]bool{"a": true}}
 	if trimmed, err := PruneBuildCache(context.Background(), f.run, 0); err == nil || !strings.Contains(err.Error(), "a") || trimmed.Removed != 0 {
 		t.Errorf("all-refused trim = %+v, %v; want an error naming a", trimmed, err)
+	}
+}
+
+func TestPruneBuildCacheCancellation(t *testing.T) {
+	for _, before := range []bool{true, false} {
+		t.Run(strconv.FormatBool(before), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if before {
+				cancel()
+			}
+			f := &fake{du: duRows(duRow{"a", 1, true, "5 days ago"}, duRow{"b", 1, true, age2d}, duRow{"c", 1, true, "1 hour ago"})}
+			calls, prunes := 0, 0
+			run := func(ctx context.Context, args ...string) ([]byte, error) {
+				calls++
+				if args[1] == "prune" {
+					prunes++
+					if prunes == 2 {
+						cancel()
+					}
+				}
+				if ctx.Err() != nil {
+					return nil, errors.New("Docker process was killed")
+				}
+				out, err := f.run(ctx, args...)
+				if args[1] == "prune" && err == nil {
+					f.du = duRows(duRow{"b", 1, true, age2d}, duRow{"c", 1, true, "1 hour ago"})
+				}
+				return out, err
+			}
+			trimmed, err := PruneBuildCache(ctx, run, 0)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("trim = %+v, %v; want cancellation", trimmed, err)
+			}
+			if before {
+				if calls != 0 || trimmed.Removed != 0 {
+					t.Fatalf("canceled trim = %+v after %d Docker calls; want none", trimmed, calls)
+				}
+			} else if prunes != 2 || trimmed.Removed != 1 || trimmed.Kept != 2 || trimmed.KeptBytes != 2e9 {
+				t.Fatalf("partial trim = %+v after %d prunes; want one completed removal, two kept records, then cancellation", trimmed, prunes)
+			}
+		})
 	}
 }
 
