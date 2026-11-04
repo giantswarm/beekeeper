@@ -365,7 +365,7 @@ func (r *Run) swap() {
 func (r *Run) inUse(d string) bool {
 	if r.held == nil {
 		r.held = []string{}
-		tmp, scratch := filepath.Clean(r.TmpDir), filepath.Clean(r.Scratch)
+		tmp, scratch := resolvedDir(r.TmpDir), resolvedDir(r.Scratch)
 		for pid := range r.Table.ByPID {
 			for _, p := range r.holds(pid) {
 				if within(p, tmp) || within(p, scratch) {
@@ -374,7 +374,17 @@ func (r *Run) inUse(d string) bool {
 			}
 		}
 	}
+	d = resolvedDir(d)
 	return slices.ContainsFunc(r.held, func(p string) bool { return within(p, d) })
+}
+
+// resolvedDir gives existing cleanup roots and candidates the same spelling as
+// /proc paths. Keep held paths untouched: deleted open files need not exist.
+func resolvedDir(d string) string {
+	if resolved, err := filepath.EvalSymlinks(d); err == nil {
+		return resolved
+	}
+	return filepath.Clean(d)
 }
 
 // within reports whether path p is d or lies under it.
