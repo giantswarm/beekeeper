@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -190,6 +192,10 @@ A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
+
+Before sending a brief, start runs the same checks as beekeeper lint briefs.
+A finding is printed to stderr with its file, line and rule; the start goes on,
+so a generated brief quoting its issue never stops a worker.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -391,6 +397,7 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			warnBriefLint(cmd.ErrOrStderr(), briefFile)
 			// The timer whose command runs this start, from its
 			// environment or, on the broker's side, the flags a brokered
 			// start forwards it in.
@@ -1977,6 +1984,24 @@ func readBrief(path string) (string, error) {
 		return "", usageErr("%s has %d bytes, more than %d: point the brief at a file instead", path, len(brief), maxBrief)
 	}
 	return brief, nil
+}
+
+// warnBriefLint prints what beekeeper lint briefs finds in the brief at path.
+// It never refuses: agents start also carries the supervisor's generated
+// briefs, whose quoted issue text no worker can fix. It lints the original
+// file so findings keep their line numbers.
+func warnBriefLint(w io.Writer, path string) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
+	if err != nil {
+		return
+	}
+	found, err := brieflint.Lint(path, bytes.NewReader(raw))
+	if err != nil {
+		return
+	}
+	for _, f := range found {
+		_, _ = fmt.Fprintf(w, "brief lint: %s:%d: %s: %s\n  %s\n", f.Path, f.Line, f.Rule, f.Why, f.Text)
+	}
 }
 
 // taskPrompt is the part of a worker's first prompt that is its task: the
