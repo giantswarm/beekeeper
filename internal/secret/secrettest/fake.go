@@ -42,9 +42,9 @@ const (
 // Tools are the fake tools and what they were asked.
 type Tools struct {
 	mu sync.Mutex
-	// Vault maps op://vault/item/field to its value.
+	// Vault maps op://vault/item/[section/]field to its value.
 	Vault map[string]string
-	// Types maps op://vault/item/field to the type a store gave it
+	// Types maps op://vault/item/[section/]field to the type a store gave it
 	// (CONCEALED, STRING).
 	Types map[string]string
 	// Calls are the command lines run, stdin left out.
@@ -170,14 +170,20 @@ var builtins = map[string][2]string{
 	"notesPlain": {"NOTES", "STRING"},
 }
 
+type section struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	vault := args[slices.Index(args, "--vault")+1]
 	type field struct {
-		ID      string `json:"id"`
-		Label   string `json:"label"`
-		Type    string `json:"type"`
-		Purpose string `json:"purpose,omitempty"`
-		Value   string `json:"value"`
+		ID      string   `json:"id"`
+		Label   string   `json:"label"`
+		Type    string   `json:"type"`
+		Purpose string   `json:"purpose,omitempty"`
+		Value   string   `json:"value"`
+		Section *section `json:"section,omitempty"`
 	}
 	type item struct {
 		ID       string  `json:"id"`
@@ -197,6 +203,10 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			items[parts[1]] = it
 		}
 		f := field{ID: parts[2], Label: parts[2], Type: concealedType, Value: v}
+		if name, label, ok := strings.Cut(parts[2], "/"); ok {
+			f.Label = label
+			f.Section = &section{ID: "section-" + name, Label: name}
+		}
 		if typ, ok := t.Types[ref]; ok {
 			f.Type = typ
 		}
@@ -266,7 +276,11 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 				// op keeps a built-in field's own label
 				f.Label = f.ID
 			}
-			ref := "op://" + vault + "/" + it.Title + "/" + f.Label
+			label := f.Label
+			if f.Section != nil {
+				label = f.Section.Label + "/" + label
+			}
+			ref := "op://" + vault + "/" + it.Title + "/" + label
 			t.Vault[ref], t.Types[ref] = f.Value, f.Type
 		}
 		return bytes.TrimSpace(raw), nil
