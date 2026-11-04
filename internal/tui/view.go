@@ -86,17 +86,17 @@ func bodyView(m *model, w, h int) string {
 	}
 	switch m.tab {
 	case 0:
-		return watchingView(d, w, h, m.sel[0])
+		return watchingView(d, w, h, m.sel[0], &m.scroll[0])
 	case 1:
-		return sessionsView(d, w, h, m.sel[1])
+		return sessionsView(d, w, h, m.sel[1], &m.scroll[1])
 	case 2:
-		return sharingView(d, w, h, m.sel[2])
+		return sharingView(d, w, h, m.sel[2], &m.scroll[2])
 	case 3:
-		return supervisingView(d, w, h, m.sel[3])
+		return supervisingView(d, w, h, m.sel[3], &m.scroll[3])
 	case 4:
-		return alertsView(d, w, h, m.sel[4])
+		return alertsView(d, w, h, m.sel[4], &m.scroll[4])
 	default:
-		return eventsView(d, w, h, m.sel[5])
+		return eventsView(d, w, h, m.sel[5], &m.scroll[5])
 	}
 }
 
@@ -205,6 +205,9 @@ func footerView(m *model, w int) string {
 				hints = append([]string{"a allow", "d deny"}, hints...)
 			}
 		}
+		if m.facts.limit > 0 {
+			hints = append([]string{"j/k scroll facts", "pgup/pgdn page", "g/G ends"}, hints...)
+		}
 		if m.composing {
 			hints = []string{"enter send", "esc drop", "ctrl+u clear"}
 		}
@@ -230,12 +233,40 @@ type tabLines struct {
 	sel     int
 	selLine int
 	rows    int
+	scroll  *viewport
 }
 
 // newTabLines starts the lines of a tab shown in w columns with sel
 // selected.
-func newTabLines(w, sel int) *tabLines {
-	return &tabLines{all: []string{}, width: w, sel: sel, selLine: -1}
+func newTabLines(w, sel int, scroll ...*viewport) *tabLines {
+	t := &tabLines{all: []string{}, width: w, sel: sel, selLine: -1}
+	if len(scroll) > 0 {
+		t.scroll = scroll[0]
+	}
+	return t
+}
+
+// viewport keeps scrolling independent of the number of selectable rows.
+// reveal asks the next render to bring a newly selected row into view.
+type viewport struct {
+	top, limit int
+	reveal     bool
+}
+
+func (v *viewport) window(all []string, h, selected int) string {
+	h = max(1, h)
+	v.limit = max(0, len(all)-h)
+	if v.reveal && selected >= 0 {
+		if selected < v.top {
+			v.top = selected
+		}
+		if selected >= v.top+h {
+			v.top = selected - h + 1
+		}
+	}
+	v.reveal = false
+	v.top = min(max(0, v.top), v.limit)
+	return strings.Join(all[v.top:min(len(all), v.top+h)], "\n")
 }
 
 // head adds a non-selectable line.
@@ -281,6 +312,9 @@ func (t *tabLines) show(h int) string { return t.window(t.all, h) }
 // sections after the list are readable; before the first row it shows
 // the beginning.
 func (t *tabLines) window(all []string, h int) string {
+	if t.scroll != nil {
+		return t.scroll.window(all, h, t.selLine)
+	}
 	if len(all) <= h {
 		return strings.Join(all, "\n")
 	}
@@ -332,9 +366,9 @@ func share(part, whole int) float64 {
 // watchingView is the machine tab: memory and pressure as bars, disks,
 // build slots and clusters, then the waits sessions sit on (the
 // selectable rows) and the OOM kills.
-func watchingView(d *Data, w, h, sel int) string {
+func watchingView(d *Data, w, h, sel int, scroll ...*viewport) string {
 	m := d.Machine
-	t := newTabLines(w, sel)
+	t := newTabLines(w, sel, scroll...)
 	t.rule("memory", "")
 	t.head(cols(
 		style.Dim.Render(pad("mem", 6)),
@@ -541,8 +575,8 @@ func (c tableCols) whatW(w, nameW int) int { return max(0, c.rest(w)-nameW) }
 
 // sessionsView is the session tab: an aligned table of the sessions,
 // then what more than one session is on.
-func sessionsView(d *Data, w, h, sel int) string {
-	t := newTabLines(w, sel)
+func sessionsView(d *Data, w, h, sel int, scroll ...*viewport) string {
+	t := newTabLines(w, sel, scroll...)
 	t.rule("sessions", fmt.Sprintf("%d", len(d.Sessions)))
 	lh := d.Totals.LastHour
 	t.dim(cols(
@@ -848,6 +882,15 @@ func detailView(d *Data, s Session, w, h int, p pane) string {
 	if s.TakenOver || len(s.Approvals) > 0 {
 		approvalLines(t, s, w, d.At)
 	}
+	// Keep the transcript and message available when the facts overflow.
+	if p.facts != nil {
+		reserve := 3
+		if messageLine(p, w) != "" {
+			reserve++
+		}
+		facts := p.facts.window(t.all, max(1, h-reserve), -1)
+		t.all = strings.Split(facts, "\n")
+	}
 	t.dim("")
 	badge = "…"
 	switch {
@@ -958,8 +1001,8 @@ func turnLines(turns []Turn, w, room int, now time.Time) []string {
 
 // sharingView is the sharing tab: held leases (the selectable rows),
 // free resources, the grant queues, holds and the merge lanes.
-func sharingView(d *Data, w, h, sel int) string {
-	t := newTabLines(w, sel)
+func sharingView(d *Data, w, h, sel int, scroll ...*viewport) string {
+	t := newTabLines(w, sel, scroll...)
 	badge := noneLabel
 	if len(d.Leases.Held) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Leases.Held))
@@ -1068,8 +1111,8 @@ func sharingView(d *Data, w, h, sel int) string {
 // supervisingView is the supervision tab: the supervisor's and the
 // guide's records (the selectable rows), the agents, the notes, the
 // timers and which session serves which issue.
-func supervisingView(d *Data, w, h, sel int) string {
-	t := newTabLines(w, sel)
+func supervisingView(d *Data, w, h, sel int, scroll ...*viewport) string {
+	t := newTabLines(w, sel, scroll...)
 	badge := noneLabel
 	if len(d.Roles) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Roles))
@@ -1172,8 +1215,8 @@ func supervisingView(d *Data, w, h, sel int) string {
 // alertsView is the alert tab: each installation (the selectable row)
 // with its firing alerts deduplicated underneath, then the running
 // upgrades and the GitHub budget.
-func alertsView(d *Data, w, h, sel int) string {
-	t := newTabLines(w, sel)
+func alertsView(d *Data, w, h, sel int, scroll ...*viewport) string {
+	t := newTabLines(w, sel, scroll...)
 	badge := noneLabel
 	if len(d.Alerts) > 0 {
 		badge = fmt.Sprintf("%d", len(d.Alerts))
@@ -1341,11 +1384,11 @@ func sevChips(rows []alertRow) string {
 
 // eventsView is the event log, newest first, the verbs coloured by what
 // they do to the work.
-func eventsView(d *Data, w, h, sel int) string {
+func eventsView(d *Data, w, h, sel int, scroll ...*viewport) string {
 	evs := make([]Event, len(d.Events))
 	copy(evs, d.Events)
 	sort.SliceStable(evs, func(i, j int) bool { return evs[i].At.After(evs[j].At) })
-	t := newTabLines(w, sel)
+	t := newTabLines(w, sel, scroll...)
 	badge := noneLabel
 	if len(evs) > 0 {
 		badge = fmt.Sprintf("%d", len(evs))
