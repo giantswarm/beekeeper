@@ -316,3 +316,32 @@ func TestEmergencyHostSessionGrantDoesNotFollowName(t *testing.T) {
 		t.Fatalf("successor's own grant refused: %v", err)
 	}
 }
+
+func TestSameEmergencySession(t *testing.T) {
+	guide := state.Party{Session: "cli-original", HostSession: "host-original", Name: mailGuide, Person: "guide@example.com", Host: "desk"}
+	for _, tc := range []struct {
+		name  string
+		other state.Party
+		want  bool
+	}{
+		{"case 0: same CLI", state.Party{Session: guide.Session}, true},
+		{"case 1: CLI restart", state.Party{Session: "cli-restarted", HostSession: guide.HostSession}, true},
+		{"case 2: host session only", state.Party{HostSession: guide.HostSession}, true},
+		{"case 3: different session same name", state.Party{HostSession: "host-successor", Name: guide.Name}, false},
+		{"case 4: name only", state.Party{Name: guide.Name}, false},
+		{"case 5: different person", state.Party{Session: guide.Session, Person: "other@example.com"}, false},
+		{"case 6: different host", state.Party{HostSession: guide.HostSession, Host: "other-desk"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameEmergencySession(guide, tc.other); got != tc.want {
+				t.Fatalf("sameEmergencySession = %v, want %v", got, tc.want)
+			}
+			if got := sameEmergencySession(tc.other, guide); got != tc.want {
+				t.Fatalf("reverse sameEmergencySession = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if sameEmergencySession(state.Party{Name: mailGuide}, state.Party{Name: mailGuide}) {
+		t.Fatal("display names without session identifiers authorized")
+	}
+}

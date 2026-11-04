@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Emergency controls require a matching session identifier; a different session with the guide's display name cannot act as the guide or inherit its emergency grant (https://github.com/giantswarm/beekeeper/issues/2316).
+
 - Keep free-form Dex token-exchange response fields out of diagnostics so refused exchanges cannot echo credentials (https://github.com/giantswarm/beekeeper/pull/1478).
 
 - The hook follows script files run from shell `-c` strings, including nested strings, using the same recursion bound as nested scripts. Refusals name the script and line; files used only as data remain unread (https://github.com/giantswarm/beekeeper/issues/971).
