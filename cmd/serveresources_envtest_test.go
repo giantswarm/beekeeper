@@ -150,7 +150,7 @@ func TestEnvtestServeResourcesReadableOnlyByWhoMay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h := env["status"].(map[string]any)["holder"].(map[string]any)["party"].(map[string]any); h["person"] != anaEmail {
+	if h := env[testStatusWord].(map[string]any)["holder"].(map[string]any)["party"].(map[string]any); h["person"] != anaEmail {
 		t.Errorf("environments/graveler: %v", env)
 	}
 	if _, err := bo.read(resourceLanes + portalLane); err != nil {

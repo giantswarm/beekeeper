@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -34,6 +37,14 @@ test -z "${OPENAI_API_KEY+x}"
 test -z "${CLAUDE_CONFIG_DIR+x}"
 test -n "${BEEKEEPER_EXECUTION_ID}"
 test -n "${BEEKEEPER_CONFIG}"
+# Model Codex persisting workspace trust when no command-line override exists.
+trusted=false
+for arg in "$@"; do
+  case "$arg" in projects.*.trust_level=\"trusted\") trusted=true;; esac
+done
+if [ "$trusted" = false ]; then
+  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PWD" >> "$CODEX_HOME/config.toml"
+fi
 input=$(cat)
 printf '%s|%s|%s\n' "$CODEX_HOME" "$*" "$input" >> "$calls"
 if [ -e "$(dirname "$0")/no-thread" ]; then echo '{"type":"error"}'; exit 1; fi
@@ -125,6 +136,15 @@ func TestPrepareInstallsManagedCodexHome(t *testing.T) {
 	if err != nil || !strings.Contains(string(config), "hooks = true") || !strings.Contains(string(config), "computer_use = false") || strings.Contains(string(config), "[projects") {
 		t.Fatalf("managed codex configuration: %s %v", config, err)
 	}
+	var installed struct {
+		Features map[string]bool `toml:"features"`
+	}
+	if err := toml.Unmarshal(config, &installed); err != nil {
+		t.Fatal(err)
+	}
+	if !installed.Features["code_mode_host"] || !installed.Features["hooks"] {
+		t.Fatal("managed codex workers need code-mode tools with execution hooks enabled")
+	}
 	if rules, err := os.ReadFile(filepath.Join(home, "AGENTS.md")); err != nil || string(rules) != string(f.s.Rules) { //nolint:gosec // test-owned managed home
 		t.Fatal("codex home does not carry the embedded worker rules")
 	}
@@ -191,12 +211,16 @@ func TestCodexRunnerSingleTurn(t *testing.T) {
 	if err != nil || !j.Ready || j.Phase != Exited || j.Thread != fixtureThread {
 		t.Fatalf("single codex turn: %+v %v", j, err)
 	}
+	if _, err := f.s.InstalledPolicy(); err != nil {
+		t.Fatalf("Codex turn changed the managed policy: %v", err)
+	}
 	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := strings.TrimSpace(string(calls))
-	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -C " + j.Handle.Workspace + " -|" + f.r.Prompt
+	project, _ := json.Marshal(j.Handle.Workspace)
+	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" -C " + j.Handle.Workspace + " -|" + f.r.Prompt
 	if line != want {
 		t.Fatalf("first turn:\n got %q\nwant %q", line, want)
 	}
@@ -223,11 +247,19 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
+	for _, level := range []string{"", "high"} {
+		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
+	}
+}
+
+func testCodexRunnerWakesWithEffort(t *testing.T, level string) {
+	t.Helper()
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
 	f, dir := codexFixture(t)
 	f.r.Messaging = true
+	f.r.Effort = level
 	ctx := startCodex(t, f)
 	done := make(chan error, 1)
 	go func() { done <- f.s.Run(ctx, f.r.Ref) }()
@@ -278,26 +310,41 @@ func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("completed codex runner did not exit")
 	}
+	if _, err := f.s.InstalledPolicy(); err != nil {
+		t.Fatalf("Codex turn changed the managed policy: %v", err)
+	}
 	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Each call begins with the managed home; prompts may span lines.
-	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.codexHomeDir()+"|")[1:]
+	raw := string(calls)
+	if level != "" {
+		override := ` -c model_reasoning_effort="` + level + `"`
+		if strings.Count(raw, override) != 3 {
+			t.Fatalf("effort missing from first or wake turns: %s", raw)
+		}
+		raw = strings.ReplaceAll(raw, override, "")
+	} else if strings.Contains(raw, "model_reasoning_effort") {
+		t.Fatalf("default overridden: %s", raw)
+	}
+	turns := strings.Split(strings.TrimSpace(raw), f.s.codexHomeDir()+"|")[1:]
 	for i := range turns {
 		turns[i] = strings.TrimSpace(turns[i])
 	}
 	if len(turns) != 3 {
 		t.Fatalf("want 3 turns, got %d: %q", len(turns), turns)
 	}
-	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture " + fixtureThread + " -|"
+	j, _ := f.s.Read(f.r.Ref)
+	project, _ := json.Marshal(j.Handle.Workspace)
+	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" " + fixtureThread + " -|"
 	if !strings.HasPrefix(turns[1], resume+"Message from ") || !strings.Contains(turns[1], `"name":"supervisor"`) || !strings.HasSuffix(turns[1], "first follow-up") {
 		t.Fatalf("first wake turn: %q", turns[1])
 	}
 	if !strings.HasSuffix(turns[2], resume+"second follow-up") {
 		t.Fatalf("second wake turn out of order: %q", turns[2])
 	}
-	j, _ := f.s.Read(f.r.Ref)
+	j, _ = f.s.Read(f.r.Ref)
 	if j.Phase != Exited || j.Messages.Entries[one.ID].Stage != Accepted {
 		t.Fatalf("final journal %s %+v", j.Phase, j.Messages.Entries[one.ID])
 	}
@@ -427,6 +474,9 @@ func TestCodexRunnerCoordinatorMCP(t *testing.T) {
 	ctx := startCodex(t, f)
 	if err := f.s.Run(ctx, f.r.Ref); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := f.s.InstalledPolicy(); err != nil {
+		t.Fatalf("Codex turn changed the managed policy: %v", err)
 	}
 	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
 	if err != nil {

@@ -105,7 +105,11 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 			continue
 		}
 		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
-			out = append(out, chore{kind: choreRemove, agent: ag, archive: true, stale: true, gone: true, why: goneActivityPrefix + last.UTC().Format(time.RFC3339)})
+			why := goneActivityPrefix + last.UTC().Format(time.RFC3339)
+			if qerr := agyQuotaError(cfg, ag); qerr != nil {
+				why = qerr.Error()
+			}
+			out = append(out, chore{kind: choreRemove, agent: ag, archive: true, stale: true, gone: true, why: why})
 			continue
 		}
 		if ag.Task != "" && !relieved(st, ag.Party) || holdsRole(st, ag.Party) || openRelayTo(st, ag.Party, now) {
@@ -245,11 +249,12 @@ func faultWhy(f faultFinding) string {
 // attended are the faults whose remedy runs although it may not run
 // unattended, and retry says whether to retitle a desktop session again.
 type doctorRun struct {
-	by       state.Party
-	dryRun   bool
-	attended []string
-	retry    func(host string) bool
-	run      shell
+	by        state.Party
+	dryRun    bool
+	attended  []string
+	retry     func(host string) bool
+	run       shell
+	loopOwned bool
 }
 
 // doctorReport is what a run of the doctor found and did, a line each.
@@ -332,6 +337,15 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return turn || executionInTurn(st, p, a.now) || inFlight(p)
 	}
 	chores := planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.now, a.cfg)
+	if r.loopOwned {
+		chores = slices.DeleteFunc(chores, func(c chore) bool {
+			if c.kind != choreRemove || agyQuotaError(a.cfg, c.agent) == nil {
+				return false
+			}
+			last := agentActivity(a.cfg, st, c.agent)
+			return a.cfg.Agents.StaleAfter.Duration <= 0 || last.IsZero() || a.now.Sub(last) < a.cfg.Agents.StaleAfter.Duration
+		})
+	}
 	fix := func(f config.Fault) bool { return !r.dryRun && (f.Unattended || slices.Contains(r.attended, f.Name)) }
 	run := r.run
 	if run == nil {
@@ -769,9 +783,11 @@ line:
   from the ones this binary embeds, with the plugin's version, the
   binary's and the commands that update it (beekeeper self-update does);
 - checks the agy PreInvocation and PreToolUse hooks in
-  ~/.gemini/config/hooks.json, failing when agy would reject the beekeeper
-  entry (a PreInvocation item that is a matcher, a command hook without a
-  command), and the agy skills entry in
+  ~/.gemini/config/hooks.json, failing when agy would reject any entry of
+  it, the beekeeper entry or another's (a lifecycle item such as
+  PreInvocation that is a matcher, a command hook without a command): agy
+  then drops the whole file, beekeeper's hooks with it; and the agy skills
+  entry in
   ~/.gemini/config/skills.json (and the skill files it points at) when agy
   is installed.
 
@@ -909,7 +925,7 @@ func (w *watcher) doctor(ctx context.Context) {
 	go func() {
 		defer w.bg.Done()
 		defer w.doctoring.Store(false)
-		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry})
+		rep, err := d.doctor(ctx, doctorRun{by: watchParty, retry: retry, loopOwned: w.loopRunning()})
 		if err != nil {
 			w.emit("doctor", "DOCTOR: %v", err)
 			return

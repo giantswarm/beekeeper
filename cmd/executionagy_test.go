@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func sshAgyTestApp(t *testing.T, offered map[string]string) (*app, string, *[]ex
 }
 
 func TestExecutionStartsAgyOnAHostThatOffersItAndCountsProviderNotLocalCeiling(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, harnessAgy: "1.4.7"})
+	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, harnessAgy: testAgyVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAgy, "--model", agyTestModel); err != nil {
 		t.Fatal(err)
 	}
@@ -105,12 +106,61 @@ func TestExecutionRefusesAgyTheHostDoesNotOffer(t *testing.T) {
 }
 
 func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: "1.4.7"})
+	a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
 		t.Fatal(err)
 	}
 	if len(*requests) != 2 || (*requests)[1].Harness != harnessAgy || (*requests)[1].Model != agyTestModel {
 		t.Fatalf("auto on an agy-only host picked %+v", *requests)
+	}
+}
+
+// An effort agy would ignore must never reach a request, a start record or an
+// event, however it was selected and whichever way agy was chosen.
+func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
+	remote := []string{loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch}
+	explicit := []string{testHarnessFlag, harnessAgy, modelFlag, agyTestModel}
+	auto := []string{testHarnessFlag, harnessAuto}
+	flag := []string{effortFlag, testEffortHigh}
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		models []config.AgentModelRule
+	}{
+		{name: "explicit flag", args: slices.Concat(explicit, flag)},
+		{name: "explicit rule", args: explicit, models: []config.AgentModelRule{{Match: "^remote", Effort: testEffortHigh}}},
+		{name: "explicit dry run", args: slices.Concat(explicit, flag, []string{testDryRunFlag})},
+		{name: "auto flag", args: slices.Concat(auto, flag)},
+		{name: "auto rule", args: auto, models: []config.AgentModelRule{{Match: "^remote", Effort: testEffortHigh}}},
+		{name: "auto dry run", args: slices.Concat(auto, flag, []string{testDryRunFlag})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
+			a.cfg.Agents.Models = tc.models
+			args := slices.Concat([]string{agentStartName, nameFlag, "remote-agy", brief}, remote, tc.args)
+			_, err := runAgents(a, args...)
+			if err == nil || !strings.Contains(err.Error(), "agy does not expose a session effort option") {
+				t.Fatalf("remote agy accepted an effort: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(*requests) != 0 || len(st.Starts) != 0 || len(st.Agents) != 0 {
+				t.Fatalf("refused start left requests=%+v starts=%+v agents=%+v", *requests, st.Starts, st.Agents)
+			}
+		})
+	}
+}
+
+// The refusal follows the harness auto resolved, not the choices it could have made.
+func TestExecutionAutoKeepsEffortOnAHarnessThatTakesIt(t *testing.T) {
+	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer})
+	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, testHarnessFlag, harnessAuto, effortFlag, testEffortHigh); err != nil {
+		t.Fatal(err)
+	}
+	if len(*requests) != 2 || (*requests)[1].Harness != claudeComm || (*requests)[1].Effort != testEffortHigh {
+		t.Fatalf("auto on a Claude host: %+v", *requests)
 	}
 }
 

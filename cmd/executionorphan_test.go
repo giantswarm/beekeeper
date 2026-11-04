@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 func TestHostsDrainNamesRecordedExecutions(t *testing.T) {
@@ -193,12 +194,15 @@ func TestPreInventoryHostUpgradeUnblocksMissingJournalReconciliation(t *testing.
 		return fake
 	}
 	digest := execution.Digest([]byte("upgraded host policy"))
-	stubHostUpdates(t, a, map[execution.HostID]func(string) (execution.HostUpdate, error){
-		sshTestSelector: func(string) (execution.HostUpdate, error) {
-			upgraded = true
-			return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}, nil
-		},
-	})
+	lookup := lookupRelease
+	t.Cleanup(func() { lookupRelease = lookup })
+	lookupRelease = func(_ context.Context, version string) (update.Release, error) {
+		return update.Release{Tag: version}, nil
+	}
+	a.executionUpdate = func(context.Context, execution.Host, string, []byte) (execution.HostUpdate, error) {
+		upgraded = true
+		return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}, nil
+	}
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
 		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: hostFixtureClaudeVersion}, Resources: execution.Resources{ObservedAt: a.now, AvailableMiB: 1 << 16}}, nil
 	}

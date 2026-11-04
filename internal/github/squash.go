@@ -43,6 +43,7 @@ type SquashDoc struct {
 	Number         int     `json:"number"`
 	HeadSha        string  `json:"headSha,omitempty"`
 	MergeCommitSha string  `json:"mergeCommitSha,omitempty"`
+	RequestedBy    string  `json:"requestedBy,omitempty"`
 	Release        *string `json:"release"`
 	// UnansweredReviews is the feedback the last review read found
 	// unanswered, empty when nothing held the merge; null only when gh

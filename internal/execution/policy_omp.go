@@ -31,11 +31,14 @@ func (s *Server) ompArgs(model string) []string {
 	}
 	return args
 }
-func (s *Server) probeOmp(ctx context.Context, h HarnessConfig) error {
+func (s *Server) probeOmp(ctx context.Context, h HarnessConfig, readiness *HarnessReadiness) error {
+	readiness.Guard = probeNotChecked
 	version, err := s.command(ctx, s.Root, s.ompEnvironment(), h.Executable, "--version")
 	if err != nil || strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(version)), "omp v")) != h.Version {
+		readiness.VersionCheck = probeFailed
 		return errors.New("unsupported or mismatched omp version")
 	}
+	readiness.VersionCheck, readiness.Login = probePassed, probeFailed
 	raw, err := s.command(ctx, s.Root, s.ompEnvironment(), h.Executable, "models", "--json", "--no-extensions")
 	var catalogue struct {
 		Models []struct {
@@ -45,5 +48,10 @@ func (s *Server) probeOmp(ctx context.Context, h HarnessConfig) error {
 	if err != nil || json.Unmarshal(raw, &catalogue) != nil || len(catalogue.Models) == 0 {
 		return errors.New("omp has no authenticated model; provision the provider login independently on the execution host")
 	}
-	return s.probeOmpGuard(ctx, h)
+	readiness.Login, readiness.Guard = probePassed, probeFailed
+	if err := s.probeOmpGuard(ctx, h); err != nil {
+		return err
+	}
+	readiness.Guard = probePassed
+	return nil
 }

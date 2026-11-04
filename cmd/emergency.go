@@ -1,0 +1,244 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+
+	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+const (
+	emergencyOpenState    = "OPEN"
+	emergencySetCommand   = "set"
+	emergencyPauseCommand = "pause"
+	emergencyViewCommand  = "view"
+)
+
+// emergencyGuide deliberately disallows --as: the grant belongs to a live
+// guide session, not to a caller who knows its display name.
+func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
+	me, err := a.caller()
+	if err != nil {
+		return me, err
+	}
+	h := st.GuideRole().Holder
+	if a.as != "" || (me.Session == "" && me.HostSession == "") || h == nil || !h.Is(me) {
+		return me, refused("only the current guide session can use emergency controls")
+	}
+	return me, nil
+}
+
+func (a *app) emergencyAction(action string) (*state.Emergency, error) {
+	var grant *state.Emergency
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		me, err := a.emergencyGuide(st)
+		if err != nil {
+			return nil, err
+		}
+		e := st.Emergency
+		if e == nil || !e.By.Is(me) || !a.now.Before(e.Until) {
+			return nil, refused("emergency mode is off or expired; enable it with the person's quoted words and --until")
+		}
+		copy := *e
+		grant = &copy
+		return []state.Event{event(me, "emergency.action", "%s; person's words: %q; expires %s", action, e.Reason, e.Until.Format(time.RFC3339))}, nil
+	})
+	return grant, err
+}
+
+func (a *app) emergencyCmd() *cobra.Command {
+	c := &cobra.Command{Use: "emergency", Short: "Bounded, audited emergency controls for the current guide", Long: `The current guide enables emergency mode on the person's explicit word, quoted
+verbatim with --reason, and a required --until time or duration. The grant
+expires automatically and does not transfer to a successor guide.
+
+Use emergency merge <owner/repo> <number> for an approved open pull request:
+it bypasses desk review and the merge lane, using GitHub's squash merge with
+an exact head match. GitHub branch protection still applies. Every attempted
+action and its result is logged with the person's words. Other controls are
+emergency hold set/lift, emergency start (capacity --force), and emergency
+capacity <capacity.key> <value> (validated configuration). Standing stop and
+starts holds still apply; lift a starts hold explicitly when authorized.
+
+Emergency auto-install pause/resume is independent of the grant: it only
+pauses the supervisor's release installation, leaving its other work running.
+The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		st, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		if e := st.Emergency; e != nil && a.now.Before(e.Until) {
+			_, err = fmt.Fprintf(a.out, "emergency until %s by %s: %q\n", e.Until.Format(time.RFC3339), e.By.Name, e.Reason)
+		} else {
+			_, err = fmt.Fprintln(a.out, "emergency off")
+		}
+		if st.AutoInstallPaused {
+			_, err = fmt.Fprintln(a.out, "release auto-install paused")
+		}
+		return err
+	}}
+	var reason, until string
+	on := &cobra.Command{Use: "on", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		if strings.TrimSpace(reason) == "" || until == "" {
+			return usageErr("--reason (the person's verbatim words) and --until are required")
+		}
+		end, err := untilTime(a.now, until)
+		if err != nil {
+			return err
+		}
+		if !end.After(a.now) {
+			return usageErr("--until must be in the future")
+		}
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			me, err := a.emergencyGuide(st)
+			if err != nil {
+				return nil, err
+			}
+			st.Emergency = &state.Emergency{By: me, Reason: reason, Until: end}
+			return []state.Event{event(me, "emergency.on", "until %s; person's words: %q", end.Format(time.RFC3339), reason)}, nil
+		})
+	}}
+	on.Flags().StringVar(&reason, "reason", "", "the person's explicit authorization, quoted verbatim (required)")
+	on.Flags().StringVar(&until, "until", "", "expiry time or duration (required)")
+	off := &cobra.Command{Use: "off", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			me, err := a.emergencyGuide(st)
+			if err != nil {
+				return nil, err
+			}
+			old := st.Emergency
+			st.Emergency = nil
+			quote := ""
+			if old != nil {
+				quote = old.Reason
+			}
+			return []state.Event{event(me, "emergency.off", "person's words: %q", quote)}, nil
+		})
+	}}
+	merge := &cobra.Command{Use: "merge <owner/repo> <number>", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n <= 0 || len(strings.Split(args[0], "/")) != 2 || strings.HasPrefix(args[0], "-") {
+			return usageErr("want owner/repo and a positive pull request number")
+		}
+		return a.runEmergency(fmt.Sprintf("merge https://github.com/%s/pull/%d", args[0], n), func() error {
+			raw, err := github.RunGH(cmd.Context(), "pr", emergencyViewCommand, strconv.Itoa(n), "--repo", args[0], "--json", "state,isDraft,reviewDecision,headRefOid")
+			if err != nil {
+				return err
+			}
+			var pr struct {
+				State, ReviewDecision, HeadRefOid string
+				IsDraft                           bool
+			}
+			if err = json.Unmarshal(raw, &pr); err != nil {
+				return err
+			}
+			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != "APPROVED" || pr.HeadRefOid == "" {
+				return refused("emergency merge requires an approved, open, non-draft pull request")
+			}
+			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
+				return err
+			}
+			_, err = github.RunGH(cmd.Context(), "pr", gitMerge, strconv.Itoa(n), "--repo", args[0], "--squash", "--match-head-commit", pr.HeadRefOid)
+			return err
+		})
+	}}
+	hold := a.holdCmd()
+	for _, sub := range hold.Commands() {
+		if sub.Name() == emergencySetCommand || sub.Name() == "lift" {
+			a.wrapEmergency(sub)
+		}
+	}
+	start := a.agentStartCmd()
+	start.Use = "start [flags] [<name>] <brief file>"
+	runStart := start.RunE
+	start.RunE = func(cmd *cobra.Command, args []string) error {
+		return a.runEmergency(emergencyCommandText(cmd, args), func() error {
+			if err := cmd.Flags().Set("force", "true"); err != nil {
+				return err
+			}
+			return runStart(cmd, args)
+		})
+	}
+	capacity := &cobra.Command{Use: "capacity <capacity.key> <value> [<capacity.key> <value>]…", Args: func(_ *cobra.Command, args []string) error {
+		if len(args) == 0 || len(args)%2 != 0 {
+			return usageErr("want capacity.key/value pairs")
+		}
+		for i := 0; i < len(args); i += 2 {
+			if !strings.HasPrefix(args[i], "capacity.") {
+				return usageErr("only capacity keys are allowed")
+			}
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		set := a.configCmd()
+		for _, sub := range set.Commands() {
+			if sub.Name() == emergencySetCommand {
+				return a.runEmergency("capacity "+strings.Join(args, " "), func() error { return sub.RunE(cmd, args) })
+			}
+		}
+		return fmt.Errorf("config set unavailable")
+	}}
+	auto := &cobra.Command{Use: "auto-install", Short: "Pause or resume release auto-install without stopping the loop"}
+	var pauseReason string
+	for _, verb := range []string{emergencyPauseCommand, agentResumeName} {
+		sub := &cobra.Command{Use: verb, Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+			if strings.TrimSpace(pauseReason) == "" {
+				return usageErr("--reason (the person's words) is required")
+			}
+			return a.store.Update(func(st *state.State) ([]state.Event, error) {
+				me, err := a.emergencyGuide(st)
+				if err != nil {
+					return nil, err
+				}
+				st.AutoInstallPaused = verb == emergencyPauseCommand
+				return []state.Event{event(me, "auto-install."+verb, "person's words: %q", pauseReason)}, nil
+			})
+		}}
+		sub.Flags().StringVar(&pauseReason, "reason", "", "the person's words (required)")
+		auto.AddCommand(sub)
+	}
+	c.AddCommand(on, off, merge, hold, start, capacity, auto)
+	return c
+}
+
+func (a *app) wrapEmergency(c *cobra.Command) {
+	run := c.RunE
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		return a.runEmergency(emergencyCommandText(cmd, args), func() error { return run(cmd, args) })
+	}
+}
+
+func (a *app) runEmergency(action string, run func() error) error {
+	grant, err := a.emergencyAction(action)
+	if err != nil {
+		return err
+	}
+	err = run()
+	result := "succeeded"
+	if err != nil {
+		result = "failed: " + err.Error()
+	}
+	// Record the outcome against the same authorization even if it expired
+	// during a slow command. The pre-action record is durable before mutation.
+	reason := grant.Reason
+	me, callerErr := a.caller()
+	if callerErr != nil {
+		return callerErr
+	}
+	if logErr := a.store.Record(event(me, "emergency.result", "%s: %s; person's words: %q", action, result, reason)); logErr != nil {
+		return fmt.Errorf("action result %s; logging result: %w", result, logErr)
+	}
+	return err
+}
+
+func emergencyCommandText(cmd *cobra.Command, args []string) string {
+	text := cmd.CommandPath() + " " + strings.Join(args, " ")
+	cmd.Flags().Visit(func(f *pflag.Flag) { text += fmt.Sprintf(" --%s=%q", f.Name, f.Value.String()) })
+	return text
+}

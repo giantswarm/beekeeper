@@ -458,7 +458,7 @@ func (a *app) diskCmd() *cobra.Command {
 	p.Flags().BoolVar(&apply, "apply", false, "reclaim disposable data after checking live processes and work")
 	p.Flags().BoolVar(&dry, "dry-run", false, "only list what each cache would free, with sizes (the default)")
 	p.Flags().BoolVar(&report, "report", false, "also list the user cache directory's largest entries no disk.caches policy covers")
-	c.AddCommand(p)
+	c.AddCommand(p, a.diskHoldersCmd())
 	return c
 }
 

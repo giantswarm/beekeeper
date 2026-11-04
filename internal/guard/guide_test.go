@@ -51,6 +51,10 @@ var guideReads = map[string]map[string]any{
 	"devctl pr list":   bashCall("devctl pr list o/r"),
 	"beekeeper":        bashCall("beekeeper guide next && beekeeper note answer 3 'yes'"),
 	"note add":         bashCall("beekeeper note add --for Timo 'merge?'"),
+	"hold lift":        bashCall("beekeeper hold lift o/r"),
+	"hold narrow":      bashCall("beekeeper hold set o/r --reason 'Timo: only 7' --except o/r#7"),
+	"lanes clear":      bashCall("beekeeper lanes clear app"),
+	"agents resume":    bashCall("beekeeper agents resume 'Agent one'"),
 	"read":             toolEvent("Read", map[string]any{filePathKey: scratch}),
 	"send":             toolEvent(SendMessageTool, map[string]any{"to": "Agent one", "message": "Timo says yes"}),
 	"browser navigate": toolEvent(browserTools+"navigate", map[string]any{"url": "https://example.com"}),
@@ -81,13 +85,23 @@ func TestGuideIsRefusedWork(t *testing.T) {
 	h := guideHook()
 	for name, ev := range guideCalls {
 		d := decideEvent(t, h, withSession(ev, guideSession))
-		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Hand it to the supervisor in one line") {
+		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "File it in this turn as an issue") {
 			t.Errorf("%s in the guide's session: want the delegation refusal, got %+v", name, d)
 		}
 		// https://github.com/giantswarm/beekeeper/issues/1776: the supervisor
 		// is the loop, which no SendMessage reaches; the hint names the board.
 		if d != nil && (strings.Contains(d.Reason, SendMessageTool) || !strings.Contains(d.Reason, "beekeeper board move")) {
 			t.Errorf("%s in the guide's session: want the board route, not %s: %s", name, SendMessageTool, d.Reason)
+		}
+		// https://github.com/giantswarm/beekeeper/issues/2197: the hint points
+		// to filing the work, never back to the person.
+		if d != nil && !strings.Contains(d.Reason, "never ask them to do it themselves") {
+			t.Errorf("%s in the guide's session: want the hint to keep the work off the person: %s", name, d.Reason)
+		}
+		// The guide is the escalation point for stuck operational state: the
+		// hint keeps that off the board.
+		if d != nil && !strings.Contains(d.Reason, "sets, narrows or lifts it itself") {
+			t.Errorf("%s in the guide's session: want the hint to keep stuck state the guide's: %s", name, d.Reason)
 		}
 	}
 }

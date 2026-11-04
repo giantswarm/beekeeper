@@ -56,6 +56,12 @@ func AgentConvPath(stateDir, id string) string {
 	return filepath.Join(stateDir, "agy", id+".conv")
 }
 
+// QuotaPath is the quota error marker written when an agy session started
+// under id stops on a quota 429 / RESOURCE_EXHAUSTED error.
+func QuotaPath(stateDir, id string) string {
+	return filepath.Join(stateDir, "agy", id+".quota.json")
+}
+
 // TranscriptPath is the transcript.jsonl path of the conversation convID under
 // brainDir.
 func TranscriptPath(brainDir, convID string) string {

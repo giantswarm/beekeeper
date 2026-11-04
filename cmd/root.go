@@ -238,7 +238,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
@@ -246,7 +246,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.agentsCmd(), a.stopCmd(), a.resumeCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.emergencyCmd(), a.agentsCmd(), a.stopCmd(), a.resumeCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}
