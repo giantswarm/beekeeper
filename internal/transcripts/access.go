@@ -101,8 +101,22 @@ func grantCovers(g state.TranscriptGrant, meta Meta, metaRepo string) bool {
 	if g.Repo != "" && metaRepo != "" && strings.EqualFold(g.Repo, metaRepo) {
 		return true
 	}
-	if g.Session != "" && meta.Matches(g.Session) {
-		return true
+	if g.Session != "" {
+		// Search accepts substrings, but an authorization must not expand a
+		// grant for guide-1 to guide-10 or another similarly named session.
+		if meta.ExactMatch(g.Session) {
+			return true
+		}
+		if ref := NormalizeRef(g.Session); ref != "" {
+			if strings.EqualFold(meta.Ref, ref) {
+				return true
+			}
+			for _, r := range meta.Refs {
+				if strings.EqualFold(r, ref) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
