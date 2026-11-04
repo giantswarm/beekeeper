@@ -14,6 +14,16 @@ import (
 // unusedFor starts the verdict of an eligible holder.
 const unusedFor = "not written for"
 
+func TestHolderProtectsStateAncestorsAndDescendants(t *testing.T) {
+	a, root, m := holdersFixture(t)
+	for _, path := range []string{root, a.cfg.StateDir, filepath.Join(a.cfg.StateDir, "synthetic-child")} {
+		h := a.inspectHolder(m, filepath.Base(path), path, false)
+		if h.Eligible || h.Why != "beekeeper's own state" {
+			t.Errorf("%s: %+v", path, h)
+		}
+	}
+}
+
 // holdersFixture is a state home with one holder of each kind, all last
 // written eight days ago unless a test touches them.
 func holdersFixture(t *testing.T) (*app, string, holderMachine) {

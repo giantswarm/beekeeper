@@ -1115,8 +1115,17 @@ func (st *State) Knows(p Party) bool {
 	return false
 }
 
+// Emergency is a guide-session emergency grant; expiry is checked on every action.
+type Emergency struct {
+	By     Party     `json:"by"`
+	Reason string    `json:"reason"`
+	Until  time.Time `json:"until"`
+}
+
 // State is the whole document.
 type State struct {
+	Emergency         *Emergency `json:"emergency,omitempty"`
+	AutoInstallPaused bool       `json:"autoInstallPaused,omitempty"`
 	// LabIdle records when a configured kind lab was first seen unleased.
 	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is

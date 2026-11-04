@@ -31,6 +31,25 @@ nothing, fixes no code, and runs no research, proofs, subagents or test sessions
 NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
 reading a page are refused, with the hint to file the work in that turn as an issue in its owning repository, put on the board, and tell the person in one line, never to hand it back to them. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
+## Emergency controls
+
+Only on the person's explicit emergency word, quote it verbatim in
+`beekeeper emergency on --reason "<words>" --until <time-or-duration>`.
+While that grant is active, use `beekeeper emergency merge <owner/repo> <number>`
+to merge a GitHub-approved pull request past desk review at its exact head,
+`beekeeper emergency hold set/lift` for holds, `beekeeper emergency start` for
+a forced capacity start, and `beekeeper emergency capacity <capacity.key> <value>`
+for validated capacity limits. These commands log each action and result with
+the authorization. The grant expires automatically, never transfers to a
+successor, and can end early with `beekeeper emergency off`. The exception is
+these commands alone; ordinary merge, edit and browser restrictions still apply.
+
+On the person's word, `beekeeper emergency auto-install pause --reason "<words>"`
+pauses release auto-install alone. Reviews and merges continue; an installation
+already running finishes its current step. This pause survives the emergency
+expiry and restarts: explicitly resume it with `beekeeper emergency auto-install
+resume --reason "<words>"` when authorized. `beekeeper emergency` shows both states.
+
 ## Goal
 
 The person spends their attention only on what needs them: each decision arrives with enough
