@@ -313,6 +313,41 @@ func TestReadServesSomeKinds(t *testing.T) {
 
 const stuckTo = "36.0.0"
 
+func TestActiveHoldTargetChange(t *testing.T) {
+	for _, lift := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lift=%t", lift), func(t *testing.T) {
+			st := &state.State{}
+			Reconcile(st, "test", []Upgrade{{Cluster: "wc", From: "35.0.1", To: "35.1.1"}}, at.Add(-23*time.Hour), watch)
+			next := []Upgrade{{Cluster: "wc", From: "35.1.1", To: "35.2.0"}}
+			begun, _ := Reconcile(st, "test", next, at, watch)
+			if len(begun) != 1 || len(st.Holds) != 1 {
+				t.Fatalf("replacement: begun %+v holds %+v", begun, st.Holds)
+			}
+			h := st.Holds[0]
+			if h.UpgradeTo != "35.2.0" || h.Reason != "upgrade test/wc 35.1.1 → 35.2.0" || !h.At.Equal(at) || !h.Active(at) {
+				t.Fatalf("replacement hold: %+v", h)
+			}
+			if lift && !Lift(st, h.Target, state.Party{Name: "Supervisor"}, at) {
+				t.Fatal("replacement hold could not be lifted")
+			}
+			if begun, ended := Reconcile(st, "test", next, at.Add(time.Minute), watch); len(begun)+len(ended) != 0 {
+				t.Fatalf("same upgrade: begun %+v ended %+v", begun, ended)
+			}
+			rolling := []Upgrade{{Cluster: "wc", Rolling: true}}
+			later := at.Add(2 * time.Hour)
+			if begun, ended := Reconcile(st, "test", rolling, later, watch); len(begun)+len(ended) != 0 || len(st.Holds) != 1 {
+				t.Fatalf("new rollout lost its hold: begun %+v ended %+v holds %+v", begun, ended, st.Holds)
+			}
+			if st.Holds[0].Active(later) == lift || Stale(st.Holds[0], later) {
+				t.Fatalf("replacement lost its lift or stall interval: %+v", st.Holds[0])
+			}
+			if begun, ended := Reconcile(st, "test", rolling, at.Add(StallAfter), watch); len(begun) != 0 || len(ended) != 1 || len(st.Holds) != 0 {
+				t.Fatalf("stalled replacement: begun %+v ended %+v holds %+v", begun, ended, st.Holds)
+			}
+		})
+	}
+}
+
 func TestLiftSticks(t *testing.T) {
 	st := &state.State{}
 	stuck := []Upgrade{{Cluster: "wc", To: stuckTo}}

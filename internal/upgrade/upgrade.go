@@ -346,7 +346,7 @@ func Reconcile(st *state.State, installation string, running []Upgrade, now time
 		switch {
 		case runs && u.Rolling && now.Sub(h.At) >= StallAfter:
 			// a rollout stalled since its hold began: no upgrade
-		case runs && h.Active(now):
+		case runs && h.Active(now) && sameUpgrade(h, u):
 			have[h.Target] = true
 			return false
 		case runs && h.LiftedBy != nil && !h.Expired(now) && sameUpgrade(h, u):
