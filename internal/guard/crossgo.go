@@ -46,7 +46,7 @@ func scanCrossGo(cmd, inherited string, depth int) string {
 				}
 			}
 		}
-		if shells[name] || name == "eval" {
+		if shells[name] || name == evalCmd {
 			for _, a := range words[k+1:] {
 				if strings.ContainsAny(a, " \t\n;|&") {
 					if r := scanCrossGo(a, target, depth+1); r != "" {
