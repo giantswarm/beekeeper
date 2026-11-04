@@ -171,7 +171,7 @@ func TestBroadcastReachesEveryRunningAgentOnce(t *testing.T) {
 		{ID: "s5", Name: agentFive}, {ID: "s6", Name: agentSix},
 	}
 	var sent []string
-	told, missed := broadcast(context.Background(), agents, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
+	told, missed := broadcast(context.Background(), &state.State{Agents: agents}, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
 		sent = append(sent, name)
 		if name == agentSix {
 			return errors.New("unreachable")

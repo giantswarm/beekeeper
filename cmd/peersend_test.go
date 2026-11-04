@@ -61,7 +61,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	done := func() bool { return true }
 
 	sent := fakeRelay(t, false)
-	told, missed := broadcast(context.Background(), agents, sessions, nil, func(ctx context.Context, name string) error {
+	told, missed := broadcast(context.Background(), &state.State{Agents: agents}, sessions, nil, func(ctx context.Context, name string) error {
 		return a.peerSend(ctx, name, "hello")
 	})
 	if fmt.Sprint(told) != "[Agent four Agent five]" || len(missed) != 0 {
@@ -75,7 +75,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	}
 
 	fakeRelay(t, true)
-	_, missed = broadcast(context.Background(), agents, sessions, nil, func(ctx context.Context, name string) error {
+	_, missed = broadcast(context.Background(), &state.State{Agents: agents}, sessions, nil, func(ctx context.Context, name string) error {
 		return a.peerSend(ctx, name, "hello")
 	})
 	err := askSteward(context.Background(), s, ask, done, a.peerSend, time.Second)
