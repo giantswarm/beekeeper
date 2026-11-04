@@ -10,6 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+const resolveLoop = "loop"
+
 // policy is a policy for a home directory in a temporary directory, with a
 // checkout configured and a credential beside it.
 func policy(t *testing.T) (Policy, string) {
@@ -382,5 +384,64 @@ func TestASymlinkedConfigHomeIsNamedByItsTarget(t *testing.T) {
 	}
 	if p.Readable(filepath.Join(dotfiles, "gh/hosts.yml"), home) {
 		t.Error("the config directory's neighbours of git opened")
+	}
+}
+
+func TestSymlinkParentTraversal(t *testing.T) {
+	p, home := policy(t)
+	cwd := filepath.Join(home, "projects/repo")
+	if err := os.Mkdir(filepath.Join(home, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "private"), filepath.Join(cwd, "link")); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(home, "canary.txt")
+	const public = "public test canary\n"
+	if err := os.WriteFile(canary, []byte(public), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(cwd)
+	for _, prefix := range []string{"", cwd + string(filepath.Separator)} {
+		path := prefix + "link/../canary.txt" // Preserve the spelling passed to the raw read.
+		actual, err := filepath.EvalSymlinks(path)
+		if err != nil || actual != canary {
+			t.Fatalf("actual target = %q, %v; want %q", actual, err, canary)
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != public { //nolint:gosec // a path of this test
+			t.Fatalf("raw read = %q, %v", data, err)
+		}
+		for _, suffix := range []string{"canary.txt", "missing/descendant.txt"} {
+			path := prefix + "link/../" + suffix
+			if got := resolve(path, cwd); got != filepath.Join(home, suffix) {
+				t.Errorf("resolve(%q) = %q", path, got)
+			}
+			if p.Readable(path, cwd) || p.Writable(path, cwd) {
+				t.Errorf("policy allowed %q", path)
+			}
+		}
+	}
+	if err := os.Mkdir(filepath.Join(cwd, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"dir/../go.mod", "dir/../missing/file"} {
+		if !p.Readable(path, cwd) || !p.Writable(path, cwd) {
+			t.Errorf("ordinary parent traversal refused: %q", path)
+		}
+	}
+}
+
+func TestUnresolvablePathsAreRefused(t *testing.T) {
+	p, home := policy(t)
+	cwd := filepath.Join(home, "projects/repo")
+	for name, target := range map[string]string{resolveLoop: resolveLoop, "broken": "absent"} {
+		if err := os.Symlink(target, filepath.Join(cwd, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{resolveLoop, "loop/../go.mod", "broken", "broken/child", "go.mod/../new", "missing/../go.mod"} {
+		if p.Readable(path, cwd) || p.Writable(path, cwd) {
+			t.Errorf("unresolvable path allowed: %q", path)
+		}
 	}
 }

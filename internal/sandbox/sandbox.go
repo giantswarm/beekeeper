@@ -304,7 +304,7 @@ func (p Policy) settings(paths []string) []string {
 // directory, or under a path of Read or Write, or writable.
 func (p Policy) Readable(path, cwd string) bool {
 	path = resolve(path, cwd)
-	return !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
+	return path != "" && !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
 }
 
 // Writable reports whether a file tool may write path: under a path of
@@ -313,7 +313,7 @@ func (p Policy) Readable(path, cwd string) bool {
 // directory or a credential's), without crossing into a closed directory.
 func (p Policy) Writable(path, cwd string) bool {
 	path = resolve(path, cwd)
-	if p.denied(path) {
+	if path == "" || p.denied(path) {
 		return false
 	}
 	if under(path, resolve(os.TempDir(), "")) || slices.ContainsFunc(p.Write, func(w string) bool { return under(path, resolve(w, "")) }) {
@@ -353,34 +353,73 @@ func (p Policy) listed(path string) bool {
 		slices.ContainsFunc(append(slices.Clone(p.Read), p.Write...), func(r string) bool { return under(path, resolve(r, "")) })
 }
 
-// resolve is path made absolute against cwd with its symlinks resolved; a
-// path that does not exist yet resolves through its nearest existing parent.
+// resolve follows components in filesystem order, including symlinks before
+// parent traversal. Missing descendants are allowed, but an unresolvable
+// path returns the empty string so callers refuse it.
 func resolve(path, cwd string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = home + path[1:]
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
 		}
+		path = home + path[1:]
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(cwd, path)
-	}
-	path = filepath.Clean(path)
-	var rest []string
-	for d := path; ; d = filepath.Dir(d) {
-		r, err := filepath.EvalSymlinks(d)
-		if err == nil {
-			return filepath.Join(append([]string{r}, rest...)...)
+		if cwd == "" {
+			var err error
+			cwd, err = os.Getwd()
+			if err != nil {
+				return ""
+			}
 		}
-		if !errors.Is(err, fs.ErrNotExist) || d == filepath.Dir(d) {
-			return path
-		}
-		rest = append([]string{filepath.Base(d)}, rest...)
+		// Join would erase symlink/.. before the filesystem sees it.
+		path = cwd + string(filepath.Separator) + path
 	}
+	parts := strings.Split(path, string(filepath.Separator))
+	resolved := string(filepath.Separator)
+	missing := false
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if missing {
+			// A missing directory cannot be traversed back out of.
+			if part == ".." {
+				return ""
+			}
+			resolved = filepath.Join(resolved, part)
+			continue
+		}
+		candidate := resolved + string(filepath.Separator) + part
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, fs.ErrNotExist) {
+			missing = true
+			resolved = filepath.Join(resolved, part)
+			continue
+		}
+		if err != nil {
+			return ""
+		}
+		resolved, err = filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return ""
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			info, err = os.Stat(resolved)
+			if err != nil {
+				return ""
+			}
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return ""
+		}
+	}
+	return resolved
 }
 
 // under reports whether path is dir or lies below it.
 func under(path, dir string) bool {
-	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+	return path != "" && dir != "" && (path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator)))
 }
 
 // underGlob is under for a dir whose components may be globs.
