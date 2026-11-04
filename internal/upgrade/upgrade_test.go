@@ -461,3 +461,55 @@ func TestStale(t *testing.T) {
 		t.Error("stale")
 	}
 }
+
+func TestWithHoldVersions(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, from, installation, cluster, reason, want string
+		expired, lifted                                 bool
+	}{
+		{name: "matching hold", want: holdFrom},
+		{name: "reader knows", from: "34.0.0", want: "34.0.0"},
+		{name: "lifted hold", lifted: true, want: holdFrom},
+		{name: "expired hold", expired: true},
+		{name: "other installation", installation: "other"},
+		{name: "other cluster", cluster: "other"},
+		{name: "other release", reason: "upgrade prod/mc 35.0.1 → 37.0.0"},
+		{name: "unknown hold version", reason: "upgrade prod/mc ? → 36.1.0"},
+		{name: "malformed reason", reason: "unrelated reason"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installation, cluster := "prod", "mc"
+			if tc.installation != "" {
+				installation = tc.installation
+			}
+			if tc.cluster != "" {
+				cluster = tc.cluster
+			}
+			reason := tc.reason
+			if reason == "" {
+				reason = "upgrade prod/mc 35.0.1 → 36.1.0"
+			}
+			h := state.Hold{Target: HoldTarget(installation, cluster), Reason: reason}
+			if tc.expired {
+				h.Until = now
+			}
+			if tc.lifted {
+				h.LiftedBy = &state.Party{Name: "operator"}
+			}
+			s := Status{Installation: "prod", Upgrades: []Upgrade{{Cluster: "mc", From: tc.from, To: holdTo}}}
+			got := WithHoldVersions(s, &state.State{Holds: []state.Hold{h}}, now)
+			if got.Upgrades[0].From != tc.want {
+				t.Errorf("from = %q, want %q", got.Upgrades[0].From, tc.want)
+			}
+			if s.Upgrades[0].From != tc.from {
+				t.Fatal("changed shared reading")
+			}
+		})
+	}
+}
+
+const (
+	holdFrom = "35.0.1"
+	holdTo   = "36.1.0"
+)
