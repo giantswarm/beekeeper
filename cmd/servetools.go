@@ -372,6 +372,19 @@ func (c *call) hold(target string) (*state.Hold, error) {
 	return nil, nil
 }
 
+// guardHold repeats ownership authorization inside the reused CLI verb's
+// write callback, against the hold that attempt will actually change.
+func (c *call) guardHold(target string) {
+	c.store.authorize = func(st *state.State) error {
+		for _, h := range st.Holds {
+			if h.Target == target && h.Active(c.app.now) {
+				return c.may("the hold on "+target, h.By)
+			}
+		}
+		return nil
+	}
+}
+
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 	target, err := required(req, paramTarget, "owner/repo or lane:<name>")
 	if err != nil {
@@ -395,6 +408,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	if cur, err := c.hold(target); err != nil {
 		return nil, err
 	} else if cur != nil && cur.Active(c.app.now) {
@@ -417,6 +431,7 @@ func toolHoldLift(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	cur, err := c.hold(target)
 	if err != nil {
 		return nil, err
@@ -724,6 +739,13 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	reason := strings.TrimSpace(req.GetString(paramReason, ""))
 	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, x := range st.Merges {
+			if x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr {
+				if err := c.may(key+"'s place in lane "+lane, x.By); err != nil {
+					return nil, err
+				}
+			}
+		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(x state.Merge) bool {
 			return x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr
 		})
