@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	checkOperation       = "check"
 	inventoryOperation   = "inventory"
 	missingOperation     = "missing"
 	syncControlOperation = "sync-control"
