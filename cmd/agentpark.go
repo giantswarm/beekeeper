@@ -507,6 +507,9 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 	if err != nil {
 		return err
 	}
+	if _, lease := parkLease(p.On); lease {
+		ctx = context.WithValue(ctx, leaseResumeKey{}, true)
+	}
 	if err := wakeOwner(a, ctx, by, ag.Name, parkMessage(p, by.Name), ""); err != nil {
 		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 			for k := range st.Agents {
@@ -624,6 +627,9 @@ func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool
 	if self {
 		_, err = fmt.Fprintf(a.out, "%s: your park ended, nobody is woken. %s\n", p.Name, parkMessage(&park, by.Name))
 		return err
+	}
+	if _, lease := parkLease(park.On); lease {
+		ctx = context.WithValue(ctx, leaseResumeKey{}, true)
 	}
 	werr := wakeOwner(a, ctx, by, wakeID(p), parkMessage(&park, by.Name), "")
 	switch {
