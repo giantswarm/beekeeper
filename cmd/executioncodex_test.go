@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	codexTestModel     = "gpt-fixture"
-	codexTestClaudeVer = "2.1.290-remote"
+	codexTestModel         = "gpt-fixture"
+	codexTestClaudeVer     = "2.1.290-remote"
+	codexSSHFixtureVersion = "0.166.0"
 )
 
 // sshCodexTestApp is a coordinator with a codex provider whose first host
@@ -54,7 +55,7 @@ func sshCodexTestApp(t *testing.T, offered map[string]string) (*app, string, *[]
 }
 
 func TestExecutionStartsCodexOnAHostThatOffersIt(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, codex.Harness: codexSSHFixtureVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-codex", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestExecutionRefusesCodexTheHostDoesNotOffer(t *testing.T) {
 }
 
 func TestExecutionAutoPicksRemoteCodex(t *testing.T) {
-	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: "0.166.0"})
+	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: codexSSHFixtureVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
 		t.Fatal(err)
 	}
