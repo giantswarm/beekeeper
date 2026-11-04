@@ -156,3 +156,49 @@ func TestNewRefusesAnOpenConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// Organization groups are exact token claims: connector prefixes are retained.
+func TestVerifyOrganizationGroupFormats(t *testing.T) {
+	iss := identitytest.New(t)
+	ctx := context.Background()
+	const prefixed = "giantswarm-github:giantswarm:employees"
+	const unprefixed = "giantswarm:employees"
+	for _, tc := range []struct {
+		name       string
+		configured string
+		group      string
+		allowed    bool
+	}{
+		{"prefixed", prefixed, prefixed, true},
+		{"unprefixed", unprefixed, unprefixed, true},
+		{"missing prefix in config", unprefixed, prefixed, false},
+		{"missing prefix in token", prefixed, unprefixed, false},
+		{"different connector", prefixed, "other-github:giantswarm:employees", false},
+		{"different organization", prefixed, "giantswarm-github:other:employees", false},
+		{"different team", prefixed, "giantswarm-github:giantswarm:other", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := serveConfig(iss.URL)
+			cfg.Organization = ""
+			cfg.Organizations = []string{tc.configured}
+			cfg.Teams = map[string]string{tc.configured: bumblebee}
+			v, err := identity.New(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := v.Verify(ctx, iss.Token(t, "muster", identitytest.Claims{
+				Email: ana, EmailVerified: identitytest.Verified(), Groups: []string{tc.group},
+			}))
+			if tc.allowed {
+				if err != nil || c.Team != bumblebee || !c.In(tc.group) {
+					t.Fatalf("caller %+v, error %v; want membership and team", c, err)
+				}
+			} else {
+				var refused *identity.RefusedError
+				if !errors.As(err, &refused) || !strings.Contains(err.Error(), "not a member of") {
+					t.Fatalf("error %v; want membership refusal", err)
+				}
+			}
+		})
+	}
+}

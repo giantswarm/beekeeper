@@ -2114,7 +2114,9 @@ type Serve struct {
 	Organization string `yaml:"organization"`
 	// Organizations are further groups that make a caller a member: one per
 	// Dex connector where the connectors spell the organization differently
-	// (a GitHub org's <org>:<team>, a directory's group name).
+	// (a GitHub org's <connector>:<org>:<team>, a directory's group name).
+	// Use the exact token group, e.g. giantswarm-github:giantswarm:employees;
+	// an unprefixed <org>:<team> matches only an unprefixed token group.
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
 	// in none is refused, a caller in several is the team of TeamGroups'
