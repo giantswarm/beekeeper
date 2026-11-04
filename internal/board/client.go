@@ -1030,8 +1030,8 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 }
 
 // onBoard returns ref's existing item on m, or nil when ref is not on m.
-// For an issue outside the board's owner, whose projectItems omit m, it
-// probes addProjectV2ItemById and deletes a freshly added blank item.
+// An issue's projectItems may omit a different owner's project; in that
+// case read the project's items rather than mutating membership to probe it.
 func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem, error) {
 	oo, or, on, err := Ref(ref)
 	if err != nil {
@@ -1043,23 +1043,56 @@ func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem
 	if err != nil || found != nil || strings.EqualFold(oo, c.Board.Owner) {
 		return found, err
 	}
-	var omv Moved
-	omv.Ref = oref
-	it, err := c.ensure(octx, m, &omv, oid, nil)
-	if err != nil {
-		return nil, err
-	}
-	if !omv.Added {
-		return &it, nil
-	}
-	_ = c.deleteItem(octx, m.ID, it.ID)
-	return nil, nil
+	return c.findItem(octx, m.ID, oid)
 }
 
-func (c *Client) deleteItem(ctx context.Context, project, item string) error {
-	var done json.RawMessage
-	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!){deleteProjectV2Item(input:{projectId:$p,itemId:$i}){deletedItemId}}`,
-		vars{"p": project, "i": item})
+// findItem resolves only membership, the item id and its archived state.
+// Empty single-select fields do not establish whether an item is new.
+func (c *Client) findItem(ctx context.Context, project, content string) (*projectItem, error) {
+	for cursor := ""; ; {
+		var r struct {
+			Node *struct {
+				Items struct {
+					Nodes []struct {
+						ID       string `json:"id"`
+						Archived bool   `json:"isArchived"`
+						Content  *struct {
+							ID string `json:"id"`
+						} `json:"content"`
+					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"items"`
+			} `json:"node"`
+		}
+		vs := vars{"p": project}
+		if cursor != "" {
+			vs["c"] = cursor
+		}
+		if err := c.graphql(ctx, &r, `query($p:ID!,$c:String){node(id:$p){...on ProjectV2{items(first:100,after:$c){nodes{id isArchived content{...on Issue{id}}} pageInfo{hasNextPage endCursor}}}}}`, vs); err != nil {
+			return nil, err
+		}
+		if r.Node == nil {
+			return nil, fmt.Errorf("board %s/%d not found", c.Board.Owner, c.Board.Project)
+		}
+		for _, n := range r.Node.Items.Nodes {
+			if n.Content != nil && n.Content.ID == content {
+				it := &projectItem{ID: n.ID, Archived: n.Archived}
+				it.Project.ID = project
+				return it, nil
+			}
+		}
+		page := r.Node.Items.PageInfo
+		if !page.HasNextPage {
+			return nil, nil
+		}
+		if page.EndCursor == "" || page.EndCursor == cursor {
+			return nil, errors.New("board item pagination did not advance")
+		}
+		cursor = page.EndCursor
+	}
 }
 
 // lookup reads the issue's node id and its item on the board from the
@@ -1439,15 +1472,11 @@ func (c *Client) lookupOrigin(ctx context.Context, m *meta, ref string, probeCro
 	}
 	onBoard = slices.ContainsFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID })
 	if !onBoard && probeCrossOwner && !strings.EqualFold(owner, c.Board.Owner) && is.ID != "" {
-		var omv Moved
-		omv.Ref = norm
-		if it, cerr := c.ensure(ctx, m, &omv, is.ID, nil); cerr == nil {
-			if !omv.Added {
-				onBoard = true
-			} else {
-				_ = c.deleteItem(ctx, m.ID, it.ID)
-			}
+		item, err := c.findItem(ctx, m.ID, is.ID)
+		if err != nil {
+			return false, parent, is.Body, err
 		}
+		onBoard = item != nil
 	}
 	return onBoard, parent, is.Body, nil
 }
