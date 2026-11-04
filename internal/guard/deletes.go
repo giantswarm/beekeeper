@@ -370,6 +370,8 @@ func (st *deleteState) expansion(token string, at int) expansion {
 	case st.nounset:
 		if v, ok := st.assigned[name]; ok {
 			e.value = v
+			// nounset stops an unset variable, not a known empty one.
+			e.maybeEmpty = v == ""
 		} else if v := st.environ(name); v != "" {
 			e.value = v
 		}
