@@ -127,6 +127,10 @@ the issue, start refuses with that claim's desk, session and time, exit 3;
 --force starts anyway and the event log records the claim overridden
 (agents.start). A stale claim is said, never honoured.
 
+For SSH execution starts, --force does not override execution-host resource
+limits (including load, memory, disk, build slots and maxBusy). Known host
+resource blocks refuse before reservation; the host checks again at preparation.
+
 The start is judged first, as beekeeper capacity judges one: the busy
 agents against capacity.ceiling, MemAvailable, disk swap's growth, the
 1-minute load and the kind labs. --builds marks a task that builds, tests

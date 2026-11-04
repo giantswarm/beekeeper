@@ -86,6 +86,16 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		return refused("execution host lacks the per-worker GitHub adapter; update and check the host before starting")
 	}
 
+	// Host resource limits are enforced again by Start and cannot be
+	// overridden by the coordinator's capacity override.
+	blocks := slices.Clone(caps.Resources.Blocks)
+	if o.Builds {
+		blocks = append(blocks, caps.Resources.BuildBlocks...)
+	}
+	if len(blocks) > 0 {
+		return refused("execution host has no room: %s; --force does not override execution-host resource limits", strings.Join(blocks, "; "))
+	}
+
 	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
 	if len(k.Providers) == 0 {

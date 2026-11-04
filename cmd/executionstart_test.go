@@ -507,3 +507,47 @@ func TestSSHStartAdmitsOrganizationRepositoryWithoutMapping(t *testing.T) {
 		t.Fatalf("organization repository dry run: %s %v", out, err)
 	}
 }
+
+// --force overrides coordinator capacity, while the host retains its limits.
+func TestExecutionForceHostResourceAdmission(t *testing.T) {
+	for _, kind := range []string{"load", "build", "changed after probe"} {
+		t.Run(kind, func(t *testing.T) {
+			a, brief := sshStartTestApp(t)
+			probe := a.executionProbe
+			a.executionProbe = func(ctx context.Context, h execution.Host) (execution.Capabilities, error) {
+				caps, err := probe(ctx, h)
+				switch kind {
+				case "load":
+					caps.Resources.Blocks = []string{"1m load 53 over 14"}
+				case "build":
+					caps.Resources.BuildBlocks = []string{"build slots busy"}
+				}
+				return caps, err
+			}
+			sends := 0
+			fake := &testExecutionTransport{inspect: notFound, start: func(context.Context, execution.StartRequest) (execution.Handle, error) {
+				sends++
+				return execution.Handle{}, errors.New("execution host has no room: 1m load 53 over 14")
+			}}
+			a.executionTransport = func(execution.Host) execution.Transport { return fake }
+			_, err := runAgents(a, agentStartName, "--name", "forced-worker", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel, "--force", "--builds")
+			if err == nil || !strings.Contains(err.Error(), "execution host has no room") {
+				t.Fatalf("forced start: %v", err)
+			}
+			st, readErr := a.store.Read()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(st.Agents) != 0 || executionHostBusy(st, a.cfg.Agents.Hosts[sshTestSelector].Identity) != 0 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 0 {
+				t.Fatal("refusal kept a host or desk slot")
+			}
+			if kind == "changed after probe" {
+				if sends != 1 || len(st.Starts) != 1 || !st.Starts[0].Execution.Released() || !strings.Contains(err.Error(), "reservation is released") {
+					t.Fatalf("host refusal did not release reservation: sends=%d, err=%v", sends, err)
+				}
+			} else if sends != 0 || len(st.Starts) != 0 || !strings.Contains(err.Error(), "--force does not override") {
+				t.Fatalf("known host block reached preparation: sends=%d, err=%v", sends, err)
+			}
+		})
+	}
+}

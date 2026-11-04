@@ -45,7 +45,12 @@ fall back to local execution when a named remote host fails. Initially select
 a remote host explicitly; `--harness auto` still chooses a provider/model,
 not a machine. Unknown hosts and unsupported host/harness combinations fail
 before reserving capacity or creating a workspace. `--force` cannot bypass
-identity, version, policy, ownership or reachability checks.
+identity, version, policy, ownership or reachability checks. It also cannot
+override execution-host resource limits, including load, memory, disk, build
+slots and maxBusy. Known resource blocks refuse before reservation, even with
+`--force`; the host checks again before preparation. If resources change
+between these checks and the host refuses without creating a journal, the
+unacknowledged reservation is released and holds no host or desk slot.
 
 Add `agents.hosts` to `internal/config`, with a reserved `local` name:
 
