@@ -1210,7 +1210,7 @@ func TestCodexUninstallKeepsRepointedLinks(t *testing.T) {
 					t.Errorf("changed link %s = %q, %v; want %q", link, got, err, target)
 				}
 				if !dangling {
-					if got, err := os.ReadFile(target); err != nil || string(got) != "custom content\n" {
+					if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != "custom content\n" {
 						t.Errorf("custom target changed: %q, %v", got, err)
 					}
 				}
@@ -1218,7 +1218,7 @@ func TestCodexUninstallKeepsRepointedLinks(t *testing.T) {
 			if _, err := os.Lstat(unchanged); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("unchanged skill link remains: %v", err)
 			}
-			if got, err := os.ReadFile(userAgentsMD); err != nil || string(got) != "# User rules\n" {
+			if got, err := os.ReadFile(filepath.Clean(userAgentsMD)); err != nil || string(got) != "# User rules\n" {
 				t.Errorf("user rules changed: %q, %v", got, err)
 			}
 		})
