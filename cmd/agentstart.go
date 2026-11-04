@@ -207,7 +207,8 @@ The first prompt is the worker rules beekeeper ships with its role skills
 task: a brief carries only its task, and a worker reports to "the
 supervisor", which the PreToolUse hook delivers to the role's holder. The
 rules name the topic skills a worker loads before the step that needs
-them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park);
+them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park,
+beekeeper:alerts, beekeeper:long-proofs);
 a topic no enabled beekeeper plugin installed serves as this binary embeds
 it (none installed, or out of date) follows the rules in the first prompt
 itself, and start says so with the command that updates the plugin.
