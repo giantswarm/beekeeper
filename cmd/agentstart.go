@@ -2077,8 +2077,8 @@ func workerPrompt(prompt string, inline ...string) string {
 		}
 		rules = b.String()
 	}
-	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
-		project.Version(), rules, prompt)
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\nYour worktree path: `<root>/<repo>/<branch>-%s` (replace root, repo and branch; keep this unique session suffix). Use the workspace provided by beekeeper instead when BEEKEEPER_EXECUTION_ID is set.\n\n%s",
+		project.Version(), rules, uuid.NewString(), prompt)
 }
 
 // topicSkills names topics as the skills a worker loads.

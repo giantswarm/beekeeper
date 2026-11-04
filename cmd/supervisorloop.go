@@ -2595,7 +2595,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -2603,7 +2603,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
