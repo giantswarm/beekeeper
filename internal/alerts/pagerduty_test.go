@@ -54,6 +54,9 @@ var (
 	fluxPage   = incident("Q2", 9369, "triggered", "eta-wc1 - FluxGiantswarmHelmReleaseFailed: HelmRelease agent-manager is stuck in Failed state. (2 firing)", "2026-09-24T17:10:00Z")
 )
 
+// pagerDutyServiceID is the service selected by the PagerDuty fixtures.
+const pagerDutyServiceID = "PSVC"
+
 // instZ is the installation of the tests' incidents.
 const instZ = "zeta"
 
@@ -72,7 +75,7 @@ func readPD(t *testing.T, f *fakePagerDuty, prev *PagerDuty, at time.Time) ([]st
 	if prev != nil {
 		known = prev.Incidents
 	}
-	r := PagerDutyReader{Services: []string{"PSVC"}, Call: f.call}
+	r := PagerDutyReader{Services: []string{pagerDutyServiceID}, Call: f.call}
 	return rules.PagerDutyStep(prev, r.Read(context.Background(), known), at)
 }
 
@@ -120,7 +123,7 @@ func TestPagerDutyEmpty(t *testing.T) {
 	if lines, _ := readPD(t, f, base, now.Add(time.Minute)); len(lines) != 0 {
 		t.Errorf("nothing changed, yet %q", lines)
 	}
-	snap := rules.PagerDutySnapshot(PagerDutyReader{Services: []string{"PSVC"}, Call: f.call}.Read(context.Background(), nil), now)
+	snap := rules.PagerDutySnapshot(PagerDutyReader{Services: []string{pagerDutyServiceID}, Call: f.call}.Read(context.Background(), nil), now)
 	if !slices.Equal(snap, []string{"pagerduty at 18:50Z: 0 open"}) {
 		t.Errorf("snapshot: %q", snap)
 	}
@@ -248,7 +251,7 @@ func TestPagerDutyRefusesCappedListing(t *testing.T) {
 				rows[i] = incident(id, i+1, "triggered", "Older incident", now.Add(-time.Hour).Format(time.RFC3339Nano))
 				known[id] = Incident{Number: i + 1, Installation: instA}
 			}
-			reader := PagerDutyReader{Services: []string{"PSVC"}, Call: func(_ context.Context, tool string, _ map[string]any) (string, error) {
+			reader := PagerDutyReader{Services: []string{pagerDutyServiceID}, Call: func(_ context.Context, tool string, _ map[string]any) (string, error) {
 				if tool != listIncidentsTool {
 					t.Fatalf("unnecessary detail call %s", tool)
 				}
