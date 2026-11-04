@@ -215,8 +215,8 @@ func TestImportCreatesAnItemOpsValidatorAccepts(t *testing.T) {
 	type want struct{ purpose, typ string }
 	builtin := want{"PASSWORD", "CONCEALED"}
 	for i, w := range []map[string]want{
-		{"password": builtin},
-		{"password": builtin, "notesPlain": {"NOTES", "STRING"}},
+		{storePasswordAttribute: builtin},
+		{storePasswordAttribute: builtin, "notesPlain": {"NOTES", plainType}},
 	} {
 		item := created[i]
 		if item["category"] != builtin.purpose {
