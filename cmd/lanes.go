@@ -333,7 +333,8 @@ for merge.settle from the merge.
 
 settle asks GitHub for the pull request's state once; while the entry waits
 without its merge, a merge waiting behind it asks again at most once a minute.
-The entry is kept for merge.seedTTL; lanes drop takes it out.`,
+The entry is kept for merge.seedTTL; lanes drop takes it out.
+A running gate and its devctl have up to 30s to exit before settle refuses.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := prArgs(args)
@@ -356,10 +357,14 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 				return refused("%s#%d is closed without a merge: nothing settles", args[0], pr)
 			}
 			lane := a.cfg.LaneOf(args[0]).Name
+			if err := a.waitSettleRun(cmd.Context(), args[0], pr, 30*time.Second); err != nil {
+				return err
+			}
 			busy := ""
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				for _, m := range st.Merges {
-					if m.Repo == args[0] && m.PR == pr && m.Phase != state.Waiting {
+					if m.Repo == args[0] && m.PR == pr && m.Phase != state.Waiting &&
+						(m.Phase != state.Running || merge.Runs(m, proc.Alive)) {
 						busy = m.Phase
 						return nil, nil
 					}
@@ -370,6 +375,10 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 					i = len(st.Merges) - 1
 				}
 				m := &st.Merges[i]
+				// A dead running entry can be registered outside the gate.
+				if m.Phase == state.Running {
+					*m = state.Merge{Repo: m.Repo, PR: m.PR, Lane: m.Lane, By: m.By, Phase: state.Waiting, Joined: m.Joined, Seen: a.now.UTC()}
+				}
 				m.Seeded, m.Outside, m.Checked = true, true, a.now.UTC()
 				if strings.TrimSpace(forName) != "" {
 					m.By = by
@@ -396,6 +405,36 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 	}
 	c.Flags().StringVar(&forName, "for", "", "the session whose merge this is (default: you)")
 	return c
+}
+
+// waitSettleRun leaves the store unlocked while a gate finishes its signal
+// cleanup. Re-read each time: the gate can record or remove its own entry.
+func (a *app) waitSettleRun(ctx context.Context, repo string, pr int, bound time.Duration) error {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo && m.PR == pr && m.Phase == state.Running })
+		if i < 0 || !merge.Runs(st.Merges[i], proc.Alive) {
+			return nil
+		}
+		m := st.Merges[i]
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return refused("%s: gate (pid %d) or devctl (pid %d) is still exiting after waiting %s; retry: beekeeper lanes settle %s %d", m.Key(), m.PID, m.Child, bound, repo, pr)
+		case <-tick.C:
+		}
+	}
 }
 
 // laneViews are the configured lanes, then every other lane with a merge or
