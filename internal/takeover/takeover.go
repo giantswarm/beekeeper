@@ -123,15 +123,22 @@ func Pending(dir, session string) ([]Request, error) {
 	if err := checkName(session); err != nil {
 		return nil, err
 	}
-	paths, err := filepath.Glob(filepath.Join(dir, session, "*"+requestExt))
+	folder := filepath.Join(dir, session)
+	entries, err := os.ReadDir(folder)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	var out []Request
-	for _, p := range paths {
-		b, err := os.ReadFile(p) //nolint:gosec // a request file under the take-over folder
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), requestExt) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(folder, entry.Name())) //nolint:gosec // a request file under the take-over folder
 		if err != nil {
-			continue // answered or given up since the glob
+			continue // answered or given up since the directory read
 		}
 		var r Request
 		if json.Unmarshal(b, &r) == nil {
