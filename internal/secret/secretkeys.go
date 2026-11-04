@@ -53,8 +53,9 @@ func (o *Ops) SecretKeys(ctx context.Context, file string, opt SecretKeysOptions
 		if err != nil {
 			return nil, err
 		}
-		_, inData := doc.get("data." + key)
-		if _, inString := doc.get(path); (inString || inData) && !opt.Replace {
+		inData := doc.node("data."+key) != nil
+		inString := doc.node(path) != nil
+		if (inString || inData) && !opt.Replace {
 			return nil, fmt.Errorf("%s: the Secret holds %s already: replacing it takes --replace", file, key)
 		}
 	}

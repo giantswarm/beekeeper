@@ -398,7 +398,7 @@ List the merge lanes: each lane's running merge, settling merge and queue.
 ```text
 Claim a shared installation for the calling agent.
 
-Refused while another holds it or while it upgrades.
+Returns held, queued or refused first. Queued behind a holder with your grant; refused otherwise or during upgrades. wait retries every 10s, at most 9m.
 ```
 
 ```json
@@ -418,6 +418,10 @@ Refused while another holds it or while it upgrades.
     },
     "purpose": {
       "description": "what the installation is for",
+      "type": "string"
+    },
+    "wait": {
+      "description": "foreground wait duration, at most 9m (default: claim once)",
       "type": "string"
     }
   },

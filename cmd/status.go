@@ -158,7 +158,7 @@ func (v *statusView) bar() string {
 	if v.SupervisorLoop > 0 {
 		sup = "loop"
 	}
-	fields := []string{"beekeeper", sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Ceiling)}
+	fields := []string{pluginName, sup, fmt.Sprint(len(v.Leases)), fmt.Sprint(len(v.Holds)), fmt.Sprint(v.Due), fmt.Sprintf("%d/%d", v.Busy, v.Ceiling)}
 	for i, f := range fields {
 		fields[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(f)
 	}

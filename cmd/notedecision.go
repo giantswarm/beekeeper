@@ -298,7 +298,11 @@ func takeAnswered(st *state.State, id int) (found, defaulted bool) {
 // otherwise. A central instance has no sessions to tell: it queues line in
 // the mailbox of the filer's person, addressed to the filing agent, whose
 // machine's watch delivers it.
-func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) (report string) {
+func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line string) string {
+	return a.tellFilerWithWake(ctx, by, n, line, (*app).quietWake)
+}
+
+func (a *app) tellFilerWithWake(ctx context.Context, by state.Party, n *state.Note, line string, wake func(*app, context.Context, state.Party, string, string) error) (report string) {
 	delivery := noteDelivery{Note: n.ID, Team: n.By.Team, Status: "delivered"}
 	defer func() {
 		// Hold-release messages use this route too; their delivery must not
@@ -343,14 +347,14 @@ func (a *app) tellFiler(ctx context.Context, by state.Party, n *state.Note, line
 	}
 	rl, ok := filedRole(st, n.By)
 	if !ok {
-		if err := a.quietWake(ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
+		if err := wake(a, ctx, by, cmp.Or(wakeID(n.By), n.By.Name), line); err != nil {
 			return fail(err)
 		}
 		return ""
 	}
 	why := fmt.Sprintf("no session holds the %s's role", rl.name)
 	if h := rl.get(st).Holder; h != nil {
-		err := a.quietWake(ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
+		err := wake(a, ctx, by, cmp.Or(wakeID(h.Party), h.Name), line)
 		switch {
 		case err == nil && h.Is(n.By):
 			return ""
