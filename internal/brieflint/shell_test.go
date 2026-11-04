@@ -34,6 +34,9 @@ func TestLintShellRedirectSyntax(t *testing.T) {
 		{"case 19: inline quoted text", "Print `printf '%s' 'a > b'`.", nil},
 		{"case 20: inline digit-prefixed file", "Capture `printf ok >1.log`.", []int{1}},
 		{"case 21: shell numeric comparison", "```bash\n[[ $a > b ]]\n(( n > 0 ))\n```", nil},
+		{"case 22: combined redirect shorthand", "```bash\nprintf ok >&out.log\n```", []int{2}},
+		{"case 23: descriptor duplication and closure", "```bash\nprintf ok >&1\nprintf ok 2>&1\nprintf ok >&-\nprintf ok 2>&\"$fd\"\n```", nil},
+		{"case 24: digit-prefixed combined target", "Capture `printf ok >&1.log`.", []int{1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Lint("brief.md", strings.NewReader(tc.text))

@@ -69,8 +69,9 @@ var (
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
 	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
 	// redirect is the conservative fallback for incomplete shell examples.
-	redirect = regexp.MustCompile(`(?:^|[^<>=&|\-])(?:[0-9]?>|&>)[ \t]*([^\s>|&=;)` + "`" + `]+)`)
-	number   = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+	redirect   = regexp.MustCompile(`(?:^|[^<>=&|\-])(?:[0-9]?>|&>)[ \t]*([^\s>|&=;)` + "`" + `]+)`)
+	number     = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+	descriptor = regexp.MustCompile(`^(?:[0-9]+-?|-)$`)
 	// shellFences are the info strings whose blocks are shell examples.
 	shellFences = map[string]bool{"": true, "sh": true, "bash": true, "zsh": true, "shell": true, "console": true}
 )
@@ -106,7 +107,7 @@ func redirectLines(code string, lang syntax.LangVariant, inline bool) []int {
 	}
 	syntax.Walk(f, func(n syntax.Node) bool {
 		r, ok := n.(*syntax.Redirect)
-		if !ok || r.Word == nil || r.Op != syntax.RdrOut && r.Op != syntax.RdrAll {
+		if !ok || r.Word == nil || r.Op != syntax.RdrOut && r.Op != syntax.RdrAll && (r.Op != syntax.DplOut || r.N != nil) {
 			return true
 		}
 		pos := r.OpPos.Offset()
@@ -118,7 +119,16 @@ func redirectLines(code string, lang syntax.LangVariant, inline bool) []int {
 			return true
 		}
 		start, end := r.Word.Pos().Offset(), r.Word.End().Offset()
-		if start <= end && end <= uint(len(code)) && unsafeTarget(code[start:end], inline) {
+		if start > end || end > uint(len(code)) {
+			return true
+		}
+		target := strings.Trim(code[start:end], `"'`)
+		// With no explicit source descriptor, >&file redirects both streams.
+		// Numeric descriptors, moves and closure remain descriptor operations.
+		if r.Op == syntax.DplOut && descriptor.MatchString(target) {
+			return true
+		}
+		if unsafeTarget(target, inline && r.Op != syntax.DplOut) {
 			out = append(out, int(r.OpPos.Line()))
 		}
 		return true
