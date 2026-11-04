@@ -3,10 +3,11 @@ package board
 import (
 	"context"
 	"fmt"
-	"github.com/giantswarm/beekeeper/internal/config"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/config"
 )
 
 func TestReadRetainsAncestorsOutsideTheOrdersStatuses(t *testing.T) {
