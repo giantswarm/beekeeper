@@ -129,3 +129,21 @@ func TestADevctlEndedBySignalSaysWhatGitHubSays(t *testing.T) {
 		t.Errorf("woke %q, want %q", *woke, stoppedMerged)
 	}
 }
+
+// A requested cancellation recovered by the watch must not invite a retry.
+func TestTheWatchDoesNotRetryARequestedCancellation(t *testing.T) {
+	stubGitHub(t, github.Open, "")
+	stubPull(t, github.Pull{State: github.Open}, nil)
+	w, woke := cutWatch(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: hungLane, By: four, PID: deadPID(t), Child: deadPID(t), Phase: state.Running, Started: relayNow})
+	base := mergeBase(w.store.Dir(), scratchRepo, 7)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(base+stoppedExt, []byte(`{"name":"supervisor","session":"s9"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	polls(w, 3)
+	if len(*woke) != 1 || !strings.Contains((*woke)[0], "cancelled on request") || !strings.Contains((*woke)[0], "do not rerun it") || strings.Contains((*woke)[0], "run the same command again") {
+		t.Fatalf("woke %q", *woke)
+	}
+}
