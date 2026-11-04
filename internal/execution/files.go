@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -173,8 +174,13 @@ func pathWithFirst(dir, path string) string {
 
 type HostCommand func(context.Context, string, []string, string, ...string) ([]byte, error)
 
+// Bound output draining after command exit or cancellation: SSH proxies and
+// probe wrappers may leave descendants holding the inherited output pipes.
+const commandDrainWait = time.Second
+
 func hostCommand(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c.WaitDelay = commandDrainWait
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}
 	c.Stdout, c.Stderr = out, io.Discard
@@ -188,6 +194,7 @@ func hostCommand(ctx context.Context, dir string, env []string, bin string, args
 // prints there. Callers compare it and never return it.
 func hostCombined(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // operator-pinned executable, typed arguments
+	c.WaitDelay = commandDrainWait
 	c.Dir, c.Env = dir, env
 	out := &boundedBuffer{limit: MaxWire}
 	c.Stdout, c.Stderr = out, out
