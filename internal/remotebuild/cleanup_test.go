@@ -36,7 +36,7 @@ func TestSweepOwnershipAndRetries(t *testing.T) {
 		}
 		name := builderName(owner, root)
 		names[root] = name
-		rec := builderRecord{root, owner, "fixture-kubeconfig", "fixture-context", "builders"}
+		rec := builderRecord{root, owner, filepath.Join(state, "fixture-kubeconfig"), "fixture-context", "builders"}
 		records[root] = filepath.Join(dir, rec.file(name))
 		raw, _ := json.Marshal(rec)
 		if err := os.WriteFile(records[root], raw, 0o600); err != nil {
@@ -83,7 +83,7 @@ func TestSweepOwnershipAndRetries(t *testing.T) {
 		if strings.Contains(call, names[busy]) || strings.Contains(call, names[foreign]) {
 			t.Fatal(call)
 		}
-		if !strings.Contains(call, "--kubeconfig fixture-kubeconfig --context fixture-context --namespace builders") {
+		if !strings.Contains(call, "--kubeconfig "+filepath.Join(state, "fixture-kubeconfig")+" --context fixture-context --namespace builders") {
 			t.Fatal(call)
 		}
 	}
@@ -109,8 +109,8 @@ func TestSweepRetiresEveryConnection(t *testing.T) {
 	}
 	root := t.TempDir()
 	builder := builderName(host, root)
-	old := Config{Kubeconfig: "old-kubeconfig", Context: "old-context", Namespace: "old-builders"}
-	current := Config{Kubeconfig: "new-kubeconfig", Context: "new-context", Namespace: "new-builders"}
+	old := Config{Kubeconfig: filepath.Join(state, "old-kubeconfig"), Context: "old-context", Namespace: "old-builders"}
+	current := Config{Kubeconfig: filepath.Join(state, "new-kubeconfig"), Context: "new-context", Namespace: "new-builders"}
 	offline := true
 	var calls []string
 	runner := Runner{StateDir: state, Command: func(_ context.Context, _ io.Reader, _ io.Writer, args ...string) error {
