@@ -176,3 +176,46 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 		t.Fatalf("serve --clear again: %q, %v", out, err)
 	}
 }
+
+func TestServeAcceptsItems(t *testing.T) {
+	for _, item := range []string{"example/tool", "investigate build failures", "example/tool#42"} {
+		t.Run(item, func(t *testing.T) {
+			a, store := serveApp(t)
+			out, err := serve(a, rosterName, item, "--waits", "review")
+			want := `"BK worker" serves ` + item + ", waiting on review"
+			if err != nil || !strings.Contains(out, want) {
+				t.Fatalf("serve: %q, %v; want %q", out, err, want)
+			}
+			st, err := store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Records) != 1 || st.Records[0].Issue != item || st.Records[0].Waits != "review" {
+				t.Fatalf("records: %+v", st.Records)
+			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := printedRecords(st, sessions); !strings.Contains(got, want) {
+				t.Errorf("listing: %q; want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestServeRejectsEmptyItems(t *testing.T) {
+	for _, item := range []string{"", " \t\n"} {
+		a, store := serveApp(t)
+		if _, err := serve(a, rosterName, item); err == nil || !strings.Contains(err.Error(), "served item must not be empty") {
+			t.Fatalf("serve(%q): %v", item, err)
+		}
+		st, err := store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Records) != 0 {
+			t.Fatalf("empty item recorded: %+v", st.Records)
+		}
+	}
+}
