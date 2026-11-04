@@ -56,3 +56,37 @@ func TestRelativeGlobPatternRespectsSandbox(t *testing.T) {
 		t.Fatal("a parent-relative Glob pattern escaped the sandbox's readable directories")
 	}
 }
+
+func TestGlobBracePatternsRespectTranscripts(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Hook{Transcripts: TranscriptAccess{
+		Roots:   []string{filepath.Join(workspace, "private")},
+		Managed: func(string) (bool, error) { return true, nil },
+	}}
+	for _, tc := range []struct {
+		pattern string
+		deny    bool
+	}{
+		{"{private,public}/record.jsonl", true},
+		{"{private,public}/**/*.jsonl", true},
+		{"public/{one,two}/record.jsonl", false},
+	} {
+		for _, absolute := range []bool{false, true} {
+			pattern := tc.pattern
+			if absolute {
+				pattern = filepath.Join(workspace, pattern)
+			}
+			t.Run(pattern, func(t *testing.T) {
+				ev := toolEvent(globTool, map[string]any{pathKey: workspace, patternKey: pattern})
+				ev["cwd"] = workspace
+				d := decideEvent(t, h, ev)
+				if got := d != nil && d.PermissionDecision == decisionDeny; got != tc.deny {
+					t.Errorf("transcript policy denied = %v, want %v", got, tc.deny)
+				}
+			})
+		}
+	}
+}
