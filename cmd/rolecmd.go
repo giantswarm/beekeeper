@@ -195,7 +195,7 @@ func (a *app) titleRun(ctx context.Context, me state.Party, name string) string 
 		}
 		return ""
 	}
-	if was := title(); was == "" || was == name {
+	if title() == name {
 		return ""
 	}
 	// Not the caller itself: it is in this turn, so a request to it would

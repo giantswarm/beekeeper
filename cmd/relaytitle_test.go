@@ -1,0 +1,53 @@
+package cmd
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+func TestRelayKeepsRunNameAfterDesktopCLIRestarts(t *testing.T) {
+	for _, title := range []string{"Guide", "Supervisor"} {
+		t.Run(title, func(t *testing.T) {
+			rl := guideRole
+			rl.title = title
+			out := state.Party{Session: "old", Name: rl.runName(79)}
+			next := state.Party{Session: "next", HostSession: "local_next", Name: rl.runName(80)}
+			st := &state.State{}
+			rl.set(st, state.Role{Holder: &state.Supervisor{Party: out, Since: relayNow.Add(-time.Hour)}, Run: 79})
+			if _, _, err := rl.relay(st, out, next, relayNow, time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := rl.start(st, next, true, false, relayNow); err != nil {
+				t.Fatal(err)
+			}
+			for i, name := range []string{next.Name, "workspace-12", "", "workspace-13"} {
+				sessions := []*claude.Session{{PID: 100 + i, ID: next.Session, HostID: next.HostSession, Name: name}}
+				_, evs := rl.observeCLI(st, sessions, relayNow.Add(time.Duration(i)*time.Second))
+				r := rl.get(st)
+				if r.Holder.Name != next.Name || r.CLI.Supervisor.Name != next.Name {
+					t.Fatalf("restart lost run name: %+v", r)
+				}
+				for _, ev := range evs {
+					if strings.HasSuffix(ev.Verb, ".rename") {
+						t.Fatalf("restart renamed holder: %+v", ev)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestTitleRunRestoresAnEmptyDesktopTitle(t *testing.T) {
+	a, _ := supervisorApp(t)
+	// No desktop steward is available: an empty title must still attempt
+	// restoration and report the failure instead of silently skipping it.
+	line := a.titleRun(context.Background(), state.Party{Session: "missing", Name: "Guide run 80"}, "Guide run 80")
+	if !strings.Contains(line, "the desktop recorded no title") {
+		t.Fatalf("empty title was not restored: %q", line)
+	}
+}
