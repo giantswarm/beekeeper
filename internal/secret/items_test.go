@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+const opItemCommand = "item"
+
 // The listing answers titles and field labels with their lengths, never a
 // value, also in its JSON form.
 func TestItemsAnswerTitlesFieldsAndLengthsOnly(t *testing.T) {
@@ -125,7 +127,7 @@ func TestItemsKeyPatternAcrossLargeVault(t *testing.T) {
 	o := ops(tools)
 	var active, peak atomic.Int32
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if len(args) > 1 && args[0] == "item" && args[1] == "get" {
+		if len(args) > 1 && args[0] == opItemCommand && args[1] == "get" {
 			n := active.Add(1)
 			defer active.Add(-1)
 			for p := peak.Load(); n > p; p = peak.Load() {
