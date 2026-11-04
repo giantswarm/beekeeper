@@ -2146,12 +2146,10 @@ func (w *watcher) noteAnswers(st *state.State) {
 	}
 }
 
-// refusals says each command the upstream guard refused since the last
-// reading, by whom and to which repository: the supervisor finds out what
-// the session was about to write and why it tried. The first reading is the
-// baseline and says none.
+// refusals reports upstream refusals and recovered hook panics since the
+// last reading. The first reading establishes a baseline and says none.
 func (w *watcher) refusals() {
-	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused })
+	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
 	if err != nil {
 		return // the next reading reads them again
 	}
@@ -2163,6 +2161,10 @@ func (w *watcher) refusals() {
 	for _, e := range evs {
 		if e.At.After(since) {
 			w.refusedSince = e.At
+			if e.Verb == "hook.panic" {
+				w.emitNow("hook.panic", "HOOK PANIC %s", truncate(e.Detail, 400))
+				continue
+			}
 			w.emitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), truncate(e.Detail, 400))
 		}
 	}

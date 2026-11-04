@@ -1243,14 +1243,15 @@ func (h *Hook) beginCheck(name string) {
 }
 
 func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
-	if recover() == nil {
+	value := recover()
+	if value == nil {
 		return
 	}
 	check := "PreToolUse"
 	if h.check != nil {
 		check = *h.check
 	}
-	stack := debug.Stack()
+	stack := append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
 	if h.Panic != nil {
 		h.Panic(check, stack)
