@@ -1122,8 +1122,16 @@ type Emergency struct {
 	Until  time.Time `json:"until"`
 }
 
+// Handover protects the outgoing session while the owning CLI moves its work.
+// PID lets readers ignore a mark left by a crashed handover.
+type Handover struct {
+	Party
+	PID int `json:"pid"`
+}
+
 // State is the whole document.
 type State struct {
+	Handovers         []Handover `json:"handovers,omitempty"`
 	Emergency         *Emergency `json:"emergency,omitempty"`
 	AutoInstallPaused bool       `json:"autoInstallPaused,omitempty"`
 	// LabIdle records when a configured kind lab was first seen unleased.
@@ -1609,21 +1617,23 @@ type Merge struct {
 // marks a merge stopped before devctl reported its end, whose outcome is
 // its pull request's state on GitHub (Repo, PR), Command and Stop naming
 // the command and its stop. Tried is when a hand-over was last claimed, Why
-// why the last one failed.
+// why the last one failed. Cancelled distinguishes a requested stop from a
+// crash, so recovery never asks the owner to rerun a cancelled command.
 type Owed struct {
-	Owner   Party     `json:"owner"`
-	Line    string    `json:"line"`
-	Ask     bool      `json:"ask,omitempty"`
-	Repo    string    `json:"repo,omitempty"`
-	PR      int       `json:"pr,omitempty"`
-	Command string    `json:"command,omitempty"`
-	Stop    string    `json:"stop,omitempty"`
-	Gate    int       `json:"gate,omitempty"`
-	Child   int       `json:"child"`
-	Heard   string    `json:"heard,omitempty"`
-	Since   time.Time `json:"since"`
-	Tried   time.Time `json:"tried,omitzero"`
-	Why     string    `json:"why,omitempty"`
+	Cancelled bool      `json:"cancelled,omitempty"`
+	Owner     Party     `json:"owner"`
+	Line      string    `json:"line"`
+	Ask       bool      `json:"ask,omitempty"`
+	Repo      string    `json:"repo,omitempty"`
+	PR        int       `json:"pr,omitempty"`
+	Command   string    `json:"command,omitempty"`
+	Stop      string    `json:"stop,omitempty"`
+	Gate      int       `json:"gate,omitempty"`
+	Child     int       `json:"child"`
+	Heard     string    `json:"heard,omitempty"`
+	Since     time.Time `json:"since"`
+	Tried     time.Time `json:"tried,omitzero"`
+	Why       string    `json:"why,omitempty"`
 
 	rest rest
 }
