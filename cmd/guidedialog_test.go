@@ -32,7 +32,7 @@ const (
 	pastGuideHost = "local_guide15"
 )
 
-func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
+func TestGuideDialogSelectionIsAttributedOnlyForItsNote(t *testing.T) {
 	for _, tc := range []struct {
 		name, session, words string
 		choice               int
@@ -74,15 +74,12 @@ func TestGuideDialogSelectionVerifiesOnlyForItsNote(t *testing.T) {
 			if err := a.recordAnswer(t.Context(), privateThread, 1, tc.choice, viaCLI, tc.words, false); err != nil {
 				t.Fatal(err)
 			}
-			v, _, err := a.answerAccount(answerQuery{Note: 1, About: privateThread, Head: verifyHead})
-			if err != nil {
-				t.Fatal(err)
+			got, err := a.answeredSince(a.now.Add(-time.Hour))
+			if err != nil || len(got) != 1 {
+				t.Fatalf("answers: %+v, %v", got, err)
 			}
-			if v.Verified != tc.want {
-				t.Fatalf("verified=%v want %v: %+v", v.Verified, tc.want, v)
-			}
-			if tc.want && (!strings.Contains(v.Strength, "question dialog") || v.Channel != "guide_dialog") {
-				t.Fatalf("no dialog provenance %+v", v)
+			if (got[0].Via == channelGuideDialog) != tc.want {
+				t.Fatalf("dialog attribution: %+v", got[0])
 			}
 		})
 	}
@@ -174,13 +171,6 @@ func TestGuideDialogKeepsSelectedOptionAndNotesVerbatim(t *testing.T) {
 			}
 			if len(*woke) != 1 || !strings.Contains((*woke)[0], ": "+wantFull+" (on o/private#7)") {
 				t.Fatalf("woke = %q, want %q", *woke, wantFull)
-			}
-			v, _, err := a.answerAccount(answerQuery{Note: 1, About: privateThread, Head: verifyHead})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !v.Verified || v.Channel != "guide_dialog" {
-				t.Fatalf("verified=%v channel=%q: %+v", v.Verified, v.Channel, v)
 			}
 		})
 	}

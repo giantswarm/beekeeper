@@ -663,7 +663,7 @@ worker for repair and another green published head. A restart reads GitHub befor
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
-around queue validation. Merge goes never go through `answer verify`.
+around queue validation. Merge goes come from the supervisor loop.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.

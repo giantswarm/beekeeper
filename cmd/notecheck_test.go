@@ -292,3 +292,34 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 		t.Fatalf("an added note records its plan at the grill stage or ready for review, neither a merged one, a refused note's nor a folded one's: %q, want %q", plans, want)
 	}
 }
+
+func TestMergePermissionNeverFilesPersonNote(t *testing.T) {
+	for _, question := range []string{"Merge?", "May I merge this PR?", "Should we merge now?", "Please approve the merge", "Can you merge this?", "Confirm merging the reviewed PR", "Ready to merge?", "Give permission to merge", "Merge needs your approval"} {
+		t.Run(question, func(t *testing.T) {
+			a, _ := noteApp(t)
+			err := addNote(a, "--for", notePerson, "--ref", "o/r#7", question)
+			if Code(err) != ExitUsage || !strings.Contains(err.Error(), "supervisor loop merges") {
+				t.Fatalf("merge permission was not refused: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Notes) != 0 {
+				t.Fatalf("person received merge note: %+v", st.Notes)
+			}
+		})
+	}
+}
+
+func TestAnswerVerificationInterfacesRemoved(t *testing.T) {
+	a, _ := noteApp(t)
+	if a.answerCmd().Flags().Lookup("via") != nil {
+		t.Fatal("answer still accepts channel provenance")
+	}
+	for _, c := range a.answerCmd().Commands() {
+		if c.Name() == "verify" {
+			t.Fatal("answer verification still registered")
+		}
+	}
+}

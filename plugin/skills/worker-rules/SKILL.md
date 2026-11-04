@@ -24,3 +24,5 @@ One task; stricter desk rules win.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
 
 Load first: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
+
+A reviewed PR with fixes and green CI is ready for the supervisor loop. Report it ready to the loop; never file a note asking the person to approve, confirm or authorise a merge. The loop merges after one desk review and its fixes, with one review per head.

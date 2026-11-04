@@ -36,6 +36,16 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 		return "", 0
 	}
 	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Fatalf("merge created a person note: %+v", st.Notes)
+	}
+	if len(r.logged(t, "note.added")) != 0 {
+		t.Fatal("merge asked a person")
+	}
 	var merged bool
 	for _, argv := range r.cmds {
 		if len(argv) > 3 && argv[0] == "gh" && argv[1] == "pr" && argv[2] == superloop.KindMerge {

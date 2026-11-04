@@ -106,7 +106,7 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	for _, args := range [][]string{
 		{verbAnswer, "1", flagChoice, "2", "if", "CI", "is", "green"},
 		{verbAnswer, "2", flagChoice, "1"},
-		{verbAnswer, "3", flagVia, "slack", "neither, ask Kim"},
+		{verbAnswer, "3", "neither, ask Kim"},
 	} {
 		if _, err := noteCommand(a, args...); err != nil {
 			t.Fatalf("%q: %v", args, err)

@@ -358,3 +358,6 @@ func closeProbed(st *state.State, passed []int) ([]string, []state.Event) {
 	})
 	return lines, evs
 }
+
+// mergePermission catches requests to put the supervisor's merge decision to a person.
+var mergePermission = regexp.MustCompile(`(?i)(^(please\s+)?merge\b|\b(may|can|should|shall|could)\s+(i|we|you|the loop|the supervisor)\s+merge\b|\b(approve|confirm|authori[sz]e|permit|allow)\b.*\bmerg(e|ing)\b|\b(go ahead|ready|permission|approval|consent)\b.*\bmerg(e|ing)\b|\bmerg(e|ing)\b.*\b(approval|permission|consent)\b|\bmerge\s*\?)`)

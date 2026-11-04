@@ -186,6 +186,9 @@ public, costly or reserved for them) reaches them.`,
 			case draft.Kind != noteLogin && draft.Until != "":
 				return usageErr("--until is a login's: --kind login")
 			}
+			if draft.Kind == noteDecision && mergePermission.MatchString(draft.Question) {
+				return usageErr("the supervisor loop merges after desk review and fixes with green CI; report the PR ready to the loop")
+			}
 			n.Kind, draft.Due = draft.Kind, due
 			if holds {
 				switch {
@@ -424,15 +427,14 @@ notes' only.`,
 	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
 	done.MarkFlagsMutuallyExclusive("reason", "overtaken")
 	var choice int
-	var via string
+	via := viaCLI
 	var post bool
 	answer := &cobra.Command{
 		Use:   "answer <id> [<answer>]",
 		Short: "Record a person's answer to a note, word for word, and close it",
 		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
 answer is --choice <n>, one of its options (1-based), the person's own
-words (at most 3000 characters), or both, with the way it came (--via, cli unless it came from
-Slack). It is logged as answer.recorded and the note closed; the session
+words (at most 3000 characters), or both. It is logged as answer.recorded and the note closed; the session
 that filed it is told at once. A decision its default closed within the
 last day is answered all the same: the answer replaces the default.
 Nothing is posted to GitHub unless --post (as beekeeper answer says). A note a role's run filed (the
@@ -491,7 +493,6 @@ naming both. --post is the machine's notes' only.`,
 		},
 	}
 	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
-	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool

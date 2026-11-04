@@ -21,15 +21,14 @@ const answerRecorded = "answer.recorded"
 // answerCmd records a person's words for the session that asked.
 func (a *app) answerCmd() *cobra.Command {
 	var noteID, choice int
-	var via string
+	via := viaCLI
 	var post bool
 	c := &cobra.Command{
 		Use:   "answer <owner/repo#n|URL> [<words>]",
 		Short: "Record a person's answer, word for word, for the session it concerns",
-		Long: `Record the person's words verbatim, however they came (--via cli or
-slack), about the issue or pull request they concern: answer.recorded is
+		Long: `Record the person's words verbatim, however they came, about the issue or pull request they concern: answer.recorded is
 logged with the thread, the words and the channel they came through, which
-beekeeper sets from where it runs (answer verify): one recorded from
+beekeeper sets from where it runs: one recorded from
 inside an agent session is relayed, except a local guide dialog selection
 bound by its completed tool result to this note and session. The session
 told names any relay; --note <id> closes that note
@@ -65,9 +64,7 @@ The hand-over's answers and note add's re-ask warning read answer.recorded
 	}
 	c.Flags().IntVar(&noteID, "note", 0, "the note the answer answers: it closes, its filer is told")
 	c.Flags().IntVar(&choice, "choice", 0, "the note's option chosen, 1-based")
-	c.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
 	c.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
-	c.AddCommand(a.answerVerifyCmd())
 	return c
 }
 

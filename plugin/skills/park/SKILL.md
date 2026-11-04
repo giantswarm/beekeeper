@@ -20,3 +20,5 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
 - **Before the turn ends**, `beekeeper sessions serve "<name>" <owner/repo#n> --waits "<what>"`
   carries the new wait, and nothing is left
   running. A park is not the report: `agents idle --done --report` comes when the task is finished.
+
+A reviewed PR with fixes and green CI is ready for the supervisor loop. Report it ready to the loop; never file a note asking the person to approve, confirm or authorise a merge. The loop merges after one desk review and its fixes, with one review per head.

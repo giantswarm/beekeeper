@@ -153,7 +153,7 @@ func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := runAnswer(a, privateThread, "--via", viaSlack, "yes"); err != nil {
+	if err := runAnswer(a, privateThread, "yes"); err != nil {
 		t.Fatal(err)
 	}
 	if s := out.String(); !strings.Contains(s, "no session serves o/private#7: the answer is in the log") || len(*woke) != 1 || len(f.comments) != 0 {
