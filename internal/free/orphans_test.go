@@ -45,15 +45,15 @@ func TestOrphanWorkerArguments(t *testing.T) {
 		want bool
 	}{
 		{"empty", nil, false},
-		{"worker basename", []string{"node", "jest-worker"}, true},
-		{"runtime option", []string{"node", "--max-old-space-size=256", orphanChildScript}, true},
-		{"option terminator", []string{"node", "--", orphanChildScript}, true},
-		{"eval", []string{"node", "-e", orphanChildScript}, false},
-		{"print", []string{"node", "--print", "jest-worker"}, false},
-		{"option value", []string{"node", "--require", orphanChildScript, orphanApp}, false},
-		{"script argument", []string{"node", orphanApp, orphanChildScript}, false},
-		{"script suffix", []string{"node", "processChild.js.backup"}, false},
-		{"directory", []string{"node", "/jest-worker/app.js"}, false},
+		{"worker basename", []string{litNode, "jest-worker"}, true},
+		{"runtime option", []string{litNode, "--max-old-space-size=256", orphanChildScript}, true},
+		{"option terminator", []string{litNode, "--", orphanChildScript}, true},
+		{"eval", []string{litNode, "-e", orphanChildScript}, false},
+		{"print", []string{litNode, "--print", "jest-worker"}, false},
+		{"option value", []string{litNode, "--require", orphanChildScript, orphanApp}, false},
+		{"script argument", []string{litNode, orphanApp, orphanChildScript}, false},
+		{"script suffix", []string{litNode, "processChild.js.backup"}, false},
+		{"directory", []string{litNode, "/jest-worker/app.js"}, false},
 		{"other executable", []string{orphanPython, orphanChildScript}, false},
 		{"headless brief", []string{"claude", "-p", "claude --output-format stream-json"}, false},
 		{"joined argument", []string{"claude --output-format stream-json"}, false},
@@ -70,12 +70,12 @@ func TestOrphansRetainGuards(t *testing.T) {
 	for _, guard := range []string{"parent", "age", "uid", "dry run"} {
 		t.Run(guard, func(t *testing.T) {
 			r, _ := newRun(t, Options{Apply: true, Only: []string{Orphans}, Orphan: 30 * time.Minute})
-			p := &proc.Process{PID: 20, PPID: 1, Args: []string{"node", orphanChildScript}, Start: now.Add(-time.Hour)}
+			p := &proc.Process{PID: 20, PPID: 1, Args: []string{litNode, orphanChildScript}, Start: now.Add(-time.Hour)}
 			r.Table.ByPID[p.PID] = p
 			switch guard {
 			case "parent":
 				p.PPID = 2
-				r.Table.ByPID[2] = &proc.Process{PID: 2, Comm: "node"}
+				r.Table.ByPID[2] = &proc.Process{PID: 2, Comm: litNode}
 			case "age":
 				p.Start = now.Add(-time.Minute)
 			case "uid":
