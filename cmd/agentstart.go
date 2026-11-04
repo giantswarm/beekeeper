@@ -107,7 +107,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var nameFlag, model, dir, task, harness, mode, choiceLine string
-	var host, repository, gitRef, effortLevel string
+	var host, repository, gitRef, effortLevel, branch string
 	var exclude []string
 	var desktop, builds, force, dryRun, review, ofSelfHosted bool
 	c := &cobra.Command{
@@ -190,6 +190,15 @@ A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
+
+A worker start requires --dir to name exactly one main repository checkout
+and --branch to name a new branch. Parent folders and linked worktrees are
+refused with the available checkout paths. The session starts in the checkout
+so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
+created from the freshly fetched origin default branch. A --review start
+instead requires a pull request URL in its brief and creates a detached
+<state>/worktrees/<repo>/review-<number>. Existing destinations are refused.
+A brief spanning repositories must be split into one task per repository.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -387,8 +396,18 @@ work, which takes no choice on a self-hosted provider.`,
 			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
 				return err
 			}
+			dir, err = a.startCheckout(dir)
+			if err != nil {
+				return err
+			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
+				return err
+			}
+			if err := singleTaskRepository(brief); err != nil {
+				return err
+			}
+			if _, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true); err != nil {
 				return err
 			}
 			// The timer whose command runs this start, from its
@@ -477,7 +496,11 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				rules, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true)
+				if err != nil {
+					return err
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -487,6 +510,7 @@ work, which takes no choice on a self-hosted provider.`,
 			origHarness, origModel := harness, model
 			autoPick := origHarness == harnessAuto
 			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			worktreeRules := ""
 			var timerLine string
 			for {
 				gateFrom := time.Now()
@@ -556,7 +580,13 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+				if worktreeRules == "" {
+					worktreeRules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, false)
+					if err != nil {
+						return err
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
 				if byTimer {
 					if timerLine == "" {
 						var err error
@@ -593,6 +623,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&effortLevel, "effort", "", "session effort: low, medium, high, xhigh, max (default: task kind, else harness default)")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&branch, "branch", "", "new worker branch, created from the freshly fetched origin default branch")
 	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
