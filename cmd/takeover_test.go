@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -199,5 +200,68 @@ func TestCollectorApprovals(t *testing.T) {
 	}
 	if ss := c.withApprovals([]tui.Session{{Name: tBeeName, ID: tTakenSession}}); ss[0].TakenOver {
 		t.Error("a released session still shows taken over")
+	}
+}
+
+func TestRestartedCollectorApprovals(t *testing.T) {
+	a, _ := stubApp(t)
+	st := &state.State{Starts: []state.Start{restartedStart("/w", sonnetModel)}}
+	v := &view{st: st, Sessions: []*sessionView{{Session: &claude.Session{ID: restartedCLI, HostID: restartHost}}}}
+	c := &collector{a: a}
+	sessions := func() []tui.Session { return c.withApprovals(uiSessions(v, nil)) }
+	if got := sessions()[0]; got.ID != restartedCLI || got.ApprovalAlias != firstCLI || got.TakenOver {
+		t.Fatalf("restarted pane: %+v", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir := c.takeoverDir()
+	done := make(chan bool, 2)
+	hold := func(key, id string, at time.Time) {
+		t.Helper()
+		if err := takeover.Take(dir, key, takeover.Flag{PID: os.Getpid()}); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			d, ok, err := takeover.Hold(ctx, dir, takeover.Request{Session: key, ID: id, Tool: tToolBash, At: at}, func(int) bool { return true }, time.Millisecond)
+			done <- ok && err == nil && d.Behavior == takeover.Allow
+		}()
+	}
+	wait := func(n int) tui.Session {
+		t.Helper()
+		for range 1000 {
+			s := sessions()[0]
+			if len(s.Approvals) == n {
+				return s
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatal("held requests did not appear")
+		return tui.Session{}
+	}
+	hold(firstCLI, "old", time.Now().Add(-time.Minute))
+	s := wait(1)
+	if !s.TakenOver || s.Approvals[0].Session != firstCLI {
+		t.Fatalf("inherited request: %+v", s)
+	}
+	hold(restartedCLI, "new", time.Now())
+	s = wait(2)
+	if s.Approvals[0].ID != "old" || s.Approvals[1].ID != "new" {
+		t.Fatalf("request order: %+v", s.Approvals)
+	}
+	for _, ap := range s.Approvals {
+		if err := c.Answer(ctx, ap.Session, ap.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		if !<-done {
+			t.Fatal("answer did not reach its queue")
+		}
+	}
+	for _, key := range s.ApprovalKeys() {
+		if err := c.Release(ctx, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sessions()[0].TakenOver {
+		t.Fatal("release left a takeover")
 	}
 }

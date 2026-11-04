@@ -785,3 +785,32 @@ func TestLoadingBeforeFirstRefresh(t *testing.T) {
 func keyText(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(text)[0], Text: text}
 }
+
+func TestRestartedPaneApprovalRouting(t *testing.T) {
+	src := &fakeSource{data: fixtureData()}
+	src.data.Sessions[0].ID = "current"
+	src.data.Sessions[0].ApprovalAlias = "original"
+	src.data.Sessions[0].TakenOver = true
+	src.data.Sessions[0].Approvals = []Approval{{ID: "old", Session: "original", At: testAt, Gist: "held call"}}
+	m := newTestModel(t, src)
+	m.tickFn = func() tea.Cmd { return nil }
+	m.key(keyText("2"))
+	_, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	run(m, c)
+	_, c = m.key(keyText("a"))
+	run(m, c)
+	if len(src.answers) != 1 || src.answers[0] != "original/old allow" {
+		t.Fatalf("answers: %v", src.answers)
+	}
+	_, c = m.key(keyText("t"))
+	run(m, c)
+	if strings.Join(src.released, ",") != "current,original" {
+		t.Fatalf("released: %v", src.released)
+	}
+	src.released = nil
+	m.taken = map[string]bool{"current": true}
+	m.releaseAll()
+	if strings.Join(src.released, ",") != "current,original" {
+		t.Fatalf("quit released: %v", src.released)
+	}
+}

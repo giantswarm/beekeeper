@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -393,10 +394,13 @@ func (m *model) toggleTakeOver() tea.Cmd {
 	}
 	m.acting = true
 	id, name := s.ID, s.Name
+	keys := s.ApprovalKeys()
 	if s.TakenOver {
-		delete(m.taken, id)
+		for _, key := range keys {
+			delete(m.taken, key)
+		}
 		return func() tea.Msg {
-			if err := m.src.Release(m.ctx, id); err != nil {
+			if err := m.releaseApprovals(m.ctx, keys); err != nil {
 				return actMsg{err: err}
 			}
 			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
@@ -426,7 +430,10 @@ func (m *model) answer(allow bool) tea.Cmd {
 	if allow {
 		verb = "allowed"
 	}
-	id := s.ID
+	id := ap.Session
+	if id == "" {
+		id = s.ID
+	}
 	return func() tea.Msg {
 		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {
 			return actMsg{err: fmt.Errorf("%s: %w", ap.Gist, err)}
@@ -547,7 +554,16 @@ func (m *model) closeDetail() {
 // is closing.
 func (m *model) releaseAll() {
 	for id := range m.taken {
-		_ = m.src.Release(context.Background(), id)
+		keys := []string{id}
+		if m.data != nil {
+			for _, s := range m.data.Sessions {
+				if s.ID == id {
+					keys = s.ApprovalKeys()
+					break
+				}
+			}
+		}
+		_ = m.releaseApprovals(context.Background(), keys)
 	}
 	m.taken = nil
 }
@@ -666,4 +682,13 @@ func (m *model) screen() string {
 		h = 24
 	}
 	return render(m, w, h)
+}
+
+// releaseApprovals tries every queue even when one release fails.
+func (m *model) releaseApprovals(ctx context.Context, keys []string) error {
+	var errs []error
+	for _, key := range keys {
+		errs = append(errs, m.src.Release(ctx, key))
+	}
+	return errors.Join(errs...)
 }

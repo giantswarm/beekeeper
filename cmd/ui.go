@@ -269,15 +269,18 @@ func (c *collector) withApprovals(ss []tui.Session) []tui.Session {
 		if s.ID == "" {
 			continue
 		}
-		if _, ok := takeover.Taken(dir, s.ID, proc.Alive); !ok {
-			continue
+		for _, key := range s.ApprovalKeys() {
+			if _, ok := takeover.Taken(dir, key, proc.Alive); !ok {
+				continue
+			}
+			s.TakenOver = true
+			rs, _ := takeover.Pending(dir, key)
+			for _, r := range rs {
+				s.Approvals = append(s.Approvals, tui.Approval{Session: key, ID: r.ID, At: r.At,
+					Gist: claude.ToolGist(r.Tool, r.Input), Detail: inputLines(r.Input)})
+			}
 		}
-		s.TakenOver = true
-		rs, _ := takeover.Pending(dir, s.ID)
-		for _, r := range rs {
-			s.Approvals = append(s.Approvals, tui.Approval{ID: r.ID, At: r.At,
-				Gist: claude.ToolGist(r.Tool, r.Input), Detail: inputLines(r.Input)})
-		}
+		slices.SortStableFunc(s.Approvals, func(a, b tui.Approval) int { return a.At.Compare(b.At) })
 	}
 	return ss
 }
@@ -531,6 +534,11 @@ func uiSessions(v *view, waits map[string]string) []tui.Session {
 			PID: s.PID, ID: s.ID, Name: s.Name, Role: s.Role, Harness: s.Harness, State: s.State, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
 			Model: s.Model, Permission: s.Permission, Started: s.Started, LastActive: s.LastActive,
 			MemMiB: s.MemMiB, Leases: slices.Clone(s.Leases), Waits: waits[s.Name],
+		}
+		if v.st != nil {
+			if start, ok := v.st.BypassStartOf(state.Party{Session: s.ID, HostSession: s.HostID}); ok && start.Session != s.ID {
+				x.ApprovalAlias = start.Session
+			}
 		}
 		if s.Waiting != nil {
 			x.Waiting = s.Waiting.Action

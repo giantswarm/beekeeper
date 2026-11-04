@@ -252,6 +252,8 @@ type Session struct {
 	// GitHubProcesses are its gh and devctl processes now.
 	GitHubProcesses int
 	Merges          Merges
+	// ApprovalAlias is the original CLI queue inherited after a restart.
+	ApprovalAlias string
 	// TakenOver says a screen holds the session's approvals; Approvals
 	// are the requests held for it, oldest first.
 	TakenOver bool
@@ -260,8 +262,10 @@ type Session struct {
 
 // Approval is a permission request a taken-over session waits on.
 type Approval struct {
-	ID string
-	At time.Time
+	// Session is the queue holding this request.
+	Session string
+	ID      string
+	At      time.Time
 	// Gist is the call in one line ("Bash: Run the tests"), Detail its
 	// input, a line per field.
 	Gist   string
@@ -481,4 +485,13 @@ type Turn struct {
 	At   time.Time
 	Role string
 	Text string
+}
+
+// ApprovalKeys returns the current CLI and its inherited approval queue.
+func (s Session) ApprovalKeys() []string {
+	keys := []string{s.ID}
+	if s.ApprovalAlias != "" && s.ApprovalAlias != s.ID {
+		keys = append(keys, s.ApprovalAlias)
+	}
+	return keys
 }
