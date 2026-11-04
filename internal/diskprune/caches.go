@@ -78,11 +78,11 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 	}
 	var units []unit
 	if p.Files {
-		u, ok := scanFiles(p.Root, refs, &r)
+		u, ok := scanFiles(p.Root, refs, p.Nested, &r)
 		if !ok {
 			return r
 		}
-		units = slices.DeleteFunc(u, func(u unit) bool { return nestedIn(u.path, p.Nested) })
+		units = u
 	} else {
 		entries, err := os.ReadDir(p.Root)
 		if err != nil {
@@ -133,7 +133,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			r.Keep("process references unknown")
 			return r
 		}
-		if p.Files && InUse(p.Root, refs) {
+		if p.Files && filesInUse(p.Root, refs, p.Nested) {
 			r.Keep("in use")
 			return r
 		}
@@ -253,10 +253,24 @@ func removeFile(root *os.Root, base string, u unit) error {
 	return root.Remove(rel)
 }
 
-// scanFiles lists root's regular files. A reference or checkout anywhere in
-// root, or an unreadable subtree, keeps all of it (ok false).
-func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
-	if InUse(dir, refs) {
+// filesInUse checks references in this policy's domain. A nested policy
+// decides use of its own subtree independently.
+func filesInUse(dir string, refs, nested []string) bool {
+	if len(nested) == 0 {
+		return InUse(dir, refs)
+	}
+	for _, ref := range refs {
+		if !nestedIn(ref, nested) && InUse(dir, []string{ref}) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanFiles lists root's regular files outside nested policies. A reference,
+// checkout or unreadable subtree in this policy's domain keeps all of it.
+func scanFiles(dir string, refs, nested []string, r *CacheResult) ([]unit, bool) {
+	if filesInUse(dir, refs, nested) {
 		r.Keep("in use")
 		return nil, false
 	}
@@ -272,6 +286,12 @@ func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
 		if d.Name() == checkoutMetadata {
 			why = whyCheckout
 			return fs.SkipAll
+		}
+		if p != dir && nestedIn(p, nested) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if !d.Type().IsRegular() {
 			return nil
