@@ -40,7 +40,8 @@ var rules = []rule{
 		// A date on its own, not one inside a file name or a version.
 		regexp.MustCompile(`(^|[\s(\[])(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])($|[\s).,;:\]])`)},
 	{"until-ships", `a wait on something to ship: say what to do now, and change the line when it ships`,
-		regexp.MustCompile(`(?i)\buntil\b[^.;\n]{1,120}?\b(ships|shipped|lands|landed|merges|is merged|is released|is fixed|is installed|is out|is live|goes live)\b`)},
+		// A period before a word character belongs to a version or dotted name.
+		regexp.MustCompile(`(?i)\buntil\b(?:[^.;\n]|\.\b){1,120}?\b(ships|shipped|lands|landed|merges|is merged|is released|is fixed|is installed|is out|is live|goes live)\b`)},
 	{"fixed-in", "a note on the release that changed something: describe the behaviour, not its history",
 		regexp.MustCompile(`(?i)\(\s*(beekeeper |devctl )?` + versionRe + `\s*:|\b(since|as of|starting with|fixed in) (beekeeper |devctl )?` + versionRe)},
 	{"workaround", "a workaround: once the fix ships the line is wrong; describe the way that works",
