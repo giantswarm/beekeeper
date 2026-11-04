@@ -210,13 +210,17 @@ func Binary(t *testing.T, endpoint, token string) (bin, tokenFile string) {
 		t.Fatal(err)
 	}
 	bin = filepath.Join(dir, "muster")
+	// The client reads only endpoint from context show. Encode it before
+	// quoting shell arguments, and keep data out of printf's format string.
+	contextJSON, _ := json.Marshal(map[string]string{"endpoint": endpoint})
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
-context) printf '{"name":"%%s","endpoint":"%s"}' "$3" ;;
-auth) cat '%s' ;;
+context) printf '%%s' %s ;;
+auth) cat %s ;;
 *) echo "unknown command $1" >&2; exit 1 ;;
 esac
-`, endpoint, tokenFile)
+`, quote(string(contextJSON)), quote(tokenFile))
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable under the test's temporary folder
 		t.Fatal(err)
 	}
