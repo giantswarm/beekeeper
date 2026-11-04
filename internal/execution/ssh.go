@@ -239,7 +239,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		if (op == inspectOperation || op == syncControlOperation || op == stopOperation) && (reply.Code == "not-found" || (reply.Code == "" && missingJournalError(ref, reply.Error))) {
 			return ErrNotFound
 		}
-		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
+		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation || op == retireOperation) && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
 		}
 		return errors.New(reply.Error)

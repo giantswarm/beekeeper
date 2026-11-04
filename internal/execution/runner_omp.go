@@ -71,8 +71,11 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 	}
 	defer stream.Close()
 	stream.encode = ompMessage
-	env, err := s.GitHubEnvironment(j, append(s.toolPath(s.ompEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath))
+	env, err := s.ownedEnvironment(j, append(s.toolPath(s.ompEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath))
 	if err != nil {
+		return err
+	}
+	if env, err = s.GitHubEnvironment(j, env); err != nil {
 		return err
 	}
 	c := exec.CommandContext(ctx, h.Executable, s.ompArgs(j.Request.Model)...) //nolint:gosec // pinned harness and typed arguments

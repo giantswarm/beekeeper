@@ -522,8 +522,55 @@ a process does not mark its task complete or remove its workspace.
 Inspection, including acknowledgement of a lease-expired unit, also preserves
 the workspace, its execution-owned Git repository and source bundle. Recover
 unpublished commits and local edits at the workspace path printed by `inspect`;
-stopping and repeating a stop do not authorize deletion. These retained files
-continue to consume disk until separately preserved and deliberately removed.
+stopping and repeating a stop do not authorize deletion.
+
+### Retirement
+
+The coordinator ends what an execution left through one resumable retirement.
+A final report, a stop, a failed start and a crash all enter it; the watch
+advances it, each execution on its own backoff, and records it under the
+execution's `retirement`. A parked worker, an open desk review or a finished
+round of an unfinished task does not enter it: the worktree and thread stay.
+
+The execution's inventory is in its host journal under `resources`, recorded
+before the resources exist: the worktree, its repository and branch, scratch,
+temporary files, caches, Go module and toolchain downloads, source bundle and
+credential dispatch directory. Workers run with `TMPDIR`, `XDG_CACHE_HOME`,
+`GOCACHE`, `GOPATH` and `GOMODCACHE` inside `<workspaceRoot>/<execution>`, so
+each build starts from a cold cache and leaves nothing in the host's home. Shared
+provisioned sources and toolchains are never part of an inventory, and an
+inventory naming anything but its own execution's paths refuses.
+
+1. **Revocation** runs first and on its own: neither an unreachable host nor a
+   GitHub outage blocks the other, and only a success records `revokedAt`. A
+   failure keeps `revokeError` and retries with `nextAttempt`.
+2. **Preservation** waits until the owned unit is confirmed ended, the log reached
+   the transcript store and no publication needs the execution. Commits, including
+   those only reflogs still reach, edits and untracked files that the starting
+   commit does not hold become one recovery commit, recorded as `refs/beekeeper/recovery/<execution>/<generation>` and
+   written as a verified bundle to `<state>/recovery/<execution>-<generation>.bundle`.
+   Work that cannot be read fails the step and everything stays in place.
+3. **Moving aside** renames `<workspaceRoot>/<execution>` to
+   `<workspaceRoot>/.retired/<execution>-<generation>`, and the source and
+   credential directories to `retired/<execution>-<generation>` beside the
+   journal. Nothing is deleted. A symlinked resource or parent, or one
+   overlapping a provisioned path, refuses and stays in place.
+
+The journal, log and control receipts stay as evidence, and so does the published
+branch. `retention` under `agents.execution` (a Go duration, default `168h`)
+sets `retainUntil` on the retired resources; nothing removes them yet.
+
+To recover preserved work, fetch the bundle into a clone holding its base commit:
+
+```bash
+git fetch <state>/recovery/<execution>-<generation>.bundle \
+  refs/beekeeper/recovery/<execution>/<generation>:refs/heads/recovered
+```
+
+Files ignored by Git are not in the bundle; they stay in the moved-aside tree. Its
+worktree link is stale after the move: run `git worktree repair` from the moved
+repository before using it. A desk stop holds the host's part until it is lifted
+and never holds revocation.
 
 Capped runs verify their worker identity, installed policy and live coordinator
 authority before taking a slot. Their scopes stop with the verified owned
