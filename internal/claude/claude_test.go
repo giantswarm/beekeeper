@@ -159,7 +159,7 @@ func TestParseTurn(t *testing.T) {
 		text string
 	}{
 		{`{"type":"assistant","timestamp":"2026-09-24T19:00:00Z","message":{"content":[{"type":"text","text":"merged 12"},{"type":"tool_use","name":"Bash"}]}}`, true, "assistant", "merged 12"},
-		{`{"type":"user","message":{"content":"merge now 12"}}`, true, "user", "merge now 12"},
+		{`{"type":"user","message":{"content":"merge now 12"}}`, true, roleUser, "merge now 12"},
 		{`{"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]}}`, false, "", ""},
 		{`{"type":"user","isMeta":true,"message":{"content":"meta"}}`, false, "", ""},
 		{`{"type":"summary"}`, false, "", ""},

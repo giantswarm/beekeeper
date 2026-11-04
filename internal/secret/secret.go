@@ -100,6 +100,15 @@ type Ops struct {
 // in time fails like a locked vault, never hangs the caller.
 const opTimeout = time.Minute
 
+// toolExitError keeps the process status available without changing the safe message.
+type toolExitError struct {
+	error
+	message string
+}
+
+func (e toolExitError) Error() string { return e.message }
+func (e toolExitError) Unwrap() error { return e.error }
+
 // Exec is the Runner of the real tools, found on PATH or in the Go tool
 // directories (proc.LookPath): the sandbox broker's calls run with the
 // service manager's PATH, without the directory kind lives in.
@@ -120,7 +129,7 @@ func Exec(ctx context.Context, dir string, env []string, stdin io.Reader, name s
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return nil, fmt.Errorf("%s: exit %d (%s)", name, ee.ExitCode(), guard.Message(stderr.String()))
+			return nil, toolExitError{err, fmt.Sprintf("%s: exit %d (%s)", name, ee.ExitCode(), guard.Message(stderr.String()))}
 		}
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
