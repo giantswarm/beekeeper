@@ -22,7 +22,7 @@ func TestSchedulerIntervals(t *testing.T) {
 		{"supervisor.loopInterval", "supervisor: {loopInterval: VALUE}", func(c *Config) time.Duration { return c.Supervisor.LoopInterval.Duration }, 30 * time.Second},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
-			for _, value := range []string{"-1s", "0s", "2s"} {
+			for _, value := range []string{negativeSecond, "0s", "2s"} {
 				t.Run(value, func(t *testing.T) {
 					p := writeConfig(t, strings.ReplaceAll(tc.raw, "VALUE", value))
 					c, err := Load(p)
@@ -30,7 +30,7 @@ func TestSchedulerIntervals(t *testing.T) {
 					if checkErr != nil {
 						t.Fatal(checkErr)
 					}
-					if value == "-1s" {
+					if value == negativeSecond {
 						if err == nil || !strings.Contains(err.Error(), tc.key+":") {
 							t.Errorf("Load error = %v; want key %s", err, tc.key)
 						}
@@ -55,7 +55,7 @@ func TestSchedulerIntervals(t *testing.T) {
 					const original = "# preserve this file\ngrantTTL: 20m\n"
 					target := writeConfig(t, original)
 					setConfig, setErr := Set(target, []Setting{{tc.key, value}})
-					if value == "-1s" {
+					if value == negativeSecond {
 						if !errors.Is(setErr, ErrInvalid) || !strings.Contains(setErr.Error(), tc.key+":") {
 							t.Errorf("Set error = %v; want ErrInvalid and key %s", setErr, tc.key)
 						}
@@ -80,12 +80,12 @@ func TestSchedulerIntervals(t *testing.T) {
 func TestSchedulerValidationPreservesDisableSentinels(t *testing.T) {
 	settings := []Setting{
 		{"capacity.usage.command", "[echo]"},
-		{"watch.batchInterval", "-1s"},
-		{"board.tidyEvery", "-1s"},
-		{"board.escalateEvery", "-1s"},
-		{"doctor.freeEvery", "-1s"},
-		{"doctor.worktreesEvery", "-1s"},
-		{"capacity.usage.reportEvery", "-1s"},
+		{"watch.batchInterval", negativeSecond},
+		{"board.tidyEvery", negativeSecond},
+		{"board.escalateEvery", negativeSecond},
+		{"doctor.freeEvery", negativeSecond},
+		{"doctor.worktreesEvery", negativeSecond},
+		{"capacity.usage.reportEvery", negativeSecond},
 	}
 	p := writeConfig(t, "")
 	if _, err := Set(p, settings); err != nil {

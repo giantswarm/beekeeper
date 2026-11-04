@@ -72,14 +72,14 @@ func Change(path string, settings []Setting, unset []string) (*Config, error) {
 		return nil, fmt.Errorf("lock configuration: %w", err)
 	}
 	defer func() { _ = lock.Unlock() }()
-	raw, err := os.ReadFile(filepath.Clean(target))
+	raw, err := os.ReadFile(filepath.Clean(target)) //nolint:gosec // the configuration path comes from the user
 	mode := fs.FileMode(0o600)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return nil, err
 	default:
-		if fi, err := os.Stat(target); err == nil {
+		if fi, err := os.Stat(target); err == nil { //nolint:gosec // the configuration path comes from the user
 			mode = fi.Mode().Perm()
 		}
 	}
@@ -278,5 +278,5 @@ func writeAtomic(path string, b []byte, mode fs.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return os.Rename(f.Name(), path) //nolint:gosec // the configuration path comes from the user
 }

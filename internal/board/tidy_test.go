@@ -31,6 +31,8 @@ type tidyGH struct {
 	writes []string
 }
 
+const tidyWriteI2 = "I2=s9"
+
 func (f *tidyGH) run(_ context.Context, args ...string) ([]byte, error) {
 	checkSelectionSchema(f.t, args)
 	q := args[3]
@@ -114,7 +116,7 @@ func TestTidyMovesClosedItemsToDoneAndArchivesThemAfterTheGrace(t *testing.T) {
 	if f.query != `is:closed team:"X"` {
 		t.Errorf("query = %q, want the team's closed items", f.query)
 	}
-	want := []string{"I1=s9", "I2=s9", "archive I2", "archive I3", "I7=s9", "archive I7"}
+	want := []string{"I1=s9", tidyWriteI2, "archive I2", "archive I3", "I7=s9", "archive I7"}
 	if !slices.Equal(f.writes, want) {
 		t.Errorf("writes = %v, want %v", f.writes, want)
 	}
@@ -152,7 +154,7 @@ func TestTidyNeverArchivesWithANegativeGraceAndWithoutTeamReadsEveryItem(t *test
 	if f.query != "is:closed" {
 		t.Errorf("query = %q", f.query)
 	}
-	if !slices.Equal(f.writes, []string{"I2=s9"}) {
+	if !slices.Equal(f.writes, []string{tidyWriteI2}) {
 		t.Errorf("writes = %v, want the move to Done alone", f.writes)
 	}
 }
@@ -225,7 +227,7 @@ func (f *statefulTidyGH) run(ctx context.Context, args ...string) ([]byte, error
 
 func TestTidyPartialWritesAndRecovery(t *testing.T) {
 	for _, archiveFails := range []bool{true, false} {
-		name, failure := "status fails", "I2=s9"
+		name, failure := "status fails", tidyWriteI2
 		if archiveFails {
 			name, failure = "archive fails after status", "archive I2"
 		}
@@ -248,7 +250,7 @@ func TestTidyPartialWritesAndRecovery(t *testing.T) {
 				t.Fatalf("error = %v, want injected failure", err)
 			}
 			want := &Tidy{Done: doneValue, Items: []Tidied{item(1, inProgress, true, true)}}
-			writes := []string{"I1=s9", "archive I1", "I2=s9"}
+			writes := []string{"I1=s9", "archive I1", tidyWriteI2}
 			statuses := []string{doneValue, inProgress, inProgress}
 			if archiveFails {
 				want.Items = append(want.Items, item(2, inProgress, true, false))
@@ -273,7 +275,7 @@ func TestTidyPartialWritesAndRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			want.Items = []Tidied{item(2, inProgress, true, true), item(3, inProgress, true, true)}
-			writes = []string{"I2=s9", "archive I2", "I3=s9", "archive I3"}
+			writes = []string{tidyWriteI2, "archive I2", "I3=s9", "archive I3"}
 			if archiveFails {
 				want.Items[0] = item(2, doneValue, false, true)
 				writes = writes[1:]

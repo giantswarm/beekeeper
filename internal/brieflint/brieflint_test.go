@@ -13,6 +13,8 @@ const (
 	ruleFullURL = "full-url"
 )
 
+const literalBackticksBrief = "Capture with ``echo `printf ok >out.log` ``."
+
 func TestLintDateFilenameBoundary(t *testing.T) {
 	for _, tt := range []struct {
 		line     string
@@ -179,7 +181,7 @@ func TestLintInlineCodeBoundaries(t *testing.T) {
 		text string
 	}{
 		{"multiline", "Capture with `printf ok\n>out.log`.", 2, ">out.log`."},
-		{"literal backticks", "Capture with ``echo `printf ok >out.log` ``.", 1, "Capture with ``echo `printf ok >out.log` ``."},
+		{"literal backticks", literalBackticksBrief, 1, literalBackticksBrief},
 		{"long delimiter", "Capture with ```echo ``printf ok >out.log`` ```.", 1, "Capture with ```echo ``printf ok >out.log`` ```."},
 		{"CRLF", "Capture with `printf ok\r\n>out.log`.\r\n", 2, ">out.log`."},
 		{"unmatched", "Capture with `printf ok >out.log.", 0, ""},
@@ -187,7 +189,7 @@ func TestLintInlineCodeBoundaries(t *testing.T) {
 		{"prose after span", "Capture with `printf ok\ndone` then >out.log.", 0, ""},
 		{"non-shell fence", "```text\nCapture with ``echo `printf ok >out.log` ``.\n```", 0, ""},
 		{"span interrupted by fence", "Capture with `printf ok >out.log\n```text\nend`\n```", 0, ""},
-		{"after non-shell fence", "```text\n`ignore >out.log`\n```\nCapture with ``echo `printf ok >out.log` ``.", 4, "Capture with ``echo `printf ok >out.log` ``."},
+		{"after non-shell fence", "```text\n`ignore >out.log`\n```\nCapture with ``echo `printf ok >out.log` ``.", 4, literalBackticksBrief},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Lint("brief.md", strings.NewReader(tt.doc))

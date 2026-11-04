@@ -42,7 +42,7 @@ func TestLeaseResourceValidation(t *testing.T) {
 					if _, err := Set(p, []Setting{setting}); !errors.Is(err, ErrInvalid) {
 						t.Errorf("Set error = %v, want ErrInvalid", err)
 					}
-					after, err := os.ReadFile(p)
+					after, err := os.ReadFile(p) //nolint:gosec // a path of this test
 					if err != nil {
 						t.Fatal(err)
 					}
