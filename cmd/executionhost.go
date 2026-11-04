@@ -480,14 +480,17 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		caps, err := a.probeExecution(cmd.Context(), h)
-		if err != nil {
-			return err
+		caps, probeErr := a.probeExecution(cmd.Context(), h)
+		// Show per-harness diagnostics even when every configured harness is
+		// unavailable. The failed probe still refuses admission and exits nonzero.
+		if probeErr != nil && len(caps.Readiness) == 0 {
+			return probeErr
 		}
-		// Keep the observed release and toolchain visible even when the
-		// coordinator release differs, so operators can diagnose the host.
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
+		}
+		if probeErr != nil {
+			return probeErr
 		}
 		return checkHostRelease(caps.Version)
 	}})
