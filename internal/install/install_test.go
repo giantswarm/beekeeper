@@ -1384,3 +1384,70 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 		t.Fatal("failed restart left its prepared state")
 	}
 }
+
+func TestCodexRepairsQuotedHook(t *testing.T) {
+	for _, exe := range []string{"/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+		for _, format := range []string{"--format codex", "--format=codex"} {
+			t.Run(exe+"/"+format, func(t *testing.T) {
+				home := t.TempDir()
+				f := &fakeSetup{}
+				e, _ := env(t, home, f, f.run)
+				e.Exe = exe
+				e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+				var entry hookEntry
+				if err := json.Unmarshal(CodexHook(exe), &entry); err != nil {
+					t.Fatal(err)
+				}
+				entry.Matcher = "Bash"
+				entry.Hooks[0].Command = shellQuote(exe) + " hook pretooluse " + format
+				raw, err := json.Marshal(entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[`+string(raw)+`]}}`)
+				if got := CheckCodexHooks(e.CodexHooks, "", home); !strings.Contains(got, "differs from what install writes") {
+					t.Fatalf("before repair: %q", got)
+				}
+				for range 2 {
+					if err := Install(context.Background(), e); err != nil {
+						t.Fatal(err)
+					}
+					s, err := readSettings(e.CodexHooks)
+					if err != nil {
+						t.Fatal(err)
+					}
+					list, err := s.hooks("PreToolUse")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(list) != 1 || !sameJSON(list[0], CodexHook(exe)) {
+						t.Fatalf("repair produced %s, want one generated hook", list)
+					}
+					for _, diagnosticExe := range []string{"", exe} {
+						if got := CheckCodexHooks(e.CodexHooks, diagnosticExe, home); got != "" {
+							t.Errorf("after repair: %s", got)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCodexHookBinaryRejectsShellExpressions(t *testing.T) {
+	for _, command := range []string{
+		"$HOME/beekeeper hook pretooluse --format codex",
+		"$(echo beekeeper) hook pretooluse --format codex",
+		"/opt/bin/beekeeper; other hook pretooluse --format codex",
+		"'unterminated hook pretooluse --format codex",
+		"/opt/bin/beekeeper hook pretooluse --format codex; other",
+	} {
+		raw, err := json.Marshal(hookEntry{Matcher: ".*", Hooks: []hookCommand{{Type: hookTypeCommand, Command: command, Timeout: 30}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bin, _, _ := codexHookBinary(raw); bin != "" {
+			t.Errorf("recognized shell expression %q as %q", command, bin)
+		}
+	}
+}
