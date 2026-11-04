@@ -33,7 +33,7 @@ func TestTrimDoesNotFollowReplacedShard(t *testing.T) {
 	if err == nil || freed != 0 || removed != 0 {
 		t.Errorf("trim = %d, %d, %v; want no removals and a confinement error", freed, removed, err)
 	}
-	if got, err := os.ReadFile(other); err != nil || string(got) != "outside data" {
+	if got, err := os.ReadFile(other); err != nil || string(got) != "outside data" { //nolint:gosec // reads only this test's temporary fixture
 		t.Fatalf("trim changed a file outside the scanned cache: %q, %v", got, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "moved", filepath.Base(entryA))); err != nil {
