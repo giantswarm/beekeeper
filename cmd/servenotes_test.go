@@ -15,7 +15,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
 
-const noteListTool = "note_list"
+const (
+	noteListTool = "note_list"
+	snapshotTool = "snapshot"
+)
 
 func TestNoteToolsScope(t *testing.T) {
 	scheme, err := kube.Scheme()

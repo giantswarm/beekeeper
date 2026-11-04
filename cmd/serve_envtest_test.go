@@ -348,7 +348,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	}
 	e.expect(t, pia, noteListTool, map[string]any{}, false, "no open notes")
 	for _, caller := range []*mcpCaller{ana, bo, pia} {
-		for _, tool := range []string{noteListTool, "snapshot"} {
+		for _, tool := range []string{noteListTool, snapshotTool} {
 			text, result, failed := caller.call(tool, map[string]any{})
 			want := 1
 			if caller == pia {
@@ -376,7 +376,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, pia, "list_agents", map[string]any{"scope": scopeTeam}, false, piaTeam)
 	e.expect(t, ana, "list_agents", map[string]any{}, false, "ana@example.com")
 
-	snap := e.expect(t, ana, "snapshot", map[string]any{}, false, "== Agents")
+	snap := e.expect(t, ana, snapshotTool, map[string]any{}, false, "== Agents")
 	for _, k := range []string{"leases", "holds", "lanes", keyNotes, "agents"} {
 		if _, ok := snap[k]; !ok {
 			t.Errorf("snapshot lacks %s", k)
