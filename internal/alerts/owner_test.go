@@ -112,3 +112,32 @@ func TestMatch(t *testing.T) {
 		}
 	}
 }
+
+// The same labels and start can occur in two Alertmanagers. Ownership and
+// reminder deduplication must preserve their distinct installations.
+func TestFiringIdentityIncludesInstallation(t *testing.T) {
+	raw := alert("shared", restarting, Page, ourTeam, now.Add(-time.Hour).Format(time.RFC3339Nano))
+	st := &State{Installations: map[string]*Installation{}}
+	for _, name := range []string{instA, instB} {
+		_, st.Installations[name] = rules.Step(name, nil, ok(raw), now)
+	}
+	firing := st.Firing(Page)
+	if len(firing) != 2 {
+		t.Fatalf("firing count = %d", len(firing))
+	}
+	owned := func(key string) (time.Time, bool) { return time.Time{}, key == firing[0].Key }
+	if hits := Match(firing, instA+"/"+restarting+"#shared"); len(hits) != 1 || hits[0].Installation != instA {
+		t.Fatal("installation-qualified fingerprint no longer selects one instance")
+	}
+	if hits := Match(firing, "shared"); len(hits) != 2 {
+		t.Fatal("bare fingerprint no longer selects both matching instances")
+	}
+	due := UnownedPages(firing, 15*time.Minute, owned, now)
+	if len(due) != 1 || due[0].Installation != instB {
+		t.Errorf("owning alpha also suppressed beta: %d due pages, want beta", len(due))
+	}
+	due = UnownedPages(firing, 15*time.Minute, neverOwned, now)
+	if len(due) != 2 || due[0].Mark == due[1].Mark {
+		t.Error("distinct installations share a reminder mark")
+	}
+}

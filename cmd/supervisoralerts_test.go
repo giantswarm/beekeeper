@@ -46,7 +46,7 @@ func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, By: state.Party{Name: "alert-fixture-owner"}}}
+		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -444,5 +444,75 @@ func TestLoopAlertBlockedNotesScopeInstallation(t *testing.T) {
 		if len(note.Refs) != 1 || !strings.Contains(note.StatusQuo, "blocks "+note.Refs[0]) {
 			t.Fatalf("note lost blocked item: %+v", note)
 		}
+	}
+}
+
+// The loop must recognize an existing owner after installation-scoped keys
+// are introduced, without treating another installation's page as owned.
+func TestLoopAlertLegacyOwnerKeepsItsInstallation(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	original := loopFiring()
+	base := &alerts.State{Installations: map[string]*alerts.Installation{
+		"owner-a": {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
+		"owner-b": {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
+	}}
+	firing := base.Firing(alerts.Page)
+	for _, f := range firing {
+		blockLoopAlert(t, r, f)
+	}
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return firing, nil }
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AlertOwners = []state.AlertOwner{{Alert: alerts.Key("fp", original.Alert), Name: firing[0].Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil || len(st.Notes) != 1 || !strings.Contains(st.Notes[0].Text, firing[1].Instance()) {
+		t.Fatalf("expected a note only for owner-b: %+v, %v", st, err)
+	}
+}
+
+func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
+	read := readLoopAlerts
+	r := newLoopRig(t)
+	readLoopAlerts = read
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	f := loopFiring() // An old watch snapshot's unqualified key.
+	blockLoopAlert(t, r, f)
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := r.a.newWatcher(false, false)
+	w.publishAlerts([]alerts.Firing{f})
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil || len(st.Notes) != 0 {
+		t.Fatalf("an owned legacy watch snapshot paged: %+v, %v", st, err)
+	}
+}
+
+func TestLoopAlertLegacyCompletionIsNotRepeated(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Alerts.PageSeverity = alerts.Page
+	original := loopFiring()
+	base := &alerts.State{Installations: map[string]*alerts.Installation{
+		original.Installation: {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
+	}}
+	f := base.Firing(alerts.Page)[0]
+	blockLoopAlert(t, r, f)
+	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
+	if err := r.a.store.Record(event(loopParty, loopAlertVerb, "[alert page %s/%s] legacy completion", original.Installation, original.Key)); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	st, err := r.a.store.Read()
+	if err != nil || len(st.Notes) != 0 {
+		t.Fatalf("a completed alert action was repeated after upgrading its key: %+v, %v", st, err)
 	}
 }
