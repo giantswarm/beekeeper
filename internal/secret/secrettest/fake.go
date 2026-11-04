@@ -47,6 +47,8 @@ type Tools struct {
 	// Types maps op://vault/item/field to the type a store gave it
 	// (CONCEALED, STRING).
 	Types map[string]string
+	// categories maps vault and item title to the category a store gave it.
+	categories map[[2]string]string
 	// Calls are the command lines run, stdin left out.
 	Calls []string
 	// Tokens are the service account tokens op calls were given.
@@ -193,7 +195,7 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		}
 		it, ok := items[parts[1]]
 		if !ok {
-			it = &item{ID: "id-" + parts[1], Title: parts[1]}
+			it = &item{ID: "id-" + parts[1], Title: parts[1], Category: t.categories[[2]string{vault, parts[1]}]}
 			items[parts[1]] = it
 		}
 		f := field{ID: parts[2], Label: parts[2], Type: concealedType, Value: v}
@@ -209,7 +211,7 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	case "list":
 		var out []item
 		for _, it := range items {
-			out = append(out, item{ID: it.ID, Title: it.Title})
+			out = append(out, item{ID: it.ID, Title: it.Title, Category: it.Category})
 		}
 		return json.Marshal(out)
 	case get:
@@ -258,6 +260,10 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 			return nil, fmt.Errorf("exit 1 ([ERROR] unable to process line 1: Validation: (validateVaultItem failed to Validate), "+
 				"Couldn't validate the item: \"[ItemValidator] has found %d errors, 0 warnings: \nDetails:\nErrors:\n%s\")", len(refused), strings.Join(refused, "\n"))
 		}
+		if t.categories == nil {
+			t.categories = map[[2]string]string{}
+		}
+		t.categories[[2]string{vault, it.Title}] = it.Category
 		if t.Types == nil {
 			t.Types = map[string]string{}
 		}
