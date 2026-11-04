@@ -234,7 +234,7 @@ Doctor names installations it could not write and why.`,
 						return err
 					}
 				}
-				missed = rec.Missed(a.now, t.Every.Duration)
+				missed = rec.PendingMiss || rec.Missed(a.now, t.Every.Duration)
 				due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration, missed)
 				last := rec.CheckedAt
 				rec.CheckedAt = a.now.UTC()
@@ -256,6 +256,7 @@ Doctor names installations it could not write and why.`,
 				if !keeper {
 					return err
 				}
+				rec.PendingMiss = missed
 				rec.Waiting, rec.WaitingAt = err.Error(), a.now.UTC()
 				if werr := a.store.WriteFile(teleportFile, rec); werr != nil {
 					return werr

@@ -3101,6 +3101,8 @@ type Omp struct {
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// ServedBy is the lease resource serving Model. Starts refuse while held.
+	ServedBy string `yaml:"servedBy"`
 	// Providers are the providers of ModelsFile whose key lives in the
 	// vault, by the provider's name there.
 	Providers map[string]OmpProvider `yaml:"providers"`
