@@ -203,7 +203,7 @@ const (
 const browseStart = "beekeeper browse"
 
 func (a *app) browseCmd() *cobra.Command {
-	var model, dir, deploy string
+	var model, dir, deploy, proofRepo string
 	var files []string
 	var wait time.Duration
 	c := &cobra.Command{
@@ -229,6 +229,14 @@ taken" or "screenshot: none saved: <why>" otherwise). The files saved are
 the one record of the screenshots: the turn writes no file, and the line
 heading the paths says a report calling a screenshot not saved speaks for
 the turn alone. The report is printed as the turn wrote it.
+
+With --proof-repo <owner/repo>, saved screenshots are also uploaded through
+the App API to that repository's images-only branch and the report includes
+their Markdown image links. This works for public, private and internal
+repositories; private links require repository read access. Paste the links
+into a comment with gh under the App identity rather than submitting a
+Comment click in the browser. The App needs contents write access even
+when the worker's browser identity has no write access.
 
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
@@ -550,9 +558,10 @@ again once the extension is connected.`,
 			if steps == "" {
 				return usageErr("browse needs the steps to run")
 			}
-			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil)
+			return a.browseWithProof(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil, proofRepo)
 		},
 	}
+	c.Flags().StringVar(&proofRepo, "proof-repo", "", "upload saved screenshots to this thread repository and report their Markdown links (owner/repo)")
 	c.Flags().StringVar(&model, "model", "", "the turn's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the turn's working directory")
 	c.Flags().DurationVar(&wait, "timeout", browseWait, "stop the turn and fail after this long")
@@ -593,6 +602,10 @@ for a timer to park on.`,
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	return a.browseWithProof(ctx, steps, dir, model, wait, deploy, files, blind, "")
+}
+
+func (a *app) browseWithProof(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn, proofRepo string) error {
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
 	if err := screenLockedErr(); err != nil {
@@ -743,10 +756,32 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
 	lines = append(lines, shotLines(shots, serr)...)
+	proofLines, perr := a.uploadBrowseProofs(ctx, shots, proofRepo)
+	lines = append(lines, proofLines...)
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, werr, found.lostErr(report), found.drawErr(), found.tabsErr())
+	return errors.Join(err, ferr, serr, werr, perr, found.lostErr(report), found.drawErr(), found.tabsErr())
+}
+
+// uploadBrowseProofs uses the same App API path as proof upload, without
+// submitting a comment through the person's browser identity.
+func (a *app) uploadBrowseProofs(ctx context.Context, shots []string, repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	var lines []string
+	var errs []error
+	for _, shot := range shots {
+		res, err := a.uploadProof(ctx, shot, repo, "")
+		if err != nil {
+			lines = append(lines, "proof upload failed: "+err.Error())
+			errs = append(errs, err)
+			continue
+		}
+		lines = append(lines, "proof: "+res.Markdown)
+	}
+	return lines, errors.Join(errs...)
 }
 
 // The turn's classifier names a call it refused in the call's error result:

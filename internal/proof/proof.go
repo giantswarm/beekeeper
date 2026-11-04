@@ -1,5 +1,5 @@
-// Package proof hosts a proof image in a public GitHub repository so a
-// public issue or pull request thread can show it: one commit on the
+// Package proof hosts a proof image in its GitHub repository so an
+// issue or pull request thread can show it: one commit on the
 // repository's images-only branch through the Git data API, made with the gh
 // CLI's own login, and a Markdown image line pinned to that commit.
 package proof
@@ -88,9 +88,9 @@ func Path(img []byte, now time.Time) string {
 	return fmt.Sprintf("%s/%s-%s.png", now.Format("2006-01-02"), now.Format("150405"), hex.EncodeToString(sum[:])[:12])
 }
 
-// Run hosts img (already normalized) on the branch and returns its link. A
-// repository that is not public is refused: its image would not render for
-// a public thread's readers.
+// Run hosts img (already normalized) on the branch and returns its link.
+// Private images use GitHub repository links, resolved for each reader,
+// rather than a raw URL that would need an expiring access token.
 func (u Upload) Run(ctx context.Context, img []byte) (Result, error) {
 	if !repoName.MatchString(u.Repo) {
 		return Result{}, fmt.Errorf("--repo %q is not owner/repo", u.Repo)
@@ -99,8 +99,9 @@ func (u Upload) Run(ctx context.Context, img []byte) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if v := strings.TrimSpace(string(vis)); v != "public" {
-		return Result{}, fmt.Errorf("%s is %s, not public: proof upload hosts images for public threads only", u.Repo, v)
+	visibility := strings.TrimSpace(string(vis))
+	if visibility != "public" && visibility != "private" && visibility != "internal" {
+		return Result{}, fmt.Errorf("%s has unknown visibility %q", u.Repo, visibility)
 	}
 	path := Path(img, u.Now)
 	blob, err := u.send(ctx, "POST", "git/blobs", map[string]any{"content": base64.StdEncoding.EncodeToString(img), "encoding": "base64"})
@@ -116,8 +117,14 @@ func (u Upload) Run(ctx context.Context, img []byte) (Result, error) {
 			return Result{}, err
 		}
 		url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", u.Repo, commit, path)
+		imageLink := url
+		if visibility != "public" {
+			url = fmt.Sprintf("https://github.com/%s/blob/%s/%s?raw=true", u.Repo, commit, path)
+			// GitHub rewrites repository-relative image links for each reader.
+			imageLink = fmt.Sprintf("../../../%s/blob/%s/%s?raw=true", u.Repo, commit, path)
+		}
 		alt := strings.NewReplacer("[", "", "]", "", "\n", " ").Replace(u.Alt)
-		return Result{Commit: commit, Path: path, URL: url, Markdown: fmt.Sprintf("![%s](%s)", alt, url)}, nil
+		return Result{Commit: commit, Path: path, URL: url, Markdown: fmt.Sprintf("![%s](%s)", alt, imageLink)}, nil
 	}
 }
 
