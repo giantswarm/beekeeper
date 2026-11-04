@@ -71,7 +71,7 @@ func TestPsRequestedLivePID(t *testing.T) {
 }
 
 func TestPsUnavailablePIDs(t *testing.T) {
-	tb := table(&proc.Process{PID: 10, Comm: "sleep"})
+	tb := table(&proc.Process{PID: 10, Comm: sleepComm})
 	filters := []string{"10", "20", "20", "30", "sleep"}
 	rows := psRows(tb, time.Now(), filters)
 	if len(rows) != 1 || rows[0].PID != 10 {

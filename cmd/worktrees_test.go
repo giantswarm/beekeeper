@@ -73,10 +73,10 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+	for _, k := range []string{litGitAuthorName, "GIT_COMMITTER_NAME"} {
 		t.Setenv(k, "test")
 	}
-	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, "GIT_COMMITTER_EMAIL"} {
 		t.Setenv(k, "test@example.com")
 	}
 	base := t.TempDir()
@@ -89,7 +89,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	gitT(t, clone, "remote", "add", workerGitHubOrigin, "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
-	for _, b := range []string{mergedPR, "work", "unpushed", "open", "nopr", "live", "recent"} {
+	for _, b := range []string{mergedPR, "work", litUnpushed, "open", "nopr", "live", "recent"} {
 		gitT(t, clone, "worktree", "add", "-q", "-b", b, filepath.Join(root, "app", b), "main")
 		writeT(t, filepath.Join(root, "app", b, "node_modules", "pkg", "index.js"), strings.Repeat("x", 4096))
 	}
@@ -341,7 +341,7 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 
 // Cleanup only touches scratch checkouts; all process data is injected.
 func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
-	for _, name := range []string{removeUnused, removeActive, removeParked, removeDesktop, "process unavailable", "roster unavailable", "canonical child", "canonical parent"} {
+	for _, name := range []string{removeUnused, removeActive, removeParked, removeDesktop, "process unavailable", "roster unavailable", litCanonicalChild, "canonical parent"} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = ungatedMachine{Machine: plat.Machine, table: proc.NewTable()}

@@ -30,9 +30,9 @@ func (a *app) freeNestedWorktrees(o free.Options, out io.Writer) error {
 			group = "merged and clean, removable"
 		}
 		if o.Summary {
-			fmt.Fprintf(out, "worktree\t%s\t%s\n", dir, group)
+			_, _ = fmt.Fprintf(out, "worktree\t%s\t%s\n", dir, group)
 		} else {
-			fmt.Fprintf(out, "worktrees: %s: %s\n", group, dir)
+			_, _ = fmt.Fprintf(out, "worktrees: %s: %s\n", group, dir)
 		}
 		if !o.Apply {
 			continue

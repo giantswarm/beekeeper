@@ -12,10 +12,10 @@ import (
 
 func TestTmpfsLargestNamesEntriesAndWorkerOwners(t *testing.T) {
 	root := t.TempDir()
-	for i, name := range []string{"small", "medium", "large", "largest"} {
+	for i, name := range []string{litSmall, "medium", "large", "largest"} {
 		writeT(t, filepath.Join(root, name, "data"), strings.Repeat("x", 8192*(i+1)))
 	}
-	table := proc.NewTable(&proc.Process{PID: 10, Comm: "worker"}, &proc.Process{PID: 11, PPID: 10, Comm: "go"}, &proc.Process{PID: 12, Comm: "gone"})
+	table := proc.NewTable(&proc.Process{PID: 10, Comm: workerRole}, &proc.Process{PID: 11, PPID: 10, Comm: "go"}, &proc.Process{PID: 12, Comm: "gone"})
 	refs := func(pid int) ([]string, error) {
 		if pid == 11 {
 			return []string{filepath.Join(root, "largest", "data"), filepath.Join(root, "largest", "other"), filepath.Join(root, "large-other", "data")}, nil

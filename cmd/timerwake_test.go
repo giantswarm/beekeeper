@@ -97,7 +97,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 		{name: "matching checks", on: claimIssue, when: "pr-checks o/r#7", wantWake: true},
 		{name: "another pull", on: claimIssue2, when: prMerged7},
 		{name: "lease wait", on: "lease agentlab-1"},
-		{name: "hold", on: parkedHoldWait},
+		{name: verbHold, on: parkedHoldWait},
 		{name: "alert", on: parkedAlertWait},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

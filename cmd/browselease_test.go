@@ -26,7 +26,7 @@ func TestBrowseLeaseRefusesBeforeSteps(t *testing.T) {
 			bin := t.TempDir()
 			ran := filepath.Join(bin, "ran")
 			writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\n: > "+ran+"\n")
-			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil {
+			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil { //nolint:gosec // a test fixture
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -39,7 +39,7 @@ func TestBrowseLeaseRefusesBeforeSteps(t *testing.T) {
 			err := c.ExecuteContext(t.Context())
 			want := holder
 			if want == "" {
-				want = "nobody"
+				want = nobodyNamed
 			}
 			if Code(err) != ExitRefused || !strings.Contains(err.Error(), want) {
 				t.Fatalf("browse = %v, want refusal naming %q", err, want)
@@ -66,7 +66,7 @@ func TestBrowseLeaseGrant(t *testing.T) {
 		allowed bool
 	}{
 		{name: "valid", age: time.Minute, allowed: true},
-		{name: "expired", age: time.Hour},
+		{name: handoverExpiredMode, age: time.Hour},
 		{name: "other holder", holder: claimOther, age: time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

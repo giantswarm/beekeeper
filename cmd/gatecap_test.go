@@ -140,7 +140,7 @@ func TestQueuedGateMovesToReloadedLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.lane.Name != "shared" || st.Merges[0].Lane != "shared" {
+	if g.lane.Name != litShared || st.Merges[0].Lane != "shared" {
 		t.Fatalf("lane not updated: %+v, %+v", g.lane, st.Merges)
 	}
 }

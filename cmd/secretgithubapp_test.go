@@ -337,7 +337,7 @@ func TestSecretGitHubAppDryRunMissingParts(t *testing.T) {
 		{name: "recipient", body: dryAppSkeleton, rules: "creation_rules:\n  - age: invalid\n", want: "no valid age recipient"},
 		{name: "wrong-kind", body: "kind: ConfigMap\n", want: "no Kubernetes Secret"},
 		{name: "missing-name", body: "kind: Secret\n", want: "no metadata.name"},
-		{name: "malformed", body: "[" + secretValue, want: "no YAML mapping"},
+		{name: handoverMalformedMode, body: "[" + secretValue, want: "no YAML mapping"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, tools, repo := secretApp(t)
@@ -482,7 +482,7 @@ func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 }
 
 func TestSecretGitHubAppCheckoutRefusals(t *testing.T) {
-	for _, kind := range []string{"behind", "diverged", "tracked", "staged", "untracked", "fetch-failure", "missing-main", "not-a-clone"} {
+	for _, kind := range []string{"behind", litDiverged, "tracked", "staged", "untracked", "fetch-failure", "missing-main", "not-a-clone"} {
 		t.Run(kind, func(t *testing.T) {
 			a, tools, repo := secretApp(t)
 			file := githubAppConfig(t, a, repo)
@@ -528,7 +528,7 @@ func TestSecretGitHubAppCheckoutRefusals(t *testing.T) {
 				want = "fetch failed"
 			}
 			_, err := runSecret(a, githubAppOp, fixtureOrg, codeFlag, conversionCode)
-			if Code(err) != ExitRefused || !strings.Contains(fmt.Sprint(err), want) || !strings.Contains(fmt.Sprint(err), repo) || !(strings.Contains(fmt.Sprint(err), "git -C") || strings.Contains(fmt.Sprint(err), "configure apps.secrets")) {
+			if Code(err) != ExitRefused || !strings.Contains(fmt.Sprint(err), want) || !strings.Contains(fmt.Sprint(err), repo) || !(strings.Contains(fmt.Sprint(err), "git -C") || strings.Contains(fmt.Sprint(err), "configure apps.secrets")) { //nolint:staticcheck // reads as the condition it checks
 				t.Fatalf("got %v; want refusal naming clone, remedy and %q", err, want)
 			}
 			if *calls != 0 || len(tools.Calls) != 0 {

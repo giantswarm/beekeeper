@@ -988,7 +988,7 @@ func (a *app) unfinishedWorker(st *state.State, p state.Party) string {
 	// Older state can predate WorkerReports; the audit log still records
 	// completion and subsequent idle reports that invalidate it.
 	evs, err := a.store.Events(0, func(e state.Event) bool {
-		return e.By.Is(p) && (e.Verb == "agents.done" || e.Verb == "agents.idle")
+		return e.By.Is(p) && (e.Verb == executionDone || e.Verb == "agents.idle")
 	})
 	if err != nil {
 		return "its completion history could not be read"

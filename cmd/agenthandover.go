@@ -854,7 +854,7 @@ func (a *app) say(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format
 // noteRequest is the peer message that asks the agent for its note, naming
 // the configuration file the hand-over runs with.
 func (a *app) noteRequest(h handover) string {
-	bin := "beekeeper"
+	bin := pluginName
 	if c := a.explicitConfig(); c != "" {
 		bin += " --config " + c
 	}

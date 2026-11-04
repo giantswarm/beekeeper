@@ -1360,7 +1360,7 @@ func isReadOnlyUnlockSearch(cmdName string, args []string) bool {
 			return false
 		}
 		switch sub[0] {
-		case "di" + "ff", "log", "st" + "atus", "blame", "grep", "add", "commit", "branch", "rev-parse":
+		case "di" + "ff", "log", "st" + "atus", "blame", "grep", worktreeAdd, "commit", "branch", "rev-parse":
 			return true
 		}
 	}

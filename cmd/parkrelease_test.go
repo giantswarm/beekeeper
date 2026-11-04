@@ -18,7 +18,7 @@ func TestParseReleaseTarget(t *testing.T) {
 			t.Fatalf("parse %q: %q %q %v", on, repo, version, ok)
 		}
 	}
-	for _, on := range []string{"example/tool#12", "example/tool@latest", "example/tool@v1", "example/tool@>=1.2.3", "example/tool@", "tool@v1.2.3", "example/tool@v1.2.3 extra"} {
+	for _, on := range []string{litExampleTool12, "example/tool@latest", "example/tool@v1", "example/tool@>=1.2.3", "example/tool@", "tool@v1.2.3", "example/tool@v1.2.3 extra"} {
 		if _, _, ok := parseReleaseTarget(on); ok {
 			t.Errorf("accepted %q", on)
 		}
@@ -47,7 +47,7 @@ func TestParkReleaseAvailability(t *testing.T) {
 	}{
 		{name: "pending", raw: `{"verdict":"timeout","exitCode":2}`, err: errors.New("exit 2")},
 		{name: "unavailable tool", err: errors.New("missing devctl")},
-		{name: "malformed", raw: `not JSON`},
+		{name: handoverMalformedMode, raw: `not JSON`},
 		{name: "failed CI", raw: `{"verdict":"ci_failed","exitCode":1}`},
 		{name: "available", raw: `{"verdict":"available","exitCode":0}`, want: 2},
 	} {

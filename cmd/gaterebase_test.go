@@ -61,7 +61,7 @@ func placeOf(t *testing.T, a *app) int {
 func TestANonRebaseableMergeIsRefusedBeforeItQueues(t *testing.T) {
 	for name, r := range map[string]github.Rebase{
 		"not rebaseable": {Known: true, State: "clean"},
-		"dirty":          {Known: true, Rebaseable: true, State: github.DirtyState},
+		litDirty:         {Known: true, Rebaseable: true, State: github.DirtyState},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubGitHub(t, github.Open, "")

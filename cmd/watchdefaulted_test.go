@@ -62,9 +62,9 @@ func TestWatchDefaultedWakesOncePerSession(t *testing.T) {
 
 func TestWatchDefaultedBatchesCurrentRoleHolder(t *testing.T) {
 	w, _ := onceWatch(t, openRefs)
-	holder := state.Party{Session: "fixture-current-session", Name: "Guide run 2"}
+	holder := state.Party{Session: "fixture-current-session", Name: litGuideRun2}
 	notes := []state.Note{
-		{ID: 1, By: state.Party{Name: "Guide run 1"}, Default: "first fixture"},
+		{ID: 1, By: state.Party{Name: firstRun}, Default: "first fixture"},
 		{ID: 2, By: holder, Default: "second fixture"},
 	}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {

@@ -63,7 +63,7 @@ func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane conf
 	t.Helper()
 	hostDevctls(t, 0)
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
-	me := state.Party{Name: "worker"}
+	me := state.Party{Name: workerRole}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
 		argv: mergeArgv(repo)}
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
@@ -203,7 +203,7 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 
 func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
 	for _, tc := range []struct{ name, script, want string }{
-		{"external", "kill -KILL $$", "no cap kill confirmed"},
+		{"external", litKillKill, "no cap kill confirmed"},
 		{"cap", "echo 'beekeeper run: the 6G cap killed: 7 (worker) 6100 MiB (MemoryMax=6G)' >&2; kill -KILL $$", "MemoryMax=6G"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
 				}
 			})
 			base := mergeBase(g.store.Dir(), scratchRepo, 7)
-			raw, err := os.ReadFile(base + terminationExt)
+			raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
 			if err != nil || !strings.Contains(string(raw), tc.want) {
 				t.Fatalf("persisted reason %q: %v", raw, err)
 			}
@@ -1091,7 +1091,7 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, "runner disappeared") || !strings.Contains(out, "no cap kill confirmed") {
 		t.Fatalf("rerun did not recover lost runner: %s", out)
 	}
-	raw, err := os.ReadFile(base + terminationExt)
+	raw, err := os.ReadFile(base + terminationExt) //nolint:gosec // a test fixture
 	if err != nil || !strings.Contains(string(raw), "runner disappeared") {
 		t.Fatalf("lost diagnostic after cleanup: %q, %v", raw, err)
 	}

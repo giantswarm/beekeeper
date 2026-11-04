@@ -107,7 +107,7 @@ func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	since := loopFiring().Since
 	hours := alerts.Raw{Fingerprint: "wh", Labels: map[string]string{labelAlertname: alerts.WorkingHours}, StartsAt: since}
 	inhibited := func(fp, team string) alerts.Raw {
-		labels := map[string]string{labelAlertname: "WorkloadDown", labelSeverity: alerts.Page, labelTeam: team, "namespace": "ns", "deployment": "app"}
+		labels := map[string]string{labelAlertname: "WorkloadDown", labelSeverity: alerts.Page, labelTeam: team, litNamespace: "ns", "deployment": "app"}
 		return alerts.Raw{Fingerprint: fp, Labels: labels, StartsAt: since, Status: alerts.Status{InhibitedBy: []string{"wh"}}}
 	}
 	page, other := inhibited("fp", loopDeskTeam), inhibited("ot", loopOtherTeam)

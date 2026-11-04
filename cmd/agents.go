@@ -343,9 +343,9 @@ completion is refused under --as.`,
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
-				verb := "agents.idle"
+				verb := litAgentsIdle
 				if finished {
-					verb = "agents.done"
+					verb = executionDone
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
 				if finished {

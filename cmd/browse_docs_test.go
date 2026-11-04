@@ -13,7 +13,7 @@ func TestBrowseDocsRouteXReads(t *testing.T) {
 	}
 	for name, text := range map[string]string{
 		"README": string(readme),
-		"help":   (&app{}).browseCmd().Long,
+		litHelp:  (&app{}).browseCmd().Long,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, line := range strings.Split(text, "\n") {

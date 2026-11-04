@@ -35,7 +35,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 
 func addNote(a *app, args ...string) error {
 	c := a.noteCmd()
-	c.SetArgs(append([]string{"add"}, args...))
+	c.SetArgs(append([]string{loopAdd}, args...))
 	c.SetOut(a.out)
 	c.SetErr(a.out)
 	c.SilenceUsage, c.SilenceErrors = true, true

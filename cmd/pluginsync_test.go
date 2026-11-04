@@ -255,7 +255,7 @@ func TestFirstRunSyncReportsOnlyChangedPlugin(t *testing.T) {
 		version string
 		changed bool
 	}{
-		{name: "unchanged", version: newPlugin},
+		{name: litUnchanged, version: newPlugin},
 		{name: "changed", version: oldPlugin, changed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

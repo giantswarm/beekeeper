@@ -373,7 +373,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
 		Agents: []state.Agent{
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-			{Party: state.Party{Name: "on operator"}, Task: "t", Park: &state.Park{On: "example/tool#12", Waits: "operator's go"}},
+			{Party: state.Party{Name: "on operator"}, Task: "t", Park: &state.Park{On: litExampleTool12, Waits: "operator's go"}},
 			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{On: "example/tool#13", Waits: "a colleague's reply on the timer setting"}},
 			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review"}},
 			{Party: state.Party{Name: "on a queued gate"}, Task: "t", Park: &state.Park{On: "gate place 12", Waits: "queued merge waits for the person's go"}},
@@ -403,22 +403,22 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		on, waits string
 		want      bool
 	}{
-		"supervisor ready":  {"", "rollout ready; waiting for the supervisor", false},
-		"supervisor go":     {"", "awaiting the supervisor's go", false},
-		"guide handoff":     {"", "the guide handoff ready", false},
-		"gate":              {"", "the supervisor's gate", false},
-		"install chain":     {"", "the supervisor's install chain", false},
-		"local note":        {"#787", "install chain ready", true},
-		"central note":      {"central#12", "gate ready", true},
-		"named person":      {"example/tool#12", "operator's go on the install chain", true},
-		"answer":            {"example/tool#12", "awaiting the person's answer", true},
-		"colleague review":  {"example/tool#12", "a colleague's review", true},
-		"untargeted answer": {"", "awaiting the person's answer", false},
-		"queued gate":       {"gate place 12", "queued merge waits for the operator's go", false},
-		"timer":             {"timer 12", "timer for the person's answer", false},
-		"release":           {"release v1.2.0", "release after the operator's go", false},
-		"lease":             {leaseParkOn(labOne), "the person's answer", false},
-		"hold":              {holdParkOn("merges"), "the person's answer", false},
+		"supervisor ready":       {"", "rollout ready; waiting for the supervisor", false},
+		"supervisor go":          {"", "awaiting the supervisor's go", false},
+		"guide handoff":          {"", "the guide handoff ready", false},
+		"gate":                   {"", "the supervisor's gate", false},
+		"install chain":          {"", "the supervisor's install chain", false},
+		"local note":             {"#787", "install chain ready", true},
+		"central note":           {"central#12", "gate ready", true},
+		"named person":           {"example/tool#12", "operator's go on the install chain", true},
+		"answer":                 {"example/tool#12", "awaiting the person's answer", true},
+		"colleague review":       {"example/tool#12", "a colleague's review", true},
+		"untargeted answer":      {"", "awaiting the person's answer", false},
+		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
+		"timer":                  {"timer 12", "timer for the person's answer", false},
+		workerGitHubReleaseGroup: {"release v1.2.0", "release after the operator's go", false},
+		kindLease:                {leaseParkOn(labOne), "the person's answer", false},
+		verbHold:                 {holdParkOn("merges"), "the person's answer", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}

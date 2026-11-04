@@ -19,10 +19,10 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+	for _, k := range []string{litGitAuthorName, "GIT_COMMITTER_NAME"} {
 		t.Setenv(k, "test")
 	}
-	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, "GIT_COMMITTER_EMAIL"} {
 		t.Setenv(k, "test@example.invalid")
 	}
 	base := t.TempDir()
@@ -42,7 +42,7 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 func TestFreeNestedWorktrees(t *testing.T) {
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
-	for _, branch := range []string{"merged", "squashed", "dirty", "unpushed"} {
+	for _, branch := range []string{"merged", "squashed", litDirty, "unpushed"} {
 		dir := filepath.Join(root, branch)
 		gitT(t, repo, "worktree", "add", "-qb", branch, dir)
 		writeT(t, filepath.Join(dir, branch), "first\n")
@@ -81,7 +81,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 		}
 	}
 	moved := filepath.Join(a.cfg.Projects.Worktrees, "repo")
-	if b, err := os.ReadFile(filepath.Join(moved, "dirty", "notes")); err != nil || string(b) != "keep me" {
+	if b, err := os.ReadFile(filepath.Join(moved, "dirty", "notes")); err != nil || string(b) != "keep me" { //nolint:gosec // a test fixture
 		t.Fatalf("dirty work lost: %s %v", b, err)
 	}
 	if got := gitT(t, filepath.Join(moved, "unpushed"), "log", "-1", "--format=%s"); got != "change" {
@@ -100,7 +100,7 @@ func TestSessionWorktreeHooks(t *testing.T) {
 		c.SetIn(bytes.NewReader(raw))
 		return c.Execute()
 	}
-	if err := invoke(false, map[string]string{"cwd": repo, "name": "test"}); err != nil {
+	if err := invoke(false, map[string]string{executionOmpCwd: repo, "name": "test"}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(a.cfg.Projects.Worktrees, "repo", "worktree-test")

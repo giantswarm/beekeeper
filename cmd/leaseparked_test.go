@@ -32,7 +32,7 @@ func TestParkedLeaseHolder(t *testing.T) {
 			a := claimApp(t)
 			ag := state.Agent{Party: claimOther, Done: tc.done}
 			if tc.park {
-				ag.Park = &state.Park{On: "person", Waits: "an answer", At: a.now}
+				ag.Park = &state.Park{On: holderPerson, Waits: "an answer", At: a.now}
 			}
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents, st.Timers, st.Records = nil, nil, []state.Record{{Session: claimOther, Issue: "giantswarm/beekeeper#660"}}

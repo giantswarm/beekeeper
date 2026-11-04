@@ -313,7 +313,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	}
 	e.expect(t, sup, "lease_release", map[string]any{paramEnvironment: graveler}, false, `released graveler (held by "ana@example.com/ana-agent": e2e for #123)`)
 	e.expect(t, ana, "lease_release", map[string]any{paramEnvironment: graveler}, false, "graveler was free")
-	e.expect(t, ana, "lease_claim", map[string]any{paramEnvironment: glean, paramPurpose: "proof"}, false, "claimed glean")
+	e.expect(t, ana, "lease_claim", map[string]any{paramEnvironment: glean, paramPurpose: purposeProof}, false, "claimed glean")
 	e.expect(t, ana, "lease_release", agent(map[string]any{paramEnvironment: glean}), false, "released glean")
 
 	// Holds: anyone sets one; its setter or the setter's team's supervisor lifts it.

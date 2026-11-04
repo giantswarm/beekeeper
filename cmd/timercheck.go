@@ -392,7 +392,7 @@ func probeWaits(probe string) bool {
 				continue
 			}
 			// Only a direct command or the command following gate's separator.
-			if i != 0 && !(i > 1 && args[i-1] == "--" && filepath.Base(args[0]) == "beekeeper" && slices.Contains(args[1:i-1], "gate")) {
+			if i != 0 && !(i > 1 && args[i-1] == "--" && filepath.Base(args[0]) == pluginName && slices.Contains(args[1:i-1], "gate")) {
 				continue
 			}
 			if slices.Contains(args[i+1:], "wait") {

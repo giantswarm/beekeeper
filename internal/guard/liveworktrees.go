@@ -220,7 +220,7 @@ func movedOperands(name string, args []string) []operand {
 				return ops[:1]
 			}
 		}
-	case "git":
+	case gitCmd:
 		return gitWorktreeOperands(args)
 	}
 	return nil
@@ -243,7 +243,7 @@ func gitWorktreeOperands(args []string) []operand {
 			}
 		}
 	}
-	if i+1 >= len(args) || strings.Join(shellWords(args[i]), "") != "worktree" {
+	if i+1 >= len(args) || strings.Join(shellWords(args[i]), "") != litWorktree {
 		return nil
 	}
 	if s := strings.Join(shellWords(args[i+1]), ""); s != "remove" && s != "move" {

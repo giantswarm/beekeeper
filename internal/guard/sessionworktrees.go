@@ -7,7 +7,7 @@ import (
 
 // Reuse the folder guard's shell state for cd, assignments, loops and -C.
 func (w *targetWalk) addWorktree(st *deleteState, dir, name string, raw []string) {
-	if name != "git" {
+	if name != gitCmd {
 		return
 	}
 	i := 0
@@ -28,7 +28,7 @@ func (w *targetWalk) addWorktree(st *deleteState, dir, name string, raw []string
 			break
 		}
 	}
-	if i+1 >= len(raw) || strings.Join(shellWords(raw[i]), "") != "worktree" || strings.Join(shellWords(raw[i+1]), "") != "add" {
+	if i+1 >= len(raw) || strings.Join(shellWords(raw[i]), "") != "worktree" || strings.Join(shellWords(raw[i+1]), "") != worktreeAdd {
 		return
 	}
 	i += 2
@@ -41,7 +41,7 @@ func (w *targetWalk) addWorktree(st *deleteState, dir, name string, raw []string
 		if !strings.HasPrefix(a, "-") {
 			break
 		}
-		if a == "-b" || a == "-B" || a == "--reason" {
+		if a == "-b" || a == "-B" || a == worktreeReason {
 			i++
 		}
 		i++

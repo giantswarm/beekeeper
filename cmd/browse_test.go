@@ -29,7 +29,7 @@ const (
 func TestBrowseReactAriaCoordinateClick(t *testing.T) {
 	for name, guidance := range map[string]string{
 		"prompt": browsePrompt("Click the Dev Portal's 'Sign in' button by coordinate.", "", nil, false, nil),
-		"help":   (&app{}).browseCmd().Long,
+		litHelp:  (&app{}).browseCmd().Long,
 	} {
 		for _, want := range []string{
 			"React-aria Buttons (bui components)", "need a coordinate click",
@@ -886,12 +886,12 @@ func TestBrowseSharesFiles(t *testing.T) {
 		files []string
 		want  string
 	}{
-		"missing":  {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
-		"dir":      {[]string{files}, files + " is a directory, not a file"},
-		"too big":  {[]string{big}, "over file_upload's 10485760"},
-		"together": {[]string{shot, big}, "over file_upload's 10485760"},
-		"outside":  {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
-		"a link":   {[]string{link}, link + ": outside the worker's directories"},
+		workerGitHubMissingRef: {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
+		"dir":                  {[]string{files}, files + " is a directory, not a file"},
+		"too big":              {[]string{big}, "over file_upload's 10485760"},
+		"together":             {[]string{shot, big}, "over file_upload's 10485760"},
+		"outside":              {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
+		"a link":               {[]string{link}, link + ": outside the worker's directories"},
 	} {
 		if err := os.Remove(argvFile); err != nil {
 			t.Fatal(err)
@@ -913,7 +913,7 @@ func TestUploadFileKind(t *testing.T) {
 		want string
 	}{
 		{os.ModeDir | 0o700, "a directory"},
-		{os.ModeDevice, "a device"},
+		{os.ModeDevice, litADevice},
 		{os.ModeDevice | os.ModeCharDevice, "a device"},
 		{os.ModeSocket, "a socket"},
 		{os.ModeNamedPipe, "a named pipe"},
@@ -1446,7 +1446,7 @@ func TestBrowseLocalPageRunsWithSignInOnlyWhenNeeded(t *testing.T) {
 			writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BROWSE_ARGV\"\n"+
 				"id=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n"+
 				"mkdir -p \"$BROWSE_PROJECT\"\nprintf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}' > \"$BROWSE_PROJECT/$id.jsonl\"\necho done\n")
-			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil {
+			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil { //nolint:gosec // a test fixture
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -1457,7 +1457,7 @@ func TestBrowseLocalPageRunsWithSignInOnlyWhenNeeded(t *testing.T) {
 			if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
 				t.Fatalf("browse: %v", err)
 			}
-			args, err := os.ReadFile(argsFile)
+			args, err := os.ReadFile(argsFile) //nolint:gosec // a test fixture
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -10,7 +10,7 @@ import (
 func TestTimerTime(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	for input, want := range map[string]time.Time{
-		"now": now, "7d": now.Add(168 * time.Hour), "1w": now.Add(168 * time.Hour),
+		litNow: now, "7d": now.Add(168 * time.Hour), "1w": now.Add(168 * time.Hour),
 		"1w2d3h4m5s": now.Add(219*time.Hour + 4*time.Minute + 5*time.Second),
 		"1.5d":       now.Add(36 * time.Hour), ".5w": now.Add(84 * time.Hour),
 		"-1d": now.Add(-24 * time.Hour), "30m": now.Add(30 * time.Minute),
@@ -35,7 +35,7 @@ func TestTimerAddNowWithDayAndWeekDeadline(t *testing.T) {
 			a, _, _ := notifyingWatch(t, t.TempDir(), false)
 			a.as = "timer-test"
 			c := a.timerCmd()
-			c.SetArgs([]string{"add", "now", "check readiness", "--probe", "true", "--until", until})
+			c.SetArgs([]string{"add", "now", "check readiness", "--probe", "true", untilFlag, until})
 			if err := c.Execute(); err != nil {
 				t.Fatal(err)
 			}

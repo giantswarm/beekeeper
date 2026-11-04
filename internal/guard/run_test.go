@@ -355,7 +355,7 @@ func TestKillReport(t *testing.T) {
 		not    string
 	}{
 		{"own scope's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: scope}},
-			[]string{"the 6G cap killed: 7 (go) 6100 MiB", "MemoryMax=6G", ownAdvice}, sharedCap},
+			[]string{"the 6G cap killed: 7 (go) 6100 MiB", litMemorymax6g, ownAdvice}, sharedCap},
 		{"the held slot's slice, capped at the run's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: slice, TaskMemcg: scope}},
 			[]string{"the 6G cap killed: 7 (go) 6100 MiB", "MemoryMax=6G", ownAdvice}, sharedCap},
 		{"systemd-run at the slice's cap", false, []machine.OOMKill{{PID: 8, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},

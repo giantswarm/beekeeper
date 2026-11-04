@@ -399,7 +399,7 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err != nil {
 		t.Fatal(err)
 	}
-	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != "hold merges" {
+	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != litHoldMerges {
 		t.Fatalf("park %+v", ag.Park)
 	}
 	w.out.(*bytes.Buffer).Reset()
@@ -783,7 +783,7 @@ func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 
 func TestParkRefusesMismatchedWaitTarget(t *testing.T) {
 	for _, tc := range []struct{ waits, hint string }{
-		{"waiting for the merge hold to lift", "--on hold:<target>"},
+		{"waiting for the merge hold to lift", litOnHoldTarget},
 		{"merges are HELD for the release", "--on hold:<target>"},
 		{"the devctl release window", "--on hold:<target>"},
 		{"waiting for gate-run completion", "beekeeper gate runs"},

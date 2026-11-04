@@ -165,7 +165,7 @@ func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
 	}
 	appendRequest := func(tokens int) {
 		t.Helper()
-		f, err := os.OpenFile(transcript, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		f, err := os.OpenFile(transcript, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // a test fixture
 		if err != nil {
 			t.Fatal(err)
 		}

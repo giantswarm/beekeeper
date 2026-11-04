@@ -185,7 +185,7 @@ func TestPassiveHandoffKeepsAnExpiredPlaceAfterItsParentExits(t *testing.T) {
 
 func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	a := busyLaneApp(t)
-	a.cfg.Lanes[0].Name = "shared"
+	a.cfg.Lanes[0].Name = litShared
 	a.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges[0].Lane = "shared"

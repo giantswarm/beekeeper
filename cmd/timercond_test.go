@@ -191,8 +191,8 @@ func TestTimersTimeOutExpireAndFireAtTheirTime(t *testing.T) {
 	st := &state.State{Timers: []state.Timer{
 		{ID: 1, Due: past, Probe: probeFails, Until: relayNow, Wake: "a", What: "late"},
 		{ID: 2, Due: past, Probe: probeFails, Until: relayNow, Expire: true, What: "moot"},
-		{ID: 3, Due: past, What: "plain"},
-		{ID: 4, Due: past, Wake: "a", What: "now"},
+		{ID: 3, Due: past, What: litPlain},
+		{ID: 4, Due: past, Wake: "a", What: litNow},
 		{ID: 5, Due: past, Probe: probeFails, Until: relayNow.Add(time.Hour), What: "waits"},
 		{ID: 6, Due: relayNow.Add(time.Hour), Wake: "a", What: "later"},
 	}}
@@ -243,7 +243,7 @@ func TestTimerAddRefusesWhatCannotFire(t *testing.T) {
 		"expire without until":      {probe: probeHolds, expire: true},
 		"until before the time":     {probe: probeHolds, until: "30s"},
 		"an unknown condition":      {when: "pr-open o/r#1"},
-		"an unknown agent":          {wake: "nobody"},
+		"an unknown agent":          {wake: nobodyNamed},
 	} {
 		if _, err := a.timerFrom(spec, due); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -454,7 +454,7 @@ func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
 
 func TestTimerRunKilledRearms(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
-	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 43, Due: w.now, Run: "kill -KILL $$", What: "killed command"}})
+	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 43, Due: w.now, Run: litKillKill, What: "killed command"}})
 	st, err := w.store.Read()
 	if err != nil || len(st.Timers) != 1 || st.Timers[0].ID != 43 {
 		t.Fatalf("killed timer lost: %+v, %v", st, err)

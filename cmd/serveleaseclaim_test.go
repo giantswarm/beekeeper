@@ -24,11 +24,11 @@ func TestMCPLeaseClaimOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 1, 1, 2, 0, 0, 0, time.Local)
-	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Environment{}).WithObjects(&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: "installation"}}).Build()
+	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Environment{}).WithObjects(&v1alpha1.Environment{ObjectMeta: metav1.ObjectMeta{Name: installCmd}}).Build()
 	store := kube.New(client)
 	s := &server{store: store, cfg: &config.Config{}, now: func() time.Time { return now }}
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{paramEnvironment: "installation", paramPurpose: "proof"}
+	req.Params.Arguments = map[string]any{paramEnvironment: "installation", paramPurpose: purposeProof}
 	invoke := func(person string) (string, error) {
 		c := s.newCall(context.Background(), identity.Caller{Email: person}, req)
 		_, err := toolLeaseClaim(c, req)
@@ -70,7 +70,7 @@ func TestMCPLeaseClaimOutcome(t *testing.T) {
 		t.Fatalf("wait: %q, %v, %v", out, err, pauses)
 	}
 	claimPause = func(_ context.Context, d time.Duration) error {
-		return store.Release("installation", state.Party{Name: "agent-one", Person: "agent-one"}, now)
+		return store.Release("installation", state.Party{Name: litAgentOne, Person: "agent-one"}, now)
 	}
 	if out, err := invoke("agent-two"); err != nil || !strings.HasPrefix(out, "held by you since") {
 		t.Fatalf("wait until held: %q, %v", out, err)

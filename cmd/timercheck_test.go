@@ -307,7 +307,7 @@ func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 			{ID: 1, Due: relayNow, When: cpWhen, Checked: relayNow.UTC(), Reason: "context gone", Unreadable: true, What: "a"},
 			{ID: 2, Due: relayNow, When: prMerged7, Checked: relayNow.UTC(), Reason: "not merged", What: "b"},
 			{ID: 3, Due: relayNow, Probe: probeHolds, What: "c"},
-			{ID: 4, Due: relayNow, What: "plain"},
+			{ID: 4, Due: relayNow, What: litPlain},
 		}
 		return nil, nil
 	}); err != nil {
@@ -365,7 +365,7 @@ func TestTimerProbeWaitRejected(t *testing.T) {
 
 func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
 	c := (&app{}).timerCmd()
-	add, _, err := c.Find([]string{"add"})
+	add, _, err := c.Find([]string{loopAdd})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestTimerProbeTimeoutWatchLine(t *testing.T) {
 		t.Fatalf("timeout: %v", err)
 	}
 	r := (timerCheck{cmd: "exec sleep 30"}).result(nil, err)
-	st := state.State{Timers: []state.Timer{{ID: 1, Due: relayNow, Probe: "exec sleep 30", What: "check"}}}
+	st := state.State{Timers: []state.Timer{{ID: 1, Due: relayNow, Probe: "exec sleep 30", What: appCheck}}}
 	lines, _, fires, _ := settleTimers(&st, map[int]checkResult{1: r}, relayNow)
 	if len(lines) != 1 || !strings.Contains(lines[0], "probe timed out after 10 s") || len(fires) != 0 {
 		t.Fatalf("lines %v, fires %v", lines, fires)

@@ -416,7 +416,7 @@ func TestAppCreateManifestRefuses(t *testing.T) {
 		code int
 		want string
 	}{
-		"installation": {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
+		installCmd:     {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
 		"nameless":     {[]string{fixtureOrg, manifestFlag, nameless, orgFlag, fixtureOrg}, ExitUsage, `names no App ("name")`},
 		"no file":      {[]string{fixtureOrg, manifestFlag, filepath.Join(dir, "absent.json"), orgFlag, fixtureOrg}, ExitUsage, "--manifest: "},
 		"known":        {[]string{fixtureOrg, manifestFlag, taken, orgFlag, fixtureOrg}, ExitRefused, "GitHub already knows an App named taken"},

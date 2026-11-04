@@ -192,14 +192,14 @@ func TestLogDetailOutput(t *testing.T) {
 		"second report\nwith another line",
 	}
 	for _, detail := range details {
-		if err := store.Record(state.Event{At: now, Verb: "agents.report", By: state.Party{Name: "worker"}, Detail: detail}); err != nil {
+		if err := store.Record(state.Event{At: now, Verb: "agents.report", By: state.Party{Name: workerRole}, Detail: detail}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := store.Record(state.Event{At: now, Verb: "agents.problem", Detail: "excluded problem"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"plain", "short", "json", "json-short"} {
+	for _, mode := range []string{litPlain, "short", "json", "json-short"} {
 		t.Run(mode, func(t *testing.T) {
 			var out bytes.Buffer
 			a := &app{store: store, out: &out, now: now, json: strings.Contains(mode, "json")}

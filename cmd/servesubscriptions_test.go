@@ -39,7 +39,7 @@ func TestServeRefusesLegacyResourceSubscriptions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		var got map[string]json.RawMessage
 		if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 			t.Fatalf("HTTP %d: %v", res.StatusCode, err)

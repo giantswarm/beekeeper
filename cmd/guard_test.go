@@ -413,9 +413,9 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	for shape, cmd := range map[string]string{
-		"direct": self + " run --class build -- true",
-		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
-		"script": script,
+		litDirect: self + " run --class build -- true",
+		"chain":   "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
+		"script":  script,
 	} {
 		_, errOut, rc := zsh(t, env, "timeout 3 "+testShell+" -c "+guard.ShellQuote(rewriteCall(t, cmd, true)))
 		if rc != 124 || !strings.Contains(errOut, guard.LogPrefix+"waiting up to 60m (the background default) for a build slot") {
@@ -677,7 +677,7 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 		t.Helper()
 		raw, err := json.Marshal(map[string]any{
 			"session_" + "id":      "sess-1",
-			"cwd":                  cwd,
+			executionOmpCwd:        cwd,
 			"hook_event_" + "name": "PreToolUse",
 			"tool_" + "name":       tool,
 			"tool_" + "input":      input,

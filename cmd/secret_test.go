@@ -109,7 +109,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{copyOp, src, dst, "--name", "db-copy", "--namespace", "team-b"},
+		{copyOp, src, dst, nameFlag, "db-copy", "--namespace", "team-b"},
 		{compareOp, src, dst},
 		{compareOp, src + "#data.password", dst + "#data.password"},
 		{fingerprintOp, src},
@@ -524,7 +524,7 @@ func gitCheckout(t *testing.T, url string) string {
 	t.Helper()
 	dir := t.TempDir()
 	const gitInit = "init"
-	for _, args := range [][]string{{gitInit, "-q"}, {"remote", "add", "origin", url}} {
+	for _, args := range [][]string{{gitInit, "-q"}, {"remote", loopAdd, "origin", url}} {
 		c := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own git calls
 		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := c.CombinedOutput(); err != nil {

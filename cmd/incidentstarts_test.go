@@ -122,11 +122,11 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 // Save the hold after the initial incident check, during an external read.
 // No real capacity command, GitHub request, or agent start is performed.
 func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
-	for _, kind := range []string{"worker", "reviewer", incidentFixerKind} {
+	for _, kind := range []string{"worker", litReviewer, incidentFixerKind} {
 		for _, repair := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/repair=%t", kind, repair), func(t *testing.T) {
 				r, _ := fillRig(t)
-				r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: "test-model"}}
+				r.a.cfg.Agents.Models = []config.AgentModelRule{{Match: ".*", Model: litTestModel}}
 				inserted := false
 				setHold := func() {
 					inserted = true

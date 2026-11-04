@@ -81,7 +81,7 @@ func TestStartDesktopTurnWarmCLI(t *testing.T) {
 			a, launcher, _ := wakeTwinSetup(t, id, true)
 			a.cfg.Claude.DesktopDir = t.TempDir()
 			plat.Opener = &recordingOpener{}
-			w := wakeTarget{name: "Worker", id: id, host: "local_" + id, model: sonnetModel}
+			w := wakeTarget{name: litWorker, id: id, host: "local_" + id, model: sonnetModel}
 			rec := filepath.Join(a.cfg.Claude.DesktopDir, "u", "o", w.host+".json")
 			writeFile(t, rec, `{"sessionId":"`+w.host+`","cliSessionId":"`+id+`","title":"Worker","model":"`+sonnetModel+`"}`)
 			if tc.noSocket {

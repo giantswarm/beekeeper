@@ -134,7 +134,7 @@ func (f *fakeInstallation) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var list []map[string]any
 		for _, n := range reached {
-			list = append(list, map[string]any{"name": n})
+			list = append(list, map[string]any{remoteMCPNameKey: n})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": len(reached), "repositories": list})
 	case p == "/installation/token" && asInst:

@@ -623,14 +623,14 @@ func launchChild(spec childSpec, base string) (int, error) {
 		return 0, err
 	}
 	if _, err := os.Stat(base + ".pid"); err == nil {
-		if raw, err := os.ReadFile(base + ".pid"); err == nil {
+		if raw, err := os.ReadFile(base + ".pid"); err == nil { //nolint:gosec // a path of this tool's own state
 			pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 			if pid > 0 && !proc.Alive(pid) {
 				_, _ = finishedRun(base)
 			}
 		}
 	}
-	if raw, err := os.ReadFile(base + terminationExt); err == nil {
+	if raw, err := os.ReadFile(base + terminationExt); err == nil { //nolint:gosec // a path of this tool's own state
 		gateLine("previous merge termination: %s", strings.TrimSpace(string(raw)))
 	}
 	removeMergeFiles(base)
@@ -980,7 +980,7 @@ func mergeChild(base string) childResult {
 		log, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
 		recordMergeTermination(base, mergeKillReason(log))
 	} else {
-		_ = os.Remove(base + terminationExt) // a newer completed run supersedes the old diagnostic
+		_ = os.Remove(base + terminationExt) // a newer completed run supersedes the old diagnostic //nolint:gosec // a path of this tool's own state
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)

@@ -20,7 +20,7 @@ import (
 
 func TestLaneSettleWaitsForTermedGate(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
-	gate := exec.Command("sh", "-c", `trap 'sleep 0.2; exit 0' TERM; touch "$1"; while :; do sleep 0.05; done`, "sh", ready)
+	gate := exec.Command("sh", "-c", `trap 'sleep 0.2; exit 0' TERM; touch "$1"; while :; do sleep 0.05; done`, "sh", ready) //nolint:gosec // a test fixture
 	if err := gate.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -30,8 +30,8 @@ func TestLaneSettleWaitsForTermedGate(t *testing.T) {
 	if !eventually(5*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }) {
 		t.Fatal("gate not ready")
 	}
-	a := queueApp(t, state.Merge{Repo: "o/r", PR: 1, Lane: "o/r", PID: gate.Process.Pid, Phase: state.Running})
-	a.as = "operator"
+	a := queueApp(t, state.Merge{Repo: repo, PR: 1, Lane: "o/r", PID: gate.Process.Pid, Phase: state.Running})
+	a.as = litOperator
 	var out bytes.Buffer
 	a.out = &out
 	bin := fakeGH(t, `'{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}'`)
@@ -66,7 +66,7 @@ func TestLaneSettleWaitBoundAndCancellation(t *testing.T) {
 			a := queueApp(t, m)
 			start := time.Now()
 			err := a.waitSettleRun(context.Background(), "o/r", 1, 20*time.Millisecond)
-			for _, want := range []string{"o/r#1", strconv.Itoa(os.Getpid()), "still exiting", "20ms", "retry: beekeeper lanes settle o/r 1"} {
+			for _, want := range []string{refOne, strconv.Itoa(os.Getpid()), "still exiting", "20ms", "retry: beekeeper lanes settle o/r 1"} {
 				if err == nil || !strings.Contains(err.Error(), want) {
 					t.Fatalf("want %q in %v", want, err)
 				}

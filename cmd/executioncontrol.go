@@ -517,7 +517,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				r.Completed = true
 			}
 		}
-		verb := "agents.idle"
+		verb := litAgentsIdle
 		if v.Finished {
 			verb = executionDone
 			clearRecords(st, me)

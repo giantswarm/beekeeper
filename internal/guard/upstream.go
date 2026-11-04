@@ -61,7 +61,7 @@ var ghValued = map[string]bool{"-R": true, flagRepo: true, "-t": true, "--title"
 	"--add-reviewer": true, "--remove-reviewer": true, "--add-project": true, "--remove-project": true, "-c": true,
 	"--comment": true, "-n": true, "--notes": true, "--notes-file": true, "--target": true, "--template": true,
 	"-T": true, "-s": true, "--subject": true, "--match-head-commit": true, "--author-email": true, "-A": true,
-	"-d": true, "--description": true, "--color": true, "--name": true, "--reason": true, "-j": true, flagJSON: true,
+	"-d": true, "--description": true, "--color": true, "--name": true, worktreeReason: true, "-j": true, flagJSON: true,
 	"-q": true, flagJQ: true}
 
 var (
