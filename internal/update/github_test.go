@@ -520,3 +520,23 @@ func TestGitHubPublicReleaseUploadWindow(t *testing.T) {
 		}
 	}
 }
+
+// A release whose assets never came does not hold updates back for good.
+func TestGitHubReleaseBeyondTheUploadWindowFallsBack(t *testing.T) {
+	const newest, previous = "v0.171.0", "v0.170.0"
+	published := time.Now().Add(-2 * assetUploadWindow).UTC().Format(time.RFC3339)
+	stubGitHub(t, "v0.169.0", func(r *http.Request) (int, string, http.Header) {
+		switch {
+		case strings.Contains(r.URL.Path, matchingRefsPath):
+			return 200, refsJSON(newest, previous), nil
+		case strings.HasSuffix(r.URL.Path, "/releases/tags/"+newest):
+			return 200, strings.TrimSuffix(releaseJSON(newest, false, false), "}") + `,"published_at":"` + published + `"}`, nil
+		}
+		return 200, releaseJSON(previous, true, true), nil
+	})
+	var output strings.Builder
+	res, err := Run(context.Background(), &output, true)
+	if !errors.Is(err, ErrOutdated) || res.Latest != previous {
+		t.Fatalf("result=%+v err=%v", res, err)
+	}
+}
