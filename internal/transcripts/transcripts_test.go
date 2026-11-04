@@ -286,10 +286,10 @@ func TestCodexNativeKeepsCommentary(t *testing.T) {
 }
 
 func TestDefaultAccessRequiresWorkerRole(t *testing.T) {
-	caller := Caller{Party: state.Party{Session: "worker"}, Repo: testBeekeeperRepo}
-	for _, role := range []string{"", "operator", "guide", "worker"} {
+	caller := Caller{Party: state.Party{Session: testRosterWorker}, Repo: testBeekeeperRepo}
+	for _, role := range []string{"", "operator", testGuide, testWorker} {
 		meta := Meta{ID: "other", Repo: testBeekeeperRepo, Role: role}
-		if got := Allowed(caller, meta, nil, time.Now()); got != (role == "worker") {
+		if got := Allowed(caller, meta, nil, time.Now()); got != (role == testWorker) {
 			t.Errorf("role %q: allowed = %v", role, got)
 		}
 	}

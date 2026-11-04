@@ -398,10 +398,11 @@ func TestExecutionTranscriptRPC(t *testing.T) {
 }
 
 func TestTranscriptsUnknownHarnessHasNoGuideAccess(t *testing.T) {
+	const session = "unregistered-worker"
 	a, _ := newTranscriptTestApp(t)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "unregistered-worker")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", session)
 	t.Setenv("CLAUDE_CODE_HOST_SESSION_ID", "")
-	t.Setenv("CLAUDE_CODE_SESSION_NAME", "unregistered-worker")
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", session)
 	st := &state.State{}
 	caller, _ := a.resolveTranscriptCaller(st)
 	if caller.IsGuide || caller.Role != workerRole {
@@ -410,7 +411,7 @@ func TestTranscriptsUnknownHarnessHasNoGuideAccess(t *testing.T) {
 	if transcripts.Allowed(caller, transcripts.Meta{ID: "other", Role: guideRole.name}, nil, a.now) {
 		t.Fatal("unregistered worker can read guide transcript")
 	}
-	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "unregistered-worker"}}}
+	st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: session}}}
 	caller, _ = a.resolveTranscriptCaller(st)
 	if !caller.IsGuide {
 		t.Fatal("current guide holder lost guide access")
