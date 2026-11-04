@@ -267,7 +267,8 @@ process tree, each running over a minute, are one STACKED line with the
 count, the oldest's age, its parent and its session. More than
 watch.toolProcsMax (1000) processes of the CLIs in watch.tools (kubectl,
 helm, tsh, gh, flux, devctl) running machine-wide are one LOAD line with
-their commands and the sessions that run them. Each ends with an ENDED
+their commands and the sessions that run them. A parent-child chain of one
+CLI longer than watch.toolProcsMax is named as a possible recursion. Each ends with an ENDED
 line; a negative threshold turns it off. A printed command line
 keeps no value: the program, its subcommands and the flag names.
 
@@ -1672,6 +1673,11 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		var callers string
 		if refused {
 			callers = w.callersText()
+			if recorded, err := githubWindowCallers(w.app, b.GraphQL); err != nil {
+				callers = "window callers unknown (" + err.Error() + "); live: " + callers
+			} else if len(recorded) > 0 {
+				callers = "window: " + githubCallersText(recorded) + "; live: " + callers
+			}
 		}
 		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
@@ -1805,6 +1811,9 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		if since := now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
+			if m.Release == "" && !m.ReleaseFailed {
+				why += fmt.Sprintf("; recover with devctl release wait %s --pr %d, then name the release with beekeeper lanes settle %s %d --release <version>", m.Repo, m.PR, m.Repo, m.PR)
+			}
 			w.emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",
 				lane.Name, m.Key(), dur(since), why, lane.Name)
 		}
@@ -2137,12 +2146,10 @@ func (w *watcher) noteAnswers(st *state.State) {
 	}
 }
 
-// refusals says each command the upstream guard refused since the last
-// reading, by whom and to which repository: the supervisor finds out what
-// the session was about to write and why it tried. The first reading is the
-// baseline and says none.
+// refusals reports upstream refusals and recovered hook panics since the
+// last reading. The first reading establishes a baseline and says none.
 func (w *watcher) refusals() {
-	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused })
+	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
 	if err != nil {
 		return // the next reading reads them again
 	}
@@ -2154,6 +2161,10 @@ func (w *watcher) refusals() {
 	for _, e := range evs {
 		if e.At.After(since) {
 			w.refusedSince = e.At
+			if e.Verb == "hook.panic" {
+				w.emitNow("hook.panic", "HOOK PANIC %s", truncate(e.Detail, 400))
+				continue
+			}
 			w.emitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), truncate(e.Detail, 400))
 		}
 	}
@@ -2434,6 +2445,9 @@ func reportLines(r state.WorkerReport) []string {
 // name only the supervisor or the guide wait on an operational handoff,
 // including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
+	if p.Checks {
+		return false
+	}
 	// Desk reviews belong to the supervisor loop, including an unproven
 	// review park that the worker still needs to correct.
 	if strings.Contains(strings.ToLower(p.Waits), "desk review") {

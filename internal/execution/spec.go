@@ -341,6 +341,7 @@ type HarnessReadiness struct {
 }
 
 type Capabilities struct {
+	CIWait bool `json:"ciWait"`
 	// SourcePreparation promises source-chunk upload and typed not-found
 	// responses when inspecting an execution whose journal does not exist.
 	SourcePreparation bool              `json:"sourcePreparation"`
