@@ -963,9 +963,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 	published = published || req.GetArguments()[paramDone] != nil
 	pubTask, done := strings.TrimSpace(req.GetString(paramTask, "")), req.GetBool(paramDone, false)
 	task := ""
+	registered := c.me
 	err := c.app.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, x := range st.Agents {
-			if !strings.EqualFold(x.Name, c.me.Name) || x.Host != c.me.Host {
+			if !strings.EqualFold(x.Name, registered.Name) || x.Host != c.me.Host {
 				continue
 			}
 			// An address, local:<host>/<name>, names one agent.
@@ -975,7 +976,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 			// Registered again: the call's audit Event records it, since
 			// within the same second nothing the resource stores changes.
 			task = x.Task
-			st.Agents[i].Party, st.Agents[i].Registered = c.me, c.app.now.UTC()
+			// Keep the persisted spelling and object key for this address.
+			registered.Name = x.Name
+			c.concern = kube.RosterObject(registered)
+			st.Agents[i].Party, st.Agents[i].Registered = registered, c.app.now.UTC()
 			if published {
 				task = pubTask
 				publish(&st.Agents[i], pubTask, done, c.app.now.UTC())
@@ -992,11 +996,11 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	if task != "" {
-		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", c.me.Name, task)
+		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", registered.Name, task)
 	} else {
-		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", c.me.Name)
+		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", registered.Name)
 	}
-	return map[string]any{"agent": c.me, "task": task}, err
+	return map[string]any{"agent": registered, "task": task}, err
 }
 
 // publish sets a machine's agent's task and whether it is done, the fields
