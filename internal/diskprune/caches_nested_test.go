@@ -8,7 +8,7 @@ import (
 )
 
 func TestCacheFilesNestedPolicyDoesNotBlockOuterCleanup(t *testing.T) {
-	for _, scenario := range []string{"checkout", "initial reference", "refreshed reference", whyUnreadable} {
+	for _, scenario := range []string{"nested checkout", "initial reference", "refreshed reference", whyUnreadable} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			outer := cacheFile(t, root, "outer", 1000, 10*day)
@@ -17,7 +17,7 @@ func TestCacheFilesNestedPolicyDoesNotBlockOuterCleanup(t *testing.T) {
 			p := Policy{Root: root, Files: true, OlderThan: 7 * day, Nested: []string{inner}}
 			var refs []string
 			switch scenario {
-			case "checkout":
+			case "nested checkout":
 				cacheFile(t, inner, ".git/HEAD", 10, 10*day)
 			case "initial reference":
 				refs = []string{data}
@@ -27,14 +27,14 @@ func TestCacheFilesNestedPolicyDoesNotBlockOuterCleanup(t *testing.T) {
 				if err := os.Chmod(inner, 0); err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = os.Chmod(inner, 0700) }()
+				defer func() { _ = os.Chmod(inner, 0700) }() //nolint:gosec // test-owned directory
 				if _, err := os.ReadDir(inner); !os.IsPermission(err) {
 					t.Skip("filesystem does not enforce directory permissions")
 				}
 			}
 			r := Cache(p, time.Now(), false, refs, nil, false)
 			if scenario == whyUnreadable {
-				if err := os.Chmod(inner, 0700); err != nil {
+				if err := os.Chmod(inner, 0700); err != nil { //nolint:gosec // test-owned directory
 					t.Fatal(err)
 				}
 			}
