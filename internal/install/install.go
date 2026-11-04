@@ -104,6 +104,10 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	}
 	p := &plan{home: e.Spec.Home}
 	if e.Setup.Available() {
+		needsStop := e.Setup.Started
+		if stopper, ok := e.Setup.(platform.SetupStopper); ok {
+			needsStop = stopper.NeedsStop
+		}
 		for _, svc := range m.Services {
 			stop := e.Setup.Stop
 			if symlink(svc) {
@@ -112,7 +116,7 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 				}
 				stop = e.Setup.Halt
 			}
-			if e.Setup.Started(ctx, svc) {
+			if needsStop(ctx, svc) {
 				p.command(ctx, e, stop(svc))
 			}
 		}

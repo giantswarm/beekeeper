@@ -131,6 +131,13 @@ func (systemdSetup) Started(ctx context.Context, path string) bool {
 	return systemctlIs(ctx, "is-enabled", unit, "enabled") && systemctlIs(ctx, "is-active", unit, "active")
 }
 
+// NeedsStop includes an enabled unit that failed or stopped, and a running
+// unit that was disabled without stopping it.
+func (systemdSetup) NeedsStop(ctx context.Context, path string) bool {
+	unit := filepath.Base(path)
+	return systemctlIs(ctx, "is-enabled", unit, "enabled") || systemctlIs(ctx, "is-active", unit, "active")
+}
+
 // systemctlIs reports whether systemctl --user verb says want of unit.
 func systemctlIs(ctx context.Context, verb, unit, want string) bool {
 	out, _ := exec.CommandContext(ctx, systemctl, userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes

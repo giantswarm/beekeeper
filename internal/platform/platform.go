@@ -271,6 +271,13 @@ type Setup interface {
 	Restart(path string) [][]string
 }
 
+// SetupStopper optionally reports partial service states during uninstall.
+// Started requires both enabled and running; a unit can still need stopping
+// or disabling when only one of those states remains.
+type SetupStopper interface {
+	NeedsStop(ctx context.Context, path string) bool
+}
+
 // Platform is one build's implementation of every part.
 type Platform struct {
 	Machine  Machine
