@@ -2,6 +2,7 @@ package takeover
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -141,5 +142,58 @@ func TestHoldIgnoresAGarbledAnswer(t *testing.T) {
 	}
 	if got := <-done; got[1].(bool) {
 		t.Fatalf("a garbled answer decided: %v", got)
+	}
+}
+
+func TestPendingUsesLiteralPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, session, siblingState, siblingSession string
+	}{
+		{"bracketed state", "state[work]", tSession, "statew", tSession},
+		{"unmatched bracket", "state[", tSession, "", ""},
+		{"bracketed session", "state", "session[work]", "state", "sessionw"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := Dir(filepath.Join(root, tc.state))
+			writeRequest := func(dir, session, filename string, r Request) {
+				t.Helper()
+				b, err := json.Marshal(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writeAtomic(filepath.Join(dir, session, filename), b); err != nil {
+					t.Fatal(err)
+				}
+			}
+			oldest := Request{ID: "z-oldest", Session: tc.session, At: time.Unix(1, 0)}
+			newest := Request{ID: "a-newest", Session: tc.session, At: time.Unix(2, 0)}
+			writeRequest(dir, tc.session, newest.ID+requestExt, newest)
+			writeRequest(dir, tc.session, oldest.ID+requestExt, oldest)
+			writeRequest(dir, tc.session, "ignored.answer", Request{ID: "ignored"})
+			if err := os.Mkdir(filepath.Join(dir, tc.session, "directory.request"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if tc.siblingState != "" {
+				writeRequest(Dir(filepath.Join(root, tc.siblingState)), tc.siblingSession, "other.request", Request{ID: "other"})
+			}
+			if err := Take(dir, tc.session, Flag{PID: tScreen}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Pending(dir, tc.session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 2 || got[0].ID != oldest.ID || got[1].ID != newest.ID {
+				t.Fatalf("Pending = %+v, want oldest then newest", got)
+			}
+		})
+	}
+}
+
+func TestPendingMissingDirectory(t *testing.T) {
+	got, err := Pending(Dir(filepath.Join(t.TempDir(), "state[")), "missing[session]")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("Pending = %+v, %v, want no requests and no error", got, err)
 	}
 }
