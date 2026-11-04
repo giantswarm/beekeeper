@@ -47,6 +47,7 @@ if [ "$trusted" = false ]; then
 fi
 input=$(cat)
 printf '%s|%s|%s\n' "$CODEX_HOME" "$*" "$input" >> "$calls"
+if [ -e "$(dirname "$0")/startup-error" ]; then cat "$(dirname "$0")/startup-error" >&2; exit 1; fi
 if [ -e "$(dirname "$0")/no-thread" ]; then echo '{"type":"error"}'; exit 1; fi
 if [ "$2" = resume ]; then
   thread=""

@@ -266,8 +266,9 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		prompt += "\n"
 	}
 	c.Dir, c.Env, c.Stdin = j.Handle.Workspace, env, strings.NewReader(prompt)
-	// Authentication diagnostics must not leak values into logs or replies.
-	c.Stderr = io.Discard
+	// Keep bounded startup diagnostics without exposing authentication output.
+	stderr := &codexStderr{}
+	c.Stderr = stderr
 	stdout, err := c.StdoutPipe()
 	if err != nil {
 		return thread, false, err
@@ -275,9 +276,16 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	if err := c.Start(); err != nil {
 		return thread, false, errors.New("harness process could not start")
 	}
+	wait := func() error {
+		err := c.Wait()
+		if logErr := stderr.writeLog(log); logErr != nil {
+			return logErr
+		}
+		return err
+	}
 	kill := func(err error) (string, bool, error) {
 		_ = c.Process.Kill()
-		_ = c.Wait()
+		_ = wait()
 		return thread, false, err
 	}
 	accepted, failed := false, false
@@ -330,7 +338,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	if scan.Err() != nil {
 		_ = c.Process.Kill()
 	}
-	err = c.Wait()
+	err = wait()
 	if err == nil {
 		err = scan.Err()
 	}
