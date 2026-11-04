@@ -50,7 +50,8 @@ type Table struct {
 	ByPID    map[int]*Process
 	children map[int][]int
 	// root is the process tree the table was read from; "" is /proc.
-	root string
+	root       string
+	readErrors map[int]error
 }
 
 // Read scans /proc.
@@ -68,7 +69,7 @@ func ReadAt(root string) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}, root: root}
+	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}, root: root, readErrors: map[int]error{}}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
@@ -76,12 +77,28 @@ func ReadAt(root string) (*Table, error) {
 		}
 		p, err := readProcess(root, pid, boot)
 		if err != nil {
-			continue // exited while scanning
+			t.readErrors[pid] = err
+			continue // exited or inaccessible while scanning
 		}
 		t.add(p)
 	}
 	t.sortChildren()
 	return t, nil
+}
+
+// MissingReason explains why pid is absent from this snapshot. A process hidden
+// by the caller's PID namespace or procfs mount cannot be distinguished from
+// one that has exited.
+func (t *Table) MissingReason(pid int) string {
+	err := t.readErrors[pid]
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return "not visible to the caller (permission denied)"
+	case err == nil, errors.Is(err, os.ErrNotExist):
+		return "not found or not visible in the caller's process namespace"
+	default:
+		return "could not read process information"
+	}
 }
 
 // NewTable is the table of the processes ps, linked by their parents: a
@@ -130,7 +147,7 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 		return nil, err
 	}
 	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "cmdline")))
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrPermission) {
 		return nil, err
 	}
 	return &Process{

@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,5 +44,49 @@ func TestPsRowsMaskCommandLines(t *testing.T) {
 	}
 	if got := psRows(tb, now, []string{"11", "kthreadd"}); len(got) != 2 || got[0].PID != 2 || got[1].PID != 11 {
 		t.Errorf("filters by PID and name = %+v", got)
+	}
+}
+
+func TestPsRequestedLivePID(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc")
+	}
+	child := exec.Command("sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	tb, err := proc.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	filters := []string{strconv.Itoa(child.Process.Pid), "does-not-match"}
+	rows := psRows(tb, time.Now(), filters)
+	if len(rows) != 1 || rows[0].PID != child.Process.Pid || rows[0].Command != "sleep 30" {
+		t.Fatalf("requested live process = %+v", rows)
+	}
+	if err := psPIDError(tb, filters); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPsUnavailablePIDs(t *testing.T) {
+	tb := table(&proc.Process{PID: 10, Comm: "sleep"})
+	filters := []string{"10", "20", "20", "30", "sleep"}
+	rows := psRows(tb, time.Now(), filters)
+	if len(rows) != 1 || rows[0].PID != 10 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	err := psPIDError(tb, filters)
+	if err == nil {
+		t.Fatal("missing PIDs had no explanation")
+	}
+	for _, pid := range []string{"20", "30"} {
+		if strings.Count(err.Error(), "PID "+pid+": not found or not visible") != 1 {
+			t.Fatalf("diagnostic = %v", err)
+		}
+	}
+	if err := psPIDError(tb, []string{"unmatched-name"}); err != nil {
+		t.Fatalf("name filter: %v", err)
 	}
 }
