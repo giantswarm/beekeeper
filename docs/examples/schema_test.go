@@ -32,7 +32,7 @@ func TestConfigPassesCheck(t *testing.T) {
 	// Replace the example's home paths before checking, including the inputs
 	// whose existence Check resolves independently of the loader's defaults.
 	raw := strings.ReplaceAll(examples.Config, "~/", filepath.ToSlash(home)+"/")
-	path := filepath.Join(home, "config.yaml")
+	path := filepath.Join(home, "example.yaml")
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
