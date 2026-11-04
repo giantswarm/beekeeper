@@ -1,9 +1,6 @@
 package guard
 
 import (
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,14 +25,9 @@ const issueRead = `- heading "browse: a scripted click" [ref_3]
 // click on the element the step names passes, and so does a typed text, a
 // read and a script that clicks nothing.
 func TestSubscriptionRefusal(t *testing.T) {
-	transcript := filepath.Join(t.TempDir(), "t.jsonl")
-	lines := []string{
-		resultLine(strconv.Quote(strings.ReplaceAll(issueRead, "Notifications", "Customize"))),
-		resultLine(`[{"type":"text","text":` + strconv.Quote(issueRead) + `}]`),
-	}
-	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	transcript := drawsTranscript(t,
+		drawsCall{chromeReadPage, map[string]any{tabKey: tab7}, strings.ReplaceAll(issueRead, "Notifications", "Customize"), applicationsPage},
+		drawsCall{chromeReadPage, map[string]any{tabKey: tab7}, issueRead, applicationsPage})
 	click := func(ref, summary string) map[string]any {
 		return tabInput(leftClick, map[string]any{refKey: ref, summaryKey: summary})
 	}
