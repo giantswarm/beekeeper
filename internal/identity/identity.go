@@ -9,10 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 )
@@ -59,7 +62,18 @@ func New(ctx context.Context, cfg config.Serve) (*Verifier, error) {
 	case len(cfg.Teams) == 0:
 		return nil, errors.New("serve.teams is not set: the Dex groups that name a caller's team")
 	}
-	p, err := oidc.NewProvider(ctx, cfg.Issuer)
+	// go-oidc shares key fetches in a background context, independent of
+	// Verify's cancellation. Bound the whole HTTP request, including its body,
+	// so a stalled fetch cannot prevent every subsequent key refresh.
+	client := http.DefaultClient
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+		client = c
+	}
+	bounded := *client
+	if bounded.Timeout <= 0 || bounded.Timeout > 30*time.Second {
+		bounded.Timeout = 30 * time.Second
+	}
+	p, err := oidc.NewProvider(oidc.ClientContext(ctx, &bounded), cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("the issuer %s: %w", cfg.Issuer, err)
 	}
