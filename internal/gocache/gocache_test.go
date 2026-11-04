@@ -242,6 +242,7 @@ func TestHoldGivesUpWithItsContext(t *testing.T) {
 }
 
 func TestModDir(t *testing.T) {
+	t.Setenv("GOENV", "off")
 	t.Setenv("GOMODCACHE", "/m")
 	if got := ModDir(); got != "/m" {
 		t.Errorf("GOMODCACHE: %s", got)
