@@ -361,13 +361,13 @@ func TestLeaseConfiguredInstallation(t *testing.T) {
 	if err != nil || !strings.Contains(out, installation) || !strings.Contains(out, "cut-over") || !strings.Contains(out, claimMe.Name) {
 		t.Fatalf("list: %q, %v", out, err)
 	}
-	if out, err = runLease(a, "release", installation); err != nil {
+	if out, err = runLease(a, leaseReleaseVerb, installation); err != nil {
 		t.Fatalf("release: %q, %v", out, err)
 	}
 	if out, err = runLease(a, "status", installation); err != nil || out != "free\n" {
 		t.Fatalf("released status: %q, %v", out, err)
 	}
-	for _, args := range [][]string{{"claim", "unknown", "-p", "cut-over"}, {"release", "unknown"}} {
+	for _, args := range [][]string{{leaseClaimVerb, kindUnknown, "-p", "cut-over"}, {leaseReleaseVerb, kindUnknown}} {
 		if _, err := runLease(a, args...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "unknown resource") {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -391,3 +391,8 @@ func TestLeaseConfiguredInstallationQueued(t *testing.T) {
 		t.Fatalf("claim after release: %q, %v", out, err)
 	}
 }
+
+const (
+	leaseClaimVerb   = "claim"
+	leaseReleaseVerb = "release"
+)

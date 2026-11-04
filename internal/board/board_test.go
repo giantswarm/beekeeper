@@ -977,7 +977,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
 			state, summary := stateClosed, 1
 			if open {
-				state, summary = "OPEN", 0
+				state, summary = stateOpen, 0
 			}
 			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
 			f := &fakeGH{t: t, pages: []string{

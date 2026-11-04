@@ -1268,12 +1268,12 @@ func TestWatchBatchInterval(t *testing.T) {
 }
 
 func TestLeasableInstallations(t *testing.T) {
-	c := Config{Resources: []string{"shared"}}
-	c.Alerts.Installations = []Installation{{Name: "customer"}, {Name: "shared"}, {Name: "customer"}}
-	if got, want := c.Leasable(), []string{"shared", "customer", Browser}; !slices.Equal(got, want) {
+	c := Config{Resources: []string{leasableShared}}
+	c.Alerts.Installations = []Installation{{Name: leasableCustomer}, {Name: leasableShared}, {Name: leasableCustomer}}
+	if got, want := c.Leasable(), []string{leasableShared, leasableCustomer, Browser}; !slices.Equal(got, want) {
 		t.Fatalf("Leasable() = %v, want %v", got, want)
 	}
-	if !c.IsLeasable("customer") || c.IsLeasable("unknown") {
+	if !c.IsLeasable(leasableCustomer) || c.IsLeasable("unknown") {
 		t.Fatal("only configured installations should be leasable")
 	}
 }
@@ -1320,3 +1320,8 @@ func TestMergeCITimeoutsRejectInvalidOverrides(t *testing.T) {
 		})
 	}
 }
+
+const (
+	leasableShared   = "shared"
+	leasableCustomer = "customer"
+)

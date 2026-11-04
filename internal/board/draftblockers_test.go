@@ -13,9 +13,9 @@ func TestReadSkipsDraftAndUnmergedBlockersAndOffersMerged(t *testing.T) {
 		draft                     bool
 		want                      string
 	}{
-		{"draft", "OPEN", "OPEN", true, "o/r#9 awaiting o/r#10 (draft)"},
-		{"unmerged", "OPEN", "OPEN", false, "o/r#9 awaiting o/r#10 (unmerged)"},
-		{"merged", "CLOSED", "MERGED", false, ""},
+		{"draft PR", stateOpen, stateOpen, true, "o/r#9 awaiting o/r#10 (draft)"},
+		{"unmerged", stateOpen, stateOpen, false, "o/r#9 awaiting o/r#10 (unmerged)"},
+		{"merged PR", "CLOSED", "MERGED", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps := fmt.Sprintf(`,"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, tc.issueState)

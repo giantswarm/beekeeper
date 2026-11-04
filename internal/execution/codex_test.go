@@ -403,7 +403,7 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
-	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports turn.failed", "turn-failed"}, {"first turn ends without completion", "incomplete-turn"}} {
+	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", codexFailTurn}, {"first turn reports turn.failed", "turn-failed"}, {"first turn ends without completion", "incomplete-turn"}} {
 		t.Run(test.name, func(t *testing.T) {
 			f, dir := codexFixture(t)
 			f.r.Messaging = true
@@ -427,7 +427,7 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 			}
 		})
 	}
-	for _, marker := range []string{"fail-turn", "turn-failed", "incomplete-turn"} {
+	for _, marker := range []string{codexFailTurn, "turn-failed", "incomplete-turn"} {
 		t.Run("wake/"+marker, func(t *testing.T) {
 			f, dir := codexFixture(t)
 			f.r.Messaging = true
@@ -492,3 +492,5 @@ func TestCodexRunnerCoordinatorMCP(t *testing.T) {
 		}
 	}
 }
+
+const codexFailTurn = "fail-turn"

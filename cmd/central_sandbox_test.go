@@ -15,7 +15,7 @@ import (
 func TestCentralSandboxExit(t *testing.T) {
 	t.Setenv("BEEKEEPER_SANDBOX", "1")
 	t.Setenv("BEEKEEPER_SANDBOX_BROKERED", "")
-	a := &app{centralClient: central.New(config.Central{Context: "test", Timeout: config.Duration{Duration: time.Second}}, func(context.Context, ...string) ([]byte, error) {
+	a := &app{centralClient: central.New(config.Central{Context: "sandbox-context", Timeout: config.Duration{Duration: time.Second}}, func(context.Context, ...string) ([]byte, error) {
 		t.Fatal("sandboxed command invoked muster")
 		return nil, nil
 	})}
