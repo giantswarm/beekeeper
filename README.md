@@ -565,6 +565,24 @@ beekeeper lease release model-server
 
 ## The person's folders
 
+`projects.dir` (default `~/projects`) holds the person's clones and org folders
+(direct children that are no checkout and hold clones). The home folder,
+`projects.dir` and these org folders are protected: the PreToolUse hook refuses a
+new direct child from Write or NotebookEdit, shell output redirection or `tee`,
+`mkdir`, `touch`, `cp`, `mv`, `git clone`, `gh repo clone` or `git worktree add`.
+Existing targets and paths deeper inside a folder pass this protection.
+
+`projects.worktrees` defaults to `[~/projects/worktrees]`; put worktrees and scratch
+checkouts there with layout `<repo>/<branch>`. For example, use
+`git -C <clone> worktree add <place>/<repo>/<branch> -b <branch> origin/main`.
+`agents.roots` defaults to these places when unset. `home.places` defaults to
+`[~/.local/state]` for state, logs and backups; drafts use the session scratchpad.
+The refusal and the worker rules supplied by `agents start` name these paths.
+A path the person named for the task is created by the person or with their go-ahead.
+Commands follow `cd` (bare `cd` goes home), `git -C`, `~`, `$HOME` and shell
+assignments; use `cd "${dir:?}"` to stop on an empty directory variable.
+
+
 `hooks.personFolders` names the person's folders (`~/` and globs: `[~, ~/projects, ~/projects/*]`;
 unset, the guard is off). The PreToolUse hook refuses a Write, Edit, MultiEdit or NotebookEdit, and a
 Bash command's output redirection (`>`, `>|`, `>>`, `&>`, `n>`) or `tee` target, that creates a file

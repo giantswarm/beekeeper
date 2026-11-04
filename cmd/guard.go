@@ -698,6 +698,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
 				h.GuardPersonalSearch = a.cfg.Hooks.GuardPersonalSearch
+				h.ProjectsDir, h.WorktreePlaces, h.HomePlaces = a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {

@@ -490,7 +490,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -499,7 +499,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// A timer's start says what the gate did to it in the log.
 			origHarness, origModel := harness, model
 			autoPick := origHarness == harnessAuto
-			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			baseBrief := a.workerPrompt(taskPrompt(brief), gaps...)
 			var timerLine string
 			for {
 				gateFrom := time.Now()
@@ -2055,6 +2055,16 @@ func workerPrompt(prompt string, inline ...string) string {
 	}
 	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
 		project.Version(), rules, prompt)
+}
+
+// workerPrompt adds this desk's configured paths to the shipped Git rule.
+func (a *app) workerPrompt(prompt string, inline ...string) string {
+	return strings.Replace(workerPrompt(prompt, inline...), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1)
+}
+
+func (a *app) entryRules() string {
+	home, _ := os.UserHomeDir()
+	return guard.EntryRules(home, a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places, scratchpadMark)
 }
 
 // topicSkills names topics as the skills a worker loads.

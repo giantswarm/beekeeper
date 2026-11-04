@@ -247,6 +247,10 @@ type Hook struct {
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
+	// ProjectsDir and the places enable protection against new direct entries
+	// in the home, projects and org folders (entries.go).
+	ProjectsDir                string
+	WorktreePlaces, HomePlaces []string
 	// PersonFolders are the person's folders (hooks.personFolders, absolute
 	// globs): no file is created directly in one, nor an untracked one in the
 	// main working tree of a checkout that sits directly in one (folders.go);
@@ -387,6 +391,9 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("folderRefusal")
+	if r := h.entryRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if r := h.folderRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}

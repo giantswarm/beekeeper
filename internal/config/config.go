@@ -36,6 +36,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
+// Projects separates the person's clones from session checkouts.
+type Projects struct {
+	Dir       string   `yaml:"dir"`
+	Worktrees []string `yaml:"worktrees"`
+}
+
+// Home names places for session state, logs and backups.
+type Home struct {
+	Places []string `yaml:"places"`
+}
+
 // Browser is the resource every machine has: the one Chrome the Claude in
 // Chrome extension drives.
 const Browser = "browser"
@@ -46,6 +57,8 @@ const ModelServer = "model-server"
 
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Projects Projects `yaml:"projects"`
+	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
@@ -3344,6 +3357,22 @@ func (c *Config) defaults() error {
 	if err != nil {
 		return err
 	}
+	setStr(&c.Projects.Dir, filepath.Join(home, "projects"))
+	c.Projects.Dir = filepath.Clean(homePath(home, c.Projects.Dir))
+	if c.Projects.Worktrees == nil {
+		c.Projects.Worktrees = []string{filepath.Join(c.Projects.Dir, "worktrees")}
+	}
+	if c.Home.Places == nil {
+		c.Home.Places = []string{filepath.Join(home, ".local", "state")}
+	}
+	for _, places := range [][]string{c.Projects.Worktrees, c.Home.Places} {
+		for i, p := range places {
+			places[i] = filepath.Clean(homePath(home, p))
+		}
+	}
+	if c.Agents.Roots == nil {
+		c.Agents.Roots = slices.Clone(c.Projects.Worktrees)
+	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		state = filepath.Join(home, ".local", "state")
@@ -3840,6 +3869,14 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	for key, paths := range map[string][]string{"projects.dir": {c.Projects.Dir}, "projects.worktrees": c.Projects.Worktrees, "home.places": c.Home.Places} {
+		for _, p := range paths {
+			if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) == "/") {
+				report(fmt.Errorf("%s: %q: want an absolute directory below the filesystem root (~/ allowed)", key, p))
+			}
+		}
+	}
+
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
