@@ -248,7 +248,7 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
-	for _, level := range []string{"", "high"} {
+	for _, level := range []string{"", testEffortHigh} {
 		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
 	}
 }
