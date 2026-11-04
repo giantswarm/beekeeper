@@ -7,6 +7,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const reconcileSupervisor = "Supervisor"
+
 func TestReconcileReplacesActiveUpgrade(t *testing.T) {
 	st := &state.State{}
 	Reconcile(st, prod, []Upgrade{{Cluster: "mc", From: "35.0.1", To: to}}, at.Add(-23*time.Hour), watch)
@@ -24,7 +26,7 @@ func TestReconcileReplacesActiveUpgrade(t *testing.T) {
 	if begun, ended = Reconcile(st, prod, []Upgrade{{Cluster: "mc", Rolling: true}}, at.Add(2*time.Hour), watch); len(begun)+len(ended) != 0 {
 		t.Fatalf("the previous hold's age ended the new rollout: begun %+v, ended %+v", begun, ended)
 	}
-	if !Lift(st, HoldTarget(prod, "mc"), state.Party{Name: "Supervisor"}, at.Add(2*time.Hour)) {
+	if !Lift(st, HoldTarget(prod, "mc"), state.Party{Name: reconcileSupervisor}, at.Add(2*time.Hour)) {
 		t.Fatal("the new upgrade was not held")
 	}
 	if begun, ended = Reconcile(st, prod, []Upgrade{next}, at.Add(2*time.Hour+time.Minute), watch); len(begun)+len(ended) != 0 {
