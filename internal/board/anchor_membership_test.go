@@ -4,10 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/giantswarm/beekeeper/internal/config"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/config"
+)
+
+const (
+	crossOwnerAnchor = "org/engine#9"
+	rankAfterNine    = `I1 after "I9"`
 )
 
 func TestRankAnchorPreservesBlankCrossOwnerItems(t *testing.T) {
@@ -33,8 +39,8 @@ func TestRankAnchorPreservesBlankCrossOwnerItems(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected query: %s", q)
 	}
-	got, err := c.RankAnchor(t.Context(), engineIssue7, "org/engine#9")
-	if err != nil || got != "org/engine#9" || len(mutations) != 0 {
+	got, err := c.RankAnchor(t.Context(), engineIssue7, crossOwnerAnchor)
+	if err != nil || got != crossOwnerAnchor || len(mutations) != 0 {
 		t.Fatalf("blank existing anchor = %q, %v; mutations %v", got, err, mutations)
 	}
 }
@@ -62,7 +68,7 @@ func TestRankChecksCrossOwnerMembershipWithoutWriting(t *testing.T) {
 				}
 				return f.run(ctx, args...)
 			}}
-			rk, err := c.Rank(t.Context(), issue5, Place{After: "org/engine#9"})
+			rk, err := c.Rank(t.Context(), issue5, Place{After: crossOwnerAnchor})
 			if (err != nil) != tc.wantError || pages != 2 {
 				t.Fatalf("rank=%+v, error=%v, membership pages=%d", rk, err, pages)
 			}
@@ -70,7 +76,7 @@ func TestRankChecksCrossOwnerMembershipWithoutWriting(t *testing.T) {
 				if len(f.mutations) != 0 {
 					t.Fatalf("refused rank wrote %v", f.mutations)
 				}
-			} else if !slices.Equal(f.mutations, []string{`I1 after "I9"`}) {
+			} else if !slices.Equal(f.mutations, []string{rankAfterNine}) {
 				t.Fatalf("rank wrote %v", f.mutations)
 			}
 		})

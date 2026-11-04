@@ -636,14 +636,14 @@ func TestRankMovesTheItemByItsPosition(t *testing.T) {
 	}
 	f.mutations, f.moved = nil, ""
 	rk, err = c.Rank(ctx, issue5, Place{After: "https://github.com/o/r/issues/9"})
-	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine}) {
 		t.Errorf("Rank after = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	// Before is the item after the other one, then the other one after the
 	// item: the other one's predecessor is never read.
 	f.mutations = nil
 	rk, err = c.Rank(ctx, issue5, Place{Before: issue9})
-	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`, `I9 after "I1"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine, `I9 after "I1"`}) {
 		t.Errorf("Rank before = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	if readsItems(slices.DeleteFunc(slices.Clone(f.queries), func(q string) bool { return strings.Contains(q, "items(first:2)") })) {
@@ -965,8 +965,8 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 		}
 		return origRun(ctx, args...)
 	}
-	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: "org/engine#9"})
-	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
+	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: crossOwnerAnchor})
+	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: crossOwnerAnchor, Added: true, Team: teamX}) ||
 		!slices.Equal(f.mutations, []string{addIssue7, "I71=t1", `I71 after "I9"`}) {
 		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
