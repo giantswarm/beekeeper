@@ -1072,18 +1072,23 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 			"replace the link with a directory for install to manage it, or edit the target yourself", nil)
 		return nil
 	}
-	names := plugin.SkillNames()
+	var names []string
 	linksOK := true
 	anyExisted := exists(e.CodexSkills)
 	var links []string
-	for _, name := range names {
+	for _, name := range plugin.SkillNames() {
 		dst := filepath.Join(e.CodexSkills, name)
 		wantTarget := filepath.Join(skillsDir, name)
-		links = append(links, dst)
 		gotTarget, err := os.Readlink(dst)
 		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
+			if exists(dst) {
+				p.add("keep", dst, "an existing skill install did not write", nil)
+				continue
+			}
 			linksOK = false
 		}
+		names = append(names, name)
+		links = append(links, dst)
 	}
 	workerSkills := CodexWorkerSkills(e.StateDir)
 	if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
@@ -1135,7 +1140,6 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 			if gotTarget, err := os.Readlink(dst); err == nil && filepath.Clean(gotTarget) == filepath.Clean(wantTarget) {
 				continue
 			}
-			_ = os.RemoveAll(dst)
 			if err := os.Symlink(wantTarget, dst); err != nil {
 				return err
 			}
