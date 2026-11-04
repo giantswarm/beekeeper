@@ -93,15 +93,17 @@ func TestCalendar(t *testing.T) {
 }
 
 func TestSystemdSetupNeedsStop(t *testing.T) {
+	const enabled = "enabled"
 	bin := t.TempDir()
 	command := filepath.Join(bin, "systemctl")
-	if err := os.WriteFile(command, []byte(`#!/bin/sh
+	script := `#!/bin/sh
 case "$2" in
 is-enabled) echo "$TEST_ENABLED" ;;
 is-active) echo "$TEST_ACTIVE" ;;
 *) exit 1 ;;
 esac
-`), 0o700); err != nil {
+`
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)
@@ -109,9 +111,9 @@ esac
 		enabled, active    string
 		started, needsStop bool
 	}{
-		{"enabled", "active", true, true},
-		{"enabled", "inactive", false, true},
-		{"enabled", "failed", false, true},
+		{enabled, "active", true, true},
+		{enabled, "inactive", false, true},
+		{enabled, "failed", false, true},
 		{"disabled", "active", false, true},
 		{"disabled", "inactive", false, false},
 	} {

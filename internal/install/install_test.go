@@ -21,7 +21,11 @@ import (
 )
 
 // reload is the fake service manager's reload command.
-const reload = "reload"
+const (
+	reload = "reload"
+	stop   = "stop"
+	halt   = "halt"
+)
 
 const replacementExe = "/new/bin/beekeeper"
 
@@ -54,8 +58,8 @@ func (f *fakeSetup) NeedsStop(context.Context, string) bool {
 }
 func (*fakeSetup) Reload() []string            { return []string{reload} }
 func (*fakeSetup) Start(p string) []string     { return []string{"start", filepath.Base(p)} }
-func (*fakeSetup) Stop(p string) []string      { return []string{"stop", filepath.Base(p)} }
-func (*fakeSetup) Halt(p string) []string      { return []string{"halt", filepath.Base(p)} }
+func (*fakeSetup) Stop(p string) []string      { return []string{stop, filepath.Base(p)} }
+func (*fakeSetup) Halt(p string) []string      { return []string{halt, filepath.Base(p)} }
 func (*fakeSetup) Restart(p string) [][]string { return [][]string{{"restart", filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
@@ -63,10 +67,10 @@ func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	switch argv[0] {
 	case "start":
 		f.started = true
-	case "stop", "halt":
+	case stop, halt:
 		f.started = false
 		f.running = false
-		if argv[0] == "stop" {
+		if argv[0] == stop {
 			f.enabled = false
 		}
 	}
@@ -1436,9 +1440,9 @@ func TestUninstallStopsPartiallyStartedServices(t *testing.T) {
 				}
 				want := []string{reload}
 				if state.enabled || state.running {
-					verb := "stop"
+					verb := stop
 					if linked {
-						verb = "halt"
+						verb = halt
 					}
 					want = append([]string{verb + " notify.service"}, want...)
 				}
