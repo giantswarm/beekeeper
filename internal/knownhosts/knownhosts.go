@@ -9,14 +9,12 @@
 package knownhosts
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 
-	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -31,11 +29,18 @@ func Defaults(home string) []string {
 }
 
 // Parseable writes the lines of srcs that Go's knownhosts parses to dst and
-// reports how many lines it dropped. With nothing dropped it writes no file
+// reports how many lines it dropped. With nothing dropped it leaves dst alone
 // and returns 0: the sources serve as they are. A missing source counts as
 // empty. dst is replaced atomically, so concurrent runs read a whole file.
 func Parseable(dst string, srcs ...string) (dropped int, err error) {
 	var out bytes.Buffer
+	var check *os.File
+	defer func() {
+		if check != nil {
+			_ = check.Close()
+			_ = os.Remove(check.Name())
+		}
+	}()
 	for _, src := range srcs {
 		b, err := os.ReadFile(src) //nolint:gosec // the machine's own known_hosts files
 		if errors.Is(err, fs.ErrNotExist) {
@@ -44,19 +49,26 @@ func Parseable(dst string, srcs ...string) (dropped int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		sc := bufio.NewScanner(bytes.NewReader(b))
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			line := sc.Bytes()
-			if !parses(line) {
+		for line := range bytes.Lines(b) {
+			// New only accepts filenames. Reuse a private scratch file to
+			// apply the consumer's exact rules, including its scanner limit.
+			if check == nil {
+				check, err = os.CreateTemp("", ".known_hosts-check-*")
+				if err != nil {
+					return 0, err
+				}
+			}
+			line = bytes.TrimSuffix(line, []byte{'\n'})
+			ok, err := parses(check, line)
+			if err != nil {
+				return 0, err
+			}
+			if !ok {
 				dropped++
 				continue
 			}
 			out.Write(line)
 			out.WriteByte('\n')
-		}
-		if err := sc.Err(); err != nil {
-			return 0, err
 		}
 	}
 	if dropped == 0 {
@@ -86,13 +98,22 @@ func Parseable(dst string, srcs ...string) (dropped int, err error) {
 	return dropped, os.Rename(tmp.Name(), dst)
 }
 
-// parses reports whether Go's knownhosts takes line: a blank line or a
-// comment, or an entry whose key it can parse.
-func parses(line []byte) bool {
-	t := bytes.TrimSpace(line)
-	if len(t) == 0 || t[0] == '#' {
-		return true
+// parses checks one output line with the same parser as the final consumer.
+// File errors abort filtering rather than discarding potentially trusted keys.
+func parses(check *os.File, line []byte) (bool, error) {
+	if err := check.Truncate(0); err != nil {
+		return false, err
 	}
-	_, _, _, _, _, err := ssh.ParseKnownHosts(t)
-	return err == nil
+	if _, err := check.WriteAt(line, 0); err != nil {
+		return false, err
+	}
+	if _, err := check.WriteAt([]byte{'\n'}, int64(len(line))); err != nil {
+		return false, err
+	}
+	_, err := knownhosts.New(check.Name())
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return false, err
+	}
+	return err == nil, nil
 }
