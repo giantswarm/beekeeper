@@ -37,6 +37,7 @@ func TestLintShellRedirectSyntax(t *testing.T) {
 		{"case 22: combined redirect shorthand", "```bash\nprintf ok >&out.log\n```", []int{2}},
 		{"case 23: descriptor duplication and closure", "```bash\nprintf ok >&1\nprintf ok 2>&1\nprintf ok >&-\nprintf ok 2>&\"$fd\"\n```", nil},
 		{"case 24: digit-prefixed combined target", "Capture `printf ok >&1.log`.", []int{1}},
+		{"multiline input and output redirects", "```sh\ncat <input\nprintf ok>out\n```", []int{3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Lint("brief.md", strings.NewReader(tc.text))

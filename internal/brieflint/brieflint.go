@@ -67,7 +67,7 @@ var (
 	// codeSpan is one inline code span.
 	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
-	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
+	placeholder = regexp.MustCompile(`<[^<>\s][^<>\r\n]*[^<>\s]>|<[^<>\s]>`)
 	// redirect is the conservative fallback for incomplete shell examples.
 	redirect   = regexp.MustCompile(`(?:^|[^<>=&|\-])(?:[0-9]?>|&>)[ \t]*([^\s>|&=;)` + "`" + `]+)`)
 	number     = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
