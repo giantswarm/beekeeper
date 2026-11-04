@@ -246,7 +246,8 @@ func safe(h Handler) Handler {
 // read reads the request at path, closed again before its holders are
 // looked for.
 func read(path string) ([]byte, os.FileInfo, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // a request in our own spool
+	// A substituted FIFO must not block open before we can inspect its type.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // a request in our own spool
 	if err != nil {
 		return nil, nil, err
 	}
@@ -254,6 +255,10 @@ func read(path string) ([]byte, os.FileInfo, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return nil, nil, err
+	}
+	// Check the opened inode: the listed path may have been replaced.
+	if !st.Mode().IsRegular() {
+		return nil, nil, errors.New("request is not a regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxRequest+1))
 	return raw, st, err
