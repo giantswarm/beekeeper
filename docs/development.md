@@ -162,14 +162,32 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
 reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
-the rewrite, and run what it prints:
+the rewrite, and run what it prints. A hook proof requires a **real in-scope
+session ID**, never a made-up ID: out-of-scope events pass through without
+exercising the guard. Run `beekeeper sessions` with the configuration being
+proved and copy the ID of a session beekeeper started or knows; in a Claude
+Code tool shell, `$CLAUDE_CODE_SESSION_ID` supplies the current session ID.
+For agy, use the real conversation ID from its session record. Include that
+session's actual `cwd` (agy: `workspacePaths`). Scope also includes directories
+under `hooks.scope.dirs`; when that setting is unset, every session is in scope.
+A scope check verifies membership, not session liveness, so obtaining a real ID
+is still required.
+
+Save the exact event and check it before each proof. Use the same configuration,
+state and environment for the preflight and hook. `check-scope` exits nonzero
+with an explicit out-of-scope error rather than treating a pass-through as proof:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"devctl pr merge giantswarm/marge 1"}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse
-echo '{"conversationId":"s1","workspacePaths":["/tmp"],"toolCall":{"name":"run_command","args":{"CommandLine":"devctl pr merge giantswarm/marge 1"}}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse --format agy
-PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
+# Set SESSION_ID to the real ID obtained above, and SESSION_CWD to its cwd.
+: "${SESSION_ID:?real in-scope session ID required}"
+: "${SESSION_CWD:?session working directory required}"
+jq -n --arg id "$SESSION_ID" --arg cwd "$SESSION_CWD" \
+  '{session_id:$id,cwd:$cwd,tool_name:"Bash",tool_input:{command:"devctl pr merge giantswarm/marge 1"}}' > /tmp/bk-event.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-event.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse < /tmp/bk-event.json
+# For agy, save its event shape with conversationId and workspacePaths instead;
+# check the same event, then invoke pretooluse --format agy.
+PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID="$SESSION_ID" \
   ./beekeeper gate --wait 10s -- devctl pr merge giantswarm/marge 1
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
@@ -189,8 +207,10 @@ it is quiet, then `agents handover`. The started sessions get the scratch config
 `agents handover --prompt` shows the prompt without starting anything.
 
 ```bash
-echo '{"hook_event_name":"PermissionRequest","session_id":"<id>","permission_mode":"acceptEdits","tool_name":"WebSearch"}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest
+jq -n --arg id "${SESSION_ID:?real started session ID required}" \
+  '{hook_event_name:"PermissionRequest",session_id:$id,permission_mode:"acceptEdits",tool_name:"WebSearch"}' > /tmp/bk-permission.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-permission.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest < /tmp/bk-permission.json
 ```
 
 The hook's merge rewrite is pinned against real commands: `internal/guard/testdata/merges.jsonl`
@@ -614,7 +634,9 @@ disk:
 
 A central Note closes only with a recognised close event (`answer.recorded`,
 `note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
-line atomically with the outcome. Closed Notes remain as history, outside the
+line atomically with the outcome. Answered Notes also retain the verbatim answer
+in `status.answer`, the caller's verified email in `status.answeredBy`, and the
+answer time in `status.answeredAt`. Closed Notes remain as history, outside the
 open notes and the 24-hour default-answer window, for 30 days after closure.
 Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first
@@ -663,7 +685,13 @@ worker for repair and another green published head. A restart reads GitHub befor
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
-around queue validation. Merge goes never go through `answer verify`.
+around queue validation. No person is asked whether to merge: the loop merges after its
+reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+For an SSH worker's fixes, the loop retains the authenticated independent review result
+and its original head, author, verdict and body digest. The loop records its exact-head
+authorization before the executor accepts the new green head without another approval
+round; a pending ownership claim alone is insufficient. Worker merge grants continue
+to require approval of their head; an empty grant ID alone confers no loop authority.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
@@ -691,13 +719,6 @@ or recover every ownerless In Progress item. The broader 15-minute orphan sweep
 remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
 pulls without saved review metadata and stale serve records from relieved or
 off-roster sessions.
-
-The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
-The receipt binds its active local note, session, thread, displayed head, selected option and
-verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
-command-line flag alone cannot select the channel. The guide keeps the note's option labels
-and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
-relay still does not verify. The central instance retains its authenticated identity checks.
 
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
@@ -839,9 +860,9 @@ Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
 `-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
 The selected model must support the level. agy has no session effort option:
 an effort from the flag or a rule is refused instead of silently ignored, on
-local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude
-and Codex starts carry effort in the owned execution request and reuse it for
-later turns.
+local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude,
+Codex and omp starts carry effort in the owned execution request and reuse it
+for later turns.
 
 A Claude desktop-mode start with an effort runs its task headless, with its
 normal tool profile and sidebar import. Its wakes stay headless on that
