@@ -673,3 +673,112 @@ func TestConsecutiveTurnsReuseOutput(t *testing.T) {
 		t.Errorf("created output %d times", creates)
 	}
 }
+
+// Cancellation may arrive after the compositor applied a command but before
+// its response reached Show. Cleanup must use a live, bounded context and
+// return both the shared window and any redirected pop-up before removal.
+func TestShowRollsBackCancelledSetup(t *testing.T) {
+	for _, boundary := range []string{"create", "redirect", "move"} {
+		t.Run(boundary, func(t *testing.T) {
+			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			cancelled := false
+			ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+				if err := callCtx.Err(); err != nil {
+					return nil, err
+				}
+				if cancelled {
+					if _, ok := callCtx.Deadline(); !ok {
+						t.Error("cleanup context has no deadline")
+					}
+				}
+				out, err := f.ctl(callCtx, args...)
+				hit := boundary == "create" && args[0] == "output" && args[1] == "create" ||
+					boundary == "redirect" && args[0] == "eval" && strings.Contains(args[1], "set_enabled(true)") ||
+					boundary == "move" && args[0] == "dispatch"
+				if !cancelled && hit {
+					if f.redirect {
+						f.open(Window{Address: "0xe", Class: chromeClass})
+					}
+					cancelled = true
+					cancel()
+					return nil, callCtx.Err()
+				}
+				return out, err
+			}
+			s, err := Show(ctx, ctl, hold)
+			if s != nil || err == nil || !cancelled {
+				t.Fatalf("Show = %+v, %v; cancellation reached: %v", s, err, cancelled)
+			}
+			if f.redirect || len(f.monitors) != 1 {
+				t.Errorf("after rollback: redirect %v, monitors %+v", f.redirect, f.monitors)
+			}
+			for _, w := range f.windows {
+				if w.Workspace != chrome.Workspace {
+					t.Errorf("window %s left on %+v", w.Address, w.Workspace)
+				}
+			}
+		})
+	}
+}
+
+// A failed setup may use an output retained by an earlier turn. Return its
+// redirected windows, but leave that output in place.
+func TestShowRollbackPreservesExistingOutput(t *testing.T) {
+	f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic(), {ID: 1, Name: Output, ActiveWorkspace: surface}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+		if err := callCtx.Err(); err != nil {
+			return nil, err
+		}
+		out, err := f.ctl(callCtx, args...)
+		if args[0] == "eval" && strings.Contains(args[1], "set_enabled(true)") {
+			f.open(Window{Address: "0xe", Class: chromeClass})
+			cancel()
+			return nil, callCtx.Err()
+		}
+		return out, err
+	}
+	if s, err := Show(ctx, ctl, hold); s != nil || err == nil {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	if f.redirect || len(f.monitors) != 2 || slices.Contains(f.calls, remove) || f.windows[1].Workspace != chrome.Workspace {
+		t.Fatalf("after rollback: redirect %v, monitors %+v, windows %+v", f.redirect, f.monitors, f.windows)
+	}
+}
+
+func TestShowRollbackRetainsOutputWhenCleanupFails(t *testing.T) {
+	for _, failure := range []string{"redirect off", "clients", "move"} {
+		t.Run(failure, func(t *testing.T) {
+			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failed := false
+			ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+				if err := callCtx.Err(); err != nil {
+					return nil, err
+				}
+				if failed && (failure == "redirect off" && args[0] == "eval" ||
+					failure == "clients" && slices.Equal(args, []string{"-j", "clients"}) ||
+					failure == "move" && args[0] == "dispatch") {
+					return nil, errors.New("cleanup refused")
+				}
+				out, err := f.ctl(callCtx, args...)
+				if !failed && args[0] == "dispatch" {
+					failed = true
+					cancel()
+					return nil, callCtx.Err()
+				}
+				return out, err
+			}
+			if s, err := Show(ctx, ctl, hold); s != nil || err == nil || !strings.Contains(err.Error(), "cleanup refused") {
+				t.Fatalf("Show = %+v, %v", s, err)
+			}
+			if len(f.monitors) != 2 || slices.Contains(f.calls, remove) {
+				t.Fatalf("occupied output removed: %+v, commands %q", f.monitors, f.commands())
+			}
+		})
+	}
+}
