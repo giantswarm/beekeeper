@@ -65,6 +65,15 @@ const controlWords = "Click only the element a step names: a computer click by t
 	"First read_page or find on the clicked tab so the hook can verify that ref's button or tab role and label; read it again after a page-changing action. " +
 	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. "
 
+// permanentDeletionRule also names the preflight refusal in browse's help.
+const permanentDeletionRule = "A permanent deletion of data is the person's own click: deleting an edit-history revision (Delete revision), a comment, an issue, a repository or a branch, or emptying a trash. No browse turn makes these clicks, even when the owner asks."
+
+// Match the named data deletions, leaving product deletes to the turn's classifier.
+var permanentDeletionSteps = regexp.MustCompile(`(?i)\b(?:delet(?:e|es|ing|ion)|remov(?:e|es|ing|al)|eras(?:e|es|ing))\b[^.!?\n]{0,100}\b(?:revisions?|edit[- ]history|comments?|issues?|repositories|repository|repos?|branches|branch)\b` +
+	`|\b(?:revision|comment|issue|repository|repo|branch)\s+delet(?:e|ion)\b` +
+	`|\bempty(?:ing)?\b[^.!?\n]{0,40}\b(?:trash|recycle bin)\b` +
+	`|\bpermanent(?:ly)?\s+(?:delet(?:e|ion)|eras(?:e|ure))\b`)
+
 // lostLine is the line a turn ends its report with when the Chrome
 // connection is gone, the steps not done after it.
 const lostLine = "browser connection lost"
@@ -243,6 +252,10 @@ taken" or "screenshot: none saved: <why>" otherwise). The files saved are
 the one record of the screenshots: the turn writes no file, and the line
 heading the paths says a report calling a screenshot not saved speaks for
 the turn alone. The report is printed as the turn wrote it.
+
+` + permanentDeletionRule + `
+Steps asking for one are refused before the turn starts; report the refusal
+to the supervisor at once.
 
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
@@ -618,6 +631,9 @@ for a timer to park on.`,
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	if permanentDeletionSteps.MatchString(steps) {
+		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
+	}
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
 	if err := screenLockedErr(); err != nil {

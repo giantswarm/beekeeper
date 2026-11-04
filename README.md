@@ -2932,6 +2932,12 @@ through the person's SSO button (a Backstage portal's sign-in window with `flow=
 portal returns to the page signed in), and `windows:` below the report names the tabs the turn worked
 in and each window it followed, by its address without the query.
 
+A permanent deletion of data is the person's own click: deleting an edit-history
+revision (Delete revision), a comment, an issue, a repository or a branch, or
+emptying a trash. No browse turn makes these clicks, even when the owner asks.
+Steps asking for one are refused before the turn starts, before any Chrome
+call. Report the refusal to the supervisor at once.
+
 **A deploy click the task covers is declared; every other deploy stays refused.** A portal's deploy
 or create click (a review step's Deploy button, which applies a release to a cluster) is a production
 deploy to the browse turn's classifier, which refuses it, so a portal proof stops one click short.
