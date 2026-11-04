@@ -10,7 +10,10 @@ import (
 )
 
 func TestItemSectionsSurviveListingAndEdit(t *testing.T) {
-	const itemRef = "op://Shared/widget"
+	const (
+		itemRef    = "op://Shared/widget"
+		stringType = "STRING"
+	)
 	wantVault := map[string]string{
 		itemRef + "/first/notes":    "FIRST=one\n",
 		itemRef + "/second/notes":   "SECOND=two\n",
@@ -19,8 +22,8 @@ func TestItemSectionsSurviveListingAndEdit(t *testing.T) {
 	}
 	tools := secrettest.New(maps.Clone(wantVault))
 	tools.Types = map[string]string{
-		itemRef + "/first/notes":  "STRING",
-		itemRef + "/second/notes": "STRING",
+		itemRef + "/first/notes":  stringType,
+		itemRef + "/second/notes": stringType,
 	}
 	ops := &secret.Ops{Run: tools.Run, Vault: "Shared", Token: "fixture-service-account"}
 	ctx := context.Background()
@@ -42,12 +45,15 @@ func TestItemSectionsSurviveListingAndEdit(t *testing.T) {
 		}
 		for _, section := range []string{"first", "second"} {
 			field := fields[section+"/notes"]
-			if field.Label != "notes" || field.Section != section || field.Type != "STRING" || field.Length != len(wantVault[itemRef+"/"+section+"/notes"]) {
+			if field.Label != "notes" || field.Section != section || field.Type != stringType || field.Length != len(wantVault[itemRef+"/"+section+"/notes"]) {
 				t.Errorf("%s notes metadata = %+v", section, field)
 			}
 		}
 		if field := fields["first/username"]; field.Label != "username" || field.Section != "first" || field.Type != "CONCEALED" || field.Purpose != "" {
 			t.Errorf("a section's custom username field = %+v", field)
+		}
+		if field := fields["/notesPlain"]; field.Label != "notesPlain" || field.Section != "" || field.Type != stringType || field.Purpose != "NOTES" || field.Length != len(wantVault[itemRef+"/notesPlain"]) {
+			t.Errorf("ordinary notes metadata = %+v", field)
 		}
 		keys := map[string]secret.EnvKey{}
 		for _, key := range items[0].EnvKeys {
