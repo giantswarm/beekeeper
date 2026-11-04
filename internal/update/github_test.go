@@ -150,9 +150,9 @@ func TestGitHubCandidateEligibility(t *testing.T) {
 				case "v0.171.0-rc.104":
 					return 404, `{}`, nil
 				case "v0.171.0-rc.103":
-					return 200, releaseJSON(tag, true, false), nil
+					return 404, `{}`, nil
 				case "v0.171.0-rc.102":
-					return 200, releaseJSON(tag, false, true), nil
+					return 404, `{}`, nil
 				case "v0.171.0-rc.101":
 					return 200, strings.TrimSuffix(releaseJSON(tag, true, true), "}") + `,"draft":true}`, nil
 				default:
@@ -485,5 +485,58 @@ func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
 				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, tc.want)
 			}
 		})
+	}
+}
+
+// Public releases must never disappear behind an older complete release while
+// the release pipeline is still uploading the binary or its signature bundle.
+func TestGitHubPublicReleaseUploadWindow(t *testing.T) {
+	for _, checkOnly := range []bool{true, false} {
+		for _, assets := range []struct{ binary, bundle bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+			t.Run(fmt.Sprintf("check=%t/binary=%t/bundle=%t", checkOnly, assets.binary, assets.bundle), func(t *testing.T) {
+				calls := stubGitHub(t, githubStable, func(r *http.Request) (int, string, http.Header) {
+					if strings.Contains(r.URL.Path, matchingRefsPath) {
+						return 200, refsJSON(githubStable, "v0.171.0"), nil
+					}
+					if !strings.HasSuffix(r.URL.Path, "/releases/tags/v0.171.0") {
+						t.Fatalf("fell back to older release: %s", r.URL.Path)
+					}
+					return 200, releaseJSON("v0.171.0", assets.binary, assets.bundle), nil
+				})
+				var output strings.Builder
+				// Complete assets are checked without attempting a real installation.
+				res, err := Run(context.Background(), &output, checkOnly || (assets.binary && assets.bundle))
+				if assets.binary && assets.bundle {
+					if !errors.Is(err, ErrOutdated) || res.Latest != "v0.171.0" {
+						t.Fatalf("result=%+v err=%v", res, err)
+					}
+				} else if !errors.Is(err, errIncompleteLookup) || res.Latest != "" || res.Updated || output.Len() != 0 || !strings.Contains(err.Error(), "public release v0.171.0 is still being prepared") || strings.Contains(err.Error(), "online?") {
+					t.Fatalf("result=%+v err=%v output=%q", res, err, output.String())
+				}
+				if *calls != 2 {
+					t.Fatalf("calls=%d; want 2", *calls)
+				}
+			})
+		}
+	}
+}
+
+// A release whose assets never came does not hold updates back for good.
+func TestGitHubReleaseBeyondTheUploadWindowFallsBack(t *testing.T) {
+	const newest, previous = "v0.171.0", "v0.170.0"
+	published := time.Now().Add(-2 * assetUploadWindow).UTC().Format(time.RFC3339)
+	stubGitHub(t, "v0.169.0", func(r *http.Request) (int, string, http.Header) {
+		switch {
+		case strings.Contains(r.URL.Path, matchingRefsPath):
+			return 200, refsJSON(newest, previous), nil
+		case strings.HasSuffix(r.URL.Path, "/releases/tags/"+newest):
+			return 200, strings.TrimSuffix(releaseJSON(newest, false, false), "}") + `,"published_at":"` + published + `"}`, nil
+		}
+		return 200, releaseJSON(previous, true, true), nil
+	})
+	var output strings.Builder
+	res, err := Run(context.Background(), &output, true)
+	if !errors.Is(err, ErrOutdated) || res.Latest != previous {
+		t.Fatalf("result=%+v err=%v", res, err)
 	}
 }
