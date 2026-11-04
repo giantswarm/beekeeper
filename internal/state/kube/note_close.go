@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +31,8 @@ var answerNoteDetail = regexp.MustCompile(`(?s), note #(\d+) asked by "(?:[^"\\]
 // closeNotes refuses a silent close and keeps its reason in the same status
 // write as its outcome. Closed resources stay out of the open state document.
 func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID func(time.Time) (string, error)) error {
-	for k, old := range snap.notes {
+	for _, k := range sortedKeys(snap.notes) {
+		old := snap.notes[k]
 		if old.Status.State == noteClosed || old.Status.State == noteAnswered {
 			want.notes[k] = old.DeepCopy()
 			continue
@@ -44,13 +44,7 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 		var closing *state.Event
 		for i := range events {
 			e := &events[i]
-			detail := e.Detail
-			if e.Verb == noteAnsweredEvent {
-				_, detail, _ = strings.Cut(detail, ", note #")
-				detail = "#" + detail
-			}
-			m := noteRef.FindStringSubmatch(detail)
-			if len(m) < 2 || m[1] != strconv.Itoa(old.Spec.ID) {
+			if id, ok := eventNote(*e); !ok || id != old.Spec.ID {
 				continue
 			}
 			switch e.Verb {
@@ -79,6 +73,7 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 		}
 		if n == nil {
 			n = old.DeepCopy()
+			n.Status = initialNoteStatus(old)
 			n.Status.State = noteClosed
 			if closing.Verb == noteAnsweredEvent {
 				n.Status.State = noteAnswered
