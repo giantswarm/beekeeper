@@ -32,6 +32,10 @@ const Branch = "beekeeper-proofs"
 // MaxBytes bounds the image read: a screenshot is far smaller.
 const MaxBytes = 10 << 20
 
+// MaxPixels bounds decoded image memory while allowing large screenshots.
+// A 16-bit RGBA image at this limit uses 256 MiB for its pixels.
+const MaxPixels = 32 << 20
+
 // attempts bounds the retries of an upload whose branch moved under it.
 const attempts = 3
 
@@ -68,6 +72,17 @@ type Result struct {
 func Normalize(raw []byte) ([]byte, error) {
 	if len(raw) > MaxBytes {
 		return nil, fmt.Errorf("the image is %d bytes, more than %d", len(raw), MaxBytes)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("not a PNG, JPEG or GIF image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return nil, fmt.Errorf("invalid image dimensions: %dx%d", config.Width, config.Height)
+	}
+	// Divide instead of multiplying untrusted dimensions, which may overflow.
+	if config.Width > MaxPixels/config.Height {
+		return nil, fmt.Errorf("the image dimensions %dx%d exceed the limit of %d pixels", config.Width, config.Height, MaxPixels)
 	}
 	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
