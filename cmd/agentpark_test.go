@@ -308,7 +308,7 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
 	register := func(args ...string) error {
 		c := w.agentsCmd()
-		c.SetArgs(append([]string{"register"}, args...))
+		c.SetArgs(append([]string{registerVerb}, args...))
 		c.SetOut(w.out)
 		c.SetErr(w.out)
 		c.SilenceUsage, c.SilenceErrors = true, true

@@ -12,6 +12,16 @@ executions require expiring coordinator leases and live supervisor merge grants.
 The component command below is the supported remote merge path; local approvals
 and raw merge commands do not authorize an SSH execution.
 
+For remote starts, `--force` overrides coordinator capacity only. Execution-host
+admission still enforces memory, swap, load, disk, build slots (with `--builds`)
+and `maxBusy`. The CLI explains these limits before remote preparation; a
+passing host check does not reserve room or guarantee that preparation will
+succeed. Authentication, identity, version and policy checks remain required.
+If the host refuses preparation before acknowledging a start and inspection
+confirms no execution exists, the coordinator releases the reservation: no
+worker remains registered and no host or desk slot is held. Start anew after
+resolving the host's refusal.
+
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
@@ -291,6 +301,11 @@ edits and searches; PTYs, services, asynchronous bash, URL reads and every
 other tool are refused. The extension blocks on command failure, timeout,
 invalid JSON and guard rewrites it cannot apply. Each allowed call passes the
 shared workspace and execution guards and live coordinator authority check.
+File tools accept one literal local path; reads require an existing target to
+avoid omp spelling, suffix and approved-plan fallback resolution. URL shorthand
+(`www.`) is refused. Home and `@` shorthands, whitespace,
+path lists and patterns are refused because omp expands them differently from
+the shared guard. Use guarded bash for filenames requiring those characters.
 Hooks are not an OS sandbox for arbitrary code executed inside an allowed
 shell command.
 
