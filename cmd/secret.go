@@ -533,8 +533,13 @@ ssh's stdin alone, never on a command line: the remote command is a fixed
 script that writes a temp file next to the path under umask 077, checks
 its length against what was sent (a dropped connection ends the stream
 early), sets --owner user[:group] and then --mode (default 0600), and
-moves it into place; a path that is a directory is refused. A failure or a signal removes the temp file and leaves the
-path as it was; a source that resolves to nothing, or to an empty value,
+moves it into place; a symlink target is replaced with a regular file,
+leaving its referent unchanged; a path that is a directory is refused.
+A remote script failure or a signal removes the temp file and leaves the
+path as it was. SSH exit 255 means the target state is unknown; use
+secret fingerprint to check it. Each part of user[:group] accepts a name
+or numeric id; an omitted --owner keeps the writing user's (root under
+--sudo). A source that resolves to nothing, or to an empty value,
 fails before ssh runs. --sudo runs the script under sudo -n, for a path
 only root writes, by the host's own sudo rules. --template '<content>'
 writes a file whose other lines are public, the value at {{value}} (once);
