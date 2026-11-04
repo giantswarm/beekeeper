@@ -64,7 +64,7 @@ const isOpen = "is:open"
 
 // issueFields is what every read takes of an issue.
 const issueFields = `fragment I on Issue{number url title state createdAt updatedAt repository{nameWithOwner}
-labels(first:20){nodes{name}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
+labels(first:20){nodes{name} pageInfo{hasNextPage endCursor}} assignees(first:10){nodes{login}} ` + blockerFields + ` subIssuesSummary{total completed}
 parent{number repository{nameWithOwner}}}`
 
 // boardFields is what every read takes of a board item, the Status with
@@ -92,9 +92,7 @@ type issueJSON struct {
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
-	Labels struct {
-		Nodes []struct{ Name string } `json:"nodes"`
-	} `json:"labels"`
+	Labels    labelPage `json:"labels"`
 	Assignees struct {
 		Nodes []struct{ Login string } `json:"nodes"`
 	} `json:"assignees"`
@@ -114,6 +112,49 @@ type issueJSON struct {
 		TotalCount int           `json:"totalCount"`
 		Nodes      []blockerNode `json:"nodes"`
 	} `json:"blockedBy"`
+}
+
+// labelPage keeps the cursor alongside the labels read with an issue.
+type labelPage struct {
+	Nodes    []struct{ Name string } `json:"nodes"`
+	PageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	} `json:"pageInfo"`
+}
+
+// completeLabels follows only overflowing connections, before labels are used
+// for selection or exposed to callers. Unread labels must never mean absent.
+func (c *Client) completeLabels(ctx context.Context, j *issueJSON) error {
+	owner, repo, ok := strings.Cut(j.Repository.NameWithOwner, "/")
+	for page := j.Labels; page.PageInfo.HasNextPage; {
+		cursor := page.PageInfo.EndCursor
+		if !ok || cursor == "" {
+			return fmt.Errorf("incomplete labels for %s#%d: missing repository or cursor", j.Repository.NameWithOwner, j.Number)
+		}
+		var r struct {
+			Repository struct {
+				Issue *struct {
+					Labels labelPage `json:"labels"`
+				} `json:"issue"`
+			} `json:"repository"`
+		}
+		err := c.graphql(github.ActingOn(ctx, j.Repository.NameWithOwner), &r,
+			`query($o:String!,$r:String!,$n:Int!,$c:String!){repository(owner:$o,name:$r){issue(number:$n){labels(first:100,after:$c){nodes{name} pageInfo{hasNextPage endCursor}}}}}`,
+			vars{"o": owner, "r": repo, "n": j.Number, "c": cursor})
+		if err != nil {
+			return fmt.Errorf("labels of %s#%d: %w", j.Repository.NameWithOwner, j.Number, err)
+		}
+		if r.Repository.Issue == nil {
+			return fmt.Errorf("labels of %s#%d: issue not found", j.Repository.NameWithOwner, j.Number)
+		}
+		page = r.Repository.Issue.Labels
+		if page.PageInfo.HasNextPage && page.PageInfo.EndCursor == cursor {
+			return fmt.Errorf("labels of %s#%d: cursor did not advance", j.Repository.NameWithOwner, j.Number)
+		}
+		j.Labels.Nodes = append(j.Labels.Nodes, page.Nodes...)
+	}
+	return nil
 }
 
 // blockerNode is a recorded blocker as issueFields reads it.
@@ -431,6 +472,9 @@ content{...I}}}}}}}`+issueFields, vs)
 			if !n.Content.open() {
 				continue
 			}
+			if err := c.completeLabels(ctx, &n.Content); err != nil {
+				return nil, err
+			}
 			it := n.Content.item()
 			n.onto(&it)
 			out = append(out, it)
@@ -545,15 +589,6 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	type nodes struct {
 		Nodes []issueJSON `json:"nodes"`
 	}
-	open := func(ns []issueJSON) []Item {
-		var out []Item
-		for _, n := range ns {
-			if n.open() {
-				out = append(out, n.item())
-			}
-		}
-		return out
-	}
 	// Each error is named on what it belongs to: a sub-issue (by its epic's
 	// alias and its index among the nodes read), the epic, else snap.
 	epicOf := map[string]int{}
@@ -562,6 +597,9 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	subMissing := map[string][]string{}
 	for _, e := range missing {
+		if slices.Contains(e.Path, "labels") {
+			return &Partial{Errors: []GraphQLError{e}}
+		}
 		alias := at(e.Path, 0)
 		i, epic := epicOf[alias]
 		switch {
@@ -601,6 +639,9 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			if !n.open() {
 				continue
 			}
+			if err := c.completeLabels(ctx, &n.issueJSON); err != nil {
+				return err
+			}
 			it := n.item()
 			if j := slices.IndexFunc(n.ProjectItems.Nodes, func(p projectItem) bool { return p.Project.ID == project }); j >= 0 {
 				n.ProjectItems.Nodes[j].onto(&it)
@@ -615,7 +656,15 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
-			snap.Search[i] = open(s.Nodes)
+			for _, n := range s.Nodes {
+				if !n.open() {
+					continue
+				}
+				if err := c.completeLabels(ctx, &n); err != nil {
+					return err
+				}
+				snap.Search[i] = append(snap.Search[i], n.item())
+			}
 		}
 	}
 	return nil
