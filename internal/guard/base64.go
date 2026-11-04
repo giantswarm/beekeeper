@@ -149,8 +149,8 @@ func (ix *Index) carries(d string, depth int) (name string, ref, found bool) {
 		return m[0].name, true, true
 	}
 	for _, r := range tokenRules {
-		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(d, k) }) && r.re.MatchString(d) {
-			return r.id, false, true
+		if slices.ContainsFunc(r.Keywords, func(k string) bool { return strings.Contains(d, k) }) && r.RE.MatchString(d) {
+			return r.ID, false, true
 		}
 	}
 	if inner := ix.encodedSpans(d, depth+1); len(inner) > 0 {
