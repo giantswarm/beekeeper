@@ -52,7 +52,7 @@ func TestSetRejectsUnsafeServeModeNode(t *testing.T) {
 	if !errors.Is(err, ErrInvalid) {
 		t.Errorf("unsafe node edit must be refused: %v", err)
 	}
-	if got, err := os.ReadFile(p); err != nil || string(got) != raw {
+	if got, err := os.ReadFile(filepath.Clean(p)); err != nil || string(got) != raw {
 		t.Fatalf("refused edit changed config: %v", err)
 	}
 }
