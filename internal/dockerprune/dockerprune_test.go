@@ -165,7 +165,10 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == execCommand:
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
-		f.removed = append(f.removed, args[2:])
+		if args[2] != "--no-prune" {
+			return nil, errors.New("image removal must disable parent pruning")
+		}
+		f.removed = append(f.removed, args[3:])
 		return nil, nil
 	}
 	return nil, errors.New("unexpected docker " + strings.Join(args, " "))
@@ -322,6 +325,46 @@ func TestKindImagesSkipsAStoppedNode(t *testing.T) {
 	}
 }
 
+// Docker's default removal recursively prunes dangling parents, even when
+// their last tag time is inside our keep window.
+func TestTrimImagesKeepsRecentlyTaggedDanglingParent(t *testing.T) {
+	ctx := context.Background()
+	keep := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	parent := Image{ID: "parent", Created: keep.Add(-48 * time.Hour), Tagged: keep.Add(time.Hour), Size: 2}
+	child := Image{ID: "child", Refs: []string{"child:old"}, Created: keep.Add(-24 * time.Hour), Size: 1}
+	candidates := Candidates([]Image{parent, child}, nil, keep)
+	if len(candidates) != 1 || candidates[0].ID != child.ID {
+		t.Fatalf("candidates = %+v; want only the old child", candidates)
+	}
+	remaining := map[string]bool{parent.ID: true, child.ID: true}
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) < 3 || args[0] != "image" || args[1] != "rm" || args[len(args)-1] != child.Refs[0] {
+			return nil, fmt.Errorf("unexpected docker arguments: %v", args)
+		}
+		delete(remaining, child.ID)
+		if !slices.Contains(args[2:], "--no-prune") {
+			delete(remaining, parent.ID)
+		}
+		return nil, nil
+	}
+	size := func() (int64, error) {
+		var total int64
+		for _, img := range []Image{parent, child} {
+			if remaining[img.ID] {
+				total += img.Size
+			}
+		}
+		return total, nil
+	}
+	trimmed, err := TrimImages(ctx, run, candidates, 3, 2, size, func() bool { return false })
+	if err != nil || !slices.Equal(trimmed.Removed, []string{child.Name()}) || len(trimmed.Refused) != 0 {
+		t.Fatalf("trim = %+v, %v; want only the child removed", trimmed, err)
+	}
+	if !remaining[parent.ID] || remaining[child.ID] {
+		t.Fatalf("remaining = %v; want the recently tagged parent kept", remaining)
+	}
+}
+
 func TestTrimImagesStopsAtTheTargetAndWhenBusy(t *testing.T) {
 	cands := []Image{
 		{ID: "a", Size: 2e9},
@@ -373,7 +416,7 @@ func TestTrimImagesReadsTheSizeBeforeItCouldPassTheTarget(t *testing.T) {
 func refusing(f *fake, children map[string]string, stuck string) Docker {
 	return func(ctx context.Context, args ...string) ([]byte, error) {
 		if args[0] == image && args[1] == "rm" {
-			id := args[2]
+			id := args[3]
 			if id == stuck {
 				return nil, errors.New("conflict: image is being used by a container")
 			}
