@@ -175,8 +175,9 @@ func pagePreset(clientSecret, privateKey, anthropicKey, workspace string, generi
 		if clientSecret != "" {
 			create := "a new client secret of the GitHub App " + app
 			return pageCapture{
-				steps:  page + ` Under "Client secrets" click "Generate a new client secret" once.` + readerStep,
-				create: create, match: githubAppMatch, rule: captureRule(create, url, `"Generate a new client secret"`),
+				steps:  page + ` Open the "Credentials" tab. Before looking for the generator, if the page shows "Uh oh! There was an error while loading", reload the page at most once during this turn and open the "Credentials" tab again if needed. If the load error remains or returns, stop and report "GitHub App settings load error after one reload"; do not report a missing control. Only after the Credentials page has loaded, under "Client secrets" click "Generate a new client secret" once. If that control is absent on the loaded page, stop and report "GitHub App client-secret generator control not found".` + readerStep,
+				create: create, match: githubAppMatch,
+				rule: captureRule(create, url, `"Generate a new client secret"`) + ` Opening the "Credentials" tab (including after the reload) and reloading this App settings page at most once on "Uh oh! There was an error while loading" are also pre-authorized.`,
 			}, nil
 		}
 		create := "a new private key of the GitHub App " + app
