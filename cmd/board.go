@@ -411,7 +411,8 @@ func servedOpen(ctx context.Context, cl *board.Client, store state.Store, me sta
 	}
 	asked := map[string]bool{}
 	for _, r := range st.Records {
-		if !r.Session.Is(me) || !r.Ended.IsZero() {
+		// A repository or free text has no state to ask about: it stays open.
+		if !r.Session.Is(me) || !r.Ended.IsZero() || !issueRef.MatchString(r.Issue) {
 			continue
 		}
 		if asked[strings.ToLower(r.Issue)], err = cl.Open(ctx, r.Issue); err != nil {
