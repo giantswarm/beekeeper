@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,44 +142,49 @@ func TestLoopMergeEndDeclaresRemainingWork(t *testing.T) {
 }
 
 func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
-	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict", "changes-requested"} {
-		t.Run(scenario, func(t *testing.T) {
-			r := newLoopRig(t)
-			r.park(t, loopPR, time.Now())
-			if scenario != "unclaimed" {
-				if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
-					t.Fatal(err)
+	for _, configured := range []bool{false, true} {
+		for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict", "changes-requested"} {
+			t.Run(fmt.Sprintf("%s/devctl=%t", scenario, configured), func(t *testing.T) {
+				r := newLoopRig(t)
+				if configured {
+					r.a.cfg.Merge.DevctlOwners = []string{"o"}
 				}
-			}
-			switch scenario {
-			case "conflict":
-				r.pull.Mergeable = mergeableConflicting
-			case "moved":
-				r.pull.Head = loopFixed
-			case reviewedRedCase:
-				r.pull.Green = false
-			case "changes-requested":
-				r.pull.Reviews = []superloop.Review{
-					{ID: "r1", Head: loopHead, Verdict: superloop.Approved, At: time.Unix(100, 0)},
-					{ID: "r2", Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+				r.park(t, loopPR, time.Now())
+				if scenario != "unclaimed" {
+					if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+						t.Fatal(err)
+					}
 				}
-			case reviewedStoppedCase:
-				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
-					t.Fatal(err)
+				switch scenario {
+				case "conflict":
+					r.pull.Mergeable = mergeableConflicting
+				case "moved":
+					r.pull.Head = loopFixed
+				case reviewedRedCase:
+					r.pull.Green = false
+				case "changes-requested":
+					r.pull.Reviews = []superloop.Review{
+						{ID: "r1", Head: loopHead, Verdict: superloop.Approved, At: time.Unix(100, 0)},
+						{ID: "r2", Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+					}
+				case reviewedStoppedCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
+						t.Fatal(err)
+					}
+				case reviewedHeldCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
 				}
-			case reviewedHeldCase:
-				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
-					return nil, nil
-				}); err != nil {
-					t.Fatal(err)
+				doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+				if doc.ExitCode == 0 || len(r.cmds) > 0 {
+					t.Fatalf("unsafe mutation: doc %+v commands %v", doc, r.cmds)
 				}
-			}
-			doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
-			if doc.ExitCode == 0 || len(r.cmds) > 0 {
-				t.Fatalf("unsafe mutation: doc %+v commands %v", doc, r.cmds)
-			}
-		})
+			})
+		}
 	}
 }
 

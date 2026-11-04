@@ -26,6 +26,26 @@ const (
 	tabsContext = "tabs_context_mcp"
 )
 
+func TestBrowseReactAriaCoordinateClick(t *testing.T) {
+	for name, guidance := range map[string]string{
+		"prompt": browsePrompt("Click the Dev Portal's 'Sign in' button by coordinate.", "", nil, false, nil),
+		"help":   (&app{}).browseCmd().Long,
+	} {
+		for _, want := range []string{
+			"React-aria Buttons (bui components)", "need a coordinate click",
+			"computer left_click with coordinate", "current position from a screenshot",
+			"silently does nothing", "action_summary", "check the resulting page or window",
+		} {
+			if !strings.Contains(guidance, want) {
+				t.Errorf("%s guidance lacks %q", name, want)
+			}
+		}
+	}
+	if help := (&app{}).browseCmd().Long; !strings.Contains(help, "Dev Portal's 'Sign in' button by coordinate at its current position") {
+		t.Error("browse help lacks a coordinate-click step for the portal Sign in button")
+	}
+}
+
 // selfSettings are the settings of a turn browse runs in this test binary.
 func selfSettings(t *testing.T, rules []string) string {
 	t.Helper()
@@ -1321,5 +1341,29 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
 		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}
+
+func TestBrowseStorageBarrier(t *testing.T) {
+	p := browsePrompt("List Slack user groups", "", nil, false, nil)
+	for _, word := range []string{"localStorage", "sessionStorage", "cookies", "IndexedDB", "session tokens", "visible UI only", "Slack user groups", "report that barrier"} {
+		if !strings.Contains(p, word) {
+			t.Errorf("prompt missing %q", word)
+		}
+	}
+	reason, _ := json.Marshal("PreToolUse hook error: " + guard.BrowseStorageBarrier)
+	lines := chromeUse("s1", scriptTool, `{"action":"javascript_exec","text":"localStorage.getItem('key')","tabId":1}`) +
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","is_error":true,"content":` + string(reason) + `}]}}` + "\n"
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, transcript, lines)
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Refused) != 1 || !f.Refused[0].Hook || f.Refused[0].Reason != "Storage and Session Tokens" {
+		t.Fatalf("findings = %+v", f)
+	}
+	if got := strings.Join(f.lines("List Slack user groups", "", nil, false), "\n"); !strings.Contains(got, "beekeeper's hook refused it as [Storage and Session Tokens]") {
+		t.Errorf("report = %s", got)
 	}
 }

@@ -161,7 +161,7 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences,updatedAt")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,reviewDecision,closingIssuesReferences,updatedAt")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
@@ -215,11 +215,12 @@ type loopPullJSON struct {
 	Closes []struct {
 		URL string `json:"url"`
 	} `json:"closingIssuesReferences"`
-	Updated     time.Time `json:"updatedAt"`
-	Draft       bool      `json:"isDraft"`
-	Mergeable   string    `json:"mergeable"`
-	MergeState  string    `json:"mergeStateStatus"`
-	MergeCommit struct {
+	Updated        time.Time `json:"updatedAt"`
+	Draft          bool      `json:"isDraft"`
+	Mergeable      string    `json:"mergeable"`
+	MergeState     string    `json:"mergeStateStatus"`
+	ReviewDecision string    `json:"reviewDecision"`
+	MergeCommit    struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 	State  string      `json:"state"`
@@ -338,7 +339,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, ReviewDecision: j.ReviewDecision, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
 	p.Updated = j.Updated
 	for _, issue := range j.Closes {
 		if r, ok := parseRef(issue.URL); ok {
