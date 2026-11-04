@@ -13,6 +13,8 @@ import (
 const ghAPISub = "api"
 
 var (
+	// teamMembersPath permits only the collection read, never a membership write.
+	teamMembersPath = regexp.MustCompile(`^(?:https?://api\.github\.com)?/?orgs/[^/?#]+/teams/[^/?#]+/members/?(?:\?[^#]*)?$`)
 	// membersPath: a REST path whose answer under the App's token an agent's
 	// gh carries misclassifies a colleague: the org's members and a login's
 	// membership (404 for a private member), the org's teams and a team's
@@ -45,6 +47,12 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 		ep := ghAPIEndpoint(words)
 		if ep == "" {
 			continue
+		}
+		if teamMembersPath.MatchString(ep) {
+			method := ghAPIMethod(words[commandAt(words)+1:])
+			if method == "" || method == "GET" {
+				continue
+			}
 		}
 		var what, person string
 		switch m := membersPath.FindStringSubmatch(ep); {
