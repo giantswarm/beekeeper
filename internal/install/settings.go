@@ -260,13 +260,16 @@ const pretooluseWord = "pretooluse"
 
 // agyHookBinary returns the binary path and timeout of an agy hook entry
 // that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
-// not such an entry.
+// not such an entry or is explicitly disabled.
 func agyHookBinary(raw json.RawMessage) (string, int) {
-	var events map[string][]hookEntry
-	if json.Unmarshal(raw, &events) != nil {
+	var events struct {
+		Enabled    *bool       `json:"enabled"`
+		PreToolUse []hookEntry `json:"PreToolUse"`
+	}
+	if json.Unmarshal(raw, &events) != nil || (events.Enabled != nil && !*events.Enabled) {
 		return "", 0
 	}
-	list := events["PreToolUse"]
+	list := events.PreToolUse
 	if len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
 		return "", 0
 	}

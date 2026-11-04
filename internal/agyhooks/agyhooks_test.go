@@ -66,3 +66,46 @@ func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestDefinitionMetadata(t *testing.T) {
+	for _, raw := range []string{
+		`{"enabled":true,"PreInvocation":[{"command":"/usr/bin/true"}]}`,
+		`{"enabled":false,"PreInvocation":[{"command":"/usr/bin/true"}]}`,
+		`{"FutureEvent":17}`, `{"FutureEvent":{"arbitrary":true}}`,
+		`{"enabled":false}`, `{}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			if why := EntryRejects([]byte(raw)); why != "" {
+				t.Fatalf("EntryRejects = %q", why)
+			}
+			if why := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + raw + `}`)); why != "" {
+				t.Fatalf("Rejects = %q", why)
+			}
+		})
+	}
+	for _, value := range []string{`[]`, `{}`, `null`, `0`, `"true"`} {
+		raw := `{"enabled":` + value + `}`
+		if why := EntryRejects([]byte(raw)); why == "" {
+			t.Errorf("accepted %s", raw)
+		}
+		if why := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + raw + `}`)); why == "" {
+			t.Errorf("accepted whole file with %s", raw)
+		}
+	}
+}
+
+func TestDefinitionMetadataStillValidatesKnownFields(t *testing.T) {
+	for _, event := range []string{"SessionStart", "PreInvocation", "PostInvocation", "Stop", "PreToolUse", "PostToolUse"} {
+		for _, enabled := range []string{"true", "false"} {
+			for _, handlers := range []string{`17`, `[{}]`} {
+				raw := `{"enabled":` + enabled + `,"FutureEvent":17,"` + event + `":` + handlers + `}`
+				if why := EntryRejects([]byte(raw)); why == "" {
+					t.Errorf("accepted %s", raw)
+				}
+				if why := Rejects([]byte(`{"beekeeper":` + guard + `,"other":` + raw + `}`)); why == "" {
+					t.Errorf("accepted whole file with %s", raw)
+				}
+			}
+		}
+	}
+}

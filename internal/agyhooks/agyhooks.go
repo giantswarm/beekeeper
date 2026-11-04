@@ -17,12 +17,20 @@ import (
 // the other lifecycle events) lists the command hooks themselves.
 var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 
+// knownEvents are the definition fields agy interprets as handler lists.
+var knownEvents = map[string]bool{
+	"SessionStart": true, "PreToolUse": true, "PostToolUse": true,
+	"PreInvocation": true, "PostInvocation": true, "Stop": true,
+}
+
 // EntryRejects is why agy refuses the named hook entry raw, an object of
-// event lists, or "" when agy accepts it: a tool event's items are matchers
+// event lists and optional enabled boolean, or "" when agy accepts it.
+// Unknown fields are ignored, and disabled entries still validate their handlers.
+// A tool event's items are matchers
 // with at least one hook, a lifecycle event's items are command hooks, and
 // every hook of type "command" (or of no type) names its command.
 func EntryRejects(raw json.RawMessage) string {
-	var events map[string][]json.RawMessage
+	var events map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return "not an object of hook lists: " + err.Error()
 	}
@@ -30,7 +38,21 @@ func EntryRejects(raw json.RawMessage) string {
 		return "not an object of hook lists"
 	}
 	for _, event := range ordered(raw) {
-		for _, item := range events[event] {
+		if event == "enabled" {
+			value := bytes.TrimSpace(events[event])
+			if !bytes.Equal(value, []byte("true")) && !bytes.Equal(value, []byte("false")) {
+				return "enabled: must be a boolean"
+			}
+			continue
+		}
+		if !knownEvents[event] {
+			continue
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(events[event], &items); err != nil {
+			return "not an object of hook lists: " + event + ": " + err.Error()
+		}
+		for _, item := range items {
 			if why := itemRejects(event, item); why != "" {
 				return why
 			}

@@ -1384,3 +1384,25 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 		t.Fatal("failed restart left its prepared state")
 	}
 }
+
+func TestAgyHooksDefinitionMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	const exe = "/opt/bin/beekeeper"
+	for _, enabled := range []string{"true", "false"} {
+		for _, sibling := range []string{`{"enabled":true}`, `{"enabled":false}`, `{"FutureEvent":17}`} {
+			entry := `{"enabled":` + enabled + `,"FutureEvent":17,` + string(AgyHook(exe))[1:]
+			write(t, path, `{"beekeeper":`+entry+`,"other":`+sibling+`}`)
+			for name, finding := range map[string]string{
+				"doctor": CheckAgyHooks(path, exe, ""),
+				"worker": AgyHooksUnguarded(path),
+			} {
+				if enabled == "true" && finding != "" {
+					t.Errorf("%s enabled with %s: %s", name, sibling, finding)
+				}
+				if enabled == "false" && finding == "" {
+					t.Errorf("%s accepted disabled guard with %s", name, sibling)
+				}
+			}
+		}
+	}
+}
