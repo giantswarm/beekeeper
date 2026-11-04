@@ -71,7 +71,7 @@ func (a *app) slotView() (dir string, n int) {
 }
 
 func (a *app) runCmd() *cobra.Command {
-	var maxFlag, swapFlag, waitFlag, classFlag string
+	var maxFlag, swapFlag, waitFlag, classFlag, timeoutFlag string
 	var localFlag bool
 	c := &cobra.Command{
 		Use:   "run [--local] [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
@@ -96,6 +96,12 @@ scope notices; run then names the victim in one line starting with
 When the command exits and leaves processes in its scope (a test's
 kube-apiserver), run stops the scope before it releases the slot and names
 them; a scope left that way would keep the slot busy for every other run.
+Local builds have a 30-minute execution deadline; commands containing
+golangci-lint have 5 minutes. --timeout sets a positive duration independently
+of --wait (queueing). On expiry run stops the whole scope before releasing
+the slot and exits 124. Direct golangci-lint run commands also get a matching
+--timeout unless they already supply one. Compound shell commands are bounded
+by the scope deadline. Lab and benchmark runs have no default deadline.
 A launcher whose scope becomes empty is stopped and releases its slot;
 when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
 position only when its turn reaches a free slot. While builds occupy the
@@ -226,6 +232,12 @@ machine's files stay untouched.`,
 			if f.Changed("swap") {
 				o.Swap = swapFlag
 			}
+			if cmd.Flags().Changed("timeout") {
+				o.Timeout, err = time.ParseDuration(timeoutFlag)
+				if err != nil || o.Timeout <= 0 {
+					return usageErr("--timeout must be a positive duration")
+				}
+			}
 			var wait string
 			wait, o.WaitFrom, o.Background = guard.ResolveWait(waitFlag, f.Changed("wait"))
 			if o.Wait, err = guard.ParseWait(wait); err != nil {
@@ -249,7 +261,7 @@ machine's files stay untouched.`,
 			o.Repo, o.Head = repo, commit
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
-			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && !f.Changed("timeout") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
 				head := guard.CommandHead(args)
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
 					Record: a.runRecorder(), Name: head, Repo: repo, Head: commit,
@@ -269,6 +281,7 @@ machine's files stay untouched.`,
 		},
 	}
 	c.Flags().SetInterspersed(false)
+	c.Flags().StringVar(&timeoutFlag, "timeout", "", "execution deadline after queueing (default 5m for lint, 30m for builds; lab and benchmark have none)")
 	c.Flags().BoolVar(&localFlag, "local", false, "run in the local slot even when run.remote is enabled")
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")

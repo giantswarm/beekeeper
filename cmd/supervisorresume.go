@@ -290,14 +290,18 @@ func endedParkCandidate(ag state.Agent) bool {
 }
 
 func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref string) error {
+	pullPark := ag.Park != nil && ag.Park.RefKind == github.RefPullRequest
+	if pullPark {
+		ref = ag.Park.On
+	}
 	r, ok := parseRef(ref)
 	var startErr error
-	if !ok || l.a.cfg.Supervisor.WorkerBrief == "" {
+	if !ok || (!pullPark && l.a.cfg.Supervisor.WorkerBrief == "") {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
 	} else {
 		file, def := l.a.cfg.Supervisor.WorkerBrief, ""
 		url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)
-		if ag.Park != nil && ag.Park.RefKind == github.RefPullRequest {
+		if pullPark {
 			// A recovery continues the parked task; the board template would
 			// turn the PR number into an unrelated issue assignment.
 			file, def = "", "Continue your existing task after the pull request {{.URL}} settled."
