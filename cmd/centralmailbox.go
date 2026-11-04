@@ -192,6 +192,7 @@ func (w *watcher) drainMailbox(ctx context.Context) bool {
 		// A watch that stops meanwhile still acks what it delivered.
 		if _, err := w.callCentralRaw(context.WithoutCancel(ctx), me, "ack_messages", map[string]any{paramIDs: acks}, nil); err != nil {
 			w.emitNow(mailboxKey, "MAILBOX: %d delivered not acked, delivered again: %s", len(acks), unreadableReason(err))
+			return true
 		}
 	}
 	return len(held) > 0
