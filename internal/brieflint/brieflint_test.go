@@ -13,6 +13,39 @@ const (
 	ruleFullURL = "full-url"
 )
 
+func TestLintDateFilenameBoundary(t *testing.T) {
+	for _, tt := range []struct {
+		line     string
+		wantDate bool
+	}{
+		{"Read 2026-11-04.md for the decision.", false},
+		{"Read (2026-11-04.txt).", false},
+		{"Read [2026-11-04.tar.gz] for the record.", false},
+		{"Read 2026-11-04.记录 for the decision.", false},
+		{"Read 2026-11-04.1 for the decision.", false},
+		{"Recorded on 2026-11-04.", true},
+		{"Recorded on 2026-11-04. Read the decision.", true},
+		{"Recorded (2026-11-04.)", true},
+		{"Recorded on 2026-11-04...", true},
+		{"Recorded on 2026-11-04, with a decision.", true},
+		{"Read 2026-11-04.md on 2026-11-05.", true},
+	} {
+		t.Run(tt.line, func(t *testing.T) {
+			got, err := Lint("brief.md", strings.NewReader(tt.line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if tt.wantDate {
+				want = 1
+			}
+			if len(got) != want || (len(got) > 0 && got[0].Rule != ruleDate) {
+				t.Errorf("Lint(%q) = %+v, want %d date findings", tt.line, got, want)
+			}
+		})
+	}
+}
+
 func TestLintRefusesStaleLines(t *testing.T) {
 	for line, want := range map[string]string{
 		"- Resumed fully 2026-09-27 16:10 on the person's word.":                ruleDate,
