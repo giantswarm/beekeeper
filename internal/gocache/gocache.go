@@ -169,6 +169,9 @@ type Usage struct {
 	Dir     string
 	Entries []Entry
 	Bytes   int64
+	// dirInfo identifies the directory Scan read, without keeping an open
+	// handle alive between the scan and a later trim.
+	dirInfo fs.FileInfo
 }
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
@@ -176,6 +179,14 @@ type Usage struct {
 // left out, and a missing cache is empty.
 func Scan(dir string) (Usage, error) {
 	u := Usage{Dir: dir}
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return u, nil
+	}
+	if err != nil {
+		return u, err
+	}
+	u.dirInfo = info
 	subs, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return u, nil
@@ -223,8 +234,29 @@ func hexByte(name string) bool {
 // most target bytes, and returns the bytes and entries it removed. It asks
 // busy before it starts and every few hundred removals, and stops with
 // ErrBusy once a build runs. An entry gone already is skipped; the go
-// command takes a missing entry for a miss and builds it again.
+// command takes a missing entry for a miss and builds it again. Removals
+// stay within u.Dir, and a directory replaced since Scan is refused.
 func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, err error) {
+	if u.Bytes <= target || len(u.Entries) == 0 {
+		return 0, 0, nil
+	}
+	root, err := os.OpenRoot(u.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = root.Close() }()
+	if u.dirInfo != nil {
+		info, err := root.Stat(".")
+		if err != nil {
+			return 0, 0, err
+		}
+		if !os.SameFile(u.dirInfo, info) {
+			return 0, 0, &fs.PathError{Op: "trim", Path: u.Dir, Err: errors.New("cache directory changed since scan")}
+		}
+	}
 	left := u.Bytes
 	for i, e := range u.Entries {
 		if left <= target {
@@ -234,7 +266,11 @@ func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, er
 			return freed, removed, ErrBusy
 		}
 		left -= e.Size
-		if err := os.Remove(e.Path); err != nil {
+		name, err := filepath.Rel(u.Dir, e.Path)
+		if err != nil {
+			return freed, removed, err
+		}
+		if err := root.Remove(name); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
