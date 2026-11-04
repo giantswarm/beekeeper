@@ -47,8 +47,8 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 				default:
 					t.Fatal("unexpected extra request")
 				}
-				data["d"] = map[string]any{"nodes": nodes, "issueCount": 51, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": "draft-page-1"}}
-				return json.Marshal(map[string]any{"data": data})
+				data["d"] = map[string]any{"nodes": nodes, "issueCount": 51, "pageInfo": map[string]any{"hasNextPage": next, pageEndCursor: "draft-page-1"}}
+				return json.Marshal(map[string]any{pageData: data})
 			}
 			pull := PR{Repo: repo, N: 99}
 			titles, drafts, err := Lookup(t.Context(), run, []PR{pull}, []string{repo})

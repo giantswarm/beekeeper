@@ -38,6 +38,8 @@ const hyprCreate = "create"
 
 const hyprMove = "move"
 
+const hyprOutput = "output"
+
 // open maps a window Chrome opens: on the output's workspace while the
 // redirect is on, else on the workspace the person's focused monitor shows.
 func (f *fake) open(w Window) {
@@ -75,13 +77,13 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		f.redirect = true
 	case args[0] == evalCmd && strings.HasPrefix(args[1], redirectOff):
 		f.redirect = false
-	case slices.Equal(args, []string{"output", hyprCreate, "headless", Output}):
+	case slices.Equal(args, []string{hyprOutput, hyprCreate, "headless", Output}):
 		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: surface}
 		if f.onCreate != nil {
 			f.onCreate(f, &out)
 		}
 		f.monitors = append(f.monitors, out)
-	case slices.Equal(args, []string{"output", "remove", Output}):
+	case slices.Equal(args, []string{hyprOutput, "remove", Output}):
 		f.monitors = slices.DeleteFunc(f.monitors, func(m Monitor) bool { return m.Name == Output })
 	case args[0] == hyprDispatch:
 		m := moveRE.FindStringSubmatch(args[1])
@@ -751,7 +753,7 @@ func TestShowRollsBackCancelledSetup(t *testing.T) {
 					}
 				}
 				out, err := f.ctl(callCtx, args...)
-				hit := boundary == hyprCreate && args[0] == "output" && args[1] == hyprCreate ||
+				hit := boundary == hyprCreate && args[0] == hyprOutput && args[1] == hyprCreate ||
 					boundary == "redirect" && args[0] == evalCmd && strings.Contains(args[1], "set_enabled(true)") ||
 					boundary == hyprMove && args[0] == hyprDispatch
 				if !cancelled && hit {
