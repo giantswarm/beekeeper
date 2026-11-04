@@ -955,6 +955,18 @@ func (a *app) appList() error {
 // allowedApps are the Apps on record, for the hook's consent decision: nil
 // when the record cannot be read, which decides no consent page.
 func (a *app) allowedApps() []guard.App {
+	return a.loadAllowedApps(listenerUp)
+}
+
+// allowedAppsForSession includes live creations owned by the calling session,
+// even when the hook cannot reach their listener across a sandbox boundary.
+func (a *app) allowedAppsForSession(session string) []guard.App {
+	return a.loadAllowedApps(func(r state.AppRun) bool {
+		return session != "" && r.By.Session == session && proc.Alive(r.PID)
+	})
+}
+
+func (a *app) loadAllowedApps(running func(state.AppRun) bool) []guard.App {
 	if a.loadConfig() != nil {
 		return nil
 	}
@@ -966,7 +978,7 @@ func (a *app) allowedApps() []guard.App {
 	if err != nil {
 		return nil
 	}
-	return guardAppsOf(st)
+	return guardAppsWithRuns(st, running)
 }
 
 // guardApps are the Apps on record as the guard reads them.
@@ -1000,6 +1012,10 @@ var listenerUp = func(r state.AppRun) bool {
 // listener answers and beekeeper's latest ledger entry of it; an App that
 // only runs or only the ledger holds is one of its own.
 func guardAppsOf(st *state.State) []guard.App {
+	return guardAppsWithRuns(st, listenerUp)
+}
+
+func guardAppsWithRuns(st *state.State, running func(state.AppRun) bool) []guard.App {
 	out := guardApps(st.Apps)
 	of := func(name, org, declared string) *guard.App {
 		i := slices.IndexFunc(out, func(g guard.App) bool { return strings.EqualFold(g.Name, name) })
@@ -1017,7 +1033,7 @@ func guardAppsOf(st *state.State) []guard.App {
 		return g
 	}
 	for _, r := range st.AppRuns {
-		if listenerUp(r) {
+		if running(r) {
 			of(r.Name, r.Org, r.Declared).Run = &guard.CreateRun{Listener: r.Listener, By: r.By.Name, At: r.At}
 		}
 	}

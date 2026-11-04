@@ -785,3 +785,39 @@ func TestAppAllowKeepsGrants(t *testing.T) {
 	}
 	check(checkRefuse, permissionsPage, navigateFlag)
 }
+
+func TestAppCreateClickBelongsToCallingSession(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfgPath = filepath.Join(a.cfg.StateDir, "config.yaml")
+	original := listenerUp
+	t.Cleanup(func() { listenerUp = original })
+	// The hook cannot dial the listener in the command's network namespace.
+	listenerUp = func(state.AppRun) bool { return false }
+	for _, tc := range []struct {
+		name, owner, caller string
+		pid                 int
+		running, allow      bool
+	}{
+		{"own live run", "session-a", "session-a", os.Getpid(), true, true},
+		{"another session", "session-b", "session-a", os.Getpid(), true, false},
+		{"no run", "session-a", "session-a", os.Getpid(), false, false},
+		{"dead run", "session-a", "session-a", -1, true, false},
+		{"missing session", "", "", os.Getpid(), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.AppRuns = nil
+				if tc.running {
+					st.AppRuns = []state.AppRun{{Name: "example-app", Org: "example-org", PID: tc.pid, By: state.Party{Session: tc.owner}}}
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			d := guard.Click(a.allowedAppsForSession(tc.caller), guard.Page{URL: "https://github.com/organizations/example-org/settings/apps/manifest"}, "Clicks Create GitHub App")
+			if got := d.Decision == guard.Allow; got != tc.allow {
+				t.Fatalf("decision = %+v, want allow %v", d, tc.allow)
+			}
+		})
+	}
+}
