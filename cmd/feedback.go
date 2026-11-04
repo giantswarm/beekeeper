@@ -133,7 +133,7 @@ func (w *watcher) deliverFeedback(ctx context.Context, a *app, c *central.Client
 			w.emitNow("feedback", "FEEDBACK on %s waits: it names no agent and no guide holds the role to deliver it to", th.Report)
 			return false
 		}
-		to, label = g.Session, "the guide"
+		to, label = g.Session, guideRoleAlias
 	}
 	person := a.cfg.Reporter.Person
 	body := fmt.Sprintf("Feedback from %s in Slack, a reply to the status report %s: %s", person, th.Report, msg)

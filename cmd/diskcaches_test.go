@@ -151,7 +151,7 @@ func TestUncoveredCachesListsWhatNoPolicyNames(t *testing.T) {
 	staleCache(t, filepath.Join(base, "small"), "a")
 	entries := []config.DiskCache{{Path: filepath.Join(base, "covered")}, {Path: filepath.Join(base, "parent", "*")}}
 	got := uncoveredCaches(base, entries, 1<<20, 10)
-	if len(got) != 2 || got[0].name != "big" || got[0].Held != 2<<20 || got[1].name != "small" {
+	if len(got) != 2 || got[0].name != "big" || got[0].Held != 2<<20 || got[1].name != litSmall {
 		t.Fatalf("uncovered=%+v", got)
 	}
 	if got := uncoveredCaches(base, entries, 2<<20, 10); len(got) != 1 {

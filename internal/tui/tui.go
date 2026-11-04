@@ -25,16 +25,17 @@ type Source interface {
 	// Data reads everything the screen shows in one go.
 	Data(ctx context.Context) (*Data, error)
 	// Tail reads the last turns of one session's transcript: what it
-	// said and what it was told. session is a name, id or PID as in
-	// `beekeeper tail`.
+	// said and what it was told. The screen passes the selected session ID.
 	Tail(ctx context.Context, session string, turns int) ([]Turn, error)
 	// Send delivers the person's message to one session and says where
-	// it went; a session that takes no message is an error.
+	// it went; session is its ID. A session that takes no message is an error.
 	Send(ctx context.Context, session, text string) (string, error)
 	// TakeOver brings the approvals of the session with id to this
 	// screen; Release hands them back to its own window.
 	TakeOver(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
+	// ReleaseOwned hands back only this screen's current takeover.
+	ReleaseOwned(ctx context.Context, id string) error
 	// Answer allows or denies the held request of the session with id.
 	Answer(ctx context.Context, id, request string, allow bool) error
 }
@@ -47,14 +48,20 @@ type Options struct {
 
 // Run opens the screen and blocks until the person quits.
 func Run(src Source, opts Options) error {
-	if opts.Interval <= 0 {
-		opts.Interval = 2 * time.Second
-	}
-	p := tea.NewProgram(newModel(src, opts))
-	final, err := p.Run()
-	if m, ok := final.(*model); ok {
+	return runProgram(src, opts, func(m tea.Model) (tea.Model, error) {
+		return tea.NewProgram(m).Run()
+	})
+}
+
+// runProgram keeps cleanup independent of the runner's final model, which
+// can be nil when the terminal cannot start or the program is interrupted.
+func runProgram(src Source, opts Options, run func(tea.Model) (tea.Model, error)) error {
+	m := newModel(src, opts).(*model)
+	defer func() {
+		m.cancel()
 		m.releaseAll() // a closed screen answers nothing
-	}
+	}()
+	_, err := run(m)
 	return err
 }
 

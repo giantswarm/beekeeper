@@ -6,7 +6,6 @@
 package proc
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -50,7 +49,8 @@ type Table struct {
 	ByPID    map[int]*Process
 	children map[int][]int
 	// root is the process tree the table was read from; "" is /proc.
-	root string
+	root       string
+	readErrors map[int]error
 }
 
 // Read scans /proc.
@@ -68,7 +68,7 @@ func ReadAt(root string) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}, root: root}
+	t := &Table{ByPID: map[int]*Process{}, children: map[int][]int{}, root: root, readErrors: map[int]error{}}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
@@ -76,12 +76,28 @@ func ReadAt(root string) (*Table, error) {
 		}
 		p, err := readProcess(root, pid, boot)
 		if err != nil {
-			continue // exited while scanning
+			t.readErrors[pid] = err
+			continue // exited or inaccessible while scanning
 		}
 		t.add(p)
 	}
 	t.sortChildren()
 	return t, nil
+}
+
+// MissingReason explains why pid is absent from this snapshot. A process hidden
+// by the caller's PID namespace or procfs mount cannot be distinguished from
+// one that has exited.
+func (t *Table) MissingReason(pid int) string {
+	err := t.readErrors[pid]
+	switch {
+	case errors.Is(err, os.ErrPermission):
+		return "not visible to the caller (permission denied)"
+	case err == nil, errors.Is(err, os.ErrNotExist):
+		return "not found or not visible in the caller's process namespace"
+	default:
+		return "could not read process information"
+	}
 }
 
 // NewTable is the table of the processes ps, linked by their parents: a
@@ -130,7 +146,7 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 		return nil, err
 	}
 	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "cmdline")))
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrPermission) {
 		return nil, err
 	}
 	return &Process{
@@ -145,7 +161,9 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 	}, nil
 }
 
-func ticks(n int64) time.Duration { return time.Duration(n) * time.Second / clockTicks }
+// USER_HZ divides a second exactly, so scale by the duration of one tick
+// without overflowing an intermediate product for representable durations.
+func ticks(n int64) time.Duration { return time.Duration(n) * (time.Second / clockTicks) }
 
 // stat is the part of /proc/<pid>/stat beekeeper reads; times in clock ticks.
 type stat struct {
@@ -195,14 +213,13 @@ func splitNul(b []byte) []string {
 }
 
 func bootTime(root string) (time.Time, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "stat")))
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(root, "stat")))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("reading the process table needs Linux /proc: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "btime "); ok {
+	// Interrupt tables can make unrelated lines arbitrarily long.
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
 			s, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
 				return time.Time{}, err
@@ -319,7 +336,8 @@ func cwd(root string, pid int) string {
 
 // Held returns the paths pid holds: its working directory, its executable
 // and every file it has open, a deleted one by the path it had (readable
-// for the caller's own processes).
+// for the caller's own processes). An ambiguous deletion suffix retains
+// both possible paths.
 func Held(pid int) []string { return held(procRoot, pid) }
 
 func held(root string, pid int) []string {
@@ -333,7 +351,7 @@ func held(root string, pid int) []string {
 	for _, l := range links {
 		// Sockets, pipes and anonymous inodes link to no path.
 		if p, err := os.Readlink(l); err == nil && filepath.IsAbs(p) {
-			out = append(out, strings.TrimSuffix(p, " (deleted)"))
+			out = appendReference(out, p)
 		}
 	}
 	return out
