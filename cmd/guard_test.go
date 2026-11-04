@@ -280,7 +280,7 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, "tool_input": map[string]any{hookTypeCommand: command, "run_in_background": bg}})
+	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, executionHookInput: map[string]any{hookTypeCommand: command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`

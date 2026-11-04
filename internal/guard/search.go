@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const graphqlIssueSearch = "`gh api graphql` ISSUE search"
+
 var (
 	graphqlSearch    = regexp.MustCompile(`\bsearch\s*\(((?:[^()"#]|"(?:\\.|[^"\\])*"|#[^\n]*\n)*)\)`)
 	graphqlStrings   = regexp.MustCompile(`"(?:\\.|[^"\\])*"|#[^\n]*`)
@@ -175,7 +177,7 @@ func graphqlSearchScope(words []string, body string) (string, int) {
 		found = true
 		q := graphqlQuery.FindStringSubmatch(match[1])
 		if len(q) < 2 {
-			return "`gh api graphql` ISSUE search", 0
+			return graphqlIssueSearch, 0
 		}
 		value := ""
 		if strings.HasPrefix(q[1], "$") {
@@ -184,11 +186,11 @@ func graphqlSearchScope(words []string, body string) (string, int) {
 			_ = json.Unmarshal([]byte(q[1]), &value)
 		}
 		if n := len(repoQualifier.FindAllString(value, -1)); n != 1 {
-			return "`gh api graphql` ISSUE search", n
+			return graphqlIssueSearch, n
 		}
 	}
 	if found {
-		return "`gh api graphql` ISSUE search", 1
+		return graphqlIssueSearch, 1
 	}
 	return "", 0
 }

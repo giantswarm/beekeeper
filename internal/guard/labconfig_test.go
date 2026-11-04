@@ -52,7 +52,7 @@ func TestLabConfigLease(t *testing.T) {
 					t.Fatal(err)
 				}
 				out := string(h.Decide(raw))
-				want := tc.deny && session != "owner" && session != "desktop"
+				want := tc.deny && session != ownerKey && session != "desktop"
 				if strings.Contains(out, `"permissionDecision":"deny"`) != want {
 					t.Fatalf("session %q: %s; want deny %v", session, out, want)
 				}
