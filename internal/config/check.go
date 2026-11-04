@@ -245,7 +245,7 @@ func localInput(key string) bool {
 }
 
 func checkInput(path, key string, findings *[]string) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		*findings = append(*findings, key+": cannot resolve home directory")
 		return
