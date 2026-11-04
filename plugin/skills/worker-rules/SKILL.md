@@ -24,4 +24,4 @@ One task; stricter desk rules win.
 
 Load: `beekeeper:lease`, `beekeeper:merge`, `beekeeper:github`, `beekeeper:park`.
 
-Load after roll/proof: `beekeeper:alerts`; before long proofs: `beekeeper:long-proofs`.
+After roll/proof: `beekeeper:alerts`; long proofs: `beekeeper:long-proofs`
