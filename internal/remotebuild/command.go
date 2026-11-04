@@ -73,16 +73,28 @@ func Toolchain(argv []string) string {
 
 func literal(w *syntax.Word) (string, bool) {
 	var b bytes.Buffer
-	var add func([]syntax.WordPart) bool
-	add = func(parts []syntax.WordPart) bool {
+	var add func([]syntax.WordPart, bool) bool
+	add = func(parts []syntax.WordPart, quoted bool) bool {
 		for _, p := range parts {
 			switch p := p.(type) {
 			case *syntax.Lit:
+				// Lit retains shell escapes and unquoted expansion characters.
+				// The original shell runs remotely, so checking those raw bytes
+				// would validate different arguments from the ones Go/Cargo see.
+				if strings.Contains(p.Value, "\\") || !quoted && (strings.ContainsAny(p.Value, "*?[{") || strings.HasPrefix(p.Value, "~")) {
+					return false
+				}
 				b.WriteString(p.Value)
 			case *syntax.SglQuoted:
+				if p.Dollar { // ANSI-C quotes interpret escapes such as \x2f.
+					return false
+				}
 				b.WriteString(p.Value)
 			case *syntax.DblQuoted:
-				if !add(p.Parts) {
+				if p.Dollar { // Locale translation can change the argument.
+					return false
+				}
+				if !add(p.Parts, true) {
 					return false
 				}
 			default:
@@ -91,7 +103,7 @@ func literal(w *syntax.Word) (string, bool) {
 		}
 		return true
 	}
-	if !add(w.Parts) {
+	if !add(w.Parts, false) {
 		return "", false
 	}
 	return b.String(), true
