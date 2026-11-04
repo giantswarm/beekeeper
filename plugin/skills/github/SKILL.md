@@ -7,11 +7,9 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 
 - **Budget:** stop while `beekeeper budget --gate` refuses, until reset; code search adds
   `--bucket code_search`.
+- **Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`.
 - **Membership:** `beekeeper person <login>`, never `gh api` members endpoints: private members
   are misread.
-- **Dependabot alerts:** before/after remediation, `beekeeper security alert <owner/repo> <number>`.
-  Unreadable or dismissed is not fixed. App: Dependabot alerts read, accepted on installation.
-  No personal scopes or security-scan bypass.
 - **Scans:** list each repo (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr list`
   likewise), never multi-repo `gh search`, which drops private repos. Unreadable is a problem,
   never "no match".
@@ -23,7 +21,5 @@ description: GitHub reads, builds, browser steps and waits on a beekeeper desk: 
 - **Builds**, tests, lints: `beekeeper run` (the hook does it). Exit 75: no slot, rerun in
   background, never a loop. Exit 137: cap, bound parallelism. No heavy work under
   `beekeeper watch` load or memory pressure.
-- **Browser:** headless: CLI Claude in Chrome tools; desktop: `beekeeper browse "<steps>"`.
-  Never wait on site approval. Own App grants: `beekeeper app allow` first; refusals are
-  barriers. Sign-in: `muster auth login --no-browser`, the printed URL in a browse step.
 - **Subagents:** only if the brief allows, each told force-push and secret rules.
+- **Browser / Dependabot:** before either, read [references/browser-and-security.md](references/browser-and-security.md).
