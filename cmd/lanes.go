@@ -706,7 +706,12 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			st.Merges[i].Run = ""
 			e := event(watchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
 			if m.By.Session != "" || m.By.HostSession != "" {
-				st.Owed = append(st.Owed, cutOwed(m, now))
+				o := cutOwed(m, now)
+				o.Cancelled = readStopped(mergeBase(a.store.Dir(), m.Repo, m.PR)) != (state.Party{})
+				if o.Cancelled {
+					o.Line = fmt.Sprintf("%s was cancelled on request: do not rerun it", o.Command)
+				}
+				st.Owed = append(st.Owed, o)
 				e.Detail += fmt.Sprintf("; its outcome is owed to %q", m.By.Name)
 			}
 			evs = append(evs, e)
