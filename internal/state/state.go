@@ -1852,8 +1852,10 @@ func (s *FileStore) busy(waited time.Duration) error {
 func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
-// back atomically together with the events fn returns. When fn fails nothing
+// back atomically, then appends the events fn returns. When fn fails nothing
 // is written, nor when a newer release wrote the state (StaleWriterError).
+// An event log that cannot be opened also leaves the state unchanged. A later
+// append or close failure can still leave saved state without all its events.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1876,10 +1878,20 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
-	if err := writeJSON(s.path("state.json"), st); err != nil {
+	if len(events) == 0 {
+		return writeJSON(s.path("state.json"), st)
+	}
+	// Refuse an unavailable log before removing state whose only history
+	// would be in these events, such as an answered note.
+	f, err := s.openEvents()
+	if err != nil {
 		return err
 	}
-	return s.append(events)
+	if err := writeJSON(s.path("state.json"), st); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return appendEvents(f, events)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -2040,10 +2052,19 @@ func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := s.openEvents()
 	if err != nil {
 		return err
 	}
+	return appendEvents(f, events)
+}
+
+func (s *FileStore) openEvents() (*os.File, error) {
+	return os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+}
+
+// appendEvents owns and closes f, including when the append fails.
+func appendEvents(f *os.File, events []Event) error {
 	if err := endLine(f); err != nil {
 		_ = f.Close()
 		return err
