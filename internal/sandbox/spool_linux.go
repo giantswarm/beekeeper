@@ -37,6 +37,23 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 		if err != nil {
 			return err
 		}
+		// Sweep each request family once, including orphaned sidecars. Busy
+		// handlers may still be writing output or publishing their answer.
+		seen := map[string]bool{}
+		for _, e := range entries {
+			base := spoolBase(e.Name())
+			if base == "" || seen[base] {
+				continue
+			}
+			seen[base] = true
+			base = filepath.Join(dir, base)
+			mu.Lock()
+			skip := busy[base+reqSuffix]
+			mu.Unlock()
+			if !skip {
+				sweep(base, procDir, 3*tick)
+			}
+		}
 		for _, e := range entries {
 			path := filepath.Join(dir, e.Name())
 			mu.Lock()
@@ -60,6 +77,60 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 			return nil
 		case <-t.C:
 		}
+	}
+}
+
+// spoolBase recognizes both requester and broker temporary files.
+func spoolBase(name string) string {
+	temporary := strings.HasSuffix(name, tmpSuffix)
+	name = strings.TrimSuffix(name, tmpSuffix)
+	for _, suffix := range []string{reqSuffix, replySuffix, outSuffix} {
+		if strings.HasSuffix(name, suffix) {
+			return strings.TrimSuffix(name, suffix)
+		}
+	}
+	if temporary {
+		return name
+	}
+	return ""
+}
+
+// sweep collects old, unheld requests and orphaned sidecars. The grace
+// period also protects a requester still preparing its temporary file.
+func sweep(base, procDir string, grace time.Duration) {
+	st, err := os.Lstat(base + reqSuffix)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err == nil {
+		if !st.Mode().IsRegular() || time.Since(st.ModTime()) < grace {
+			return
+		}
+		sys, ok := st.Sys().(*syscall.Stat_t)
+		if !ok || len(Holders(procDir, sys.Dev, sys.Ino)) != 0 {
+			return
+		}
+	}
+	removed := false
+	for _, suffix := range []string{reqSuffix, replySuffix, outSuffix, tmpSuffix, replySuffix + tmpSuffix} {
+		path := base + suffix
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || (st == nil && time.Since(info.ModTime()) < grace) {
+			continue
+		}
+		// An orphaned requester temporary file can still be in use.
+		if suffix == tmpSuffix {
+			sys, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || len(Holders(procDir, sys.Dev, sys.Ino)) != 0 {
+				continue
+			}
+		}
+		if os.Remove(path) == nil {
+			removed = true
+		}
+	}
+	if removed {
+		fmt.Fprintf(os.Stderr, "beekeeper sandbox broker: swept stale spool entry %s\n", filepath.Base(base))
 	}
 }
 
