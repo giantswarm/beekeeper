@@ -119,7 +119,7 @@ func TestExecutionOmpRunnerSingleTurn(t *testing.T) {
 }
 
 func TestExecutionOmpRunnerCarriesEffort(t *testing.T) {
-	for _, level := range []string{"", "high"} {
+	for _, level := range []string{"", testEffortHigh} {
 		t.Run("level="+level, func(t *testing.T) {
 			f, dir := ompFixture(t)
 			f.r.Effort = level
