@@ -162,7 +162,7 @@ func TestGHBodyFullURLCheckClaudeAndAgy(t *testing.T) {
 
 	for _, cmd := range []string{
 		`gh pr create --repo o/r --title "feat: x" --body "Closes https://github.com/o/r/issues/7 (o/r#7)"`,
-		`gh pr edit o/r#12 --body "See https://github.com/o/r/pull/7#issuecomment-42 and note #3 and timer #4"`,
+		`gh issue edit o/r#12 --body "See https://github.com/o/r/pull/7#issuecomment-42 and note #3 and timer #4"`,
 		`gh issue create --repo o/r --title "bug" --body "Park with ` + "`beekeeper agents park --on o/r#7`" + ` or in session beekeeper#12"`,
 		"gh issue comment 7 --repo o/r --body \"```sh\ngh pr view #8 o/r#9\n```\"",
 		"gh issue comment 7 --repo o/r --body \"````markdown\n```sh\ngh pr view #8\n```\no/r#9\n````\"",
