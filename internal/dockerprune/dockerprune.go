@@ -101,8 +101,8 @@ func (i Image) Name() string {
 }
 
 // ListImages reads every image with its size and what removing it frees,
-// from docker system df -v, which lists an image once per tag, and when it was tagged
-// last, from docker image inspect.
+// from docker system df -v, and its complete references and last tag time
+// from docker image inspect. Verbose df lists only the first tag.
 func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	raw, err := d(ctx, "system", "df", "-v", "--format", "{{json .}}")
 	if err != nil {
@@ -138,16 +138,16 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 			out[i].Refs = append(out[i].Refs, repo+":"+tag)
 		}
 	}
-	return out, tagTimes(ctx, d, out)
+	return out, inspectImages(ctx, d, out)
 }
 
-// tagTimes sets each image's Tagged. An image whose tag time is unreadable
+// inspectImages sets each image's Tagged and Refs. An unreadable inspection
 // fails the list: what may be removed is then unknown.
-func tagTimes(ctx context.Context, d Docker, images []Image) error {
+func inspectImages(ctx context.Context, d Docker, images []Image) error {
 	if len(images) == 0 {
 		return nil
 	}
-	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}"}
+	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}\t{{json .RepoTags}}"}
 	at := map[string]int{}
 	for i, img := range images {
 		args, at[img.ID] = append(args, img.ID), i
@@ -158,15 +158,24 @@ func tagTimes(ctx context.Context, d Docker, images []Image) error {
 	}
 	seen := 0
 	for line := range bytes.Lines(raw) {
-		id, js, _ := strings.Cut(strings.TrimSpace(string(line)), "\t")
+		id, data, _ := strings.Cut(strings.TrimSpace(string(line)), "\t")
 		i, ok := at[id]
 		if !ok {
 			continue
+		}
+		js, tags, ok := strings.Cut(data, "\t")
+		if !ok {
+			return fmt.Errorf("docker image inspect: image %s: missing references", id)
 		}
 		var t time.Time
 		if err := json.Unmarshal([]byte(js), &t); err != nil {
 			return fmt.Errorf("docker image inspect: image %s: tag time %s: %w", id, js, err)
 		}
+		var refs []string
+		if err := json.Unmarshal([]byte(tags), &refs); err != nil {
+			return fmt.Errorf("docker image inspect: image %s: references: %w", id, err)
+		}
+		images[i].Refs = refs
 		images[i].Tagged, seen = t, seen+1
 	}
 	if seen != len(images) {

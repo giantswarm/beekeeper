@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
+
+- Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
+
+- Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
+
+- Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
+
+- Unregistered harness sessions keep worker transcript permissions; default repository access includes only explicitly identified worker transcripts (https://github.com/giantswarm/beekeeper/issues/2183).
 - Keep free-form Dex token-exchange response fields out of diagnostics so refused exchanges cannot echo credentials (https://github.com/giantswarm/beekeeper/pull/1478).
 
 - The hook follows script files run from shell `-c` strings, including nested strings, using the same recursion bound as nested scripts. Refusals name the script and line; files used only as data remain unread (https://github.com/giantswarm/beekeeper/issues/971).

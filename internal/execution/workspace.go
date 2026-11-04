@@ -24,7 +24,7 @@ func RepositoryIdentity(raw string) string {
 	if err != nil || u.Host != "github.com" || u.RawQuery != "" || u.Fragment != "" {
 		return ""
 	}
-	if u.Scheme == "https" && u.User != nil || u.Scheme != "https" && u.Scheme != sshCommand {
+	if u.Scheme == httpsScheme && u.User != nil || u.Scheme != httpsScheme && u.Scheme != sshCommand {
 		return ""
 	}
 	if u.Scheme == sshCommand && (u.User == nil || u.User.Username() != "git") {

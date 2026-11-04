@@ -17,7 +17,7 @@ func TestEnvironment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer listener.Close()
+		defer func() { _ = listener.Close() }()
 	}
 	regular := filepath.Join(dir, "regular")
 	if err := os.WriteFile(regular, nil, 0600); err != nil {
