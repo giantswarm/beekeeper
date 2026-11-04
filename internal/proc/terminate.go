@@ -24,31 +24,63 @@ func Terminate(pids []int, grace time.Duration) {
 	signal(syscall.SIGKILL)
 }
 
-// TerminateMatching rechecks the snapshot's start time and match before
-// each signal, including escalation, so an exited PID reused by another
-// process is never signalled. It returns the PIDs successfully sent TERM.
+// processHandle pins one process identity even after its PID is reused.
+type processHandle interface {
+	signal(syscall.Signal) error
+	close() error
+}
+
+type terminationOS struct {
+	open    func(int) (processHandle, error)
+	started func(int) (time.Time, error)
+}
+
+// TerminateMatching pins a stable process handle before checking the snapshot's
+// start time and match. It rechecks both before escalation and signals only the
+// pinned handle. If a stable handle is unavailable, it fails closed. It returns
+// the PIDs successfully sent TERM.
 func TerminateMatching(ps []*Process, grace time.Duration, match func(*Process) bool) []int {
-	signal := func(p *Process, sig syscall.Signal) bool {
-		start, err := Started(p.PID)
-		if err != nil || p.PID <= 1 || !start.Equal(p.Start) || !match(p) {
-			return false
+	return terminateMatching(ps, grace, match, terminationOS{openProcessHandle, Started})
+}
+
+func terminateMatching(ps []*Process, grace time.Duration, match func(*Process) bool, ops terminationOS) []int {
+	type target struct {
+		process *Process
+		handle  processHandle
+	}
+	var targets []target
+	var handles []processHandle
+	defer func() {
+		for _, handle := range handles {
+			_ = handle.close()
 		}
-		live, err := os.FindProcess(p.PID)
-		return err == nil && live.Signal(sig) == nil
+	}()
+	signal := func(t target, sig syscall.Signal) bool {
+		start, err := ops.started(t.process.PID)
+		return err == nil && start.Equal(t.process.Start) && match(t.process) && t.handle.signal(sig) == nil
 	}
 	var sent []int
 	for _, p := range ps {
-		if signal(p, syscall.SIGTERM) {
-			sent = append(sent, p.PID)
+		if p.PID <= 1 {
+			continue
 		}
+		handle, err := ops.open(p.PID)
+		if err != nil {
+			continue
+		}
+		handles = append(handles, handle)
+		t := target{p, handle}
+		if !signal(t, syscall.SIGTERM) {
+			continue
+		}
+		targets = append(targets, t)
+		sent = append(sent, p.PID)
 	}
-	for deadline := time.Now().Add(grace); time.Now().Before(deadline) && slices.ContainsFunc(sent, Alive); {
+	for deadline := time.Now().Add(grace); time.Now().Before(deadline) && slices.ContainsFunc(targets, func(t target) bool { return t.handle.signal(0) == nil }); {
 		time.Sleep(100 * time.Millisecond)
 	}
-	for _, p := range ps {
-		if slices.Contains(sent, p.PID) {
-			signal(p, syscall.SIGKILL)
-		}
+	for _, t := range targets {
+		signal(t, syscall.SIGKILL)
 	}
 	return sent
 }
