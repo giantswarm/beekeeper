@@ -41,7 +41,7 @@ func TestToolAnnotations(t *testing.T) {
 	type hint struct{ readOnly, destructive, idempotent, openWorld bool }
 	read, add, remove := hint{true, false, true, false}, hint{false, false, true, false}, hint{false, true, true, false}
 	want := map[string]hint{
-		"lease_list": read, "hold_list": read, "lanes": read, "lane_turn": read,
+		leaseListTool: read, "hold_list": read, lanesName: read, "lane_turn": read,
 		"note_list": read, "list_agents": read, "snapshot": read, "receive_messages": read, nameReadFeed: read,
 		"lease_claim": add, "lane_queue": add, "lane_settle": add, nameAgentsRegister: add,
 		"lease_release": remove, "hold_set": remove, "hold_lift": remove, "lane_leave": remove,
@@ -92,7 +92,7 @@ func TestCallerRequired(t *testing.T) {
 }
 
 func TestCallerSchema(t *testing.T) {
-	auditOnly := map[string]bool{"lease_list": true, "hold_list": true, "lanes": true, "lane_turn": true, "note_list": true, "list_agents": true, "snapshot": true, "receive_messages": true, "ack_messages": true}
+	auditOnly := map[string]bool{leaseListTool: true, "hold_list": true, lanesName: true, "lane_turn": true, "note_list": true, "list_agents": true, "snapshot": true, "receive_messages": true, "ack_messages": true}
 	for name, st := range docsServer().ListTools() {
 		for _, param := range []string{paramAgent, paramHost} {
 			_, declared := st.Tool.InputSchema.Properties[param]
