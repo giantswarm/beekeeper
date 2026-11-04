@@ -229,6 +229,31 @@ func (d *document) set(path, value string) error {
 	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
 }
 
+// checkSet tries a representative scalar write on a detached tree. This
+// shares set's path and embedded-document checks without changing d.
+func (d *document) checkSet(path string) error {
+	seen := map[*yaml.Node]*yaml.Node{}
+	var copyNode func(*yaml.Node) *yaml.Node
+	copyNode = func(n *yaml.Node) *yaml.Node {
+		if n == nil {
+			return nil
+		}
+		if c := seen[n]; c != nil {
+			return c
+		}
+		c := *n
+		seen[n] = &c
+		c.Content = make([]*yaml.Node, len(n.Content))
+		for i, child := range n.Content {
+			c.Content[i] = copyNode(child)
+		}
+		c.Alias = copyNode(n.Alias)
+		return &c
+	}
+	trial := &document{root: copyNode(d.root)}
+	return trial.set(path, "preflight")
+}
+
 // setKeys puts a string under keys, one key each, a key holding a dot
 // included (a Secret's .dockerconfigjson), creating the mappings on the way.
 func (d *document) setKeys(keys []string, value string) error {

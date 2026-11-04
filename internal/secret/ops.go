@@ -297,6 +297,9 @@ func place(doc *document, file, path string) (string, error) {
 	if err := checkRule(file, keys); err != nil {
 		return "", err
 	}
+	if err := doc.checkSet(path); err != nil {
+		return "", fmt.Errorf("%s: %w", file, err)
+	}
 	return path, nil
 }
 
