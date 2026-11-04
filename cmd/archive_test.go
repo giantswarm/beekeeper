@@ -331,3 +331,120 @@ func TestTakenOverGuideStaysThePersons(t *testing.T) {
 		t.Errorf("archivable: %q", why)
 	}
 }
+
+func TestRetryGivenUpArchive(t *testing.T) {
+	for _, id := range []string{"w", "local_retry"} {
+		t.Run(id, func(t *testing.T) {
+			st := &state.State{FinishedSeeded: true, DoneSeeded: true, Starts: []state.Start{{Party: worker}}}
+			st.Starts[0].HostSession = "local_retry"
+			failed := archiveOutcome{agent: worker, host: "local_retry", asked: true, line: "not archived"}
+			now := archiveNow
+			for cycle := 0; cycle < 2; cycle++ {
+				if err := retryArchive(st, id, unarchived, now); err != nil {
+					t.Fatal(err)
+				}
+				ar := st.Archives[0]
+				if len(st.Archives) != 1 || ar.Tries != 0 || !ar.Tried.IsZero() || !ar.Looked.IsZero() || !ar.Warmed.IsZero() || !ar.Since.Equal(now) {
+					t.Fatalf("retry did not reset budget: %+v", ar)
+				}
+				plan := planArchives(st, unarchived, func(state.Party) bool { return false }, now)
+				if len(plan) != 1 || plan[0].wait != "" || plan[0].drop != "" {
+					t.Fatalf("retry not due: %+v", plan)
+				}
+				for try := 0; try < archiveTries; try++ {
+					line := owe(st, []archiveOutcome{failed}, now)[0]
+					if try == archiveTries-1 && !strings.Contains(line, "gives it up: 5 stewards' turns") {
+						t.Fatal(line)
+					}
+					now = now.Add(archiveAgain)
+				}
+				if len(st.Archives) != 0 {
+					t.Fatal("not given up")
+				}
+			}
+			if err := retryArchive(st, id, unarchived, now); err != nil {
+				t.Fatal(err)
+			}
+			owe(st, []archiveOutcome{{agent: worker, line: "archived"}}, now)
+			if len(st.Archives) != 0 {
+				t.Fatal("successful retry still owed")
+			}
+		})
+	}
+}
+
+func TestRetryArchiveSafety(t *testing.T) {
+	for _, kind := range []string{"unknown", "roster", "role", "harness", "no desktop", "missing", "archived"} {
+		t.Run(kind, func(t *testing.T) {
+			st := &state.State{Starts: []state.Start{{Party: worker}}}
+			st.Starts[0].HostSession = "local_retry"
+			record := unarchived
+			switch kind {
+			case "unknown":
+				st.Starts = nil
+			case "roster":
+				st.Agents = []state.Agent{{Party: worker}}
+			case "role":
+				st.Guide = &state.Role{Holder: &state.Supervisor{Party: worker}}
+			case "harness":
+				st.Starts[0].Harness = "codex"
+			case "no desktop":
+				st.Starts[0].HostSession = ""
+			case "missing":
+				record = func(string) (*claude.Record, bool) { return nil, false }
+			case "archived":
+				record = func(string) (*claude.Record, bool) { return &claude.Record{IsArchived: true}, true }
+			}
+			if err := retryArchive(st, worker.Session, record, archiveNow); err == nil {
+				t.Fatal("unsafe retry accepted")
+			}
+			if len(st.Archives) != 0 {
+				t.Fatal("rejected retry changed archives")
+			}
+		})
+	}
+}
+
+func TestRetryArchiveResetsExistingBudget(t *testing.T) {
+	st := &state.State{Starts: []state.Start{{Party: worker}}, Archives: []state.Archive{{Party: worker, Host: "local_retry", Since: archiveNow.Add(-48 * time.Hour), Tries: 4, Tried: archiveNow, Looked: archiveNow, Warmed: archiveNow}}}
+	st.Starts[0].HostSession = "local_retry"
+	if err := retryArchive(st, worker.Session, unarchived, archiveNow); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Archives) != 1 || st.Archives[0].Tries != 0 || !st.Archives[0].Tried.IsZero() || !st.Archives[0].Looked.IsZero() || !st.Archives[0].Warmed.IsZero() {
+		t.Fatalf("budget: %+v", st.Archives)
+	}
+}
+
+func TestDoctorRetryArchiveCommand(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Claude.DesktopDir = t.TempDir()
+	writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_retry.json"), `{}`)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		p := worker
+		p.HostSession = "local_retry"
+		st.Starts = append(st.Starts, state.Start{Party: p})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := a.doctorCmd()
+	cmd.SetArgs([]string{"retry-archive", "local_retry"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Archives) != 1 || st.Archives[0].Host != "local_retry" || st.Archives[0].Tries != 0 {
+		t.Fatalf("queued: %+v", st.Archives)
+	}
+	if !strings.Contains(out.String(), "archive retry queued") {
+		t.Fatal(out.String())
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("events: %+v, %v", evs, err)
+	}
+}
