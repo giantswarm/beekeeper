@@ -394,3 +394,72 @@ func TestTimerRunMarksInheritedSession(t *testing.T) {
 		t.Fatalf("run subprocess marker = %q, %v", out, err)
 	}
 }
+
+// Both supervisor re-arms and self-update restarts cancel the watch's
+// context, then wait for timerActs before starting the replacement watch.
+func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
+	for _, repeat := range []string{"", state.RepeatDaily} {
+		t.Run("repeat="+repeat, func(t *testing.T) {
+			w, _, out := notifyingWatch(t, t.TempDir(), false)
+			ready := filepath.Join(t.TempDir(), "ready")
+			timer := state.Timer{ID: 42, Due: w.now, What: "start worker", Repeat: repeat,
+				Run: fmt.Sprintf("touch %s; exec sleep 60", ready)}
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{timer}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var fires []timerFire
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				_, evs, f, _ := settleTimers(st, nil, w.now)
+				fires = f
+				return evs, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w.actTimers(ctx, fires)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					cancel()
+					w.timerActs.Wait()
+					t.Fatal("timer command did not start")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			cancel()
+			w.timerActs.Wait()
+			st, err := w.store.Read()
+			if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(timer.Due) || !st.Timers[0].Fired.IsZero() {
+				t.Fatalf("interrupted occurrence lost: %+v, %v", st, err)
+			}
+			for _, want := range []string{"TIMER FAILED: #42", timer.Run, timer.What, "re-armed"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q in %q", want, out.String())
+				}
+			}
+			_, _, retried, _ := settleTimers(st, nil, w.now)
+			if len(retried) != 1 || retried[0].t.ID != timer.ID {
+				t.Fatalf("replacement watch did not retry: %+v", retried)
+			}
+		})
+	}
+}
+
+func TestTimerRunKilledRearms(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 43, Due: w.now, Run: "kill -KILL $$", What: "killed command"}})
+	st, err := w.store.Read()
+	if err != nil || len(st.Timers) != 1 || st.Timers[0].ID != 43 {
+		t.Fatalf("killed timer lost: %+v, %v", st, err)
+	}
+	if !strings.Contains(out.String(), "TIMER FAILED: #43 `kill -KILL $$`") {
+		t.Fatalf("kill not reported: %s", out.String())
+	}
+}

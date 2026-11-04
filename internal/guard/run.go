@@ -398,12 +398,18 @@ func ParseWait(s string) (time.Duration, error) {
 // scope goes into the slot's slice and shares the slot's cap.
 func Run(o Options, argv []string) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
+	kubeEnv, cleanupKube, err := runKubeconfig()
+	if err != nil {
+		logf("scratch kubeconfig: %v", err)
+		return 1
+	}
+	defer cleanupKube()
 	capper := plat.Capper
 	switch {
 	case capper.Available():
 	case o.Sandbox == nil:
 		logf("no user systemd here, running uncapped: %s", argv[0])
-		return execve(argv, logf)
+		return runDirect(argv, kubeEnv, logf)
 	case !o.Sandbox.Available():
 		logf("refused: the agent sandbox keeps the user systemd out of reach and no sandbox broker answers; " +
 			"the host runs it as beekeeper-sandbox.service (beekeeper install), an uncapped build would put the machine at risk")
@@ -412,7 +418,7 @@ func Run(o Options, argv []string) int {
 		capper = o.Sandbox
 	}
 	if capper.Capped() {
-		return execve(argv, logf)
+		return runDirect(argv, kubeEnv, logf)
 	}
 	needKiB, err := ParseSize(o.Max)
 	if err != nil {
@@ -466,6 +472,7 @@ func Run(o Options, argv []string) int {
 	}
 	env, cleanup := runTmp(o.TmpDir, logf)
 	defer cleanup()
+	env = append(env, kubeEnv...)
 	env = append(env, cpuEnv(o)...)
 	if o.GoCache != "" {
 		release, ok := holdGoCache(o, logf)
