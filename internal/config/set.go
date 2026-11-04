@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/gofrs/flock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +44,7 @@ func Set(path string, settings []Setting) (*Config, error) {
 
 // Change is Set with the dotted keys of unset removed in the same write,
 // after the settings: a mapping an unset key leaves empty goes with it.
+// Concurrent changes to the same target are serialized by its .lock file.
 func Change(path string, settings []Setting, unset []string) (*Config, error) {
 	if len(settings) == 0 && len(unset) == 0 {
 		return nil, errors.New("no change")
@@ -56,6 +58,14 @@ func Change(path string, settings []Setting, unset []string) (*Config, error) {
 	case err != nil:
 		return nil, err
 	}
+	// Lock the resolved target before reading it. The configuration's inode
+	// changes at rename, so its own file cannot be the lock. Keep the sidecar
+	// in place so a waiting editor and a new editor always lock the same inode.
+	lock := flock.New(target + ".lock")
+	if err := lock.Lock(); err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
 	raw, err := os.ReadFile(filepath.Clean(target))
 	mode := fs.FileMode(0o600)
 	switch {
