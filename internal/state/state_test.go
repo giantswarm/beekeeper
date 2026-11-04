@@ -16,7 +16,12 @@ import (
 	"github.com/gofrs/flock"
 )
 
-const verbRunStart = "run.start"
+const (
+	verbRunStart = "run.start"
+	verbReport   = "agents.report"
+	verbBefore   = "before"
+	verbAfter    = "after"
+)
 
 // A holder that stops with the lock (a frozen process) fails every wait
 // behind it after the bound, naming its PID and age; a holder without a
@@ -721,8 +726,8 @@ func TestFollowLargeEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := Event{Verb: "agents.report", Detail: strings.Repeat("x", 2<<20)}
-	want := []Event{{Verb: "before"}, report, {Verb: "after"}}
+	report := Event{Verb: verbReport, Detail: strings.Repeat("x", 2<<20)}
+	want := []Event{{Verb: verbBefore}, report, {Verb: verbAfter}}
 	if err := s.Record(want...); err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +739,7 @@ func TestFollowLargeEvents(t *testing.T) {
 	if len(all) != 3 || all[1].Detail != report.Detail {
 		t.Fatal("large report was not persisted")
 	}
-	keep := func(e Event) bool { return e.Verb != "agents.report" }
+	keep := func(e Event) bool { return e.Verb != verbReport }
 	filtered := []Event{all[0], all[2]}
 	for i := 0; i < 3; i++ {
 		got, err := s.Follow("filtered", keep)
@@ -759,7 +764,7 @@ func TestFollowLargeIncompleteLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Record(Event{Verb: "before"}); err != nil {
+	if err := s.Record(Event{Verb: verbBefore}); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
@@ -767,7 +772,7 @@ func TestFollowLargeIncompleteLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	event := Event{Verb: "agents.report", Detail: strings.Repeat("x", 2<<20)}
+	event := Event{Verb: verbReport, Detail: strings.Repeat("x", 2<<20)}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
@@ -777,14 +782,14 @@ func TestFollowLargeIncompleteLine(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		got, err := s.Follow("t", nil)
-		if err != nil || len(got) != 1 || got[0].Verb != "before" {
+		if err != nil || len(got) != 1 || got[0].Verb != verbBefore {
 			t.Fatalf("incomplete read %d: count=%d, err=%v", i, len(got), err)
 		}
 	}
 	if _, err := f.WriteString("\n"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Record(Event{Verb: "after"}); err != nil {
+	if err := s.Record(Event{Verb: verbAfter}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -792,7 +797,7 @@ func TestFollowLargeIncompleteLine(t *testing.T) {
 		if err != nil || len(got) != 3 {
 			t.Fatalf("completed read %d: count=%d, err=%v", i, len(got), err)
 		}
-		if got[0].Verb != "before" || got[1] != event || got[2].Verb != "after" {
+		if got[0].Verb != verbBefore || got[1] != event || got[2].Verb != verbAfter {
 			t.Fatal("completed events differ")
 		}
 	}
