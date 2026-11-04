@@ -53,15 +53,16 @@ const devctlOwned = `(?:(?:~|\.\.?|\$\{?\w+\}?)?/(?:[^\s;&|()'"<>=]*/)?)?devctl\
 var (
 	// heavy: the commands that take a build slot, for the CPU and memory a
 	// build, test or lint spends. A lab command (agentlab: the lab-count guard
-	// and the lab lease govern it, and it mostly waits on its cluster) and a
-	// quick refresh (graphify update, AST only) are no build: they stay off.
+	// and the lab lease govern it, and it mostly waits on its cluster), a
+	// quick refresh (graphify update, AST only), and a govulncheck source scan
+	// are not builds: they stay off.
 	heavy = regexp.MustCompile(`(?m)` + pos + `(` + strings.Join([]string{
 		`go\s+(?:test|build|vet|install|generate|run)\b`,
 		`golangci-lint\b`,
 		`cargo\s+(?:build|test|run|clippy|check|doc)\b`,
 		`(?:yarn|npm|pnpm|bun)\s+(?:run\s+)?(?:test|build|tsc|lint|typecheck|ci(?::\S+)?|e2e\S*|test:\S+|build:\S+|backstage-cli|install|dedupe|workspace\s+\S+\s+(?:test|build|tsc|lint|backstage-cli))\b`,
 		`npx\s+(?:jest|vitest|tsc|playwright|backstage-cli|eslint|webpack|vite|esbuild)\b`,
-		`(?:jest|vitest|tsc|playwright|eslint|webpack|vite|esbuild|ginkgo|pytest|tox|mvn|gradle|bazel|staticcheck|govulncheck|trivy|controller-gen|kubebuilder|goreleaser)\b`,
+		`(?:jest|vitest|tsc|playwright|eslint|webpack|vite|esbuild|ginkgo|pytest|tox|mvn|gradle|bazel|staticcheck|trivy|controller-gen|kubebuilder|goreleaser)\b`,
 		`ko\s+build\b`,
 		`make\b`,
 		`docker\s+(?:build|buildx\s+build)\b`,
