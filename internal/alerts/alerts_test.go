@@ -316,6 +316,53 @@ func TestSnapshotGroupedPageAndTeamFirst(t *testing.T) {
 	})
 }
 
+func TestSnapshotUsesWorkloadNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, namespace, exported string
+	}{
+		{name: "plain namespace", namespace: "jobs-a"},
+		{name: "empty exported namespace", namespace: "jobs-a"},
+		{name: "exported namespace only", exported: "jobs-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []Raw{
+				alert("a", "JobFailed", "page", "batch", "", "namespace", "monitoring", "exported_namespace", "jobs-a"),
+				alert("b", "JobFailed", "page", "batch", "", "namespace", "monitoring", "exported_namespace", "jobs-b"),
+				alert("c", "JobFailed", "page", "batch", "", "namespace", tc.namespace),
+			}
+			if tc.name != "plain namespace" {
+				raw[2].Labels["exported_namespace"] = tc.exported
+			}
+			original := make([]map[string]string, len(raw))
+			for i, a := range raw {
+				original[i] = maps.Clone(a.Labels)
+			}
+			lines := rules.SnapshotLines(instA, ok(raw...), now)
+			var got []string
+			for _, line := range lines[1:] {
+				got = append(got, strings.Join(strings.Fields(line), " "))
+			}
+			equal(t, lines[:1], []string{"alpha at 18:50Z: 3 active"})
+			equal(t, got, []string{
+				"PAGE batch JobFailed alpha 2 namespace=jobs-a",
+				"PAGE batch JobFailed alpha 1 namespace=jobs-b",
+			})
+			normalized := rules.Normalize(raw, instA)
+			for i, a := range rules.SnapshotAlerts(instA, ok(raw...)) {
+				if !maps.Equal(a.Labels, original[i]) {
+					t.Errorf("alert %s: structured snapshot labels were changed", raw[i].Fingerprint)
+				}
+			}
+			for i, a := range raw {
+				where(t, normalized, a.Fingerprint, first(a.Labels["exported_namespace"], a.Labels["namespace"]))
+				if !maps.Equal(a.Labels, original[i]) || !maps.Equal(normalized[a.Fingerprint].Labels, original[i]) {
+					t.Errorf("alert %s: original labels were changed", a.Fingerprint)
+				}
+			}
+		})
+	}
+}
+
 func TestSnapshotUnreachable(t *testing.T) {
 	equal(t, rules.SnapshotLines(instA, Answer{Why: timedOut}, now), []string{"alpha unreachable: timed out"})
 }
