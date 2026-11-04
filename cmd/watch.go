@@ -91,7 +91,9 @@ gone is one MERGE LOST line: it settles with an unknown release. A
 running merge whose devctl runs on merge.hungAfter (45m) after its pull
 request merged, or that long after its start once the pull request is
 closed, is one MERGE HUNG line: the watch ends its devctl and records the
-merge at the next poll. A
+merge at the next poll. Startup, a detected suspend, or a long gap between
+checks gives waits a fresh merge.hungAfter grace period before they can
+be ended as hung. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
 that wakes it). A positive capacity.ceiling reached is one CAPACITY FULL
@@ -366,6 +368,11 @@ type watcher struct {
 	// kept in its mark.
 	feedID   string
 	lastPoll time.Time
+	// Hung checks get a fresh grace period on startup and after a suspend
+	// (or a long gap in observations). These times stay in memory so their
+	// monotonic readings can exclude time spent asleep.
+	lastHungCheck time.Time
+	hungGrace     time.Time
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
 	refusedSince time.Time
@@ -1759,6 +1766,21 @@ func (w *watcher) lostMerges(ctx context.Context) {
 // pull request (endHung), one MERGE HUNG line each; the next poll records
 // it (lostMerges), or its gate does.
 func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
+	// GitHub and persisted merge timestamps have no monotonic reading.
+	// Never use their wall-clock age alone to kill a wait after a suspend.
+	// The wall/monotonic difference detects suspend on platforms whose
+	// monotonic clock stops asleep; a long gap also covers other platforms
+	// and clocks without monotonic readings.
+	gap := max(5*time.Minute, 2*slowReads*w.cfg.Watch.Interval.Duration)
+	wallElapsed := now.Round(0).Sub(w.lastHungCheck.Round(0))
+	elapsed := now.Sub(w.lastHungCheck)
+	if w.lastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
+		w.hungGrace = now
+	}
+	w.lastHungCheck = now
+	if now.Sub(w.hungGrace) <= w.cfg.Merge.HungAfter.Duration {
+		return
+	}
 	for _, h := range w.endHung(ctx, watchParty, now, w.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
 		return now.Sub(m.Started) > w.cfg.Merge.HungAfter.Duration
 	}) {
