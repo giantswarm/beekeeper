@@ -223,7 +223,7 @@ browser's sign-in is retried once first, both attempts in the log.`,
 			before, perr := teleport.Status(ctx, t.Tsh, t.Home)
 			missed := false
 			if keeper {
-				missed = rec.Missed(a.now, t.Every.Duration)
+				missed = rec.PendingMiss || rec.Missed(a.now, t.Every.Duration)
 				due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration, missed)
 				last := rec.CheckedAt
 				rec.CheckedAt = a.now.UTC()
@@ -245,6 +245,7 @@ browser's sign-in is retried once first, both attempts in the log.`,
 				if !keeper {
 					return err
 				}
+				rec.PendingMiss = missed
 				rec.Waiting, rec.WaitingAt = err.Error(), a.now.UTC()
 				if werr := a.store.WriteFile(teleportFile, rec); werr != nil {
 					return werr
