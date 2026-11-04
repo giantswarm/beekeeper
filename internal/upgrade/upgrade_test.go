@@ -28,6 +28,12 @@ import (
 // cluster-api-events writes (its Available condition's transition time).
 var phases = []string{"0820-before", "0821-changed", "0827-during", "0843-after"}
 
+const (
+	nsCluster  = "dev"
+	nsSecond   = "ns-b"
+	orgCluster = "org-mc/mc"
+)
+
 func objects(t *testing.T, phase string) []Object {
 	t.Helper()
 	var objs []Object
@@ -114,7 +120,7 @@ func TestRolling(t *testing.T) {
 			objs[i].Metadata.Annotations[upgradingMark] = "false"
 		}
 	}
-	if ups := Detect(objs, at, func(c string) bool { return c == "org-mc/mc" }); len(ups) != 1 || !ups[0].Rolling {
+	if ups := Detect(objs, at, func(c string) bool { return c == orgCluster }); len(ups) != 1 || !ups[0].Rolling {
 		t.Errorf("a held upgrade whose control plane rolls ended: %+v", ups)
 	}
 	if ups := Detect(objs, at, func(string) bool { return false }); len(ups) != 0 {
@@ -259,7 +265,7 @@ func TestRead(t *testing.T) {
 		t.Errorf("kubectl calls %q", c)
 	}
 	// A held upgrade's from is in its hold's reason: the events are not read.
-	held := func(i, c string) bool { return i == prod && c == "org-mc/mc" }
+	held := func(i, c string) bool { return i == prod && c == orgCluster }
 	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, held); ss[0].Upgrades[0].From != "" {
 		t.Errorf("the events of a held upgrade were read: %+v", ss[0])
 	}
@@ -386,7 +392,7 @@ func TestStaleMark(t *testing.T) {
 	if ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return false }); len(ups) != 1 || ups[0].Rolling {
 		t.Errorf("a marked upgrade within its grace: %+v", ups)
 	}
-	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "org-mc/mc"), Reason: "upgrade prod/org-mc/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
+	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, orgCluster), Reason: "upgrade prod/org-mc/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
 	mark[upgradeStartTime] = stamp(50 * time.Hour)
 	ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return true })
 	if len(ups) != 0 {
@@ -420,11 +426,11 @@ func TestRollingAfterMarkCleared(t *testing.T) {
 	for i := range objs {
 		delete(objs[i].Metadata.Annotations, upgradeStartTime)
 	}
-	ups := Detect(objs, at, func(c string) bool { return c == "org-mc/mc" })
+	ups := Detect(objs, at, func(c string) bool { return c == orgCluster })
 	if len(ups) != 1 || !ups[0].Rolling {
 		t.Fatalf("a held rollout ended with the mark: %+v", ups)
 	}
-	h := state.Hold{Target: HoldTarget(prod, "org-mc/mc"), Reason: "upgrade prod/org-mc/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
+	h := state.Hold{Target: HoldTarget(prod, orgCluster), Reason: "upgrade prod/org-mc/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
 	st := &state.State{Holds: []state.Hold{h}}
 	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun)+len(ended) != 0 {
 		t.Errorf("a young rollout: begun %+v ended %+v", begun, ended)
@@ -456,15 +462,15 @@ func TestStaleMarkKeepsDueSchedule(t *testing.T) {
 }
 
 func TestStale(t *testing.T) {
-	h := state.Hold{Target: HoldTarget(prod, "org-mc/mc"), At: at.Add(-StallAfter)}
+	h := state.Hold{Target: HoldTarget(prod, orgCluster), At: at.Add(-StallAfter)}
 	if !Stale(h, at) || Stale(state.Hold{Target: h.Target, At: at.Add(-time.Hour)}, at) || Stale(state.Hold{Target: "lane:x", At: h.At}, at) {
 		t.Error("stale")
 	}
 }
 
 func TestNamespacedHolds(t *testing.T) {
-	a := Upgrade{Namespace: "ns-a", Cluster: "dev", To: "2"}
-	b := Upgrade{Namespace: "ns-b", Cluster: "dev", To: "2"}
+	a := Upgrade{Namespace: "ns-a", Cluster: nsCluster, To: "2"}
+	b := Upgrade{Namespace: nsSecond, Cluster: nsCluster, To: "2"}
 	st := &state.State{}
 	Reconcile(st, prod, []Upgrade{a}, at, watch)
 	if !Lift(st, HoldTarget(prod, "ns-a/dev"), watch, at) {
@@ -505,9 +511,51 @@ func TestLegacyHoldDoesNotTransferLift(t *testing.T) {
 			}
 			// Even a single currently observed cluster cannot establish the
 			// namespace of a persisted bare-name target.
-			begun, ended := Reconcile(st, prod, []Upgrade{{Namespace: "ns-b", Cluster: "dev", To: "2"}}, at, watch)
+			begun, ended := Reconcile(st, prod, []Upgrade{{Namespace: nsSecond, Cluster: nsCluster, To: "2"}}, at, watch)
 			if len(ended) != 1 || len(begun) != 1 || !begun[0].Active(at) || begun[0].Target != "upgrade:prod/ns-b/dev" {
 				t.Fatalf("legacy hold migration: begun %+v ended %+v", begun, ended)
+func TestWithHoldVersions(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, from, installation, cluster, reason, want string
+		expired, lifted                                 bool
+	}{
+		{name: "matching hold", want: holdFrom},
+		{name: "reader knows", from: "34.0.0", want: "34.0.0"},
+		{name: "lifted hold", lifted: true, want: holdFrom},
+		{name: "expired hold", expired: true},
+		{name: "other installation", installation: "other"},
+		{name: "other cluster", cluster: "other"},
+		{name: "other release", reason: "upgrade prod/mc 35.0.1 → 37.0.0"},
+		{name: "unknown hold version", reason: "upgrade prod/mc ? → 36.1.0"},
+		{name: "malformed reason", reason: "unrelated reason"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installation, cluster := "prod", "mc"
+			if tc.installation != "" {
+				installation = tc.installation
+			}
+			if tc.cluster != "" {
+				cluster = tc.cluster
+			}
+			reason := tc.reason
+			if reason == "" {
+				reason = "upgrade prod/mc 35.0.1 → 36.1.0"
+			}
+			h := state.Hold{Target: HoldTarget(installation, cluster), Reason: reason}
+			if tc.expired {
+				h.Until = now
+			}
+			if tc.lifted {
+				h.LiftedBy = &state.Party{Name: "operator"}
+			}
+			s := Status{Installation: "prod", Upgrades: []Upgrade{{Cluster: "mc", From: tc.from, To: holdTo}}}
+			got := WithHoldVersions(s, &state.State{Holds: []state.Hold{h}}, now)
+			if got.Upgrades[0].From != tc.want {
+				t.Errorf("from = %q, want %q", got.Upgrades[0].From, tc.want)
+			}
+			if s.Upgrades[0].From != tc.from {
+				t.Fatal("changed shared reading")
 			}
 		})
 	}
@@ -515,9 +563,9 @@ func TestLegacyHoldDoesNotTransferLift(t *testing.T) {
 
 func duplicateClusters() []Object {
 	var objs []Object
-	for _, ns := range []string{"ns-a", "ns-b"} {
+	for _, ns := range []string{"ns-a", nsSecond} {
 		c := Object{Kind: kindCluster}
-		c.Metadata.Namespace, c.Metadata.Name = ns, "dev"
+		c.Metadata.Namespace, c.Metadata.Name = ns, nsCluster
 		c.Metadata.Labels = map[string]string{releaseLabel: "2"}
 		c.Metadata.Annotations = map[string]string{upgradingMark: "true"}
 		c.Status.Conditions = []Condition{{Type: rollingOut, Status: "True"}}
@@ -532,7 +580,7 @@ func TestNamespacedRolloutLookup(t *testing.T) {
 		objs[i].Metadata.Annotations = nil
 	}
 	st := &state.State{}
-	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: "dev", To: "2"}}, at, watch)
+	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: nsCluster, To: "2"}}, at, watch)
 	Lift(st, HoldTarget(prod, "ns-a/dev"), watch, at)
 	held := HeldClusters(st, at)
 	ups := Detect(objs, at, func(c string) bool { return held(prod, c) })
@@ -562,7 +610,7 @@ func TestNamespacedReaderEventLookup(t *testing.T) {
 	}
 	exe, log := fakeKubectl(t, dir)
 	st := &state.State{}
-	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: "dev", To: "2"}}, at, watch)
+	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: nsCluster, To: "2"}}, at, watch)
 	r := Reader{Kubectl: exe, Timeout: 10 * time.Second}
 	ss := r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, HeldClusters(st, at))
 	if len(ss[0].Upgrades) != 2 {
@@ -576,3 +624,7 @@ func TestNamespacedReaderEventLookup(t *testing.T) {
 		t.Fatalf("event calls: %v", c)
 	}
 }
+const (
+	holdFrom = "35.0.1"
+	holdTo   = "36.1.0"
+)

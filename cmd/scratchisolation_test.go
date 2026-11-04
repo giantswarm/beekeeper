@@ -40,6 +40,8 @@ func TestADevBuildsUnitIsNoInstalledBeekeeper(t *testing.T) {
 
 // Only the default configuration syncs the user-wide plugins.
 func TestAScratchConfigurationLeavesThePluginsAlone(t *testing.T) {
+	t.Setenv(xdgStateHomeEnv, "")
+	t.Setenv(xdgConfigHomeEnv, "")
 	if !syncsUnder("") || syncsUnder("/tmp/scratch/config.yaml") {
 		t.Error("syncsUnder")
 	}
