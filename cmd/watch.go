@@ -2094,10 +2094,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.actTimers(ctx, fires)
-	for _, n := range defaulted {
+	if len(defaulted) > 0 {
 		w.timerActs.Go(func() {
-			w.tellFiler(ctx, watchParty, &n, defaultedLine(&n))
-			w.emitReleased(ctx, &n, closedDefaulted)
+			w.tellDefaulted(ctx, defaulted)
+			for _, n := range defaulted {
+				w.emitReleased(ctx, &n, closedDefaulted)
+			}
 		})
 	}
 	for _, n := range overtaken {
