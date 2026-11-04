@@ -79,7 +79,7 @@ func TestCodexStderrRedactsAuthentication(t *testing.T) {
 	for _, diagnostic := range []string{
 		"Authorization:\nBearer opaque-fixture-value\n",
 		"refresh_token: opaque-fixture-value\n",
-		strings.Join([]string{"-----BEGIN", "PRIVATE KEY-----\nopaque-fixture-value\n"}, " "),
+		strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\nopaque-fixture-value\n",
 		"gitleaks:allow " + patternValue,
 		"unexpected value " + patternValue,
 	} {
