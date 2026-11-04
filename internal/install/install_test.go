@@ -21,7 +21,12 @@ import (
 )
 
 // reload is the fake service manager's reload command.
-const reload = "reload"
+const (
+	reload  = "reload"
+	start   = "start"
+	halt    = "halt"
+	restart = "restart"
+)
 
 const replacementExe = "/new/bin/beekeeper"
 
@@ -48,17 +53,17 @@ func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
 
 func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
 func (*fakeSetup) Reload() []string                       { return []string{reload} }
-func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
+func (*fakeSetup) Start(p string) []string                { return []string{start, filepath.Base(p)} }
 func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
-func (*fakeSetup) Halt(p string) []string                 { return []string{"halt", filepath.Base(p)} }
-func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{"restart", filepath.Base(p)}} }
+func (*fakeSetup) Halt(p string) []string                 { return []string{halt, filepath.Base(p)} }
+func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{restart, filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	f.ran = append(f.ran, strings.Join(argv, " "))
 	switch argv[0] {
-	case "start":
+	case start:
 		f.started = true
-	case "stop", "halt":
+	case "stop", halt:
 		f.started = false
 	}
 	return nil
@@ -1484,6 +1489,21 @@ func TestInstallDefersOnlyRefusedRestart(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "restart deferred") {
 		t.Fatal("refusal was not reported")
+	}
+	e.BeforeRestart, f.ran = nil, nil
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"restart beekeeper-sandbox.service"}
+	if !slices.Equal(f.ran, want) {
+		t.Fatalf("retry commands = %v, want only the refused service: %v", f.ran, want)
+	}
+	f.ran = nil
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ran) != 0 {
+		t.Fatalf("completed refusal recovery repeated commands: %v", f.ran)
 	}
 }
 
