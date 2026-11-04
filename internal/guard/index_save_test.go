@@ -2,6 +2,8 @@ package guard
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -54,5 +56,34 @@ func TestIndexConcurrentSavesPublishCompleteSnapshots(t *testing.T) {
 		if ref[:len(writer)] != writer {
 			t.Fatalf("published references from multiple snapshots: %v", refs)
 		}
+	}
+	assertNoIndexTemporaryFiles(t, dir)
+}
+
+func TestIndexSaveCleansUpAfterPublishFailure(t *testing.T) {
+	dir := t.TempDir()
+	ix, err := OpenIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix.Add("fixture/cleanup", "synthetic-index-save-cleanup")
+	// A directory at the destination deterministically prevents publication.
+	if err := os.Mkdir(filepath.Join(dir, indexFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.Save(time.Unix(1, 0)); err == nil {
+		t.Fatal("Save succeeded with a directory at the publication path")
+	}
+	assertNoIndexTemporaryFiles(t, dir)
+}
+
+func assertNoIndexTemporaryFiles(t *testing.T, dir string) {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, ".index-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("temporary snapshots remain: %v", files)
 	}
 }

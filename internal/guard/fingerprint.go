@@ -196,7 +196,11 @@ func (ix *Index) Save(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() {
+		// After publication the temporary name no longer exists; on failure
+		// cleanup is best effort so it does not hide the original error.
+		_ = os.Remove(tmp.Name())
+	}()
 	_, writeErr := tmp.Write(raw)
 	if err := errors.Join(writeErr, tmp.Close()); err != nil {
 		return err
