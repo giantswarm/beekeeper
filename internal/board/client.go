@@ -982,7 +982,7 @@ func (c *Client) ensure(ctx context.Context, m *meta, mv *Moved, id string, foun
 
 // onBoard returns ref's existing item on m, or nil when ref is not on m.
 // For an issue outside the board's owner, whose projectItems omit m, it
-// probes addProjectV2ItemById and deletes a freshly added blank item.
+// reads the project directly without changing membership.
 func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem, error) {
 	oo, or, on, err := Ref(ref)
 	if err != nil {
@@ -994,23 +994,43 @@ func (c *Client) onBoard(ctx context.Context, m *meta, ref string) (*projectItem
 	if err != nil || found != nil || strings.EqualFold(oo, c.Board.Owner) {
 		return found, err
 	}
-	var omv Moved
-	omv.Ref = oref
-	it, err := c.ensure(octx, m, &omv, oid, nil)
-	if err != nil {
-		return nil, err
-	}
-	if !omv.Added {
-		return &it, nil
-	}
-	_ = c.deleteItem(octx, m.ID, it.ID)
-	return nil, nil
+	return c.projectIssueItem(octx, m, oid)
 }
 
-func (c *Client) deleteItem(ctx context.Context, project, item string) error {
-	var done json.RawMessage
-	return c.graphql(ctx, &done, `mutation($p:ID!,$i:ID!){deleteProjectV2Item(input:{projectId:$p,itemId:$i}){deletedItemId}}`,
-		vars{"p": project, "i": item})
+// projectIssueItem resolves membership from the project when the issue omits it.
+// Field values cannot distinguish an existing item from a newly added one.
+func (c *Client) projectIssueItem(ctx context.Context, m *meta, id string) (*projectItem, error) {
+	vs := vars{"p": m.ID}
+	for {
+		var r struct {
+			Node struct {
+				Items struct {
+					Nodes []struct {
+						projectItem
+						Content struct {
+							ID string `json:"id"`
+						} `json:"content"`
+					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"items"`
+			} `json:"node"`
+		}
+		if err := c.graphql(ctx, &r, `query($p:ID!,$c:String){node(id:$p){...on ProjectV2{items(first:100,after:$c){nodes{`+itemFields+` content{...on Issue{id}}} pageInfo{hasNextPage endCursor}}}}}`, vs); err != nil {
+			return nil, err
+		}
+		for _, it := range r.Node.Items.Nodes {
+			if it.Content.ID == id {
+				return &it.projectItem, nil
+			}
+		}
+		if !r.Node.Items.PageInfo.HasNextPage {
+			return nil, nil
+		}
+		vs["c"] = r.Node.Items.PageInfo.EndCursor
+	}
 }
 
 // lookup reads the issue's node id and its item on the board from the
@@ -1390,15 +1410,11 @@ func (c *Client) lookupOrigin(ctx context.Context, m *meta, ref string, probeCro
 	}
 	onBoard = slices.ContainsFunc(is.ProjectItems.Nodes, func(x projectItem) bool { return x.Project.ID == m.ID })
 	if !onBoard && probeCrossOwner && !strings.EqualFold(owner, c.Board.Owner) && is.ID != "" {
-		var omv Moved
-		omv.Ref = norm
-		if it, cerr := c.ensure(ctx, m, &omv, is.ID, nil); cerr == nil {
-			if !omv.Added {
-				onBoard = true
-			} else {
-				_ = c.deleteItem(ctx, m.ID, it.ID)
-			}
+		it, readErr := c.projectIssueItem(ctx, m, is.ID)
+		if readErr != nil {
+			return false, parent, is.Body, readErr
 		}
+		onBoard = it != nil
 	}
 	return onBoard, parent, is.Body, nil
 }
