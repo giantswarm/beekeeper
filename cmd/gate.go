@@ -2866,6 +2866,7 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // runChild runs the command with this process's stdin and stderr, its
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
+	started := time.Now()
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
@@ -2886,10 +2887,17 @@ func runChild(argv []string, out io.Writer) int {
 		}
 	}()
 	_ = c.Wait()
-	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+	return childExit(c.ProcessState, os.Stderr, started)
+}
+
+// childExit preserves signal deaths as shell exit codes and reports how long
+// the command ran, including when a caller or the watch stopped it.
+func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), time.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())
 	}
-	return c.ProcessState.ExitCode()
+	return ps.ExitCode()
 }
 
 func exitCode(rc int) error {

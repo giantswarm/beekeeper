@@ -948,6 +948,7 @@ const busySpent = "busy-base budget spent"
 // and no other run follows it (followerGlob), the command is sent SIGTERM
 // and gone set.
 func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
+	started := time.Now()
 	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
 	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
 	if err := c.Start(); err != nil {
@@ -978,9 +979,5 @@ func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Po
 	}
 	_ = c.Wait()
 	close(ended)
-	rc := c.ProcessState.ExitCode()
-	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		rc = 128 + int(ws.Signal())
-	}
-	return rc
+	return childExit(c.ProcessState, errs, started)
 }
