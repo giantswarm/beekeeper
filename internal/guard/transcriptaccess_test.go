@@ -422,7 +422,7 @@ SH`,
 		}
 	}
 	script := filepath.Join(home, "literal.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho process.env.HOME\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho process.env.HOME\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test's own directory
 		t.Fatal(err)
 	}
 	for _, command := range []string{"bash " + script, script} {
@@ -438,7 +438,7 @@ func TestTranscriptRuntimeRootProgramFiles(t *testing.T) {
 	h := transcriptHook()
 	script := filepath.Join(home, "runtime.py")
 	code := `from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))`
-	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\n"+code+"\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\n"+code+"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test's own directory
 		t.Fatal(err)
 	}
 	for _, command := range []string{
