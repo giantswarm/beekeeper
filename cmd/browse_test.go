@@ -608,7 +608,7 @@ func TestBrowseConsentPromptProviders(t *testing.T) {
 
 // Steps that name an App on record, by name or one of its callback hosts, give the turn
 // that App's auto mode rule and prompt words; steps that name a loopback
-// host give it the lab's; the rules stand after the shipped ones beside a
+// host and a sign-in give it the lab's; the rules stand after the shipped ones beside a
 // declared deploy's; the report says what was allowed, and a grant refusal
 // under a record says the record did not cover it.
 func TestBrowseConsent(t *testing.T) {
@@ -716,8 +716,8 @@ func TestBrowseConsent(t *testing.T) {
 func TestBrowseLocalhostLabSignIn(t *testing.T) {
 	const steps = "Open https://localhost:32000/dex/auth?client_id=kubernetes&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback" +
 		"&response_type=code. Sign in as viewer@lab.local with the fixture password 'password' and press Login."
-	if !namesLoopback(steps) {
-		t.Fatalf("namesLoopback(%q) = false", steps)
+	if !namesLabSignIn(steps) {
+		t.Fatalf("namesLabSignIn(%q) = false", steps)
 	}
 	if rules := browseRules("", nil, true); len(rules) != 1 || rules[0] != labRule {
 		t.Errorf("browseRules of the lab = %q", rules)
@@ -767,8 +767,8 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") ||
-		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
+	if len(got) != 4 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") ||
+		!strings.HasPrefix(got[2], "transcript: ") || got[3] != noShots {
 		t.Errorf("browse with a record printed %q", got)
 	}
 	b, err := os.ReadFile(argvFile) //nolint:gosec // the test's own file
@@ -777,7 +777,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	}
 	argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person's organisation declares the App "+recordedApp) || !strings.Contains(argv[i+1], "Lab Identity Provider:") ||
+	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person's organisation declares the App "+recordedApp) || strings.Contains(argv[i+1], "Lab Identity Provider:") ||
 		!strings.Contains(argv[len(argv)-1], "The person's own App "+recordedApp+" is declared and on record") {
 		t.Errorf("the turn with a record ran with %q", argv)
 	}
@@ -1398,6 +1398,75 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
 		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}
+
+// Local navigation must not grant the fixture-credential exception.
+func TestBrowseLabSignInSelection(t *testing.T) {
+	for steps, want := range map[string]bool{
+		"Open http://localhost:8080/ and report the title.":              false,
+		"Open http://127.0.0.1:8080/ and take a screenshot.":             false,
+		"Open https://portal.127.0.0.2.nip.io/ and read the page.":       false,
+		"Open https://localhost:32000/dex/auth":                          true,
+		"Open http://localhost:8080/login":                               true,
+		"Open http://localhost:8080/sign-in":                             true,
+		"Open http://localhost:8080/ and sign in with the fixture user.": true,
+		"Open http://localhost:8080/ and enter the fixture password.":    true,
+		"Open https://example.org/login and enter a password.":           false,
+		"Open http://localhost:8080/catalog and inspect the loginCount.": false,
+	} {
+		t.Run(steps, func(t *testing.T) {
+			lab := namesLabSignIn(steps)
+			if lab != want {
+				t.Fatalf("namesLabSignIn = %v, want %v", lab, want)
+			}
+			rules := browseRules("", nil, lab)
+			if slices.Contains(rules, labRule) != want {
+				t.Errorf("lab rule presence = %v, want %v", rules, want)
+			}
+			if strings.Contains(browsePrompt(steps, "", nil, lab, nil), labWords) != want {
+				t.Errorf("unexpected lab prompt")
+			}
+			lines := (browseFindings{}).lines(steps, "", nil, lab)
+			if strings.Contains(strings.Join(lines, "\n"), "allowed lab sign-in:") != want {
+				t.Errorf("unexpected lab findings: %v", lines)
+			}
+		})
+	}
+}
+
+func TestBrowseLocalPageRunsWithSignInOnlyWhenNeeded(t *testing.T) {
+	for _, signIn := range []bool{false, true} {
+		t.Run(strconv.FormatBool(signIn), func(t *testing.T) {
+			a, out := stubApp(t)
+			bin := t.TempDir()
+			argsFile := filepath.Join(bin, "args")
+			t.Setenv("BROWSE_ARGV", argsFile)
+			t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+			writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BROWSE_ARGV\"\n"+
+				"id=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n"+
+				"mkdir -p \"$BROWSE_PROJECT\"\nprintf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}' > \"$BROWSE_PROJECT/$id.jsonl\"\necho done\n")
+			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			steps := "Open http://localhost:8080/ and report the title."
+			if signIn {
+				steps += " Sign in with the fixture password."
+			}
+			if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+				t.Fatalf("browse: %v", err)
+			}
+			args, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(args), "Lab Identity Provider:") != signIn ||
+				strings.Contains(string(args), labWords) != signIn ||
+				strings.Contains(out.String(), "allowed lab sign-in:") != signIn {
+				t.Fatalf("unexpected lab exception for signIn=%v", signIn)
+			}
+		})
 	}
 }
 

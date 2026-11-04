@@ -377,8 +377,9 @@ report.
 A sign-in or consent page of the lab's own identity provider on a loopback
 host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
-that name such a host run with the lab's rule, the prompt's exception for
-the fixture user's credential the steps give, and "allowed lab sign-in:"
+that name a sign-in page or credential step on such a host run with the
+lab's rule, the prompt's exception for the fixture user's credential the
+steps give, and "allowed lab sign-in:"
 below the report. Such a page needs no fallback: the lab's certificate
 authority is one Chrome trusts, and a sign-in there whose clicks and keys
 do nothing and whose screenshots fail is a tab behind another or a window
@@ -642,7 +643,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
-	consents, lab := appsNamed(guardAppsOf(st), steps), namesLoopback(steps)
+	consents, lab := appsNamed(guardAppsOf(st), steps), namesLabSignIn(steps)
 	id := uuid.NewString()
 	if blind != nil {
 		blind.id = id
@@ -1447,7 +1448,7 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 // browseRules are the auto mode allow rules of a browse turn: the declared
 // deploy's, one per grant on record of each App the steps name (its
 // consent, its permission change), the lab's when the steps name a loopback
-// host; none without any.
+// sign-in; none without any.
 func browseRules(deploy string, consents []guard.App, lab bool) []string {
 	var rules []string
 	if deploy != "" {
@@ -1722,6 +1723,14 @@ func appNames(apps []guard.App) string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// namesLabSignIn limits the lab exception to steps that actually describe
+// authentication, rather than any navigation to a local page.
+func namesLabSignIn(steps string) bool {
+	return namesLoopback(steps) && labSignInStep.MatchString(steps)
+}
+
+var labSignInStep = regexp.MustCompile(`(?i)\b(?:sign[ -]?in|log[ -]?in|password|credential|consent)\b|/(?:auth|authorize)(?:[/?#\s.]|$)`)
 
 // namesLoopback reports whether steps name a loopback host, the lab's own,
 // as the hook decides one (guard.Loopback).
