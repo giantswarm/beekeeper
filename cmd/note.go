@@ -43,7 +43,7 @@ Without a subcommand, lists the open notes.`,
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
-		Use:   "add <text>",
+		Use:   "add <question>",
 		Short: "Add a note",
 		Long: `Add a note for a person (--for). --kind is decision, the default, or
 login. A decision is refused without --due and a --default that is an
@@ -140,7 +140,12 @@ is closed or merged, or whose issue's parent epic is closed, is refused as
 superseded; a thread GitHub does not answer is filed with a warning. Each
 refusal logs note.redirected; only what is the person's to decide (live,
 public, costly or reserved for them) reaches them.`,
-		Args: cobra.MinimumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageErr("a note needs a question as its first argument; flags provide its context\nUsage: %s", cmd.UseLine())
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
 			if err != nil {
