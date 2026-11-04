@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -17,13 +18,13 @@ func TestBoardNextOpenSessionPRReferences(t *testing.T) {
 		running       bool
 		wantSkip      bool
 	}{
-		{"open", "OPEN", true, true},
+		{"open pr", github.Open, true, true},
 		{"merged", "MERGED", true, false},
 		{"closed", "CLOSED", true, false},
-		{"session ended", "OPEN", false, false},
+		{"session ended", github.Open, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			worker := &claude.Session{ID: "worker", Name: "Worker", Repo: "o/r", Branch: "fix-neighbour"}
+			worker := &claude.Session{ID: "neighbour", Name: "Worker", Repo: strings.TrimSuffix(refOne, "#1"), Branch: "fix-neighbour"}
 			st := &state.State{Records: []state.Record{{Session: worker.Party(), Issue: "o/r#99"}}}
 			var sessions []*claude.Session
 			if tc.running {
@@ -67,7 +68,7 @@ func TestBoardNextOpenSessionPRReferences(t *testing.T) {
 				if err != nil || !strings.Contains(string(b), "referenced by open PR o/r#100") {
 					t.Fatalf("json: %s, %v", b, err)
 				}
-			} else if res.Pick == nil || res.Pick.Ref != "o/r#1" {
+			} else if res.Pick == nil || res.Pick.Ref != refOne {
 				t.Fatalf("pick: %+v", res.Pick)
 			}
 		})

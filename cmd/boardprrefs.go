@@ -43,7 +43,7 @@ func sessionPRReferences(ctx context.Context, gh github.GH, st *state.State, ses
 		}
 		owner, _, _ := strings.Cut(s.Repo, "/")
 		for _, pr := range prs {
-			if pr.State != "OPEN" {
+			if pr.State != github.Open {
 				continue
 			}
 			refs := namedRefs(pr.Title+"\n"+pr.Body, owner)
