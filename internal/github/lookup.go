@@ -15,7 +15,7 @@ type PR struct {
 	N    int    `json:"n"`
 }
 
-// Lookup reads in one GraphQL request per repository owner (ByOwner) the
+// Lookup reads, grouped by repository owner (ByOwner), the
 // titles of pulls and the open draft pull requests of the repositories
 // drafts (owner/repo), oldest first within each owner.
 func Lookup(ctx context.Context, run GH, pulls []PR, drafts []string) (map[PR]string, []PR, error) {
@@ -49,63 +49,100 @@ func Lookup(ctx context.Context, run GH, pulls []PR, drafts []string) (map[PR]st
 	return titles, open, nil
 }
 
-// lookup is one request of Lookup, of pulls and drafts of one owner: the
+// lookup reads pulls and all draft search pages of one owner: the
 // titles go into titles, the open drafts are returned.
 func lookup(ctx context.Context, run GH, pulls []PR, drafts []string, titles map[PR]string) ([]PR, error) {
-	var q strings.Builder
-	q.WriteString("query{")
-	for i, p := range pulls {
-		owner, name, ok := strings.Cut(p.Repo, "/")
-		if !ok {
-			return nil, fmt.Errorf("%s is not owner/repo", p.Repo)
-		}
-		fmt.Fprintf(&q, "p%d:repository(owner:%s,name:%s){pullRequest(number:%d){title}}", i, quote(owner), quote(name), p.N)
-	}
-	if len(drafts) > 0 {
-		search := "is:pr is:open draft:true sort:created-asc"
-		for _, r := range drafts {
-			search += " repo:" + r
-		}
-		fmt.Fprintf(&q, "d:search(query:%s,type:ISSUE,first:50){nodes{...on PullRequest{number repository{nameWithOwner}}}}", quote(search))
-	}
-	q.WriteString("}")
-	// A pull request GitHub does not answer fails the request but keeps the
-	// others' data.
-	out, err := run(ctx, "api", "graphql", "-f", "query="+q.String())
-	var doc struct {
-		Data map[string]json.RawMessage `json:"data"`
-	}
-	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
-		return nil, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
-	}
-	for i, p := range pulls {
-		var r struct {
-			PullRequest *struct {
-				Title string `json:"title"`
-			} `json:"pullRequest"`
-		}
-		if raw, ok := doc.Data[fmt.Sprintf("p%d", i)]; ok && json.Unmarshal(raw, &r) == nil && r.PullRequest != nil {
-			titles[p] = r.PullRequest.Title
-		}
-	}
 	var open []PR
-	if raw, ok := doc.Data["d"]; ok {
-		var s struct {
-			Nodes []struct {
-				Number     int `json:"number"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-				} `json:"repository"`
-			} `json:"nodes"`
+	var after string
+	seen := map[string]bool{}
+	for {
+		var q strings.Builder
+		q.WriteString("query{")
+		for i, p := range pulls {
+			owner, name, ok := strings.Cut(p.Repo, "/")
+			if !ok {
+				return nil, fmt.Errorf("%s is not owner/repo", p.Repo)
+			}
+			fmt.Fprintf(&q, "p%d:repository(owner:%s,name:%s){pullRequest(number:%d){title}}", i, quote(owner), quote(name), p.N)
 		}
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return nil, fmt.Errorf("gh api graphql: %w", err)
+		if len(drafts) > 0 {
+			search := "is:pr is:open draft:true sort:created-asc"
+			for _, r := range drafts {
+				search += " repo:" + r
+			}
+			cursor := ""
+			if after != "" {
+				cursor = ",after:" + quote(after)
+			}
+			fmt.Fprintf(&q, "d:search(query:%s,type:ISSUE,first:50%s){issueCount pageInfo{hasNextPage endCursor} nodes{...on PullRequest{number repository{nameWithOwner}}}}", quote(search), cursor)
 		}
-		for _, n := range s.Nodes {
-			open = append(open, PR{Repo: n.Repository.NameWithOwner, N: n.Number})
+		q.WriteString("}")
+		// A pull request GitHub does not answer fails the request but keeps the
+		// others' data.
+		out, err := run(ctx, "api", "graphql", "-f", "query="+q.String())
+		var doc struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
+			return nil, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
+		}
+		for i, p := range pulls {
+			var r struct {
+				PullRequest *struct {
+					Title string `json:"title"`
+				} `json:"pullRequest"`
+			}
+			if raw, ok := doc.Data[fmt.Sprintf("p%d", i)]; ok && json.Unmarshal(raw, &r) == nil && r.PullRequest != nil {
+				titles[p] = r.PullRequest.Title
+			}
+		}
+		if (after != "" || len(pulls) == 0) && err != nil {
+			return nil, err
+		}
+		if len(drafts) == 0 {
+			return open, nil
+		}
+		if raw, ok := doc.Data["d"]; ok {
+			var s struct {
+				IssueCount int `json:"issueCount"`
+				PageInfo   *struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+				Nodes []struct {
+					Number     int `json:"number"`
+					Repository struct {
+						NameWithOwner string `json:"nameWithOwner"`
+					} `json:"repository"`
+				} `json:"nodes"`
+			}
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return nil, fmt.Errorf("gh api graphql: %w", err)
+			}
+			// GitHub search exposes at most 1,000 results, even when more match.
+			if s.PageInfo == nil || s.IssueCount > 1000 {
+				return nil, fmt.Errorf("gh api graphql: incomplete draft search")
+			}
+			for _, n := range s.Nodes {
+				open = append(open, PR{Repo: n.Repository.NameWithOwner, N: n.Number})
+			}
+			if !s.PageInfo.HasNextPage {
+				if len(open) < s.IssueCount {
+					return nil, fmt.Errorf("gh api graphql: incomplete draft search")
+				}
+				return open, nil
+			}
+			after = s.PageInfo.EndCursor
+			if after == "" || seen[after] {
+				return nil, fmt.Errorf("gh api graphql: incomplete draft search: cursor did not advance")
+			}
+			seen[after] = true
+			// Titles were read on the first page and must not be fetched again.
+			pulls = nil
+		} else {
+			return nil, cmp.Or(err, fmt.Errorf("gh api graphql: incomplete draft search: missing data"))
 		}
 	}
-	return open, nil
 }
 
 // quote is s as a GraphQL string literal, whose escapes are JSON's.
