@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -129,11 +130,25 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubGitHub(t, github.Open, "")
-			stubSelf(t)
+			self, launched := stubSelf(t)
 			asked := stubPullRebase(t, c.r, nil)
 			a := busyLaneApp(t)
-			if err := a.gate(context.Background(), mergeArgv(scratchRepo, "--rebase"), 0, 0, false); Code(err) != ExitGateQueued {
+			argv := mergeArgv(scratchRepo, "--rebase", "--update-branch")
+			if err := a.gate(context.Background(), argv, 0, 0, false); Code(err) != ExitGateQueued {
 				t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
+			}
+			spec := launched()
+			if !slices.Equal(spec.Argv, append(queuedGate(self), argv...)) || !slices.Equal(spec.Command, argv) {
+				t.Fatalf("queued command lost arguments: argv %q, command %q", spec.Argv, spec.Command)
+			}
+			// The queued gate receives everything after -- unchanged. At its
+			// turn it must still launch devctl with both flags.
+			g := &gateRun{app: a, argv: spec.Command, repo: scratchRepo, pr: 7,
+				release: &github.BaseRelease{Base: mainBranch, Auto: true}}
+			run, err := g.mergeArgv()
+			want := merge.NoReleaseWait(argv) // the lane confirms the release itself
+			if err != nil || !slices.Equal(run, want) {
+				t.Fatalf("merge command %q, error %v, want %q", run, err, want)
 			}
 			if *asked != c.reads {
 				t.Errorf("GitHub was read %d times, want %d", *asked, c.reads)

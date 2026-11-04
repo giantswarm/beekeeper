@@ -1014,9 +1014,32 @@ func TestKeepOutputNamesWhoAskedForTheMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	want := "requested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
+	want := "command: devctl pr merge o/r 42\nrequested by: supervisor loop (for beekeeper 2137) (session sess-2137, gate pid 4024700)\n"
 	if !strings.HasPrefix(got, want) {
 		t.Fatalf("kept output missing requester header:\ngot:\n%s\nwant prefix:\n%s", got, want)
+	}
+}
+
+// The command remains the first line even without owner metadata and after
+// the transient run files are removed.
+func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
+	base := mergeBase(t.TempDir(), scratchRepo, 7)
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := "devctl pr merge o/r 7 --rebase --update-branch"
+	writeRunInfo(base, runInfo{Command: command})
+	if err := os.WriteFile(base+".log", []byte("merge refused\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept := keepOutput(base, []byte(`{"verdict":"red"}`), time.Now())
+	removeMergeFiles(base)
+	raw, err := os.ReadFile(kept) //nolint:gosec // the test's file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "command: " + command + "\nmerge refused\n"; !strings.HasPrefix(string(raw), want) {
+		t.Fatalf("kept output %q, want prefix %q", raw, want)
 	}
 }
 

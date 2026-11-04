@@ -260,12 +260,16 @@ func keepOutputHeader(base string, doc []byte) []byte {
 		}
 	}
 	info, ok := readRunInfo(base)
+	var command string
+	if ok && info.Command != "" {
+		command = "command: " + info.Command + "\n"
+	}
 	owner := requestedBy
 	if owner == "" && ok {
 		owner = cmp.Or(info.Owner.Name, info.Owner.Session, info.Owner.HostSession)
 	}
 	if owner == "" {
-		return nil
+		return []byte(command)
 	}
 	var details []string
 	if ok {
@@ -280,9 +284,9 @@ func keepOutputHeader(base string, doc []byte) []byte {
 		}
 	}
 	if len(details) > 0 {
-		return []byte(fmt.Sprintf("requested by: %s (%s)\n", owner, strings.Join(details, ", ")))
+		return []byte(command + fmt.Sprintf("requested by: %s (%s)\n", owner, strings.Join(details, ", ")))
 	}
-	return []byte(fmt.Sprintf("requested by: %s\n", owner))
+	return []byte(command + fmt.Sprintf("requested by: %s\n", owner))
 }
 
 // finishedRun reads how a merge's run ended from its files once its runner
