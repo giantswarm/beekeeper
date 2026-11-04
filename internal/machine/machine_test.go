@@ -99,6 +99,40 @@ func TestParseWrittenBack(t *testing.T) {
 	}
 }
 
+func TestParseOOMGlobal(t *testing.T) {
+	const summary = `2026-11-01T12:00:00+0000 kernel: oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/user.slice/example.scope,task=worker,pid=42,uid=1000`
+	const detail = `2026-11-01T12:00:00+0000 kernel: Out of memory: Killed process 42 (worker) total-vm:8192kB, anon-rss:2048kB, file-rss:0kB, shmem-rss:0kB`
+	for _, tt := range []struct {
+		name    string
+		journal string
+		anonMiB int
+	}{
+		{name: "summary only", journal: summary},
+		{name: "summary and detail", journal: summary + "\n" + detail, anonMiB: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			kills := ParseOOM(tt.journal)
+			if len(kills) != 1 {
+				t.Fatalf("kills = %+v, want one victim", kills)
+			}
+			want := OOMKill{
+				At:  time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC),
+				PID: 42, Task: "worker", AnonMiB: tt.anonMiB,
+				Constraint: "CONSTRAINT_NONE", TaskMemcg: "/user.slice/example.scope",
+			}
+			got := kills[0]
+			if !got.At.Equal(want.At) || got.PID != want.PID || got.Task != want.Task ||
+				got.AnonMiB != want.AnonMiB || got.Constraint != want.Constraint ||
+				got.Memcg != want.Memcg || got.TaskMemcg != want.TaskMemcg {
+				t.Errorf("kill = %+v, want %+v", got, want)
+			}
+			if got.RunMemcg() != want.TaskMemcg {
+				t.Errorf("RunMemcg() = %q, want %q", got.RunMemcg(), want.TaskMemcg)
+			}
+		})
+	}
+}
+
 func TestParseOOMAtASlotSlice(t *testing.T) {
 	const slice = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-slot2.slice"
 	journal := `2026-10-04T16:00:00+0300 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`
