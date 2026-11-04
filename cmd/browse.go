@@ -229,6 +229,9 @@ CLI's Chrome connection takes the site permissions of the Chrome extension,
 so a navigate to a site no session was allowed on never waits on a person's
 site approval.
 
+For x.com reads, use beekeeper browse "Read <URL> and report the page text."
+WebFetch returns HTTP 402 for x.com; read the page through beekeeper browse.
+
 It exists for the desktop turns of the sessions beekeeper starts: Claude
 Desktop holds such a session's navigate to a new site for a person's site
 approval, which neither bypassPermissions nor a hook answers (beekeeper

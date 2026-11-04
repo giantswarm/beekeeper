@@ -2785,6 +2785,10 @@ desktop's `claude_desktop_config.json`, does not reach an acceptEdits session on
 Enterprise account either.) With nobody at the desktop such a navigate waits until the desktop
 aborts it, sometimes hours later, and the model reads "Claude in Chrome is not connected".
 
+For x.com reads, use `beekeeper browse "Read <URL> and report the page text."`.
+WebFetch returns HTTP 402 for x.com; read the page through `beekeeper browse`.
+Hold the browser lease while it runs.
+
 So the sessions beekeeper starts never use the desktop's browser. In their desktop turns
 (acceptEdits) `beekeeper hook pretooluse` refuses every `mcp__claude-in-chrome__*` call and names
 `beekeeper browse "<steps>"`, which runs the steps in a headless `claude -p --chrome` turn that has
