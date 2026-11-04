@@ -593,6 +593,10 @@ for a timer to park on.`,
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
 	if err := screenLockedErr(); err != nil {
