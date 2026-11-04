@@ -50,6 +50,7 @@ type fakeSource struct {
 	took, released []string
 	answers        []string
 	answerErr      error
+	releaseErr     error
 }
 
 // TakeOver records the take-over and marks the session in the data.
@@ -66,6 +67,9 @@ func (f *fakeSource) TakeOver(_ context.Context, id string) error {
 // Release records the hand-back and unmarks the session.
 func (f *fakeSource) Release(_ context.Context, id string) error {
 	f.released = append(f.released, id)
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	for i := range f.data.Sessions {
 		if f.data.Sessions[i].ID == id {
 			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
