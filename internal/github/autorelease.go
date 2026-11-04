@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -420,4 +422,22 @@ func filterPattern(p string) (*regexp.Regexp, error) {
 	}
 	b.WriteByte('$')
 	return regexp.Compile(b.String())
+}
+
+// CommitRelease finds the release tag cut on sha. An unrelated tag never
+// identifies the release of this merge. Failed reads are retried next poll.
+func CommitRelease(ctx context.Context, run GH, repo, sha string) (string, error) {
+	if sha == "" {
+		return "", nil
+	}
+	out, err := run(ctx, "api", "--paginate", "repos/"+repo+"/tags?per_page=100", "--jq", `.[] | select(.commit.sha == `+strconv.Quote(sha)+`) | .name`)
+	if err != nil {
+		return "", err
+	}
+	for _, tag := range strings.Fields(string(out)) {
+		if _, err := semver.StrictNewVersion(strings.TrimPrefix(tag, "v")); err == nil {
+			return tag, nil
+		}
+	}
+	return "", nil
 }

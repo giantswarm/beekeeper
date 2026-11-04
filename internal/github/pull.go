@@ -17,6 +17,9 @@ const (
 
 // Pull is a pull request's state as the gh CLI reports it.
 type Pull struct {
+	MergeCommit struct {
+		OID string `json:"oid"`
+	} `json:"mergeCommit"`
 	State    string    `json:"state"`
 	MergedAt time.Time `json:"mergedAt"`
 }
@@ -26,7 +29,7 @@ type Pull struct {
 func PullState(ctx context.Context, repo string, n int) (Pull, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := RunGH(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "state,mergedAt")
+	out, err := RunGH(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "state,mergedAt,mergeCommit")
 	if err != nil {
 		return Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", n, repo, err)
 	}

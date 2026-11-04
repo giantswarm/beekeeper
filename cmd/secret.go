@@ -1371,7 +1371,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
 	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
-		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots, SecretEnv: a.cfg.Secret.Env}
+		AgeVaults: a.cfg.Secret.AgeVaults, AgeCache: a.store, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots, SecretEnv: a.cfg.Secret.Env}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
