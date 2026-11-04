@@ -33,8 +33,9 @@ type authKey struct{}
 // Muster is a test muster in front of the beekeeper serve at backend
 // (its /mcp URL), registered as server.
 type Muster struct {
-	URL string
-	srv *httptest.Server
+	URL    string
+	srv    *httptest.Server
+	cancel context.CancelFunc
 	// down makes every call_tool fail as muster's does when the backend
 	// does not answer.
 	down atomic.Bool
@@ -55,8 +56,9 @@ type stream struct {
 func New(t *testing.T, backend, server string) *Muster {
 	t.Helper()
 	m := &Muster{}
-	m.srv = httptest.NewServer(m.handler(backend, server))
-	t.Cleanup(m.srv.Close)
+	m.srv = m.newServer(m.handler(backend, server))
+	m.srv.Start()
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m
 }
@@ -74,7 +76,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 	m := &Muster{}
 	h := m.handler(backend, server)
 	var conns atomic.Int64
-	m.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m.srv = m.newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Value(connKey{}) == int64(1) && r.Body != nil {
 			body, _ := io.ReadAll(r.Body)
 			var msg struct {
@@ -93,7 +95,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 		return context.WithValue(ctx, connKey{}, conns.Add(1))
 	}
 	m.srv.StartTLS()
-	t.Cleanup(m.srv.Close)
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m, m.srv.Client().Transport.(*http.Transport)
 }
@@ -165,8 +167,22 @@ func (m *Muster) Updated(uri string) int {
 // Down makes the backend unreachable behind muster (down) or reachable.
 func (m *Muster) Down(down bool) { m.down.Store(down) }
 
-// Close stops muster itself.
-func (m *Muster) Close() { m.srv.Close() }
+// newServer gives every handler a context cancelled when muster stops, including
+// HTTP/2 handlers that may outlive their underlying connection.
+func (m *Muster) newServer(h http.Handler) *httptest.Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	srv := httptest.NewUnstartedServer(h)
+	srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
+	return srv
+}
+
+// Close stops muster itself, interrupting active requests and subscriptions.
+func (m *Muster) Close() {
+	m.cancel()
+	m.srv.CloseClientConnections()
+	m.srv.Close()
+}
 
 // dial is an initialized client of the backend at url as token's person.
 func dial(ctx context.Context, url, token string) (*client.Client, error) {
