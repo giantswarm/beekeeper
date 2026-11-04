@@ -50,7 +50,8 @@ const (
 	workDir = "/work"
 )
 
-// fixture writes a file of kib KiB under root/rel, touched age ago.
+// fixture writes a file of kib KiB under root/rel, aging it and its parent
+// directories up to root so the whole candidate tree is stale.
 func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	t.Helper()
 	p := filepath.Join(root, rel)
@@ -60,8 +61,14 @@ func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	if err := os.WriteFile(p, make([]byte, kib*1024), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
-		t.Fatal(err)
+	for {
+		if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		if p == root {
+			break
+		}
+		p = filepath.Dir(p)
 	}
 }
 
@@ -102,6 +109,36 @@ func newRun(t *testing.T, o Options) (*Run, *bytes.Buffer) {
 }
 
 func sessionDir(sid string) string { return filepath.Join("claude-1000", "-home-u-proj", sid) }
+
+func TestFreeKeepsRecentlyChangedDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		section string
+		dir     string
+	}{
+		{SessionDirs, sessionDir(deadSID)},
+		{GoBuild, "go-build123"},
+		{TmpDirs, "tmp.recent"},
+	} {
+		for _, changed := range []string{".", "scratchpad"} {
+			t.Run(tc.section+"/"+changed, func(t *testing.T) {
+				r, out := newRun(t, Options{Apply: true, Only: []string{tc.section}})
+				file := filepath.Join(tc.dir, "scratchpad", "old")
+				fixture(t, r.TmpDir, file, 2048, 5*time.Hour)
+				path := filepath.Join(r.TmpDir, tc.dir, changed)
+				recent := now.Add(-time.Minute)
+				if err := os.Chtimes(path, recent, recent); err != nil {
+					t.Fatal(err)
+				}
+				if got := r.Free(); len(got) != 0 {
+					t.Errorf("recent directory reported freed: %+v\n%s", got, out)
+				}
+				if _, err := os.Stat(filepath.Join(r.TmpDir, file)); err != nil {
+					t.Errorf("recent directory lost its old file: %v\n%s", err, out)
+				}
+			})
+		}
+	}
+}
 
 func TestSessionDirsFreeOnlyTheDead(t *testing.T) {
 	r, out := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
