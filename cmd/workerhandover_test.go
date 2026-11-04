@@ -135,7 +135,7 @@ func TestHandoverRefusesLiveGateWait(t *testing.T) {
 func TestRegisterRefusesUnregisteredLiveCLIName(t *testing.T) {
 	a, _ := stubApp(t)
 	a.as = ""
-	for _, key := range []string{litBeekeeperCodexAgent, "BEEKEEPER_OMP_AGENT", litBeekeeperAgyAgent, "CLAUDE_CODE_HOST_SESSION_ID"} {
+	for _, key := range []string{litBeekeeperCodexAgent, litBeekeeperOmpAgent, litBeekeeperAgyAgent, "CLAUDE_CODE_HOST_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s4")

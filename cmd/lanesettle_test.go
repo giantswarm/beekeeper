@@ -41,7 +41,7 @@ func TestLaneSettleWaitsForTermedGate(t *testing.T) {
 	}
 	c := a.settleCmd()
 	c.SetContext(context.Background())
-	if err := c.RunE(c, []string{"o/r", "1"}); err != nil {
+	if err := c.RunE(c, []string{repo, "1"}); err != nil {
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()

@@ -160,7 +160,7 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 				act := superloop.Action{Ref: loopPR, URL: loopURL, Key: "incident preparation", Head: loopHead, Round: 1}
 				var err error
 				switch kind {
-				case "worker":
+				case workerRole:
 					_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
 				case litReviewer:
 					_, err = l.startReviewer(context.Background(), act)

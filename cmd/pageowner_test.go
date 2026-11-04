@@ -27,9 +27,9 @@ func pageApp(t *testing.T, start time.Time) (*app, *bytes.Buffer) {
 	a, out := stubApp(t)
 	since := start.UTC().Format(time.RFC3339Nano)
 	base := &alerts.State{Installations: map[string]*alerts.Installation{"alpha": {Reachable: true, Alerts: alerts.Set{
-		"fp1": {Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/app", Since: since},
-		"fp2": {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
-		"fp3": {Severity: alerts.Page, Team: otherTeam, Alertname: "TheirPage", Where: "ns/x", Since: since},
+		litFp1: {Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/app", Since: since},
+		"fp2":  {Severity: "notify", Team: "t", Alertname: "DiskFilling", Where: "ns/vol", Since: since},
+		"fp3":  {Severity: alerts.Page, Team: otherTeam, Alertname: "TheirPage", Where: "ns/x", Since: since},
 	}}}}
 	a.cfg.Alerts.Team = "t"
 	if err := alerts.NewStore(a.cfg.StateDir).Save(base); err != nil {
@@ -165,7 +165,7 @@ func twoInstances(t *testing.T, a *app, start time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.Installations["alpha"].Alerts["fp4"] = alerts.Alert{Severity: alerts.Page, Team: "t", Alertname: "PodRestarting", Where: "ns/other", Since: start.UTC().Format(time.RFC3339Nano)}
+	base.Installations["alpha"].Alerts["fp4"] = alerts.Alert{Severity: alerts.Page, Team: "t", Alertname: litPodrestarting, Where: "ns/other", Since: start.UTC().Format(time.RFC3339Nano)}
 	if err := st.Save(base); err != nil {
 		t.Fatal(err)
 	}
@@ -321,8 +321,8 @@ func TestAlertsOwnershipMatchers(t *testing.T) {
 	}{
 		{litAlertnameOnly, nil, 4},
 		{"cluster", []string{litCluster, litClusterA}, 2},
-		{litNamespace, []string{namespaceFlag, "namespace-a"}, 2},
-		{"both", []string{litCluster, "cluster-a", "--namespace", "namespace-a"}, 1},
+		{litNamespace, []string{namespaceFlag, litNamespaceA}, 2},
+		{"both", []string{litCluster, litClusterA, "--namespace", "namespace-a"}, 1},
 		{"no match", []string{"--cluster", workerGitHubMissingRef}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

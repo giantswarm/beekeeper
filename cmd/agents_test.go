@@ -156,7 +156,7 @@ func TestAgentsRegisterName(t *testing.T) {
 			a, out := stubApp(t)
 			a.as = ""
 			plat.Machine = tableMachine{plat.Machine}
-			for _, env := range []string{"BEEKEEPER_OMP_AGENT", litBeekeeperAgyAgent, litBeekeeperCodexAgent, "CLAUDE_CODE_HOST_SESSION_ID"} {
+			for _, env := range []string{litBeekeeperOmpAgent, litBeekeeperAgyAgent, litBeekeeperCodexAgent, "CLAUDE_CODE_HOST_SESSION_ID"} {
 				t.Setenv(env, "")
 			}
 			t.Setenv("CLAUDE_CODE_SESSION_ID", "register-session")

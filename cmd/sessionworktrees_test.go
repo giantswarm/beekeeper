@@ -43,7 +43,7 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 func TestFreeNestedWorktrees(t *testing.T) {
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
-	for _, branch := range []string{testMergedWord, "squashed", litDirty, "unpushed"} {
+	for _, branch := range []string{testMergedWord, litSquashed, litDirty, "unpushed"} {
 		dir := filepath.Join(root, branch)
 		gitT(t, repo, "worktree", "add", "-qb", branch, dir)
 		writeT(t, filepath.Join(dir, branch), "first\n")

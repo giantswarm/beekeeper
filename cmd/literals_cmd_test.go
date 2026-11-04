@@ -2,6 +2,10 @@ package cmd
 
 // Shared literals, kept as constants for goconst.
 const (
+	litBeekeeperOmpAgent   = "BEEKEEPER_OMP_AGENT"
+	litFp1                 = "fp1"
+	litNamespaceA          = "namespace-a"
+	litSquashed            = "squashed"
 	litBeekeeperCodexAgent = "BEEKEEPER_CODEX_AGENT"
 	litClusterA            = "cluster-a"
 	litGitCommitterEmail   = "GIT_COMMITTER_EMAIL"
