@@ -62,6 +62,11 @@ func TestQueueAdmission(t *testing.T) {
 					if err := json.Unmarshal(raw, &obj); err != nil {
 						t.Fatal(err)
 					}
+					// Queue has omitempty on the API types. Validate an explicit
+					// empty array too, so minItems cannot silently tighten the bound.
+					if n == 0 {
+						obj["status"].(map[string]any)["queue"] = []any{}
+					}
 					result := validator.Validate(obj)
 					if n <= v1alpha1.MaxQueue {
 						if !result.IsValid() {
