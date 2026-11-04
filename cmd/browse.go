@@ -64,7 +64,20 @@ const controlWords = "Click only the element a step names: a computer click by t
 	"For a UI-only disclosure on an App permissions page, name the effect and role, for example 'Expands the Organization permissions section', " +
 	"'Collapses the Repository permissions section' or 'Switches to the Account permissions tab', without the App or permission name. " +
 	"First read_page or find on the clicked tab so the hook can verify that ref's button or tab role and label; read it again after a page-changing action. " +
-	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. "
+	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. " + clickSettleWords
+
+// clickSettleWords keep a slow response from becoming a duplicate mutation.
+// A changed page is evidence to inspect, not permission to submit again.
+const clickSettleWords = "Before a state-changing click (rerun, deploy, release, send, create, delete or submit), note the current URL and " +
+	"the relevant result or status, then click once. Do not batch repeated clicks or use a scripted retry loop. " +
+	"Wait for that click to settle: use computer wait in intervals of 2 seconds, re-reading the clicked tab with read_page or find " +
+	"after each interval, for up to 30 seconds. Stop waiting when the expected result appears, the URL changes, or the relevant status " +
+	"changes; inspect that signal to determine whether the action succeeded or is pending. An unchanged page immediately after a click " +
+	"does not mean the click failed. Before any repeated state-changing click, re-read the page and check whether the first click " +
+	"already took effect. If the result exists or the action is pending, do not click again. Only retry after the page has settled or " +
+	"the 30-second timeout has passed AND that fresh read shows no effect and no pending action. If the outcome is uncertain, stop " +
+	"and report it instead of risking a duplicate. After a connection loss at a state-changing click, apply this same wait and fresh " +
+	"check before retrying the step. In a blind capture turn, use find for these checks; never read a secret value. "
 
 // permanentDeletionRule also names the preflight refusal in browse's help.
 const permanentDeletionRule = "A permanent deletion of data is the person's own click: deleting an edit-history revision (Delete revision), a comment, an issue, a repository or a branch, or emptying a trash. No browse turn makes these clicks, even when the owner asks."
@@ -103,7 +116,7 @@ const sitePermissionWords = "When a Chrome tool answers 'Permission denied for t
 const reconnectWords = "beekeeper browse: the Chrome connection was lost at your call %s and did not come back. This turn is the one " +
 	"reconnect, a fresh connection to the browser: call list_connected_browsers; when it lists a browser, select it and go on with the " +
 	"steps not done, under the same rules, the connection checked before each step; when it lists none, do nothing else and end your " +
-	"report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line."
+	"report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line. " + clickSettleWords
 
 // deployWords tell a browse turn the one deploy the person's task covers,
 // between the preamble and the steps.
@@ -475,6 +488,12 @@ one the last check marked and its find gave, naming why. For example:
 
   beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
   through the comment box's file input. Report the attachment's name."
+
+After a state-changing click, the turn waits in 2-second intervals and
+re-reads the page for up to 30 seconds, watching for the result, a URL
+change or a relevant status change. Before any retry it reads again and
+checks for an existing result or pending action. An uncertain outcome is
+reported instead of risking a duplicate rerun, deploy, release or send.
 
 A click targets only the element its step names. The turn never clicks
 a subscription, watch, star or notification control (GitHub's Subscribe,
