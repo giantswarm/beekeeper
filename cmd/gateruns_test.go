@@ -135,6 +135,9 @@ func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 	if !eventually(5*time.Second, func() bool { return !proc.Alive(child) }) {
 		t.Error("the stopped merge's merge-child runs on")
 	}
+	if by := readStopped(mergeBase(dir, hungRepo, 1)); !by.Is(stopper) {
+		t.Errorf("merge stopper: %+v", by)
+	}
 	said, err = a.gateStop(stopper, runs[1].ID)
 	if err != nil {
 		t.Fatal(err)
@@ -158,8 +161,11 @@ func TestGateStopEndsARunningAndAQueuedMerge(t *testing.T) {
 func TestAStoppedWaitsOutcomeNamesTheStopper(t *testing.T) {
 	r := childResult{spec: childSpec{Argv: strings.Fields(releaseWaitCmd), Owner: four}, rc: 128 + int(syscall.SIGTERM),
 		stop: syscall.SIGTERM, stoppedBy: state.Party{Session: "s9", Name: supervisorName}}
-	if got := r.outcome(); !strings.HasPrefix(got, releaseWaitCmd+` did not settle: "`+supervisorName+`" stopped it (beekeeper gate stop, exit 143)`) {
+	if got := r.outcome(); !strings.HasPrefix(got, releaseWaitCmd+` was cancelled on request: "`+supervisorName+`" stopped it (beekeeper gate stop, exit 143)`) {
 		t.Errorf("outcome %q", got)
+	}
+	if got := r.outcome(); !strings.Contains(got, "do not rerun it") {
+		t.Fatalf("cancelled wait: %s", got)
 	}
 	if done := r.done().result(); !done.stoppedBy.Is(r.stoppedBy) {
 		t.Errorf("the stopper does not survive a re-exec: %+v", done.stoppedBy)
