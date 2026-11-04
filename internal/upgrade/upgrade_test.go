@@ -114,7 +114,7 @@ func TestRolling(t *testing.T) {
 			objs[i].Metadata.Annotations[upgradingMark] = "false"
 		}
 	}
-	if ups := Detect(objs, at, func(c string) bool { return c == "mc" }); len(ups) != 1 || !ups[0].Rolling {
+	if ups := Detect(objs, at, func(c string) bool { return c == "org-mc/mc" }); len(ups) != 1 || !ups[0].Rolling {
 		t.Errorf("a held upgrade whose control plane rolls ended: %+v", ups)
 	}
 	if ups := Detect(objs, at, func(string) bool { return false }); len(ups) != 0 {
@@ -259,7 +259,7 @@ func TestRead(t *testing.T) {
 		t.Errorf("kubectl calls %q", c)
 	}
 	// A held upgrade's from is in its hold's reason: the events are not read.
-	held := func(i, c string) bool { return i == prod && c == "mc" }
+	held := func(i, c string) bool { return i == prod && c == "org-mc/mc" }
 	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, held); ss[0].Upgrades[0].From != "" {
 		t.Errorf("the events of a held upgrade were read: %+v", ss[0])
 	}
@@ -420,11 +420,11 @@ func TestRollingAfterMarkCleared(t *testing.T) {
 	for i := range objs {
 		delete(objs[i].Metadata.Annotations, upgradeStartTime)
 	}
-	ups := Detect(objs, at, func(c string) bool { return c == "mc" })
+	ups := Detect(objs, at, func(c string) bool { return c == "org-mc/mc" })
 	if len(ups) != 1 || !ups[0].Rolling {
 		t.Fatalf("a held rollout ended with the mark: %+v", ups)
 	}
-	h := state.Hold{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
+	h := state.Hold{Target: HoldTarget(prod, "org-mc/mc"), Reason: "upgrade prod/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
 	st := &state.State{Holds: []state.Hold{h}}
 	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun)+len(ended) != 0 {
 		t.Errorf("a young rollout: begun %+v ended %+v", begun, ended)

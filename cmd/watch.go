@@ -147,7 +147,7 @@ and its control plane and node pools have rolled; a marked one once the
 cluster reports the release cluster-api-events recorded and has rolled out
 for an hour from its start stamp, or that start is a day ago; a rollout
 after the mark cleared a day after its hold began. While it runs, the
-installation is held (hold upgrade:<installation>/<cluster>): the gate
+installation is held (hold upgrade:<installation>/<namespace>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
 "UPGRADE ENDED …" when it ends, once each; an unreadable installation is one
