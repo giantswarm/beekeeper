@@ -168,8 +168,9 @@ func (m *Muster) Down(down bool) { m.down.Store(down) }
 // Close stops muster itself.
 func (m *Muster) Close() {
 	// Server.Close waits for active handlers, including subscriptions and
-	// deliberately stalled requests. Disconnect them before waiting.
-	m.srv.CloseClientConnections()
+	// deliberately stalled requests. Stop accepting and disconnect clients
+	// before waiting, including clients reconnecting during shutdown.
+	_ = m.srv.Config.Close()
 	m.srv.Close()
 }
 
