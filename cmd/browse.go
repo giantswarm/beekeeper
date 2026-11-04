@@ -38,6 +38,7 @@ const browseWait = 8 * time.Minute
 // browsePreamble opens a browse turn's prompt; browseSteps leads its steps.
 const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
+		storageWords +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
 		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
 		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
@@ -45,6 +46,9 @@ const (
 
 	browseSteps = "The steps:\n\n"
 )
+
+// storageWords keep data discovery in the visible UI, even for read-only tasks.
+const storageWords = "Never read page storage (localStorage, sessionStorage, cookies, IndexedDB) or session tokens, and never call a site's API with them. Work through the visible UI only, including when listing a site's data such as Slack user groups. If the UI cannot complete a step or the hook refuses a call, report that barrier and the steps not completed; never work around it with storage or direct API requests. "
 
 // controlWords tell a browse turn which element it clicks: the one a step
 // names, never a subscription, watch, star or notification control, which
@@ -930,6 +934,8 @@ func readFindings(transcript string) (browseFindings, error) {
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reason})
 				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
+				case strings.Contains(text, guard.BrowseStorageBarrier):
+					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: "Storage and Session Tokens", Hook: true})
 				case strings.Contains(text, guard.NotShared):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonNotShared, Hook: true})
 				}

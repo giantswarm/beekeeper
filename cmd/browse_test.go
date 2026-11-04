@@ -1323,3 +1323,27 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 		t.Errorf("browse without a screenshot printed %q", got)
 	}
 }
+
+func TestBrowseStorageBarrier(t *testing.T) {
+	p := browsePrompt("List Slack user groups", "", nil, false, nil)
+	for _, word := range []string{"localStorage", "sessionStorage", "cookies", "IndexedDB", "session tokens", "visible UI only", "Slack user groups", "report that barrier"} {
+		if !strings.Contains(p, word) {
+			t.Errorf("prompt missing %q", word)
+		}
+	}
+	reason, _ := json.Marshal("PreToolUse hook error: " + guard.BrowseStorageBarrier)
+	lines := chromeUse("s1", scriptTool, `{"action":"javascript_exec","text":"localStorage.getItem('key')","tabId":1}`) +
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"s1","is_error":true,"content":` + string(reason) + `}]}}` + "\n"
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, transcript, lines)
+	f, err := readFindings(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Refused) != 1 || !f.Refused[0].Hook || f.Refused[0].Reason != "Storage and Session Tokens" {
+		t.Fatalf("findings = %+v", f)
+	}
+	if got := strings.Join(f.lines("List Slack user groups", "", nil, false), "\n"); !strings.Contains(got, "beekeeper's hook refused it as [Storage and Session Tokens]") {
+		t.Errorf("report = %s", got)
+	}
+}
