@@ -205,7 +205,9 @@ func (c *Client) load() map[string]cached {
 		return out
 	}
 	if raw, err := os.ReadFile(c.Cache); err == nil {
-		_ = json.Unmarshal(raw, &out) // a broken cache is an empty one
+		if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+			return map[string]cached{} // a broken cache is an empty one
+		}
 	}
 	return out
 }

@@ -2,7 +2,9 @@ package claim_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,5 +140,55 @@ func TestEditOfAGoneCommentIsErrGone(t *testing.T) {
 	}
 	if _, err := cl.Read(ctx, "not-a-ref"); err == nil {
 		t.Error("Read of no issue succeeded")
+	}
+}
+
+// A broken cache must neither hide a live claim behind its ETag nor prevent
+// a successful read from storing a fresh answer.
+func TestClaimReadDiscardsBrokenCache(t *testing.T) {
+	for _, name := range []string{"invalid-comments", "null", "invalid-json"} {
+		t.Run(name, func(t *testing.T) {
+			gh := claimtest.New()
+			marker := claim.Marker{Desk: deskTwo, Session: "s", At: t0}
+			id := gh.Add(issue, marker.Body())
+			cl := &claim.Client{GH: gh.GH, Cache: filepath.Join(t.TempDir(), "cache.json")}
+			ctx := context.Background()
+			if cs, err := cl.Read(ctx, issue); err != nil || len(cs) != 1 || cs[0].ID != id {
+				t.Fatalf("initial Read = %+v, %v", cs, err)
+			}
+			raw, err := os.ReadFile(cl.Cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "invalid-comments":
+				var cache map[string]map[string]json.RawMessage
+				if err := json.Unmarshal(raw, &cache); err != nil {
+					t.Fatal(err)
+				}
+				cache[issue]["comments"] = json.RawMessage(`"damaged"`)
+				raw, err = json.Marshal(cache)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "null":
+				raw = []byte("null")
+			case "invalid-json":
+				raw = []byte("{")
+			}
+			if err := os.WriteFile(cl.Cache, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			// The first read must fetch unconditionally; the next must use the repaired cache.
+			for range 2 {
+				cs, err := cl.Read(ctx, issue)
+				if err != nil || len(cs) != 1 || cs[0] != (claim.Comment{ID: id, Marker: marker}) {
+					t.Fatalf("Read after cache damage = %+v, %v; want live claim %d", cs, err, id)
+				}
+			}
+			if gh.Calls["list"] != 2 || gh.Calls["notModified"] != 1 {
+				t.Errorf("calls = %v, want two listings and one 304", gh.Calls)
+			}
+		})
 	}
 }
