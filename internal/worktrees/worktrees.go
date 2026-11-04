@@ -196,7 +196,9 @@ func classifyBuildDirs(status []byte, extra []string) (work, build []string) {
 		code, path := e[:2], e[3:]
 		switch code {
 		case "!!", "??":
-			if regenerableWith(path, extra) {
+			// Status directories end in /; a file named build is still work.
+			dirs := path[:strings.LastIndex(path, "/")+1]
+			if regenerableWith(dirs, extra) {
 				build = append(build, path)
 			} else if code == "??" {
 				work = append(work, path)
