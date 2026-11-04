@@ -25,7 +25,7 @@ import (
 )
 
 func (a *app) leaseKubeconfigCmd() *cobra.Command {
-	var refresh bool
+	var refresh, export bool
 	c := &cobra.Command{
 		Use:   "kubeconfig <lab>",
 		Short: "Write the kubeconfig of a kind lab whose lease you hold into its lease, and print its path",
@@ -46,7 +46,11 @@ it at its sandbox's SOCKS proxy: the API server is on loopback, which the
 sandbox reaches only through the proxy and only on the ports
 sandbox.domains lists (127.0.0.1:<port>). beekeeper's hook refreshes the
 proxy's URL before every command of a sandboxed session that holds a lab
-lease (--refresh).`,
+lease (--refresh).
+
+By default stdout is the bare path, for example:
+  kubectl --kubeconfig "$(beekeeper lease kubeconfig <lab>)" get nodes
+Use --export to print export KUBECONFIG=<path> for shell use.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sandboxed := inSandbox()
@@ -73,14 +77,18 @@ lease (--refresh).`,
 			if err := a.checkResource(res); err != nil {
 				return err
 			}
-			line, err := a.labKubeconfigLine(cmd.Context(), res)
+			path, err := a.labKubeconfigPath(cmd.Context(), res)
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(a.out, line)
+			if export {
+				path = "export KUBECONFIG=" + path
+			}
+			_, err = fmt.Fprintln(a.out, path)
 			return err
 		},
 	}
+	c.Flags().BoolVar(&export, "export", false, "print export KUBECONFIG=<path> instead of the bare path")
 	c.Flags().BoolVar(&refresh, "refresh", false, "in the sandbox, point the labs' existing kubeconfigs at this process's sandbox proxy; quiet, a missing one skipped")
 	_ = c.Flags().MarkHidden("refresh")
 	return c
@@ -88,7 +96,7 @@ lease (--refresh).`,
 
 // brokeredKubeconfig has the host's broker write the kubeconfig of the lab
 // res for a sandboxed session, points it at the session's sandbox proxy,
-// and returns the broker's export line.
+// and returns the kubeconfig's path.
 func (a *app) brokeredKubeconfig(res string) (string, error) {
 	dir := sandbox.SpoolDir(a.cfg.StateDir)
 	if !(sandbox.Capper{Dir: dir}).Available() {
@@ -160,22 +168,20 @@ func (a *app) writeLabKubeconfig(ctx context.Context, res string) (string, error
 // claimKubeconfig is the line a lab claim adds: the kubeconfig's path, or
 // why there is none yet.
 func (a *app) claimKubeconfig(ctx context.Context, res string) string {
-	line, err := a.labKubeconfigLine(ctx, res)
+	path, err := a.labKubeconfigPath(ctx, res)
 	if err != nil {
 		return fmt.Sprintf("\nno kubeconfig yet (%v): beekeeper lease kubeconfig %s once the lab runs", err, res)
 	}
-	return "\n" + line
+	return "\nexport KUBECONFIG=" + path
 }
 
-// labKubeconfigLine writes the kubeconfig of the lab res, whose lease the
-// caller holds, through the broker in the sandbox, and returns its export
-// line.
-func (a *app) labKubeconfigLine(ctx context.Context, res string) (string, error) {
+// labKubeconfigPath writes the kubeconfig of the lab res, whose lease the
+// caller holds, through the broker in the sandbox, and returns its path.
+func (a *app) labKubeconfigPath(ctx context.Context, res string) (string, error) {
 	if inSandbox() {
 		return a.brokeredKubeconfig(res)
 	}
-	path, err := a.writeLabKubeconfig(ctx, res)
-	return "export KUBECONFIG=" + path, err
+	return a.writeLabKubeconfig(ctx, res)
 }
 
 // holdsLease refuses, for what, unless the caller holds the lease of res.
