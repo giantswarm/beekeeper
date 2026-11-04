@@ -1795,7 +1795,7 @@ func checkUploads(files, roots []string) error {
 		case err != nil:
 			return usageErr("--file %s: %v", f, err)
 		case !fi.Mode().IsRegular():
-			return usageErr("--file %s: not a regular file (%s), only a file's bytes are uploaded", f, fi.Mode().Type())
+			return usageErr("--file %s is %s, not a file; only a file's bytes are uploaded", f, uploadFileKind(fi.Mode()))
 		case !slices.ContainsFunc(roots, func(r string) bool { return within(f, r) }):
 			return usageErr("--file %s: outside the worker's directories (%s): a file the steps upload lies in the working directory, "+
 				"the turn's --dir, beekeeper's state directory or the session's scratchpad", f, strings.Join(roots, ", "))
@@ -1806,6 +1806,24 @@ func checkUploads(files, roots []string) error {
 		return usageErr("--file: the files hold %d bytes, over file_upload's %d", total, int64(uploadLimit))
 	}
 	return nil
+}
+
+// uploadFileKind names a non-regular file without displaying permission bits.
+func uploadFileKind(mode os.FileMode) string {
+	switch {
+	case mode.IsDir():
+		return "a directory"
+	case mode&os.ModeDevice != 0:
+		return "a device"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSymlink != 0:
+		return "a symbolic link"
+	default:
+		return "an irregular file"
+	}
 }
 
 // stageUploads copies each file into a directory of its own under the stage

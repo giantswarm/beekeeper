@@ -887,7 +887,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		want  string
 	}{
 		"missing":  {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
-		"dir":      {[]string{files}, files + ": not a regular file"},
+		"dir":      {[]string{files}, files + " is a directory, not a file"},
 		"too big":  {[]string{big}, "over file_upload's 10485760"},
 		"together": {[]string{shot, big}, "over file_upload's 10485760"},
 		"outside":  {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
@@ -904,6 +904,27 @@ func TestBrowseSharesFiles(t *testing.T) {
 			t.Errorf("browse --file %s started the turn", name)
 		}
 		writeFile(t, argvFile, "")
+	}
+}
+
+func TestUploadFileKind(t *testing.T) {
+	for _, tc := range []struct {
+		mode os.FileMode
+		want string
+	}{
+		{os.ModeDir | 0o700, "a directory"},
+		{os.ModeDevice, "a device"},
+		{os.ModeDevice | os.ModeCharDevice, "a device"},
+		{os.ModeSocket, "a socket"},
+		{os.ModeNamedPipe, "a named pipe"},
+		{os.ModeSymlink, "a symbolic link"},
+		{os.ModeIrregular, "an irregular file"},
+	} {
+		t.Run(tc.want+tc.mode.String(), func(t *testing.T) {
+			if got := uploadFileKind(tc.mode); got != tc.want {
+				t.Errorf("uploadFileKind(%v) = %q, want %q", tc.mode, got, tc.want)
+			}
+		})
 	}
 }
 
