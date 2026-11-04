@@ -21,7 +21,8 @@ import (
 // The states of a held lease.
 const (
 	holderLive    = "live"    // the holder's session runs
-	holderGone    = "gone"    // it does not: the lease is stale
+	holderGone    = "gone"    // no running session or roster wake path
+	holderParked  = "parked"  // no CLI, but the roster keeps a wake path
 	holderPerson  = "person"  // held by a person or script
 	holderUnknown = "unknown" // the platform lists no sessions to tell
 )
@@ -36,6 +37,15 @@ type leaseView struct {
 }
 
 func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
+	var st *state.State
+	if a.store != nil {
+		st, _ = a.store.Read()
+	}
+	return a.leaseViewState(st, sessions, h)
+}
+
+// leaseViewState also serves callers already holding the state lock.
+func (a *app) leaseViewState(st *state.State, sessions []*claude.Session, h lease.Holder) leaseView {
 	v := leaseView{Holder: h, State: holderPerson}
 	if h.Session != "" || h.HostSession != "" {
 		v.State = holderGone
@@ -44,6 +54,8 @@ func (a *app) leaseView(sessions []*claude.Session, h lease.Holder) leaseView {
 			if v.Name == "" {
 				v.Name = s.Name
 			}
+		} else if st != nil && rosterKept(st, h.Party(), a.now) != "" {
+			v.State = holderParked
 		}
 	}
 	if v.Name == "" {
@@ -531,7 +543,7 @@ func claimOutcomeLine(now, since time.Time, detail string, r *claimRefusal) stri
 // claimHeld is the outcome of me's claim of the lease cur holds: queued
 // when a grant of it to me waits, else refused.
 func (a *app) claimHeld(st *state.State, me state.Party, sessions []*claude.Session, cur lease.Holder) error {
-	v := a.leaseView(sessions, cur)
+	v := a.leaseViewState(st, sessions, cur)
 	q := lease.Pending(st, cur.Env, true, a.now, a.cfg.GrantTTL.Duration)
 	if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(me) }); i >= 0 {
 		return &claimRefusal{res: cur.Env, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s",
@@ -773,7 +785,7 @@ func (a *app) leases() (*leaseList, error) {
 	l := &leaseList{Queues: map[string][]state.Grant{}}
 	names := map[string]string{}
 	for _, h := range holders {
-		v := a.leaseView(sessions, h)
+		v := a.leaseViewState(st, sessions, h)
 		l.Held = append(l.Held, v)
 		names[h.Env] = v.Name
 	}

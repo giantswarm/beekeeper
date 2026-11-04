@@ -2440,7 +2440,7 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 			r.Ended = time.Time{} // resumed: its next end is reported again
 			evs = append(evs, event(watchParty, "session.resumed", "%s: %s", r.Session.Name, recordText(*r)))
 		}
-		if live || !r.Ended.IsZero() {
+		if live || !r.Ended.IsZero() || rosterKept(st, r.Session, now) != "" {
 			continue
 		}
 		r.Ended = now.UTC()
