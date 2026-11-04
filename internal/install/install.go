@@ -112,7 +112,7 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 				}
 				stop = e.Setup.Halt
 			}
-			if e.Setup.Started(ctx, svc) {
+			if e.Setup.NeedsStop(ctx, svc) {
 				p.command(ctx, e, stop(svc))
 			}
 		}

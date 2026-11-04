@@ -25,8 +25,9 @@ type loopServiceSetup struct {
 	started bool
 }
 
-func (*loopServiceSetup) Available() bool                        { return true }
-func (s *loopServiceSetup) Started(context.Context, string) bool { return s.started }
+func (*loopServiceSetup) Available() bool                          { return true }
+func (s *loopServiceSetup) Started(context.Context, string) bool   { return s.started }
+func (s *loopServiceSetup) NeedsStop(context.Context, string) bool { return s.started }
 
 func TestSupervisorLoopServiceLifecycle(t *testing.T) {
 	const (
