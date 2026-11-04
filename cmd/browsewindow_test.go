@@ -166,7 +166,7 @@ func TestShowChromeUnderALockedScreen(t *testing.T) {
 // locked, naming the locker and the probe to park on; unlocked, it refuses
 // nothing.
 func TestBrowseRefusesALockedScreen(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	ran := filepath.Join(bin, "ran")
 	writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\n: > "+ran+"\n")

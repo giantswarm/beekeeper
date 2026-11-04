@@ -99,6 +99,8 @@ func fakePageClaude(args []string) int {
 func capturePageApp(t *testing.T, value string) (*app, *clipboardTools, string, string) {
 	t.Helper()
 	a, c, downloads := storeApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	holdLease(t, a, browserResource, state.Party{Name: a.as})
 	dir := t.TempDir()
 	a.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
 	self, err := os.Executable()
