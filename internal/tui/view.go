@@ -75,6 +75,16 @@ func render(m *model, w, h int) string {
 // bodyView picks the current tab's view, the open session's detail pane
 // or the placeholder before the first refresh.
 func bodyView(m *model, w, h int) string {
+	if !m.bodyBrowsing {
+		return bodyContent(m, w, h)
+	}
+	lines := strings.Split(bodyContent(m, w, 0), "\n")
+	start := min(max(0, m.bodyOffset), max(0, len(lines)-h))
+	return strings.Join(lines[start:min(len(lines), start+h)], "\n")
+}
+
+// bodyContent renders a selected view; height zero collects every line.
+func bodyContent(m *model, w, h int) string {
 	if m.data == nil {
 		return style.Dim.Render("loading…")
 	}
@@ -195,10 +205,10 @@ func footerView(m *model, w int) string {
 		}
 		line += "  " + style.Warn.Render(fit("err: "+d.Errors[0], max(10, w-ansiWidth(line)-2-len(more)))+more)
 	}
-	hints := []string{"1-6 tabs", "j/k move", "enter details", "r refresh", "q quit",
-		"g/G ends", "pgup/pgdn page"}
+	hints := []string{"ctrl+u/d scroll", "1-6 tabs", "j/k move", "enter details", "r refresh", "q quit",
+		"g/G ends", "pgup/pgdn page", "ctrl+home/end bounds"}
 	if m.detail != "" {
-		hints = []string{"m message", "t take over", "k/j older/newer", "G live", "esc close", "q quit", "g oldest"}
+		hints = []string{"m message", "t take over", "ctrl+u/d scroll", "k/j older/newer", "G live", "esc close", "q quit", "g oldest", "ctrl+home/end bounds"}
 		if s := m.paneSession(); s != nil && s.TakenOver {
 			hints[1] = "t hand back"
 			if len(s.Approvals) > 0 {
@@ -277,11 +287,10 @@ func (t *tabLines) row(i int, line string) {
 func (t *tabLines) show(h int) string { return t.window(t.all, h) }
 
 // window returns the h lines of all centred on the selected line. With
-// the last row selected the window shows the end of the list, so the
-// sections after the list are readable; before the first row it shows
-// the beginning.
+// the first row selected it shows the beginning. Body browsing reaches
+// nonselectable sections independently of selection.
 func (t *tabLines) window(all []string, h int) string {
-	if len(all) <= h {
+	if h <= 0 || len(all) <= h {
 		return strings.Join(all, "\n")
 	}
 	start := t.selLine - h/2
@@ -289,8 +298,6 @@ func (t *tabLines) window(all []string, h int) string {
 	case t.selLine < 0:
 	case t.selLine == 0 || t.sel > t.rows-1:
 		start = 0
-	case t.sel >= t.rows-1:
-		start = len(all) - h
 	}
 	if start > len(all)-h {
 		start = len(all) - h
@@ -873,10 +880,16 @@ func detailView(d *Data, s Session, w, h int, p pane) string {
 			t.dim("empty")
 		}
 		room := h - len(t.all)
+		if h <= 0 {
+			room = len(tail)*5 + 1
+		}
 		if msg != "" {
 			room--
 		}
 		t.all = append(t.all, turnLines(tail[:len(tail)-min(back, len(tail))], w, room, d.At)...)
+	}
+	if msg != "" && h <= 0 {
+		return strings.Join(append(t.all, msg), "\n")
 	}
 	if msg != "" {
 		// The message line stays in sight: the pane's last line, even

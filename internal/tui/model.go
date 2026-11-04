@@ -74,6 +74,10 @@ type model struct {
 	updated    time.Time
 	refreshing bool
 
+	// Body browsing reaches sections outside the selectable rows.
+	bodyOffset   int
+	bodyBrowsing bool
+
 	tab int
 	sel [len(tabs)]int
 
@@ -295,6 +299,13 @@ func (m *model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.enter()
 	}
+	switch msg.String() {
+	case "ctrl+u", "ctrl+d", "ctrl+home", "ctrl+end":
+		m.scrollBody(msg.String())
+		return m, nil
+	case "j", "k", "up", "down", "pgup", "pgdown", "g", "G", "home", "end":
+		m.bodyBrowsing, m.bodyOffset = false, 0
+	}
 	if m.detail != "" {
 		return m.scrollDetail(msg)
 	}
@@ -312,6 +323,7 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 	if m.tab != sessionsTab || m.sel[m.tab] >= len(s) {
 		return m, nil
 	}
+	m.bodyBrowsing, m.bodyOffset = false, 0
 	name := s[m.sel[m.tab]].Name
 	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = name, nil, "", 0, 1, false
 	return m, m.tailCmd(name)
@@ -539,6 +551,7 @@ func (m *model) pane() pane {
 
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
+	m.bodyBrowsing, m.bodyOffset = false, 0
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
 	m.composing, m.draft, m.outcome, m.outcomeErr = false, nil, "", false
 }
@@ -666,4 +679,28 @@ func (m *model) screen() string {
 		h = 24
 	}
 	return render(m, w, h)
+}
+
+// scrollBody pages through every rendered line without changing selection.
+func (m *model) scrollBody(key string) {
+	full := bodyContent(m, m.width, 0)
+	if !m.bodyBrowsing {
+		current := bodyContent(m, m.width, m.bodyH())
+		if at := strings.Index(full, current); at >= 0 {
+			m.bodyOffset = strings.Count(full[:at], "\n")
+		}
+	}
+	m.bodyBrowsing = true
+	last := max(0, strings.Count(full, "\n")+1-m.bodyH())
+	switch key {
+	case "ctrl+u":
+		m.bodyOffset -= m.page()
+	case "ctrl+d":
+		m.bodyOffset += m.page()
+	case "ctrl+home":
+		m.bodyOffset = 0
+	case "ctrl+end":
+		m.bodyOffset = last
+	}
+	m.bodyOffset = min(last, max(0, m.bodyOffset))
 }
