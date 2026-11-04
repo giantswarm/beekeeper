@@ -74,6 +74,85 @@ func TestSendRefusesStoppedInboxAndDrainsInOrder(t *testing.T) {
 	}
 }
 
+// Every queue transition must stop before rewriting a queue it cannot read.
+func TestQueueTransitionsPreserveUnreadableQueue(t *testing.T) {
+	operations := map[string]func(string) error{
+		"Send":            func(path string) error { return Send(path, "new wake") },
+		"Drain":           func(path string) error { _, err := Drain(path); return err },
+		"Confirm":         Confirm,
+		"popInflight":     func(path string) error { _, _, err := popInflight(path); return err },
+		"finishTurn":      finishTurn,
+		"restoreInflight": restoreInflight,
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			inbox := filepath.Join(t.TempDir(), "inbox")
+			if err := MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := os.OpenFile(inbox, os.O_RDWR, 0) //nolint:gosec // temporary test FIFO
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = reader.Close() }()
+			if err := Send(inbox, "already stored"); err != nil {
+				t.Fatal(err)
+			}
+			qp := queuePath(inbox)
+			before, err := os.ReadFile(qp) //nolint:gosec // temporary test queue
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(qp, 0o200); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chmod(qp, 0o600) }()
+			if _, err := os.ReadFile(qp); err == nil { //nolint:gosec // temporary test queue
+				t.Skip("current user can read files without read permission")
+			} else if !errors.Is(err, os.ErrPermission) {
+				t.Fatal(err)
+			}
+			operationErr := operation(inbox)
+			if err := os.Chmod(qp, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(qp) //nolint:gosec // temporary test queue
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(operationErr, os.ErrPermission) {
+				t.Errorf("operation error = %v, want permission denied", operationErr)
+			}
+			if !bytes.Equal(before, after) {
+				t.Error("stored queue changed after read failure")
+			}
+		})
+	}
+}
+
+func TestReadQueue(t *testing.T) {
+	inbox := filepath.Join(t.TempDir(), "inbox")
+	if _, err := readQueue(inbox); err != nil {
+		t.Fatalf("missing queue: %v", err)
+	}
+	qp := queuePath(inbox)
+	if err := os.WriteFile(qp, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readQueue(inbox); err != nil {
+		t.Fatalf("empty queue: %v", err)
+	}
+	if err := os.Remove(qp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(qp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readQueue(inbox); err == nil {
+		t.Error("reading a directory succeeded, want read error")
+	}
+}
+
 func TestPreInvocationInjectsOnceInOrder(t *testing.T) {
 	stateDir := t.TempDir()
 	const (
