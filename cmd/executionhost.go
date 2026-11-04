@@ -534,6 +534,10 @@ func (a *app) catalogHost(selector string) (execution.Host, error) {
 	if err != nil {
 		return h, err
 	}
+	return h, validateRetainedExecutionRoute(st, selector, h)
+}
+
+func validateRetainedExecutionRoute(st *state.State, selector string, h execution.Host) error {
 	// Retained journals can still be inspected, stopped or reconciled after
 	// exit. Keep their route until their records are retired, including when
 	// another selector names the same physical host.
@@ -543,10 +547,10 @@ func (a *app) catalogHost(selector string) (execution.Host, error) {
 			continue
 		}
 		if r.Handle.Ref.Host != h.Identity || *r.Endpoint != h.Endpoint {
-			return h, refused("execution host %s route changed while retained execution %s depends on its approved endpoint; restore the original host identity and SSH executable/config route before continuing", selector, r.Handle.Ref.Execution)
+			return refused("execution host %s route changed while retained execution %s depends on its approved endpoint; restore the original host identity and SSH executable/config route before continuing", selector, r.Handle.Ref.Execution)
 		}
 	}
-	return h, nil
+	return nil
 }
 
 // executionHost is the agents.hosts entry selector names, pinned to the

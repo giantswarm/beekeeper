@@ -152,6 +152,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
 			return nil, err
 		}
+		// Another coordinator can reserve a different route after our catalog
+		// read. Serialize route pinning with admission, just like capacity.
+		if err := validateRetainedExecutionRoute(current, o.Host, host); err != nil {
+			return nil, err
+		}
 		// Provider observations are read once before admission. Only counts
 		// are recomputed under the store lock; no SSH or paid call holds it.
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
