@@ -95,7 +95,7 @@ func TestAnswersOfTheLastDayAndWithin72h(t *testing.T) {
 	}
 
 	// A new note on o/r#7 is filed with the warning quoting its answer.
-	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", "o/r#7", "Merge "+prURL)
+	stderr, err := noteCommand(a, "add", "--for", pat, "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", "o/r#7", "Keep "+prURL+" open?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestBroadcastReachesEveryRunningAgentOnce(t *testing.T) {
 		{ID: "s5", Name: agentFive}, {ID: "s6", Name: agentSix},
 	}
 	var sent []string
-	told, missed := broadcast(context.Background(), agents, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
+	told, missed := broadcast(context.Background(), &state.State{Agents: agents}, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
 		sent = append(sent, name)
 		if name == agentSix {
 			return errors.New("unreachable")
