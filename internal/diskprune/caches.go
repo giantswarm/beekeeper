@@ -148,8 +148,11 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			r.Keep("process references unknown")
 			return r
 		}
-		if p.Files && InUse(p.Root, refs) {
-			r.Keep("in use")
+	}
+	if p.Files && !dry {
+		// A checkout can appear while the cache or processes are read,
+		// without changing any of the existing files' timestamps.
+		if _, ok := scanFiles(root, p.Root, refs, &r); !ok {
 			return r
 		}
 	}

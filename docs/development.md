@@ -468,7 +468,9 @@ a policy says, the step keeps:
 
 The scan of a large cache takes a while, so before removing anything the
 step reads the processes' references again, and right before it removes an
-entry it inspects that entry again: one a process opened meanwhile, one
+entry it inspects that entry again. In `files` mode it also rechecks the whole
+root for checkouts after refreshing process references, before deleting files.
+An entry a process opened meanwhile, one
 written since the scan, or one that now holds a checkout stays. A file is
 removed only if unchanged since the scan. The tools' own locks are only
 known to their cleaners: a cache whose tool locks it belongs in `command`
