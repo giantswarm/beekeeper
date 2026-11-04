@@ -271,8 +271,9 @@ func (c *Client) MoveHeld(ctx context.Context, ref, in, by string) (*Moved, *Hel
 		if err != nil {
 			return nil, nil, err
 		}
-		if b.node != nil && b.node.Type == "Issue" && b.node.State != stateOpen {
-			return nil, nil, &Refusal{fmt.Sprintf("%s/%s#%d is closed: it holds nothing, and %s is not blocked by it", bo, br, bn, ref)}
+		b, blockerRef := closingIssue(b, fmt.Sprintf("%s/%s#%d", bo, br, bn))
+		if b.node != nil && b.node.Type == github.RefIssue && b.node.State != stateOpen {
+			return nil, nil, &Refusal{fmt.Sprintf("%s is closed: it holds nothing, and %s is not blocked by it", blockerRef, ref)}
 		}
 		if h, err = c.Block(ctx, ref, by); err != nil {
 			return nil, nil, err
