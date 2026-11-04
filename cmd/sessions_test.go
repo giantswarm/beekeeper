@@ -13,6 +13,7 @@ import (
 
 const (
 	browseHelperName = "helper"
+	ownSessionID     = "own"
 	otherTestRepo    = "example/other"
 	unrelatedAgent   = "unrelated"
 )
@@ -181,14 +182,14 @@ func TestSessionsAttributeBrowseHelpers(t *testing.T) {
 			worker := &sessionView{Session: &claude.Session{ID: parent.Session, HostID: parent.HostSession, Repo: "example/tool"},
 				Work: claude.Work{Repos: []string{"example/tool"}, Refs: []string{"example/tool#7"}, Created: []string{"example/tool#8"}}}
 			helper := &sessionView{Session: &claude.Session{ID: browseHelperName, Name: "test: browse helper"}}
-			own := &sessionView{Session: &claude.Session{ID: "own", Repo: otherTestRepo}, Role: "own role",
+			own := &sessionView{Session: &claude.Session{ID: ownSessionID, Repo: otherTestRepo}, Role: "own role",
 				Work: claude.Work{Repos: []string{otherTestRepo}, Refs: []string{"example/other#2"}}}
 			unrelated := &sessionView{Session: &claude.Session{ID: unrelatedAgent}}
 			v := &view{Sessions: []*sessionView{helper, own, unrelated, worker}, st: &state.State{
 				Agents: []state.Agent{{Party: parent, Task: "fix example/tool#7"}},
 				Starts: []state.Start{
 					{Party: state.Party{Session: browseHelperName, Name: browseStart}, By: parent},
-					{Party: state.Party{Session: "own", Name: browseStart}, By: parent},
+					{Party: state.Party{Session: ownSessionID, Name: browseStart}, By: parent},
 					{Party: state.Party{Session: unrelatedAgent, Name: "other start"}, By: parent},
 				},
 			}}
