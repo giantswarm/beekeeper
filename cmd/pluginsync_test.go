@@ -405,7 +405,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := entries["beekeeper"]
-				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != "unchanged" || entries["other"].Source.Ref != "main" {
+				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != "unchanged" || entries["other"].Source.Ref != mainBranch {
 					t.Fatalf("registry at sync: %s", raw)
 				}
 				return run(ctx, args...)
