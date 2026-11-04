@@ -188,7 +188,7 @@ func (p *turnParser) parse(line []byte) []Turn {
 				p.asks[b.ID] = askQuestions(b.Input)
 			}
 		}
-		if e.Type == roleUser && len(text) == 0 && p.asks != nil {
+		if e.Type == roleUser && p.asks != nil {
 			if ans, questions := askUserTurnText(e.ToolUseResult, blocks, p.asks); ans != "" {
 				text = append(text, ans)
 				if p.onDialog != nil {
