@@ -467,6 +467,51 @@ func TestExecutionMergeCoordinatorNeedsTheFixHeadsApprovalAfterTheWorkerEnded(t 
 	}
 }
 
+// The loop merges fixes after one authenticated review and green CI. This
+// path requires the exact-head claim checked by reviewedMerge; workers cannot
+// reuse it through a grant or by leaving the grant ID empty.
+func TestLoopClaimMergesAuthenticatedReviewFixes(t *testing.T) {
+	previous := readBaseMerge
+	t.Cleanup(func() { readBaseMerge = previous })
+	readBaseMerge = func(context.Context, superloop.Pull, string) (bool, error) { return false, nil }
+	for _, verdict := range []string{superloop.Approved, superloop.ChangesRequested} {
+		t.Run(verdict, func(t *testing.T) {
+			a, use, pull := mergeReviewRig(t)
+			review := superloop.Review{ID: "independent-result", Verdict: verdict}
+			completeMergeReview(t, a, use, &review)
+			pull.Reviews = []superloop.Review{review}
+			use.ID = ""
+			use.Head = strings.Repeat("b", 40)
+			pull.Head = use.Head
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := a.authenticateReviewResult(t.Context(), st, use, *pull, true); err != nil {
+				t.Fatalf("loop's fixed head: %v", err)
+			}
+			if err := a.executionMergeDecisionLive(t.Context(), st, use, true); err != nil {
+				t.Fatalf("loop planner rejected fixes: %v", err)
+			}
+			if doc := a.reviewedMerge(t.Context(), use.Repository, use.PR, use.Head); doc.Reason != "no pending exact-head supervisor merge claim" {
+				t.Fatalf("executor did not require the loop claim: %+v", doc)
+			}
+			if err := a.authenticateExecutionReview(t.Context(), st, use, *pull); err == nil {
+				t.Fatal("fixes admitted without a loop claim")
+			}
+			pull.Green = false
+			if err := a.authenticateReviewResult(t.Context(), st, use, *pull, true); err == nil {
+				t.Fatal("red fixes admitted")
+			}
+			pull.Green = true
+			pull.Reviews[0].Body += " edited"
+			if err := a.authenticateReviewResult(t.Context(), st, use, *pull, true); err == nil {
+				t.Fatal("modified reviewer result admitted")
+			}
+		})
+	}
+}
+
 func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	assignMergeReview(t, a, use, 1)

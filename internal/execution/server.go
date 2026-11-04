@@ -185,6 +185,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 		}
 		harnesses[name] = h.Version
 	}
+	c = Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness}
 	if len(harnesses) == 0 {
 		var reasons []string
 		for name, reason := range unavailable {
@@ -213,7 +214,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{CIWait: true, GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
+	return Capabilities{CIWait: true, SourcePreparation: true, GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -695,7 +696,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 			case missingOperation:
 				value, err = s.Missing(ctx, req.Ref)
-			case "check":
+			case checkOperation:
 				value, err = s.Check(ctx)
 			case "source-chunk":
 				var chunk SourceChunk
@@ -756,6 +757,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
+				}
+				// Readiness diagnostics remain available when no harness passes.
+				// Other failed operations never expose a partial result.
+				if req.Operation == checkOperation {
+					reply.Payload, _ = json.Marshal(value)
 				}
 				reply.Error = err.Error()
 			} else {

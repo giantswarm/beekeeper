@@ -152,7 +152,7 @@ func TestExecutionCheckRejectsHostWithoutCIWait(t *testing.T) {
 	a, r := executionTestApp(t)
 	host := a.cfg.Agents.Hosts[sshTestSelector]
 	a.executionProbe = func(context.Context, execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: r.Ref.Host, PolicyDigest: host.PolicyDigest,
+		return execution.Capabilities{SourcePreparation: true, Publication: true, Protocol: execution.Protocol, Identity: r.Ref.Host, PolicyDigest: host.PolicyDigest,
 			Harnesses: map[string]string{execution.HarnessClaude: publicationClaudeVersion}, Resources: execution.Resources{ObservedAt: time.Now(), AvailableMiB: 1 << 16}}, nil
 	}
 	if _, err := a.probeExecution(context.Background(), host); err == nil || !strings.Contains(err.Error(), "CI wait") {

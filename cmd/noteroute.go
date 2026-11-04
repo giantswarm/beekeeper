@@ -77,6 +77,54 @@ var opClasses = []opClass{
 	},
 }
 
+// mergeAsk marks a question whether to merge: approving, confirming or
+// authorising a merge, or a "merge it?". It is a merge ask of a pull
+// request only with one named (mergeObject, mergePronoun).
+var mergeAsk = regexp.MustCompile(`(?i)^\s*merge\b|\b(may|can|shall|should|could|do|must)\s+(i|we|you|the\s+loop|the\s+supervisor|it|this|they)\s+(still\s+|now\s+|go\s+ahead\s+and\s+)?merge\b|\bmerg(e|ing)\s+(it|this|that|them|now|the\s+(pr|pull\s+request|change|fix)|prs?\b|pull\s+requests?|https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|[\w.-]+/[\w.-]+#\d+|#\d+)|\b(ok|okay|good|ready|fine|clear(ed)?|safe|go|green\s+light|approv(e|ed|al)|permission|authori[sz](e|ed|ation)|sign[\s-]?off)\b[^.?!]{0,30}\b(to|for)\s+merg(e|ing)\b|\b(approve|authori[sz]e|confirm|allow|release|sign\s+off\s+on)\b[^.?!]{0,30}\bmerg(e|ing)\b`)
+
+// mergeObject names a pull request in a question: its URL, owner/repo#n,
+// #n, or "the PR" or "pull request".
+var mergeObject = regexp.MustCompile(`(?i)https?://github\.com/[\w.-]+/[\w.-]+/pull/\d+|\b[\w.-]+/[\w.-]+#\d+|(^|[\s(])#\d+\b|\b(prs?|pull\s+requests?)\b`)
+
+// mergePronoun is a merge of "it" or "this": the pull request of the
+// note's --ref, when that is one.
+var mergePronoun = regexp.MustCompile(`(?i)\bmerg(e|ing)\s+(it|this|that|them)\b|\b(it|this|that)\s+(still\s+|now\s+)?(be\s+)?merged?\b|\b(it|this|that)\s+(is\s+)?(ok|okay|good|ready|fine|safe|clear(ed)?)\b[^.?!]{0,20}\bmerg(e|ing)\b`)
+
+// isMergeAsk reports whether question asks whether to merge a pull
+// request: a merge ask (mergeAsk) that names one, or that merges "it" while
+// a ref of the note is a pull request's URL or owner/repo#n. A merge of
+// anything else (charts, branches, clusters, duplicate issues) or a
+// repository's merge setting is no merge ask.
+func isMergeAsk(question string, refs []string) bool {
+	if !mergeAsk.MatchString(question) {
+		return false
+	}
+	if mergeObject.MatchString(question) {
+		return true
+	}
+	if !mergePronoun.MatchString(question) {
+		return false
+	}
+	return slices.ContainsFunc(refs, func(r string) bool {
+		r = strings.TrimSpace(r)
+		return ghRef.MatchString(r) || pullURL.FindString(r) == r
+	})
+}
+
+// mergeWhere is where a merge ask goes instead of a person.
+const mergeWhere = `the supervisor loop merges a pull request once its desk review and the fixes of its findings are in and its checks are green, at the head it gives the go for; park on it (beekeeper agents park --on <owner/repo#n> "desk review") and the loop merges it, asking nobody`
+
+// refuseMergeAsk refuses a decision, whoever files it, that asks a person
+// whether to merge a pull request (isMergeAsk of its question and refs),
+// logging note.redirected. Nil: it asks no such thing.
+func (a *app) refuseMergeAsk(stderr io.Writer, me state.Party, d noteDraft, refs []string) error {
+	if !isMergeAsk(d.Question, refs) {
+		return nil
+	}
+	a.logRedirect(stderr, me, "merge", truncate(strings.TrimSpace(d.Question), 200), mergeWhere)
+	return refused("note refused: whether to merge is never a person's decision: %s. Do not file it again", mergeWhere)
+}
+
 // reserved marks a decision that needs the person's own authority, whatever
 // operation it concerns: spending or cost, a purchase, contract or licence,
 // consent, an account or credential, or something made public or touching

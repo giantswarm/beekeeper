@@ -132,6 +132,8 @@ type timerFire struct {
 	// late is how late a timer fired past its time and why, or empty
 	// (timerLate); a command it runs reads it from BEEKEEPER_TIMER_LATE.
 	late string
+	// nextDue is the repeating occurrence saved when this run was claimed.
+	nextDue time.Time
 }
 
 // message is what a woken agent reads.
@@ -221,7 +223,6 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			continue
 		}
 		changed = true
-		fires = append(fires, f)
 		var act string
 		switch {
 		case t.Wake != "":
@@ -234,9 +235,11 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 			kept = append(kept, t)
 		} else if t.Repeat != "" {
 			t.Due, t.Checked, t.Held = t.Next(now), time.Time{}, ""
+			f.nextDue = t.Due
 			act += "next " + clock(now, t.Due) + ": "
 			kept = append(kept, t)
 		}
+		fires = append(fires, f)
 		lines = append(lines, fmt.Sprintf("TIMER: #%d, %s: %s%s", t.ID, f.reason, act, truncate(t.What, 200)))
 		evs = append(evs, event(watchParty, "timer.fired", "#%d %s: %s%s", t.ID, f.reason, act, t.What))
 	}
@@ -354,11 +357,44 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 		}
 	}
 	rc := 0
-	if err := c.Run(); err != nil {
+	runErr := c.Run()
+	if runErr != nil {
 		rc = -1
 		if c.ProcessState != nil {
 			rc = c.ProcessState.ExitCode()
 		}
+	}
+	if runErr != nil && (rctx.Err() != nil || c.ProcessState != nil && rc == -1) {
+		// Shutdown waits for timerActs before handing over to another watch.
+		// Restore the due occurrence before that handover, including a
+		// repeating timer whose next occurrence was already scheduled.
+		rearmed := false
+		err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+			retry := f.t
+			retry.Checked, retry.Fired = time.Time{}, time.Time{}
+			retry.Held = "previous command interrupted"
+			for i, t := range st.Timers {
+				if t.ID != retry.ID {
+					continue
+				}
+				if t.Repeat != "" && t.Run == retry.Run && t.Due.Equal(f.nextDue) {
+					st.Timers[i] = retry
+					rearmed = true
+				}
+				return []state.Event{event(watchParty, "timer.failed", "#%d interrupted: %s", retry.ID, retry.Run)}, nil
+			}
+			st.Timers = append(st.Timers, retry)
+			rearmed = true
+			return []state.Event{event(watchParty, "timer.failed", "#%d interrupted; re-armed: %s", retry.ID, retry.Run)}, nil
+		})
+		if err != nil {
+			w.emitNow("timer", "TIMER FAILED: #%d `%s` interrupted (%v); could not re-arm (%v): %s", f.t.ID, f.t.Run, runErr, err, f.t.What)
+		} else if rearmed {
+			w.emitNow("timer", "TIMER FAILED: #%d `%s` interrupted (%v); timer re-armed: %s", f.t.ID, f.t.Run, runErr, f.t.What)
+		} else {
+			w.emitNow("timer", "TIMER FAILED: #%d `%s` interrupted (%v); current timer retained: %s", f.t.ID, f.t.Run, runErr, f.t.What)
+		}
+		return
 	}
 	_ = w.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
 	w.emitNow("timer", "TIMER RAN: #%d exit %d, output in %s: %s", f.t.ID, rc, path, truncate(f.t.What, 200))
