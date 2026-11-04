@@ -858,7 +858,7 @@ func TestCopyValueRefusesMalformedTrailingSkeleton(t *testing.T) {
 	if len(tools.Calls) != 0 {
 		t.Errorf("refused copy ran %q", tools.Calls)
 	}
-	after, readErr := os.ReadFile(file)
+	after, readErr := os.ReadFile(file) //nolint:gosec // a path of this test
 	if readErr != nil {
 		t.Fatal(readErr)
 	}

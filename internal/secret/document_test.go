@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const trailingYAMLError = "invalid trailing YAML content"
+
 func TestParseNodeTrailingDocuments(t *testing.T) {
 	const planted = "planted-trailing-secret"
 	for _, tc := range []struct {
@@ -16,9 +18,9 @@ func TestParseNodeTrailingDocuments(t *testing.T) {
 		{"explicit end", "...\n", ""},
 		{"second document", "---\nother: value\n", errSeveralDocuments.Error()},
 		{"empty second document", "---\n", errSeveralDocuments.Error()},
-		{"malformed sequence", "---\n[" + planted + "\n", "invalid trailing YAML content"},
-		{"unknown alias", "---\n*" + planted + "\n", "invalid trailing YAML content"},
-		{"malformed after end", "...\n" + planted + "\n", "invalid trailing YAML content"},
+		{"malformed sequence", "---\n[" + planted + "\n", trailingYAMLError},
+		{"unknown alias", "---\n*" + planted + "\n", trailingYAMLError},
+		{"malformed after end", "...\n" + planted + "\n", trailingYAMLError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, err := parseNode([]byte("key: value\n" + tc.tail))
