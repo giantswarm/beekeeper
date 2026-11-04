@@ -2478,6 +2478,13 @@ did it. A steward that archived nothing is read from its turn: one that declined
 the first line of its reply (`agents.archive`, "steward local_… declined to archive: …") and asked
 for no archive for 24 hours; one that did not answer is reported as such.
 
+After the doctor gives up an archive, run `beekeeper doctor retry-archive <session>`
+with its agent session ID or desktop session ID, then `beekeeper doctor` (or wait for
+its next watch poll). This queues the archive again with a fresh five-turn, 24-hour
+budget, including after installing a fixed build. It accepts only beekeeper-started
+desktop sessions off the roster and holding no role. Archive agreement and busy-session
+checks still apply; another exhausted budget records the give-up as before.
+
 `beekeeper doctor` does these chores by rule, and every watch poll (not `--once`) runs it in the
 background, one `DOCTOR` line per thing it did. It takes an agent off the roster once it reported
 its work finished with `agents idle --done` and its CLI runs no turn, once it was relieved of the
