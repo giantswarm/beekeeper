@@ -216,13 +216,20 @@ func (o *Ops) CopyValues(ctx context.Context, pairs []Pair, file string, nw *New
 		return nil, err
 	}
 	paths := make([]string, len(pairs))
+	planned := &document{root: clone(doc.root)}
+	seen := map[destination]bool{}
 	for i, p := range pairs {
 		if paths[i], err = place(doc, file, p.Path); err != nil {
 			return nil, err
 		}
-		if slices.Contains(paths[:i], paths[i]) {
+		dst, err := planned.planDestination(paths[i])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if seen[dst] {
 			return nil, fmt.Errorf("%s: %s is named twice", file, paths[i])
 		}
+		seen[dst] = true
 	}
 	vs := make([]string, len(pairs))
 	for i, p := range pairs {
