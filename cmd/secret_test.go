@@ -1018,3 +1018,97 @@ func TestStoreSourceConsumerArgumentDoesNotRequireBroker(t *testing.T) {
 	}
 	noSecret(t, "consumer response", out)
 }
+
+func TestSecretRotateSandboxFiles(t *testing.T) {
+	for _, generate := range []bool{true, false} {
+		for _, access := range []string{"denied", "read-only", "writable", "host"} {
+			t.Run(fmt.Sprintf("generate=%t/%s", generate, access), func(t *testing.T) {
+				a, tools, repo := secretApp(t)
+				base := t.TempDir()
+				home := filepath.Join(base, "home")
+				if err := os.Mkdir(home, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("HOME", home)
+				t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+				t.Setenv(sandbox.Env, "1")
+				t.Setenv(sandbox.Brokered, "1")
+				if access == "host" {
+					t.Setenv(sandbox.Brokered, "")
+					t.Setenv(sandbox.Env, "")
+				}
+				t.Chdir(repo)
+				src := filepath.Join(repo, "db.sops.yaml")
+				outside := filepath.Join(home, "carrier.sops.yaml")
+				if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.ReadFile(src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(outside, before, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				// Denial must precede processing any of the scan files.
+				a.cfg.Scan.SOPS = []string{src, outside}
+				if access == "read-only" {
+					a.cfg.Sandbox.AllowRead = []string{home}
+				}
+				if access == "writable" {
+					a.cfg.Sandbox.AllowWrite = []string{home}
+				}
+				args := []string{"rotate", dbRef}
+				if generate {
+					args = append(args, generateFlag)
+				} else {
+					_, ix, err := a.secretOpsIndexed()
+					if err != nil {
+						t.Fatal(err)
+					}
+					ix.Add(dbRef, secretValue)
+					if err := ix.Save(a.now); err != nil {
+						t.Fatal(err)
+					}
+					tools.Vault[dbRef] = "replacement-fixture-value"
+				}
+				vaultBefore := tools.Vault[dbRef]
+				tools.Calls = nil
+				_, err = runSecret(a, args...)
+				if access == "denied" || access == "read-only" {
+					if Code(err) != ExitRefused || !strings.Contains(err.Error(), "agent sandbox does not let") {
+						t.Fatalf("rotation: %v, want sandbox refusal", err)
+					}
+					if len(tools.Calls) != 0 {
+						t.Errorf("refused rotation ran tools: %v", tools.Calls)
+					}
+					if tools.Vault[dbRef] != vaultBefore {
+						t.Error("refused rotation changed vault")
+					}
+					for _, file := range []string{src, outside} {
+						after, err := os.ReadFile(file)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !bytes.Equal(before, after) {
+							t.Error("refused rotation changed carrier")
+						}
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, file := range []string{src, outside} {
+						after, err := os.ReadFile(file)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if bytes.Equal(before, after) {
+							t.Error("permitted rotation did not change carrier")
+						}
+					}
+				}
+			})
+		}
+	}
+}

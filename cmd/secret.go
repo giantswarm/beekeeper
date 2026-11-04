@@ -1248,6 +1248,11 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 			if err != nil {
 				return err
 			}
+			// Every scanned file may carry the old value and need rewriting.
+			// Check the entire list before reading the vault or decrypting files.
+			if err := a.sandboxPaths(files, files); err != nil {
+				return err
+			}
 			var rot secret.Rotation
 			if generate {
 				rot, err = ops.RotateGenerated(cmd.Context(), r[0], files, ix, length, charset)
