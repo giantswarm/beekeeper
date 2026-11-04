@@ -65,6 +65,9 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 	w, _, out := notifyingWatch(t, t.TempDir(), false)
 	w.now = relayNow
 	hungAfter := w.cfg.Merge.HungAfter.Duration
+	// The watch has been observing continuously for a full grace period.
+	w.lastHungCheck = relayNow.Add(-time.Second)
+	w.hungGrace = relayNow.Add(-hungAfter - time.Minute)
 	dir := w.store.Dir()
 	stubPulls(t, map[int]github.Pull{
 		1: {State: github.Merged, MergedAt: relayNow.Add(-hungAfter - time.Minute)},
@@ -112,6 +115,51 @@ func TestWatchEndsAHungMerge(t *testing.T) {
 	}
 	if evs, err := w.store.Events(10, func(e state.Event) bool { return e.Verb == "merge.hung" }); err != nil || len(evs) != 1 {
 		t.Errorf("merge.hung events: %d, %v", len(evs), err)
+	}
+}
+
+// A wall-clock jump representing suspend must not turn a live release
+// wait into a hung merge. Continuous awake checks still end it afterwards.
+func TestWatchHungMergeAcrossSuspend(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.now = relayNow
+	after := w.cfg.Merge.HungAfter.Duration
+	child := hungChild(t, w.store.Dir(), hungRepo, 1)
+	stubPulls(t, map[int]github.Pull{
+		1: {State: github.Merged, MergedAt: relayNow.Add(-after - time.Minute)},
+	})
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: hungRepo, PR: 1, Lane: hungLane, By: four,
+			Child: child, Phase: state.Running, Started: relayNow.Add(-time.Hour)}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	w.hungMerges(ctx, relayNow)
+	if !proc.Alive(child) || strings.Contains(out.String(), "MERGE HUNG") {
+		t.Fatalf("wait ended on startup without awake observations: %s", out)
+	}
+	// Three hours pass on the wall clock with no watch ticks.
+	resumed := relayNow.Add(3 * time.Hour)
+	w.hungMerges(ctx, resumed)
+	if !proc.Alive(child) || strings.Contains(out.String(), "MERGE HUNG") {
+		t.Fatalf("wait ended after suspend: %s", out)
+	}
+	// Normal ticks accumulate a full awake grace period, including its
+	// boundary, without relying on real sleeps in the test.
+	for elapsed := time.Minute; elapsed <= after; elapsed += time.Minute {
+		w.hungMerges(ctx, resumed.Add(elapsed))
+	}
+	if !proc.Alive(child) || strings.Contains(out.String(), "MERGE HUNG") {
+		t.Fatalf("wait ended before awake threshold: %s", out)
+	}
+	w.hungMerges(ctx, resumed.Add(after+time.Second))
+	if !eventually(5*time.Second, func() bool { return !proc.Alive(child) }) {
+		t.Fatal("silent wait survived the awake threshold")
+	}
+	if strings.Count(out.String(), "MERGE HUNG") != 1 {
+		t.Fatalf("watch lines: %s", out)
 	}
 }
 
