@@ -37,6 +37,8 @@ type fakeSetup struct {
 	ran     []string
 }
 
+const installBash = "Bash"
+
 func (*fakeSetup) Available() bool { return true }
 
 func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
@@ -1064,7 +1066,7 @@ func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
 			if got := CheckAgyHooks(path, "", ""); got != "" {
 				t.Fatalf("install-generated hooks refused by doctor: %s", got)
 			}
-			for _, matcher := range []string{"Read", "Bash", ""} {
+			for _, matcher := range []string{"Read", installBash, ""} {
 				restricted := strings.Replace(string(raw), `"matcher":"*"`, `"matcher":"`+matcher+`"`, 1)
 				write(t, path, `{"beekeeper": `+restricted+`}`)
 				if got := AgyHooksUnguarded(path); got == "" {
@@ -1147,7 +1149,7 @@ func TestAgyInstallKeepsUnrelatedWorkerRulesEntry(t *testing.T) {
 			if !sameJSON(raw, json.RawMessage(`{"entries":[`+string(entry)+`]}`)) {
 				t.Fatalf("uninstall changed unrelated entry: %s", raw)
 			}
-			if raw, err := os.ReadFile(skillPath); err != nil || string(raw) != content {
+			if raw, err := os.ReadFile(skillPath); err != nil || string(raw) != content { //nolint:gosec // a path of this test
 				t.Fatalf("custom skill changed: %q, %v", raw, err)
 			}
 		})
@@ -1343,7 +1345,7 @@ func TestCodexHookUpgradeUpdatesWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, path := range paths {
-				raw, err := os.ReadFile(path)
+				raw, err := os.ReadFile(path) //nolint:gosec // a path of this test
 				if preexisting {
 					if err != nil || string(raw) != priorCodexHooks {
 						t.Errorf("uninstall: %s = %s (%v), want original hooks", path, raw, err)
@@ -1444,8 +1446,8 @@ func TestCodexHooksAndSkills(t *testing.T) {
 		t.Errorf("after update: CheckCodexHooks = %q, want empty", got)
 	}
 
-	// Stale "*" matcher or narrowed "Bash" matcher is flagged by CheckCodexHooks and fixed by Install.
-	for _, badMatcher := range []string{"*", "Bash"} {
+	// Stale "*" matcher or narrowed installBash matcher is flagged by CheckCodexHooks and fixed by Install.
+	for _, badMatcher := range []string{"*", installBash} {
 		write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[{"matcher":"`+badMatcher+`","hooks":[{"type":"command","command":"`+updatedExe+` hook pretooluse --format codex","timeout":30}]}]}}`)
 		if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); !strings.Contains(got, "differs from what install writes") {
 			t.Errorf("matcher %q: CheckCodexHooks = %q, want differs from what install writes", badMatcher, got)
@@ -1605,7 +1607,7 @@ func TestCodexRepairsQuotedHook(t *testing.T) {
 				if err := json.Unmarshal(CodexHook(exe), &entry); err != nil {
 					t.Fatal(err)
 				}
-				entry.Matcher = "Bash"
+				entry.Matcher = installBash
 				entry.Hooks[0].Command = shellQuote(exe) + " hook pretooluse " + format
 				raw, err := json.Marshal(entry)
 				if err != nil {

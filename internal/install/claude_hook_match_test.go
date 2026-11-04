@@ -10,8 +10,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+const hookMatchExe = "/opt/desk tools/beekeeper"
+
 func TestClaudeInstallsGuardWithQuotedOrRenamedBinary(t *testing.T) {
-	for _, exe := range []string{"/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper", "/opt/bin/bk"} {
+	for _, exe := range []string{hookMatchExe, "/opt/desk's tools/beekeeper", "/opt/bin/bk"} {
 		t.Run(exe, func(t *testing.T) {
 			e, _ := env(t, t.TempDir(), platform.Stub().Setup, nil)
 			e.Exe, e.Spec.Exe = exe, exe

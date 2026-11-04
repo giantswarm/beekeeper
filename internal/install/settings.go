@@ -259,8 +259,6 @@ func AgyHook(exe string) json.RawMessage {
 	return bytes.TrimSpace(b.Bytes())
 }
 
-const pretooluseWord = "pretooluse"
-
 // agyHookBinary returns the binary path and timeout of an agy hook entry
 // that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
 // not such an entry.
