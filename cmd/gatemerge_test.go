@@ -646,7 +646,7 @@ func TestKeepOutput(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), "not found error") || !strings.Contains(string(raw), `"exitCode":7`) {
 		t.Fatalf("kept %q: %q, %v", path, raw, err)
 	}
-	if !strings.HasPrefix(string(raw), "devctl pr merge o/r 7 --rebase\n") {
+	if !strings.HasPrefix(string(raw), "command: devctl pr merge o/r 7 --rebase\n") {
 		t.Fatalf("kept output missing command as first line: %q", raw)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {

@@ -256,7 +256,7 @@ func TestARebaseMergeBehindItsBaseAtItsTurnIsRebasedAndMerged(t *testing.T) {
 	if err != nil || argsErr != nil {
 		t.Fatalf("read output: %v, %v", err, argsErr)
 	}
-	if first, _, _ := strings.Cut(string(raw), "\n"); first != "devctl "+strings.TrimSpace(string(argsRaw)) {
+	if first, _, _ := strings.Cut(string(raw), "\n"); first != "command: devctl "+strings.TrimSpace(string(argsRaw)) {
 		t.Errorf("log's first line %q does not match devctl arguments %q", first, argsRaw)
 	}
 

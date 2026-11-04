@@ -13,7 +13,7 @@ func TestRestartedPaneAnswersQueueAndReleasesBothKeys(t *testing.T) {
 	src := &fakeSource{data: &Data{Sessions: []Session{{ID: currentWord, Name: tBee, TakeoverAlias: originalWord, TakenOver: true,
 		Approvals: []Approval{{ID: "held", Session: originalWord, Gist: "Bash"}}}}}}
 	m := newTestModel(t, src)
-	m.detail = tBee
+	m.detail = currentWord
 	run(m, m.answer(true))
 	if !reflect.DeepEqual(src.answers, []string{"original/held allow"}) {
 		t.Fatalf("answers = %v", src.answers)
