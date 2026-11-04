@@ -3428,6 +3428,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
 	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
+	c.Serve.Identity.TokenFile = homePath(home, c.Serve.Identity.TokenFile)
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)
