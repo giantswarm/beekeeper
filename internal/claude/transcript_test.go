@@ -209,7 +209,7 @@ func TestTailIncludesAskUserQuestionAnswersAndNotes(t *testing.T) {
 	}
 	var userTexts []string
 	for _, turn := range turns {
-		if turn.Role == "user" {
+		if turn.Role == roleUser {
 			userTexts = append(userTexts, turn.Text)
 		}
 	}
@@ -249,7 +249,7 @@ func TestTailAskUserQuestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(turns) != 1 || turns[0].Role != "user" || !strings.Contains(turns[0].Text, "Keep 30 days with 2 GiB cap") {
+	if len(turns) != 1 || turns[0].Role != roleUser || !strings.Contains(turns[0].Text, "Keep 30 days with 2 GiB cap") {
 		t.Fatalf("Tail = %+v, want AskUserQuestion answer as user turn", turns)
 	}
 	followed, err := Follow(path, 5)

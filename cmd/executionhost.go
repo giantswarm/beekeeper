@@ -327,7 +327,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	switch path {
 	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
-	case "supervisor", "supervisor status":
+	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
 	case agentsName, "agents list":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {

@@ -25,7 +25,7 @@ func TestStaleWatches(t *testing.T) {
 		return tb
 	}
 	bk := func(pid, ppid int, args ...string) *proc.Process {
-		return &proc.Process{PID: pid, PPID: ppid, Comm: "beekeeper", Args: append([]string{path}, args...)}
+		return &proc.Process{PID: pid, PPID: ppid, Comm: pluginName, Args: append([]string{path}, args...)}
 	}
 	claudeCLI := &proc.Process{PID: 10, PPID: 1, Comm: "claude", Args: []string{"claude"}}
 	supervisorWatch := bk(100, 10, "watch", "--notify")
