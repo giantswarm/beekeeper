@@ -8,6 +8,45 @@ import (
 // psForm is the masked read a process-table refusal names.
 const psForm = "beekeeper ps"
 
+func TestHookDockerImageConfigFormats(t *testing.T) {
+	for _, command := range []string{"docker inspect", "docker image inspect"} {
+		for _, flag := range []string{"--format ", "--format=", "-f "} {
+			for _, tc := range []struct {
+				format string
+				deny   bool
+			}{
+				{`{{.Config.Entrypoint}}`, false},
+				{`{{json .Config.Cmd}}`, false},
+				{`{{.Config.User}} {{.Config.WorkingDir}}`, false},
+				{`{{json .Config.ExposedPorts}}`, false},
+				{`{{- json .Config.Entrypoint -}}`, false},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}`, false},
+				{`{{.Config.User}} {{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}`, false},
+				{`{{json .Config.Env}}`, true},
+				{`{{.Config.Env}}`, true},
+				{`{{range .Config.Env}}{{println .}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 1)}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{println .}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}{{json .Config.Env}}`, true},
+				{`{{.Config.User}} {{json .Config}}`, true},
+				{`{{.Config.User}} {{.Args}}`, true},
+				{`{{.Config.User}} {{json .}}`, true},
+				{`{{index .Config "Env"}}`, true},
+				{`{{$env := .Config.Env}}{{json $env}}`, true},
+			} {
+				cmd := command + " " + flag + "'" + tc.format + "' image"
+				t.Run(cmd, func(t *testing.T) {
+					d := decide(t, hook(), "/", cmd, nil)
+					denied := d != nil && d.PermissionDecision == decisionDeny
+					if denied != tc.deny {
+						t.Fatalf("deny = %v, want %v: %+v", denied, tc.deny, d)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestHookRefusesCommandLineReads(t *testing.T) {
 	for _, cmd := range []string{
 		"ps aux",
