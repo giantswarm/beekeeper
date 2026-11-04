@@ -1,6 +1,6 @@
 module github.com/giantswarm/beekeeper
 
-go 1.26.0
+go 1.27.0
 
 toolchain go1.27.3
 
@@ -36,7 +36,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
-	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad
+	k8s.io/kube-openapi v0.0.0-20261104182252-5bee61fc5225
 	k8s.io/utils v0.0.0-20261023123148-ca04ba58ecab
 	mvdan.cc/sh/v3 v3.14.1
 	sigs.k8s.io/controller-runtime v0.25.2
@@ -66,7 +66,6 @@ require (
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
-	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
@@ -166,6 +165,7 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
+	sigs.k8s.io/structured-merge-diff/v7 v7.0.0 // indirect
 )
 
 replace github.com/klauspost/compress v1.18.6 => github.com/klauspost/compress v1.20.1
