@@ -1,8 +1,12 @@
 package guard
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,5 +154,50 @@ func TestSweepTranscriptsNamesTheFilesOfAnEncodedIdentity(t *testing.T) {
 	js, _ := json.Marshal(rep)
 	if strings.Contains(string(js), key) || strings.Contains(string(js), std[8:40]) {
 		t.Fatal("the report carries the identity")
+	}
+}
+
+func TestRedactSkipsImagesAndScansSurroundingText(t *testing.T) {
+	file, key := ageIdentity()
+	encoded := base64.StdEncoding.EncodeToString([]byte(file))
+	for name, image := range map[string]string{
+		"PNG":            base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n" + strings.Repeat("payload", 20))),
+		"JPEG":           base64.RawURLEncoding.EncodeToString([]byte("\xff\xd8\xff\xe0" + strings.Repeat("payload", 20))),
+		"wrapped PNG":    wrap(base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n"+strings.Repeat("payload", 20))), 76, "  "),
+		"image data URL": "data:image/gif;base64," + encoded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Include a literal token pattern inside the encoded image run.
+			image = strings.TrimRight(image, "=") + "ghp_" + strings.Repeat("A", 36)
+			text := key + ` "` + image + `" ` + encoded
+			out, found := (&Index{}).Redact(text)
+			want := "[redacted: " + ageRule + "] \"" + image + "\" [redacted: " + ageRule + "]"
+			if out != want || len(found) != 1 || found[0].Rule != ageRule || found[0].Count != 2 {
+				t.Fatal("image changed or surrounding secrets were not redacted")
+			}
+		})
+	}
+}
+
+func BenchmarkRedactPNG4MiB(b *testing.B) {
+	// Incompressible pixels model a 4 MiB screenshot as a real PNG.
+	pixels := image.NewNRGBA(image.Rect(0, 0, 1024, 1024))
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := range pixels.Pix {
+		pixels.Pix[i] = byte(rng.Uint32())
+	}
+	var payload bytes.Buffer
+	if err := png.Encode(&payload, pixels); err != nil {
+		b.Fatal(err)
+	}
+	image := base64.StdEncoding.EncodeToString(payload.Bytes())
+	ix := &Index{}
+	b.SetBytes(int64(payload.Len()))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if out, found := ix.Redact(image); out != image || len(found) != 0 {
+			b.Fatal("image was redacted")
+		}
 	}
 }
