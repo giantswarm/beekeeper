@@ -99,9 +99,9 @@ alert:<name> waits for a firing alert (a bare alertname or installation/alertnam
 lease claim --park parks on a lease. The supervisor loop wakes alert waits
 and replaces a parked session that cannot be resumed, keeping its task.
 
-GitHub targets are resolved before the park is recorded; a confirmed unknown
-target is refused. If GitHub cannot be read, the park is recorded and its type
-resolved later. Issues are plain waits checked every five minutes and never
+GitHub targets are resolved before the park is recorded; a confirmed unknown,
+closed or merged target is refused. If GitHub cannot be read, the park is
+recorded and its type resolved later. Issues are plain waits checked every five minutes and never
 enter pull request review. Once the note is closed (answered, defaulted, done
 or overtaken), the issue closed, the pull request merged or closed or given a
 review or comment by anyone but its author since the park (a review posted
@@ -796,7 +796,7 @@ func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
 		for _, id := range ids {
 			if an, ok := parseAnswered(e); ok {
 				if an.ID == id {
-					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.attribution(), an.Answer)
+					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.For, an.Answer)
 					if an.Comment != "" {
 						closes[id] += " (" + an.Comment + ")"
 					}
