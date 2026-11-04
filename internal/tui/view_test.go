@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+const tPageWord = "page"
+
+const tFiringAt = "2026-09-26T09:00:00Z"
+
 // stripANSI removes escape sequences from a rendered string.
 func stripANSI(s string) string {
 	var b strings.Builder
@@ -236,7 +240,7 @@ func TestAlertsViewDeduplicatesAndHumanizesTimes(t *testing.T) {
 	since := testAt.Add(-3*time.Hour - 12*time.Minute).Format(time.RFC3339Nano)
 	var as []Alert
 	for range 24 {
-		as = append(as, Alert{Severity: "page", Team: "phoenix",
+		as = append(as, Alert{Severity: tPageWord, Team: "phoenix",
 			Alertname: "CertificateSecretWillExpireInNightly", Cluster: "glean",
 			Where: "mc", Since: since})
 	}
@@ -385,17 +389,17 @@ func TestDedupAlertsKeepsEarliestSince(t *testing.T) {
 	for _, tc := range []struct {
 		name, earlier, later string
 	}{
-		{"offsets", "2026-09-26T10:00:00+02:00", "2026-09-26T09:00:00Z"},
-		{"fractional seconds", "2026-09-26T09:00:00Z", "2026-09-26T09:00:00.1Z"},
-		{"same format", "2026-09-26T08:00:00Z", "2026-09-26T09:00:00Z"},
-		{"empty", "2026-09-26T09:00:00Z", ""},
-		{"malformed", "2026-09-26T09:00:00Z", "invalid"},
+		{"offsets", "2026-09-26T10:00:00+02:00", tFiringAt},
+		{"fractional seconds", tFiringAt, "2026-09-26T09:00:00.1Z"},
+		{"same format", "2026-09-26T08:00:00Z", tFiringAt},
+		{"empty", tFiringAt, ""},
+		{"malformed", tFiringAt, "invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, stamps := range [][2]string{{tc.earlier, tc.later}, {tc.later, tc.earlier}} {
 				alerts := []Alert{
-					{Severity: "page", Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[0]},
-					{Severity: "page", Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[1]},
+					{Severity: tPageWord, Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[0]},
+					{Severity: tPageWord, Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[1]},
 				}
 				got := dedupAlerts(alerts)
 				if len(got) != 1 {

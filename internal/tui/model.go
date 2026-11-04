@@ -122,6 +122,16 @@ type model struct {
 	quitting      bool
 }
 
+const keyDown = "down"
+
+const keyPageUp = "pgup"
+
+const keyPageDown = "pgdown"
+
+const keyHome = "home"
+
+const keyEnd = "end"
+
 // newModel builds the screen's model; Run calls it, and tests build one
 // around a fake Source.
 func newModel(src Source, opts Options) tea.Model {
@@ -375,15 +385,15 @@ func (m *model) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "k", "up":
 		m.tailBack = min(m.tailBack+1, oldest)
-	case "j", "down":
+	case "j", keyDown:
 		m.tailBack = max(m.tailBack-1, 0)
-	case "pgup":
+	case keyPageUp:
 		m.tailBack = min(m.tailBack+m.page(), oldest)
-	case "pgdown":
+	case keyPageDown:
 		m.tailBack = max(m.tailBack-m.page(), 0)
-	case "g", "home":
+	case "g", keyHome:
 		m.tailBack = oldest
-	case "G", "end":
+	case "G", keyEnd:
 		m.tailBack = 0
 	case "r":
 		return m, m.refreshCmd()
@@ -410,21 +420,21 @@ func (m *model) scrollFacts(key string) bool {
 	switch key {
 	case "k", "up":
 		v.top--
-	case "j", "down":
+	case "j", keyDown:
 		v.top++
-	case "pgup":
+	case keyPageUp:
 		v.top -= m.page()
-	case "pgdown":
+	case keyPageDown:
 		v.top += m.page()
-	case "g", "home":
+	case "g", keyHome:
 		v.top = 0
-	case "G", "end":
+	case "G", keyEnd:
 		v.top = v.limit
 	default:
 		return false
 	}
 	v.top = min(max(0, v.top), v.limit)
-	if key == "g" || key == "home" || key == "G" || key == "end" {
+	if key == "g" || key == keyHome || key == "G" || key == keyEnd {
 		return false
 	}
 	return v.top != old
@@ -532,24 +542,24 @@ func (m *model) navigate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setTab((m.tab + len(tabs) - 1) % len(tabs))
 	case "1", "2", "3", "4", "5", "6":
 		m.setTab(int(msg.String()[0] - '1'))
-	case "j", "down":
+	case "j", keyDown:
 		m.move(1, rows)
 		v.top++
 	case "k", "up":
 		m.move(-1, rows)
 		v.top--
-	case "pgdown":
+	case keyPageDown:
 		m.move(m.page(), rows)
 		v.top += m.page()
 		v.reveal = false
-	case "pgup":
+	case keyPageUp:
 		m.move(-m.page(), rows)
 		v.top -= m.page()
 		v.reveal = false
-	case "home", "g":
+	case keyHome, "g":
 		*sel = 0
 		v.top, v.reveal = 0, false
-	case "end", "G":
+	case keyEnd, "G":
 		*sel = maxRow(rows)
 		v.top, v.reveal = v.limit, false
 	}

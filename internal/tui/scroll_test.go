@@ -8,9 +8,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+const tNotesTab = "notes"
+
 func TestOverflowingSectionsReachable(t *testing.T) {
-	for _, section := range []string{"alerts", "agents", "notes", "holds"} {
-		for _, key := range []string{"j", "down", "pgdown"} {
+	for _, section := range []string{"alerts", "agents", tNotesTab, "holds"} {
+		for _, key := range []string{"j", keyDown, keyPageDown} {
 			t.Run(section+"/"+key, func(t *testing.T) {
 				d := fixtureData()
 				tab := 3
@@ -27,7 +29,7 @@ func TestOverflowingSectionsReachable(t *testing.T) {
 						d.Alerts[0].Alerts = append(d.Alerts[0].Alerts, Alert{Alertname: label})
 					case "agents":
 						d.Agents = append(d.Agents, Agent{Name: label})
-					case "notes":
+					case tNotesTab:
 						d.Notes = append(d.Notes, Note{Text: label})
 					case "holds":
 						tab = 2
@@ -62,9 +64,10 @@ func TestOverflowingSectionsReachable(t *testing.T) {
 				m.key(keyText("G"))
 				reverse := ""
 				up := "k"
-				if key == "pgdown" {
-					up = "pgup"
-				} else if key == "down" {
+				switch key {
+				case keyPageDown:
+					up = keyPageUp
+				case keyDown:
 					up = "up"
 				}
 				for range 100 {
@@ -100,8 +103,8 @@ func TestOverflowingSessionFactsReachApproval(t *testing.T) {
 	s.Approvals = []Approval{{Gist: "approval-marker"}}
 	m := newTestModel(t, &fakeSource{data: d})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	m.detail = s.Name
-	for _, key := range []string{"j", "pgdown", "G"} {
+	m.detail = s.ID
+	for _, key := range []string{"j", keyPageDown, "G"} {
 		m.facts = viewport{}
 		seen := ""
 		for range 80 {
@@ -133,7 +136,7 @@ func TestOverflowingFactsPreserveTranscriptNavigation(t *testing.T) {
 		d.Sessions[0].Commands = append(d.Sessions[0].Commands, Command{Args: "work"})
 	}
 	m := newTestModel(t, &fakeSource{data: d})
-	m.detail = d.Sessions[0].Name
+	m.detail = d.Sessions[0].ID
 	m.tail = []Turn{{Text: "older"}, {Text: "newer"}}
 	m.tailState = 2
 	m.key(keyText("k"))
