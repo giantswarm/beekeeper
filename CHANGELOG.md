@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
 - Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
 
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
