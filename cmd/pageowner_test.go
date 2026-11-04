@@ -397,3 +397,5 @@ func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
 		})
 	}
 }
+
+const legacyPageFingerprintPrefix = "fp1@"
