@@ -282,6 +282,17 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
 		return
 	}
+	if strings.EqualFold(f.t.Wake, "the guide") {
+		h := guideRole.get(st).Holder
+		if h == nil {
+			w.emitNow("timer", "TIMER WAKE FAILED: #%d: no session holds the guide role", f.t.ID)
+			return
+		}
+		f.t.Wake = h.Session
+		if f.t.Wake == "" {
+			f.t.Wake = h.Name
+		}
+	}
 	if p := wakeTargetPark(st, f.t.Wake); p != nil && !timerSettlesPark(f.t, p, w.cfg.Guide.Person) {
 		w.emitNow("timer", "TIMER WAKE SKIPPED: #%d for %q: %s; its current wake condition has not fired", f.t.ID, f.t.Wake, parkedText(p, w.now))
 		return

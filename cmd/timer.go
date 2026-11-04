@@ -41,7 +41,8 @@ the watch checks it every --every (5m) and fires the timer once it holds,
 within one tick; a condition that has not held for a day is one watch
 line (TIMER STUCK) and the timer keeps waiting. --until ends the wait: past it the timer fires as timed
 out, or with --expire closes unfired with one line. --wake names the agent
-the firing wakes with the timer's text (as agents wake does); --run runs a
+the firing wakes with the timer's text (as agents wake does). "the guide"
+resolves to the current role holder when the timer fires; --run runs a
 shell command instead, its output in timers/<id>.log of the state
 directory and its exit code logged (timer.ran). Without either the watch's
 line says it. A timer with a condition, --wake or --run closes when it
@@ -119,7 +120,7 @@ and once one failed, so it never fires on red.`,
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
 	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
 	f.BoolVar(&spec.expire, "expire", false, "at --until close the timer unfired instead")
-	f.StringVar(&spec.wake, "wake", "", "the registered agent the firing wakes with the timer's text")
+	f.StringVar(&spec.wake, "wake", "", `the registered agent or "the guide" the firing wakes with the timer's text`)
 	f.StringVar(&spec.run, "run", "", "a shell command the firing runs, its exit code logged")
 	f.StringVar(&spec.repeat, "repeat", "", "re-arm a --wake or --run timer at the same local time: daily, weekdays or weekly")
 	add.MarkFlagsMutuallyExclusive("when", "probe")
@@ -306,6 +307,13 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 		t.Due = t.Next(t.Due)
 	}
 	if q := strings.TrimSpace(spec.wake); q != "" {
+		switch strings.ToLower(q) {
+		case "the supervisor":
+			return t, errSupervisorMessage
+		case "the guide":
+			t.Wake = "the guide"
+			return t, nil
+		}
 		st, err := a.store.Read()
 		if err != nil {
 			return t, err
