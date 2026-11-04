@@ -9,8 +9,12 @@ import (
 
 const scheduleSupervisor = "Supervisor"
 
+const scheduleFrom = "35.0.1"
+
+const scheduleTo = "35.2.0"
+
 func TestDueScheduleUsesScheduledRelease(t *testing.T) {
-	const next = "35.2.0"
+	const next = scheduleTo
 	for _, age := range []time.Duration{10 * time.Minute, 50 * time.Hour} {
 		t.Run(age.String(), func(t *testing.T) {
 			objs := withMC(t, "0843-after", map[string]string{
@@ -30,7 +34,7 @@ func TestDueScheduleUsesScheduledRelease(t *testing.T) {
 }
 
 func TestDueScheduleReholdsLiftedUpgrade(t *testing.T) {
-	const next = "35.2.0"
+	const next = scheduleTo
 	st := &state.State{}
 	Reconcile(st, prod, []Upgrade{{Cluster: "mc", To: to}}, at.Add(-10*time.Minute), watch)
 	if !Lift(st, HoldTarget(prod, "mc"), state.Party{Name: scheduleSupervisor}, at.Add(-5*time.Minute)) {
@@ -54,13 +58,13 @@ func TestDueScheduleReholdsLiftedUpgrade(t *testing.T) {
 
 func TestReleaseChangePrecedesDueSchedule(t *testing.T) {
 	objs := withMC(t, "0821-changed", map[string]string{
-		scheduleRelease: "35.2.0", scheduleTime: stamp(time.Minute),
+		scheduleRelease: scheduleTo, scheduleTime: stamp(time.Minute),
 	})
 	ups := Detect(objs, at, func(string) bool { return false })
 	if len(ups) != 1 {
 		t.Fatalf("upgrades %+v", ups)
 	}
-	if u := ups[0]; u.From != "35.0.1" || u.To != to {
+	if u := ups[0]; u.From != scheduleFrom || u.To != to {
 		t.Errorf("the due schedule hid an observed release change: %+v", u)
 	}
 }

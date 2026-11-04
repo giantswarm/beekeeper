@@ -34,6 +34,8 @@ const (
 	orgCluster = "org-mc/mc"
 )
 
+const nsFirst = "ns-a"
+
 func objects(t *testing.T, phase string) []Object {
 	t.Helper()
 	var objs []Object
@@ -469,7 +471,7 @@ func TestStale(t *testing.T) {
 }
 
 func TestNamespacedHolds(t *testing.T) {
-	a := Upgrade{Namespace: "ns-a", Cluster: nsCluster, To: "2"}
+	a := Upgrade{Namespace: nsFirst, Cluster: nsCluster, To: "2"}
 	b := Upgrade{Namespace: nsSecond, Cluster: nsCluster, To: "2"}
 	st := &state.State{}
 	Reconcile(st, prod, []Upgrade{a}, at, watch)
@@ -568,7 +570,7 @@ func TestWithHoldVersions(t *testing.T) {
 
 func duplicateClusters() []Object {
 	var objs []Object
-	for _, ns := range []string{"ns-a", nsSecond} {
+	for _, ns := range []string{nsFirst, nsSecond} {
 		c := Object{Kind: kindCluster}
 		c.Metadata.Namespace, c.Metadata.Name = ns, nsCluster
 		c.Metadata.Labels = map[string]string{releaseLabel: "2"}
@@ -585,11 +587,11 @@ func TestNamespacedRolloutLookup(t *testing.T) {
 		objs[i].Metadata.Annotations = nil
 	}
 	st := &state.State{}
-	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: nsCluster, To: "2"}}, at, watch)
+	Reconcile(st, prod, []Upgrade{{Namespace: nsFirst, Cluster: nsCluster, To: "2"}}, at, watch)
 	Lift(st, HoldTarget(prod, "ns-a/dev"), watch, at)
 	held := HeldClusters(st, at)
 	ups := Detect(objs, at, func(c string) bool { return held(prod, c) })
-	if len(ups) != 1 || ups[0].Namespace != "ns-a" || !ups[0].Rolling {
+	if len(ups) != 1 || ups[0].Namespace != nsFirst || !ups[0].Rolling {
 		t.Fatalf("rollout attributed to wrong namespace: %+v", ups)
 	}
 }
@@ -615,7 +617,7 @@ func TestNamespacedReaderEventLookup(t *testing.T) {
 	}
 	exe, log := fakeKubectl(t, dir)
 	st := &state.State{}
-	Reconcile(st, prod, []Upgrade{{Namespace: "ns-a", Cluster: nsCluster, To: "2"}}, at, watch)
+	Reconcile(st, prod, []Upgrade{{Namespace: nsFirst, Cluster: nsCluster, To: "2"}}, at, watch)
 	r := Reader{Kubectl: exe, Timeout: 10 * time.Second}
 	ss := r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, HeldClusters(st, at))
 	if len(ss[0].Upgrades) != 2 {

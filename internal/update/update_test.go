@@ -689,7 +689,7 @@ func TestRunExactReleaseCandidate(t *testing.T) {
 				if err != nil || !res.Updated || string(validator.bundle) != installBundle {
 					t.Fatalf("install = %+v, %v", res, err)
 				}
-				got, err := os.ReadFile(exe)
+				got, err := os.ReadFile(exe) //nolint:gosec // a path of this test
 				if err != nil || string(got) != newBinary {
 					t.Fatalf("installed = %q, %v", got, err)
 				}

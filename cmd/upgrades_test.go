@@ -369,15 +369,15 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
-	kubectl, _ := upgradeKubectl(t, dir, "prod")
+	kubectl, _ := upgradeKubectl(t, dir, snapshotInstallation)
 	a.cfg.Alerts.Kubectl = kubectl
-	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
 	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
 	w := a.newWatcher(false, false)
 	w.clock = clk
 	phase(t, dir, "0827-during")
 	w.upgradeCycle(context.Background())
-	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\nkill -KILL $$\n"), 0700); err != nil {
+	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\nkill -KILL $$\n"), 0700); err != nil { //nolint:gosec // a path of this test
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -387,10 +387,10 @@ func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 	if !strings.Contains(out.String(), "reader failed 2 consecutive ticks: signal: killed (deadline 2m0s") {
 		t.Fatalf("no failure streak: %s", out.String())
 	}
-	upgradeKubectl(t, dir, "prod")
+	upgradeKubectl(t, dir, snapshotInstallation)
 	clk.now = clk.now.Add(time.Minute)
 	w.upgradeCycle(context.Background())
-	if w.upgradeFailures["prod"] != 0 {
+	if w.upgradeFailures[snapshotInstallation] != 0 {
 		t.Fatalf("failure streak not reset: %v", w.upgradeFailures)
 	}
 }
@@ -403,11 +403,11 @@ if [ "$1" = config ]; then echo prod; exit; fi
 if [ ! -f "$0.once" ]; then touch "$0.once"; kill -KILL $$; fi
 echo '{"items":[]}'
 `
-	if err := os.WriteFile(exe, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(exe, []byte(script), 0700); err != nil { //nolint:gosec // a path of this test
 		t.Fatal(err)
 	}
 	a.cfg.Alerts.Kubectl = exe
-	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
 	w := a.newWatcher(false, false)
 	w.upgradeCycle(context.Background())
 	if strings.Contains(out.String(), "unreadable") || w.failed.Load() != 0 {
@@ -447,4 +447,4 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 	}
 }
 
-const snapshotInstallation = "prod"
+const snapshotInstallation = snapshotInstallation

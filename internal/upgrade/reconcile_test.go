@@ -9,10 +9,14 @@ import (
 
 const reconcileSupervisor = "Supervisor"
 
+const reconcileFrom = "35.0.1"
+
+const reconcileTo = "35.2.0"
+
 func TestReconcileReplacesActiveUpgrade(t *testing.T) {
 	st := &state.State{}
-	Reconcile(st, prod, []Upgrade{{Cluster: "mc", From: "35.0.1", To: to}}, at.Add(-23*time.Hour), watch)
-	next := Upgrade{Cluster: "mc", From: to, To: "35.2.0"}
+	Reconcile(st, prod, []Upgrade{{Cluster: "mc", From: reconcileFrom, To: to}}, at.Add(-23*time.Hour), watch)
+	next := Upgrade{Cluster: "mc", From: to, To: reconcileTo}
 	begun, ended := Reconcile(st, prod, []Upgrade{next}, at, watch)
 	if len(begun) != 1 || len(ended) != 1 || len(st.Holds) != 1 {
 		t.Fatalf("a different upgrade kept the previous active hold: begun %+v, ended %+v, holds %+v", begun, ended, st.Holds)

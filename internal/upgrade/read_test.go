@@ -22,12 +22,12 @@ func TestReaderRetryAndCauses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exe := filepath.Join(t.TempDir(), "kubectl")
-			if err := os.WriteFile(exe, []byte("#!/bin/sh\necho attempt >> \"$0.calls\"\n"+tc.script+"\n"), 0700); err != nil {
+			if err := os.WriteFile(exe, []byte("#!/bin/sh\necho attempt >> \"$0.calls\"\n"+tc.script+"\n"), 0700); err != nil { //nolint:gosec // a path of this test
 				t.Fatal(err)
 			}
 			r := Reader{Kubectl: exe, Timeout: tc.timeout}
 			s := r.Read(context.Background(), []Target{{Name: "test", Context: "test"}}, time.Now(), func(string, string) bool { return false })[0]
-			calls, err := os.ReadFile(exe + ".calls")
+			calls, err := os.ReadFile(exe + ".calls") //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
