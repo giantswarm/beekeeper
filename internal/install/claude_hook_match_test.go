@@ -12,8 +12,10 @@ import (
 
 const hookMatchExe = "/opt/desk tools/beekeeper"
 
+const hookMatchQuotedExe = "/opt/desk's tools/beekeeper"
+
 func TestClaudeInstallsGuardWithQuotedOrRenamedBinary(t *testing.T) {
-	for _, exe := range []string{hookMatchExe, "/opt/desk's tools/beekeeper", "/opt/bin/bk"} {
+	for _, exe := range []string{hookMatchExe, hookMatchQuotedExe, "/opt/bin/bk"} {
 		t.Run(exe, func(t *testing.T) {
 			e, _ := env(t, t.TempDir(), platform.Stub().Setup, nil)
 			e.Exe, e.Spec.Exe = exe, exe

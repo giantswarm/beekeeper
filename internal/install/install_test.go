@@ -1055,7 +1055,7 @@ func TestAgyHooksUnguarded(t *testing.T) {
 }
 
 func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
-	for _, exe := range []string{"/opt/plain/beekeeper", "/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+	for _, exe := range []string{"/opt/plain/beekeeper", "/opt/desk tools/beekeeper", hookMatchQuotedExe} {
 		t.Run(exe, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "hooks.json")
 			raw := AgyHook(exe)
@@ -1595,7 +1595,7 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 }
 
 func TestCodexRepairsQuotedHook(t *testing.T) {
-	for _, exe := range []string{"/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+	for _, exe := range []string{"/opt/desk tools/beekeeper", hookMatchQuotedExe} {
 		for _, format := range []string{"--format codex", "--format=codex"} {
 			t.Run(exe+"/"+format, func(t *testing.T) {
 				home := t.TempDir()
