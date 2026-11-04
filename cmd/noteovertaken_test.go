@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const overtakenRepo = "o/r"
+
 const (
 	refOne  = "o/r#1"
 	refTwo  = "o/r#2"
@@ -428,9 +430,9 @@ func TestNoteOvertakenOnlyByMergeAfterItWasAdded(t *testing.T) {
 				statusQuo = "The referenced PR is merged."
 			}
 			refStates = func(_ context.Context, _ []github.PR) (map[github.PR]github.RefState, error) {
-				return map[github.PR]github.RefState{{Repo: "o/r", N: 1}: {Kind: github.RefPullRequest, State: current, MergedAt: merged}}, nil
+				return map[github.PR]github.RefState{{Repo: overtakenRepo, N: 1}: {Kind: github.RefPullRequest, State: current, MergedAt: merged}}, nil
 			}
-			setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: "reviewer", Text: "Does this change need a decision?", StatusQuo: statusQuo, At: tc.added, TaskEnded: tc.ended, Refs: []string{refOne}})
+			setNotes(t, w, state.Note{ID: 1, Kind: noteDecision, For: "note reader", Text: "Does this change need a decision?", StatusQuo: statusQuo, At: tc.added, TaskEnded: tc.ended, Refs: []string{refOne}})
 			// A note against an open PR stays open until the merge.
 			w.pending(context.Background(), nil)
 			if len(openIDs(t, w)) != 1 {
