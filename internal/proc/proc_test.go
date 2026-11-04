@@ -1,10 +1,12 @@
 package proc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestParseStat(t *testing.T) {
@@ -103,5 +105,81 @@ func TestNamedFindsTheCallersProcessesByComm(t *testing.T) {
 	}
 	if got := namedAt(root, "go", os.Getuid()+1); len(got) != 0 {
 		t.Errorf("namedAt another uid = %v, want none", got)
+	}
+}
+
+func TestMissingReason(t *testing.T) {
+	tb := &Table{readErrors: map[int]error{
+		1: &os.PathError{Op: "open", Path: "private", Err: os.ErrPermission},
+		2: os.ErrNotExist,
+		3: errors.New("malformed stat"),
+	}}
+	for pid, want := range map[int]string{
+		1: "not visible to the caller (permission denied)",
+		2: "not found or not visible in the caller's process namespace",
+		3: "could not read process information",
+		4: "not found or not visible in the caller's process namespace",
+	} {
+		if got := tb.MissingReason(pid); got != want {
+			t.Errorf("PID %d: %q, want %q", pid, got, want)
+		}
+	}
+}
+
+func TestReadRetainsProcessReadFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "stat"), []byte("btime 100\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "42"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "42", "stat"), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tb, err := ReadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tb.Process(42) != nil || tb.MissingReason(42) != "could not read process information" {
+		t.Fatalf("unreadable process: %+v", tb)
+	}
+}
+
+func TestReadProcessWithoutCmdlinePermission(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "42")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := "42 (sleep) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 0 0 1 0 100 0 1"
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte("private"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readProcess(root, 42, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Comm != "sleep" || len(p.Args) != 0 {
+		t.Fatalf("process = %+v", p)
+	}
+	if err := os.WriteFile(filepath.Join(root, "stat"), []byte("btime 100\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "stat"), 0); err != nil {
+		t.Fatal(err)
+	}
+	tb, err := ReadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tb.Process(42) != nil || tb.MissingReason(42) != "not visible to the caller (permission denied)" {
+		t.Fatalf("permission failure: %+v", tb)
 	}
 }
