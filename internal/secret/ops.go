@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
@@ -461,21 +462,15 @@ func kubectlExec(argv []string) error {
 	if len(argv) < 2 || argv[1] != "exec" || dash < 0 {
 		return fmt.Errorf("%q: kubectl takes a value only as kubectl exec -i --context <context> <pod> -- <command>", cmd)
 	}
-	stdin := false
-	for _, a := range argv[2:dash] {
-		switch {
-		case a == "-i", a == "--stdin", a == "--stdin=true":
-			stdin = true
-		case a == "-t", a == "--tty", strings.HasPrefix(a, "--tty="), strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 2 && strings.ContainsAny(a[1:], "it"):
-			return fmt.Errorf("%q: no TTY and no combined short flags, a TTY echoes stdin: kubectl exec -i", cmd)
-		case a == "-v", a == "--v", strings.HasPrefix(a, "-v="), strings.HasPrefix(a, "--v="):
-			return fmt.Errorf("%q: no verbosity, kubectl's request log stays off", cmd)
-		}
+	context, stdin, err := kubectlInput(argv)
+	if err != nil {
+		return err
 	}
+
 	switch {
 	case !stdin:
 		return fmt.Errorf("%q: the value goes on the exec stream, kubectl exec -i", cmd)
-	case ConsumerContext(argv) == "":
+	case context == "":
 		return fmt.Errorf("%q: name the cluster, --context <context>", cmd)
 	case dash+1 == len(argv) || !stdinReader(argv[dash+1:]) && !valkeyCLI(argv[dash+1:]):
 		return fmt.Errorf("%q: the command in the pod reads the value on stdin: %s, %s", cmd, stdinReaders, podReaders)
@@ -486,22 +481,66 @@ func kubectlExec(argv []string) error {
 // ConsumerContext is the kube context a kubectl exec consumer names, ""
 // for any other consumer.
 func ConsumerContext(argv []string) string {
-	if len(argv) < 2 || filepath.Base(argv[0]) != "kubectl" {
+	context, _, err := kubectlInput(argv)
+	if err != nil {
 		return ""
+	}
+	return context
+}
+
+// kubectlInput parses the supported exec flags once for both validation and
+// context inspection. Unknown flags and flag-looking values are refused;
+// they cannot consume a later context flag behind the production check.
+func kubectlInput(argv []string) (string, bool, error) {
+	if len(argv) < 2 || filepath.Base(argv[0]) != "kubectl" || argv[1] != "exec" {
+		return "", false, nil
 	}
 	end := slices.Index(argv, "--")
 	if end < 0 {
-		end = len(argv)
+		return "", false, errors.New("kubectl exec: separate the pod command with --")
 	}
-	for i, a := range argv[:end] {
-		if a == "--context" && i+1 < end {
-			return argv[i+1]
+	context, stdin := "", false
+	for i := 2; i < end; i++ {
+		arg := argv[i]
+		if !strings.HasPrefix(arg, "-") {
+			continue
 		}
-		if c, ok := strings.CutPrefix(a, "--context="); ok {
-			return c
+		flag, value, equals := strings.Cut(arg, "=")
+		switch flag {
+		case "-i", "--stdin", "-q", "--quiet", "--disable-compression", "--insecure-skip-tls-verify", "--match-server-version", "--warnings-as-errors":
+			enabled := true
+			if equals {
+				var err error
+				enabled, err = strconv.ParseBool(value)
+				if err != nil {
+					return "", false, fmt.Errorf("kubectl exec: invalid boolean for %s", flag)
+				}
+			}
+			if flag == "-i" || flag == "--stdin" {
+				stdin = enabled
+			}
+		case "--context", "-n", "--namespace", "-c", "--container", "--kubeconfig", "--cluster", "--user", "-s", "--server", "--request-timeout", "--pod-running-timeout", "--as", "--as-group", "--as-uid", "--cache-dir", "--certificate-authority", "--client-certificate", "--client-key", "--tls-server-name", "--profile", "--profile-output":
+			if !equals {
+				i++
+				if i >= end {
+					return "", false, fmt.Errorf("kubectl exec: %s requires a value", flag)
+				}
+				value = argv[i]
+			}
+			if value == "" || strings.HasPrefix(value, "-") {
+				return "", false, fmt.Errorf("kubectl exec: ambiguous value for %s", flag)
+			}
+			if flag == "--context" {
+				if context != "" {
+					return "", false, errors.New("kubectl exec: name --context only once")
+				}
+				context = value
+			}
+		default:
+			return "", false, fmt.Errorf("kubectl exec: unsupported flag %s; use separate flags without TTY or verbosity", flag)
 		}
 	}
-	return ""
+	return context, stdin, nil
 }
 
 // Stdin shapes what a consumer reads: the value alone, or with Field set,
