@@ -46,6 +46,9 @@ func TestReadPreservesAncestorHoldsWithANarrowOrder(t *testing.T) {
 			c := &Client{Board: config.Board{Owner: "o", Project: 7, Team: "X", Order: []config.BoardStep{{Name: "work", Status: []string{inProgress}}}}}
 			c.GH = func(_ context.Context, args ...string) ([]byte, error) {
 				checkSelectionSchema(t, args)
+				if strings.Contains(args[3], "closedByPullRequestsReferences") {
+					return []byte(`{"data":{}}`), nil
+				}
 				if strings.Contains(args[3], "fields(first:50)") {
 					return []byte(largeMeta), nil
 				}

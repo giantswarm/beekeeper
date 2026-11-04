@@ -11,15 +11,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const signBlobVerb = "sign-blob"
+
 func TestCosignRetry(t *testing.T) {
 	for _, tc := range []struct {
 		name, verb, failure   string
 		failures, calls, code int
 	}{
-		{"success", "sign-blob", "", 0, 1, 0},
-		{"recover", "sign-blob", "failed to fetch conflicting entry: getLogEntryByUuidNotFound", 2, 3, 0},
-		{"exhausted", "sign-blob", "getLogEntryByUuidNotFound", 9, 4, 7},
-		{"permanent", "sign-blob", "permission denied", 9, 1, 7},
+		{"success", signBlobVerb, "", 0, 1, 0},
+		{"recover", signBlobVerb, "failed to fetch conflicting entry: getLogEntryByUuidNotFound", 2, 3, 0},
+		{"exhausted", signBlobVerb, "getLogEntryByUuidNotFound", 9, 4, 7},
+		{"permanent", signBlobVerb, "permission denied", 9, 1, 7},
 		{"verification", "verify-blob", "getLogEntryByUuidNotFound", 9, 1, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,8 +47,8 @@ echo success-diagnostic >&2
 			if err := os.Chmod(stub, 0o700); err != nil { //nolint:gosec // executable test stub in a private temporary directory
 				t.Fatal(err)
 			}
-			cmd := exec.Command("bash", "../../.circleci/cosign-retry.sh", tc.verb, "--bundle", "bundle path", "binary path")
-			cmd.Env = append(os.Environ(), "BEEKEEPER_COSIGN_BINARY="+stub, "BEEKEEPER_COSIGN_BACKOFF_SECONDS=0", "COUNT_FILE="+filepath.Join(dir, "count"), "FAILURE="+tc.failure, "FAILURES="+strconv.Itoa(tc.failures))
+			cmd := exec.Command("bash", "../../.circleci/cosign-retry.sh", tc.verb, "--bundle", "bundle path", "binary path") //nolint:gosec // a path of this test
+			cmd.Env = append(os.Environ(), "BASH_ENV=", "BEEKEEPER_COSIGN_BINARY="+stub, "BEEKEEPER_COSIGN_BACKOFF_SECONDS=0", "COUNT_FILE="+filepath.Join(dir, "count"), "FAILURE="+tc.failure, "FAILURES="+strconv.Itoa(tc.failures))
 			out, err := cmd.CombinedOutput()
 			code := 0
 			if err != nil {
@@ -56,7 +58,7 @@ echo success-diagnostic >&2
 					t.Fatal(err)
 				}
 			}
-			count, readErr := os.ReadFile(filepath.Join(dir, "count"))
+			count, readErr := os.ReadFile(filepath.Join(dir, "count")) //nolint:gosec // a path of this test
 			if code != tc.code || readErr != nil || strings.TrimSpace(string(count)) != strconv.Itoa(tc.calls) {
 				t.Fatalf("code=%d calls=%s read=%v output=%s", code, count, readErr, out)
 			}
@@ -94,6 +96,7 @@ func TestGoBuildInstallsCosignRetry(t *testing.T) {
 		dir := t.TempDir()
 		// Run the actual installation step, isolated from the machine's cosign.
 		command := strings.ReplaceAll(step["command"].(string), "/tmp/beekeeper-cosign-bin", filepath.Join(dir, "bin"))
+		//nolint:gosec // the step under test, read from this repository
 		cmd := exec.Command("bash", "-eu", "-c", command+`source "$BASH_ENV"
 test "$(command -v cosign)" = "$EXPECTED_WRAPPER"
 cosign --version

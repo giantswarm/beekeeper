@@ -313,7 +313,7 @@ func TestMixedCaseBrowserPopupLifecycle(t *testing.T) {
 			if f.windows[1].Workspace != surface || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 || f.monitors[0] != laptop {
 				t.Fatalf("during redirect: windows %+v, monitors %+v", f.windows, f.monitors)
 			}
-			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || f.redirect || len(f.monitors) != 1 {
+			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || f.redirect || len(f.monitors) != 2 {
 				t.Fatalf("Restore = %v, %+v, redirect %v, monitors %+v", err, s, f.redirect, f.monitors)
 			}
 			if f.windows[0] != start || f.windows[1].Workspace != music || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 {

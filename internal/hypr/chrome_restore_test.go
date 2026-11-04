@@ -48,7 +48,7 @@ func TestRestoreWaitsForRedirectShutdown(t *testing.T) {
 					t.Fatalf("retry Redirect off = %v, active %v", err, f.redirect)
 				}
 			}
-			if err := s.Restore(t.Context(), f.ctl); err != nil || f.redirect || len(f.monitors) != 1 || s.Left != "" || s.Opened != 1 {
+			if err := s.Restore(t.Context(), f.ctl); err != nil || f.redirect || len(f.monitors) != 2 || s.Left != "" || s.Opened != 1 {
 				t.Fatalf("retry Restore = %v, placement %+v, monitors %+v, redirect %v", err, s, f.monitors, f.redirect)
 			}
 			for _, w := range f.windows {
