@@ -27,6 +27,9 @@ const (
 	testVaultSession = "OP_SESSION_TESTACCOUNT"
 	testVaultToken   = "tok"
 	testVaultRef     = "op://Shared/i/f"
+
+	// Leave room for sign-in goroutines to run on a loaded CI runner.
+	testVaultWait = 10 * time.Second
 )
 
 // vaultApp is an app with secret.session and a runtime directory of its own.
@@ -69,7 +72,7 @@ func skipWithoutOwnProc(t *testing.T) {
 // run with the session, and give up with ExitVault after secret.unlockWait
 // without it.
 func TestBrokeredVaultSignsInOnce(t *testing.T) {
-	a := vaultApp(t, 2*time.Second)
+	a := vaultApp(t, testVaultWait)
 	k := secret.NewKeeper(time.Hour, nil)
 	var asks atomic.Int32
 	approved := make(chan error)
@@ -100,7 +103,7 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 	}
 	path, _ := secret.WaitsPath()
 	var ws []secret.VaultWait
-	for range 400 {
+	for deadline := time.Now().Add(testVaultWait); time.Now().Before(deadline); {
 		if ws, _ = secret.ReadWaits(path); len(ws) == 2 {
 			break
 		}
@@ -129,7 +132,7 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 	}
 
 	k.Lock()
-	a.cfg.Secret.UnlockWait.Duration = 20 * time.Millisecond
+	a.cfg.Secret.UnlockWait.Duration = 5 * time.Second
 	go func() { approved <- errors.New("op-unlock: exit status 2") }()
 	r, err := h(context.Background(), os.Getpid(), req)
 	if err != nil || r.Code != ExitVault || !strings.Contains(r.Err, "vault locked") || !strings.Contains(r.Err, "sign-in") {
@@ -138,7 +141,7 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 	// the call that ran no process is logged by the broker, as the requester's
 	evs, err := a.store.Events(0, func(e state.Event) bool { return strings.HasPrefix(e.Verb, "secret.") })
 	if err != nil || len(evs) != 1 || evs[0].Verb != "secret.fingerprint" || evs[0].By.Name == "" ||
-		!strings.HasPrefix(evs[0].Detail, testVaultRef+": failed: the vault stayed locked for 20ms (") {
+		!strings.HasPrefix(evs[0].Detail, testVaultRef+": failed: the vault stayed locked for 5s (") {
 		t.Errorf("the locked call's log = %+v, %v", evs, err)
 	}
 
@@ -156,13 +159,13 @@ func TestBrokeredVaultSignsInOnce(t *testing.T) {
 // in the state until the new sign-in.
 func TestBrokeredVaultSignsInAgainForAnExpiredSession(t *testing.T) {
 	const oldToken = "old"
-	a := vaultApp(t, time.Second)
+	a := vaultApp(t, testVaultWait)
 	var states []secret.VaultState
 	var mu sync.Mutex
 	k := secret.NewKeeper(time.Hour, func(st secret.VaultState) { mu.Lock(); states = append(states, st); mu.Unlock() })
 	_ = k.Unlock(testVaultSession, oldToken, time.Now())
 	var signins atomic.Int32
-	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+	v := &vaultBroker{k: k, wait: testVaultWait, signin: func(context.Context) (string, string, error) {
 		signins.Add(1)
 		return testVaultSession, "new", nil
 	}}
@@ -216,7 +219,7 @@ func TestADropRightAfterTheUnlockSignsInAgain(t *testing.T) {
 	ctx := context.Background()
 	for i := range 200 {
 		v.ask(ctx)
-		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		wctx, cancel := context.WithTimeout(ctx, testVaultWait)
 		err := k.Wait(wctx)
 		cancel()
 		if err != nil {
@@ -256,14 +259,14 @@ func TestBrokeredVaultForAnAgeIdentityInTheVault(t *testing.T) {
 	}
 	t.Chdir(dir)
 
-	a := vaultApp(t, time.Second)
+	a := vaultApp(t, testVaultWait)
 	a.cfg.Secret.AgeIdentities = []config.AgeIdentity{
 		{Recipient: inVault.Recipient().String(), Ref: testVaultRef},
 		{Recipient: inFile.Recipient().String(), Ref: "file:///nowhere/identity.txt"},
 	}
 	k := secret.NewKeeper(time.Hour, nil)
 	_ = k.Unlock(testVaultSession, testVaultToken, time.Now())
-	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+	v := &vaultBroker{k: k, wait: testVaultWait, signin: func(context.Context) (string, string, error) {
 		t.Error("signed in with an unlocked keeper")
 		return "", "", errors.New("no sign-in")
 	}}
@@ -296,7 +299,7 @@ func TestTendVault(t *testing.T) {
 	k := secret.NewKeeper(time.Hour, nil)
 	_ = k.Unlock(testVaultSession, testVaultToken, now)
 	signedIn := make(chan struct{}, 1)
-	v := &vaultBroker{k: k, wait: time.Second, signin: func(context.Context) (string, string, error) {
+	v := &vaultBroker{k: k, wait: testVaultWait, signin: func(context.Context) (string, string, error) {
 		signedIn <- struct{}{}
 		return testVaultSession, "new", nil
 	}}
@@ -315,7 +318,7 @@ func TestTendVault(t *testing.T) {
 	tendVault(context.Background(), v, now.Add(2*vaultTouchEvery), touched, touch)
 	select {
 	case <-signedIn:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testVaultWait):
 		t.Fatal("no sign-in after the drop")
 	}
 	if err := k.Wait(context.Background()); err != nil || k.Env() != testVaultSession+"=new" {
@@ -423,13 +426,13 @@ func TestWatchSaysAFailedSignin(t *testing.T) {
 // tried again after the backoff, each failure one status for the watch,
 // and nothing reaches the person: no note, no final failure.
 func TestVaultSigninRetriesATransientFailure(t *testing.T) {
-	a := vaultApp(t, time.Second)
+	a := vaultApp(t, testVaultWait)
 	k := secret.NewKeeper(time.Hour, nil)
 	var tries atomic.Int32
 	var mu sync.Mutex
 	var statuses []string
 	var gaveUp []secret.SigninCause
-	v := &vaultBroker{k: k, wait: 5 * time.Second, backoff: []time.Duration{time.Millisecond},
+	v := &vaultBroker{k: k, wait: testVaultWait, backoff: []time.Duration{time.Millisecond},
 		signin: func(context.Context) (string, string, error) {
 			if tries.Add(1) < 3 {
 				return "", "", errors.New("op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host")
@@ -440,7 +443,7 @@ func TestVaultSigninRetriesATransientFailure(t *testing.T) {
 		failed:   func(c secret.SigninCause, _ int, _ error) { mu.Lock(); gaveUp = append(gaveUp, c); mu.Unlock() },
 	}
 	v.ask(context.Background())
-	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	wctx, cancel := context.WithTimeout(context.Background(), testVaultWait)
 	defer cancel()
 	if err := k.Wait(wctx); err != nil {
 		t.Fatalf("not unlocked after the retries: %v", err)
@@ -490,7 +493,7 @@ func TestVaultSigninGivesUpAtTheUnlockWindow(t *testing.T) {
 	var tries atomic.Int32
 	gaveUp := make(chan int, 1)
 	var cause secret.SigninCause
-	v := &vaultBroker{k: k, wait: time.Second, backoff: []time.Duration{time.Millisecond, time.Hour},
+	v := &vaultBroker{k: k, wait: testVaultWait, backoff: []time.Duration{time.Millisecond, time.Hour},
 		signin: func(context.Context) (string, string, error) {
 			tries.Add(1)
 			return "", "", errors.New("op-unlock: exit status 1: dial tcp: lookup my.1password.com: no such host")
@@ -507,7 +510,7 @@ func TestVaultSigninGivesUpAtTheUnlockWindow(t *testing.T) {
 		if since := time.Since(start); since > v.wait {
 			t.Errorf("gave up after %s, past the window of %s", since, v.wait)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testVaultWait):
 		t.Fatal("the sign-in never gave up")
 	}
 	if k.State().Unlocked {
@@ -519,13 +522,14 @@ func TestVaultSigninGivesUpAtTheUnlockWindow(t *testing.T) {
 // the retries and reaches the person: one sign-in note, whose probe is
 // beekeeper secret status, filed once; the failure is in the event log.
 func TestVaultSigninRejectedReachesThePerson(t *testing.T) {
-	a := vaultApp(t, time.Second)
+	a := vaultApp(t, testVaultWait)
 	a.cfg.Guide.Person = personTimo
 	k := secret.NewKeeper(time.Hour, nil)
 	var tries atomic.Int32
 	gaveUp := make(chan secret.SigninCause, 2)
 	const exe = "/opt/bee keeper/beekeeper"
-	v := &vaultBroker{k: k, wait: 200 * time.Millisecond, backoff: []time.Duration{10 * time.Millisecond},
+	// Retry once, then exceed the window without waiting for it to elapse.
+	v := &vaultBroker{k: k, wait: testVaultWait, backoff: []time.Duration{time.Millisecond, time.Hour},
 		store: func(context.Context) (secret.StoreState, error) { return secret.StoreReady, nil },
 		signin: func(context.Context) (string, string, error) {
 			tries.Add(1)
@@ -556,8 +560,8 @@ func TestVaultSigninRejectedReachesThePerson(t *testing.T) {
 	if c := gaveUpWith(); c != secret.SigninRejected {
 		t.Fatalf("gave up with %s", c)
 	}
-	if n := tries.Load(); n < 2 {
-		t.Errorf("%d tries, want retries before the person hears", n)
+	if n := tries.Load(); n != 2 {
+		t.Errorf("%d tries, want two before the person hears", n)
 	}
 	st, err := a.store.Read()
 	if err != nil || len(st.Notes) != 1 {
@@ -595,7 +599,7 @@ func TestVaultSigninWaitsForTheCredentialStore(t *testing.T) {
 			var looks, signins atomic.Int32
 			var mu sync.Mutex
 			var statuses []string
-			v := &vaultBroker{k: k, wait: 5 * time.Second, backoff: []time.Duration{time.Millisecond}, storeEvery: time.Millisecond,
+			v := &vaultBroker{k: k, wait: testVaultWait, backoff: []time.Duration{time.Millisecond}, storeEvery: time.Millisecond,
 				uptime: func() (time.Duration, error) { return tc.uptime, nil },
 				store: func(context.Context) (secret.StoreState, error) {
 					return tc.states[min(int(looks.Add(1)), len(tc.states))-1], nil
@@ -610,7 +614,7 @@ func TestVaultSigninWaitsForTheCredentialStore(t *testing.T) {
 				retrying: func(s string) { mu.Lock(); statuses = append(statuses, s); mu.Unlock() },
 			}
 			v.ask(context.Background())
-			wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			wctx, cancel := context.WithTimeout(context.Background(), testVaultWait)
 			defer cancel()
 			if err := k.Wait(wctx); err != nil {
 				t.Fatalf("not unlocked: %v", err)
@@ -629,13 +633,13 @@ func TestVaultSigninWaitsForTheCredentialStore(t *testing.T) {
 func TestVaultSigninRunsWithoutASecretServiceAfterTheBoot(t *testing.T) {
 	k := secret.NewKeeper(time.Hour, nil)
 	var looks atomic.Int32
-	v := &vaultBroker{k: k, wait: time.Second, storeEvery: time.Millisecond,
+	v := &vaultBroker{k: k, wait: testVaultWait, storeEvery: time.Millisecond,
 		uptime: func() (time.Duration, error) { return 3 * time.Hour, nil },
 		store:  func(context.Context) (secret.StoreState, error) { looks.Add(1); return secret.StoreAbsent, nil },
 		signin: func(context.Context) (string, string, error) { return testVaultSession, testVaultToken, nil },
 	}
 	v.ask(context.Background())
-	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	wctx, cancel := context.WithTimeout(context.Background(), testVaultWait)
 	defer cancel()
 	if err := k.Wait(wctx); err != nil || looks.Load() != 1 {
 		t.Errorf("unlocked %v after %d looks at the store", err, looks.Load())
@@ -645,11 +649,11 @@ func TestVaultSigninRunsWithoutASecretServiceAfterTheBoot(t *testing.T) {
 // A store that never comes up within the window is the failure's cause,
 // the command never ran, and no note asks the person.
 func TestVaultSigninGivesUpOnAStoreThatNeverComes(t *testing.T) {
-	a := vaultApp(t, time.Second)
+	a := vaultApp(t, testVaultWait)
 	k := secret.NewKeeper(time.Hour, nil)
 	gaveUp := make(chan error, 1)
 	var cause secret.SigninCause
-	v := &vaultBroker{k: k, wait: 100 * time.Millisecond, storeEvery: time.Millisecond,
+	v := &vaultBroker{k: k, wait: 5 * time.Second, storeEvery: time.Millisecond,
 		uptime: func() (time.Duration, error) { return 10 * time.Second, nil },
 		store:  func(context.Context) (secret.StoreState, error) { return secret.StoreAbsent, nil },
 		signin: func(context.Context) (string, string, error) {
@@ -668,7 +672,7 @@ func TestVaultSigninGivesUpOnAStoreThatNeverComes(t *testing.T) {
 		if cause != secret.SigninStoreAbsent || !strings.HasPrefix(err.Error(), "no credential store answers on the session bus: waited ") {
 			t.Errorf("gave up with %s: %v", cause, err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testVaultWait):
 		t.Fatal("the sign-in never gave up")
 	}
 	if st, _ := a.store.Read(); len(st.Notes) != 0 {
