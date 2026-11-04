@@ -283,3 +283,28 @@ func TestWatchSaysKindSpendOnceADay(t *testing.T) {
 		t.Errorf("yesterday's mark kept: %v", w.reported)
 	}
 }
+
+func TestAgentStartSSHDryRunRefusesAKindAtItsCap(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 10}}
+	stubSubscriptionUsage(a)
+	a.cfg.Agents.Kinds = []config.AgentKind{{Name: kindFiler, Match: "^filer", MinInterval: config.Duration{Duration: time.Hour}}}
+	recordKindStart(t, a, filerOne, "s-filer-1", a.now.Add(-5*time.Minute))
+	for _, force := range []bool{false, true} {
+		args := []string{agentStartName, filerTwo, brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel, testDryRunFlag}
+		if force {
+			args = append(args, "--force")
+		}
+		out, err := runAgents(a, args...)
+		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") {
+			t.Fatalf("SSH dry run (force=%v): output %q, error %v; want task kind refusal", force, out, err)
+		}
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Starts) != 1 {
+		t.Fatalf("dry run recorded a start: %+v", st.Starts)
+	}
+}
