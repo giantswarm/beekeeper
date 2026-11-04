@@ -17,6 +17,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+const supervisorCommand = "supervisor"
+
 // supervisorGroup is the command group of the supervisor's commands.
 const supervisorGroup = "supervising"
 
@@ -74,11 +76,9 @@ func (a *app) clearLoopVersion() {
 	_ = a.store.WriteFile(loopVersionFile, loopVersionRecord{})
 }
 
-const supervisorCommandName = "supervisor"
-
 func (a *app) supervisorCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   supervisorCommandName,
+		Use:   supervisorCommand,
 		Short: "Show the supervisor loop, or run it",
 		Long: `The supervisor is the supervisor loop (` + "`beekeeper supervisor loop`" + `), which
 the beekeeper-supervisor-loop user service runs: beekeeper install always

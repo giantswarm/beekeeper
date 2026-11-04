@@ -64,7 +64,7 @@ func TestAwaitSlotTakesItsTurnBetweenAlternatingRuns(t *testing.T) {
 					return
 				default:
 				}
-				if rc := Run(o, []string{testSleepCommand, "0.2"}); rc != 0 {
+				if rc := Run(o, []string{"sleep", "0.2"}); rc != 0 {
 					t.Errorf("a runner's run: exit %d", rc)
 					return
 				}

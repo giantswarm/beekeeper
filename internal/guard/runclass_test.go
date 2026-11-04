@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+const runAllPackages = "./..."
+
 func TestParseClass(t *testing.T) {
 	for in, want := range map[string]string{"": ClassBuild, "build": ClassBuild, "benchmark": ClassBenchmark, "lab": ClassLab} {
 		if got, err := ParseClass(in); err != nil || got != want {
@@ -35,7 +37,7 @@ func TestDefaultClass(t *testing.T) {
 		{[]string{testShell, "-c", "agentlab --help"}, ClassBuild},
 		{[]string{testShell, "-c", "python3 benchmark_preset.py"}, ClassBuild},
 		{[]string{testShell, "-c", "grep agentlab README.md"}, ClassBuild},
-		{[]string{"go", "build", testAllPackages}, ClassBuild},
+		{[]string{"go", "build", runAllPackages}, ClassBuild},
 	} {
 		if got := DefaultClass(c.argv); got != c.want {
 			t.Errorf("DefaultClass(%q) = %q, want %q", c.argv, got, c.want)
@@ -55,7 +57,7 @@ func TestBuildsNothing(t *testing.T) {
 		{[]string{"go", "version"}, true},
 		{[]string{testShell, "-c", "make help"}, true},
 		{[]string{"kubectl", "--help"}, true},
-		{[]string{"go", testCommand, testAllPackages}, false},
+		{[]string{"go", testCommand, runAllPackages}, false},
 		{[]string{testShell, "-c", "make"}, false},
 		{[]string{testShell, "-c", "true && go test ./..."}, false},
 		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},

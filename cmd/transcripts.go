@@ -729,10 +729,9 @@ func (a *app) resolveTranscriptCaller(st *state.State) (transcripts.Caller, stat
 		if h := st.GuideRole().Holder; h != nil && h.Is(envP) {
 			return transcripts.Caller{Party: me, RosterName: cmp.Or(h.Name, guideRole.name), Role: guideRole.name, IsGuide: true}, me
 		}
-		if st.Knows(envP) {
-			return a.workerCallerForParty(st, envP, me.Name), me
-		}
-		return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.name, IsGuide: true}, me
+		// An unregistered or retired harness session is still a worker.
+		// Only the current guide holder above has unrestricted access.
+		return a.workerCallerForParty(st, envP, me.Name), me
 	}
 	me := state.Party{Name: cmp.Or(a.cfg.Identity.Person, "operator"), Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
 	return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.name, IsGuide: true}, me
