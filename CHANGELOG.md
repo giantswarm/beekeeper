@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Board-read refusals and worker rules name repository-scoped `gh` calls for personal-account issues, recommend `beekeeper board move` instead of bare `item-add`, and require access proofs to use the item's current status (https://github.com/giantswarm/beekeeper/issues/929).
+
 - Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).

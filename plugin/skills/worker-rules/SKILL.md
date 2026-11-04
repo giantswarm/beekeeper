@@ -8,7 +8,8 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 One task; stricter desk rules win.
 
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
-- **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
+- **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`. Use `beekeeper board move <owner/repo#n> <status>` to add or move an issue, including a personal-account issue. Prove access by moving an existing item to its current status.
+- **GitHub identity.** For a personal-account repository, every `gh` call names the repository with `GH_REPO=<owner/repo>` or `-R <owner/repo>` where supported, so the worker uses the person's login. Use `board move` instead of bare `gh project item-add`; an issue's `projectItems` can omit another owner's board.
 - **Supervisor** (`supervisor status`): park `agents park`, ask `note add`, no status to the guide; inbox wakes, register `agents register`.
 - **Review.** Push/green CI, then `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. HEAD must match; loop merges; omit `--post-merge` only if merge ends the task.
 - **Problems**: `agents problem "<finding>"` sends evidence/owning repo/issue URL; the supervisor files. Gate/CI: report first, name detour; never bypass.

@@ -588,6 +588,33 @@ func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 	}
 }
 
+// GitHub can omit a cross-owner board from projectItems even for the
+// issue owner's login. Adding again returns that existing item and its fields.
+func TestMovePersonalIssueToItsCurrentStatusWithHiddenBoardItem(t *testing.T) {
+	for _, ref := range []string{"personal/private#7", "https://github.com/personal/private/issues/7"} {
+		t.Run(ref, func(t *testing.T) {
+			f := &fakeGH{t: t, item: issue7OffBoard,
+				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}}}}`}
+			c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+			mv, err := c.Move(context.Background(), ref, "backlog")
+			if err != nil || *mv != (Moved{Ref: "personal/private#7", From: backlog, To: backlog}) {
+				t.Fatalf("Move = %+v, %v", mv, err)
+			}
+			if !slices.Equal(f.mutations, []string{addIssue7}) {
+				t.Errorf("same-status proof changed fields: %v", f.mutations)
+			}
+			for _, repo := range f.repos {
+				if repo != "personal/private" {
+					t.Errorf("call acts on %q, want issue repository", repo)
+				}
+			}
+			if readsItems(f.queries) {
+				t.Errorf("move read the board's items: %q", f.queries)
+			}
+		})
+	}
+}
+
 func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
 	f := &fakeGH{t: t, item: issue7OffBoard,
 		added: `{"data":{"addProjectV2ItemById":null},"errors":[{"message":"Resource not accessible by integration"}]}`}
