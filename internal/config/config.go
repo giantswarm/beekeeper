@@ -4358,10 +4358,15 @@ func (c Capacity) serveModeNodeNames() []string {
 }
 
 // Leasable returns every resource a session can lease: the configured ones,
-// the nodes a self-hosted serving mode occupies, the model server when one is
-// watched, the browser last.
+// the installations under alerts, the nodes a self-hosted serving mode
+// occupies, the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	for _, in := range c.Alerts.Installations {
+		if !slices.Contains(out, in.Name) {
+			out = append(out, in.Name)
+		}
+	}
 	for _, n := range c.Capacity.serveModeNodeNames() {
 		if !slices.Contains(out, n) {
 			out = append(out, n)
@@ -4407,7 +4412,7 @@ func (c *Config) LabLease(cluster string) string {
 	return ""
 }
 
-// IsLeasable reports whether name is a configured resource or the browser.
+// IsLeasable reports whether name is one of the resources returned by Leasable.
 func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }

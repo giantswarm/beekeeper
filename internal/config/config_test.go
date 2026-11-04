@@ -1266,3 +1266,14 @@ func TestWatchBatchInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestLeasableInstallations(t *testing.T) {
+	c := Config{Resources: []string{"shared"}}
+	c.Alerts.Installations = []Installation{{Name: "customer"}, {Name: "shared"}, {Name: "customer"}}
+	if got, want := c.Leasable(), []string{"shared", "customer", Browser}; !slices.Equal(got, want) {
+		t.Fatalf("Leasable() = %v, want %v", got, want)
+	}
+	if !c.IsLeasable("customer") || c.IsLeasable("unknown") {
+		t.Fatal("only configured installations should be leasable")
+	}
+}
