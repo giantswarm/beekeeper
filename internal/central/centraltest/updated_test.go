@@ -89,7 +89,11 @@ func TestUpdatedCanceledSubscriber(t *testing.T) {
 	unlocked := make(chan struct{})
 	go func() {
 		m.mu.Lock()
+		n := len(m.streams)
 		m.mu.Unlock()
+		if n != 1 {
+			t.Errorf("registered streams = %d, want the active subscriber", n)
+		}
 		close(unlocked)
 	}()
 	select {
