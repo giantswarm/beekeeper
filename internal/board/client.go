@@ -874,16 +874,16 @@ func (c *Client) Move(ctx context.Context, ref, in string) (*Moved, error) {
 	if err != nil {
 		return nil, &Refusal{err.Error()}
 	}
+	gate, err := ResolveGate(c.Board.Epics, sf.names(), m.Fields[KindField].names())
+	if err != nil {
+		return nil, &Refusal{err.Error()}
+	}
 	item, err := c.ensure(ctx, m, mv, id, found)
 	if err != nil {
 		return nil, err
 	}
 	if item.Status != nil {
 		mv.From = item.Status.Name
-	}
-	gate, err := ResolveGate(c.Board.Epics, sf.names(), m.Fields[KindField].names())
-	if err != nil {
-		return nil, &Refusal{err.Error()}
 	}
 	var it Item
 	item.onto(&it)
