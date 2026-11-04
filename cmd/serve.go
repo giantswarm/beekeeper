@@ -235,11 +235,18 @@ type call struct {
 type auditStore struct {
 	*kube.Store
 	wrote bool
+	// authorize runs against each current snapshot, including conflict retries.
+	authorize func(*state.State) error
 }
 
 func (s *auditStore) Update(fn func(*state.State) ([]state.Event, error)) error {
 	n := 0
 	err := s.Store.Update(func(st *state.State) ([]state.Event, error) {
+		if s.authorize != nil {
+			if err := s.authorize(st); err != nil {
+				return nil, err
+			}
+		}
 		evs, err := fn(st)
 		n = len(evs)
 		return evs, err

@@ -396,6 +396,8 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 			return nil, err
 		}
 	}
+	c.authorizeHold(target, true)
+	defer func() { c.store.authorize = nil }()
 	if err := c.verb(c.app.holdCmd(), args...); err != nil {
 		return nil, err
 	}
@@ -420,10 +422,26 @@ func toolHoldLift(c *call, req mcp.CallToolRequest) (any, error) {
 			return nil, err
 		}
 	}
+	c.authorizeHold(target, false)
+	defer func() { c.store.authorize = nil }()
 	if err := c.verb(c.app.holdCmd(), "lift", target); err != nil {
 		return nil, err
 	}
 	return map[string]any{"target": target, "lifted": cur != nil}, nil
+}
+
+// authorizeHold guards the command's write, rather than only its earlier read.
+func (c *call) authorizeHold(target string, activeOnly bool) {
+	c.store.authorize = func(st *state.State) error {
+		for _, h := range st.Holds {
+			if h.Target == target && (!activeOnly || h.Active(c.app.now)) {
+				if err := c.may("the hold on "+target, h.By); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 }
 
 // centralLane is a MergeLane: its repositories, its running and settling
@@ -718,6 +736,13 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	reason := strings.TrimSpace(req.GetString(paramReason, ""))
 	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, current := range st.Merges {
+			if current.Lane == lane && strings.EqualFold(current.Repo, repo) && current.PR == pr {
+				if err := c.may(key+"'s place in lane "+lane, current.By); err != nil {
+					return nil, err
+				}
+			}
+		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(x state.Merge) bool {
 			return x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr
 		})
