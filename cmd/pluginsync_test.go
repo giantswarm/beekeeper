@@ -393,7 +393,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 			pinMarketplace = realPin
 			run := claudePlugin
 			claudePlugin = func(ctx context.Context, args ...string) error {
-				raw, err := os.ReadFile(path)
+				raw, err := os.ReadFile(filepath.Clean(path))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -405,7 +405,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := entries["beekeeper"]
-				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != "giantswarm/beekeeper" || got.InstallLocation != "unchanged" || entries["other"].Source.Ref != "main" {
+				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != "unchanged" || entries["other"].Source.Ref != "main" {
 					t.Fatalf("registry at sync: %s", raw)
 				}
 				return run(ctx, args...)
@@ -420,7 +420,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 
 func TestScratchDirectoriesLeavePluginUntouched(t *testing.T) {
 	realUnder := syncsUnder
-	for _, key := range []string{"XDG_STATE_HOME", "XDG_CONFIG_HOME"} {
+	for _, key := range []string{xdgStateHomeEnv, xdgConfigHomeEnv} {
 		t.Run(key, func(t *testing.T) {
 			dir := asBinary(t, newBinary)
 			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, InstallPath: pluginCopy(t)}})

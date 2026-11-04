@@ -190,6 +190,11 @@ var runsInstalled = func() bool {
 // syncsUnder says whether a command under the configuration file config
 // (explicitConfig, "" for the default one) syncs the user-wide plugins: a
 // scratch configuration leaves them alone; tests replace it.
+const (
+	xdgStateHomeEnv  = "XDG_STATE_HOME"
+	xdgConfigHomeEnv = "XDG_CONFIG_HOME"
+)
+
 var syncsUnder = func(config string) bool {
 	if config != "" {
 		return false
@@ -199,8 +204,8 @@ var syncsUnder = func(config string) bool {
 		return false
 	}
 	for key, normal := range map[string]string{
-		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
-		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		xdgStateHomeEnv:  filepath.Join(home, ".local", "state"),
+		xdgConfigHomeEnv: filepath.Join(home, ".config"),
 	} {
 		if value := os.Getenv(key); value != "" && filepath.Clean(value) != normal {
 			return false
@@ -235,7 +240,7 @@ var pinMarketplace = func(name, revision string) error {
 		dir = filepath.Join(home, ".claude")
 	}
 	path := filepath.Join(dir, "plugins", "known_marketplaces.json")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return err
 	}
@@ -273,7 +278,7 @@ var pinMarketplace = func(name, revision string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		return err
