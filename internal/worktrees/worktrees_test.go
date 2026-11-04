@@ -1,6 +1,7 @@
 package worktrees
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,6 +33,33 @@ func TestClassify(t *testing.T) {
 	}
 	if want := []string{"web/node_modules/", dist, ".turbo/", ".yarn/cache/", "pkg/bin/"}; !slices.Equal(build, want) {
 		t.Errorf("build = %q, want %q", build, want)
+	}
+}
+
+func TestClassifyBuildDirsPreservesFilesNamedLikeDirectories(t *testing.T) {
+	for i, tc := range []struct {
+		status      string
+		work, build []string
+	}{
+		{status: "?? build", work: []string{"build"}},
+		{status: "?? tools/build", work: []string{"tools/build"}},
+		{status: "?? .cache", work: []string{".cache"}},
+		{status: "?? .yarn/cache", work: []string{".yarn/cache"}},
+		{status: "?? generated/output", work: []string{"generated/output"}},
+		{status: "!! build"},
+		{status: "?? build/", build: []string{"build/"}},
+		{status: "?? tools/build/", build: []string{"tools/build/"}},
+		{status: "!! .yarn/cache/", build: []string{".yarn/cache/"}},
+		{status: "!! build/output.o", build: []string{"build/output.o"}},
+		{status: "?? generated/output/result", build: []string{"generated/output/result"}},
+		{status: " M build/source.go", work: []string{"build/source.go"}},
+	} {
+		t.Run(fmt.Sprintf("case %d: %s", i, tc.status), func(t *testing.T) {
+			work, build := classifyBuildDirs([]byte(tc.status+"\x00"), []string{"generated/output"})
+			if !slices.Equal(work, tc.work) || !slices.Equal(build, tc.build) {
+				t.Fatalf("work=%q build=%q, want work=%q build=%q", work, build, tc.work, tc.build)
+			}
+		})
 	}
 }
 
