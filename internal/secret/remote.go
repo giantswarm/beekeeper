@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
@@ -29,7 +30,7 @@ type RemoteFile struct {
 	Path string
 	// Mode is the file's octal mode, 0600 when empty.
 	Mode string
-	// Owner is user[:group]; empty keeps the ssh user's.
+	// Owner is user[:group]; empty keeps the writing user's (root under --sudo).
 	Owner string
 	// Sudo runs the write under sudo -n, by the host's own sudo rules.
 	Sudo bool
@@ -42,7 +43,7 @@ var (
 	sshHost  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 	sshUser  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 	fileMode = regexp.MustCompile(`^0?[0-7]{3,4}$`)
-	owner    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*(?::[A-Za-z_][A-Za-z0-9_.-]*)?$|^\d+(?::\d+)?$`)
+	owner    = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_.-]*|\d+)(?::(?:[A-Za-z_][A-Za-z0-9_.-]*|\d+))?$`)
 	safePath = regexp.MustCompile(`^/[A-Za-z0-9_.@%+=:,/-]+$`)
 )
 
@@ -223,6 +224,10 @@ func (o *Ops) CopyToRemote(ctx context.Context, src Ref, f RemoteFile) (RemoteRe
 	body := f.content(v)
 	argv := f.Argv(len(body))
 	if _, err := o.Run(ctx, "", nil, strings.NewReader(body), argv[0], argv[1:]...); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 255 {
+			return RemoteResult{}, fmt.Errorf("%s: target state unknown after SSH connection failure; use secret fingerprint to check it: %s", f, redact(err.Error(), v, src.String()))
+		}
 		return RemoteResult{}, fmt.Errorf("%s: not written, the target kept: %s", f, redact(err.Error(), v, src.String()))
 	}
 	res := RemoteResult{File: f.String(), Mode: f.mode(), Owner: f.Owner, Bytes: len(body), Length: len(v)}
