@@ -31,10 +31,12 @@ const (
 // mailboxStandIn is beekeeper serve's mailbox tools: receive_messages
 // returns the unacked deliveries, ack_messages acks them.
 type mailboxStandIn struct {
-	mu    sync.Mutex
-	queue []mailbox.Delivery
-	acked []int64
-	said  []string
+	mu           sync.Mutex
+	queue        []mailbox.Delivery
+	acked        []int64
+	said         []string
+	ackFailures  int
+	acknowledged chan struct{}
 }
 
 func (m *mailboxStandIn) url(t *testing.T) string {
@@ -48,8 +50,15 @@ func (m *mailboxStandIn) url(t *testing.T) string {
 	srv.AddTool(mcp.NewTool("ack_messages"), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.ackFailures > 0 {
+			m.ackFailures--
+			return mcp.NewToolResultError("temporary acknowledgement failure"), nil
+		}
 		for _, id := range req.GetIntSlice(paramIDs, nil) {
 			m.acked = append(m.acked, int64(id))
+		}
+		if m.acknowledged != nil {
+			m.acknowledged <- struct{}{}
 		}
 		return mcp.NewToolResultText("acked"), nil
 	})
@@ -175,6 +184,41 @@ func TestMailboxKeepsWhatItsAgentDoesNotTake(t *testing.T) {
 	}
 	if !strings.Contains(out(), "ENDED") {
 		t.Errorf("the wait is not ended:\n%s", out())
+	}
+}
+
+func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
+	mb := &mailboxStandIn{
+		queue:        []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "fixture reply")},
+		ackFailures:  1,
+		acknowledged: make(chan struct{}, 1),
+	}
+	w, sent, out, _ := mailboxWatchVia(t, mb)
+	w.cfg.Watch.Interval.Duration = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.watchMailbox(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	// No subsequent resource notification is sent. The interval must retry
+	// the unacknowledged delivery even though its first wake succeeded.
+	select {
+	case <-mb.acknowledged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a failed acknowledgement was never retried")
+	}
+	cancel()
+	<-done
+	if len(*sent) != 2 || !slices.Equal(mb.acked, []int64{1}) {
+		t.Fatalf("deliveries %d, acknowledgements %v; want one redelivery then acknowledgement", len(*sent), mb.acked)
+	}
+	if !strings.Contains(out(), "delivered not acked, delivered again") {
+		t.Fatal("acknowledgement failure was not reported")
 	}
 }
 
