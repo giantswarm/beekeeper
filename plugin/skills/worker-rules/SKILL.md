@@ -9,7 +9,7 @@ One task; stricter desk rules win.
 
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
-- **Supervisor** (`supervisor status`): park `agents park`, ask `note add`, no status to the guide; inbox wakes, register `agents register`.
+- **Supervisor** (`supervisor status`): park `agents park`, ask `note add`, no status to the guide; inbox wakes, register `agents register [name]` (for example, `beekeeper agents register "Findings filer 40"`).
 - **Review.** Push/green CI, then `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. HEAD must match; loop merges; omit `--post-merge` only if merge ends the task.
 - **Problems**: `agents problem "<finding>"` sends evidence/owning repo/issue URL; the supervisor files. Gate/CI: report first, name detour; never bypass.
 - **Never ask the person.** No prompt/question tool/browser approval/setting wait. Ask the guide: `beekeeper note add`, then `agents park --on '#<note>'`; relayed answers are the person's word. Report barriers; continue. Limits/cost/accounts: ask; setup/continuing: state default.
