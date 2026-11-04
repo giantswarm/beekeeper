@@ -2,9 +2,11 @@ package takeover
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -141,5 +143,149 @@ func TestHoldIgnoresAGarbledAnswer(t *testing.T) {
 	}
 	if got := <-done; got[1].(bool) {
 		t.Fatalf("a garbled answer decided: %v", got)
+	}
+}
+
+// A release must reject an answer even while the request awaits its next poll.
+func TestAnswerAfterReleaseBeforeHoldPoll(t *testing.T) {
+	dir := t.TempDir()
+	if err := Take(dir, tSession, Flag{PID: tScreen}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan bool, 1)
+	go func() {
+		_, ok, _ := Hold(ctx, dir, Request{ID: "late", Session: tSession}, alive, time.Hour)
+		done <- ok
+	}()
+	waitPending(t, dir)
+	if err := Release(dir, tSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := Answer(dir, tSession, "late", Decision{Behavior: Allow}); !errors.Is(err, ErrHandedBack) {
+		t.Fatalf("late answer = %v", err)
+	}
+	// Retaking with the same screen must not revive the old request.
+	if err := Take(dir, tSession, Flag{PID: tScreen}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Answer(dir, tSession, "late", Decision{Behavior: Allow}); !errors.Is(err, ErrHandedBack) {
+		t.Fatalf("answer from a new takeover = %v", err)
+	}
+	cancel()
+	if <-done {
+		t.Fatal("released hold accepted an answer")
+	}
+}
+
+func TestHoldChecksValidityBeforeAnswer(t *testing.T) {
+	for _, reason := range []string{"release", "replacement", "dead screen", "cancellation"} {
+		t.Run(reason, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := Take(dir, tSession, Flag{PID: tScreen}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var live atomic.Bool
+			live.Store(true)
+			done := make(chan [3]any, 1)
+			go func() {
+				d, ok, err := Hold(ctx, dir, Request{ID: "validity", Session: tSession}, func(int) bool { return live.Load() }, 100*time.Millisecond)
+				done <- [3]any{d, ok, err}
+			}()
+			waitPending(t, dir)
+			// Block the next poll while arranging an answer and an invalidation.
+			unlock, err := lockSession(dir, tSession, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(filepath.Join(dir, tSession, "validity"+answerExt), []byte(`{"behavior":"allow"}`)); err != nil {
+				t.Fatal(err)
+			}
+			switch reason {
+			case "release":
+				err = os.Remove(filepath.Join(dir, tSession+flagExt))
+			case "replacement":
+				b, marshalErr := json.Marshal(Flag{PID: tScreen, Generation: "replacement"})
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				err = writeAtomic(filepath.Join(dir, tSession+flagExt), b)
+			case "dead screen":
+				live.Store(false)
+			case "cancellation":
+				cancel()
+			}
+			unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-done:
+				if got[1].(bool) || got[2] != nil {
+					t.Fatalf("invalidated hold = %v", got)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("hold did not finish")
+			}
+			if paths, _ := filepath.Glob(filepath.Join(dir, tSession, "*")); len(paths) != 0 {
+				t.Fatalf("finished files: %v", paths)
+			}
+		})
+	}
+}
+
+func TestAnswerWaitsForFinalization(t *testing.T) {
+	dir := t.TempDir()
+	if err := Take(dir, tSession, Flag{PID: tScreen}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := hold(ctx, dir, Request{ID: "final", Session: tSession})
+	waitPending(t, dir)
+	unlock, err := lockSession(dir, tSession, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := make(chan error, 1)
+	go func() { answer <- Answer(dir, tSession, "final", Decision{Behavior: Allow}) }()
+	select {
+	case err := <-answer:
+		t.Fatalf("answer bypassed transition lock: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	// Model Hold's finalization while publication waits on the same file lock.
+	for _, ext := range []string{requestExt, answerExt} {
+		if err := removeFinished(filepath.Join(dir, tSession, "final"+ext)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel()
+	unlock()
+	if err := <-answer; !errors.Is(err, ErrHandedBack) {
+		t.Fatalf("answer after cleanup = %v", err)
+	}
+	<-done
+	if paths, _ := filepath.Glob(filepath.Join(dir, tSession, "*")); len(paths) != 0 {
+		t.Fatalf("orphan files: %v", paths)
+	}
+}
+
+func TestSessionLockIsBoundedAndIndependent(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockSession(dir, tSession, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if release, err := lockSession(dir, tSession, 20*time.Millisecond); err == nil {
+		release()
+		t.Fatal("contended lock succeeded")
+	}
+	if err := Take(dir, "another-session", Flag{PID: tScreen}); err != nil {
+		t.Fatalf("unrelated session blocked: %v", err)
 	}
 }

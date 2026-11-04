@@ -21,6 +21,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/gofrs/flock"
+	"github.com/google/uuid"
 )
 
 // GiveUp is how long the hook holds a request for the screen: under the
@@ -33,6 +36,8 @@ const Poll = 250 * time.Millisecond
 
 // Flag says a screen has taken a session over.
 type Flag struct {
+	// Generation distinguishes every Take, including repeated takes by one screen.
+	Generation string `json:"generation,omitempty"`
 	// PID is the screen's process: a flag whose process is gone is no
 	// take-over.
 	PID   int       `json:"pid"`
@@ -42,11 +47,13 @@ type Flag struct {
 
 // Request is a permission request the hook holds for the screen.
 type Request struct {
-	ID      string          `json:"id"`
-	Session string          `json:"session"`
-	Tool    string          `json:"tool"`
-	Input   json.RawMessage `json:"input,omitempty"`
-	At      time.Time       `json:"at"`
+	// Generation binds the request to the takeover that published it.
+	Generation string          `json:"generation,omitempty"`
+	ID         string          `json:"id"`
+	Session    string          `json:"session"`
+	Tool       string          `json:"tool"`
+	Input      json.RawMessage `json:"input,omitempty"`
+	At         time.Time       `json:"at"`
 }
 
 // The behaviours a Decision has, as Claude Code's PermissionRequest hook
@@ -81,6 +88,13 @@ func Take(dir, session string, f Flag) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
+
+	unlock, err := lockSession(dir, session, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	f.Generation = uuid.NewString()
 	b, err := json.Marshal(f)
 	if err != nil {
 		return err
@@ -94,7 +108,13 @@ func Release(dir, session string) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
-	err := os.Remove(filepath.Join(dir, session+flagExt))
+
+	unlock, err := lockSession(dir, session, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = os.Remove(filepath.Join(dir, session+flagExt))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -151,10 +171,19 @@ func Answer(dir, session, id string, d Decision) error {
 	if err := checkName(id); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(dir, session, id+requestExt)); err != nil {
+
+	unlock, err := lockSession(dir, session, lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	f, taken := Taken(dir, session, func(int) bool { return true })
+	b, err := os.ReadFile(filepath.Join(dir, session, id+requestExt))
+	var r Request
+	if !taken || err != nil || json.Unmarshal(b, &r) != nil || r.Generation != f.Generation {
 		return ErrHandedBack
 	}
-	b, err := json.Marshal(d)
+	b, err = json.Marshal(d)
 	if err != nil {
 		return err
 	}
@@ -172,40 +201,87 @@ func Hold(ctx context.Context, dir string, r Request, alive func(pid int) bool, 
 	if err := checkName(r.ID); err != nil {
 		return Decision{}, false, err
 	}
-	folder := filepath.Join(dir, r.Session)
-	if err := os.MkdirAll(folder, 0o700); err != nil {
-		return Decision{}, false, err
-	}
-	b, err := json.Marshal(r)
+
+	req := filepath.Join(dir, r.Session, r.ID+requestExt)
+	ans := filepath.Join(dir, r.Session, r.ID+answerExt)
+	unlock, err := lockSession(dir, r.Session, lockWait)
 	if err != nil {
 		return Decision{}, false, err
 	}
-	req, ans := filepath.Join(folder, r.ID+requestExt), filepath.Join(folder, r.ID+answerExt)
-	if err := writeAtomic(req, b); err != nil {
+	f, taken := Taken(dir, r.Session, alive)
+	if ctx.Err() != nil || !taken {
+		unlock()
+		return Decision{}, false, nil
+	}
+	r.Generation = f.Generation
+	b, err := json.Marshal(r)
+	if err == nil {
+		err = writeAtomic(req, b)
+	}
+	unlock()
+	if err != nil {
 		return Decision{}, false, err
 	}
-	defer func() {
-		_ = os.Remove(req)
-		_ = os.Remove(ans)
-	}()
 	t := time.NewTicker(poll)
 	defer t.Stop()
 	for {
-		if b, err := os.ReadFile(ans); err == nil { //nolint:gosec // the answer beside the request
-			var d Decision
-			if json.Unmarshal(b, &d) == nil && (d.Behavior == Allow || d.Behavior == Deny) {
-				return d, true, nil
+		unlock, err := lockSession(dir, r.Session, lockWait)
+		if err != nil {
+			return Decision{}, false, err
+		}
+		f, taken := Taken(dir, r.Session, alive)
+		finished := ctx.Err() != nil || !taken || f.Generation != r.Generation
+		if !finished {
+			if b, readErr := os.ReadFile(ans); readErr == nil { //nolint:gosec // the answer beside the request
+				if json.Unmarshal(b, &d) == nil && (d.Behavior == Allow || d.Behavior == Deny) {
+					ok, finished = true, true
+				}
 			}
 		}
-		if _, taken := Taken(dir, r.Session, alive); !taken {
-			return Decision{}, false, nil
+		if finished {
+			// Publication and removal share this lock: no answer can outlive its request.
+			reqErr := removeFinished(req)
+			ansErr := removeFinished(ans)
+			unlock()
+			return d, ok, errors.Join(reqErr, ansErr)
 		}
+		unlock()
 		select {
 		case <-ctx.Done():
-			return Decision{}, false, nil
 		case <-t.C:
 		}
 	}
+}
+
+func removeFinished(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+const lockWait = 2 * time.Second
+
+// Lock files remain outside request folders and are never unlinked: replacing
+// a lock inode would let two processes enter the same transition.
+func lockSession(dir, session string, wait time.Duration) (func(), error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	l := flock.New(filepath.Join(dir, session+".lock"))
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	if !ok {
+		_ = l.Close()
+		return nil, fmt.Errorf("takeover: session lock is busy")
+	}
+	return func() { _ = l.Unlock() }, nil
 }
 
 // checkName refuses a session or request id that is not one plain file
