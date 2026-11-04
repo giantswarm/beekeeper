@@ -385,3 +385,133 @@ func TestCapperReadsScopePopulationThroughBroker(t *testing.T) {
 		}
 	}
 }
+
+func TestServeSweepsForceKilledRequesterBeforeFirstTick(t *testing.T) {
+	dir := t.TempDir()
+	var path string
+	// The child uses the real request path and cannot run its cleanup on SIGKILL.
+	requester := exec.Command(os.Args[0], "-test.run=^TestSpoolKilledRequesterHelper$") //nolint:gosec // the test binary re-runs itself
+	requester.Dir = dir
+	requester.Env = append(os.Environ(), "BEEKEEPER_TEST_SPOOL=1")
+	if err := requester.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = requester.Process.Kill() })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 1 && strings.HasSuffix(entries[0].Name(), reqSuffix) {
+			path = filepath.Join(dir, entries[0].Name())
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("requester never published its request")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := requester.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = requester.Wait()
+	// Reproduce the refusal that used to leave this request stuck forever.
+	answer(context.Background(), path, "/proc", func(context.Context, int, Request) (Reply, error) {
+		t.Error("handled a dead request")
+		return Reply{}, nil
+	})
+	base := strings.TrimSuffix(path, reqSuffix)
+	for _, suffix := range []string{outSuffix, tmpSuffix, replySuffix + tmpSuffix} {
+		if err := os.WriteFile(base+suffix, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	broker(t, dir, func(context.Context, int, Request) (Reply, error) {
+		t.Error("handled a dead request")
+		return Reply{}, nil
+	})
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("spool keeps %v", entries)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestSpoolKilledRequesterHelper(t *testing.T) {
+	if os.Getenv("BEEKEEPER_TEST_SPOOL") != "" {
+		_ = Ask(".", Request{Op: OpPing}, time.Minute)
+	}
+}
+
+func TestSweepPreservesLiveHolderAndCollectsOrphans(t *testing.T) {
+	for _, suffix := range []string{reqSuffix, replySuffix, outSuffix, tmpSuffix, replySuffix + tmpSuffix} {
+		t.Run(suffix, func(t *testing.T) {
+			base := filepath.Join(t.TempDir(), "entry")
+			path := base + suffix
+			f, err := os.Create(path) //nolint:gosec // a file of this test's temp dir
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = f.Close() }()
+			old := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			if suffix == reqSuffix || suffix == tmpSuffix {
+				sweep(base, "/proc", time.Millisecond)
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("swept a live holder: %v", err)
+				}
+			}
+			_ = f.Close()
+			sweep(base, "/proc", time.Millisecond)
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stale file remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestSweepGraceAndLiveRequestProtectSidecars(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "entry")
+	f, err := os.Create(base + reqSuffix) //nolint:gosec // a file of this test's temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	for _, suffix := range []string{replySuffix, outSuffix, tmpSuffix, replySuffix + tmpSuffix} {
+		if err := os.WriteFile(base+suffix, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func() {
+		t.Helper()
+		entries, err := os.ReadDir(filepath.Dir(base))
+		if err != nil || len(entries) != 5 {
+			t.Fatalf("spool entries %v, error %v; want all five files", entries, err)
+		}
+	}
+	sweep(base, "/proc", time.Hour)
+	check()
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(base+reqSuffix, old, old); err != nil {
+		t.Fatal(err)
+	}
+	sweep(base, "/proc", time.Hour)
+	check()
+	_ = f.Close()
+	sweep(base, "/proc", time.Hour)
+	if entries, err := os.ReadDir(filepath.Dir(base)); err != nil || len(entries) != 0 {
+		t.Fatalf("spool entries %v, error %v; want empty", entries, err)
+	}
+}

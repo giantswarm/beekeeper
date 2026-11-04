@@ -1980,13 +1980,14 @@ func (f loopFailure) recent(now time.Time) bool {
 
 // failed logs act's failure and keeps it in failures, by key.
 func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFailure, cause error) error {
+	now := l.a.timeNow()
 	l.mu.Lock()
 	previous := failures[act.Key]
-	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
+	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: now, At: now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
 	// An episode expires after its retry has been missed for loopStuckRecent.
-	if f.Message == previous.Message && previous.recent(l.a.now) {
+	if f.Message == previous.Message && previous.recent(now) {
 		f.Count = previous.Count + 1
 		f.Since = cmp.Or(previous.Since, f.Since)
 	} else {
@@ -1997,7 +1998,7 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 		}
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.timeNow().Add(loopFailureDelay(f.Count))
+		f.RetryAt = now.Add(loopFailureDelay(f.Count))
 	}
 	failures[act.Key] = f
 	l.mu.Unlock()
@@ -2019,9 +2020,10 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 
 // stuckGroup are the failures of kind with message attempted recently, by key.
 func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, message string) map[string]loopFailure {
+	now := l.a.timeNow()
 	group := map[string]loopFailure{}
 	for key, f := range failures {
-		if f.Kind == kind && f.Message == message && f.recent(l.a.now) {
+		if f.Kind == kind && f.Message == message && f.recent(now) {
 			group[key] = f
 		}
 	}
@@ -2033,6 +2035,7 @@ func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, messa
 // PROBLEM. An episode filed before it began (filed, by step and error) is a
 // new one.
 func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
+	now := l.a.timeNow()
 	keys := slices.Sorted(maps.Keys(failures))
 	done := map[string]bool{}
 	for _, key := range keys {
@@ -2047,7 +2050,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		if len(group) == 0 {
 			continue
 		}
-		since, attempts := l.a.now, 0
+		since, attempts := now, 0
 		var items []string
 		for _, k := range slices.Sorted(maps.Keys(group)) {
 			g := group[k]
@@ -2055,7 +2058,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 			attempts += g.Count
 			items = append(items, cmp.Or(g.Ref, k))
 		}
-		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
+		if len(group) < 2 && now.Sub(since) < loopStuckAfter {
 			continue
 		}
 		if at, ok := filed[step]; ok && !at.Before(since) {
@@ -2066,13 +2069,13 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		text := fmt.Sprintf("The supervisor loop's %s step has failed the same way since %s, %d attempt(s), blocking %s: %s. "+
 			"It retries with backoff from %s up to %s; own the failure to the component its error names.",
 			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff, loopFailureBackoffCap)
-		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 		// Each episode its own key: guide watch says each one once.
 		fileKey := step + " " + since.UTC().Format("20060102T150405Z")
 		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
 			return err
 		}
-		filed[step] = l.a.now
+		filed[step] = now
 	}
 	return nil
 }
