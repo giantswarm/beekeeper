@@ -225,11 +225,14 @@ func (s *githubSource) ListReleases(ctx context.Context, repository selfupdate.R
 		if binary && bundle {
 			return []selfupdate.SourceRelease{selfupdate.NewGitHubRelease(release)}, nil
 		}
-		if !binary {
-			skipped = append(skipped, candidate.tag+": no "+name)
-		} else {
-			skipped = append(skipped, candidate.tag+": no "+name+".bundle")
+		// A public release can precede the upload job by the duration of the
+		// cross-platform build. Falling back here would falsely call an older
+		// version latest. Leave Latest unset until the signed asset pair exists.
+		missing := name
+		if binary {
+			missing += ".bundle"
 		}
+		return nil, fmt.Errorf("public release %s is still being prepared: missing %s; retry after its release assets finish uploading: %w", candidate.tag, missing, errIncompleteLookup)
 	}
 	return nil, nil
 }
