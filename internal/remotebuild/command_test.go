@@ -2,6 +2,9 @@ package remotebuild
 
 import "testing"
 
+// goTest is the go subcommand the offload cases run.
+const goTest = "test"
+
 func TestToolchainShellInterpretation(t *testing.T) {
 	for _, script := range []string{
 		`go test -e\xec=host-helper ./...`,
@@ -28,7 +31,7 @@ func TestToolchainShellInterpretation(t *testing.T) {
 		{shellBash, "-c", `go test -run "Test[AB].*" ./...`},
 		{shellBash, "-c", `go test -run Test'[AB].*' ./...`},
 		{shellBash, "-c", `go test -run 'Test{A,B}~?' ./...`},
-		{"go", "test", "-run", "Test[AB].*", "./..."},
+		{"go", goTest, "-run", "Test[AB].*", "./..."},
 	} {
 		if got := Toolchain(argv); got != "go" {
 			t.Errorf("Toolchain(%q) = %q, want go", argv, got)
