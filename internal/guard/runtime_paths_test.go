@@ -7,8 +7,8 @@ import (
 
 func TestRunTimeoutLinterPaths(t *testing.T) {
 	for _, argv := range [][]string{
-		{"/usr/local/bin/golangci-lint", "run"},
-		{"./bin/golangci-lint", "run"},
+		{"/usr/local/bin/golangci-lint", executionRunCommand},
+		{"./bin/golangci-lint", executionRunCommand},
 		{"sh", "-c", "cd /tmp && /usr/local/bin/golangci-lint run"},
 	} {
 		t.Run(CommandHead(argv), func(t *testing.T) {

@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Apply the five-minute local lint deadline when `golangci-lint` is invoked by an absolute or relative executable path (https://github.com/giantswarm/beekeeper/issues/2327).
+
 - Keep free-form Dex token-exchange response fields out of diagnostics so refused exchanges cannot echo credentials (https://github.com/giantswarm/beekeeper/pull/1478).
 
 - The hook follows script files run from shell `-c` strings, including nested strings, using the same recursion bound as nested scripts. Refusals name the script and line; files used only as data remain unread (https://github.com/giantswarm/beekeeper/issues/971).
