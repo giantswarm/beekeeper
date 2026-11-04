@@ -105,18 +105,26 @@ func cost(c *float64) string {
 	return fmt.Sprintf("$%.2f", *c)
 }
 
+// lineSeparators flattens CRLF as one separator and also accepts bare CR and LF.
+var lineSeparators = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+
+// singleLine changes only the display, leaving the original message intact.
+func singleLine(s string) string { return lineSeparators.Replace(s) }
+
 // fit shortens s to w terminal columns, ending with an ellipsis when it
-// cut; SGR sequences and wide runes survive the cut. w <= 0 yields "".
+// cut; line separators become spaces. SGR sequences and wide runes
+// survive the cut. w <= 0 yields "".
 func fit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	return ansi.Truncate(s, w, ellipsis)
+	return ansi.Truncate(singleLine(s), w, ellipsis)
 }
 
 // fitLeft keeps the right end of s within w columns, for values whose
 // tail matters more than their head.
 func fitLeft(s string, w int) string {
+	s = singleLine(s)
 	if w <= 0 {
 		return ""
 	}
@@ -171,6 +179,7 @@ func bar(frac float64, n int) string {
 // trimWord shortens s to w columns, cutting at the last word, slash or
 // dash where it can, so a truncated name stays readable.
 func trimWord(s string, w int) string {
+	s = singleLine(s)
 	if ansiWidth(s) <= w {
 		return s
 	}
