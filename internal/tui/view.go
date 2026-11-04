@@ -80,7 +80,7 @@ func bodyView(m *model, w, h int) string {
 	}
 	d := m.data
 	if m.detail != "" {
-		if s := sessionNamed(d.Sessions, m.detail); s != nil {
+		if s := sessionByID(d.Sessions, m.detail); s != nil {
 			return detailView(d, *s, w, h, m.pane())
 		}
 	}
@@ -1437,10 +1437,10 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// sessionNamed finds a session by name.
-func sessionNamed(sessions []Session, name string) *Session {
+// sessionByID finds a session by its stable ID.
+func sessionByID(sessions []Session, id string) *Session {
 	for i := range sessions {
-		if sessions[i].Name == name {
+		if sessions[i].ID == id {
 			return &sessions[i]
 		}
 	}
