@@ -272,3 +272,27 @@ func TestListenUnreachable(t *testing.T) {
 		t.Errorf("Listen = %v (%T), want Unreachable", err, err)
 	}
 }
+
+// Both tool calls and subscriptions must fail before invoking muster.
+func TestSandboxHostOnly(t *testing.T) {
+	t.Setenv("BEEKEEPER_SANDBOX", "1")
+	t.Setenv("BEEKEEPER_SANDBOX_BROKERED", "")
+	c := central.New(config.Central{Context: labContext, Timeout: config.Duration{Duration: time.Second}}, func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("sandboxed central access invoked muster")
+		return nil, nil
+	})
+	for _, op := range []string{"call", "listen"} {
+		t.Run(op, func(t *testing.T) {
+			var err error
+			if op == "call" {
+				_, err = c.Call(context.Background(), "note_list", map[string]any{}, nil)
+			} else {
+				err = c.Listen(context.Background(), []string{"beekeeper://feed"}, func() {}, func(string) {})
+			}
+			var u *central.Unreachable
+			if !errors.As(err, &u) || u.Sent || !strings.Contains(err.Error(), "central access is host-only") {
+				t.Fatalf("got %v, want unsent host-only Unreachable", err)
+			}
+		})
+	}
+}
