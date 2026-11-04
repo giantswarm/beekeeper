@@ -515,6 +515,10 @@ func Run(o Options, argv []string) int {
 			what, advice, detail := killReport(o, unit, slot, shared, kills)
 			logf("%s (exit %d) — %s", what, rc, advice)
 			end += ", " + detail
+		} else if rc == 128+int(syscall.SIGKILL) {
+			why := "SIGKILL (exit 137): no cap kill confirmed in the kernel log; external signal or session end possible (OOM evidence may be unavailable)"
+			logf("%s", why)
+			end += ", " + why
 		}
 		if at := o.keepTail(unit, head, rc, logf); at != "" {
 			end += ", tail " + at
@@ -1112,6 +1116,18 @@ func killReport(o Options, unit string, slot int, shared bool, kills []machine.O
 		started = started || k.Task != "systemd-run"
 	}
 	names := strings.Join(v, "; ")
+	limit := o.Max
+	if shared && atSlice {
+		limit = "unknown"
+		if raw, err := os.ReadFile(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")); err == nil {
+			var h holderRecord
+			if json.Unmarshal(raw, &h) == nil && h.Max != "" {
+				limit = h.Max
+			}
+		}
+	}
+	// The slot's holder, rather than this joining run, chose its limit.
+	names += " (scope " + unit + ".scope, MemoryMax=" + limit + ")"
 	switch {
 	case !started:
 		return fmt.Sprintf("slot %d's cap (%s) killed systemd-run before the command started: %s", slot, o.SlotSlice(slot), names),

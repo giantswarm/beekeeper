@@ -44,8 +44,15 @@ const Browser = "browser"
 // the GiB its models may hold.
 const ModelServer = "model-server"
 
+// Projects locates clones and the external session worktree root.
+type Projects struct {
+	Dir       string `yaml:"dir"`
+	Worktrees string `yaml:"worktrees"`
+}
+
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Projects Projects `yaml:"projects"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
@@ -3359,6 +3366,14 @@ func (c *Config) defaults() error {
 		state = filepath.Join(home, ".local", "state")
 	}
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	setStr(&c.Projects.Worktrees, filepath.Join(state, "beekeeper", "worktrees"))
+	c.Projects.Worktrees = filepath.Clean(homePath(home, c.Projects.Worktrees))
+	if c.Projects.Dir != "" {
+		c.Projects.Dir = filepath.Clean(homePath(home, c.Projects.Dir))
+	}
+	if !filepath.IsAbs(c.Projects.Worktrees) || c.Projects.Dir != "" && !filepath.IsAbs(c.Projects.Dir) {
+		return fmt.Errorf("projects paths must be absolute")
+	}
 	setStr(&c.Disk.Prune, DiskPruneAuto)
 	if c.Disk.TrashDirs == nil {
 		c.Disk.TrashDirs = []string{filepath.Join(c.StateDir, "trash"), filepath.Join(state, "trash")}

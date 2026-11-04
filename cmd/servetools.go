@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -113,7 +114,8 @@ func (s *server) tools() []serveTool {
 	return []serveTool{
 		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintAuditRead), toolLeaseList},
 		{newTool("lease_claim", "Claim a shared installation for the calling agent.",
-			"Refused while another holds it or while it upgrades.", hintAdd,
+			"Returns held, queued or refused first. Queued behind a holder with your grant; refused otherwise or during upgrades. wait retries every 10s, at most 9m.", hintAdd,
+			mcp.WithString("wait", mcp.Description("foreground wait duration, at most 9m (default: claim once)")),
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
@@ -260,17 +262,59 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	wait, err := time.ParseDuration(req.GetString("wait", "0s"))
+	if err != nil || wait < 0 || wait > claimWaitMax {
+		return nil, usageErr("wait must be a duration from 0s to %s", dur(claimWaitMax))
+	}
+	var result any
+	for waited := time.Duration(0); ; {
+		result, err = c.claimInstallation(name, purpose)
+		if err == nil {
+			return result, nil
+		}
+		var r *claimRefusal
+		if !errors.As(err, &r) {
+			if Code(err) != ExitRefused {
+				return nil, err
+			}
+			r = &claimRefusal{res: name, why: err.Error()}
+		}
+		if waited >= wait {
+			r.waited = waited
+			return nil, refused("%s", r.line())
+		}
+		step := min(claimPoll, wait-waited)
+		if err := claimPause(c.ctx, step); err != nil {
+			return nil, err
+		}
+		waited += step
+		c.app.now = c.app.now.Add(step)
+	}
+}
+
+func (c *call) claimInstallation(name, purpose string) (any, error) {
 	env, err := c.environment(name)
 	if err != nil {
 		return nil, err
+	}
+	st := &state.State{}
+	for _, g := range env.Status.Queue {
+		st.Grants = append(st.Grants, state.Grant{Resource: name, To: kube.PartyOf(g.To), By: kube.PartyOf(g.By), At: g.At.Time})
+	}
+	if env.Status.Released != nil {
+		st.Released = map[string]time.Time{name: env.Status.Released.Time}
 	}
 	if u := env.Status.Upgrade; u != nil {
 		return nil, refused("%s upgrades to %s since %s: claims wait until the upgrade ends", name, u.To, clock(c.app.now, u.Since.Time))
 	}
 	if h := env.Status.Holder; h != nil {
 		if kube.PartyOf(h.Party).Is(c.me) {
-			_, err := fmt.Fprintf(c.out, "%s is already yours (since %s)\n", name, clock(c.app.now, h.Since.Time))
+			_, err := fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, name+" was yours already"))
 			return heldLease{Environment: name, Holder: c.me, Purpose: h.Purpose, Since: h.Since.Time}, err
+		}
+		q := lease.Pending(st, name, true, c.app.now, c.app.cfg.GrantTTL.Duration)
+		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(c.me) }); i >= 0 {
+			return nil, &claimRefusal{res: name, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s", i+1, partyName(kube.PartyOf(h.Party)), name, clock(c.app.now, h.Since.Time), h.Purpose)}
 		}
 		return nil, c.heldBy(name, *h)
 	}
@@ -282,7 +326,7 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.store.wrote = true
-	_, err = fmt.Fprintf(c.out, "claimed %s\n", name)
+	_, err = fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, "claimed "+name))
 	return heldLease{Environment: name, Holder: c.me, Purpose: purpose, Since: h.Since.Time}, err
 }
 
@@ -372,6 +416,19 @@ func (c *call) hold(target string) (*state.Hold, error) {
 	return nil, nil
 }
 
+// guardHold repeats ownership authorization inside the reused CLI verb's
+// write callback, against the hold that attempt will actually change.
+func (c *call) guardHold(target string) {
+	c.store.authorize = func(st *state.State) error {
+		for _, h := range st.Holds {
+			if h.Target == target && h.Active(c.app.now) {
+				return c.may("the hold on "+target, h.By)
+			}
+		}
+		return nil
+	}
+}
+
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 	target, err := required(req, paramTarget, "owner/repo or lane:<name>")
 	if err != nil {
@@ -395,6 +452,7 @@ func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	if cur, err := c.hold(target); err != nil {
 		return nil, err
 	} else if cur != nil && cur.Active(c.app.now) {
@@ -417,6 +475,7 @@ func toolHoldLift(c *call, req mcp.CallToolRequest) (any, error) {
 	if err := c.pruneHolds(); err != nil {
 		return nil, err
 	}
+	c.guardHold(target)
 	cur, err := c.hold(target)
 	if err != nil {
 		return nil, err
@@ -724,6 +783,13 @@ func toolLaneLeave(c *call, req mcp.CallToolRequest) (any, error) {
 	}
 	reason := strings.TrimSpace(req.GetString(paramReason, ""))
 	err = c.app.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, x := range st.Merges {
+			if x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr {
+				if err := c.may(key+"'s place in lane "+lane, x.By); err != nil {
+					return nil, err
+				}
+			}
+		}
 		st.Merges = slices.DeleteFunc(st.Merges, func(x state.Merge) bool {
 			return x.Lane == lane && strings.EqualFold(x.Repo, repo) && x.PR == pr
 		})
@@ -897,9 +963,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 	published = published || req.GetArguments()[paramDone] != nil
 	pubTask, done := strings.TrimSpace(req.GetString(paramTask, "")), req.GetBool(paramDone, false)
 	task := ""
+	registered := c.me
 	err := c.app.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, x := range st.Agents {
-			if !strings.EqualFold(x.Name, c.me.Name) || x.Host != c.me.Host {
+			if !strings.EqualFold(x.Name, registered.Name) || x.Host != c.me.Host {
 				continue
 			}
 			// An address, local:<host>/<name>, names one agent.
@@ -909,7 +976,10 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 			// Registered again: the call's audit Event records it, since
 			// within the same second nothing the resource stores changes.
 			task = x.Task
-			st.Agents[i].Party, st.Agents[i].Registered = c.me, c.app.now.UTC()
+			// Keep the persisted spelling and object key for this address.
+			registered.Name = x.Name
+			c.concern = kube.RosterObject(registered)
+			st.Agents[i].Party, st.Agents[i].Registered = registered, c.app.now.UTC()
 			if published {
 				task = pubTask
 				publish(&st.Agents[i], pubTask, done, c.app.now.UTC())
@@ -926,11 +996,11 @@ func toolAgentsRegister(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	if task != "" {
-		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", c.me.Name, task)
+		_, err = fmt.Fprintf(c.out, "register: %s busy with %q: work it, then report it idle\n", registered.Name, task)
 	} else {
-		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", c.me.Name)
+		_, err = fmt.Fprintf(c.out, "register: %s idle, ready for a task\n", registered.Name)
 	}
-	return map[string]any{"agent": c.me, "task": task}, err
+	return map[string]any{"agent": registered, "task": task}, err
 }
 
 // publish sets a machine's agent's task and whether it is done, the fields

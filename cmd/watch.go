@@ -91,7 +91,9 @@ gone is one MERGE LOST line: it settles with an unknown release. A
 running merge whose devctl runs on merge.hungAfter (45m) after its pull
 request merged, or that long after its start once the pull request is
 closed, is one MERGE HUNG line: the watch ends its devctl and records the
-merge at the next poll. A
+merge at the next poll. Startup, a detected suspend, or a long gap between
+checks gives waits a fresh merge.hungAfter grace period before they can
+be ended as hung. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
 that wakes it). A positive capacity.ceiling reached is one CAPACITY FULL
@@ -167,7 +169,9 @@ note it filed, and one DOCTOR FAULT line while a known fault lasts. Every
 doctor.freeEvery (1h) one watch frees what dead sessions and dead go
 commands left in the tmpfs /tmp (beekeeper free --apply --only
 session-dirs,go-build): one FREED line when it freed something, FREE
-FAILED while it fails; the TMPFS line says when it ran last.
+FAILED while it fails; the TMPFS line says when it ran last. Above the
+tmpfs warning threshold it also names the three largest entries, their
+sizes, and the commands and worker sessions referencing them when known.
 
 A running beekeeper watch, this one included, whose binary self-update
 replaced keeps the code it started with: one WATCH STALE line names the
@@ -364,6 +368,11 @@ type watcher struct {
 	// kept in its mark.
 	feedID   string
 	lastPoll time.Time
+	// Hung checks get a fresh grace period on startup and after a suspend
+	// (or a long gap in observations). These times stay in memory so their
+	// monotonic readings can exclude time spent asleep.
+	lastHungCheck time.Time
+	hungGrace     time.Time
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
 	refusedSince time.Time
@@ -1229,7 +1238,16 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
-		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB; %s", d.UsedMiB, w.lastFreeNote())
+		large := d.UsedMiB > th.TmpMax(d.TotalMiB)
+		var largest string
+		if large {
+			var owners map[int]string
+			if o := w.owners.Load(); o != nil {
+				owners = *o
+			}
+			largest = "; " + tmpfsLargest("/tmp", table, owners, proc.References)
+		}
+		w.check("tmp", large, "TMPFS /tmp: %d MiB; %s%s", d.UsedMiB, w.lastFreeNote(), largest)
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
 		var owners map[int]string
@@ -1748,6 +1766,21 @@ func (w *watcher) lostMerges(ctx context.Context) {
 // pull request (endHung), one MERGE HUNG line each; the next poll records
 // it (lostMerges), or its gate does.
 func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
+	// GitHub and persisted merge timestamps have no monotonic reading.
+	// Never use their wall-clock age alone to kill a wait after a suspend.
+	// The wall/monotonic difference detects suspend on platforms whose
+	// monotonic clock stops asleep; a long gap also covers other platforms
+	// and clocks without monotonic readings.
+	gap := max(5*time.Minute, 2*slowReads*w.cfg.Watch.Interval.Duration)
+	wallElapsed := now.Round(0).Sub(w.lastHungCheck.Round(0))
+	elapsed := now.Sub(w.lastHungCheck)
+	if w.lastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
+		w.hungGrace = now
+	}
+	w.lastHungCheck = now
+	if now.Sub(w.hungGrace) <= w.cfg.Merge.HungAfter.Duration {
+		return
+	}
 	for _, h := range w.endHung(ctx, watchParty, now, w.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
 		return now.Sub(m.Started) > w.cfg.Merge.HungAfter.Duration
 	}) {
@@ -2094,10 +2127,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.actTimers(ctx, fires)
-	for _, n := range defaulted {
+	if len(defaulted) > 0 {
 		w.timerActs.Go(func() {
-			w.tellFiler(ctx, watchParty, &n, defaultedLine(&n))
-			w.emitReleased(ctx, &n, closedDefaulted)
+			w.tellDefaulted(ctx, defaulted)
+			for _, n := range defaulted {
+				w.emitReleased(ctx, &n, closedDefaulted)
+			}
 		})
 	}
 	for _, n := range overtaken {
@@ -2405,7 +2440,7 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 			r.Ended = time.Time{} // resumed: its next end is reported again
 			evs = append(evs, event(watchParty, "session.resumed", "%s: %s", r.Session.Name, recordText(*r)))
 		}
-		if live || !r.Ended.IsZero() {
+		if live || !r.Ended.IsZero() || rosterKept(st, r.Session, now) != "" {
 			continue
 		}
 		r.Ended = now.UTC()

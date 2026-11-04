@@ -10,10 +10,39 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/plugin"
 )
+
+func TestWorkerPromptsUseDistinctWorktreeDirectories(t *testing.T) {
+	task := "Work on branch fix/example in repository example"
+	paths := make(map[string]bool)
+	for range 2 {
+		prompt := workerPrompt(taskPrompt(task))
+		_, rest, ok := strings.Cut(prompt, "Your worktree path: `<root>/<repo>/<branch>-")
+		if !ok {
+			t.Fatal("startup prompt offers no session worktree path")
+		}
+		suffix, _, ok := strings.Cut(rest, "`")
+		if !ok {
+			t.Fatal("unterminated worktree path")
+		}
+		if _, err := uuid.Parse(suffix); err != nil {
+			t.Fatalf("worktree suffix is not a unique session token: %q", suffix)
+		}
+		path := filepath.Join("worktrees", "example", "fix/example-"+suffix)
+		if paths[path] {
+			t.Fatalf("two sessions on the same branch share %q", path)
+		}
+		paths[path] = true
+		if briefOf(prompt) != task {
+			t.Fatal("session-specific worktree instructions changed the task")
+		}
+	}
+}
 
 // The worker rules name the started session's scratchpad by absolute path,
 // and a cd to a variable that stops on an empty one.

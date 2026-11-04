@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `beekeeper lease kubeconfig <lab>` prints the bare path for use with `kubectl --kubeconfig`; `--export` prints the shell export line (#690).
+
 ### Added
 
 - `beekeeper disk holders` lists the state home's holders (each entry of `~/.local/state`, and each entry of its `aside` and `moved-aside` directories) by size and last write with an owner read from the name (a task number names the roster agent or session record working that issue or pull request number; otherwise the program), and says which are eligible for removal: unused for `disk.holders.staleAfter` (72h; aside entries after `disk.holders.asideRetention`, 168h), unused by any process, of no open task, holding no checkout outside an aside directory, and neither beekeeper's own state nor in `disk.holders.keep`. It removes nothing. Every `disk.holders.every` (6h) the watch says `STATE HOLDERS` with the largest eligible holders while they take `disk.holders.warnGiB` (10) or more, counting the ones holding a checkout without naming them, and `STATE HOLDERS unknown` while a process it cannot read leaves no holder judged; negative holder durations are refused ([https://github.com/giantswarm/beekeeper/issues/1581](https://github.com/giantswarm/beekeeper/issues/1581)).
@@ -40,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
 - Honor saved Go cache settings, including GOENV selection and persisted GOPATH, when discovering build and module cache directories (https://github.com/giantswarm/beekeeper/issues/2758).
+- Dispatch recovered merge confirmations to the workflow sink once per pull request and preserve saved results when recording fails (https://github.com/giantswarm/beekeeper/issues/3023).
 - Stop worktree cleanup when pull-request reads fail or leave any requested branch unanswered, preserving harness checkouts when PR data is unavailable (https://github.com/giantswarm/beekeeper/issues/3093).
 - Broker replies use exclusively created temporary files so planted staging links cannot overwrite other files; failed publication cleans up its temporary file (#3034).
 - Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).

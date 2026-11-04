@@ -515,7 +515,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if strings.Contains(args, "mergepullrequest") || strings.Contains(args, "/merge") || strings.Contains(args, "pr merge") {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-		case "git":
+		case gitCmd:
 			for _, a := range words[1:] {
 				if strings.Contains(a, "alias.") || strings.Contains(a, "core.sshCommand") {
 					refusal = errors.New("execution command aliases cannot bypass the remote guard")

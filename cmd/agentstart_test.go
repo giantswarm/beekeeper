@@ -130,7 +130,7 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 }
 
 func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: "default"}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
+	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: paramDefault}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
 	for id, want := range map[string]bool{"b": true, "d": false, "x": false, "": false} {
 		if _, ok := st.BypassStart(id); ok != want {
 			t.Errorf("BypassStart(%q) = %v", id, ok)
