@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+const recursiveGoGlob = "**/*.go"
+
 func TestGlobPatternsRespectWorkspaceAndTranscriptBoundaries(t *testing.T) {
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -26,8 +28,8 @@ func TestGlobPatternsRespectWorkspaceAndTranscriptBoundaries(t *testing.T) {
 		"absolute outside": {workspace, filepath.Join(outside, "**", "*.jsonl"), true},
 		"relative outside": {workspace, filepath.Join(relative, "**", "*.jsonl"), true},
 		"absolute inside":  {workspace, filepath.Join(workspace, "**", "*.go"), false},
-		"relative inside":  {workspace, "**/*.go", false},
-		"default path":     {"", "**/*.go", false},
+		"relative inside":  {workspace, recursiveGoGlob, false},
+		"default path":     {"", recursiveGoGlob, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			input := map[string]any{pathKey: tc.path, patternKey: tc.pattern}
