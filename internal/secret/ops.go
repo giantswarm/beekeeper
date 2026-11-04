@@ -774,7 +774,8 @@ func (o *Ops) storeVaultFields(ctx context.Context, vault, title, ref string, fi
 	// built-in one, which op's validator requires of the category with a
 	// value, so it carries the first secret field's value, the field itself
 	// beside it under its own label
-	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{newItemPassword(fields)}}
+	password := newItemPassword(fields)
+	item := map[string]any{"title": title, "category": passwordPurpose, "fields": []any{password}}
 	if id != "" {
 		raw, err := o.op(ctx, nil, "item", "get", id, "--vault", vault, "--format", "json")
 		if err != nil {
@@ -783,6 +784,16 @@ func (o *Ops) storeVaultFields(ctx context.Context, vault, title, ref string, fi
 		item = map[string]any{}
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return fmt.Errorf("%s: op item get answered no item", ref)
+		}
+		// A text-only creation leaves the built-in password empty. When
+		// adding its first secret, use the same value as a new item would,
+		// while preserving any password already stored.
+		existing, _ := item["fields"].([]any)
+		for _, field := range existing {
+			f, ok := field.(map[string]any)
+			if ok && f["id"] == passwordField && f["purpose"] == passwordPurpose && f["value"] == "" {
+				f["value"] = password["value"]
+			}
 		}
 	}
 	for _, f := range fields {
