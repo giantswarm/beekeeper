@@ -1922,6 +1922,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	}
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = append(slices.Clone(argv), "--progress")
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
