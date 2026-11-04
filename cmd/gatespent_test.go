@@ -146,12 +146,11 @@ func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	}
 }
 
-// The lane's places into one base branch read how it releases once for the
-// pass; a repository whose places all left reads again for its next merge.
-func TestTheBaseBranchReleaseIsReadOncePerLanePass(t *testing.T) {
+// Each pull request reads its own release tree, even in the same lane pass.
+func TestTheReleaseTreeIsReadForEachPullRequest(t *testing.T) {
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	reads := 0
-	branchRelease = func(context.Context, string, string) (github.BaseRelease, error) {
+	releaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
 		reads++
 		return github.BaseRelease{Base: mainBranch, Auto: true}, nil
 	}
@@ -174,8 +173,8 @@ func TestTheBaseBranchReleaseIsReadOncePerLanePass(t *testing.T) {
 	}
 	readFor(7)
 	readFor(8)
-	if reads != 1 {
-		t.Errorf("the base branch was read %d times for two places of the pass, want once", reads)
+	if reads != 2 {
+		t.Errorf("the base branch was read %d times for two places of the pass, want twice", reads)
 	}
 
 	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -186,7 +185,7 @@ func TestTheBaseBranchReleaseIsReadOncePerLanePass(t *testing.T) {
 	}
 	g.now = g.now.Add(2 * time.Minute)
 	readFor(9)
-	if reads != 2 {
-		t.Errorf("a new pass read the base branch %d times in all, want a second read", reads)
+	if reads != 3 {
+		t.Errorf("a new pass read the base branch %d times in all, want a third read", reads)
 	}
 }
