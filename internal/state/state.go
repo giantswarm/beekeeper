@@ -1937,6 +1937,9 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
+	if err := s.checkRecoveryFence(); err != nil {
+		return err
+	}
 	own, ok := release(s.version)
 	if !ok {
 		return nil

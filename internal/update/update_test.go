@@ -296,15 +296,15 @@ func TestReplacesTheExecutableOnceTheBundleVerifies(t *testing.T) {
 		return
 	}
 	// The link still names the file, which keeps its mode, and nothing is
-	// left beside it.
+	// left beside it except the durable recovery directory.
 	if target, err := os.Readlink(link); err != nil || target != exe {
 		t.Errorf("link names %q, %v", target, err)
 	}
 	if info, err := os.Stat(exe); err != nil || info.Mode().Perm() != 0o750 {
 		t.Errorf("executable mode %v, %v; want -rwxr-x---", info.Mode(), err)
 	}
-	if entries, _ := os.ReadDir(filepath.Dir(exe)); len(entries) != 1 {
-		t.Errorf("%s holds %d entries, want only the binary", filepath.Dir(exe), len(entries))
+	if entries, _ := os.ReadDir(filepath.Dir(exe)); len(entries) != 2 {
+		t.Errorf("%s holds %d entries, want the binary and recovery directory", filepath.Dir(exe), len(entries))
 	}
 }
 
@@ -399,7 +399,7 @@ func TestRefusesADownloadThatDoesNotVerify(t *testing.T) {
 	exe, content := installed(t)
 	var out bytes.Buffer
 	_, err := Run(context.Background(), &out, false)
-	if err == nil || !strings.Contains(err.Error(), "is unchanged") || !strings.Contains(err.Error(), "is not a Sigstore bundle") {
+	if err == nil || !strings.Contains(err.Error(), "failed") || !strings.Contains(err.Error(), "is not a Sigstore bundle") {
 		t.Errorf("Run() = %v, want the refusal and why", err)
 	}
 	if strings.Contains(out.String(), "Verified") {
@@ -421,7 +421,7 @@ func TestReportsSourceInitializationFailure(t *testing.T) {
 // installBundle is the bundle InstallVersion's release carries.
 const installBundle = "the release's bundle"
 
-func TestInstallVersionInstallsThatReleaseWithoutBackup(t *testing.T) {
+func TestInstallVersionBootstrapsJournalWithoutUnverifiedBackup(t *testing.T) {
 	src := &fakeSource{
 		releases: []selfupdate.SourceRelease{release("v0.4.0"), release(latestV)},
 		assets:   map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)},
@@ -516,107 +516,17 @@ func TestInstallVersionDoesNotTouchBackupPath(t *testing.T) {
 	}
 }
 
-func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
-	for _, tc := range []struct {
-		name               string
-		verifyErr, sudoErr error
-	}{
-		{name: "success"},
-		{name: "invalid signature", verifyErr: errors.New("invalid signature")},
-		{name: "sudo unavailable", sudoErr: errors.New("sudo denied")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
-			setup(t, running, src)
-			exe, content := installed(t)
-			resolved, err := filepath.EvalSymlinks(exe)
-			if err != nil {
-				t.Fatal(err)
-			}
-			newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
-			originalInstall, originalPrivileged := installVerified, privilegedInstall
-			t.Cleanup(func() { installVerified, privilegedInstall = originalInstall, originalPrivileged })
-			installs, privileged := 0, 0
-			installVerified = func(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
-				installs++
-				if installs == 1 {
-					return &os.PathError{Op: "mkdir", Path: filepath.Dir(exe), Err: os.ErrPermission}
-				}
-				if tc.verifyErr != nil {
-					return tc.verifyErr
-				}
-				return originalInstall(ctx, up, rel, path)
-			}
-			privilegedInstall = func(_ context.Context, source, target, mode string) error {
-				privileged++
-				if target != resolved || mode != "750" {
-					t.Fatalf("destination %q mode %q", target, mode)
-				}
-				got, err := os.ReadFile(filepath.Clean(source))
-				if err != nil || string(got) != newBinary {
-					t.Fatalf("staged %q, %v", got, err)
-				}
-				if tc.sudoErr != nil {
-					return tc.sudoErr
-				}
-				return os.Rename(source, target)
-			}
-			res, err := InstallVersion(context.Background(), io.Discard, latestV)
-			if tc.verifyErr != nil {
-				if !errors.Is(err, tc.verifyErr) || privileged != 0 {
-					t.Fatalf("verification error %v, privileged calls %d", err, privileged)
-				}
-			} else if tc.sudoErr != nil {
-				if !errors.Is(err, tc.sudoErr) || privileged != 1 {
-					t.Fatalf("sudo error %v, calls %d", err, privileged)
-				}
-			} else if err != nil || !res.Updated || privileged != 1 {
-				t.Fatalf("result %+v, %v, privileged calls %d", res, err, privileged)
-			}
-			if tc.verifyErr != nil || tc.sudoErr != nil {
-				assertUnchanged(t, exe, content)
-			}
-		})
+func TestInstallVersionPermissionFailurePreservesExecutable(t *testing.T) {
+	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+	setup(t, running, src)
+	exe, content := installed(t)
+	original := installVerified
+	t.Cleanup(func() { installVerified = original })
+	installVerified = func(context.Context, *selfupdate.Updater, *selfupdate.Release, string) error { return os.ErrPermission }
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error = %v", err)
 	}
-}
-
-func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("sudo installation is Unix only")
-	}
-	dir := t.TempDir()
-	// Exercise the actual installer script without privileges. The fake sudo
-	// accepts only noninteractive invocation and executes its exact argv.
-	sudo := filepath.Join(dir, "sudo")
-	if err := os.WriteFile(sudo, []byte("#!/bin/sh\n[ \"$1\" = -n ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	target := filepath.Join(dir, "installed binary")
-	source := filepath.Join(dir, "verified binary")
-	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil { //nolint:gosec // executable fixture whose mode the install preserves
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(source, []byte(newBinary), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := privilegedInstall(context.Background(), source, target, "750"); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != newBinary {
-		t.Fatalf("installed %q, %v", got, err)
-	}
-	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0o750 {
-		t.Fatalf("mode %v, %v", info, err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 3 {
-		t.Fatalf("installation left temporary files: %v", entries)
-	}
+	assertUnchanged(t, exe, content)
 }
 
 func TestCanaryRefusesBadBinaryAndSkipsRelease(t *testing.T) {
@@ -663,4 +573,18 @@ func TestCanaryRefusesBadBinaryAndSkipsRelease(t *testing.T) {
 	if !strings.Contains(out.String(), "is the latest release") {
 		t.Errorf("check output after skip:\n%s", out.String())
 	}
+}
+
+func TestCanaryCannotModifyTheVerifiedCandidate(t *testing.T) {
+	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+	setup(t, running, src)
+	exe, content := installed(t)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	ctx := WithOptions(context.Background(), Options{Canary: func(_ context.Context, path, _ string) error {
+		return os.WriteFile(path, []byte("modified after verification"), 0o700)
+	}})
+	if _, err := InstallVersion(ctx, io.Discard, latestV); err == nil {
+		t.Fatal("installed modified candidate")
+	}
+	assertUnchanged(t, exe, content)
 }

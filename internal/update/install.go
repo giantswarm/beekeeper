@@ -5,10 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/giantswarm/go-selfupdate"
@@ -18,85 +15,63 @@ import (
 const windowsOS = "windows"
 
 var installVerified = selfupdatecosign.Install
-var privilegedInstall = func(ctx context.Context, source, target, mode string) error {
-	// Only the final filesystem operations need privilege. No shell input is
-	// interpolated: source, target and mode are positional arguments.
-	const script = `set -eu
-source=$1
-target=$2
-mode=$3
-dir=$(mktemp -d "$(dirname "$target")/.beekeeper.update-XXXXXXXX")
-trap 'rm -f -- "$dir/beekeeper"; rmdir -- "$dir"' EXIT
-install -m "$mode" -- "$source" "$dir/beekeeper"
-mv -f -- "$dir/beekeeper" "$target"
-`
-	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed installer script; verified paths are positional arguments
-	if err != nil {
-		return fmt.Errorf("privileged atomic install: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
 
-// installRelease normally writes beside the executable. A system installation
-// may need sudo for that directory; download and verification still run as the
-// update account, and sudo never prompts or downloads anything. When a canary
-// is configured on ctx, the verified binary is staged and checked before it
-// replaces the target executable.
+// installRelease holds the recovery lock through verification, canary checks
+// and durable replacement. Directory permission errors fail closed: the former
+// sudo rename fallback could not preserve a durable recovery transaction.
 func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
-	canary := optionsFrom(ctx).Canary
-	version := "v" + strings.TrimPrefix(rel.Version(), "v")
-	target, err := filepath.EvalSymlinks(path)
+	i, err := openInstallation(ctx, path)
+	if err != nil {
+		return fmt.Errorf("opening durable installation (directory must be writable): %w", err)
+	}
+	defer i.close()
+	j, err := i.read()
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(target)
+	if err := i.recover(j); err != nil {
+		return err
+	}
+	canary := optionsFrom(ctx).Canary
+	version := "v" + strings.TrimPrefix(rel.Version(), "v")
+	info, err := os.Stat(i.target)
 	if err != nil {
 		return err
 	}
 	mode := info.Mode().Perm()
-	stageDir, err := os.MkdirTemp(filepath.Dir(target), ".beekeeper-update-*")
-	if err == nil {
-		defer func() { _ = os.RemoveAll(stageDir) }()
-		staged := filepath.Join(stageDir, filepath.Base(target))
-		if werr := os.WriteFile(staged, nil, mode); werr == nil {
-			err = installVerified(ctx, up, rel, staged)
-			if err == nil {
-				if canary != nil {
-					_ = os.Chmod(staged, mode|0o700)
-					if err := canary(ctx, staged, version); err != nil {
-						return err
-					}
-					_ = os.Chmod(staged, mode)
-				}
-				err = os.Rename(staged, target)
-				if err == nil {
-					return nil
-				}
-			}
-		} else {
-			err = fmt.Errorf("staging release: %w", werr)
-		}
-	}
-	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == windowsOS {
-		return err
-	}
-	dir, err := os.MkdirTemp("", "beekeeper-install-")
+	stageDir, err := os.MkdirTemp(filepath.Dir(i.target), ".beekeeper-update-*")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	staged := filepath.Join(dir, filepath.Base(target))
-	if err := os.WriteFile(staged, nil, 0o600); err != nil {
+	defer func() { _ = os.RemoveAll(stageDir) }()
+	staged := filepath.Join(stageDir, filepath.Base(i.target))
+	if err := os.WriteFile(staged, nil, mode); err != nil {
 		return err
 	}
 	if err := installVerified(ctx, up, rel, staged); err != nil {
-		return fmt.Errorf("verifying staged release: %w", err)
+		return err
+	}
+	verifiedDigest, err := digest(staged)
+	if err != nil {
+		return err
 	}
 	if canary != nil {
-		_ = os.Chmod(staged, mode|0o700)
+		if err := os.Chmod(staged, mode|0o700); err != nil {
+			return err
+		}
 		if err := canary(ctx, staged, version); err != nil {
 			return err
 		}
 	}
-	return privilegedInstall(ctx, staged, target, strconv.FormatUint(uint64(mode), 8))
+	if err := os.Chmod(staged, mode); err != nil {
+		return err
+	}
+	afterCanary, err := digest(staged)
+	if err != nil {
+		return err
+	}
+	if afterCanary != verifiedDigest {
+		return errors.New("verified candidate changed during canary checks")
+	}
+	return i.replace(staged, version)
 }

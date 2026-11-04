@@ -141,3 +141,23 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
 	}
 }
+
+func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
+	for _, args := range [][]string{
+		{"--rollback"},
+		{"--rollback-reason", "failed"},
+		{"--check", "--complete-probation"},
+		{"--complete-probation", "--rollback", "--rollback-reason", "failed"},
+		{"--check", "--rollback", "--rollback-reason", "failed"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			root := New()
+			root.SetArgs(append([]string{selfUpdateCmdName}, args...))
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			if err := root.Execute(); err == nil {
+				t.Fatal("accepted unsafe flag combination")
+			}
+		})
+	}
+}
