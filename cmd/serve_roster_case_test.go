@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,11 @@ func TestAgentsRegisterKeepsObjectAcrossNameCase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("register %s: %v", name, err)
 		}
-		registered := result.(map[string]any)["agent"].(state.Party)
+		response := result.(map[string]any)
+		registered := response["agent"].(state.Party)
+		if response["task"] != task || !strings.Contains(call.out.String(), "register: "+storedName+" busy") {
+			t.Fatalf("registration response lost the stored name or task: %+v, %s", response, call.out)
+		}
 		if registered.Name != storedName || client.ObjectKeyFromObject(call.concern) != key {
 			t.Fatalf("registration or audit changed the address: %+v, %+v", registered, call.concern)
 		}
@@ -62,6 +67,9 @@ func TestAgentsRegisterKeepsObjectAcrossNameCase(t *testing.T) {
 		events := &corev1.EventList{}
 		if err := c.List(context.Background(), events); err != nil {
 			t.Fatal(err)
+		}
+		if len(events.Items) == 0 {
+			t.Fatal("registration has no audit event")
 		}
 		for _, event := range events.Items {
 			if event.InvolvedObject.Kind != "RosterEntry" || event.InvolvedObject.Name != key.Name {
