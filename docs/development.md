@@ -162,14 +162,32 @@ BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
 reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
-the rewrite, and run what it prints:
+the rewrite, and run what it prints. A hook proof requires a **real in-scope
+session ID**, never a made-up ID: out-of-scope events pass through without
+exercising the guard. Run `beekeeper sessions` with the configuration being
+proved and copy the ID of a session beekeeper started or knows; in a Claude
+Code tool shell, `$CLAUDE_CODE_SESSION_ID` supplies the current session ID.
+For agy, use the real conversation ID from its session record. Include that
+session's actual `cwd` (agy: `workspacePaths`). Scope also includes directories
+under `hooks.scope.dirs`; when that setting is unset, every session is in scope.
+A scope check verifies membership, not session liveness, so obtaining a real ID
+is still required.
+
+Save the exact event and check it before each proof. Use the same configuration,
+state and environment for the preflight and hook. `check-scope` exits nonzero
+with an explicit out-of-scope error rather than treating a pass-through as proof:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"devctl pr merge giantswarm/marge 1"}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse
-echo '{"conversationId":"s1","workspacePaths":["/tmp"],"toolCall":{"name":"run_command","args":{"CommandLine":"devctl pr merge giantswarm/marge 1"}}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse --format agy
-PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
+# Set SESSION_ID to the real ID obtained above, and SESSION_CWD to its cwd.
+: "${SESSION_ID:?real in-scope session ID required}"
+: "${SESSION_CWD:?session working directory required}"
+jq -n --arg id "$SESSION_ID" --arg cwd "$SESSION_CWD" \
+  '{session_id:$id,cwd:$cwd,tool_name:"Bash",tool_input:{command:"devctl pr merge giantswarm/marge 1"}}' > /tmp/bk-event.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-event.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse < /tmp/bk-event.json
+# For agy, save its event shape with conversationId and workspacePaths instead;
+# check the same event, then invoke pretooluse --format agy.
+PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID="$SESSION_ID" \
   ./beekeeper gate --wait 10s -- devctl pr merge giantswarm/marge 1
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
@@ -189,8 +207,10 @@ it is quiet, then `agents handover`. The started sessions get the scratch config
 `agents handover --prompt` shows the prompt without starting anything.
 
 ```bash
-echo '{"hook_event_name":"PermissionRequest","session_id":"<id>","permission_mode":"acceptEdits","tool_name":"WebSearch"}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest
+jq -n --arg id "${SESSION_ID:?real started session ID required}" \
+  '{hook_event_name:"PermissionRequest",session_id:$id,permission_mode:"acceptEdits",tool_name:"WebSearch"}' > /tmp/bk-permission.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-permission.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest < /tmp/bk-permission.json
 ```
 
 The hook's merge rewrite is pinned against real commands: `internal/guard/testdata/merges.jsonl`
@@ -614,7 +634,9 @@ disk:
 
 A central Note closes only with a recognised close event (`answer.recorded`,
 `note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
-line atomically with the outcome. Closed Notes remain as history, outside the
+line atomically with the outcome. Answered Notes also retain the verbatim answer
+in `status.answer`, the caller's verified email in `status.answeredBy`, and the
+answer time in `status.answeredAt`. Closed Notes remain as history, outside the
 open notes and the 24-hour default-answer window, for 30 days after closure.
 Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first

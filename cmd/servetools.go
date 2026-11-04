@@ -118,10 +118,10 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
-		{newTool("hold_list", "List the holds on merges into a repository or lane, or on every merge, until lifted.", "", hintAuditRead), toolHoldList},
-		{newTool("hold_set", "Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.",
-			"", hintRemove,
-			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
+		{newTool("hold_list", "List the holds on merges into a repository or lane until lifted.", "", hintAuditRead), toolHoldList},
+		{newTool("hold_set", "Hold merges in a central repository or lane: owner/repo or lane:<name>.",
+			"The merges and github targets are machine-local; use the local CLI for them.", hintRemove,
+			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo or lane:<name>")),
 			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why")),
 			mcp.WithString("until", mcp.Description("when it ends by itself: a time (15:30) or a duration (2h)")),
 			mcp.WithString("except", mcp.Description("the one owner/repo or owner/repo#n the hold lets through"))), toolHoldSet},
@@ -373,9 +373,13 @@ func (c *call) hold(target string) (*state.Hold, error) {
 }
 
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
-	target, err := required(req, paramTarget, "owner/repo, lane:<name>, merges or github")
+	target, err := required(req, paramTarget, "owner/repo or lane:<name>")
 	if err != nil {
 		return nil, err
+	}
+	// Machine-wide holds belong to the local budget and guard, not central lanes.
+	if target == merge.AllMerges || target == holdGitHub {
+		return nil, usageErr("%s is a machine-local hold target; use the local CLI, or hold a central repository (owner/repo) or lane (lane:<name>)", target)
 	}
 	c.concern = kube.HoldObject(target)
 	args := []string{"set", target, flagNoteReason, req.GetString(paramReason, "")}
