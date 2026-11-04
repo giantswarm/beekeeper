@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const responseCredential = "synthetic-response-credential"
+const (
+	responseCredential = "synthetic-response-credential"
+	responseSubject    = "synthetic-sa"
+)
 
 func TestExchangerRejectsMalformedSuccess(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
@@ -20,7 +23,7 @@ func TestExchangerRejectsMalformedSuccess(t *testing.T) {
 		{"trailing JSON", `{"access_token":"stand-in","expires_in":1800} {"extra":"synthetic-response-credential"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := &fakeDex{t: t, subject: "synthetic-sa", scope: plainScopes, status: http.StatusOK, body: tc.body}
+			d := &fakeDex{t: t, subject: responseSubject, scope: plainScopes, status: http.StatusOK, body: tc.body}
 			e, _ := newExchange(t, d, "")
 			for range 2 {
 				token, err := e.Token(context.Background())
@@ -56,7 +59,7 @@ func TestExchangerMalformedErrorResponse(t *testing.T) {
 		`{"error":["synthetic-response-credential"]}`,
 		`{"error":"temporarily_unavailable","expires_in":"synthetic-response-credential"}`,
 	} {
-		d := &fakeDex{t: t, subject: "synthetic-sa", scope: plainScopes, status: http.StatusServiceUnavailable, body: body}
+		d := &fakeDex{t: t, subject: responseSubject, scope: plainScopes, status: http.StatusServiceUnavailable, body: body}
 		e, _ := newExchange(t, d, "")
 		token, err := e.Token(context.Background())
 		if err == nil || token != "" {
@@ -76,7 +79,7 @@ func TestExchangerAcceptsOptionalResponseFields(t *testing.T) {
 		`{"access_token":"stand-in","expires_in":1800}`,
 		`{"access_token":"stand-in","issued_token_type":"urn:ietf:params:oauth:token-type:id_token","expires_in":1800,"extension":{"items":[1,true,null]}}`,
 	} {
-		d := &fakeDex{t: t, subject: "synthetic-sa", scope: plainScopes, status: http.StatusOK, body: body}
+		d := &fakeDex{t: t, subject: responseSubject, scope: plainScopes, status: http.StatusOK, body: body}
 		e, _ := newExchange(t, d, "")
 		token, err := e.Token(context.Background())
 		if err != nil || token != "stand-in" {
