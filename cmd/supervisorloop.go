@@ -2637,10 +2637,33 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		}
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	var place startHost
+	var err error
+	if act.Kind == superloop.KindEnd {
+		// Terminal continuations can need the live desk checkout and host
+		// policy sync. Execution hosts only have prepared workspaces, so
+		// keep this work on the coordinator even under hostsFirst.
+		flags := startFlags(false, false)
+		if model := l.a.ruleModel(name, workerRole); model != "" {
+			flags = append(flags, modelFlag, model)
+		}
+		out, code, readErr := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+		var capacity struct {
+			Room int `json:"room"`
+		}
+		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+			err = errLoopLater
+		}
+	} else {
+		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+	}
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
-			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			where := "on any host"
+			if act.Kind == superloop.KindEnd {
+				where = "on the coordinator"
+			}
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return errLoopLater
 		}
 		return err
@@ -2657,10 +2680,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		merged := l.merged[act.Ref]
 		l.mu.Unlock()
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
-		branch = cmp.Or(place.Ref, merged.Base, head)
-		if place.remote() && place.Ref == "" {
-			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
-		}
+		branch = cmp.Or(merged.Base, head)
 	} else {
 		if p, err := readLoopPull(ctx, act.Ref); err == nil {
 			branch = p.Branch
