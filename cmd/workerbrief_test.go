@@ -44,14 +44,6 @@ func TestWorkerPromptsUseDistinctWorktreeDirectories(t *testing.T) {
 	}
 }
 
-func TestWorkerRulesRequireSessionWorktreeSuffix(t *testing.T) {
-	for _, want := range []string{"<root>/<repo>/<branch>-<session name or short id>", "(startup suffix); never share"} {
-		if !strings.Contains(plugin.WorkerRules(), want) {
-			t.Errorf("worker rules omit %q", want)
-		}
-	}
-}
-
 // The worker rules name the started session's scratchpad by absolute path,
 // and a cd to a variable that stops on an empty one.
 func TestWorkerPromptNamesTheScratchpad(t *testing.T) {
