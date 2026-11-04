@@ -171,6 +171,9 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	dirs := slices.Clone(m.Dirs)
 	slices.SortFunc(dirs, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
 	for _, dir := range dirs {
+		if purge && (dir == e.StateDir || strings.HasPrefix(dir, e.StateDir+string(filepath.Separator))) {
+			continue // The purge step already removes the state tree.
+		}
 		if !removed[dir] && empty(dir, removed) {
 			remove(dir, "an empty directory install created", os.Remove)
 		}

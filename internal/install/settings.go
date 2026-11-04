@@ -1064,36 +1064,36 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 			"replace the link with a directory for install to manage it, or edit the target yourself", nil)
 		return nil
 	}
-	names := plugin.SkillNames()
 	linksOK := true
 	anyExisted := exists(e.CodexSkills)
 	var links []string
-	for _, name := range names {
-		dst := filepath.Join(e.CodexSkills, name)
-		wantTarget := filepath.Join(skillsDir, name)
-		links = append(links, dst)
-		gotTarget, err := os.Readlink(dst)
-		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
-			linksOK = false
+	var createLinks [][2]string
+	planLink := func(dst, target string) {
+		got, err := os.Readlink(dst)
+		if err == nil && filepath.Clean(got) == filepath.Clean(target) && slices.Contains(m.CodexSkillLinks, dst) {
+			links = append(links, dst)
+			return
 		}
+		if _, err := os.Lstat(dst); !errors.Is(err, fs.ErrNotExist) {
+			p.add("keep", dst, "skill link collision: install did not write this path or it has changed", nil)
+			return
+		}
+		linksOK = false
+		links = append(links, dst)
+		createLinks = append(createLinks, [2]string{dst, target})
+	}
+	for _, name := range plugin.SkillNames() {
+		planLink(filepath.Join(e.CodexSkills, name), filepath.Join(skillsDir, name))
 	}
 	workerSkills := CodexWorkerSkills(e.StateDir)
 	if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
-		links = append(links, workerSkills)
-		gotTarget, err := os.Readlink(workerSkills)
-		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(skillsDir) {
-			linksOK = false
-		}
+		planLink(workerSkills, skillsDir)
 	}
 	userAgentsMD := filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
 	workerAgentsMD := filepath.Join(e.StateDir, "codex", "home", "AGENTS.md")
 	hasUserAgentsMD := exists(userAgentsMD) && filepath.Clean(resolve(userAgentsMD)) != filepath.Clean(workerAgentsMD)
 	if hasUserAgentsMD {
-		links = append(links, workerAgentsMD)
-		gotTarget, err := os.Readlink(workerAgentsMD)
-		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(userAgentsMD) {
-			linksOK = false
-		}
+		planLink(workerAgentsMD, userAgentsMD)
 	}
 	skillsCurrent := len(staleAgySkills(skillsDir)) == 0
 	if linksOK && skillsCurrent {
@@ -1121,45 +1121,13 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 		if err := os.MkdirAll(e.CodexSkills, 0o750); err != nil {
 			return err
 		}
-		for _, name := range names {
-			dst := filepath.Join(e.CodexSkills, name)
-			wantTarget := filepath.Join(skillsDir, name)
-			if gotTarget, err := os.Readlink(dst); err == nil && filepath.Clean(gotTarget) == filepath.Clean(wantTarget) {
-				continue
-			}
-			_ = os.RemoveAll(dst)
-			if err := os.Symlink(wantTarget, dst); err != nil {
+		for _, link := range createLinks {
+			if err := os.MkdirAll(filepath.Dir(link[0]), 0o700); err != nil {
 				return err
 			}
-		}
-		if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
-			if err := os.MkdirAll(filepath.Dir(workerSkills), 0o700); err != nil {
+			// Symlink fails if a path appeared after planning; never replace it.
+			if err := os.Symlink(link[1], link[0]); err != nil {
 				return err
-			}
-			if gotTarget, err := os.Readlink(workerSkills); err != nil || filepath.Clean(gotTarget) != filepath.Clean(skillsDir) {
-				if fi, err := os.Lstat(workerSkills); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-					_ = os.Remove(workerSkills)
-				}
-				if _, err := os.Lstat(workerSkills); errors.Is(err, fs.ErrNotExist) {
-					if err := os.Symlink(skillsDir, workerSkills); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		if hasUserAgentsMD {
-			if err := os.MkdirAll(filepath.Dir(workerAgentsMD), 0o700); err != nil {
-				return err
-			}
-			if gotTarget, err := os.Readlink(workerAgentsMD); err != nil || filepath.Clean(gotTarget) != filepath.Clean(userAgentsMD) {
-				if fi, err := os.Lstat(workerAgentsMD); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-					_ = os.Remove(workerAgentsMD)
-				}
-				if _, err := os.Lstat(workerAgentsMD); errors.Is(err, fs.ErrNotExist) {
-					if err := os.Symlink(userAgentsMD, workerAgentsMD); err != nil {
-						return err
-					}
-				}
 			}
 		}
 		return nil
@@ -1175,7 +1143,14 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 	}
 	var toRemove []string
 	for _, dst := range m.CodexSkillLinks {
-		if symlink(dst) {
+		target := filepath.Join(m.CodexSkillsDir, filepath.Base(dst))
+		if dst == CodexWorkerSkills(e.StateDir) {
+			target = m.CodexSkillsDir
+		} else if dst == filepath.Join(e.StateDir, "codex", "home", "AGENTS.md") {
+			target = filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
+		}
+		got, err := os.Readlink(dst)
+		if err == nil && filepath.Clean(got) == filepath.Clean(target) {
 			toRemove = append(toRemove, dst)
 			removed[dst] = true
 		}
