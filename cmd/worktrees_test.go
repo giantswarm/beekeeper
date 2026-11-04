@@ -21,6 +21,8 @@ import (
 // output.
 const mergedPR = "mergedpr"
 
+const cleanupUpstream = "upstream"
+
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -69,7 +71,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	writeT(t, filepath.Join(clone, ".gitignore"), "*.log\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "init")
-	gitT(t, clone, "remote", "add", "origin", "https://github.com/acme/app.git")
+	gitT(t, clone, "remote", "add", workerGitHubOrigin, "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
 	for _, b := range []string{mergedPR, "work", "unpushed", "open", "nopr", "live", "recent"} {
@@ -326,7 +328,7 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 // These temporary repositories never query a real publication service.
 func TestAutomaticWorktreesRejectChangedTask(t *testing.T) {
 	for _, action := range []string{worktrees.Remove, worktrees.Clean} {
-		for _, change := range []string{"branch", "upstream", "origin", "index"} {
+		for _, change := range []string{"branch", cleanupUpstream, workerGitHubOrigin, "index"} {
 			t.Run(action+"/"+change, func(t *testing.T) {
 				a, read, root := worktreeApp(t)
 				m, err := read()
@@ -361,11 +363,11 @@ func TestAutomaticWorktreesRejectChangedTask(t *testing.T) {
 					switch change {
 					case "branch":
 						gitT(t, dir, "checkout", "-q", "-b", "new-task")
-					case "upstream":
+					case cleanupUpstream:
 						gitT(t, dir, "update-ref", "refs/remotes/origin/new-task", "HEAD")
 						gitT(t, dir, "branch", "--set-upstream-to=origin/new-task")
-					case "origin":
-						gitT(t, dir, "remote", "set-url", "origin", "https://github.com/acme/other.git")
+					case workerGitHubOrigin:
+						gitT(t, dir, "remote", "set-url", workerGitHubOrigin, "https://github.com/acme/other.git")
 					case "index":
 						gd := gitT(t, dir, "rev-parse", "--absolute-git-dir")
 						// Advance activity while leaving it outside the grace period.
