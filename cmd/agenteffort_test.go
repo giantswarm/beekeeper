@@ -113,14 +113,14 @@ func TestEffortRulePrecedence(t *testing.T) {
 		{testScanName, workerRole, "", testEffortHigh},
 		{testScanName, taskKindReview, "", testEffortX},
 		{testScanName, workerRole, testEffortLow, testEffortLow},
-		{"fix", workerRole, "", ""},
+		{testFixWord, workerRole, "", ""},
 	} {
 		got, err := a.startEffort(tc.name, tc.kind, tc.flag)
 		if err != nil || got != tc.want {
 			t.Errorf("%+v: got %q, %v", tc, got, err)
 		}
 	}
-	if _, err := a.startEffort("fix", workerRole, "extreme"); err == nil {
+	if _, err := a.startEffort(testFixWord, workerRole, "extreme"); err == nil {
 		t.Fatal("invalid flag accepted")
 	}
 	a.cfg.Guide.Effort = testEffortMax

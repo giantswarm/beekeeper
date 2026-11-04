@@ -92,7 +92,7 @@ func TestAWaitFollowsTheRunThatPolls(t *testing.T) {
 }
 
 func TestFollowRunCopiesTheLeadersStderr(t *testing.T) {
-	lead := filepath.Join(t.TempDir(), "run")
+	lead := filepath.Join(t.TempDir(), testRunWord)
 	if err := os.WriteFile(lead+".log", []byte("checks pending\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,7 @@ func (a *app) transcriptPolicy() guard.TranscriptAccess {
 			filepath.Join(a.cfg.StateDir, "codex", "home", "sessions"),
 			filepath.Join(a.cfg.StateDir, "codex", "home", "archived_sessions"),
 			filepath.Join(a.cfg.StateDir, "codex", "home", "history.jsonl"),
+			filepath.Join(a.cfg.StateDir, "transcripts"),
 			a.cfg.Agy.BrainDir, a.cfg.Agy.ConversationsDir, a.cfg.Omp.SessionsDir},
 		ClaudeProjects: []string{a.cfg.Claude.ProjectsDir},
 		AgyBrains:      []string{a.cfg.Agy.BrainDir},

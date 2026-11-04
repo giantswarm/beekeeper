@@ -48,8 +48,13 @@ const loopStartVerb = "supervisor.loop"
 // loopClaimVerb logs an action the loop is about to take, before its side
 // effect; loopStageVerb a finished stage of a release; loopUnstageVerb a
 // stage found obsolete, which no later pass resumes.
+// loopGoVerb logs a merge go given to a worker, loopMergeVerb a merge the
+// loop ran itself.
 const (
 	loopClaimVerb    = "supervisor.claim"
+	loopGoVerb       = "supervisor." + superloop.KindGo
+	loopMergeVerb    = "supervisor." + superloop.KindMerge
+	loopEndVerb      = "supervisor." + superloop.KindEnd
 	loopFileVerb     = "supervisor." + superloop.KindFile
 	loopClaimEndVerb = "supervisor.unclaim"
 	loopStageVerb    = "supervisor.stage"
@@ -504,9 +509,8 @@ its key first in the detail):
             behind a base its merge does not update (no devctl
             --update-branch, no merge.admin); the merge go again for a green
             head whose go was given and never carried out; a reviewer for
-            a green head awaiting its review (a worker to take it over once
-            its reviews are used). Running checks wait; an open escalation
-            or ownership question is the person's. One action per stretch,
+            a green head awaiting its review. Running checks wait; an open
+            escalation or ownership question is the person's. One action per stretch,
             at most superloop.MaxSweeps (2) per head, then a leave for the
             guide
   override  the person's answer Override (the option, or a bare override):
@@ -1067,6 +1071,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if err := l.fireTimers(ctx, st); err != nil {
 			return err
 		}
+		l.settleOverrides(ctx, st)
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
@@ -1091,6 +1096,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if reexec, err := l.reexec(ctx); err != nil || reexec {
 			return err
 		}
+	}
+	if err := l.recoverQuota(ctx, st); err != nil {
+		return err
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		return err
 	}
 	if err := l.recoverParks(ctx, st); err != nil {
 		return err
@@ -1122,10 +1134,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		w := superloop.Worker{Name: ag.Name, SelfHosted: selfHostedModel(a.cfg.Capacity, agentRecordedModel(st, ag)), Started: st.StartIndex(ag.Party) >= 0}
 		if ag.Park != nil {
 			w.ParkedOn, w.ParkedAt, w.Waits = loopParkOn(ag.Park), ag.Park.At, ag.Park.Waits
-			if !shouldEndReviewWorker(st, ag) || l.dryRun {
-				w.ReviewRequested = ag.Park.ReviewHead != ""
-				w.ParkedHead = ag.Park.ReviewHead
-			}
+			// A verified park requests review even while retirement waits for
+			// the worker's current turn to end.
+			w.ReviewRequested = ag.Park.ReviewHead != ""
+			w.ParkedHead = ag.Park.ReviewHead
 		}
 		w.Waking = slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return t.Wake != "" && strings.EqualFold(t.Wake, ag.Name) })
 		w.Serves = loopServes(st, ag)
@@ -1288,6 +1300,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		if r, ok := parseRef(ref); ok {
 			p.Team = l.teams[strings.ToLower(r.Repo)]
 		}
+		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
 		if p.State == superloop.Merged {
 			l.mu.Lock()
@@ -1348,16 +1361,18 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 		}
 	}
-	// A release claimed and not finished goes on, whatever --check says
-	// now that it is installed.
-	for key := range claims {
-		if v, ok := strings.CutPrefix(key, superloop.KindRelease+" "); ok {
-			in.Release = v
+	if !st.AutoInstallPaused {
+		// A release claimed and not finished goes on, whatever --check says
+		// now that it is installed.
+		for key := range claims {
+			if v, ok := strings.CutPrefix(key, superloop.KindRelease+" "); ok {
+				in.Release = v
+			}
 		}
-	}
-	if in.Release == "" && !l.dryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
-		l.releaseAt = a.timeNow()
-		in.Release = l.newerRelease(ctx)
+		if in.Release == "" && !l.dryRun && a.timeNow().Sub(l.releaseAt) >= a.cfg.Supervisor.ReleaseEvery.Duration {
+			l.releaseAt = a.timeNow()
+			in.Release = l.newerRelease(ctx)
+		}
 	}
 	if reexec, err := l.reexec(ctx); err != nil || reexec {
 		return err
@@ -2500,6 +2515,11 @@ func shouldEndReviewWorker(st *state.State, ag state.Agent) bool {
 	if ag.Execution != nil {
 		return st.Starts[k].Execution != nil
 	}
+	// The watch stops parked background sessions to free memory. Their
+	// roster entry and park remain the durable owner of the review and wake.
+	if st.Starts[k].Background {
+		return false
+	}
 	return ag.Park.PostMerge != nil || st.Starts[k].Dir != ""
 }
 
@@ -2631,6 +2651,9 @@ Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekee
 `
 
 func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if l.holdingStarts() {
 		return errLoopLater
 	}
@@ -2779,6 +2802,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
 	if l.holdingStarts() {
 		return "", errLoopLater
 	}
@@ -2996,8 +3022,8 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement keeps reviewers on the coordinator, judged with their
-// review capacity flags. Workers use the placement rules below.
+// startPlacement applies host preferences to workers and GitHub-enabled
+// reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
 // zero value). Otherwise the local verdict (capacity --json, with the
@@ -3026,9 +3052,9 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// Execution hosts have no relayed GitHub read-and-review path. Keep
-	// reviewers on the coordinator, without reserving any choices for hosts.
-	if review {
+	// A remote reviewer needs the per-worker GitHub adapter to read the PR
+	// and post its review. Publication-only hosts cannot perform reviews.
+	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
 		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
@@ -3326,6 +3352,9 @@ type loopBoardItem struct {
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
@@ -3397,6 +3426,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 // while --check still finds it newer), the broker on the installed binary,
 // supervisor.postInstall (once), then --check finding it the latest.
 func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (string, error) {
+	st, err := l.a.store.Read()
+	if err != nil {
+		return "", err
+	}
+	if st.AutoInstallPaused {
+		return "", errLoopLater
+	}
+
 	version := act.Version
 	if err := l.claim(act, version); err != nil {
 		return "", err
@@ -3569,13 +3606,23 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 }
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
-	if act.Block != "" && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
+	blockStage := act.Key + " blocked"
+	l.mu.Lock()
+	blocked := l.stages[blockStage]
+	l.mu.Unlock()
+	if act.Block != "" && !blocked && l.a.cfg.Board.Owner != "" && l.a.cfg.Board.Project != 0 {
 		if _, err := l.run(ctx, loopBoard, "unblock", act.Ref, "--by", act.Block); err != nil {
 			return "", fmt.Errorf("remove inverse overlap dependency: %w", err)
 		}
 		if _, err := l.run(ctx, loopBoard, "block", act.Block, "--by", act.Ref); err != nil {
 			return "", fmt.Errorf("record overlap dependency: %w", err)
 		}
+		if err := l.a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s blocked by %s", blockStage, act.Block, act.Ref), act.Ref)); err != nil {
+			return "", err
+		}
+		l.mu.Lock()
+		l.stages[blockStage] = true
+		l.mu.Unlock()
 	}
 	if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
 		return "", err

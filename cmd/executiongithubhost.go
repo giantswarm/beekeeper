@@ -22,6 +22,7 @@ import (
 const workerGitHubCredentialHelper = `credential.https://github.com.helper=!f() { printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`
 
 const workerGitHubHead = "HEAD"
+const workerGitHubHeadFlag = "--head"
 const workerGitHubNoCredentialHelper = "credential.helper=" //nolint:gosec // G101: clears inherited Git helpers; contains no credential
 
 // SSH execution hosts run Linux. Resolve git outside the worker-controlled
@@ -46,7 +47,8 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), time.Hour)
 			defer cancel()
 			co := s.Config.Coordinators[j.Request.Coordinator]
-			request := workerGitHubRequest{Repository: strings.ToLower(j.Request.Repository)}
+			workDir, defaultRepo := workerGitHubWorkDir(j.Handle.Workspace, j.Request.Repository)
+			request := workerGitHubRequest{Repository: defaultRepo}
 			env := os.Environ()
 			var binary string
 			needsToken := true
@@ -59,27 +61,28 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				default:
 					return refused("worker gh requires an explicit repository command; auth, aliases and global command overrides are unavailable")
 				}
-				request.Repository, err = execution.GitHubRepository(args, request.Repository)
-				if err != nil {
-					return err
-				}
-				request.Write = len(args) > 1 && args[0] == "pr" && (args[1] == workerGitHubCreate || args[1] == "edit" || args[1] == "comment")
-				// Mutation authority is never inferred from arbitrary API request bodies.
 				if len(args) > 1 && args[0] == "pr" && args[1] == gitMerge {
 					return refused("merges stay on the coordinator")
 				}
 				if args[0] == workerGitHubAPIGroup {
-					for _, arg := range args[1:] {
-						lower := strings.ToLower(arg)
-						if strings.Contains(lower, "mutation") || strings.Contains(lower, "/merge") || lower == "post" || lower == "put" || lower == "patch" || lower == "delete" || lower == "--input" {
-							return refused("worker gh api supports reads only")
-						}
-					}
+					err = execution.ValidateGitHubAPIRead(args[1:])
+				} else {
+					request.Write, err = execution.GitHubWrite(args)
 				}
-				if request.Write && args[1] == workerGitHubCreate {
+				if err != nil {
+					return refused("%v", err)
+				}
+				if request.Write {
+					if request.Repository, err = execution.GitHubWriteRepository(args, request.Repository); err != nil {
+						return refused("%v", err)
+					}
+				} else if request.Repository, err = execution.GitHubRepository(args, request.Repository); err != nil {
+					return err
+				}
+				if args[0] == "pr" && len(args) > 1 && args[1] == workerGitHubCreate {
 					branch := execution.GitHubBranch(j.Handle.Ref)
 					for i, arg := range args {
-						if arg == "--head" || arg == "-H" {
+						if arg == workerGitHubHeadFlag || arg == "-H" {
 							if i+1 >= len(args) || args[i+1] != branch {
 								return refused("PR must use its execution branch")
 							}
@@ -88,7 +91,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 							return refused("PR must use its execution branch")
 						}
 					}
-					args = append(args, "--head", branch)
+					args = append(args, workerGitHubHeadFlag, branch)
 				}
 				binary = s.Config.Tools[execution.ToolGitHub].Executable
 			} else {
@@ -175,7 +178,7 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				env = append(env, "GH_TOKEN="+token.Token)
 			}
 			if name == "github-git" && request.Write {
-				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, j.Handle.Workspace, request.Repository, execution.GitHubBranch(j.Handle.Ref), env)
+				isolatedArgs, isolatedEnv, cleanup, err := workerGitHubIsolatedPush(ctx, binary, workDir, request.Repository, execution.GitHubBranch(j.Handle.Ref), env)
 				if err != nil {
 					return err
 				}
@@ -183,11 +186,58 @@ func (a *app) executionGitHubCommands() []*cobra.Command {
 				args, env = isolatedArgs, isolatedEnv
 			}
 			child := exec.CommandContext(ctx, binary, args...) //nolint:gosec // policy-pinned gh or system git; arguments validated above
-			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = j.Handle.Workspace, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
+			child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = workDir, env, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 			return workerGitHubCommandError(child.Run())
 		}})
 	}
 	return commands
+}
+
+func workerGitHubWorkDir(defaultWorkspace, defaultRepo string) (string, string) {
+	workDir, repo := defaultWorkspace, strings.ToLower(defaultRepo)
+	if defaultWorkspace == "" {
+		return workDir, repo
+	}
+	cleanWorkspace := filepath.Clean(defaultWorkspace)
+	execRoot := filepath.Dir(cleanWorkspace)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return workDir, repo
+	}
+	cwd = filepath.Clean(cwd)
+	if cwd != cleanWorkspace && !strings.HasPrefix(cwd, cleanWorkspace+string(filepath.Separator)) && !strings.HasPrefix(cwd, execRoot+string(filepath.Separator)) {
+		return workDir, repo
+	}
+	workDir = cwd
+	for dir := cwd; dir != cleanWorkspace && dir != execRoot && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if r := gitConfigOriginRepo(filepath.Join(dir, ".git", "config")); r != "" {
+			return workDir, r
+		}
+	}
+	return workDir, repo
+}
+
+func gitConfigOriginRepo(configPath string) string {
+	b, err := os.ReadFile(filepath.Clean(configPath)) //nolint:gosec // bounded to directories under the execution workspace root
+	if err != nil {
+		return ""
+	}
+	inOrigin := false
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			inOrigin = line == `[remote "origin"]`
+			continue
+		}
+		if inOrigin {
+			if k, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(k) == "url" {
+				if repo := execution.RepositoryIdentity(strings.TrimSpace(v)); repo != "" {
+					return repo
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // Preserve client exit codes (for example git's 128 or gh's pending-check 8)

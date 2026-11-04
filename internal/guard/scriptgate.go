@@ -253,14 +253,31 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 		}
 		return h.scriptUngated(args[0], modeShell, true, dirs, vars, depth)
 	case localShells[name]:
-		if slices.ContainsFunc(args, isCFlag) || slices.Contains(args, "-n") {
-			return nil, "" // hiddenMerges refuses a -c string; -n runs nothing
-		}
 		ip, mode = shellOptions, modeShell
+		// Only an option before the program disables execution. A -n
+		// following the command string or script is a data argument.
+		ip.module = []string{"-n"}
+		// Read -c in program order: after a script it is data, and
+		// after -o it can be an option value. Combined flags carry it too.
+		for _, a := range args {
+			if isCFlag(a) {
+				ip.code = append(ip.code, a)
+			}
+		}
 		fallthrough
 	case interp:
 		switch p := readProgram(args, ip); p.kind {
 		case programCode:
+			if mode == modeShell {
+				// hiddenMerges judges commands written in the string;
+				// recurse here to find the script files it runs.
+				for _, d := range dirs {
+					if u := h.ungated(p.arg, d, depth+1); u != nil {
+						return u, ""
+					}
+				}
+				return nil, ""
+			}
 			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", textCode), ""
 		case programScript:
 			return h.scriptUngated(p.arg, mode, true, dirs, vars, depth)

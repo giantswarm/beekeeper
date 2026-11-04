@@ -24,6 +24,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
+
+	"github.com/giantswarm/beekeeper/internal/sshagent"
 )
 
 // Background sessions (agents.mode background): beekeeper starts a session
@@ -130,7 +132,7 @@ func cleanEnv(environ []string, config string) []string {
 		out = append(slices.DeleteFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") }),
 			"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), devBuildEnv+"=1")
 	}
-	return out
+	return sshagent.Environment(out)
 }
 
 func isHarnessEnv(kv string) bool {

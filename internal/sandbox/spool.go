@@ -76,6 +76,8 @@ const (
 	OpCapSlot = "cap-slot"
 	// OpScope moves the requester into a capped scope.
 	OpScope = "scope"
+	// OpScopeState reads scope population on the host.
+	OpScopeState = "scope-state"
 	// OpSecret runs a beekeeper secret call on the host, where sops and
 	// op reach their keys, and answers its output and exit code.
 	OpSecret = "secret"

@@ -5,7 +5,9 @@ package platform
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -154,10 +156,12 @@ func TestRunArgsStopAndRuntimeBounds(t *testing.T) {
 // a kill included; unset, a merge-child's unit keeps its stop as asked as
 // its only success besides 0, so a kill or a tooling fault fails it.
 func TestRunArgsQuiet(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("SSH_AUTH_SOCK", "")
 	argv := []string{"/bin/bk", "merge-child", "/state/merges/x"}
 	merge := Unit{Name: "beekeeper-merge-x", Argv: argv, TermIsSuccess: true}
 	want := func(success string) []string {
-		head := []string{userManager, "--collect", quietRun, "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--"}
+		head := []string{userManager, "--collect", quietRun, "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--setenv=SSH_AUTH_SOCK=", "--"}
 		return append(head, argv...)
 	}
 	if got := runArgs(merge, true); !slices.Equal(got, want(quietSuccess)) {
@@ -216,5 +220,52 @@ func TestReapStopsWhatTheCommandLeftInItsScope(t *testing.T) {
 	}
 	if left, err := c.Reap(name); left != nil || err != nil {
 		t.Errorf("a second Reap = %v, %v; want nothing", left, err)
+	}
+}
+
+func TestScopePopulated(t *testing.T) {
+	for _, c := range []struct {
+		raw       string
+		live, bad bool
+	}{
+		{"populated 1\nfrozen 0\n", true, false},
+		{"populated 0\nfrozen 0\n", false, false},
+		{"frozen 0\n", false, true},
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(dir+"/cgroup.events", []byte(c.raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		live, err := scopePopulated(dir)
+		if live != c.live || (err != nil) != c.bad {
+			t.Errorf("%q: %v %v", c.raw, live, err)
+		}
+	}
+	live, err := scopePopulated(t.TempDir())
+	if live || err != nil {
+		t.Fatalf("missing scope: %v %v", live, err)
+	}
+}
+
+func TestRunArgsReplacesStaleSSHSocket(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", dir)
+	t.Setenv("SSH_AUTH_SOCK", filepath.Join(dir, "old-login"))
+	socket := filepath.Join(dir, "ssh-agent.socket")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	unit := Unit{Name: "worker", Argv: []string{"claude"}, Env: []string{"SSH_AUTH_SOCK=/stale-manager"}}
+	args := runArgs(unit, false)
+	if !slices.Contains(args, "--setenv=SSH_AUTH_SOCK="+socket) || slices.Contains(args, "--setenv=SSH_AUTH_SOCK=/stale-manager") {
+		t.Fatalf("socket not replaced: %q", args)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if args = runArgs(unit, false); !slices.Contains(args, "--setenv=SSH_AUTH_SOCK=") {
+		t.Fatalf("stale socket not cleared: %q", args)
 	}
 }

@@ -62,7 +62,7 @@ func sshAgyTestApp(t *testing.T, offered map[string]string) (*app, string, *[]ex
 }
 
 func TestExecutionStartsAgyOnAHostThatOffersItAndCountsProviderNotLocalCeiling(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, harnessAgy: "1.4.7"})
+	a, brief, requests := sshAgyTestApp(t, map[string]string{claudeComm: codexTestClaudeVer, harnessAgy: testAgyVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-agy", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAgy, "--model", agyTestModel); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestExecutionRefusesAgyTheHostDoesNotOffer(t *testing.T) {
 }
 
 func TestExecutionAutoPicksRemoteAgy(t *testing.T) {
-	a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: "1.4.7"})
+	a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
 	if _, err := runAgents(a, agentStartName, "--name", "remote-auto", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", harnessAuto); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestExecutionRefusesEffortOnRemoteAgy(t *testing.T) {
 		{name: "auto dry run", args: slices.Concat(auto, flag, []string{testDryRunFlag})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: "1.4.7"})
+			a, brief, requests := sshAgyTestApp(t, map[string]string{harnessAgy: testAgyVersion})
 			a.cfg.Agents.Models = tc.models
 			args := slices.Concat([]string{agentStartName, nameFlag, "remote-agy", brief}, remote, tc.args)
 			_, err := runAgents(a, args...)

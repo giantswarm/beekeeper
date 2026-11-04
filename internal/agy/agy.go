@@ -24,6 +24,8 @@ const (
 	StateBusy  = "busy"
 	StateIdle  = "idle"
 	StateEnded = "ended"
+
+	flagModel = "--model"
 )
 
 // helpers are the agy subcommands that run no session.
@@ -38,7 +40,7 @@ var helpers = map[string]bool{
 var valueFlags = map[string]bool{
 	"--conversation": true, "-r": true, "--resume": true,
 	"--input-format": true, "--json-schema": true, "--log-file": true,
-	"--mode": true, "--model": true, "--output-format": true,
+	"--mode": true, flagModel: true, "--output-format": true,
 	"--print-timeout": true, "--project": true,
 	"-p": true, "--print": true, "--prompt": true, "--prompt-interactive": true,
 }
