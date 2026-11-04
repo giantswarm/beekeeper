@@ -154,8 +154,16 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 		r = Reply{Error: err.Error()}
 	}
 	b, _ := json.Marshal(r)
-	tmp := out + tmpSuffix
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// The spool is sandbox-writable: never open an existing staging entry.
+	f, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+"-*"+tmpSuffix)
+	if err != nil {
+		return
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, err = f.Write(b)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
 		return
 	}
 	_ = os.Rename(tmp, out)
