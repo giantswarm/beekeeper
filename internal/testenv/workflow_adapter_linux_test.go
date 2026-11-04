@@ -54,7 +54,7 @@ func locked(f func(*apiState) error) error {
 	if e != nil {
 		return e
 	}
-	defer fd.Close()
+	defer func() { _ = fd.Close() }()
 	if e = syscall.Flock(int(fd.Fd()), syscall.LOCK_EX); e != nil {
 		return e
 	}
@@ -99,7 +99,7 @@ func claudeFixture(args []string) error {
 		if e != nil {
 			return e
 		}
-		defer log.Close()
+		defer func() { _ = log.Close() }()
 		c := exec.Command("/work/bin/fixture", "--turn", name, id) //nolint:gosec // Fixed fixture executable/arguments or the candidate in this run's private workspace.
 		c.Stdout = log
 		c.Stderr = log
