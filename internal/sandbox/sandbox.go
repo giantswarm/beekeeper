@@ -307,6 +307,28 @@ func (p Policy) Readable(path, cwd string) bool {
 	return !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
 }
 
+// Searchable reports whether a recursive file tool may search path. A
+// readable root does not authorize its closed or explicitly denied children.
+// Refuse such roots because the tools cannot enforce descendant exclusions.
+func (p Policy) Searchable(path, cwd string) bool {
+	path = resolve(path, cwd)
+	if !p.Readable(path, cwd) {
+		return false
+	}
+	for _, d := range p.Deny {
+		if d != "" && under(resolve(d, ""), path) {
+			return false
+		}
+	}
+	for _, d := range p.closed() {
+		d = resolve(d, "")
+		if under(d, path) && !p.listed(d) {
+			return false
+		}
+	}
+	return true
+}
+
 // Writable reports whether a file tool may write path: under a path of
 // Write or ToolWrite, the temporary directory, or the session's working
 // directory when that is itself readable (a checkout, never the home

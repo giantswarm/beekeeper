@@ -84,7 +84,11 @@ func (h Hook) sandboxRefusal(ev event) string {
 			". Sessions write their checkouts and worktrees, beekeeper's state and the temporary directory; " +
 			"a path the desk needs goes into sandbox.allowWrite in beekeeper's config."
 	}
-	if !write && !h.Sandbox.Readable(path, cwd) {
+	readable := h.Sandbox.Readable
+	if ev.ToolName == grepTool || ev.ToolName == globTool {
+		readable = h.Sandbox.Searchable
+	}
+	if !write && !readable(path, cwd) {
 		return "Refused: the agent sandbox does not let this session read " + path +
 			". The home directory is denied apart from the paths the sandbox re-allows (beekeeper sandbox render lists them); " +
 			"credentials stay unreadable by design. A path the desk needs goes into sandbox.allowRead in beekeeper's config."
