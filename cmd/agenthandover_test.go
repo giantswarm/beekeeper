@@ -254,7 +254,7 @@ func TestHandoverStartTakesOverTheRunningEntry(t *testing.T) {
 	if _, err := recordStart(st, s, "", "", running); err == nil {
 		t.Fatal("a start under a running session's name must be refused")
 	}
-	// The hand-over does not count the session it replaces as running.
+	// The hand-over stops the session it replaces before recording a successor.
 	handedOver := func(p state.Party) bool { return !p.Is(old) && running(p) }
 	reg, err := recordStart(st, s, "", "", handedOver)
 	if err != nil || reg.task != countTask || !reg.assignedAt.Equal(now.Add(-time.Hour)) {
@@ -325,7 +325,7 @@ func TestHandoverRefusedWithoutThePermissionHook(t *testing.T) {
 
 // A hand-over of a roster row without a task refuses unless --task gives
 // one, which the follow-up's prompt and row carry; the follow-up's row is
-// made sure of before the old session ends.
+// made sure of after the old session ends.
 func TestHandoverOfARowWithoutATask(t *testing.T) {
 	a := &app{cfg: &config.Config{Claude: config.Claude{ProjectsDir: filepath.Join(t.TempDir(), "projects")}}, as: testSupervisor}
 	old := state.Party{Session: oldID, HostSession: "local_" + oldID, Name: countName}

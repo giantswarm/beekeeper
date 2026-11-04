@@ -167,6 +167,11 @@ test's files stay out of the tmpfs /tmp, whose files take RAM. A caller's
 GOTMPDIR or TMPDIR off tmpfs wins, so a nested run keeps its outer run's
 directory. The disk step reclaims unused leftovers unchanged for an hour (disk.prune).
 
+A run gives the command a scratch KUBECONFIG and removes it afterward, so
+builds and tests using client-go's default loading rules cannot rewrite the
+machine kubeconfig. A nonempty inherited KUBECONFIG or an assignment in the
+command wins. Commands needing a cluster must name its kubeconfig explicitly.
+
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
 later (snapshot, watch) names them after the run has ended. Logging never
@@ -376,6 +381,48 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(&cobra.Command{
+		Use:   "check-scope",
+		Short: "Verify a proof event has a session ID and is in the hook's scope",
+		Long: `Read the proof's hook event from stdin, using the same configuration,
+state and environment as the hook invocation. Use a real session ID from
+beekeeper sessions (or the current harness session), never an invented ID.
+An out-of-scope event fails instead of silently passing through the hook.
+This checks scope, not whether the session is currently alive.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			var ev struct {
+				Session string `json:"session_id"`
+			}
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				return fmt.Errorf("invalid proof event: %w", err)
+			}
+			if strings.TrimSpace(ev.Session) == "" && strings.TrimSpace(guard.AgySession(raw)) == "" && strings.TrimSpace(guard.CodexSession(raw)) == "" {
+				return fmt.Errorf("proof requires a real in-scope session ID; obtain one from beekeeper sessions or the current harness session")
+			}
+			// Proofs must not mistake the hook's fail-open scope fallback
+			// for evidence that a session belongs to the configured scope.
+			if err := a.loadConfig(); err != nil {
+				return err
+			}
+			store, err := state.Open(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			if _, err := store.Peek(); err != nil {
+				return err
+			}
+			if !a.inScope(raw) {
+				return fmt.Errorf("proof event is out of scope: use a real in-scope session ID and its working directory with the same configuration and state as the hook")
+			}
+			_, err = fmt.Fprintln(a.out, "proof event is in scope")
+			return err
+		},
+	})
 	var formatFlag string
 	preCmd := &cobra.Command{
 		Use:   "pretooluse",
@@ -470,6 +517,11 @@ comment, or gh issue create, edit or comment, whose --body or --body-file
 names a bare #n or owner/repo#n without its full GitHub URL is refused
 naming the full URL.
 
+Admitted GraphQL shell invocations are recorded locally as github.call events,
+with the session, command class and a heavy flag for project item-list or
+--paginate. Recording makes no GitHub request; beekeeper budget and the watch
+use the records to name callers after their processes exit.
+
 A board-wide project read is refused: gh project item-list without
 --query, and a gh api graphql query over a projectV2's items without a
 narrowing query: argument. Such a read pages the whole board with its field
@@ -547,12 +599,11 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if cmd.OutOrStdout() != os.Stdout {
 				w = cmd.OutOrStdout()
 			}
+			var raw []byte
 			defer func() {
-				if recover() != nil {
+				if value := recover(); value != nil {
 					reason := "Refused: internal panic in PreToolUse check setup; failing closed. See beekeeper log (hook.panic)."
-					if a.cfg != nil {
-						a.recordGuardPanic("setup", debug.Stack())
-					}
+					a.recordGuardPanic("setup tool "+hookPanicTool(raw), panicStack(value))
 					switch {
 					case isCodex:
 						_, _ = w.Write(guard.DenyCodex(reason))
@@ -598,8 +649,10 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				}
 				if out := guard.DecideUnsandboxed(raw); out != nil {
 					_, _ = w.Write(out)
+					return nil
 				}
-				return nil
+				// SendMessage is exempt from the sandbox requirement, but
+				// still needs the normal scope and tool checks below.
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
@@ -617,7 +670,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
+			h := guard.Hook{Panic: func(check string, stack []byte) { a.recordGuardPanic(check+" tool "+hookPanicTool(raw), stack) }, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
@@ -645,14 +698,20 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
-				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), h.DecideCodex(raw)))
+				out := h.DecideCodex(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), out))
 				return nil
 			}
 			if isAgy {
-				_, _ = w.Write(h.DecideAgy(raw))
+				out := h.DecideAgy(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(out)
 				return nil
 			}
-			if out := h.Decide(raw); out != nil {
+			out := h.Decide(raw)
+			a.recordGitHubCalls(raw, formatFlag, out)
+			if out != nil {
 				_, _ = w.Write(out)
 			}
 			return nil
@@ -683,7 +742,8 @@ patterns). beekeeper install registers it in ~/.claude/settings.json:
     "command": "~/.go/bin/beekeeper hook posttooluse", "timeout": 10}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			defer func() { _ = recover() }() // a broken hook must not break the tool's result
+			var raw []byte
+			defer a.recoverHookPanic("posttooluse", &raw)
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil || !a.inScope(raw) {
 				return nil
@@ -843,7 +903,8 @@ The timeout is above the 290 s a held request waits, so the hook, not
 Claude Code, ends the wait.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
+			var raw []byte
+			defer a.recoverHookPanic("permissionrequest", &raw)
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil || !a.inScope(raw) {
 				return nil
@@ -1217,11 +1278,54 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 	return g
 }
 
+// openPanicLog opens the event log a recovered panic goes to; a seam for the
+// tests.
+var openPanicLog = state.Open
+
 // recordGuardPanic keeps stack traces in the event log, never tool responses.
 func (a *app) recordGuardPanic(check string, stack []byte) {
-	store, err := state.Open(a.cfg.StateDir)
+	// Recording runs inside a recover: a panic here must not skip the deny.
+	defer func() { _ = recover() }()
+	if a.cfg == nil {
+		_ = a.loadConfig()
+	}
+	if a.cfg == nil {
+		return
+	}
+	store, err := openPanicLog(a.cfg.StateDir)
 	if err != nil {
 		return
 	}
+	if len(stack) > 8192 {
+		stack = stack[:8192]
+	}
 	_ = store.Log(event(state.Party{Name: "hook"}, "hook.panic", "check %s\n%s", check, stack))
+}
+
+// recoverHookPanic leaves annotation hooks without a response on failure.
+func (a *app) recoverHookPanic(hook string, raw *[]byte) {
+	if value := recover(); value != nil {
+		a.recordGuardPanic(hook+" tool "+hookPanicTool(*raw), panicStack(value))
+	}
+}
+
+func hookPanicTool(raw []byte) string {
+	var ev struct {
+		Tool     string `json:"tool_name"`
+		ToolCall struct {
+			Name string `json:"name"`
+		} `json:"toolCall"`
+	}
+	_ = json.Unmarshal(raw, &ev)
+	if ev.Tool == "" {
+		ev.Tool = ev.ToolCall.Name
+	}
+	if ev.Tool == "" {
+		return kindUnknown
+	}
+	return ev.Tool
+}
+
+func panicStack(value any) []byte {
+	return append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 }
