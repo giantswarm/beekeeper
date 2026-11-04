@@ -9,11 +9,16 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	laneWaitRepo = "o/r"
+	laneWaitNext = "next"
+)
+
 func TestLaneWaitingReasons(t *testing.T) {
 	needsPlatform(t)
 	now := time.Now()
-	me := state.Party{Name: "worker", Session: "s1"}
-	next := state.Merge{Repo: "o/r", PR: 7, Lane: "o/r", By: me, Phase: state.Waiting, PID: os.Getpid(), Joined: now}
+	me := state.Party{Name: workerRole, Session: "s1"}
+	next := state.Merge{Repo: laneWaitRepo, PR: 7, Lane: laneWaitRepo, By: me, Phase: state.Waiting, PID: os.Getpid(), Joined: now}
 	a := queueApp(t)
 	a.now = now
 	a.cfg.Merge.SessionCap = 2
@@ -24,7 +29,7 @@ func TestLaneWaitingReasons(t *testing.T) {
 	st := &state.State{Merges: []state.Merge{running("o/a"), running("o/b"), next}}
 	views := a.laneViews(st)
 	out := a.capture(func() { a.printLanes(views) })
-	for _, want := range []string{"next", "merge.sessionCap 2", "o/a#1, o/b#1", `"worker" runs 2 merges`} {
+	for _, want := range []string{laneWaitNext, "merge.sessionCap 2", "o/a#1, o/b#1", `"worker" runs 2 merges`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("lanes missing %q: %s", want, out)
 		}
@@ -44,7 +49,7 @@ func TestLaneWaitingReasons(t *testing.T) {
 	if why := a.mergeWaitReason(st, next); !strings.Contains(why, "no local blocker") {
 		t.Errorf("free: %s", why)
 	}
-	st.Holds = []state.Hold{{Target: "o/r", Reason: "release check", By: me, Until: now.Add(time.Hour)}}
+	st.Holds = []state.Hold{{Target: laneWaitRepo, Reason: "release check", By: me, Until: now.Add(time.Hour)}}
 	if why := a.mergeWaitReason(st, next); !strings.Contains(why, "gate hold") || !strings.Contains(why, "release check") {
 		t.Errorf("held: %s", why)
 	}
