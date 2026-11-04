@@ -88,6 +88,42 @@ func TestCacheEntriesBudgetTrimsOldestFirstButNotTheHour(t *testing.T) {
 	}
 }
 
+func TestCacheBudgetAccountsForEntriesRemovedDuringScan(t *testing.T) {
+	for _, mode := range []string{"entries", "files"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			files := mode == "files"
+			for i, name := range []string{"a", "b", "c"} {
+				rel := name
+				if !files {
+					rel = filepath.Join(name, "f")
+				}
+				cacheFile(t, root, rel, 1000, time.Duration(3-i)*day)
+			}
+			p := Policy{Root: root, Files: files, MaxBytes: 2000, Recheck: func() ([]string, error) {
+				// Another cleaner finishes after the scan has measured the units.
+				return nil, os.RemoveAll(filepath.Join(root, "a"))
+			}}
+			r := Cache(p, time.Now(), false, nil, nil, false)
+			if r.Held != 3000 || r.Freed != 0 || r.Removed != 0 || len(r.Errors) != 0 {
+				t.Errorf("budget after another cleaner: %+v", r)
+			}
+			if exists(filepath.Join(root, "a")) {
+				t.Error("oldest unit was not removed by the other cleaner")
+			}
+			for _, name := range []string{"b", "c"} {
+				rel := name
+				if !files {
+					rel = filepath.Join(name, "f")
+				}
+				if !exists(filepath.Join(root, rel)) {
+					t.Errorf("removed %s after the cache already fit the budget", name)
+				}
+			}
+		})
+	}
+}
+
 func TestCacheFilesModeTrimsFilesAndKeepsAllOnReferenceOrCheckout(t *testing.T) {
 	root := t.TempDir()
 	cacheFile(t, root, "x/y/old", 1000, 9*day)
