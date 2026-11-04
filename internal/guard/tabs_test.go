@@ -12,8 +12,6 @@ import (
 // tabsCloseTool is the Chrome tool that closes a tab.
 const tabsCloseTool = "mcp__claude-in-chrome__tabs_close_mcp"
 
-const firstTabID = "806748780"
-
 // tabsTranscript writes a transcript of tool results with the texts.
 func tabsTranscript(t *testing.T, texts ...string) string {
 	t.Helper()
