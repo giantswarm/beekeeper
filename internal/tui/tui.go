@@ -34,6 +34,8 @@ type Source interface {
 	// screen; Release hands them back to its own window.
 	TakeOver(ctx context.Context, id string) error
 	Release(ctx context.Context, id string) error
+	// ReleaseOwned hands back only this screen's current takeover.
+	ReleaseOwned(ctx context.Context, id string) error
 	// Answer allows or denies the held request of the session with id.
 	Answer(ctx context.Context, id, request string, allow bool) error
 }
