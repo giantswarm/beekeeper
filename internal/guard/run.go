@@ -42,6 +42,8 @@ import (
 const (
 	// ExitBusy: no slot, or not enough memory for the cap, within the wait.
 	ExitBusy = 75
+	// ExitTimeout: the command exceeded its execution deadline.
+	ExitTimeout = 124
 	// ExitNotFound: the command could not be started.
 	ExitNotFound = 127
 )
@@ -244,6 +246,8 @@ type Options struct {
 	// slot shares (platform.Cap).
 	CPUQuota  string
 	CPUWeight int
+	// Timeout bounds execution after queueing; zero selects the class default.
+	Timeout time.Duration
 	// Wait bounds the wait for a slot and for the memory the cap needs;
 	// WaitFrom names where it came from (WaitFromForeground, …), for the
 	// lines that state it.
@@ -473,6 +477,8 @@ func Run(o Options, argv []string) int {
 	}
 
 	unit := o.scope
+	o.Timeout = RunTimeout(o, argv)
+	argv = lintTimeout(argv, o.Timeout)
 	head := CommandHead(argv)
 	how := fmt.Sprintf("slot %d", slot)
 	switch {
@@ -919,6 +925,12 @@ func scope(capper platform.Capper, unit string, o Options, slot int, argv, env [
 	}
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
+	var deadline <-chan time.Time
+	if o.Timeout > 0 {
+		timer := time.NewTimer(o.Timeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	// Only a capper that can inspect its scope participates. In particular,
 	// an unavailable scope reader must never turn a healthy run into a kill.
 	reader, monitored := capper.(interface{ ScopePopulated(string) (bool, error) })
@@ -930,6 +942,15 @@ wait:
 		select {
 		case err = <-done:
 			break wait
+		case <-deadline:
+			logf("execution timed out after %s; stopping %s.scope (exit %d)", o.Timeout, unit, ExitTimeout)
+			if _, stopErr := capper.Reap(unit); stopErr != nil {
+				logf("stopping timed-out scope: %v", stopErr)
+			}
+			// Also end the launcher if stopping the scope did not end it.
+			_ = c.Process.Kill()
+			<-done
+			return ExitTimeout, drain
 		case s := <-sig:
 			_ = c.Process.Signal(s)
 		case <-ticker.C:
