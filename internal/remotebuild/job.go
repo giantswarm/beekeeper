@@ -54,7 +54,9 @@ func Job(c Config, name, image string) *batchv1.Job {
 
 const watchdog = `set -eu
 mkdir -p /work/runs /work/src; touch /work/active
+exec 9>/work/control.lock
 while :; do
+ flock 9
  # Recover a client that vanished during upload, before launching a wrapper.
  if [ -d /work/busy ] && [ $(( $(date +%s) - $(stat -c %Y /work/active) )) -ge 60 ]; then
   id=$(cat /work/busy/id 2>/dev/null || true)
@@ -64,9 +66,10 @@ while :; do
    case "$p" in ''|*[!0-9]*) ;; *) kill -KILL -- "-$p" 2>/dev/null || true;; esac
    printf '137\n' > "/work/runs/$id/rc.tmp"
    mv "/work/runs/$id/rc.tmp" "/work/runs/$id/rc"
-   rm -rf /work/busy /work/incoming
+   rm -rf /work/busy "/work/runs/$id/incoming"
   fi
  fi
  if [ ! -d /work/busy ] && [ $(( $(date +%s) - $(stat -c %Y /work/active) )) -ge "$IDLE" ]; then exit 0; fi
+ flock -u 9
  sleep 10
 done`
