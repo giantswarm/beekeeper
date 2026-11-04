@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
-	"github.com/giantswarm/beekeeper/internal/state"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const (
