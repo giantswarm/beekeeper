@@ -319,7 +319,8 @@ func cwd(root string, pid int) string {
 
 // Held returns the paths pid holds: its working directory, its executable
 // and every file it has open, a deleted one by the path it had (readable
-// for the caller's own processes).
+// for the caller's own processes). An ambiguous deletion suffix retains
+// both possible paths.
 func Held(pid int) []string { return held(procRoot, pid) }
 
 func held(root string, pid int) []string {
@@ -333,7 +334,7 @@ func held(root string, pid int) []string {
 	for _, l := range links {
 		// Sockets, pipes and anonymous inodes link to no path.
 		if p, err := os.Readlink(l); err == nil && filepath.IsAbs(p) {
-			out = append(out, strings.TrimSuffix(p, " (deleted)"))
+			out = appendReference(out, p)
 		}
 	}
 	return out

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,6 +77,50 @@ func TestHostReadinessDistinguishesLoginAndVersionFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(readinessFailed, readinessNotChecked, false)
+		})
+	}
+}
+
+// A host with only one harness must retain the same diagnostics as a mixed
+// host. Exercise the wire boundary as well as the host's admission decision.
+func TestSingleHarnessReadinessFailureSurvivesSSH(t *testing.T) {
+	for _, harness := range []string{HarnessCodex, HarnessOmp, HarnessAgy} {
+		t.Run(harness, func(t *testing.T) {
+			var f fixture
+			var dir string
+			switch harness {
+			case HarnessCodex:
+				f, dir = codexFixture(t)
+			case HarnessOmp:
+				f, dir = ompFixture(t)
+			case HarnessAgy:
+				f, dir = agyFixture(t)
+			}
+			f.s.Config.Harnesses = map[string]HarnessConfig{harness: f.s.Config.Harnesses[harness]}
+			digest, err := f.s.Prepare(f.s.Policy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.host.Harnesses, f.host.PolicyDigest = []string{harness}, digest
+			f.r.PolicyDigest = digest
+			if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tr := f.transport(t, nil)
+			caps, err := tr.Check(context.Background())
+			if err == nil || len(caps.Harnesses) != 0 || caps.Unavailable[harness] == "" {
+				t.Fatalf("failed harness must refuse admission and retain diagnostics: %+v %v", caps, err)
+			}
+			report := readinessReport(t, caps, harness)
+			if report["versionCheck"] != readinessPassed || report["login"] != readinessFailed {
+				t.Fatalf("wrong failed readiness report: %v", report)
+			}
+			if _, err := tr.Start(context.Background(), f.r); err == nil || !strings.Contains(err.Error(), "login") {
+				t.Fatalf("logged-out harness admission did not preserve its login refusal: %v", err)
+			}
+			if len(f.launcher.starts) != 0 {
+				t.Fatal("failed readiness launched a worker")
+			}
 		})
 	}
 }
