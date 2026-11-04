@@ -40,7 +40,7 @@ func cache(t *testing.T, entries map[string][2]int) string {
 }
 
 // The entries of the trim tests, newest first.
-const entryA, entryB, entryC, entryD = entryA, "01/b", "02/c", "03/d"
+const entryA, entryB, entryC, entryD = "00/a", "01/b", "02/c", "03/d"
 
 func TestScanOrdersLeastRecentlyUsedFirst(t *testing.T) {
 	dir := cache(t, map[string][2]int{"00/new-a": {10, 1}, "ff/old-d": {20, 48}, "7a/mid-d": {30, 5}})
