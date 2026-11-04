@@ -228,7 +228,7 @@ func scenario() (err error) {
 	// Verify isolation before executing any production command.
 	conn, e := net.DialTimeout("tcp", "192.0.2.1:443", 100*time.Millisecond)
 	if e == nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("outbound network is available")
 	}
 
