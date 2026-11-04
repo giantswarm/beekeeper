@@ -65,10 +65,11 @@ func clock(t time.Time, now time.Time) string {
 	}
 	l, n := t.Local(), now.Local()
 	day := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
-	switch d := l.Sub(day); {
-	case d >= 0 && d < 24*time.Hour:
+	next := day.AddDate(0, 0, 1)
+	switch {
+	case !l.Before(day) && l.Before(next):
 		return l.Format("15:04")
-	case d >= 24*time.Hour && d < 48*time.Hour:
+	case !l.Before(next) && l.Before(next.AddDate(0, 0, 1)):
 		return "+1d " + l.Format("15:04")
 	default:
 		return l.Format("Jan 2 15:04")
