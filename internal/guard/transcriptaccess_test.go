@@ -400,3 +400,50 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		t.Errorf("here-document data refused: %+v", d)
 	}
 }
+
+func TestTranscriptInertRuntimeArguments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := filepath.Join(home, "worktree")
+	for _, command := range []string{
+		`echo process.env.HOME`,
+		`rg -n process.env.HOME src`,
+		`echo 'process.env.HOME'`,
+		`rg -n 'process.env.HOME' src`,
+		`sh -c 'echo process.env.HOME'`,
+	} {
+		if d := decide(t, transcriptHook(), cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("inert argument refused: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptRuntimeProgramInputs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, tc := range []struct{ name, code string }{
+		{"python3", `import os; print(os.environ["HOME"])`},
+		{"node", `console.log(process.env.HOME)`},
+		{"ruby", `puts ENV["HOME"]`},
+		{"perl", `print $ENV{HOME};`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := filepath.Join(home, "program")
+			if err := os.WriteFile(script, []byte("#!/usr/bin/env "+tc.name+"\n"+tc.code), 0700); err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range []string{
+				tc.name + " <<'CODE'\n" + tc.code + "\nCODE",
+				tc.name + " <<< '" + tc.code + "'",
+				"printf '%s' '" + tc.code + "' | " + tc.name,
+				tc.name + " " + script,
+				tc.name + " < " + script,
+				script,
+			} {
+				if d := decide(t, transcriptHook(), home, command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") {
+					t.Errorf("runtime program passed: %s: %+v", command, d)
+				}
+			}
+		})
+	}
+}
