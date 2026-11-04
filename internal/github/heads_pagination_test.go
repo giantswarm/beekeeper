@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+const (
+	headPaginationRepo   = "o/r"
+	headPaginationBranch = "fix"
+)
+
 func TestHeadPullsReadsPastForks(t *testing.T) {
 	var forks []headNode
 	for i := range pullsPerHead {
@@ -24,12 +29,11 @@ func TestHeadPullsReadsPastForks(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			const repo = "o/r"
 			const cursor = "after-forks"
-			other := Head{Repo: repo, Branch: "other"}
+			other := Head{Repo: headPaginationRepo, Branch: "other"}
 			run := func(ctx context.Context, args ...string) ([]byte, error) {
 				calls++
-				if Repo(ctx) != repo {
+				if Repo(ctx) != headPaginationRepo {
 					t.Fatalf("request acted on %q", Repo(ctx))
 				}
 				q := args[len(args)-1]
@@ -54,7 +58,7 @@ func TestHeadPullsReadsPastForks(t *testing.T) {
 				}
 				return json.Marshal(map[string]any{"data": data})
 			}
-			head := Head{Repo: repo, Branch: "fix"}
+			head := Head{Repo: headPaginationRepo, Branch: headPaginationBranch}
 			got, err := HeadPulls(t.Context(), run, []Head{head, other})
 			if tc.failure != nil {
 				if !errors.Is(err, tc.failure) {
@@ -91,7 +95,7 @@ func TestHeadPullsStopsAfterCancellation(t *testing.T) {
 		cancel()
 		return []byte(`{"data":{"h0":{"pullRequests":{"nodes":[{"number":9,"isCrossRepository":true}],"pageInfo":{"hasNextPage":true,"endCursor":"forks"}}}}}`), nil
 	}
-	if _, err := HeadPulls(ctx, run, []Head{{Repo: "o/r", Branch: "fix"}}); !errors.Is(err, context.Canceled) {
+	if _, err := HeadPulls(ctx, run, []Head{{Repo: headPaginationRepo, Branch: headPaginationBranch}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want cancellation", err)
 	}
 }
@@ -110,7 +114,7 @@ func TestHeadPullsRejectsInvalidPagination(t *testing.T) {
 						"pageInfo": map[string]any{"hasNextPage": true, "endCursor": cursor}},
 				}}})
 			}
-			if _, err := HeadPulls(t.Context(), run, []Head{{Repo: "o/r", Branch: "fix"}}); err == nil {
+			if _, err := HeadPulls(t.Context(), run, []Head{{Repo: headPaginationRepo, Branch: headPaginationBranch}}); err == nil {
 				t.Fatal("invalid continuation reported as no repository PR")
 			}
 		})
