@@ -573,7 +573,7 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 		{append([]string{setOp, file, newKey, generateFlag, "--"}, pod...), ExitRefused},
 		{append([]string{copyOp, file + "#stringData.secretKey", "--"}, pod...), ExitRefused},
 		{[]string{setOp, file, newKey, generateFlag, "--stdin-json", "{}", "--stdin-field", "k"}, ExitUsage},
-		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, "--name", "y"}, ExitUsage},
+		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, nameFlag, "y"}, ExitUsage},
 	} {
 		a.out = &bytes.Buffer{}
 		calls := len(tools.Calls)

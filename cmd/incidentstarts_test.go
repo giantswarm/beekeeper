@@ -122,7 +122,7 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 // Save the hold after the initial incident check, during an external read.
 // No real capacity command, GitHub request, or agent start is performed.
 func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
-	for _, kind := range []string{"worker", litReviewer, incidentFixerKind} {
+	for _, kind := range []string{workerRole, litReviewer, incidentFixerKind} {
 		for _, repair := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/repair=%t", kind, repair), func(t *testing.T) {
 				r, _ := fillRig(t)
@@ -162,7 +162,7 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 				switch kind {
 				case "worker":
 					_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
-				case "reviewer":
+				case litReviewer:
 					_, err = l.startReviewer(context.Background(), act)
 				case incidentFixerKind:
 					err = l.startFixer(context.Background(), &state.State{}, act)

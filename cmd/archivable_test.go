@@ -247,7 +247,7 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 }
 
 func TestArchivableRequiresCompletion(t *testing.T) {
-	p := state.Party{Session: "worker", HostSession: "local_worker", Name: litWorker}
+	p := state.Party{Session: "worker", HostSession: litLocalWorker, Name: litWorker}
 	for _, kind := range []string{"missing report", "idle report", "done report", "open task record", "new assignment"} {
 		t.Run(kind, func(t *testing.T) {
 			a, _ := archiveApp(t, func(st *state.State) {

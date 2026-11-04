@@ -20,10 +20,10 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{litGitAuthorName, "GIT_COMMITTER_NAME"} {
+	for _, k := range []string{litGitAuthorName, litGitCommitterName} {
 		t.Setenv(k, "test")
 	}
-	for _, k := range []string{litGitAuthorEmail, "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.invalid")
 	}
 	base := t.TempDir()
@@ -43,7 +43,7 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 func TestFreeNestedWorktrees(t *testing.T) {
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
-	for _, branch := range []string{"merged", "squashed", litDirty, "unpushed"} {
+	for _, branch := range []string{testMergedWord, "squashed", litDirty, "unpushed"} {
 		dir := filepath.Join(root, branch)
 		gitT(t, repo, "worktree", "add", "-qb", branch, dir)
 		writeT(t, filepath.Join(dir, branch), "first\n")

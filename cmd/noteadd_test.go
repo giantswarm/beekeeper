@@ -8,7 +8,7 @@ import (
 func TestNoteAddMissingQuestion(t *testing.T) {
 	for name, flags := range map[string][]string{
 		"no context":   nil,
-		"reason":       {flagFor, "reviewer", "--why", "approval is needed"},
+		"reason":       {flagFor, litReviewer, "--why", "approval is needed"},
 		"full context": {"--for", "reviewer", "--due", "3h", "--status-quo", "review is pending", "--why", "approval is needed", "--default", "keep waiting"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -30,7 +30,7 @@ func TestLaneSettleWaitsForTermedGate(t *testing.T) {
 	if !eventually(5*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }) {
 		t.Fatal("gate not ready")
 	}
-	a := queueApp(t, state.Merge{Repo: repo, PR: 1, Lane: "o/r", PID: gate.Process.Pid, Phase: state.Running})
+	a := queueApp(t, state.Merge{Repo: repo, PR: 1, Lane: repo, PID: gate.Process.Pid, Phase: state.Running})
 	a.as = litOperator
 	var out bytes.Buffer
 	a.out = &out

@@ -505,7 +505,7 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	// Remove those overrides so this fixture exercises global configuration.
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 	t.Setenv("GIT_CONFIG_PARAMETERS", "")
-	for _, key := range []string{"GIT_AUTHOR_NAME", litGitAuthorEmail, "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+	for _, key := range []string{"GIT_AUTHOR_NAME", litGitAuthorEmail, "GIT_COMMITTER_NAME", litGitCommitterEmail} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)

@@ -188,7 +188,7 @@ func TestQueuedFollowerReloadsLanesOnPoll(t *testing.T) {
 	a.cfg.Lanes[0].Name = litShared
 	a.loadedCfg = filepath.Join(t.TempDir(), "config.yaml")
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Merges[0].Lane = "shared"
+		st.Merges[0].Lane = litShared
 		st.Merges = append(st.Merges, state.Merge{Repo: scratchRepo, PR: 7, Lane: "shared", PID: os.Getpid(), Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 		return nil, nil
 	}); err != nil {

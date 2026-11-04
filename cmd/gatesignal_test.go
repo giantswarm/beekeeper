@@ -14,7 +14,7 @@ import (
 )
 
 func TestGatedChildSignalExit(t *testing.T) {
-	for _, route := range []string{litDirect, "owned", "watch stop"} {
+	for _, route := range []string{litDirect, "owned", litWatchStop} {
 		for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
 			t.Run(route+"/"+signalName(signal), func(t *testing.T) {
 				stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))

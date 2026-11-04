@@ -482,7 +482,7 @@ func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 }
 
 func TestSecretGitHubAppCheckoutRefusals(t *testing.T) {
-	for _, kind := range []string{"behind", litDiverged, "tracked", "staged", "untracked", "fetch-failure", "missing-main", "not-a-clone"} {
+	for _, kind := range []string{"behind", litDiverged, "tracked", litStaged, "untracked", "fetch-failure", "missing-main", "not-a-clone"} {
 		t.Run(kind, func(t *testing.T) {
 			a, tools, repo := secretApp(t)
 			file := githubAppConfig(t, a, repo)

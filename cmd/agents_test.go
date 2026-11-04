@@ -146,7 +146,7 @@ func TestAgentsRegisterName(t *testing.T) {
 	}{
 		{label: "positional", args: []string{positional}, want: positional},
 		{label: "flag", args: []string{nameFlag, positional}, want: positional},
-		{label: "matching", args: []string{positional, "--name", positional}, want: positional},
+		{label: "matching", args: []string{positional, nameFlag, positional}, want: positional},
 		{label: paramDefault, want: "session title"},
 		{label: litConflict, args: []string{positional, "--name", "Other worker"}, code: ExitRefused},
 		{label: "explicit empty flag", args: []string{positional, "--name", ""}, code: ExitRefused},
@@ -156,7 +156,7 @@ func TestAgentsRegisterName(t *testing.T) {
 			a, out := stubApp(t)
 			a.as = ""
 			plat.Machine = tableMachine{plat.Machine}
-			for _, env := range []string{"BEEKEEPER_OMP_AGENT", litBeekeeperAgyAgent, "BEEKEEPER_CODEX_AGENT", "CLAUDE_CODE_HOST_SESSION_ID"} {
+			for _, env := range []string{"BEEKEEPER_OMP_AGENT", litBeekeeperAgyAgent, litBeekeeperCodexAgent, "CLAUDE_CODE_HOST_SESSION_ID"} {
 				t.Setenv(env, "")
 			}
 			t.Setenv("CLAUDE_CODE_SESSION_ID", "register-session")
