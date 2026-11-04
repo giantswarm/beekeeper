@@ -443,7 +443,7 @@ func TestDoctorRetryArchiveCommand(t *testing.T) {
 	if !strings.Contains(out.String(), "archive retry queued") {
 		t.Fatal(out.String())
 	}
-	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.archive" })
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == orphanArchiveVerb })
 	if err != nil || len(evs) != 1 {
 		t.Fatalf("events: %+v, %v", evs, err)
 	}
