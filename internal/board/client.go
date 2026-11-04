@@ -514,7 +514,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
-			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
+			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){pageInfo{hasNextPage endCursor} nodes{...I}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
 	r := map[string]json.RawMessage{}
@@ -543,7 +543,11 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		maps.Copy(r, part)
 	}
 	type nodes struct {
-		Nodes []issueJSON `json:"nodes"`
+		Nodes    []issueJSON `json:"nodes"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			EndCursor   string `json:"endCursor"`
+		} `json:"pageInfo"`
 	}
 	open := func(ns []issueJSON) []Item {
 		var out []Item
@@ -616,6 +620,33 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
 			snap.Search[i] = open(s.Nodes)
+			seen := map[string]bool{}
+			for s.PageInfo.HasNextPage {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				cursor := s.PageInfo.EndCursor
+				if cursor == "" || seen[cursor] {
+					snap.Missing = noted(snap.Missing, fmt.Sprintf("board.order %q: search pagination cursor did not advance", snap.Order[i].Name))
+					break
+				}
+				seen[cursor] = true
+				alias := fmt.Sprintf("s%d", i)
+				var page map[string]nodes
+				err := c.graphql(ctx, &page, fmt.Sprintf(`query($q:String!,$c:String!){%s:search(query:$q,type:ISSUE,first:50,after:$c){pageInfo{hasNextPage endCursor} nodes{...I}}}`, alias)+issueFields,
+					vars{"q": searchQuery(snap.Order[i].Search), "c": cursor})
+				p, ok := partialOf(err)
+				if !ok {
+					return err
+				}
+				if p != nil {
+					for _, e := range p.Errors {
+						snap.Missing = noted(snap.Missing, fmt.Sprintf("board.order %q: %s", snap.Order[i].Name, e.Message))
+					}
+				}
+				s = page[alias]
+				snap.Search[i] = append(snap.Search[i], open(s.Nodes)...)
+			}
 		}
 	}
 	return nil
