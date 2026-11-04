@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
 - Discard unusable claim caches as a whole so damaged data cannot hide a live claim behind its ETag or panic after a successful read (https://github.com/giantswarm/beekeeper/issues/2603).
 - Read every page of plan check annotations so a later PRD error cannot be mistaken for missing stage outputs (https://github.com/giantswarm/beekeeper/issues/2755).
+- Preserve open-PR worktree protection when newer fork PRs fill the first branch lookup page (https://github.com/giantswarm/beekeeper/issues/2756).
 
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
 
