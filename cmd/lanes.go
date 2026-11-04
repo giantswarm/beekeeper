@@ -727,7 +727,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		for _, m := range lost {
 			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
 		}
-		return evs, nil
+		return a.mergeEvents(evs)
 	})
 	if err != nil {
 		return nil, nil, nil

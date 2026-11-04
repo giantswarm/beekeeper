@@ -2178,7 +2178,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		if confirm = confirm && settles; confirm {
 			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
 		}
-		return ev, nil
+		return g.mergeEvents(ev)
 	})
 	if confirm && err == nil {
 		releaseLine, rc = g.confirmRelease(&r.out, rc)

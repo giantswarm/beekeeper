@@ -165,7 +165,15 @@ func (a *app) owedLine(ctx context.Context, o state.Owed) (string, bool) {
 	switch p.State {
 	case github.Merged:
 		at := p.MergedAt.UTC().Format(time.RFC3339)
-		_ = a.store.Log(event(gateParty, verbMerged, "%s#%d at %s per GitHub, its waiter stopped by %s before devctl reported it: release unknown", o.Repo, o.PR, at, o.Stop))
+		err := a.store.Update(func(*state.State) ([]state.Event, error) {
+			e := about(event(gateParty, verbMerged, "%s#%d at %s per GitHub, its waiter stopped by %s before devctl reported it: release unknown", o.Repo, o.PR, at, o.Stop),
+				state.Merge{Repo: o.Repo, PR: o.PR}.Key())
+			return a.mergeEvents([]state.Event{e})
+		})
+		if err != nil {
+			a.failedPay(o, fmt.Sprintf("recording the confirmed merge of %s#%d failed (%v)", o.Repo, o.PR, err))
+			return "", false
+		}
 		return fmt.Sprintf("%s; GitHub says %s#%d merged at %s: do not merge it again, `devctl release wait %s --pr %d` waits for its release",
 			stopped, o.Repo, o.PR, at, o.Repo, o.PR), true
 	case github.Closed:
