@@ -6,7 +6,6 @@
 package proc
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -195,14 +194,13 @@ func splitNul(b []byte) []string {
 }
 
 func bootTime(root string) (time.Time, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "stat")))
+	raw, err := os.ReadFile(filepath.Clean(filepath.Join(root, "stat")))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("reading the process table needs Linux /proc: %w", err)
 	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), "btime "); ok {
+	// Interrupt tables can make unrelated lines arbitrarily long.
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
 			s, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
 				return time.Time{}, err
