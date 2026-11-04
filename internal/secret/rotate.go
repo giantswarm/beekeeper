@@ -38,6 +38,9 @@ func (o *Ops) RotateGenerated(ctx context.Context, ref Ref, files []string, ix *
 	if err != nil {
 		return Rotation{}, err
 	}
+	if rot, pending, err := o.resumeRotation(ctx, ref, files, ix, old); pending {
+		return rot, err
+	}
 	v, err := Generate(length, charset)
 	if err != nil {
 		return Rotation{}, err
@@ -52,20 +55,36 @@ func (o *Ops) RotateIssued(ctx context.Context, ref Ref, files []string, ix *gua
 	if err := o.checkRotate(ref); err != nil {
 		return Rotation{}, err
 	}
-	oldFP, ok := ix.ValueFingerprint(ref.String())
-	if !ok {
-		return Rotation{}, fmt.Errorf("%s: the index holds no fingerprint of its old value, so its carriers are unknown: "+
-			"beekeeper scan index records it from scan.vaults before the value changes", ref)
-	}
 	v, err := o.value(ctx, ref)
 	if err != nil {
 		return Rotation{}, err
+	}
+	if rot, pending, err := o.resumeRotation(ctx, ref, files, ix, v); pending {
+		return rot, err
+	}
+	oldFP, ok := ix.ValueFingerprint(ref.String())
+	if !ok {
+		return Rotation{}, fmt.Errorf("%s: the index holds no fingerprint of its old value, so its carriers are unknown: beekeeper scan index records it from scan.vaults before the value changes", ref)
 	}
 	if ix.Fingerprint(strings.TrimSpace(v)) == oldFP {
 		return Rotation{}, fmt.Errorf("%s still holds the value the index recorded: rotate it at its issuer into the vault first, "+
 			"or --generate a new one for a value beekeeper made", ref)
 	}
 	return o.carry(ctx, ref, files, ix, oldFP, v, false)
+}
+
+// resumeRotation carries the already stored replacement into remaining old
+// carriers. A changed vault value must not start another rotation over them.
+func (o *Ops) resumeRotation(ctx context.Context, ref Ref, files []string, ix *guard.Index, value string) (Rotation, bool, error) {
+	oldFP, newFP, pending := ix.PendingRotation(ref.String())
+	if !pending {
+		return Rotation{}, false, nil
+	}
+	if ix.Fingerprint(strings.TrimSpace(value)) != newFP {
+		return Rotation{}, true, fmt.Errorf("%s: the vault changed while a rotation is pending; restore its replacement before retrying", ref)
+	}
+	rot, err := o.carry(ctx, ref, files, ix, oldFP, value, false)
+	return rot, true, err
 }
 
 // checkRotate refuses a reference that is not a field of the shared vault,
@@ -111,6 +130,7 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 			return Rotation{}, fmt.Errorf("nothing rotated: %w", err)
 		}
 	}
+	ix.SetPendingRotation(ref.String(), oldFP, ix.Fingerprint(strings.TrimSpace(v)))
 	rot := Rotation{Ref: ref.String(), Fingerprint: o.Fingerprint(v), Carriers: []Carrier{}}
 	var errs []error
 	for _, f := range slices.Sorted(maps.Keys(docs)) {
@@ -125,11 +145,12 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 			}
 		}
 	}
-	ix.Add(ref.String(), v)
 	if len(errs) > 0 {
 		return rot, fmt.Errorf("the vault and %d of %d carriers hold the new value, these not: %w",
 			len(rot.Carriers), len(carriers), errors.Join(errs...))
 	}
+	ix.Add(ref.String(), v)
+	ix.ClearPendingRotation(ref.String())
 	return rot, nil
 }
 

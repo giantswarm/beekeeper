@@ -61,7 +61,32 @@ type indexData struct {
 	// the value itself and no other form: what beekeeper secret rotate
 	// finds the carriers of a value by once its source holds a new one.
 	Values map[string]string `json:"values,omitempty"`
+	// Rotations retain both fingerprints until every carrier is updated.
+	Rotations map[string]rotationFingerprints `json:"rotations,omitempty"`
 }
+
+type rotationFingerprints struct {
+	Old string `json:"old"`
+	New string `json:"new"`
+}
+
+// PendingRotation returns the fingerprints needed to resume a partial rotation.
+// No credential value is retained in the index.
+func (ix *Index) PendingRotation(ref string) (oldFP, newFP string, ok bool) {
+	pending, ok := ix.data.Rotations[ref]
+	return pending.Old, pending.New, ok
+}
+
+// SetPendingRotation records recovery metadata until every carrier is written.
+func (ix *Index) SetPendingRotation(ref, oldFP, newFP string) {
+	if ix.data.Rotations == nil {
+		ix.data.Rotations = map[string]rotationFingerprints{}
+	}
+	ix.data.Rotations[ref] = rotationFingerprints{Old: oldFP, New: newFP}
+}
+
+// ClearPendingRotation removes recovery metadata after a complete rotation.
+func (ix *Index) ClearPendingRotation(ref string) { delete(ix.data.Rotations, ref) }
 
 // OpenIndex reads the index in dir, creating its key on first use. The key
 // and the index are readable by the user only.
@@ -172,6 +197,7 @@ func (ix *Index) Drop(prefixes ...string) {
 	}
 	maps.DeleteFunc(ix.data.Entries, func(_, ref string) bool { return has(ref) })
 	maps.DeleteFunc(ix.data.Values, func(ref, _ string) bool { return has(ref) })
+	maps.DeleteFunc(ix.data.Rotations, func(ref string, _ rotationFingerprints) bool { return has(ref) })
 }
 
 // ValueFingerprint is the fingerprint of ref's value when it was indexed
