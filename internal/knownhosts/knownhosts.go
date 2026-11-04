@@ -9,14 +9,12 @@
 package knownhosts
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 
-	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
@@ -35,6 +33,15 @@ func Defaults(home string) []string {
 // and returns 0: the sources serve as they are. A missing source counts as
 // empty. dst is replaced atomically, so concurrent runs read a whole file.
 func Parseable(dst string, srcs ...string) (dropped int, err error) {
+	// The consumer has no reader-based API. Reuse a private temporary file
+	// to check each complete line with exactly the parser used by callers.
+	probe, err := os.CreateTemp("", "known_hosts-check-*")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = os.Remove(probe.Name()) }()
+	defer func() { _ = probe.Close() }()
+
 	var out bytes.Buffer
 	for _, src := range srcs {
 		b, err := os.ReadFile(src) //nolint:gosec // the machine's own known_hosts files
@@ -44,19 +51,27 @@ func Parseable(dst string, srcs ...string) (dropped int, err error) {
 		if err != nil {
 			return 0, err
 		}
-		sc := bufio.NewScanner(bytes.NewReader(b))
-		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		for sc.Scan() {
-			line := sc.Bytes()
-			if !parses(line) {
+		for line := range bytes.SplitAfterSeq(b, []byte{'\n'}) {
+			if len(line) == 0 {
+				continue
+			}
+			if err := probe.Truncate(0); err != nil {
+				return 0, err
+			}
+			if _, err := probe.Seek(0, 0); err != nil {
+				return 0, err
+			}
+			if _, err := probe.Write(line); err != nil {
+				return 0, err
+			}
+			if _, err := knownhosts.New(probe.Name()); err != nil {
 				dropped++
 				continue
 			}
 			out.Write(line)
-			out.WriteByte('\n')
-		}
-		if err := sc.Err(); err != nil {
-			return 0, err
+			if line[len(line)-1] != '\n' {
+				out.WriteByte('\n')
+			}
 		}
 	}
 	if dropped == 0 {
@@ -84,15 +99,4 @@ func Parseable(dst string, srcs ...string) (dropped int, err error) {
 		return 0, err
 	}
 	return dropped, os.Rename(tmp.Name(), dst)
-}
-
-// parses reports whether Go's knownhosts takes line: a blank line or a
-// comment, or an entry whose key it can parse.
-func parses(line []byte) bool {
-	t := bytes.TrimSpace(line)
-	if len(t) == 0 || t[0] == '#' {
-		return true
-	}
-	_, _, _, _, _, err := ssh.ParseKnownHosts(t)
-	return err == nil
 }
