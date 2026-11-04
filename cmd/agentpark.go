@@ -171,6 +171,12 @@ agents wake: its task is that message's first line.`,
 			if err := validateOverlapPark(on, waits); err != nil {
 				return err
 			}
+			var declaration []string
+			var remoteDeclaration *string
+			if cmd.Flags().Changed("post-merge") {
+				declaration = []string{postMerge}
+				remoteDeclaration = &postMerge
+			}
 			if a.managedExecutionID() != "" {
 				kind, err := resolveParkRef(cmd.Context(), on)
 				if err != nil {
@@ -179,9 +185,9 @@ agents wake: its task is that message's first line.`,
 				// The coordinator proves the review head against the
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: &postMerge})
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: remoteDeclaration})
 			}
-			line, err := a.park(me, on, waits, postMerge)
+			line, err := a.park(me, on, waits, declaration...)
 			if err != nil {
 				return err
 			}
@@ -240,11 +246,10 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 			if len(postMerge) > 0 {
 				pm = postMerge[0]
 			}
-			if pm == "" && st.Agents[i].Park != nil && strings.EqualFold(st.Agents[i].Park.On, on) && st.Agents[i].Park.PostMerge != nil && *st.Agents[i].Park.PostMerge != "" {
+			if len(postMerge) == 0 && st.Agents[i].Park != nil && strings.EqualFold(st.Agents[i].Park.On, on) && st.Agents[i].Park.PostMerge != nil {
 				pm = *st.Agents[i].Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(on); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
+			} else if len(postMerge) == 0 {
+				if rp, ok := st.ReviewParkFor(on); ok && rp.PostMerge != nil {
 					pm = *rp.PostMerge
 				}
 			}

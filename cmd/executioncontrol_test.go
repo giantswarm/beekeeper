@@ -222,6 +222,24 @@ func TestExecutionParkKeepsReviewEvidence(t *testing.T) {
 		}
 		return got
 	}
+	// Remote JSON must preserve omission versus an explicit empty declaration.
+	work, empty, replacement := "verify rollout", "", "release"
+	for _, step := range []struct {
+		declaration *string
+		want        string
+	}{{&work, work}, {nil, work}, {&empty, empty}, {nil, empty}, {&replacement, replacement}} {
+		park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead, PostMerge: step.declaration})
+		st, err := a.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rp, _ := st.ReviewParkFor(pr)
+		for _, got := range []*string{st.Agents[0].Park.PostMerge, rp.PostMerge} {
+			if got == nil || *got != step.want {
+				t.Fatalf("remote declaration %v: got %v, want %q", step.declaration, got, step.want)
+			}
+		}
+	}
 	// The workspace's HEAD is the published head of the execution's own
 	// branch: a review request, whatever the host's branch is called.
 	if got := park(executionPark{On: pr, Waits: deskReviewWait, Head: loopHead}); got != loopHead {

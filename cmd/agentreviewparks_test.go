@@ -138,3 +138,35 @@ func TestReviewParkPostMergeWorkStaysWithItsPullRequest(t *testing.T) {
 		t.Fatalf("post-merge work crossed PRs: first %+v second %+v", first, second)
 	}
 }
+
+func TestLocalParkPostMergeDeclarations(t *testing.T) {
+	w := parkingWatch(t, map[string]string{refOne: github.Open})
+	was := parkReviewHead
+	t.Cleanup(func() { parkReviewHead = was })
+	parkReviewHead = func(string) string { return loopHead }
+	for _, step := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--post-merge", "verify rollout"}, "verify rollout"},
+		{nil, "verify rollout"},
+		{[]string{"--post-merge", ""}, ""},
+		{nil, ""},
+		{[]string{"--post-merge", "release"}, "release"},
+	} {
+		args := append([]string{"--on", refOne}, step.args...)
+		if err := park(t, w, append(args, deskReviewWait)...); err != nil {
+			t.Fatal(err)
+		}
+		st, err := w.store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rp, _ := st.ReviewParkFor(refOne)
+		for _, got := range []*string{agentOf(t, w).Park.PostMerge, rp.PostMerge} {
+			if got == nil || *got != step.want {
+				t.Fatalf("args %q: got %v, want %q", step.args, got, step.want)
+			}
+		}
+	}
+}

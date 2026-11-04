@@ -416,11 +416,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			if v.PostMerge != nil {
 				pm = *v.PostMerge
 			}
-			if pm == "" && ag.Park != nil && strings.EqualFold(ag.Park.On, v.On) && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
+			if v.PostMerge == nil && ag.Park != nil && strings.EqualFold(ag.Park.On, v.On) && ag.Park.PostMerge != nil {
 				pm = *ag.Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
+			} else if v.PostMerge == nil {
+				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil {
 					pm = *rp.PostMerge
 				}
 			}
