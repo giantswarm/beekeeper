@@ -18,7 +18,7 @@ import (
 
 func runtimeBroker(t *testing.T, state string) *app {
 	t.Helper()
-	return &app{cfg: &config.Config{StateDir: state, Sandbox: config.Sandbox{Devctl: "true"}}, out: &bytes.Buffer{}}
+	return &app{cfg: &config.Config{StateDir: state, Sandbox: config.Sandbox{Devctl: probeHolds}}, out: &bytes.Buffer{}}
 }
 
 func startRuntimeBroker(t *testing.T, a *app) {
@@ -55,7 +55,7 @@ func runtimeFiles(t *testing.T, dir string) map[string]string {
 		if entry.IsDir() {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // a path of this test
 		if err != nil {
 			return err
 		}
@@ -93,12 +93,12 @@ func TestBrokerRuntimeIsolation(t *testing.T) {
 		t.Fatalf("scratch files in %s", scratchDir)
 	}
 	for path, want := range before {
-		got, err := os.ReadFile(path)
+		got, err := os.ReadFile(path) //nolint:gosec // a path of this test
 		if err != nil || string(got) != want {
 			t.Errorf("live file changed: %s: %v", path, err)
 		}
 	}
-	scratchCA, err := os.ReadFile(filepath.Join(scratchDir, sandbox.EgressCA))
+	scratchCA, err := os.ReadFile(filepath.Join(scratchDir, sandbox.EgressCA)) //nolint:gosec // a path of this test
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBrokerRuntimeIsolation(t *testing.T) {
 		t.Fatalf("duplicate owner: %v", err)
 	}
 	for path, want := range before {
-		got, err := os.ReadFile(path)
+		got, err := os.ReadFile(path) //nolint:gosec // a path of this test
 		if err != nil || string(got) != want {
 			t.Errorf("refused broker changed %s: %v", path, err)
 		}
@@ -140,7 +140,7 @@ func TestBrokerRuntimePortFailurePreservesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	_, port, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestBrokerRuntimePortFailurePreservesFiles(t *testing.T) {
 	if _, err := a.listenEgress(context.Background()); err == nil {
 		t.Fatal("occupied port accepted")
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // a path of this test
 	if err != nil || string(got) != "existing CA" {
 		t.Fatalf("CA changed: %q, %v", got, err)
 	}

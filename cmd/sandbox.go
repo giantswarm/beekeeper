@@ -73,7 +73,7 @@ down. A sandboxed git signs through the broker as well.`,
 		},
 	}
 	c.AddCommand(&cobra.Command{
-		Use:   "status",
+		Use:   executionStatus,
 		Short: "Show which broker runtime files the configured sandbox uses",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
