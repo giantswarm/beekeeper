@@ -655,7 +655,9 @@ beekeeper keeps that login:
   (`teleport.home`, default `$TELEPORT_HOME` or `~/.tsh`) swap in one step, so the old certificate
   serves until the new one is in place; the profile before is kept as `teleport/previous` in the
   state directory, and the person's kubeconfig is not touched. tsh's output carries the one-time
-  login URL: it goes to `teleport/login.log` (mode 0600) and is never printed.
+  login URL: it goes to `teleport/login.log` (mode 0600) and is never printed. Backup cleanup and
+  preparation finish before the active profile changes; a failure preparing the backup leaves the
+  active login available.
 - The renewal holds the browser lease. A session renewing by hand (`beekeeper teleport renew`) claims
   it first; the keeper claims it itself when it is free and granted to nobody, and otherwise waits
   for its next run, which the `TELEPORT LOGIN` line names.
