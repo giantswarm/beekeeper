@@ -70,6 +70,8 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 			nodes = append(nodes, is.node())
 		}
 		return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`), nil
+	case strings.Contains(q, "closedByPullRequestsReferences"):
+		return []byte(`{"data":{}}`), nil
 	}
 	return nil, fmt.Errorf("unexpected request %q", q)
 }
