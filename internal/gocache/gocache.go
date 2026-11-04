@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -154,12 +155,13 @@ func Dir() string {
 	return filepath.Join(d, "go-build")
 }
 
-// Entry is one file of the cache: an action or an output.
+// Entry is one file of the cache: an action, an output or an executable.
 type Entry struct {
 	Path string
 	Size int64
 	// Used is its modification time, which the go command moves on when it
-	// uses an entry last touched over an hour before.
+	// uses an entry last touched over an hour before. For an executable it
+	// is the enclosing output directory's modification time.
 	Used time.Time
 }
 
@@ -172,8 +174,9 @@ type Usage struct {
 }
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
-// subdirectories. Everything else (its README, trim.txt, fuzz corpora) is
-// left out, and a missing cache is empty.
+// subdirectories, including executable files inside hash-d directories.
+// Everything else (its README, trim.txt, fuzz corpora) is left out, and a
+// missing cache is empty.
 func Scan(dir string) (Usage, error) {
 	u := Usage{Dir: dir}
 	subs, err := os.ReadDir(dir)
@@ -192,6 +195,19 @@ func Scan(dir string) (Usage, error) {
 			return u, err
 		}
 		for _, f := range files {
+			if f.IsDir() && executableDir(f.Name()) {
+				info, err := f.Info()
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return u, err
+				}
+				if err := scanExecutable(&u, filepath.Join(dir, s.Name(), f.Name()), info.ModTime()); err != nil {
+					return u, err
+				}
+				continue
+			}
 			if !f.Type().IsRegular() {
 				continue
 			}
@@ -205,6 +221,37 @@ func Scan(dir string) (Usage, error) {
 	}
 	slices.SortFunc(u.Entries, func(a, b Entry) int { return a.Used.Compare(b.Used) })
 	return u, nil
+}
+
+// Go stores an executable in a directory named for its output hash. Its
+// cache hits update that directory's mtime rather than the binary's.
+func executableDir(name string) bool {
+	return len(name) == 66 && strings.HasSuffix(name, "-d") && strings.Trim(name[:64], "0123456789abcdef") == ""
+}
+
+func scanExecutable(u *Usage, dir string, used time.Time) error {
+	files, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if !f.Type().IsRegular() {
+			continue
+		}
+		info, err := f.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, f.Name()), Size: info.Size(), Used: used})
+		u.Bytes += info.Size()
+	}
+	return nil
 }
 
 func hexByte(name string) bool {
