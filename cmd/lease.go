@@ -205,6 +205,9 @@ server (--gib, default ollama.budgetGiB, at most ollama.maxBudgetGiB): a loaded
 model is RAM no cgroup counts, and the watch unloads what exceeds it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if os.Getenv(envTimerCommand) != "" {
+				return refused("lease claim refused inside a timer --probe or --run: the command inherits the watch session, not the timer setter; claim from the setter session after the timer wakes it")
+			}
 			res := args[0]
 			if err := a.checkResource(res); err != nil {
 				return err

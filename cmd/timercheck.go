@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -141,6 +142,10 @@ func checkOf(t state.Timer) timerCheck {
 // the tests.
 var readProbe = probeOutput
 
+// envTimerCommand marks subprocesses whose inherited session belongs to the
+// watch, not necessarily the timer setter. Lease claims must refuse this identity.
+const envTimerCommand = "BEEKEEPER_TIMER_COMMAND"
+
 // probeOutput runs cmd within probeTimeout and returns its output; its error
 // says how it failed in the command's last line on stderr.
 func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
@@ -148,6 +153,7 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 	defer cancel()
 	var stderr bytes.Buffer
 	c := exec.CommandContext(pctx, "sh", "-c", cmd) //nolint:gosec // the condition its timer's setter gave on this machine
+	c.Env = append(os.Environ(), envTimerCommand+"=probe")
 	c.Stderr = &stderr
 	out, err := c.Output()
 	switch {

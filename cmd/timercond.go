@@ -349,7 +349,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
 	// An agents start the command runs says which timer started it, its
 	// time and how late it fired (agentStartTimer).
-	c.Env = append(os.Environ(), envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
+	c.Env = append(os.Environ(), envTimerCommand+"=run", envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		if out, err := os.Create(path); err == nil { //nolint:gosec // under the state directory, named by the timer id
 			defer func() { _ = out.Close() }()

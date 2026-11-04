@@ -340,3 +340,27 @@ func TestNewGrantFirst(t *testing.T) {
 		t.Errorf("queue %+v", q)
 	}
 }
+
+// Timer commands must not acquire (or queue) a lease for the watching session.
+func TestLeaseClaimRefusesTimerCommands(t *testing.T) {
+	for _, kind := range []string{"probe", "run"} {
+		t.Run(kind, func(t *testing.T) {
+			a := claimApp(t)
+			t.Setenv(envTimerCommand, kind)
+			_, err := runLease(a, "claim", labOne, "-p", "timer work")
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), "watch session, not the timer setter") {
+				t.Fatalf("claim: %v; want refusal explaining the inherited session", err)
+			}
+			if h, err := lease.Dir(a.cfg.LeaseDir).Get(labOne); err != nil || h != nil {
+				t.Fatalf("refused claim changed lease: %+v, %v", h, err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Grants) != 0 {
+				t.Fatalf("refused claim queued grants: %+v", st.Grants)
+			}
+		})
+	}
+}

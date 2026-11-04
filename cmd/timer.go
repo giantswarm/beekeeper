@@ -56,6 +56,10 @@ line says it. A timer with a condition, --wake or --run closes when it
 fires. --repeat daily, weekdays or weekly re-arms a --wake or --run timer
 at the same local time instead; it stays open until timer done.
 
+A lease claim inside --probe or --run is refused: these commands inherit
+the watch session, not the timer setter. Use --wake and claim from the
+setter session when it resumes.
+
 Times carry their zone (08:30 CET). A timer firing more than a tick past
 its time says how late it is and what held it: a beekeeper stop, or no tick
 at all (the watch and the supervisor loop down, or the state locked).

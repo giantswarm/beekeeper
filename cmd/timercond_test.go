@@ -385,6 +385,16 @@ func TestTimerRunPassesTheTimerToItsCommand(t *testing.T) {
 	}
 }
 
+func TestTimerRunMarksInheritedSession(t *testing.T) {
+	t.Setenv(envTimerCommand, "outer")
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	w.runTimer(t.Context(), timerFire{t: state.Timer{ID: 9, Run: `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`}})
+	out, err := os.ReadFile(filepath.Join(w.store.Dir(), "timers", "9.log"))
+	if err != nil || string(out) != "run" {
+		t.Fatalf("run subprocess marker = %q, %v", out, err)
+	}
+}
+
 // Both supervisor re-arms and self-update restarts cancel the watch's
 // context, then wait for timerActs before starting the replacement watch.
 func TestTimerRunInterruptedByWatchRestart(t *testing.T) {
