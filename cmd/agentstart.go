@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,8 +194,8 @@ watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
 
 Before sending a brief, start runs the same checks as beekeeper lint briefs.
-A finding refuses the start with exit 3 and names the file, line and rule;
-fix the brief before starting it.
+A finding is printed to stderr with its file, line and rule; the start goes on,
+so a generated brief quoting its issue never stops a worker.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -396,6 +397,7 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			warnBriefLint(cmd.ErrOrStderr(), briefFile)
 			// The timer whose command runs this start, from its
 			// environment or, on the broker's side, the flags a brokered
 			// start forwards it in.
@@ -1968,7 +1970,7 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 	return reg, nil
 }
 
-// readBrief reads and lints the brief file: one command-line argument, not empty.
+// readBrief reads the brief file: one command-line argument, not empty.
 func readBrief(path string) (string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
 	if err != nil {
@@ -1981,21 +1983,25 @@ func readBrief(path string) (string, error) {
 	case len(brief) > maxBrief:
 		return "", usageErr("%s has %d bytes, more than %d: point the brief at a file instead", path, len(brief), maxBrief)
 	}
-	// Lint the original file so findings retain its line numbers, including
-	// leading blank lines trimmed from the prompt.
+	return brief, nil
+}
+
+// warnBriefLint prints what beekeeper lint briefs finds in the brief at path.
+// It never refuses: agents start also carries the supervisor's generated
+// briefs, whose quoted issue text no worker can fix. It lints the original
+// file so findings keep their line numbers.
+func warnBriefLint(w io.Writer, path string) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
+	if err != nil {
+		return
+	}
 	found, err := brieflint.Lint(path, bytes.NewReader(raw))
 	if err != nil {
-		return "", err
+		return
 	}
-	if len(found) > 0 {
-		var message strings.Builder
-		fmt.Fprintf(&message, "brief refused: %d lint findings", len(found))
-		for _, f := range found {
-			fmt.Fprintf(&message, "\n%s:%d: %s: %s\n  %s", f.Path, f.Line, f.Rule, f.Why, f.Text)
-		}
-		return "", refused("%s", message.String())
+	for _, f := range found {
+		_, _ = fmt.Fprintf(w, "brief lint: %s:%d: %s: %s\n  %s\n", f.Path, f.Line, f.Rule, f.Why, f.Text)
 	}
-	return brief, nil
 }
 
 // taskPrompt is the part of a worker's first prompt that is its task: the
