@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -760,4 +761,36 @@ func emptyTestConfig(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHookPersonalSearchOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			cfg := fmt.Sprintf("stateDir: %s\nhooks:\n  guardPersonalSearch: %v\n", filepath.Join(dir, "state"), enabled)
+			if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(map[string]any{
+				"session_id": "personal", "cwd": dir, "tool_name": "Bash",
+				"tool_input": map[string]any{"command": `gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }'`},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			c := New()
+			c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse"})
+			c.SetIn(strings.NewReader(string(raw)))
+			c.SetOut(&out)
+			c.SetErr(&out)
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if refused := strings.Contains(out.String(), "gh issue list --repo"); refused != enabled {
+				t.Fatalf("guard enabled=%v, output=%s", enabled, out.String())
+			}
+		})
+	}
 }

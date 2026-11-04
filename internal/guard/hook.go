@@ -235,6 +235,8 @@ type Hook struct {
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
 	Started func(session string) bool
+	// GuardPersonalSearch applies the issue-search refusal to personal sessions too.
+	GuardPersonalSearch bool
 	// Apps lists the Apps the person owns and asked a consent for, what a
 	// Chrome call on a consent page is decided from (consent.go); read only
 	// for a browser call that acts on a page, nil decides no consent page.
@@ -436,7 +438,7 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("searchRefusal")
-	if r := h.searchRefusal(cmd, ev.Session); r != "" {
+	if r := h.searchRefusal(cmd, ev.Session, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("deleteRefusal")

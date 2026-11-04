@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"net/url"
 	"path"
 	"regexp"
@@ -8,6 +9,11 @@ import (
 )
 
 var (
+	graphqlSearch    = regexp.MustCompile(`\bsearch\s*\(((?:[^()"#]|"(?:\\.|[^"\\])*"|#[^\n]*\n)*)\)`)
+	graphqlStrings   = regexp.MustCompile(`"(?:\\.|[^"\\])*"|#[^\n]*`)
+	graphqlIssueType = regexp.MustCompile(`\btype\s*:\s*ISSUE\b`)
+	graphqlQuery     = regexp.MustCompile(`\bquery\s*:\s*("(?:\\.|[^"\\])*"|\$[A-Za-z_][A-Za-z_0-9]*)`)
+
 	// repoQualifier: a search query's repo: qualifier, raw or URL-encoded; an
 	// excluding -repo: narrows nothing and is no match.
 	repoQualifier = regexp.MustCompile(`(?i)(?:^|[\s(+])repo(?::|%3A)`)
@@ -26,20 +32,32 @@ var (
 
 // searchRefusal says why cmd is refused in a session beekeeper started: a
 // search over issues or pull requests that spans more than one repository
-// (gh search issues or prs, or gh api search/issues), which GitHub answers
+// (gh search issues or prs, gh api search/issues, or GraphQL ISSUE search), which GitHub answers
 // from the repositories the App's token an agent's gh carries can read and
 // drops every other one without a word, so a scan reads "no match" for a
 // repository it never saw. A search scoped to one repository fails loudly on
-// one it cannot read and passes. A person's own session passes every call;
-// the start is read only for a matching one.
-func (h Hook) searchRefusal(cmd, session string) string {
+// one it cannot read and passes. Personal sessions opt in with GuardPersonalSearch;
+// the start is read only for a matching call.
+func (h Hook) searchRefusal(cmd, session string, cwd ...string) string {
 	sc := scanShell(cmd)
 	for _, sg := range sc.segments() {
-		what, repos := ghSearch(shellWords(sc.plain[sg.start:sg.end]))
+		words := shellWords(sc.plain[sg.start:sg.end])
+		what, repos := ghSearch(words)
+		if ep := ghAPIEndpoint(words); ep == "graphql" || graphqlURL.MatchString(ep) {
+			dir := ""
+			if len(cwd) > 0 {
+				dir = cwd[0]
+			}
+			body := ghAPIBodies(words, dir)
+			if body == "" {
+				body = cmd[sg.start:]
+			}
+			what, repos = graphqlSearchScope(words, body)
+		}
 		if what == "" || repos == 1 {
 			continue
 		}
-		if session == "" || h.Started == nil || !h.Started(session) {
+		if !h.GuardPersonalSearch && (session == "" || h.Started == nil || !h.Started(session)) {
 			return ""
 		}
 		return "Refused: " + what + " spans more than one repository, and GitHub answers it from the repositories the App's " +
@@ -106,4 +124,71 @@ func searchRepos(args []string) int {
 		}
 	}
 	return n
+}
+
+// graphqlSearchScope checks every search field independently, so a scoped
+// sibling cannot make an unscoped search appear complete.
+func graphqlSearchScope(words []string, body string) (string, int) {
+	fields := map[string]string{}
+	for i, w := range words {
+		value := ""
+		switch {
+		case w == "-f" || w == "-F" || w == flagRawField || w == flagField:
+			if i+1 < len(words) {
+				value = words[i+1]
+			}
+		case strings.HasPrefix(w, "--raw-field="):
+			value = strings.TrimPrefix(w, "--raw-field=")
+		case strings.HasPrefix(w, "--field="):
+			value = strings.TrimPrefix(w, "--field=")
+		case strings.HasPrefix(w, "-f") || strings.HasPrefix(w, "-F"):
+			value = w[2:]
+		}
+		if key, v, ok := strings.Cut(value, "="); ok {
+			fields[key] = v
+		}
+	}
+	var input map[string]any
+	if json.Unmarshal([]byte(body), &input) == nil {
+		for key, value := range input {
+			if v, ok := value.(string); ok {
+				fields[key] = v
+			}
+		}
+		if variables, ok := input["variables"].(map[string]any); ok {
+			for key, value := range variables {
+				if v, ok := value.(string); ok {
+					fields[key] = v
+				}
+			}
+		}
+	}
+	query := fields["query"]
+	if query == "" || strings.HasPrefix(query, "@") {
+		query = body
+	}
+	found := false
+	for _, match := range graphqlSearch.FindAllStringSubmatch(query, -1) {
+		if !graphqlIssueType.MatchString(graphqlStrings.ReplaceAllString(match[1], "")) {
+			continue
+		}
+		found = true
+		q := graphqlQuery.FindStringSubmatch(match[1])
+		if len(q) < 2 {
+			return "`gh api graphql` ISSUE search", 0
+		}
+		value := ""
+		if strings.HasPrefix(q[1], "$") {
+			value = fields[q[1][1:]]
+		} else {
+			_ = json.Unmarshal([]byte(q[1]), &value)
+		}
+		if n := len(repoQualifier.FindAllString(value, -1)); n != 1 {
+			return "`gh api graphql` ISSUE search", n
+		}
+	}
+	if found {
+		return "`gh api graphql` ISSUE search", 1
+	}
+	return "", 0
 }

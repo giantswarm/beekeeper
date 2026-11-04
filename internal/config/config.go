@@ -469,6 +469,8 @@ type BoardStep struct {
 
 // Hooks configures where beekeeper's Claude Code hooks act.
 type Hooks struct {
+	// GuardPersonalSearch refuses cross-repository issue searches in personal sessions too.
+	GuardPersonalSearch bool `yaml:"guardPersonalSearch"`
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
