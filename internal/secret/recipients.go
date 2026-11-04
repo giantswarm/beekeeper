@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/giantswarm/beekeeper/internal/guard"
 )
 
 // Recipient is one age recipient of a .sops.yaml creation rule or of a
@@ -85,6 +87,9 @@ func (o *Ops) Recipients(ctx context.Context, path string) ([]Recipient, error) 
 	listing := func(vault string) ([]vaultItem, error) {
 		if items, ok := listings[vault]; ok {
 			return items, nil
+		}
+		if err := o.checkVaultIn(Ref{Op: guard.OpRef + vault + "/"}, o.ageVaults()...); err != nil {
+			return nil, err
 		}
 		items, err := o.vaultItems(ctx, vault)
 		if err != nil {
