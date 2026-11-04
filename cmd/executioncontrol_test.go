@@ -314,3 +314,21 @@ func TestExecutionResumeEndsTheWorkersOwnPark(t *testing.T) {
 		t.Fatalf("second resume: %v", err)
 	}
 }
+
+func TestExecutionRefusesMismatchedParkTarget(t *testing.T) {
+	for _, waits := range []string{"merge hold lifting", "gate run completion"} {
+		t.Run(waits, func(t *testing.T) {
+			a, _ := executionTestApp(t)
+			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				_, evs, err := a.applyExecutionControl(context.Background(), st, st.Agents[0].Party, execution.ControlRequest{
+					Operation: execution.ControlPark,
+					Data:      mustExecutionJSON(t, executionPark{On: refOne, Waits: waits}),
+				})
+				return evs, err
+			})
+			if err == nil || !strings.Contains(err.Error(), "does not settle") {
+				t.Fatalf("mismatched park: %v", err)
+			}
+		})
+	}
+}

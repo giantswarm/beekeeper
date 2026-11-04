@@ -77,6 +77,26 @@ func validateOverlapPark(on, waits string) error {
 	return nil
 }
 
+// validateParkWait rejects a GitHub target when the stated condition is
+// independent of that reference's lifecycle. Keep this shared by local and
+// remote parks and by the watch, which also reads parks from older releases.
+func validateParkWait(on, waits string) error {
+	if _, ok := parseRef(on); !ok {
+		return nil
+	}
+	words := strings.FieldsFunc(strings.ToLower(waits), func(r rune) bool {
+		return r < 'a' || r > 'z'
+	})
+	text := " " + strings.Join(words, " ") + " "
+	if strings.Contains(text, " hold ") || strings.Contains(text, " held ") || strings.Contains(text, " release window ") {
+		return refused("%s does not settle a hold wait; park on --on hold:<target>, using the target named by the gate refusal or beekeeper hold", on)
+	}
+	if strings.Contains(text, " gate run ") || strings.Contains(text, " gate runs ") || strings.Contains(text, " gated run ") {
+		return refused("%s does not settle a gate run wait; the target is the run listed by beekeeper gate runs; park without --on and arrange an explicit wake for that run's outcome", on)
+	}
+	return nil
+}
+
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
 	var checks bool
@@ -100,6 +120,11 @@ the one a gate's exit 77 names);
 alert:<name> waits for a firing alert (a bare alertname or installation/alertname);
 lease claim --park parks on a lease. The supervisor loop wakes alert waits
 and replaces a parked session that cannot be resumed, keeping its task.
+
+A GitHub target is refused when the wait names a hold or a gate run. Use
+hold:<target> for a hold. Gate runs have no automatic park target: identify
+the run with gate runs, park without --on and arrange an explicit wake on
+its outcome.
 
 GitHub targets are resolved before the park is recorded; a confirmed unknown,
 closed or merged target is refused. If GitHub cannot be read, the park is
@@ -178,6 +203,9 @@ agents wake: its task is that message's first line.`,
 					on = refName(r)
 				}
 			}
+			if err := validateParkWait(on, waits); err != nil {
+				return err
+			}
 			if err := validateOverlapPark(on, waits); err != nil {
 				return err
 			}
@@ -218,6 +246,9 @@ agents wake: its task is that message's first line.`,
 // returns the line that says so. A bare note number is the central
 // instance's note when the machine has none of it open, as note answer's.
 func (a *app) park(me state.Party, on, waits string, postMerge ...string) (string, error) {
+	if err := validateParkWait(on, waits); err != nil {
+		return "", err
+	}
 	if err := validateOverlapPark(on, waits); err != nil {
 		return "", err
 	}
@@ -692,6 +723,9 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 		p := ag.Park
 		if p == nil || p.Checks || p.On == "" || !p.Resumable.IsZero() {
 			continue
+		}
+		if validateParkWait(p.On, p.Waits) != nil {
+			continue // A PR event cannot settle this condition.
 		}
 		if p.ReviewHead != "" && p.PostMerge != nil && slices.ContainsFunc(st.Agents, func(registered state.Agent) bool { return registered.Is(ag.Party) }) {
 			continue
