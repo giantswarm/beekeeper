@@ -1663,10 +1663,12 @@ func (m Merge) Key() string {
 // Event is one line of events.jsonl. At is written in UTC (RFC 3339 with a
 // trailing Z), so a reader can compare it as a string.
 type Event struct {
-	At     time.Time `json:"at"`
-	By     Party     `json:"by"`
-	Verb   string    `json:"verb"`
-	Detail string    `json:"detail"`
+	// NoteTeam disambiguates legacy same-number notes across team namespaces.
+	NoteTeam string    `json:"noteTeam,omitempty"`
+	At       time.Time `json:"at"`
+	By       Party     `json:"by"`
+	Verb     string    `json:"verb"`
+	Detail   string    `json:"detail"`
 	// Subject is the issue or pull request the event concerns, owner/repo#n,
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
