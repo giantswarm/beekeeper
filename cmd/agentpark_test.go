@@ -61,7 +61,7 @@ func answer(t *testing.T, w *watcher) {
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
 		n := st.Notes[0]
 		st.Notes = nil
-		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Channel: channelTerminal, Answer: parkAnswer, Note: n.ID}
+		rec := &recordedAnswer{About: privateThread, By: personTimo, Via: viaCLI, Answer: parkAnswer, Note: n.ID}
 		return []state.Event{answerEvent(state.Party{Name: personTimo, Person: personTimo}, rec, &n)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
 	register := func(args ...string) error {
 		c := w.agentsCmd()
-		c.SetArgs(append([]string{"register"}, args...))
+		c.SetArgs(append([]string{registerVerb}, args...))
 		c.SetOut(w.out)
 		c.SetErr(w.out)
 		c.SilenceUsage, c.SilenceErrors = true, true

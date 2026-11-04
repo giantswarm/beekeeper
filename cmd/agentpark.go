@@ -99,6 +99,7 @@ func validateParkWait(on, waits string) error {
 
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
+	var checks bool
 	c := &cobra.Command{
 		Use:   "park <what it waits for>",
 		Short: "Park the calling agent on a note, a pull request or a person: it keeps its task without holding a busy slot",
@@ -124,9 +125,9 @@ hold:<target> for a hold. Gate runs have no automatic park target: identify
 the run with gate runs, park without --on and arrange an explicit wake on
 its outcome.
 
-GitHub targets are resolved before the park is recorded; a confirmed unknown
-target is refused. If GitHub cannot be read, the park is recorded and its type
-resolved later. Issues are plain waits checked every five minutes and never
+GitHub targets are resolved before the park is recorded; a confirmed unknown,
+closed or merged target is refused. If GitHub cannot be read, the park is
+recorded and its type resolved later. Issues are plain waits checked every five minutes and never
 enter pull request review. Once the note is closed (answered, defaulted, done
 or overtaken), the issue closed, the pull request merged or closed or given a
 review or comment by anyone but its author since the park (a review posted
@@ -137,6 +138,10 @@ with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
 by hand, also for a park without --on; run by the parked agent with no
 agent named, it ends its own park and wakes nobody.
+
+--checks is available to SSH workers: --on owner/repo#n names the CI wait.
+The coordinator records a pr-checks wake timer with the park, without requesting
+review. End the turn; green or red CI wakes you to fix or request desk review.
 
 A park from the pull request's own worktree at its published HEAD records
 an independent review request, retained per pull request. Park from each
@@ -199,7 +204,13 @@ agents wake: its task is that message's first line.`,
 			if err := validateOverlapPark(on, waits); err != nil {
 				return err
 			}
+			if checks && a.managedExecutionID() == "" {
+				return refused("--checks is for SSH workers; use timer add --when pr-checks --wake on the coordinator")
+			}
 			if a.managedExecutionID() != "" {
+				if checks {
+					return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, Checks: true})
+				}
 				kind, err := resolveParkRef(cmd.Context(), on)
 				if err != nil {
 					return err
@@ -217,8 +228,10 @@ agents wake: its task is that message's first line.`,
 			return err
 		},
 	}
+	c.Flags().BoolVar(&checks, "checks", false, "SSH worker: park for CI on --on owner/repo#n; coordinator wakes on green or red, without requesting review")
 	c.Flags().StringVar(&postMerge, "post-merge", "", "work to wake for after merge (release, rollout, proof); empty closes the task without a wake")
 	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a hold (hold:<target>) or an alert (alert:<name>)")
+	c.MarkFlagsMutuallyExclusive("checks", "post-merge")
 	return c
 }
 
@@ -538,6 +551,9 @@ func (a *app) resumeParkedOpts(ctx context.Context, by state.Party, q string, fo
 	if err != nil {
 		return err
 	}
+	if _, lease := parkLease(p.On); lease {
+		ctx = context.WithValue(ctx, leaseResumeKey{}, true)
+	}
 	if err := wakeOwner(a, ctx, by, ag.Name, parkMessage(p, by.Name), ""); err != nil {
 		_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
 			for k := range st.Agents {
@@ -656,6 +672,9 @@ func (a *app) resumeOffRoster(ctx context.Context, by, p state.Party, force bool
 		_, err = fmt.Fprintf(a.out, "%s: your park ended, nobody is woken. %s\n", p.Name, parkMessage(&park, by.Name))
 		return err
 	}
+	if _, lease := parkLease(park.On); lease {
+		ctx = context.WithValue(ctx, leaseResumeKey{}, true)
+	}
 	werr := wakeOwner(a, ctx, by, wakeID(p), parkMessage(&park, by.Name), "")
 	switch {
 	case werr == nil:
@@ -697,7 +716,7 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var out []settledPark
 	for _, ag := range parkedAgents(st) {
 		p := ag.Park
-		if p == nil || p.On == "" || !p.Resumable.IsZero() {
+		if p == nil || p.Checks || p.On == "" || !p.Resumable.IsZero() {
 			continue
 		}
 		if validateParkWait(p.On, p.Waits) != nil {
@@ -830,7 +849,7 @@ func noteCloses(evs []state.Event, ids []int, central string) map[int]string {
 		for _, id := range ids {
 			if an, ok := parseAnswered(e); ok {
 				if an.ID == id {
-					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.attribution(), an.Answer)
+					closes[id] = fmt.Sprintf("note %s#%d answered by %s: %s", central, id, an.For, an.Answer)
 					if an.Comment != "" {
 						closes[id] += " (" + an.Comment + ")"
 					}
