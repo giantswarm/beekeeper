@@ -233,13 +233,17 @@ func (r Renewal) swap(staging string) error {
 	if _, err := os.Lstat(r.Home); errors.Is(err, os.ErrNotExist) {
 		return os.Rename(staging, r.Home)
 	}
-	if err := exchange(staging, r.Home); err != nil {
-		return fmt.Errorf("swap %s into %s: %w", staging, r.Home, err)
-	}
-	// staging holds the previous profile now; its certificate expires
-	// within hours, the one it replaces expired long ago.
+	// Prepare the backup before changing Home. The final exchange installs
+	// the new login and saves the active profile without fallible cleanup
+	// afterwards; Renew's staging cleanup can never delete that profile.
 	if err := os.RemoveAll(r.Previous()); err != nil {
 		return err
 	}
-	return os.Rename(staging, r.Previous())
+	if err := os.Rename(staging, r.Previous()); err != nil {
+		return err
+	}
+	if err := exchange(r.Previous(), r.Home); err != nil {
+		return fmt.Errorf("swap %s into %s: %w", r.Previous(), r.Home, err)
+	}
+	return nil
 }

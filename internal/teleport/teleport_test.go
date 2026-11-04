@@ -182,11 +182,16 @@ func TestRenewSwapsTheStagingHomeIn(t *testing.T) {
 		t.Fatalf("staging left behind: %v", left)
 	}
 	// A second renewal replaces the previous profile.
+	second := fakeTsh{until: now.Add(24 * time.Hour)}
+	r.Login = second.login
 	if _, err := r.Renew(context.Background(), now.Add(11*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if prev, _ := readProfile(context.Background(), r.Previous()); !prev.ValidUntil.Equal(p.ValidUntil) {
 		t.Fatalf("previous holds %s after the second renewal", prev.ValidUntil)
+	}
+	if got, _ := readProfile(context.Background(), r.Home); !got.ValidUntil.Equal(second.until) {
+		t.Fatalf("home holds %s after the second renewal", got.ValidUntil)
 	}
 }
 
@@ -201,6 +206,52 @@ func TestRenewWithoutAHome(t *testing.T) {
 	}
 	if got, _ := readProfile(context.Background(), r.Home); got.ValidUntil.IsZero() {
 		t.Fatal("no profile in the home")
+	}
+}
+
+func TestRenewBackupPermissionFailureLeavesHome(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	r := renewal(t, fakeTsh{until: now.Add(12 * time.Hour)})
+	if err := os.MkdirAll(r.Previous(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(r.Previous(), "profile")
+	if err := os.WriteFile(backup, []byte("older profile"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.Previous(), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(r.Previous(), 0o700) })
+	// Verify that this environment enforces the real directory permission.
+	if err := os.Remove(backup); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected backup removal to be denied, got %v", err)
+	}
+	if _, err := r.Renew(context.Background(), now); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("renewal error = %v, want permission failure", err)
+	}
+	if got, _ := readProfile(context.Background(), r.Home); got.ValidUntil.Format(time.RFC3339) != homeUntil {
+		t.Fatalf("failed renewal changed the active profile to %s", got.ValidUntil)
+	}
+	if raw, err := os.ReadFile(backup); err != nil || string(raw) != "older profile" {
+		t.Fatalf("backup changed: %q, %v", raw, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(r.Dir, "staging-*")); len(left) != 0 {
+		t.Fatalf("staging left behind: %v", left)
+	}
+}
+
+func TestSwapFailedPreparationLeavesHome(t *testing.T) {
+	r := renewal(t, fakeTsh{})
+	if err := os.MkdirAll(r.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A missing source forces the preparation rename to fail after cleanup.
+	if err := r.swap(filepath.Join(r.Dir, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("swap error = %v, want missing staging", err)
+	}
+	if got, _ := readProfile(context.Background(), r.Home); got.ValidUntil.Format(time.RFC3339) != homeUntil {
+		t.Fatalf("failed preparation changed the active profile to %s", got.ValidUntil)
 	}
 }
 
