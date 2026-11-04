@@ -326,7 +326,7 @@ func TestLiftSticks(t *testing.T) {
 	stuck := []Upgrade{{Cluster: "wc", To: stuckTo}}
 	Reconcile(st, prod, stuck, at, watch)
 	timo := state.Party{Name: "Supervisor"}
-	if !Lift(st, HoldTarget(prod, "/wc"), timo, at) || Lift(st, HoldTarget(prod, "/wc"), timo, at) {
+	if !Lift(st, HoldTarget(prod, "wc"), timo, at) || Lift(st, HoldTarget(prod, "wc"), timo, at) {
 		t.Fatal("lift: want the first to lift and the second to find nothing held")
 	}
 	for tick := range 3 {
@@ -351,14 +351,14 @@ func TestLiftSticks(t *testing.T) {
 	if len(begun) != 1 || st.Holds[0].LiftedBy != nil || st.Holds[0].UpgradeTo != "36.1.0" {
 		t.Errorf("a different upgrade must hold again: begun %+v holds %+v", begun, st.Holds)
 	}
-	Lift(st, HoldTarget(prod, "/wc"), timo, at)
+	Lift(st, HoldTarget(prod, "wc"), timo, at)
 	if _, ended := Reconcile(st, prod, nil, at, watch); len(ended) != 1 || len(st.Holds) != 0 {
 		t.Errorf("the upgrade's end must remove the lifted hold: ended %+v holds %+v", ended, st.Holds)
 	}
 }
 
 func TestLiftBackfillsTarget(t *testing.T) {
-	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "/wc")}}}
+	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "wc")}}}
 	Reconcile(st, prod, []Upgrade{{Cluster: "wc", To: stuckTo}}, at, watch)
 	if st.Holds[0].UpgradeTo != stuckTo {
 		t.Errorf("holds %+v", st.Holds)
