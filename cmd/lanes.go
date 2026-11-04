@@ -23,8 +23,9 @@ import (
 // laneView is one lane's queue with its installation and hold.
 type laneView struct {
 	merge.Lane
-	Installation string      `json:"installation,omitempty"`
-	Hold         *state.Hold `json:"hold,omitempty"`
+	WaitingReasons map[string]string `json:"waitingReasons,omitempty"`
+	Installation   string            `json:"installation,omitempty"`
+	Hold           *state.Hold       `json:"hold,omitempty"`
 	// Stall is set when the lane's first arrived merge has waited longer
 	// than merge.stallAfter behind places whose merges are not in the gate.
 	Stall *merge.Stall `json:"stall,omitempty"`
@@ -416,6 +417,12 @@ func (a *app) laneViews(st *state.State) []laneView {
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		for _, m := range v.Waiting {
+			if v.WaitingReasons == nil {
+				v.WaitingReasons = map[string]string{}
+			}
+			v.WaitingReasons[m.Key()] = a.mergeWaitReason(st, m)
+		}
 		for _, m := range st.Merges {
 			if t := pairs[m.Key()]; m.Lane == name && t != "" {
 				if v.Pairs == nil {
@@ -455,6 +462,55 @@ func (a *app) laneViews(st *state.State) []laneView {
 		add(f.Lane, a.cfg.LaneOf(f.Repo).Installation)
 	}
 	return out
+}
+
+// mergeWaitReason explains the locally observable start constraints without
+// polling GitHub or changing a gate's state.
+func (a *app) mergeWaitReason(st *state.State, m state.Merge) string {
+	lane := a.cfg.LaneOf(m.Repo)
+	lane.Name = m.Lane
+	if h, ok := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, lane); ok {
+		return fmt.Sprintf("gate hold (%s) by %s until %s: %s", holdTarget(h), quotedOwner(h.By), untilText(a, h), h.Reason)
+	}
+	q := merge.Queue(st, m.Lane)
+	if q.Running != nil {
+		return "lane running " + q.Running.Key()
+	}
+	if ahead, behind := q.Ahead(m.Repo, m.PR, merge.Unheld(st, a.now, lane, a.present)); behind {
+		return "lane waits for " + ahead.Key()
+	}
+	if !proc.Alive(m.PID) {
+		return "gate not running; waiting for arrival"
+	}
+	g := &gateRun{app: a, repo: m.Repo, pr: m.PR, lane: lane, me: m.By}
+	need := 1
+	if i := st.PairOf(m.Key()); i >= 0 {
+		p := st.Pairs[i]
+		if p.Started == p.Sibling(m.Key()) {
+			need = 0
+		} else {
+			need = 2
+			if a.now.Sub(p.Ready[p.Sibling(m.Key())]) > pairFresh {
+				return "paired merge not ready: " + p.Sibling(m.Key())
+			}
+		}
+	}
+	if why := g.sessionWaitFor(st, need); why != "" {
+		return why
+	}
+	if why := g.capWaitFor(st, m, need); why != "" {
+		var holders []string
+		for _, run := range st.Merges {
+			if run.Phase == state.Running {
+				holders = append(holders, fmt.Sprintf("%s by %s", run.Key(), quotedOwner(run.By)))
+			}
+		}
+		return why + "; slots held by " + strings.Join(holders, ", ")
+	}
+	if q.Settling != nil && lane.Installation != "" {
+		return a.settlingText(*q.Settling)
+	}
+	return "no local blocker; gate may be checking GitHub, release readiness or its central lane"
 }
 
 // present says whether a waiting merge holds its place against the merges
@@ -577,6 +633,7 @@ func (a *app) printLanes(views []laneView) {
 				how = "not arrived, queued"
 			}
 			p("%s %d. %s by %s, %s since %s%s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined), v.paired(m.Key()))
+			p("        start: %s", v.WaitingReasons[m.Key()])
 		}
 		for _, f := range v.Failed {
 			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),
