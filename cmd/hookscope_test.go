@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,6 +290,31 @@ func TestHookBrokenConfigRecovery(t *testing.T) {
 			}
 			if !strings.Contains(got, `"permissionDecision":"`+decision+`"`) || !strings.Contains(got, "watch.interval") {
 				t.Fatalf("want %s and key diagnostic, got %s", decision, got)
+			}
+		})
+	}
+}
+
+// Requiring a sandbox must preserve the normal SendMessage checks.
+func TestSandboxRequiredPreservesSendMessageChecks(t *testing.T) {
+	var verdict string
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprint(required), func(t *testing.T) {
+			var out bytes.Buffer
+			a, dir := scopeApp(t, &out)
+			conf := fmt.Sprintf("stateDir: %s\nhooks:\n  scope:\n    dirs: [%s]\nsandbox:\n  required: %t\n", dir, dir, required)
+			if err := os.WriteFile(a.cfgPath, []byte(conf), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			send := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"` + dir + `","tool_name":"SendMessage","tool_input":{"to":"the supervisor","message":"x"}}`
+			got := runHook(t, a, &out, "pretooluse", send)
+			if !strings.Contains(got, `"permissionDecision":"deny"`) || !strings.Contains(got, "no session holds") {
+				t.Fatalf("want refusal for a role without a holder, got %q", got)
+			}
+			if !required {
+				verdict = got
+			} else if got != verdict {
+				t.Errorf("sandbox.required changed the verdict: off %q, on %q", verdict, got)
 			}
 		})
 	}

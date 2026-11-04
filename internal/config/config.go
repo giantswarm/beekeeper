@@ -2115,7 +2115,9 @@ type Serve struct {
 	Organization string `yaml:"organization"`
 	// Organizations are further groups that make a caller a member: one per
 	// Dex connector where the connectors spell the organization differently
-	// (a GitHub org's <org>:<team>, a directory's group name).
+	// (a GitHub org's <connector>:<org>:<team>, a directory's group name).
+	// Use the exact token group, e.g. giantswarm-github:giantswarm:employees;
+	// an unprefixed <org>:<team> matches only an unprefixed token group.
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
 	// in none is refused, a caller in several is the team of TeamGroups'
@@ -2256,10 +2258,14 @@ type Guide struct {
 type Supervisor struct {
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
-	// ReviewRounds is retained for configuration compatibility and reporting
-	// (default 1). It never releases a head without an approving review.
-	// Every new head gets one independent review, except a proven base-only
-	// update of an approved head, which remains covered by that approval.
+	// ReviewRounds caps the review rounds that ask for changes (default 1);
+	// an approved round counts for none, and superloop.MaxReviews bounds all
+	// rounds. Under the cap a green head with fixes gets the next review.
+	// Once the cap is used it gets the merge go with no new review: fixes
+	// pushed after a review need no review of their own. A head that only
+	// brings the base into the findings' head carries no fixes and goes back
+	// to rework; one that only brings the base into an approved head stays
+	// covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -3002,6 +3008,10 @@ type Model struct {
 	// defaults): a fast request's cost is unknown.
 	Fast          float64 `yaml:"fast" json:"fast,omitempty"`
 	ContextWindow int     `yaml:"contextWindow" json:"contextWindow"`
+	// LongContextThreshold counts all input tokens, including cache reads
+	// and writes. Requests above it multiply every price by LongContextMultiplier.
+	LongContextThreshold  int64   `yaml:"longContextThreshold" json:"longContextThreshold,omitempty"`
+	LongContextMultiplier float64 `yaml:"longContextMultiplier" json:"longContextMultiplier,omitempty"`
 }
 
 // Runaway are the per-session figures over which the watch prints one line.
@@ -3030,6 +3040,7 @@ var DefaultModels = map[string]Model{
 	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-5":   {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-4-6": {Input: 3, Output: 15, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.3, ContextWindow: 1_000_000},
+	"claude-haiku-5-5":  {Input: 0.1, Output: 0.5, CacheWrite5m: 0.125, CacheWrite1h: 0.2, CacheRead: 0.01, ContextWindow: 1_000_000, LongContextThreshold: 100_000, LongContextMultiplier: 5},
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.1, ContextWindow: 200_000},
 }
 
