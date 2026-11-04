@@ -17,7 +17,7 @@ func unheldApp(t *testing.T) *app {
 	if err := os.WriteFile(cfg, []byte("stateDir: "+dir+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run := filepath.Join(dir, "run")
+	run := filepath.Join(dir, testRunWord)
 	for _, k := range sandbox.Unset(sandbox.EgressDir(run)) {
 		t.Setenv(k, os.Getenv(k))
 	}

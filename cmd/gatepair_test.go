@@ -105,7 +105,7 @@ func TestAPairStartsBackToBack(t *testing.T) {
 	if why, err := s.start("", nil); why != "" || err != nil {
 		t.Fatalf("the sibling after the first started, the cap full: %q, %v", why, err)
 	}
-	if d := lastEvent(t, s, "merged"); !strings.Contains(d, "o/s#7 exit 0") {
+	if d := lastEvent(t, s, testMergedWord); !strings.Contains(d, "o/s#7 exit 0") {
 		t.Errorf("merged event %q", d)
 	}
 }

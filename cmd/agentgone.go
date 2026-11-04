@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"cmp"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -55,14 +58,42 @@ func agentActivity(cfg *config.Config, st *state.State, ag state.Agent) time.Tim
 	return last
 }
 
+func agyAgentStartID(ag state.Agent) string {
+	if id, ok := strings.CutPrefix(strings.TrimSpace(ag.HostSession), agy.HostPrefix); ok && id != "" {
+		return id
+	}
+	if id, ok := strings.CutPrefix(strings.TrimSpace(ag.Session), agy.HostPrefix); ok && id != "" {
+		return id
+	}
+	return ""
+}
+
+func agyQuotaError(cfg *config.Config, ag state.Agent) *agy.QuotaError {
+	if cfg == nil || cfg.StateDir == "" {
+		return nil
+	}
+	id := agyAgentStartID(ag)
+	if id == "" {
+		return nil
+	}
+	return agy.ReadQuotaError(cfg.StateDir, id)
+}
+
 // goneAgent is a local task holder with neither a running CLI nor recent
-// transcript or roster activity. Kept, parked, remote and role entries stay.
+// transcript or roster activity, or an agy worker whose run ended with a
+// quota error. Kept, parked, remote and role entries stay.
 func goneAgent(cfg *config.Config, st *state.State, sessions []*claude.Session, ag state.Agent, staleAfter time.Duration, now time.Time) (time.Time, bool) {
 	guide := st.GuideRole()
 	if guide.Relay.Open(now) && guide.Relay.To.Is(ag.Party) {
 		return time.Time{}, false
 	}
-	if ag.Execution != nil || ag.Task == "" || ag.Done || roleRun(st, ag.Party) || keptBy(st, ag, now) != "" || ag.Import.Pending(now) || staleAfter <= 0 {
+	if ag.Execution != nil || ag.Task == "" || ag.Done || roleRun(st, ag.Party) || keptBy(st, ag, now) != "" || ag.Import.Pending(now) {
+		return time.Time{}, false
+	}
+	if qerr := agyQuotaError(cfg, ag); qerr != nil {
+		return cmp.Or(qerr.At, agentActivity(cfg, st, ag), now), true
+	}
+	if staleAfter <= 0 {
 		return time.Time{}, false
 	}
 	if _, live := claude.Live(sessions, ag.Party); live || mergeInFlight(st, ag.Party, proc.Alive) {

@@ -87,7 +87,7 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err := omp.MakeInbox(inbox); err != nil {
 		return err
 	}
-	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model}
+	s := state.Start{Party: state.Party{HostSession: omp.HostPrefix + id, Name: sp.name}, Mode: state.ModeBypass, Dir: dir, By: by, At: a.now.UTC(), Harness: omp.Harness, Model: model, Effort: sp.effort}
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
@@ -95,14 +95,14 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q", sp.name, id, model, dir, credentialsText(creds), reg.task)}, nil
+		return []state.Event{event(by, verbStart, "%s: omp agent %s on %s in %s, yolo%s, busy with %q%s", sp.name, id, model, dir, credentialsText(creds), reg.task, effortText(sp.effort))}, nil
 	})
 	if err != nil {
 		return err
 	}
 	unit := ompUnit(id)
 	names := credentialNames(creds)
-	if err := launch(unit, dir, a.explicitConfig(), nil, omp.ShellArgv(inbox, names, ompArgv(bin, model)...),
+	if err := launch(unit, dir, a.explicitConfig(), nil, omp.ShellArgv(inbox, names, ompArgv(bin, model, sp.effort)...),
 		omp.EnvAgent+"="+id, omp.EnvName+"="+sp.name, "SHELL="+shell, omp.EnvCredentials+"="+strings.Join(names, " ")); err != nil {
 		return fmt.Errorf("starting %s: %w (the start stays recorded; beekeeper agents remove %q takes it off the roster)", sp.name, err, sp.name)
 	}
@@ -539,8 +539,12 @@ func ompModels(ctx context.Context, bin string) ([]string, error) {
 
 // ompArgv is an omp agent's command line: the rpc protocol, no approvals,
 // extensions headless, on its model.
-func ompArgv(bin, model string) []string {
-	return []string{bin, "--mode", "rpc", "--no-ui", "--approval-mode", "yolo", modelFlag, model}
+func ompArgv(bin, model string, effort ...string) []string {
+	argv := []string{bin, "--mode", "rpc", "--no-ui", "--approval-mode", "yolo", modelFlag, model}
+	if len(effort) > 0 && effort[0] != "" {
+		argv = append(argv, "--thinking", effort[0])
+	}
+	return argv
 }
 
 // sendWhenOpen sends msg to the inbox once the agent opened it, waiting up

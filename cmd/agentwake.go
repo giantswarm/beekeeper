@@ -42,6 +42,12 @@ the outcome of a gated wait or a settled park reaches a waiter that never
 registered. A session that no longer exists (no transcript to resume, no
 harness process reading its inbox) is refused as gone.
 
+A message from a roster agent or a role's holder is headed with the name
+it is answered by ([from "<name>": reply by SendMessage to "<name>", …]):
+the relay turn that delivers it ends, and with it the peer socket its
+recipient would see as the sender. A SendMessage by an omp, agy or codex
+agent's roster name is written to its inbox by the PreToolUse hook.
+
 An SSH execution receives a durable ordered envelope. Success requires a
 harness acceptance event containing its message ID. A pending or uncertain
 delivery exits nonzero; agents messages shows its receipt and agents hosts
@@ -104,7 +110,8 @@ type wakeTarget struct {
 	name, id, host, dir, mode string
 	// model is the model the desktop recorded for the session's turns;
 	// empty: Claude Code's default.
-	model string
+	model  string
+	effort string
 	// profile is the profile a headless turn of one of beekeeper's starts
 	// runs under (its role's); empty: none.
 	profile string
@@ -127,6 +134,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	// an agent on its task keeps getting its own wakes.
 	if h := startsHold(st, a.now); h != nil && rostered && ag.Done {
 		return refused("waking %s refused: it is done and %s", ag.Name, a.startsHeldText(h))
+	}
+	if !ag.Is(by) {
+		msg = fromLine(replyAddress(st, by), ag.Name, msg)
 	}
 	// Reserve the local entry before delivering a wake so retirement cannot
 	// race a turn's startup. A failed delivery restores the previous age.
@@ -370,6 +380,9 @@ func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) err
 // error when the desktop cannot run the turn (it does not run, the session
 // has no row, no steward took the send), whose turn then runs headless.
 func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm time.Duration) (string, error) {
+	if w.effort != "" {
+		return "", errors.New("explicit effort requires a headless turn")
+	}
 	if w.host == "" || !strings.HasPrefix(w.host, "local_") {
 		return "", errors.New("it has no desktop session")
 	}
@@ -504,6 +517,7 @@ func resolveWake(cfg *config.Config, st *state.State, ag state.Agent) (wakeTarge
 				w.model = s.Model
 			}
 			w.mode = s.Mode
+			w.effort = s.Effort
 			if w.dir == "" {
 				w.dir = s.Dir
 			}
@@ -630,6 +644,7 @@ func wakeArgv(bin string, w wakeTarget, msg string, profile ...string) []string 
 		// a person's site approval as the desktop's does
 		argv = append(argv, chromeFlag)
 	}
+	argv = append(argv, effortFlags(w.effort)...)
 	argv = append(argv, profile...)
 	return append(argv, "--", msg)
 }

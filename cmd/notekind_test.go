@@ -76,7 +76,7 @@ func TestDecisionNeedsItsDueAndDefault(t *testing.T) {
 	if err := addNote(a, "--kind", noteDecision, "--default", dfltOK, "--due", "3h", "Pick the lab?"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "--for") {
 		t.Fatalf("a decision for nobody: %v", err)
 	}
-	if err := addNote(a, "--kind", "status", "--for", samName, "a line"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "decision, login") {
+	if err := addNote(a, "--kind", testStatusWord, "--for", samName, "a line"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "decision, login") {
 		t.Fatalf("an unknown kind: %v", err)
 	}
 	if err := addNote(a, "--kind", noteDecision, "--for", samName, "--default", dfltOK, "--due", "3h", "Pick the lab?"); err == nil || !strings.Contains(err.Error(), "--status-quo") {

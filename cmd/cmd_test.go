@@ -149,7 +149,7 @@ func TestOOMOwnerSaysCapUnknownWithoutARun(t *testing.T) {
 	if got := oomOwner(kills[0], nil, nil, gone, runs); got != "memcap scope, cap unknown, owner unknown (no run.start)" {
 		t.Errorf("gone: %q", got)
 	}
-	alive := &proc.Table{ByPID: map[int]*proc.Process{287208: {PID: 287208, Args: []string{task, "run", "--", task, "__alloc"}}}}
+	alive := &proc.Table{ByPID: map[int]*proc.Process{287208: {PID: 287208, Args: []string{task, testRunWord, "--", task, "__alloc"}}}}
 	if got := oomOwner(kills[0], nil, nil, alive, runs); got != "memcap scope of `cmd.test run -- cmd.test __alloc`, cap unknown (no run.start)" {
 		t.Errorf("alive: %q", got)
 	}
@@ -307,11 +307,12 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
-	pull, ver, upd, wait, bc, accepts, infra, cand, rg := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard
+	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority
 	t.Cleanup(func() {
-		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard = pull, ver, upd, wait, bc, accepts, infra, cand, rg
+		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
 	})
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	toolCandidate = func(context.Context, time.Time) (string, error) { return "", nil }
 	infraReds = func(context.Context, []byte) []merge.Infra { return nil }
 	devctlUpdate = func(context.Context) error { return nil }

@@ -27,7 +27,7 @@ func (a *app) guideCmd() *cobra.Command {
 		Long: `The guide is the session that walks the person through the decisions
 waiting on them and takes their answers back to the sessions that asked.
 The supervisor is the supervisor loop, no session. The guide has no grant
-power.
+power outside the explicit, expiring controls in beekeeper emergency.
 
 The role moves in two steps that leave no gap: the relay starts the next run, "Guide run N+1", as a fresh session, and its
 start takes the role (` + "`beekeeper guide handover --prompt`" + ` is its prompt). ` + "`beekeeper guide watch`" + `

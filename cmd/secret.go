@@ -1358,7 +1358,7 @@ func (a *app) secretOps() (*secret.Ops, error) {
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}
-	raw, err := os.ReadFile(a.cfg.Secret.TokenFile)
+	raw, err := os.ReadFile(filepath.Clean(a.cfg.Secret.TokenFile)) //nolint:gosec // operator-configured secret.tokenFile path
 	if err != nil {
 		return nil, fmt.Errorf("secret.tokenFile: %w", err)
 	}

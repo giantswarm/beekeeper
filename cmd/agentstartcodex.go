@@ -39,10 +39,10 @@ func codexUnit(id string) string { return "beekeeper-codex-" + id[:min(8, len(id
 
 func (a *app) codexRunCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:    codexRunCmdName + " <inbox> <log> <bin> [model]",
+		Use:    codexRunCmdName + " <inbox> <log> <bin> [model] [effort]",
 		Short:  "Run a codex session one turn at a time on its persistent inbox",
 		Hidden: true,
-		Args:   cobra.RangeArgs(3, 4),
+		Args:   cobra.RangeArgs(3, 5),
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return nil
 		},
@@ -51,7 +51,14 @@ func (a *app) codexRunCmd() *cobra.Command {
 			if len(args) >= 4 {
 				model = args[3]
 			}
-			return codex.Run(cmd.Context(), args[0], args[1], args[2], model, os.Stderr)
+			level := ""
+			if len(args) == 5 {
+				level = args[4]
+			}
+			if !config.ValidEffort(level) {
+				return usageErr("invalid effort %q", level)
+			}
+			return codex.Run(cmd.Context(), args[0], args[1], args[2], model, os.Stderr, level)
 		},
 	}
 	c.Flags().SetInterspersed(false)
@@ -135,6 +142,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		At:      a.now.UTC(),
 		Harness: codex.Harness,
 		Model:   model,
+		Effort:  sp.effort,
 	}
 	var reg registration
 	var handed []string
@@ -144,7 +152,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 		if err != nil {
 			return nil, err
 		}
-		evs := []state.Event{event(by, verbStart, "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q", sp.name, id, dir, model, reg.task)}
+		evs := []state.Event{event(by, verbStart, "%s: codex agent codex_%s in %s, bypass, on %s, busy with %q%s", sp.name, id, dir, model, reg.task, effortText(sp.effort))}
 		if sp.replaces != nil {
 			moveRecord(st, *sp.replaces, s.Party)
 			if handed, err = handClaims(st, lease.Dir(a.cfg.LeaseDir), *sp.replaces, s.Party); err != nil {
@@ -165,6 +173,9 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 
 	unit := codexUnit(id)
 	runnerArgv := []string{self, codexRunCmdName, inbox, logPath, bin, model}
+	if sp.effort != "" {
+		runnerArgv = append(runnerArgv, sp.effort)
+	}
 	if err := launchCodex(
 		unit,
 		dir,
@@ -190,7 +201,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	}
 	_, err = fmt.Fprintf(a.out, "started %s: codex agent codex_%s, bypass, on %s, in %s, busy with %q\n"+
 		"turn: %s (%s)\n",
-		sp.name, id, model, dir, reg.task, unit, strings.Join(codex.ExecArgv(codex.Comm, model), " "))
+		sp.name, id, model, dir, reg.task, unit, strings.Join(codex.ExecArgv(codex.Comm, model, sp.effort), " "))
 	for _, r := range handed {
 		if err == nil {
 			_, err = fmt.Fprintf(a.out, "handed over lease %s to %s\n", r, sp.name)
@@ -228,7 +239,7 @@ func (a *app) dryRunCodexStart(sp agentStart, gaps []string) error {
 	}
 	sp.brief = projectPrompt(dir, sp.brief)
 	model := cmp.Or(sp.model, a.cfg.Codex.Model, "<model>")
-	argv := codex.ExecArgv(codex.Comm, model)
+	argv := codex.ExecArgv(codex.Comm, model, sp.effort)
 	if _, err := fmt.Fprintf(a.out, "dry run: %s would start in %s as a codex agent on %s, bypass, no desktop import\nstart: %s\n",
 		sp.name, dir, model, strings.Join(argv, " ")); err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -191,5 +192,43 @@ func TestLoopRecoveryRequiresHarnessGone(t *testing.T) {
 		if len(r.calls) != 0 {
 			t.Fatalf("replaced without gone verdict: %v", r.calls)
 		}
+	}
+}
+
+func TestRestartPullParkKeepsTaskAndPostMergeWork(t *testing.T) {
+	for _, outcome := range []string{testMergedWord, overrideClosed} {
+		t.Run(outcome, func(t *testing.T) {
+			r, _ := fillRig(t)
+			work := "release and prove the deployment"
+			ag := state.Agent{Party: state.Party{Name: "free form worker"}, Task: "finish the alpha pump", Park: &state.Park{On: "o/r#60", RefKind: github.RefPullRequest, At: r.a.now, Resumable: r.a.now, Answer: "pull request https://github.com/o/r/pull/60 " + outcome, PostMerge: &work}}
+			started := false
+			r.answer = func(args []string) (string, int) {
+				if len(args) < 4 || args[0] != agentsName || args[1] != agentStartName {
+					t.Fatalf("unexpected command: %v", args)
+				}
+				b, err := os.ReadFile(args[3])
+				if err != nil {
+					t.Fatal(err)
+				}
+				brief := string(b)
+				for _, want := range []string{ag.Task, "https://github.com/o/r/pull/60", outcome, work} {
+					if !strings.Contains(brief, want) {
+						t.Fatalf("brief missing %q: %s", want, brief)
+					}
+				}
+				if strings.Contains(brief, "/issues/60") || strings.Contains(brief, "board item") {
+					t.Fatalf("PR became board issue: %s", brief)
+				}
+				started = true
+				return "", 0
+			}
+			l := &supervisorLoop{a: r.a}
+			if err := l.restartPark(t.Context(), ag, ag.Park.On); err != nil {
+				t.Fatal(err)
+			}
+			if !started {
+				t.Fatal("replacement not started")
+			}
+		})
 	}
 }

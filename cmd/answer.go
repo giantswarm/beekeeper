@@ -119,12 +119,21 @@ func (a *app) recordAnswer(ctx context.Context, about string, noteID, choice int
 		if text, err = answerText(n, choice, text); err != nil {
 			return err
 		}
+		if err := a.refuseOptionLabelOnly(st, me, n, choice, verbatim); err != nil {
+			return err
+		}
 	} else if text == "" {
 		return usageErr("an answer is the person's words")
+	} else if st, err := a.store.Read(); err == nil {
+		if asking, _ := answerable(st, guideRole.get(st).LocalAsking(), a.now); asking != nil && len(asking.Refs) > 0 && strings.EqualFold(asking.Refs[0], about) {
+			if err := a.refuseOptionLabelOnly(st, me, asking, 0, verbatim); err != nil {
+				return err
+			}
+		}
 	}
 	rec := recordedAnswer{About: about, By: a.answerer(me, n), Via: via, Answer: text, Note: noteID}
 	rec.Channel, rec.RelayedBy = a.answerChannel(me, via)
-	if a.dialogAnswer(me, n, about, choice, verbatim) {
+	if a.dialogAnswer(me, n, about, choice, text, verbatim) {
 		rec.Channel, rec.RelayedBy = channelGuideDialog, ""
 	}
 	if post {

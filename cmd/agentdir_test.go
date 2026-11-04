@@ -22,7 +22,7 @@ func TestAgentDir(t *testing.T) {
 	for _, c := range []struct{ dir, want string }{
 		{"", lab},
 		{lab, lab},
-		{filepath.Join(wt, "beekeeper", "fix"), filepath.Join(wt, "beekeeper", "fix")},
+		{filepath.Join(wt, "beekeeper", testFixWord), filepath.Join(wt, "beekeeper", testFixWord)},
 	} {
 		if got, err := a.agentDir(c.dir, ""); err != nil || got != c.want {
 			t.Errorf("agentDir(%q) = %q, %v, want %q", c.dir, got, err, c.want)
