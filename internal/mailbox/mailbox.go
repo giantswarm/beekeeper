@@ -50,7 +50,8 @@ type Message struct {
 	// Sender is the sending person's email, SenderTeam the person's team.
 	Sender     string
 	SenderTeam string
-	// ID is the sender's message id (the A2A messageId), unique per sender.
+	// ID is the sender's message id (the A2A messageId), unique per sender
+	// within DedupeWindow.
 	ID string
 	// Envelope is the message as the receiver gets it.
 	Envelope json.RawMessage
@@ -123,6 +124,8 @@ var migrations = []string{
 		seen       timestamptz NOT NULL,
 		PRIMARY KEY (sender, message_id)
 	);`,
+	// Dedupe limits admission for a window; a delivery can live longer.
+	`ALTER TABLE messages DROP CONSTRAINT messages_sender_message_id_key;`,
 }
 
 // migrate applies the migrations the database has not seen, under a lock
@@ -198,10 +201,6 @@ func (s *Store) Send(ctx context.Context, m Message, now time.Time) (Sent, error
 		}
 		if n >= Cap {
 			return fmt.Errorf("%w: %s holds %d unacked messages", ErrFull, m.Mailbox, n)
-		}
-		// An id seen outside the window is a new message: its old row goes.
-		if _, err := tx.Exec(ctx, `DELETE FROM messages WHERE sender = $1 AND message_id = $2`, m.Sender, m.ID); err != nil {
-			return err
 		}
 		out.Seq, err = insert(ctx, tx, m, KindMessage, now)
 		if err != nil {
