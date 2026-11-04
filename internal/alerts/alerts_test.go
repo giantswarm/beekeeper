@@ -415,3 +415,8 @@ func TestNoContextLine(t *testing.T) {
 		t.Errorf("two: %q", got)
 	}
 }
+
+const (
+	alertMissingContext = "missing"
+	plainJobsNamespace  = "jobs-a"
+)

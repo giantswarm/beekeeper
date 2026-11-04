@@ -57,7 +57,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"alpha", "beta"} {
+	for _, name := range []string{instA, "beta"} {
 		if strings.Count(string(raw), "kube login "+name+"\n") != 1 {
 			t.Fatalf("login not idempotent: %s", raw)
 		}
