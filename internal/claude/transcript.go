@@ -404,7 +404,9 @@ func joinOptionAndNote(ans, note string) string {
 	}
 }
 
-var askResultPair = regexp.MustCompile(`"[^"]*"=(?:"([^"]*)"|\(no option selected\))(?:\s+selected preview:\n.*?)?(?:\s+(?:user's\s+)?notes:\s*(.+))?$`)
+// Only simplify a complete single-answer response. A suffix match would
+// discard earlier answers in a response to several questions.
+var askResultPair = regexp.MustCompile(`^"[^"]*"=(?:"([^"]*)"|\(no option selected\))(?:\s+selected preview:\n.*?)?(?:\s+(?:user's\s+)?notes:\s*(.+))?$`)
 
 func askToolResultBlockText(s string) string {
 	s = strings.TrimSpace(s)

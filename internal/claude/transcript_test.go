@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -277,5 +278,52 @@ func TestTailKeepsDialogAlongsideText(t *testing.T) {
 	dialogs, err := DialogsSince(path, time.Time{})
 	if err != nil || len(dialogs) != 1 || dialogs[0].Text != "Wait — build the button first" {
 		t.Fatalf("DialogsSince = %+v, %v", dialogs, err)
+	}
+}
+
+// Without structured toolUseResult metadata, every answer in a multi-question
+// result must survive both the transcript tail and the guide's dialog reader.
+func TestTailKeepsEveryDialogAnswerWithoutMetadata(t *testing.T) {
+	const answers = `"Proceed?"="Wait for CI", "Scope?"="Keep the current flag"`
+	for _, tc := range []struct {
+		name, prefix, suffix string
+	}{
+		{"case 0: original frame", "Your questions have been answered: ", ". You can now continue with these answers in mind."},
+		{"case 1: user frame", "User has answered your questions: ", ". You can now continue with the user's answers in mind."},
+		{"case 2: caution frame", "The user answered: ", ". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, body := range []string{answers, answers + " user's notes: \"keep this constraint\"", answers + " user's notes: \"keep this\nconstraint\""} {
+				t.Run(body, func(t *testing.T) {
+					content, err := json.Marshal(tc.prefix + body + tc.suffix)
+					if err != nil {
+						t.Fatal(err)
+					}
+					lines := `{"type":"assistant","timestamp":"2026-10-05T10:00:00Z","message":{"content":[{"type":"tool_use","id":"q1","name":"AskUserQuestion","input":{"questions":[{"question":"Proceed?"},{"question":"Scope?"}]}}]}}` + "\n" +
+						`{"type":"user","timestamp":"2026-10-05T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"q1","content":` + string(content) + `}]}}` + "\n"
+					path := filepath.Join(t.TempDir(), "answers.jsonl")
+					if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					for _, read := range []func(string, int) ([]Turn, error){Tail, Follow} {
+						turns, err := read(path, 10)
+						if err != nil || len(turns) == 0 {
+							t.Fatalf("turns = %+v, %v", turns, err)
+						}
+						last := turns[len(turns)-1]
+						if last.Role != roleUser || last.Text != body {
+							t.Errorf("last turn = %+v, want all answers %q", last, body)
+						}
+					}
+					dialogs, err := DialogsSince(path, time.Time{})
+					if err != nil || len(dialogs) != 1 {
+						t.Fatalf("dialogs = %+v, %v", dialogs, err)
+					}
+					if dialogs[0].Text != body || !slices.Equal(dialogs[0].Questions, []string{"Proceed?", "Scope?"}) {
+						t.Errorf("dialog = %+v, want both questions and answers %q", dialogs[0], body)
+					}
+				})
+			}
+		})
 	}
 }
