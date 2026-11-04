@@ -15,17 +15,19 @@ import (
 
 const encryptionAPIPassword = "api.password"
 
+const encryptionOldLine = "api.password: old\n"
+
 func TestCreationRuleChecksResolvedDottedKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name, plain, path, rule string
 		allowed                 bool
 	}{
-		{"terminal regex", "api.password: old\n", encryptionAPIPassword, "encrypted_regex: '^password$'", false},
+		{"terminal regex", encryptionOldLine, encryptionAPIPassword, "encrypted_regex: '^password$'", false},
 		{"intermediate regex", "api.password:\n  value: old\n", "api.password.value", "encrypted_regex: '^password$'", false},
 		{"suffix", "api_secret.password: old\n", "api_secret.password", "encrypted_suffix: _secret", false},
-		{"unencrypted regex", "api.password: old\n", encryptionAPIPassword, "unencrypted_regex: '^api[.]password$'", false},
+		{"unencrypted regex", encryptionOldLine, encryptionAPIPassword, "unencrypted_regex: '^api[.]password$'", false},
 		{"new suffix", "api.password: {}\n", "api.password.value", "encrypted_regex: '^password$'", false},
-		{"actual key selected", "api.password: old\n", encryptionAPIPassword, "encrypted_regex: '^api[.]password$'", true},
+		{"actual key selected", encryptionOldLine, encryptionAPIPassword, "encrypted_regex: '^api[.]password$'", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tools := secrettest.New(map[string]string{vaultRef: password})

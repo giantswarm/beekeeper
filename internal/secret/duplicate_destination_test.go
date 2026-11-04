@@ -15,7 +15,7 @@ const duplicatePassword = "password"
 
 func TestCopyValuesRefusesResolvedDuplicateDestinations(t *testing.T) {
 	for _, tc := range []struct{ a, b string }{
-		{duplicatePassword, `duplicatePassword`}, {`"credentials.json"`, `credentials\.json`}, {"nested.password", `nested.duplicatePassword`},
+		{duplicatePassword, `"password"`}, {`"credentials.json"`, `credentials\.json`}, {"nested.password", `nested."password"`},
 	} {
 		for _, skeleton := range []bool{false, true} {
 			t.Run(tc.a+tc.b+string(rune('0'+boolNumber(skeleton))), func(t *testing.T) { //nolint:gosec // small test index

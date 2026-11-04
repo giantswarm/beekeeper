@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+const conflictSOPS = "sops"
+
 func awaitFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -37,7 +39,7 @@ func TestSOPSWriterProcess(t *testing.T) {
 	tools := secrettest.New(map[string]string{"op://Shared/synthetic/value": "synthetic"})
 	o := ops(tools)
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if name == "sops" && slices.Contains(args, "encrypt") {
+		if name == conflictSOPS && slices.Contains(args, "encrypt") {
 			if err := os.WriteFile(gate+".ready", nil, 0o600); err != nil { //nolint:gosec // a path of this test
 				return nil, err
 			}

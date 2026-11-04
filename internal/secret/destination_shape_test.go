@@ -16,14 +16,18 @@ const shapePrivateKey = "private-key"
 
 const shapeCopy = "copy"
 
+const shapeStringData = "stringData"
+
+const shapeKeys = "keys"
+
 func TestUnwritableDestinationRefusesBeforeProduction(t *testing.T) {
 	for _, tc := range []struct{ section, path, shape string }{
-		{"stringData", shapePrivateKey, "{}"}, {"stringData", shapePrivateKey, "[]"},
-		{"stringData", "broken.child", "[]"}, {"data", shapePrivateKey, "{}"},
+		{shapeStringData, shapePrivateKey, "{}"}, {shapeStringData, shapePrivateKey, "[]"},
+		{shapeStringData, "broken.child", "[]"}, {"data", shapePrivateKey, "{}"},
 	} {
-		for _, action := range []string{"keys", shapeCopy, "capture"} {
+		for _, action := range []string{shapeKeys, shapeCopy, "capture"} {
 			// A data node is occupied for SecretKeys; copy/capture write a separate stringData key.
-			if tc.section == "data" && action != "keys" {
+			if tc.section == "data" && action != shapeKeys {
 				continue
 			}
 			t.Run(action+tc.section+tc.path+tc.shape, func(t *testing.T) {
@@ -50,7 +54,7 @@ func TestUnwritableDestinationRefusesBeforeProduction(t *testing.T) {
 				produced := 0
 				ctx := context.Background()
 				switch action {
-				case "keys":
+				case shapeKeys:
 					_, err = o.SecretKeys(ctx, file, secret.SecretKeysOptions{Keys: []string{tc.path}, Produce: func(context.Context) (map[string]string, error) {
 						produced++
 						return map[string]string{tc.path: "synthetic"}, nil
