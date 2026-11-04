@@ -286,7 +286,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		}
 		dirs = append(dirs, d)
 	}
-	for _, st := range walkSegments(sc, g.cwd, false) {
+	states := walkSegments(sc, g.cwd, false)
+	for _, st := range states {
 		if st.dir != "" && !slices.Contains(dirs, st.dir) {
 			dirs = append(dirs, st.dir)
 		}
@@ -316,6 +317,16 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 			exp = g.linkAllowance.resolve(exp)
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
+			}
+			// Shell invocations make the directory tracker conservative, but
+			// its directory candidate still resolves scripts after a literal
+			// cd. Keep checking the initial directory too for ambiguous paths.
+			if dir := states[i].dir; dir != "" && dir != g.cwd {
+				nested := g
+				nested.cwd = dir
+				if l := nested.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
+					return l
+				}
 			}
 			g.feeds = feedsOutput(sc, segs, i)
 			g.inTest = (sg.before == "&&" || sg.before == "||") && inTestExpr(sc.masked[:sg.start])
