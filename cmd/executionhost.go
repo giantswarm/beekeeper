@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -480,17 +481,59 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		caps, err := a.probeExecution(cmd.Context(), h)
-		if err != nil {
-			return err
-		}
-		// Keep the observed release and toolchain visible even when the
-		// coordinator release differs, so operators can diagnose the host.
+		caps, probeErr := a.probeExecution(cmd.Context(), h)
+		// Audit independently of readiness so a policy/tool failure does not
+		// hide leftovers. An unreachable audit is explicitly unknown.
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}
+		var audit []execution.ResourceFinding
+		auditErr := (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-audit", execution.Ref{}, nil, &audit)
+		if auditErr != nil {
+			audit = []execution.ResourceFinding{{Ref: execution.Ref{Host: h.Identity}, State: execution.Unknown, Reason: "resource inventory unreachable or unavailable", Retry: "restore host access and retry hosts check; do not clean unknown resources"}}
+		}
+		if auditErr == nil {
+			st, err := a.store.Peek()
+			if err != nil {
+				return err
+			}
+			var registered []execution.Ref
+			for _, start := range st.Starts {
+				if start.Execution != nil {
+					registered = append(registered, start.Execution.Handle.Ref)
+				}
+			}
+			execution.ReportOrphans(audit, a.cfg.Identity.Host, registered)
+		}
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(audit); err != nil {
+			return err
+		}
+		if probeErr != nil || auditErr != nil {
+			return errors.Join(probeErr, auditErr)
+		}
 		return checkHostRelease(caps.Version)
 	}})
+	var releaseEvidence bool
+	reconcile := &cobra.Command{Use: "reconcile <host> <execution> <generation>", Short: "Reconcile one terminal execution; retain recovery work", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot reconcile host resources")
+		}
+		h, err := a.executionHost(args[0])
+		if err != nil {
+			return err
+		}
+		generation, err := strconv.ParseUint(args[2], 10, 64)
+		if err != nil {
+			return err
+		}
+		ref := execution.Ref{Host: h.Identity, Execution: execution.ExecutionID(args[1]), Generation: generation}
+		if err := ref.Validate(); err != nil {
+			return err
+		}
+		return (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-reconcile", ref, releaseEvidence, &struct{}{})
+	}}
+	reconcile.Flags().BoolVar(&releaseEvidence, "release-evidence", false, "Attest this execution log is no longer needed for review or recovery; allow removal after 30 days")
+	c.AddCommand(reconcile)
 	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.managedExecutionID() != "" {
 			return refused("managed workers cannot provision host tools")

@@ -25,7 +25,16 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	if j.Phase != Activating || j.StopRequest != nil {
 		return errors.New("execution is not awaiting its first managed turn")
 	}
-	defer func() { runErr = errors.Join(runErr, s.RevokeGitHub(j)) }()
+	defer func() {
+		revokeErr := s.RevokeGitHub(j)
+		if j.Request.GitHub {
+			persistCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			persistErr := s.update(persistCtx, ref, func(current *Journal) error { current.RevocationFailed = revokeErr != nil; return nil })
+			runErr = errors.Join(runErr, persistErr)
+		}
+		runErr = errors.Join(runErr, revokeErr)
+	}()
 	p, err := s.InstalledPolicy()
 	if err != nil || p.Digest() != j.BoundPolicy() {
 		return errors.New("execution rules or guards changed before launch")

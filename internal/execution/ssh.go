@@ -196,7 +196,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != "check" && op != inventoryOperation {
+	if op != "check" && op != inventoryOperation && op != "resource-audit" {
 		if err := ref.Validate(); err != nil {
 			return err
 		}

@@ -21,6 +21,8 @@ import (
 )
 
 type Journal struct {
+	RetainedAt          time.Time     `json:"retainedAt,omitzero"`
+	RevocationFailed    bool          `json:"revocationFailed,omitempty"`
 	Lease               *LeaseGrant   `json:"lease,omitempty"`
 	LeasePending        *LeaseRequest `json:"leasePending,omitempty"`
 	Completed           bool          `json:"completed,omitempty"`
@@ -529,6 +531,10 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 // remain at the journal's recorded paths: even a clean tree can contain
 // unpublished commits, and an acknowledged stop is not proof of task completion.
 func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
+	return s.stop(ctx, r, q, false)
+}
+
+func (s *Server) stop(ctx context.Context, r Ref, q StopRequest, terminalOnly bool) (Ack, error) {
 	if q.ID == "" || len(q.ID) > 128 || q.Reason == "" || len(q.Reason) > 1024 {
 		return Ack{}, errors.New("stop needs an idempotency key and reason")
 	}
@@ -540,6 +546,15 @@ func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	j, err := s.Read(r)
 	if err != nil {
 		return Ack{}, err
+	}
+	if terminalOnly {
+		if s.Launcher == nil {
+			return Ack{}, errors.New("supervisor unavailable")
+		}
+		status := s.Launcher.State(ctx, j.Handle.Unit)
+		if status != unitInactive && status != Failed {
+			return Ack{}, errors.New("execution is active or unknown")
+		}
 	}
 	if j.StopRequest != nil && j.StopRequest.ID == q.ID && *j.StopRequest != q {
 		return Ack{}, errors.New("stop key reused with different content")
@@ -581,6 +596,10 @@ func (s *Server) cleanStoppedRuntime(r Ref) {
 	if s.Root != "" {
 		mcpHome := s.agyMCPHomeDir(r)
 		if within(s.Root, mcpHome) {
+			fi, err := os.Lstat(mcpHome)
+			if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+				return
+			}
 			_ = worktrees.RemoveAll(mcpHome)
 		}
 	}
@@ -687,6 +706,15 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		} else {
 			var value any
 			switch req.Operation {
+			case "resource-audit":
+				value, err = s.AuditResources(ctx)
+			case "resource-reconcile":
+				var release bool
+				err = Decode(req.Payload, &release)
+				if err == nil {
+					err = s.ReconcileResource(ctx, req.Ref, release)
+				}
+				value = struct{}{}
 			case inventoryOperation:
 				var coordinator string
 				err = Decode(req.Payload, &coordinator)
