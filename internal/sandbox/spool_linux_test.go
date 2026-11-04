@@ -388,10 +388,11 @@ func TestCapperReadsScopePopulationThroughBroker(t *testing.T) {
 
 func TestServeSweepsForceKilledRequesterBeforeFirstTick(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "killed"+reqSuffix)
+	var path string
 	// The child uses the real request path and cannot run its cleanup on SIGKILL.
-	requester := exec.Command(os.Args[0], "-test.run=^TestSpoolKilledRequesterHelper$")
-	requester.Env = append(os.Environ(), "BEEKEEPER_TEST_SPOOL="+dir)
+	requester := exec.Command(os.Args[0], "-test.run=^TestSpoolKilledRequesterHelper$") //nolint:gosec // the test binary re-runs itself
+	requester.Dir = dir
+	requester.Env = append(os.Environ(), "BEEKEEPER_TEST_SPOOL=1")
 	if err := requester.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -447,8 +448,8 @@ func TestServeSweepsForceKilledRequesterBeforeFirstTick(t *testing.T) {
 }
 
 func TestSpoolKilledRequesterHelper(t *testing.T) {
-	if dir := os.Getenv("BEEKEEPER_TEST_SPOOL"); dir != "" {
-		_ = Ask(dir, Request{Op: OpPing}, time.Minute)
+	if os.Getenv("BEEKEEPER_TEST_SPOOL") != "" {
+		_ = Ask(".", Request{Op: OpPing}, time.Minute)
 	}
 }
 
@@ -457,7 +458,7 @@ func TestSweepPreservesLiveHolderAndCollectsOrphans(t *testing.T) {
 		t.Run(suffix, func(t *testing.T) {
 			base := filepath.Join(t.TempDir(), "entry")
 			path := base + suffix
-			f, err := os.Create(path)
+			f, err := os.Create(path) //nolint:gosec // a file of this test's temp dir
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -483,7 +484,7 @@ func TestSweepPreservesLiveHolderAndCollectsOrphans(t *testing.T) {
 
 func TestSweepGraceAndLiveRequestProtectSidecars(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "entry")
-	f, err := os.Create(base + reqSuffix)
+	f, err := os.Create(base + reqSuffix) //nolint:gosec // a file of this test's temp dir
 	if err != nil {
 		t.Fatal(err)
 	}
