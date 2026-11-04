@@ -454,3 +454,66 @@ func TestStateSplitsSwapAndNamesOomdRule(t *testing.T) {
 		t.Errorf("the oomd trigger of a swap-monitored cgroup is not named:\n%s", out)
 	}
 }
+
+// Only synthetic argv and injected process metadata are used here.
+func TestReportsMaskProcessArguments(t *testing.T) {
+	for _, summary := range []bool{false, true} {
+		name := "report"
+		if summary {
+			name = "summary"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, out := newRun(t, Options{Summary: summary, HeavyMiB: 1})
+			args := []string{"/bin/worker", "serve", "PASSWORD=fake-password", "--token=fake-token", "--password", "fake-value", "https://user:fake-url-password@host.invalid"}
+			r.Table.ByPID[10] = &proc.Process{PID: 10, PPID: 2, Comm: "worker", Args: args, RSSKiB: 2048, Start: now.Add(-time.Hour)}
+			r.anonKiB = func(int) int { return 2048 }
+			r.heavy()
+			for _, secret := range []string{"fake-password", "fake-token", "fake-value", "fake-url-password"} {
+				if strings.Contains(out.String(), secret) {
+					t.Errorf("output contains credential %q: %s", secret, out)
+				}
+			}
+			if !strings.Contains(out.String(), "worker serve --token --password (masked)") {
+				t.Errorf("missing masked command: %s", out)
+			}
+			if !slices.Equal(r.Table.ByPID[10].Args, args) {
+				t.Fatal("report changed original arguments")
+			}
+		})
+	}
+}
+
+func TestOrphanActionsMaskProcessArguments(t *testing.T) {
+	for _, apply := range []bool{false, true} {
+		name := "dry-run"
+		if apply {
+			name = "apply"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, out := newRun(t, Options{Apply: apply, Orphan: time.Minute, Only: []string{Orphans}})
+			// Classification requires the original value stream-json, which the
+			// display policy omits along with the credential.
+			r.Table.ByPID[10] = &proc.Process{PID: 10, PPID: 1, Comm: "claude", Args: []string{"claude", "--output-format", "stream-json", "--token", "fake-orphan-token"}, Start: now.Add(-time.Hour)}
+			var killed []int
+			r.kill = func(pids []int) { killed = pids }
+			r.Free()
+			if strings.Contains(out.String(), "fake-orphan-token") || strings.Contains(out.String(), "stream-json") {
+				t.Fatalf("unmasked action: %s", out)
+			}
+			if !strings.Contains(out.String(), "claude --output-format --token (masked)") {
+				t.Fatalf("missing orphan action: %s", out)
+			}
+			if apply && !slices.Equal(killed, []int{10}) {
+				t.Errorf("killed %v, want [10]", killed)
+			}
+		})
+	}
+}
+
+func TestProcessDetailKeepsMaskMarkerAfterTruncation(t *testing.T) {
+	p := &proc.Process{Args: []string{"worker", strings.Repeat("x", 150), "--token=fake-token"}}
+	detail := shortDetail(processDetail(p, 120), 70)
+	if strings.Contains(detail, "fake-token") || !strings.HasSuffix(detail, " (masked)") {
+		t.Errorf("unsafe or unmarked detail: %q", detail)
+	}
+}
