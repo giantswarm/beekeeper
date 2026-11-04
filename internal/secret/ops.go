@@ -290,10 +290,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 // sops encrypts, the one holding the document for a path into it.
 func place(doc *document, file, path string) (string, error) {
 	path = doc.valuePath(path)
-	keys := splitPath(path)
-	if l, ok := doc.inLeaf(keys); ok {
-		keys = l.held
-	}
+	keys := doc.encryptionKeys(splitPath(path))
 	if err := checkRule(file, keys); err != nil {
 		return "", err
 	}

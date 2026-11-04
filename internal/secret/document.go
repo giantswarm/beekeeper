@@ -150,6 +150,26 @@ func (d *document) walk(keys []string) (parent, n *yaml.Node, held []string) {
 	return parent, n, held
 }
 
+// encryptionKeys follows the same existing dotted keys as putKeys. A
+// missing suffix becomes new mapping keys; an embedded edit is encrypted
+// as the scalar document that holds it.
+func (d *document) encryptionKeys(keys []string) []string {
+	if l, ok := d.inLeaf(keys); ok {
+		return l.held
+	}
+	n := d.root
+	var held []string
+	for i := 0; i < len(keys); {
+		c, width := childAt(n, keys[i:])
+		if c == nil {
+			return append(held, keys[i:]...)
+		}
+		held = append(held, strings.Join(keys[i:i+width], "."))
+		n, i = c, i+width
+	}
+	return held
+}
+
 // splitPath reads a dotted path into its keys: a key in double quotes
 // (stringData."credentials.json") or a dot escaped with a backslash
 // (stringData.credentials\.json) keeps its dots.
