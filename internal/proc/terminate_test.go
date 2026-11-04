@@ -105,11 +105,18 @@ func TestTerminateMatchingPinsIdentityBeforeChecks(t *testing.T) {
 	}
 }
 
-// failOpen names the case where opening the process handle fails.
-const failOpen = "open"
+// The ways terminateMatching can be refused, one subtest each.
+const (
+	failOpen      = "open"
+	failStart     = "start"
+	failStale     = "stale"
+	failMatch     = "match"
+	failSignal    = "signal"
+	failProtected = "protected"
+)
 
 func TestTerminateMatchingFailsClosed(t *testing.T) {
-	for _, failure := range []string{failOpen, "start", "stale", "match", "signal", "protected"} {
+	for _, failure := range []string{failOpen, failStart, failStale, failMatch, failSignal, failProtected} {
 		t.Run(failure, func(t *testing.T) {
 			current := 1
 			var signals []int
@@ -117,7 +124,7 @@ func TestTerminateMatchingFailsClosed(t *testing.T) {
 			start := time.Unix(100, 0)
 			p := &Process{PID: 42, Start: start}
 			opened, checked := 0, 0
-			if failure == "protected" {
+			if failure == failProtected {
 				p.PID = 1
 			}
 			ops := terminationOS{
@@ -130,26 +137,26 @@ func TestTerminateMatchingFailsClosed(t *testing.T) {
 				},
 				started: func(int) (time.Time, error) {
 					checked++
-					if failure == "start" {
+					if failure == failStart {
 						return time.Time{}, os.ErrNotExist
 					}
-					if failure == "stale" {
+					if failure == failStale {
 						return start.Add(time.Second), nil
 					}
 					return start, nil
 				},
 			}
 			got := terminateMatching([]*Process{p}, 0, func(*Process) bool {
-				if failure == "signal" {
+				if failure == failSignal {
 					current++
 				}
-				return failure != "match"
+				return failure != failMatch
 			}, ops)
 			if len(got) != 0 || len(signals) != 0 {
 				t.Fatalf("unexpected signals: %v, %v", got, signals)
 			}
 			wantClosed := 1
-			if failure == failOpen || failure == "protected" {
+			if failure == failOpen || failure == failProtected {
 				wantClosed = 0
 			}
 			if h.closed != wantClosed {
@@ -158,7 +165,7 @@ func TestTerminateMatchingFailsClosed(t *testing.T) {
 			if failure == failOpen && checked != 0 {
 				t.Fatal("read evidence without a stable handle")
 			}
-			if failure == "protected" && opened != 0 {
+			if failure == failProtected && opened != 0 {
 				t.Fatal("opened protected PID")
 			}
 		})
