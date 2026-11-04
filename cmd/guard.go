@@ -517,6 +517,11 @@ comment, or gh issue create, edit or comment, whose --body or --body-file
 names a bare #n or owner/repo#n without its full GitHub URL is refused
 naming the full URL.
 
+Admitted GraphQL shell invocations are recorded locally as github.call events,
+with the session, command class and a heavy flag for project item-list or
+--paginate. Recording makes no GitHub request; beekeeper budget and the watch
+use the records to name callers after their processes exit.
+
 A board-wide project read is refused: gh project item-list without
 --query, and a gh api graphql query over a projectV2's items without a
 narrowing query: argument. Such a read pages the whole board with its field
@@ -694,14 +699,20 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
-				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), h.DecideCodex(raw)))
+				out := h.DecideCodex(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), out))
 				return nil
 			}
 			if isAgy {
-				_, _ = w.Write(h.DecideAgy(raw))
+				out := h.DecideAgy(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(out)
 				return nil
 			}
-			if out := h.Decide(raw); out != nil {
+			out := h.Decide(raw)
+			a.recordGitHubCalls(raw, formatFlag, out)
+			if out != nil {
 				_, _ = w.Write(out)
 			}
 			return nil

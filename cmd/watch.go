@@ -1673,6 +1673,11 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		var callers string
 		if refused {
 			callers = w.callersText()
+			if recorded, err := githubWindowCallers(w.app, b.GraphQL); err != nil {
+				callers = "window callers unknown (" + err.Error() + "); live: " + callers
+			} else if len(recorded) > 0 {
+				callers = "window: " + githubCallersText(recorded) + "; live: " + callers
+			}
 		}
 		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
