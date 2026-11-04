@@ -18,7 +18,7 @@ func TestDefaultDeliveryAcknowledgesOnlyItsClosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).Name},
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).GetName()},
 		Spec: v1alpha1.NoteSpec{ID: 1, Text: asked}, Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), At: metav1.NewTime(now),
 			Closure: &v1alpha1.NoteClosure{ID: "1", Verb: noteDefaultedEvent, Detail: firstDefaulted, At: metav1.NewTime(now)}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(n).WithObjects(n).Build()
@@ -64,7 +64,7 @@ func TestDefaultDeliverySkipsClosuresPastItsWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).Name},
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).GetName()},
 		Spec: v1alpha1.NoteSpec{ID: 1, Text: asked}, Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), At: metav1.NewTime(now.Add(-48 * time.Hour)),
 			Closure: &v1alpha1.NoteClosure{ID: "1", Verb: noteDefaultedEvent, Detail: firstDefaulted, At: metav1.NewTime(now.Add(-2 * defaultDeliveryWindow))}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(n).WithObjects(n).Build()
