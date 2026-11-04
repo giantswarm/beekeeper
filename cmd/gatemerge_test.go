@@ -184,6 +184,10 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	// devctl kills the merge's runner (its parent), as a person or an OOM would.
 	fakeDevctl(t, `echo $PPID >`+pidFile+`; kill -KILL $PPID; sleep 1`)
 	stubGitHub(t, github.Merged, "")
+	// The script would kill this test binary if the recovery ran it too.
+	was := releaseWait
+	t.Cleanup(func() { releaseWait = was })
+	releaseWait = func(context.Context, string, ...string) []byte { return nil }
 	g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
 	if err := g.runMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
@@ -581,6 +585,39 @@ func TestSquashArgv(t *testing.T) {
 	}
 }
 
+func TestNonDevctlUpdateBranchRefused(t *testing.T) {
+	for _, flag := range []string{"--update-branch", "--update-branch=true"} {
+		t.Run(flag, func(t *testing.T) {
+			a := busyLaneApp(t)
+			const repo = "other/project"
+			var err error
+			stderr := gateStderr(t, func() {
+				err = a.gate(context.Background(), mergeArgv(repo, flag), 0, 0, false)
+			})
+			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") ||
+				!strings.Contains(stderr, "outside merge.devctlOwners") || !strings.Contains(stderr, "cannot update the branch") {
+				t.Fatalf("exit %d (%v), stderr %q", Code(err), err, stderr)
+			}
+			if placeOf(t, a) >= 0 {
+				t.Fatal("refused merge took a lane place")
+			}
+
+			// A queued run from an older version must not launch a squash merge.
+			g := &gateRun{app: a, repo: repo, pr: 7, argv: mergeArgv(repo, flag)}
+			stderr = gateStderr(t, func() {
+				argv, routeErr := g.mergeArgv()
+				err = routeErr
+				if len(argv) != 0 {
+					t.Errorf("refused route produced argv %v", argv)
+				}
+			})
+			if Code(err) != ExitGateRefused || !strings.Contains(stderr, "--update-branch") {
+				t.Fatalf("launch exit %d (%v), stderr %q", Code(err), err, stderr)
+			}
+		})
+	}
+}
+
 // A finished run's stderr and document are kept for its owner outside the
 // run's own files; kept outputs past keptFor are pruned.
 func TestKeepOutput(t *testing.T) {
@@ -838,6 +875,7 @@ func TestACandidateToolMergeLiftsItsWindow(t *testing.T) {
 // a candidate, so devctl never reports it.
 func TestAToolWindowLiftsOnceItsCandidateIsPublished(t *testing.T) {
 	stubGitHub(t, github.Merged, devctlFrom)
+	toolRelease = func(context.Context, string) (string, error) { return devctlTo + "-rc.1", nil }
 	updates := 0
 	devctlUpdate = func(context.Context) error { updates++; return nil }
 	candidate, since := "", time.Time{}
@@ -1033,5 +1071,38 @@ func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
 	raw, err := os.ReadFile(base + terminationExt)
 	if err != nil || !strings.Contains(string(raw), "runner disappeared") {
 		t.Fatalf("lost diagnostic after cleanup: %q, %v", raw, err)
+	}
+}
+
+func TestToolWindowWaitsForMergeCommitRelease(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		t.Run(fmt.Sprint(live), func(t *testing.T) {
+			stubGitHub(t, github.Merged, devctlTo)
+			tag := ""
+			toolRelease = func(context.Context, string) (string, error) { return tag, nil }
+			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+			if !live {
+				_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Merges[0].PID, st.Merges[0].Child = 0, 0
+					return nil, nil
+				})
+			}
+			// An unrelated newer binary is installed before this merge gets a tag.
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 1 {
+				t.Fatal("unrelated release lifted the window")
+			}
+			// The merge's tag appears, but its binary is not installed yet.
+			tag = "v999.0.0"
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 1 || st.Holds[0].ToolRelease != tag {
+				t.Fatalf("expected persisted release, got %+v", st.Holds)
+			}
+			devctlVersion = func(context.Context) string { return "999.0.0" }
+			g.closeToolWindow(context.Background(), watchParty)
+			if st := gateState(t, g); len(st.Holds) != 0 {
+				t.Fatalf("installed merge release kept window: %+v", st.Holds)
+			}
+		})
 	}
 }

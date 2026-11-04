@@ -556,3 +556,25 @@ func TestSharedCapReportsHolderLimit(t *testing.T) {
 		t.Fatalf("wrong shared limit: %s", what)
 	}
 }
+
+func TestRunReturns137AsStepOutcome(t *testing.T) {
+	saved := plat.Capper
+	plat.Capper = &fakeCapper{}
+	t.Cleanup(func() { plat.Capper = saved })
+	var ends []string
+	o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard,
+		Record: func(verb, detail string) {
+			if verb == VerbEnd {
+				ends = append(ends, detail)
+			}
+		}}
+	if rc := Run(o, []string{"sh", "-c", "exit 137"}); rc != 137 {
+		t.Fatalf("exit %d, want 137", rc)
+	}
+	if len(ends) != 1 || !strings.Contains(ends[0], "exit 137") {
+		t.Fatalf("step outcome: %v", ends)
+	}
+	if rc := Run(o, trueCmd); rc != 0 {
+		t.Fatalf("retry exit %d, want 0", rc)
+	}
+}

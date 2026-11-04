@@ -31,12 +31,17 @@ import (
 
 // Seams for the tests.
 var (
+	toolRelease = func(ctx context.Context, sha string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return github.CommitRelease(ctx, github.RunGH, merge.ToolRepo, sha)
+	}
 	pullState = github.PullState
 	pullBase  = func(ctx context.Context, repo string, n int) (github.PullBase, error) {
 		return github.ReadPullBase(ctx, github.RunGH, repo, n)
 	}
-	branchRelease = func(ctx context.Context, repo, base string) (github.BaseRelease, error) {
-		return github.ReadBranchRelease(ctx, github.RunGH, repo, base)
+	releaseAt = func(ctx context.Context, repo, base, ref string) (github.BaseRelease, error) {
+		return github.ReadReleaseAt(ctx, github.RunGH, repo, base, ref)
 	}
 	pluginTags = func(ctx context.Context, repo, sha string) ([]string, error) {
 		return github.PluginTags(ctx, github.RunGH, repo, sha)
@@ -398,6 +403,9 @@ type childRun struct {
 	// ended says the follow returned as its caller went away, for a run that
 	// ends with it (withCaller): its merge-child stops the command.
 	ended bool
+	// stopped says a SIGTERM aimed at the gate stopped the command: the gate
+	// ends with it and leaves its release to lanes settle --release.
+	stopped bool
 }
 
 // emit writes a held document to the gate's stdout.
@@ -426,6 +434,11 @@ func runDetached(spec childSpec, base string, leave time.Time, started func(pid 
 	pid, err := launchChild(spec, base)
 	if err != nil {
 		gateLine("devctl does not start: %v", err)
+		if filepath.Base(filepath.Dir(base)) == ownedRuns {
+			// Followers may already be waiting before a PID is published.
+			// Keep the known failure after the startup files are removed.
+			writeResult(base, runResult{RC: guard.ExitNotFound})
+		}
 		return childRun{rc: guard.ExitNotFound}
 	}
 	started(pid)
@@ -557,7 +570,7 @@ func followChild(base string, pid int, offset int64, bin binary, hold func(doc [
 		case time.Since(term) >= stopGrace:
 			gateLine("SIGTERM with the caller still there: stopping devctl (pid %d); the run is recorded as one ended by a signal", pid)
 			signalPID(pid, syscall.SIGTERM)
-			term, said = time.Time{}, true
+			term, said, r.stopped = time.Time{}, true, true
 		}
 	}
 }
