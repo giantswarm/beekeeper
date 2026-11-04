@@ -224,15 +224,22 @@ func Binary(t *testing.T, endpoint, token string) (bin, tokenFile string) {
 		t.Fatal(err)
 	}
 	bin = filepath.Join(dir, "muster")
+	endpointJSON, err := json.Marshal(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
-context) printf '{"name":"%%s","endpoint":"%s"}' "$3" ;;
-auth) cat '%s' ;;
+context) printf '{"name":"%%s","endpoint":%%s}' "$3" %s ;;
+auth) cat %s ;;
 *) echo "unknown command $1" >&2; exit 1 ;;
 esac
-`, endpoint, tokenFile)
+`, shellQuote(string(endpointJSON)), shellQuote(tokenFile))
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable under the test's temporary folder
 		t.Fatal(err)
 	}
 	return bin, tokenFile
 }
+
+// shellQuote keeps a value literal in a POSIX shell command.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
