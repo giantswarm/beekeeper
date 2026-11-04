@@ -514,7 +514,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
-			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
+			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I} pageInfo{hasNextPage endCursor}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
 	r := map[string]json.RawMessage{}
@@ -541,9 +541,6 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			missing = append(missing, p.Errors...)
 		}
 		maps.Copy(r, part)
-	}
-	type nodes struct {
-		Nodes []issueJSON `json:"nodes"`
 	}
 	open := func(ns []issueJSON) []Item {
 		var out []Item
@@ -610,12 +607,22 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 		}
 	}
 	for i := range snap.Order {
-		var s nodes
+		var s searchPage
 		if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
 			snap.Search[i] = open(s.Nodes)
+			if s.PageInfo.HasNextPage {
+				more, missing, err := c.searchAfter(ctx, snap.Order[i].Search, s.PageInfo.EndCursor)
+				if err != nil {
+					return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+				}
+				snap.Search[i] = append(snap.Search[i], more...)
+				for _, message := range missing {
+					snap.Missing = noted(snap.Missing, fmt.Sprintf("board.order %q: %s", snap.Order[i].Name, message))
+				}
+			}
 		}
 	}
 	return nil
