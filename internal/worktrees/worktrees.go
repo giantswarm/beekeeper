@@ -159,9 +159,14 @@ func InspectBuildDirs(ctx context.Context, git Git, dir string, extra []string) 
 	if out, err := git(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
 		t.Branch = strings.TrimSpace(string(out))
 	}
-	if out, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
-		if b, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "origin/"); ok {
-			t.Pushed = b
+	if t.Branch != "" {
+		// Read the tracking configuration even when the remote-tracking ref
+		// was pruned: its branch name still identifies the pull request.
+		if out, err := git(ctx, dir, "for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", "refs/heads/"+t.Branch); err == nil {
+			remote, ref, ok := strings.Cut(strings.TrimSpace(string(out)), "\x00")
+			if ok && remote == "origin" {
+				t.Pushed, _ = strings.CutPrefix(ref, "refs/heads/")
+			}
 		}
 	}
 	status, err := git(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignored=matching")
