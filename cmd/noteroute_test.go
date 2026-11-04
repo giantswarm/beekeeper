@@ -10,6 +10,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // workerNoteApp is noteApp whose caller is a worker on the roster, its
@@ -133,6 +134,81 @@ func TestWorkerSupersededAskIsRefused(t *testing.T) {
 			t.Errorf("no warning: %q", out)
 		}
 	})
+}
+
+// Whether to merge is never a person's decision: a note that asks it is
+// refused from anyone, a worker or not, naming the loop that merges, and
+// logged (https://github.com/giantswarm/beekeeper/issues/2207). A question
+// that only mentions a merge reaches the person.
+func TestMergeAskIsRefusedFromAnyone(t *testing.T) {
+	for _, q := range []string{
+		"Merge " + prURL + " at head 3333333 without a third review, or have it reworked?",
+		"May I merge " + prURL + " now that the review approved it?",
+		mergeIt,
+		"Is " + prURL + " ok to merge?",
+		"Approve the merge of " + decisionRef + "?",
+		"Confirm merging " + prURL + " at head abc1234?",
+		"Should the loop merge the pull request once CI is green?",
+	} {
+		t.Run(q, func(t *testing.T) {
+			worker := workerNoteApp(t, openThread, nil)
+			session, _ := noteApp(t)
+			for name, a := range map[string]*app{workerRole: worker, "session": session} {
+				err := addNote(a, append(slices.Clone(decisionArgs), q)...)
+				if Code(err) != ExitRefused || !strings.Contains(err.Error(), "whether to merge is never a person's decision") || !strings.Contains(err.Error(), "the loop merges it, asking nobody") {
+					t.Fatalf("%s: refusal: %v", name, err)
+				}
+				st, _ := a.store.Read()
+				if len(st.Notes) != 0 {
+					t.Errorf("%s: filed: %+v", name, st.Notes)
+				}
+				if evs := redirected(t, a); len(evs) != 1 || !strings.Contains(evs[0].Detail, ": merge: ") {
+					t.Errorf("%s: logged %+v", name, evs)
+				}
+			}
+		})
+	}
+	a, _ := noteApp(t)
+	for _, q := range []string{
+		"Should merge lanes of o/r settle before a release rolls?",
+		"Rebase onto main or merge main into the branch?",
+		superloop.OwnershipQuestion(prURL, "team-x"),
+		"Approve publishing the release " + prURL + " to the public registry?",
+		"Merge the two Helm charts into one, or keep them separate?",
+		"Merge main into the release branch or cut a new one?",
+		"Do we merge the staging and production clusters?",
+		"Allow squash merge only on o/r? It changes the repository settings.",
+		"Confirm the merge of the two Slack channels?",
+		"Should we merge https://github.com/o/r/issues/12 into https://github.com/o/r/issues/13 as duplicates?",
+	} {
+		if err := addNote(a, append(slices.Clone(decisionArgs), q)...); err != nil {
+			t.Errorf("%s: %v", q, err)
+		}
+	}
+}
+
+// mergeIt asks to merge the pull request of the note's ref.
+const mergeIt = "Can we merge it?"
+
+// A merge of "it" is a pull request's merge only when the note's ref is
+// a pull request: owner/repo#n or a pull request's URL, never an issue's.
+func TestMergeOfItNeedsAPullRequestRef(t *testing.T) {
+	for _, c := range []struct {
+		q    string
+		refs []string
+		want bool
+	}{
+		{mergeIt, []string{decisionRef}, true},
+		{"Is this ready to merge?", []string{prURL}, true},
+		{mergeIt, []string{"https://github.com/o/r/issues/12"}, false},
+		{mergeIt, nil, false},
+		{"Merge the two Helm charts into one, or keep them separate?", []string{decisionRef}, false},
+		{"Merge " + decisionRef + " now?", nil, true},
+	} {
+		if got := isMergeAsk(c.q, c.refs); got != c.want {
+			t.Errorf("%q with %v: %v, want %v", c.q, c.refs, got, c.want)
+		}
+	}
 }
 
 // What is live, public or costly stays the person's: a worker's decision
