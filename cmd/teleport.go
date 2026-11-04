@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -204,7 +205,12 @@ last run: a suspend, a powered-off machine) renews a login under
 teleport.renewBefore even after a failure, and a failure of that run is
 tried once more at the next run before the note. A
 login whose SSO callback exchange with the proxy timed out after the
-browser's sign-in is retried once first, both attempts in the log.`,
+browser's sign-in is retried once first, both attempts in the log.
+
+Every keeper run with a valid login also fills the keeper kubeconfig
+(alerts.kubeconfig's first file other than the machine kubeconfig) for
+alerts.installations that Teleport lists, even when renewal is not due.
+Doctor names installations it could not write and why.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			t := a.cfg.Teleport
@@ -223,6 +229,11 @@ browser's sign-in is retried once first, both attempts in the log.`,
 			before, perr := teleport.Status(ctx, t.Tsh, t.Home)
 			missed := false
 			if keeper {
+				if perr == nil && before.Left(a.now) > 0 {
+					if err := a.keepTeleportContexts(ctx); err != nil {
+						return err
+					}
+				}
 				missed = rec.Missed(a.now, t.Every.Duration)
 				due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration, missed)
 				last := rec.CheckedAt
@@ -261,6 +272,9 @@ browser's sign-in is retried once first, both attempts in the log.`,
 				return a.teleportFailed(me, keeper, missed, before, perr, err)
 			}
 			if err := a.store.WriteFile(teleportFile, teleport.Record{RenewedAt: a.now.UTC(), ValidUntil: after.ValidUntil, CheckedAt: rec.CheckedAt}); err != nil {
+				return err
+			}
+			if err := a.keepTeleportContexts(ctx); err != nil {
 				return err
 			}
 			from := "no active profile"
@@ -378,4 +392,28 @@ func (a *app) holdBrowser(me state.Party) (func(), error) {
 			return []state.Event{event(me, "lease.release", "%s", config.Browser)}, nil
 		})
 	}, nil
+}
+
+// keepTeleportContexts also runs on ticks that need no login renewal.
+func (a *app) keepTeleportContexts(ctx context.Context) error {
+	var targets []alerts.Target
+	for _, in := range a.cfg.Alerts.Installations {
+		targets = append(targets, alerts.Target{Name: in.Name, Context: in.Context})
+	}
+	unread := a.alertDiscoverer().EnsureContexts(ctx, targets)
+	return a.store.WriteFile("teleport-contexts.json", unread)
+}
+
+func (a *app) teleportContextsLine() string {
+	if !a.cfg.Teleport.Enabled() {
+		return ""
+	}
+	var unread []string
+	if _, err := a.store.ReadFile("teleport-contexts.json", &unread); err != nil {
+		return "Teleport kube contexts: could not read keeper diagnostics"
+	}
+	if len(unread) == 0 {
+		return ""
+	}
+	return "Teleport kube contexts: " + strings.Join(unread, "; ")
 }
