@@ -37,7 +37,7 @@ func TestCodexRunnerLogsExecFailure(t *testing.T) {
 	if err := json.Unmarshal(log.Bytes(), &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != "harness.stderr" || !strings.Contains(event.Text, "no such file or directory") {
+	if event.Type != codexStderrEvent || !strings.Contains(event.Text, "no such file or directory") {
 		t.Fatalf("OS startup diagnostic missing: %+v", event)
 	}
 }
@@ -65,7 +65,7 @@ func TestCodexRunnerLogsStartupStderr(t *testing.T) {
 	if err := json.Unmarshal(page.Data, &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != "harness.stderr" || event.Text != codexStartupDiagnostic {
+	if event.Type != codexStderrEvent || event.Text != codexStartupDiagnostic {
 		t.Fatalf("startup diagnostic missing: %+v", event)
 	}
 	j, err := f.s.Read(f.r.Ref)

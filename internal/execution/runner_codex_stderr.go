@@ -7,7 +7,10 @@ import (
 	"regexp"
 )
 
-const codexStderrLimit = 64 << 10
+const (
+	codexStderrLimit = 64 << 10
+	codexStderrEvent = "harness.stderr"
+)
 
 // Authentication output may contain opaque values no token pattern recognizes,
 // or values on the line after their label. Suppress that diagnostic as a whole.
@@ -48,5 +51,5 @@ func (w *codexStderr) writeLog(log io.Writer) error {
 		Type      string `json:"type"`
 		Text      string `json:"text"`
 		Truncated bool   `json:"truncated,omitempty"`
-	}{Type: "harness.stderr", Text: text, Truncated: w.truncated})
+	}{Type: codexStderrEvent, Text: text, Truncated: w.truncated})
 }
