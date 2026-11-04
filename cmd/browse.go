@@ -38,6 +38,7 @@ const browseWait = 8 * time.Minute
 // browsePreamble opens a browse turn's prompt; browseSteps leads its steps.
 const (
 	browsePreamble = "beekeeper browse: you run browser steps for another Claude session, with the Claude in Chrome tools only. " +
+		storageWords +
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
 		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
 		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
@@ -46,11 +47,17 @@ const (
 	browseSteps = "The steps:\n\n"
 )
 
+// storageWords keep data discovery in the visible UI, even for read-only tasks.
+const storageWords = "Never read page storage (localStorage, sessionStorage, cookies, IndexedDB) or session tokens, and never call a site's API with them. Work through the visible UI only, including when listing a site's data such as Slack user groups. If the UI cannot complete a step or the hook refuses a call, report that barrier and the steps not completed; never work around it with storage or direct API requests. "
+
 // controlWords tell a browse turn which element it clicks: the one a step
 // names, never a subscription, watch, star or notification control, which
 // changes the person's own notifications; the hook refuses such a click.
-const controlWords = "Click only the element a step names: a computer click by that element's ref, its action_summary naming that element; " +
-	"a scripted click (javascript_tool) selects that one element by its own selector (an id, a data-testid, an aria-label), never by a sweep " +
+const controlWords = "Click only the element a step names: a computer click by that element's ref (or by coordinate for a react-aria Button), its action_summary naming that element. " +
+	"React-aria Buttons (bui components), including the Dev Portal's 'Sign in' button, need a coordinate click: " +
+	"use computer left_click with coordinate at the button's current position from a screenshot, not a ref or JavaScript click, " +
+	"which silently does nothing. Name the button in action_summary and check the resulting page or window before continuing. " +
+	"A scripted click (javascript_tool) selects that one element by its own selector (an id, a data-testid, an aria-label), never by a sweep " +
 	"over the page's buttons or links. Never click " + guard.SubscriptionControls + " (GitHub's Subscribe, Unsubscribe, Watch, Star and " +
 	"Notifications buttons): such a click changes the person's own notifications, which no token restores. " +
 	"For a UI-only disclosure on an App permissions page, name the effect and role, for example 'Expands the Organization permissions section', " +
@@ -91,6 +98,10 @@ const deployWords = "The person's task covers one deploy: %s. Once the steps rea
 const (
 	consentWords = "The person's own App %s is declared and on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
 		"with that callback, click Authorize once; click nothing else that grants access. "
+	gitlabConsentWords = "The person's own GitLab application %s is declared and on record (callback %s): once the steps reach GitLab's page 'Authorize %s' " +
+		"on %s at /oauth/authorize with that callback, first read the consent form with javascript_tool on the tab, a call of its own (not in a batch), " +
+		"using this script verbatim:\n" + guard.GitLabFormScript + "\n" +
+		"then click Authorize once, with no click, key, navigation or other script on the tab between; click nothing else that grants access. "
 	permissionWords = "The person's own App %s is declared and on record for one permission change, %s: once the steps reach its permissions " +
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
 		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each change call's summary; " +
@@ -236,6 +247,15 @@ the turn alone. The report is printed as the turn wrote it.
 The turn shares the person's Chrome: hold the browser lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
 a page that waits on a person (a sign-in form, a dialog) is the usual cause.
+
+React-aria Buttons (bui components) need a coordinate click. A click by ref
+or JavaScript silently does nothing. Use computer left_click with coordinate
+at the button's current position from a screenshot, name it in action_summary,
+and check the resulting page or window before continuing. For example:
+
+  beekeeper browse "Open <portal URL>. Take a screenshot, then click the
+  Dev Portal's 'Sign in' button by coordinate at its current position.
+  Report the resulting page or window."
 
 A muster sign-in is "muster auth login --no-browser" (the hook refuses it
 without the flag in every session: muster would open the person's default
@@ -469,7 +489,8 @@ the front window of a monocle workspace) is drawn off the person's screen
 for the turn: browse creates the headless output BEEKEEPER-BROWSE, placed
 far from every monitor with its own workspace beekeeper-browse (number 31337), moves
 the window silently onto it, and puts it back on its own workspace and
-removes the output once the turn ends. Every window Chrome opens while the
+keeps the empty output for later turns to avoid transient numbered workspaces.
+Every window Chrome opens while the
 turn runs and the person's keyboards and pointers are quiet (desktop.typingQuiet;
 a sign-in pop-up, a new window), the shared window shown or not, maps on
 that output too, silently, without the focus and deaf to
@@ -933,6 +954,8 @@ func readFindings(transcript string) (browseFindings, error) {
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reason})
 				case strings.Contains(text, "never clicks "+guard.SubscriptionControls):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonControl, Hook: true})
+				case strings.Contains(text, guard.BrowseStorageBarrier):
+					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: "Storage and Session Tokens", Hook: true})
 				case strings.Contains(text, guard.NotShared):
 					f.Refused = append(f.Refused, refusal{Call: c.words, Reason: reasonNotShared, Hook: true})
 				}
@@ -1395,6 +1418,8 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 			}
 		} else if c.Google {
 			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
+		} else if c.GitLab != "" {
+			p += fmt.Sprintf(gitlabConsentWords, c.Name, callbacks(c), c.Name, c.GitLab)
 		} else if len(c.Callbacks) > 0 {
 			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
 		}
