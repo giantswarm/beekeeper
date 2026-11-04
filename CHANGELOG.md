@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret destination preflight checks encryption selectors against the actual resolved YAML keys (https://github.com/giantswarm/beekeeper/issues/3030).
 - Secret producers refuse structurally unwritable destinations before producing credentials (https://github.com/giantswarm/beekeeper/issues/3078).
 - Multi-value secret copies refuse quoted and escaped aliases of the same destination before reading sources (https://github.com/giantswarm/beekeeper/issues/3100).
+- Partial secret rotations retain recovery fingerprints and retry remaining carriers without generating another replacement (https://github.com/giantswarm/beekeeper/issues/3120).
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - Secret capture writes quoted, escaped and embedded-document paths consistently with its encryption preflight (https://github.com/giantswarm/beekeeper/issues/2982).
 - Secret copies to remote files reject blank source values before encoding (https://github.com/giantswarm/beekeeper/issues/2991).
