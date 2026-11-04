@@ -21,7 +21,7 @@ version: 2.1
 jobs:
   test-loop-workflow:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.40
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.41
       entrypoint: /bin/bash
     resource_class: medium
     environment:
