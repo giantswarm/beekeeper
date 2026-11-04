@@ -10,6 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+const resolveLoop = "loop"
+
 // policy is a policy for a home directory in a temporary directory, with a
 // checkout configured and a credential beside it.
 func policy(t *testing.T) (Policy, string) {
@@ -387,12 +389,12 @@ func TestSymlinkParentTraversal(t *testing.T) {
 func TestUnresolvablePathsAreRefused(t *testing.T) {
 	p, home := policy(t)
 	cwd := filepath.Join(home, "projects/repo")
-	for name, target := range map[string]string{"loop": "loop", "broken": "absent"} {
+	for name, target := range map[string]string{resolveLoop: resolveLoop, "broken": "absent"} {
 		if err := os.Symlink(target, filepath.Join(cwd, name)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, path := range []string{"loop", "loop/../go.mod", "broken", "broken/child", "go.mod/../new", "missing/../go.mod"} {
+	for _, path := range []string{resolveLoop, "loop/../go.mod", "broken", "broken/child", "go.mod/../new", "missing/../go.mod"} {
 		if p.Readable(path, cwd) || p.Writable(path, cwd) {
 			t.Errorf("unresolvable path allowed: %q", path)
 		}
