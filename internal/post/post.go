@@ -305,6 +305,12 @@ func stripCode(text string) string {
 	return string(b)
 }
 
+// CodeRanges returns half-open byte ranges of Markdown fenced code blocks and
+// inline code spans, including their delimiters, in document order.
+func CodeRanges(text string) [][2]int {
+	return codeRanges(text)
+}
+
 // codeRanges returns the byte ranges of Markdown fenced code blocks and inline
 // code spans in text. Fenced blocks open at the start of a line with at least
 // three backticks or tildes and close only on a line whose leading fence of the

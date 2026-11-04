@@ -62,8 +62,6 @@ var (
 	// fence opens a fenced code block; its info string names the language.
 	fence      = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)\\s*(.*)$")
 	fenceClose = regexp.MustCompile("^\\s*(```+|~~~+)\\s*$")
-	// codeSpan is one inline code span.
-	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
 	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
 	// redirect is a > into a target: not >>, >|, >&, >=, -> or =>.
@@ -86,6 +84,35 @@ func clobbers(code string) bool {
 	return false
 }
 
+// inlineClobbers checks complete Markdown spans, whose backtick delimiters
+// must match and whose contents can span lines or contain shorter tick runs.
+func inlineClobbers(text string) map[int]bool {
+	out := make(map[int]bool)
+	line, last := 1, 0
+	for _, span := range post.CodeRanges(text) {
+		line += strings.Count(text[last:span[0]], "\n")
+		code := text[span[0]:span[1]]
+		// Fenced ranges start at the beginning of a line (including indent).
+		// An inline span instead starts at its opening backtick run.
+		first, _, _ := strings.Cut(code, "\n")
+		m := fence.FindStringSubmatch(first)
+		isFence := (span[0] == 0 || text[span[0]-1] == '\n') && m != nil &&
+			(m[1][0] == '~' || !strings.ContainsRune(m[2]+m[3], '`'))
+		if !isFence {
+			ticks := len(code) - len(strings.TrimLeft(code, "`"))
+			body := code[ticks : len(code)-ticks]
+			for i, part := range strings.Split(body, "\n") {
+				if clobbers(part) {
+					out[line+i] = true
+				}
+			}
+		}
+		line += strings.Count(code, "\n")
+		last = span[1]
+	}
+	return out
+}
+
 // Lint reads one file's lines and returns what the rules refuse in them.
 // The clobber rule reads only shell examples: inline code spans and fenced
 // blocks without a language or with a shell's.
@@ -97,6 +124,7 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	text := string(raw)
 	here := post.SingleRepo(text)
 	unlinked := post.UnlinkedLines(text, here)
+	inline := inlineClobbers(text)
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
@@ -127,10 +155,8 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 			continue
 		case inFence && shellFence:
 			code = line
-		case !inFence:
-			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
 		}
-		if clobbers(code) {
+		if clobbers(code) || inline[n] {
 			add(clobberRule, clobberWhy)
 		}
 	}
