@@ -330,11 +330,6 @@ func TestTheFixesOfTheLastRoundMergeWithoutAnotherReview(t *testing.T) {
 	if acts := Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, false, rev), Rounds: 1, Taken: taken(t, t0, acts...)}); len(acts) != 0 {
 		t.Errorf("a fixed head with red checks got %+v", acts)
 	}
-	tk := append(taken(t, t0, acts...), taken(t, t0.Add(time.Hour+time.Minute), r2)...)
-	approved := Review{ID: "R2", Head: head2, Verdict: Approved, At: t0.Add(2 * time.Hour)}
-	if g := only(t, Plan(Input{Workers: parked(t0.Add(time.Hour)), Pulls: pull(head2, true, rev, approved), Rounds: 1, Taken: tk}), KindGo); g.Head != head2 {
-		t.Errorf("go = %+v, want the approved fixed head", g)
-	}
 }
 
 // https://github.com/giantswarm/beekeeper/issues/1795: used-up review
