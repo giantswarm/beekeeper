@@ -1,13 +1,12 @@
 # The tools
 
-Generated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`. Every tool takes `agent` and `host`, which tell one person's agents apart.
+Generated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`. Tools that use caller identity declare `agent` and `host`, which tell one person's agents apart; other tools still accept them for auditing.
 
 | Tool | Kind |
 |---|---|
 | `ack_messages` | write, destructive |
 | `agents_leave` | write, destructive |
 | `agents_register` | write |
-| `answer_verify` | read-only |
 | `converse` | write |
 | `hold_lift` | write, destructive |
 | `hold_list` | read-only |
@@ -39,16 +38,8 @@ Ack messages of your mailbox by their ids, so they are not delivered again.
 ```json
 {
   "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
     "for": {
       "description": "the mailbox: your email (default)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
       "type": "string"
     },
     "ids": {
@@ -128,43 +119,6 @@ A machine publishing its agents passes each one's task and whether it is done; a
 }
 ```
 
-## `answer_verify`
-
-```text
-Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.
-
-Verified: through an authenticated channel (central, slack), at most 24h old and, with head, naming that commit; for the answering person, their team or its supervisor role.
-```
-
-```json
-{
-  "properties": {
-    "about": {
-      "description": "the issue or pull request, owner/repo#n",
-      "type": "string"
-    },
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "head": {
-      "description": "the commit its question or words must name",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    },
-    "note": {
-      "description": "the note's number",
-      "type": "number"
-    }
-  },
-  "required": [],
-  "type": "object"
-}
-```
-
 ## `converse`
 
 ```text
@@ -235,16 +189,7 @@ List the holds on merges into a repository or lane, or on every merge, until lif
 
 ```json
 {
-  "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -415,14 +360,6 @@ It does not keep the place: lane_queue does.
 ```json
 {
   "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    },
     "pr": {
       "description": "the pull request's number",
       "type": "number"
@@ -448,16 +385,7 @@ List the merge lanes: each lane's running merge, settling merge and queue.
 
 ```json
 {
-  "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -507,16 +435,7 @@ List the shared installations: who holds each, since when and what for, and whic
 
 ```json
 {
-  "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -560,14 +479,6 @@ List the agent roster you may read: your own local agents, your team's holding a
 ```json
 {
   "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    },
     "scope": {
       "description": "all (default) or team: only the caller's team",
       "type": "string"
@@ -743,16 +654,7 @@ List every open note, whoever it is for or filed it: decisions and sign-ins.
 
 ```json
 {
-  "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
@@ -796,16 +698,8 @@ Read the oldest unacked messages to any of your agents, in order; ack only those
 ```json
 {
   "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
     "for": {
       "description": "the mailbox: your email (default)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
       "type": "string"
     },
     "limit": {
@@ -867,16 +761,7 @@ Show everything at once: leases, holds, lanes, every open note and the agents yo
 
 ```json
 {
-  "properties": {
-    "agent": {
-      "description": "the calling agent's name (default: your email)",
-      "type": "string"
-    },
-    "host": {
-      "description": "the machine or installation it runs on",
-      "type": "string"
-    }
-  },
+  "properties": {},
   "required": [],
   "type": "object"
 }
