@@ -74,6 +74,7 @@ func (snap *snapshot) closeNotes(want *snapshot, events []state.Event, nextID fu
 		}
 		if n == nil {
 			n = old.DeepCopy()
+			n.Status = initialNoteStatus(old)
 			n.Status.State = noteClosed
 			if closing.Verb == noteAnsweredEvent {
 				n.Status.State = noteAnswered
