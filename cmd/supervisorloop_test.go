@@ -1702,11 +1702,6 @@ func TestLoopForwardsFindingsOnAMovedHead(t *testing.T) {
 	}
 	r.park(t, loopPR, time.Now().Add(time.Minute))
 	r.pass(t)
-	if start := r.called(agentsName, agentStartName); start == nil || start[2] != superloop.ReviewerName(loopPR, 2) {
-		t.Fatalf("no review for the fixes: %v", r.calls)
-	}
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
 	if wake := r.called(gateCmdName); wake == nil || !slices.Contains(wake, loopFixed) {
 		t.Errorf("no go for the fixes: %v", r.calls)
 	}
