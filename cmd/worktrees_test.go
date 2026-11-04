@@ -23,8 +23,6 @@ import (
 // output.
 const mergedPR = "mergedpr"
 
-const headsNull = "null"
-
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -335,7 +333,7 @@ func TestTrimHarnessRequiresCompleteHeadPulls(t *testing.T) {
 		wantErr, wantRemoved bool
 	}{
 		{name: "missing alias", wantErr: true},
-		{name: "null alias", answer: `null`, wantErr: true},
+		{name: "null alias", answer: `null `, wantErr: true},
 		{name: "null pulls", answer: `{"pullRequests":null}`, wantErr: true},
 		{name: "missing nodes", answer: `{"pullRequests":{}}`, wantErr: true},
 		{name: "null nodes", answer: `{"pullRequests":{"nodes":null}}`, wantErr: true},
