@@ -78,6 +78,67 @@ func TestCheckInputFiles(t *testing.T) {
 	}
 }
 
+func TestCheckServeIdentityTokenFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	present := filepath.Join(home, "token")
+	if err := os.WriteFile(present, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(home, "directory")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{name: "default"},
+		{name: "present", path: present},
+		{name: "absent", path: filepath.Join(home, "missing"), want: "referenced file does not exist"},
+		{name: "directory", path: directory, want: "referenced path is not a regular file"},
+		{name: "home present", path: "~/token"},
+		{name: "home absent", path: "~/missing", want: "referenced file does not exist"},
+		{name: "home directory", path: "~/directory", want: "referenced path is not a regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := "{}"
+			if tc.path != "" {
+				raw = "serve: {identity: {tokenFile: " + tc.path + "}}"
+			}
+			file := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			findings, err := Check(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(findings) != 0 {
+					t.Fatalf("unexpected findings: %v", findings)
+				}
+			} else if len(findings) != 1 || findings[0] != "serve.identity.tokenFile: "+tc.want {
+				t.Fatalf("findings = %v; want serve.identity.tokenFile: %s", findings, tc.want)
+			}
+			c, err := Load(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPath := tc.path
+			if strings.HasPrefix(wantPath, "~/") {
+				wantPath = filepath.Join(home, strings.TrimPrefix(wantPath, "~/"))
+			}
+			if wantPath == "" {
+				wantPath = "/var/run/secrets/dex/token"
+			}
+			if c.Serve.Identity.TokenFile != wantPath {
+				t.Errorf("loaded token path = %q; want %q", c.Serve.Identity.TokenFile, wantPath)
+			}
+		})
+	}
+}
+
 func TestCheckReviewRegressions(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
