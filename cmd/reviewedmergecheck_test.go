@@ -525,6 +525,8 @@ func TestMergeCheckEnvironmentFailures(t *testing.T) {
 		"signal":            {"sh", "-c", "kill -KILL $$"},
 		"exhausted disk":    {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
 		"resource":          {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
+		"compiler killed":   {"sh", "-c", "echo 'compile: signal: killed'; exit 1"},
+		"exhausted memory":  {"sh", "-c", "echo 'fork: cannot allocate memory'; exit 1"},
 		"test failure":      {"sh", "-c", "echo '--- FAIL: TestRegression'; exit 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
