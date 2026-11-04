@@ -193,7 +193,8 @@ same start gate a real start is, and prints its verdict: the auto choice,
 and with --force the verdict it goes over; a verdict without room refuses
 the dry run with exit 3 too (--force aside).
 
-A start that delivers no turn of the task fails: it exits non-zero, logs
+A warm desktop CLI gets up to 15 seconds per attempt to accept the task,
+with one retry if delivery fails. A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
@@ -493,7 +494,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -502,7 +503,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// A timer's start says what the gate did to it in the log.
 			origHarness, origModel := harness, model
 			autoPick := origHarness == harnessAuto
-			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			baseBrief := a.workerPrompt(taskPrompt(brief), gaps...)
 			var timerLine string
 			for {
 				gateFrom := time.Now()
@@ -1067,11 +1068,15 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
-	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
+	line, err := a.startDesktopTurn(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
 		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
+	}
+	var delivery desktopDeliveryError
+	if errors.As(err, &delivery) {
+		return sa, err
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
@@ -1084,6 +1089,25 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	return sa, nil
+}
+
+// startDesktopTurn retries a warm CLI's delivery once. A CLI that is still
+// warming must take the task itself; asking a steward to start it cannot
+// establish that an already running CLI received the task.
+func (a *app) startDesktopTurn(ctx context.Context, w wakeTarget, msg string, wait time.Duration) (string, error) {
+	var err error
+	for range 2 {
+		var line string
+		line, err = a.turnInDesktop(ctx, w, msg, wait)
+		if err == nil {
+			return line, nil
+		}
+		var delivery desktopDeliveryError
+		if !errors.As(err, &delivery) || ctx.Err() != nil {
+			break
+		}
+	}
+	return "", err
 }
 
 // resumeSeededTask refuses a seeded desktop start whose requested model
@@ -2056,8 +2080,18 @@ func workerPrompt(prompt string, inline ...string) string {
 		}
 		rules = b.String()
 	}
-	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
-		project.Version(), rules, prompt)
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\nYour worktree path: `<root>/<repo>/<branch>-%s` (replace root, repo and branch; keep this unique session suffix). Use the workspace provided by beekeeper instead when BEEKEEPER_EXECUTION_ID is set.\n\n%s",
+		project.Version(), rules, uuid.NewString(), prompt)
+}
+
+// workerPrompt adds this desk's configured paths to the shipped Git rule.
+func (a *app) workerPrompt(prompt string, inline ...string) string {
+	return strings.Replace(workerPrompt(prompt, inline...), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1)
+}
+
+func (a *app) entryRules() string {
+	home, _ := os.UserHomeDir()
+	return guard.EntryRules(home, a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places, scratchpadMark)
 }
 
 // topicSkills names topics as the skills a worker loads.

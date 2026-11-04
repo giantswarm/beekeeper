@@ -522,7 +522,7 @@ func TestMergeCheckIgnoresHostLocale(t *testing.T) {
 func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	for name, args := range map[string][]string{
 		"absent executable": {"beekeeper-test-nonexistent-command"},
-		"signal":            {"sh", "-c", "kill -KILL $$"},
+		"signal":            {"sh", "-c", litKillKill},
 		"exhausted disk":    {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
 		"resource":          {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
 		"compiler killed":   {"sh", "-c", "echo 'compile: signal: killed'; exit 1"},

@@ -7,9 +7,11 @@ import (
 
 const currentWord = "current"
 
+const originalWord = "original"
+
 func TestRestartedPaneAnswersQueueAndReleasesBothKeys(t *testing.T) {
-	src := &fakeSource{data: &Data{Sessions: []Session{{ID: currentWord, Name: tBee, TakeoverAlias: "original", TakenOver: true,
-		Approvals: []Approval{{ID: "held", Session: "original", Gist: "Bash"}}}}}}
+	src := &fakeSource{data: &Data{Sessions: []Session{{ID: currentWord, Name: tBee, TakeoverAlias: originalWord, TakenOver: true,
+		Approvals: []Approval{{ID: "held", Session: originalWord, Gist: "Bash"}}}}}}
 	m := newTestModel(t, src)
 	m.detail = tBee
 	run(m, m.answer(true))
@@ -17,9 +19,9 @@ func TestRestartedPaneAnswersQueueAndReleasesBothKeys(t *testing.T) {
 		t.Fatalf("answers = %v", src.answers)
 	}
 	m.acting = false
-	m.taken = map[string]bool{"original": true, currentWord: true}
+	m.taken = map[string]bool{originalWord: true, currentWord: true}
 	run(m, m.toggleTakeOver())
-	if !reflect.DeepEqual(src.released, []string{currentWord, "original"}) {
+	if !reflect.DeepEqual(src.released, []string{currentWord, originalWord}) {
 		t.Fatalf("released = %v", src.released)
 	}
 	if len(m.taken) != 0 {

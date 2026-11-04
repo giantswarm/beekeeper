@@ -48,7 +48,7 @@ func TestLoadConfigUnconfinesAnUnheldSession(t *testing.T) {
 // A sandboxed command and a hook (which runs on the host for a sandboxed
 // session too) keep the policy's environment.
 func TestLoadConfigKeepsAHeldOrHookEnvironment(t *testing.T) {
-	for name, held := range map[string]bool{"held": true, "hook": false} {
+	for name, held := range map[string]bool{"held": true, configHookVerb: false} {
 		t.Run(name, func(t *testing.T) {
 			a := unheldApp(t)
 			want := os.Getenv("GH_CONFIG_DIR")

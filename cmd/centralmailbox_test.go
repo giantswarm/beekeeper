@@ -350,7 +350,7 @@ func TestMailBodyNamesAnAgentSender(t *testing.T) {
 	if err := json.Unmarshal(d.Envelope, &env); err != nil {
 		t.Fatal(err)
 	}
-	env.From.Agent, env.From.Host = "Worker", "laptop"
+	env.From.Agent, env.From.Host = litWorker, "laptop"
 	if got := mailBody(d, env); got != "Message from ada@example.com's agent Worker on laptop (slack-D1-1): merge it" {
 		t.Errorf("body %q: an agent's message passes as the person's", got)
 	}

@@ -214,13 +214,14 @@ func (o *Ops) CopyToRemote(ctx context.Context, src Ref, f RemoteFile) (RemoteRe
 	if err := f.Check(); err != nil {
 		return RemoteResult{}, err
 	}
-	v, err := o.encoded(ctx, src)
+	v, err := o.value(ctx, src)
 	if err != nil {
 		return RemoteResult{}, err
 	}
 	if strings.TrimSpace(v) == "" {
 		return RemoteResult{}, fmt.Errorf("%s: %w", src, ErrEmptyValue)
 	}
+	v = o.Encode.Apply(v)
 	body := f.content(v)
 	argv := f.Argv(len(body))
 	if _, err := o.Run(ctx, "", nil, strings.NewReader(body), argv[0], argv[1:]...); err != nil {

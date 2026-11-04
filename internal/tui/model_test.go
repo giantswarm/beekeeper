@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image/color"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 // Fixture names shared by the model and view tests.
 const (
 	tBee        = "bee"
+	tBeeID      = "sid-bee"
 	tWasp       = "wasp"
 	tSup        = "sup"
 	tGuide      = "guide"
@@ -50,7 +52,12 @@ type fakeSource struct {
 	cleaned        []string
 	answers        []string
 	answerErr      error
+	releaseErr     error
 }
+
+const tWaspID = "sid-wasp"
+
+const tSharedTitle = "shared"
 
 // TakeOver records the take-over and marks the session in the data.
 func (f *fakeSource) TakeOver(_ context.Context, id string) error {
@@ -66,6 +73,9 @@ func (f *fakeSource) TakeOver(_ context.Context, id string) error {
 // Release records the hand-back and unmarks the session.
 func (f *fakeSource) Release(_ context.Context, id string) error {
 	f.released = append(f.released, id)
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	for i := range f.data.Sessions {
 		if f.data.Sessions[i].ID == id {
 			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
@@ -138,7 +148,7 @@ func fixtureData() *Data {
 		},
 		Sessions: []Session{
 			{
-				PID: 100, Name: tBee, Role: "worker", Cwd: "/home/me/bee", Repo: "giantswarm/beekeeper",
+				ID: tBeeID, PID: 100, Name: tBee, Role: "worker", Cwd: "/home/me/bee", Repo: "giantswarm/beekeeper",
 				Branch: "main", Model: "opus", Permission: "acceptEdits", Started: testAt.Add(-3 * time.Hour),
 				LastActive: testAt.Add(-30 * time.Second), MemMiB: 1500, Waiting: "answer to the question",
 				Work: []string{tIssue}, Serves: "#1", Idle: 4 * time.Second,
@@ -150,7 +160,7 @@ func fixtureData() *Data {
 				Merges:   Merges{Queued: 1, Failed: 1}, GitHubProcesses: 2,
 			},
 			{
-				PID: 101, Name: tWasp, Role: "spare", Idle: 90 * time.Minute, MemMiB: 300,
+				ID: tWaspID, PID: 101, Name: tWasp, Role: "spare", Idle: 90 * time.Minute, MemMiB: 300,
 				LastHour: Counter{Turns: 0, ToolErrors: 0},
 			},
 		},
@@ -406,15 +416,15 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 
 	m.key(keyText("2"))
 	_, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.detail != tBee || m.tailState != 1 {
-		t.Fatalf("detail = %q state %d, want bee loading", m.detail, m.tailState)
+	if m.detail != tBeeID || m.tailState != 1 {
+		t.Fatalf("detail = %q state %d, want sid-bee loading", m.detail, m.tailState)
 	}
 	got := msgs(c)
 	if len(got) != 1 {
 		t.Fatalf("enter asked for %d messages, want one tail", len(got))
 	}
-	if src.tailCall != tBee || src.tailN != tailTurns {
-		t.Errorf("Tail(%q, %d), want bee, %d", src.tailCall, src.tailN, tailTurns)
+	if src.tailCall != tBeeID || src.tailN != tailTurns {
+		t.Errorf("Tail(%q, %d), want sid-bee, %d", src.tailCall, src.tailN, tailTurns)
 	}
 	if body := m.screen(); !strings.Contains(body, "transcript") || !strings.Contains(body, "…") {
 		t.Errorf("the loading pane shows no transcript header and ellipsis:\n%s", body)
@@ -487,7 +497,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 		t.Fatal("a tick with the pane open asked for nothing")
 	}
 	got := msgs(c)
-	if src.tailCall != tBee {
+	if src.tailCall != tBeeID {
 		t.Fatalf("the tick did not re-read the tail: Tail(%q)", src.tailCall)
 	}
 	for _, msg := range got {
@@ -511,7 +521,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(keyText("k"))
 	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
-	m.Update(tailMsg{session: tBee, turns: src.turns})
+	m.Update(tailMsg{session: tBeeID, pane: m.paneID, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
 	}
@@ -524,7 +534,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	}
 
 	// A failed re-read keeps the turns shown and says why.
-	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	m.Update(tailMsg{session: tBeeID, pane: m.paneID, err: errors.New("transcript moved")})
 	if v := m.screen(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
 	}
@@ -596,8 +606,8 @@ func TestMessageFromThePane(t *testing.T) {
 		t.Error("m opened a second message while one is on its way")
 	}
 	m.Update(c())
-	if src.sendTo != tBee || src.sendText != "q jG" {
-		t.Errorf("Send(%q, %q), want bee and the draft", src.sendTo, src.sendText)
+	if src.sendTo != tBeeID || src.sendText != "q jG" {
+		t.Errorf("Send(%q, %q), want sid-bee and the draft", src.sendTo, src.sendText)
 	}
 	if v := m.screen(); m.sending || !strings.Contains(v, "sent: queued in its CLI") {
 		t.Errorf("the outcome is not shown (sending %v):\n%s", m.sending, v)
@@ -640,7 +650,7 @@ func run(m *model, c tea.Cmd) {
 
 func TestTakeOverFromThePane(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "about to clean"}}}
-	src.data.Sessions[0].ID = "sid-bee"
+	src.data.Sessions[0].ID = tBeeID
 	m := newTestModel(t, src)
 	m.tickFn = func() tea.Cmd { return nil }
 	m.key(keyText("2"))
@@ -649,7 +659,7 @@ func TestTakeOverFromThePane(t *testing.T) {
 
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.took) != 1 || src.took[0] != "sid-bee" || !m.taken["sid-bee"] {
+	if len(src.took) != 1 || src.took[0] != tBeeID || !m.taken[tBeeID] {
 		t.Fatalf("t took %v (screen holds %v), want bee's id", src.took, m.taken)
 	}
 	if v := m.screen(); !strings.Contains(v, "taken over") || !strings.Contains(v, "t hand back") {
@@ -705,12 +715,12 @@ func TestTakeOverFromThePane(t *testing.T) {
 	// t again hands back; quitting hands back what is still taken.
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.released) != 1 || m.taken["sid-bee"] {
+	if len(src.released) != 1 || m.taken[tBeeID] {
 		t.Fatalf("t did not hand back: released %v, taken %v", src.released, m.taken)
 	}
-	m.taken = map[string]bool{"sid-wasp": true}
+	m.taken = map[string]bool{tWaspID: true}
 	m.releaseAll()
-	if len(src.released) != 1 || len(src.cleaned) != 1 || src.cleaned[0] != "sid-wasp" {
+	if len(src.released) != 1 || len(src.cleaned) != 1 || src.cleaned[0] != tWaspID {
 		t.Errorf("closing cleaned %v, manual releases %v", src.cleaned, src.released)
 	}
 }
@@ -769,7 +779,7 @@ func TestLateTailForClosedPaneIsDropped(t *testing.T) {
 	m.key(keyText("2"))
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m.Update(tailMsg{session: tBee, turns: []Turn{{Text: "late"}}})
+	m.Update(tailMsg{session: tBeeID, turns: []Turn{{Text: "late"}}})
 	if m.tailState != 0 || len(m.tail) != 0 {
 		t.Errorf("a late tail reopened the pane: state %d, %d turns", m.tailState, len(m.tail))
 	}
@@ -790,4 +800,142 @@ func TestLoadingBeforeFirstRefresh(t *testing.T) {
 // keyText is the key press that types text.
 func keyText(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(text)[0], Text: text}
+}
+
+func TestMultilineDraftStaysWithinScreenAndSendsOriginal(t *testing.T) {
+	for _, sep := range []string{"\n", "\r\n", "\r"} {
+		t.Run(fmt.Sprintf("separator-%q", sep), func(t *testing.T) {
+			src := &fakeSource{data: fixtureData()}
+			m := newTestModel(t, src)
+			m.key(keyText("2"))
+			_, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			for _, msg := range msgs(c) {
+				m.Update(msg)
+			}
+			m.key(keyText("m"))
+			text := "first" + sep + "second" + sep + "third" + strings.Repeat(sep+"x", 40)
+			m.Update(tea.PasteMsg{Content: text})
+			line := messageLine(m.pane(), 100)
+			if strings.ContainsAny(line, "\r\n") {
+				t.Errorf("multiline message display: %q", line)
+			}
+			assertScreenRows(t, render(m, 100, 30), 30)
+			_, c = m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if c == nil {
+				t.Fatal("no send command")
+			}
+			m.Update(c())
+			if src.sendText != text {
+				t.Errorf("sent %q, want %q", src.sendText, text)
+			}
+		})
+	}
+}
+
+func assertScreenRows(t *testing.T, screen string, height int) {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(screen), "\n")
+	if len(lines) > height {
+		t.Fatalf("screen has %d rows, maximum %d", len(lines), height)
+	}
+	for _, line := range lines {
+		if strings.ContainsRune(line, '\r') || ansi.StringWidth(line) > 100 {
+			t.Errorf("invalid screen row: %q", line)
+		}
+	}
+	if !strings.Contains(lines[len(lines)-1], "updated") {
+		t.Errorf("footer displaced: %q", lines[len(lines)-1])
+	}
+}
+
+func TestMultilineCellsStayWithinScreen(t *testing.T) {
+	m := newTestModel(t, &fakeSource{data: fixtureData()})
+	m.data.Notes[0].Text = "first\nsecond\r\nthird\rfourth" + strings.Repeat("\nx", 40)
+	for tab := range tabs {
+		m.tab = tab
+		assertScreenRows(t, render(m, 100, 30), 30)
+	}
+	m.err = errors.New("refresh\nfailed\r\nretry\rlater" + strings.Repeat("\nx", 40))
+	assertScreenRows(t, render(m, 100, 30), 30)
+}
+
+func TestNamesakeSessionActionsUseSelectedID(t *testing.T) {
+	src := &fakeSource{data: fixtureData()}
+	for i := range src.data.Sessions {
+		src.data.Sessions[i].Name = tSharedTitle
+		src.data.Sessions[i].Approvals = []Approval{{ID: fmt.Sprintf("request-%d", i)}}
+	}
+	m := newTestModel(t, src)
+	m.key(keyText("2"))
+	m.key(keyText("j"))
+	_, c := m.enter()
+	run(m, c)
+	if src.tailCall != tWaspID || m.paneSession().PID != 101 {
+		t.Fatalf("selected pane targets %q, session %+v", src.tailCall, m.paneSession())
+	}
+	m.key(keyText("m"))
+	m.Update(tea.PasteMsg{Content: "hello"})
+	_, c = m.key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	run(m, c)
+	if src.sendTo != tWaspID {
+		t.Fatalf("message targeted %q", src.sendTo)
+	}
+	_, c = m.key(keyText("t"))
+	run(m, c)
+	if !slices.Equal(src.took, []string{tWaspID}) {
+		t.Fatalf("take-over targeted %v", src.took)
+	}
+	_, c = m.key(keyText("a"))
+	run(m, c)
+	if !slices.Equal(src.answers, []string{"sid-wasp/request-1 allow"}) {
+		t.Fatalf("approval targeted %v", src.answers)
+	}
+	_, c = m.key(keyText("t"))
+	run(m, c)
+	if !slices.Equal(src.released, []string{tWaspID}) {
+		t.Fatalf("release targeted %v", src.released)
+	}
+}
+
+func TestSessionIdentitySurvivesRefresh(t *testing.T) {
+	src := &fakeSource{data: fixtureData()}
+	for i := range src.data.Sessions {
+		src.data.Sessions[i].Name = tSharedTitle
+	}
+	m := newTestModel(t, src)
+	m.key(keyText("2"))
+	m.key(keyText("j"))
+	m.Update(refreshMsg{data: src.data})
+	if m.sel[sessionsTab] != 1 {
+		t.Fatal("refresh moved selection to namesake")
+	}
+	_, c := m.enter()
+	run(m, c)
+	d := *src.data
+	d.Sessions = slices.Clone(d.Sessions)
+	slices.Reverse(d.Sessions)
+	d.Sessions[0].Name = "renamed"
+	m.Update(refreshMsg{data: &d})
+	if m.selectedSession() != tWaspID || m.sel[sessionsTab] != 0 || m.paneSession() == nil {
+		t.Fatal("rename or reorder lost selected session")
+	}
+	if !strings.Contains(m.screen(), "renamed") {
+		t.Fatal("pane did not render renamed session")
+	}
+	d.Sessions = []Session{{ID: "replacement", Name: tSharedTitle}}
+	m.Update(refreshMsg{data: &d})
+	if m.paneSession() != nil {
+		t.Fatal("replacement inherited pane")
+	}
+	if m.toggleTakeOver() != nil || m.answer(true) != nil {
+		t.Fatal("action targeted replacement")
+	}
+	// A delayed result for the old namesake must not populate a new pane.
+	m.closeDetail()
+	_, c = m.enter()
+	run(m, c)
+	m.Update(tailMsg{session: tWaspID, turns: []Turn{{Text: "wrong session"}}})
+	if strings.Contains(m.screen(), "wrong session") {
+		t.Fatal("late transcript populated replacement pane")
+	}
 }

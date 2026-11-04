@@ -88,7 +88,7 @@ func TestKindGateRefusesInsideTheIntervalAndAtTheBusyCap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.kindGate(filerTwo); err == nil || strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "minInterval") {
+	if err := a.kindGate(filerTwo); err == nil || strings.Contains(err.Error(), busyWord) || !strings.Contains(err.Error(), "minInterval") {
 		t.Errorf("done filer inside the interval: %v", err)
 	}
 	a.now = a.now.Add(time.Hour)
@@ -159,7 +159,7 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 }
 
 func TestSSHAgentStartKindAdmission(t *testing.T) {
-	for _, limit := range []string{intervalKey, "busy", availableWord} {
+	for _, limit := range []string{intervalKey, busyWord, availableWord} {
 		for _, dry := range []bool{false, true} {
 			if limit == availableWord && !dry {
 				continue
@@ -173,7 +173,7 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 					switch limit {
 					case intervalKey:
 						k.MinInterval = config.Duration{Duration: time.Hour}
-					case "busy":
+					case busyWord:
 						k.MaxBusy = 1
 					}
 					a.cfg.Agents.Kinds = []config.AgentKind{k}
@@ -200,7 +200,7 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 						}
 					} else {
 						want := "minInterval"
-						if limit == "busy" {
+						if limit == busyWord {
 							want = "maxBusy"
 						}
 						if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") || !strings.Contains(err.Error(), want) || strings.Contains(out, "dry run:") {

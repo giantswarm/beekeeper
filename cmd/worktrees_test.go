@@ -58,10 +58,10 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+	for _, k := range []string{litGitAuthorName, litGitCommitterName} {
 		t.Setenv(k, "test")
 	}
-	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.com")
 	}
 	base := t.TempDir()
@@ -74,7 +74,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	gitT(t, clone, "remote", "add", "origin", "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
-	for _, b := range []string{mergedPR, "work", "unpushed", noteStatusOpen, "nopr", "live", "recent"} {
+	for _, b := range []string{mergedPR, "work", litUnpushed, noteStatusOpen, "nopr", "live", "recent"} {
 		gitT(t, clone, "worktree", "add", "-q", "-b", b, filepath.Join(root, "app", b), "main")
 		writeT(t, filepath.Join(root, "app", b, "node_modules", "pkg", "index.js"), strings.Repeat("x", 4096))
 	}

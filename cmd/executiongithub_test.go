@@ -143,7 +143,7 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
 	sopsDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sopsFile := filepath.Join(sopsDir, "worker-github.sops.yaml")
