@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const registerVerb = "register"
+
 func TestKilledRunDoesNotFinishWorker(t *testing.T) {
 	a, _ := stubApp(t)
 	p := state.Party{Session: "s3", Name: countName}
@@ -46,7 +48,7 @@ func TestKilledRunDoesNotFinishWorker(t *testing.T) {
 
 func TestHandoverStopsFreshlyDiscoveredCLI(t *testing.T) {
 	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "stopped", true: "stop fails"}[fail], func(t *testing.T) {
+		t.Run(map[bool]string{false: reviewedStoppedCase, true: "stop fails"}[fail], func(t *testing.T) {
 			a, out := stubApp(t)
 			titles := map[int]string{3: countName}
 			runLive(t, a, titles)
@@ -121,7 +123,7 @@ func TestRegisterRefusesUnregisteredLiveCLIName(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s4")
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", "new worker")
 	runLive(t, a, map[int]string{3: countName})
-	c, _, err := a.agentsCmd().Find([]string{"register"})
+	c, _, err := a.agentsCmd().Find([]string{registerVerb})
 	if err != nil {
 		t.Fatal(err)
 	}
