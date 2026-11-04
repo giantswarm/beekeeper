@@ -343,6 +343,7 @@ func fillFromFile(s *claude.Session, path string, running bool) {
 	}
 	buf, _ := claude.ReadWindow(path)
 	var last *entry
+	var served string
 	eachEntry(buf, func(e *entry) {
 		switch {
 		case e.Type == "model_change" && e.Model != "":
@@ -352,8 +353,14 @@ func fillFromFile(s *claude.Session, path string, running bool) {
 			h.title = e.Title
 		case e.Type == typeMessage && e.Message != nil:
 			last = e
+			if e.Message.Role == "assistant" && !e.Message.IsError && e.Message.StopReason != "error" && e.Message.Model != "" {
+				served = e.Message.Model
+			}
 		}
 	})
+	if served != "" {
+		s.Model = served
+	}
 	if !running {
 		s.State = StateEnded
 		return
