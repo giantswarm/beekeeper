@@ -121,7 +121,8 @@ each of its --ref while it is open (note add --holds), skipped as "held:
 decision #<n> for <person> until it closes"; a priority is a board move or a
 board reorder (board rank / board order). A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
-<owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
+<owner/repo#n>; 1 of 1 blockers open". Linked open pull requests are named
+with "(draft)" or "(unmerged)" in the hold reason. A held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
 <epic>, blocked by …". A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of

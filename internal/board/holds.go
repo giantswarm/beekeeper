@@ -20,7 +20,11 @@ func (it Item) HeldText() string {
 	if len(it.OpenBlockedBy) == 0 {
 		return HeldWord + blockersOpen(it)
 	}
-	return fmt.Sprintf("%sblocked by %s; %s", HeldWord, strings.Join(it.OpenBlockedBy, ", "), blockersOpen(it))
+	details := it.OpenBlockedBy
+	if len(it.BlockerDetails) > 0 {
+		details = it.BlockerDetails
+	}
+	return fmt.Sprintf("%sblocked by %s; %s", HeldWord, strings.Join(details, ", "), blockersOpen(it))
 }
 
 // heldAbove is the skip reason of an issue under a held one: the nearest

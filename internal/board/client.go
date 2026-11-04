@@ -389,6 +389,9 @@ func (c *Client) Read(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if err := c.extras(ctx, snap, m.ID, now); err != nil {
 		return nil, err
 	}
+	if err := c.blockerDetails(ctx, snap); err != nil {
+		return nil, err
+	}
 	snap.Plans, err = c.plansOf(ctx, snap)
 	return snap, err
 }
