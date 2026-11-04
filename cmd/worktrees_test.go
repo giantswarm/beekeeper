@@ -23,6 +23,8 @@ import (
 // output.
 const mergedPR = "mergedpr"
 
+const headsNull = "null"
+
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()

@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+const (
+	headsRepo   = "o/r"
+	headsNoData = `{"data":{}}`
+)
+
 func TestHeadPullsSkipsForks(t *testing.T) {
 	run := func(_ context.Context, args ...string) ([]byte, error) {
 		if q := args[len(args)-1]; !strings.Contains(q, `headRefName:"fix"`) || !strings.Contains(q, "isCrossRepository") {
@@ -20,7 +25,7 @@ func TestHeadPullsSkipsForks(t *testing.T) {
 			"h1":{"pullRequests":{"nodes":[
 				{"number":3,"state":"MERGED","headRefOid":"f","closedAt":"2026-10-01T00:00:00Z","isCrossRepository":true}]}}}}`), nil
 	}
-	fix, other := Head{Repo: "o/r", Branch: "fix"}, Head{Repo: "o/r", Branch: "other"}
+	fix, other := Head{Repo: headsRepo, Branch: "fix"}, Head{Repo: headsRepo, Branch: "other"}
 	pulls, err := HeadPulls(context.Background(), run, []Head{fix, other})
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +50,7 @@ func TestHeadPullsRejectsUnavailableAnswers(t *testing.T) {
 		{"invalid JSON", `{"data":{"h0":{"pullRequests":{"nodes":[]}}}} trailing`, nil},
 		{"missing data", `{}`, nil},
 		{"null data", `{"data":null}`, nil},
-		{"missing alias", `{"data":{}}`, nil},
+		{"missing alias", headsNoData, nil},
 		{"null alias", `{"data":{"h0":null}}`, nil},
 		{"invalid alias", `{"data":{"h0":[]}}`, nil},
 		{"missing pulls", `{"data":{"h0":{}}}`, nil},
@@ -58,9 +63,9 @@ func TestHeadPullsRejectsUnavailableAnswers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(context.Context, ...string) ([]byte, error) { return []byte(tc.response), tc.err }
-			heads := []Head{{Repo: "o/r", Branch: "one"}}
+			heads := []Head{{Repo: headsRepo, Branch: "one"}}
 			if tc.name == "partial batch" {
-				heads = append(heads, Head{Repo: "o/r", Branch: "two"})
+				heads = append(heads, Head{Repo: headsRepo, Branch: "two"})
 			}
 			pulls, err := HeadPulls(context.Background(), run, heads)
 			if err == nil || pulls != nil {
@@ -77,7 +82,7 @@ func TestHeadPullsEmptyNodes(t *testing.T) {
 	run := func(context.Context, ...string) ([]byte, error) {
 		return []byte(`{"data":{"h0":{"pullRequests":{"nodes":[]}}}}`), nil
 	}
-	pulls, err := HeadPulls(context.Background(), run, []Head{{Repo: "o/r", Branch: "one"}})
+	pulls, err := HeadPulls(context.Background(), run, []Head{{Repo: headsRepo, Branch: "one"}})
 	if err != nil || len(pulls) != 0 {
 		t.Fatalf("got %v, %v; want no pull requests", pulls, err)
 	}
@@ -86,13 +91,13 @@ func TestHeadPullsEmptyNodes(t *testing.T) {
 func TestHeadPullsDiscardsEarlierBatchesOnFailure(t *testing.T) {
 	var heads []Head
 	for i := 0; i < headsPerRequest+1; i++ {
-		heads = append(heads, Head{Repo: "o/r", Branch: fmt.Sprint(i)})
+		heads = append(heads, Head{Repo: headsRepo, Branch: fmt.Sprint(i)})
 	}
 	calls := 0
 	run := func(context.Context, ...string) ([]byte, error) {
 		calls++
 		if calls > 1 {
-			return []byte(`{"data":{}}`), nil
+			return []byte(headsNoData), nil
 		}
 		var response strings.Builder
 		response.WriteString(`{"data":{`)
