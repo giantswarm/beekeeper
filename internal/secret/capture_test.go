@@ -122,7 +122,7 @@ func TestCaptureEncodes(t *testing.T) {
 
 func TestCaptureUsesThePathCheckedByTheCreationRule(t *testing.T) {
 	for _, tc := range []struct{ path, key string }{
-		{`"stringData".password`, "password"},
+		{`"stringData".password`, storePasswordAttribute},
 		{`stringData."credentials.json"`, "credentials.json"},
 		{`stringData.credentials\.json`, "credentials.json"},
 	} {
