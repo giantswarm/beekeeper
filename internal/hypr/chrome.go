@@ -505,13 +505,13 @@ func redirectOn(hold time.Duration) string {
 const redirectOff = `if beekeeper_browse_timer then beekeeper_browse_timer:set_enabled(false) end; ` +
 	`for _, r in pairs(beekeeper_browse_windows or {}) do r:set_enabled(false) end;`
 
-// browserPattern matches whole browser classes case-insensitively, like isBrowser.
+// browserPattern matches the class of a browser window and nothing else.
 func browserPattern() string {
 	q := make([]string, len(browserClasses))
 	for i, c := range browserClasses {
 		q[i] = regexp.QuoteMeta(c)
 	}
-	return "(?i)^(" + strings.Join(q, "|") + ")$"
+	return "^(" + strings.Join(q, "|") + ")$"
 }
 
 // setting is runtime configuration in both of Hyprland's syntaxes: a Lua
