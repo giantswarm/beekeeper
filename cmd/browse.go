@@ -98,6 +98,10 @@ const deployWords = "The person's task covers one deploy: %s. Once the steps rea
 const (
 	consentWords = "The person's own App %s is declared and on record (callback %s): once the steps reach GitHub's page 'Authorize %s' " +
 		"with that callback, click Authorize once; click nothing else that grants access. "
+	gitlabConsentWords = "The person's own GitLab application %s is declared and on record (callback %s): once the steps reach GitLab's page 'Authorize %s' " +
+		"on %s at /oauth/authorize with that callback, first read the consent form with javascript_tool on the tab, a call of its own (not in a batch), " +
+		"using this script verbatim:\n" + guard.GitLabFormScript + "\n" +
+		"then click Authorize once, with no click, key, navigation or other script on the tab between; click nothing else that grants access. "
 	permissionWords = "The person's own App %s is declared and on record for one permission change, %s: once the steps reach its permissions " +
 		"page (organizations/%s/settings/apps/%s/permissions) set exactly that permission and click Save changes once, and on the organisation's " +
 		"installation of the App click Review request and Accept new permissions once; name the App and the permission in each change call's summary; " +
@@ -1411,6 +1415,8 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 			}
 		} else if c.Google {
 			p += fmt.Sprintf(googleConsentWords, c.Name, callbacks(c), googleAccount(c))
+		} else if c.GitLab != "" {
+			p += fmt.Sprintf(gitlabConsentWords, c.Name, callbacks(c), c.Name, c.GitLab)
 		} else if len(c.Callbacks) > 0 {
 			p += fmt.Sprintf(consentWords, c.Name, callbacks(c), c.Name)
 		}
