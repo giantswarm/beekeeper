@@ -35,3 +35,32 @@ func TestReportsMaskProcessArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestReportsKeepMaskedMarkerAfterTruncation(t *testing.T) {
+	for _, summary := range []bool{false, true} {
+		r, out := newRun(t, Options{Summary: summary, HeavyMiB: 1, Only: []string{Orphans}, Orphan: 30 * time.Minute})
+		r.Table = proc.NewTable(&proc.Process{
+			PID: 20, PPID: 1, Comm: "node", RSSKiB: 4096, Start: now.Add(-time.Hour),
+			Args: []string{"node", "processChild.js", strings.Repeat("界", 140), "--token", "fixture-secret"},
+		})
+		r.anonKiB = func(int) int { return 2048 }
+		r.Do()
+		seen := 0
+		for _, line := range strings.Split(out.String(), "\n") {
+			if !strings.Contains(line, "processChild.js") {
+				continue
+			}
+			seen++
+			if !strings.Contains(line, " (masked)") || strings.Contains(line, "fixture-secret") {
+				t.Errorf("summary=%v: truncated process line lost masking: %s", summary, line)
+			}
+		}
+		want := 2 // heavy report and orphan action
+		if summary {
+			want = 1 // heavy TSV row; actions are suppressed
+		}
+		if seen != want {
+			t.Errorf("summary=%v: got %d process lines, want %d", summary, seen, want)
+		}
+	}
+}
