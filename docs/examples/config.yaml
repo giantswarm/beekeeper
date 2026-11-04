@@ -22,6 +22,9 @@ identity:
 #   issuer: https://dex.example.com   # the Dex every caller's ID token is checked against
 #   clientIDs: [muster]     # the audiences accepted: muster's client, the installations' exchange client
 #   organization: example:everyone           # the group every member carries; anyone else is refused
+#   # Dex GitHub groups include the connector id: <connector>:<org>:<team>.
+#   # Match token groups exactly; prefixes are not added or removed.
+#   organizations: [giantswarm-github:giantswarm:employees]
 #   teams: {example:platform: platform}      # a Dex group and the team its members belong to
 #   supervisors: {platform: example:platform-supervisors}   # who releases a team's leases and lifts its holds
 #   muster: https://muster.example.com/mcp   # the muster a send_message to a kagent: address goes through, as the caller
