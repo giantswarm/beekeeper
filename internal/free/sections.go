@@ -310,7 +310,6 @@ func (r *Run) orphans() {
 		if !r.Table.Orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
 			continue
 		}
-		c := p.Cmdline()
 		if !orphanWorker(p) {
 			continue
 		}
