@@ -34,7 +34,7 @@ func TestTeleportView(t *testing.T) {
 		{"under the warning", p(45 * time.Minute), nil, teleport.Record{}, teleportWarn, "TELEPORT LOGIN expires 12:45 (45m left): " + teleportRenewHint},
 		{"the keeper waits", p(45 * time.Minute), nil, teleport.Record{Waiting: `the browser lease is held by "Agent one" (proof)`, WaitingAt: now.Add(-time.Minute)}, teleportWarn,
 			`TELEPORT LOGIN expires 12:45 (45m left): the keeper's renewal waits (the browser lease is held by "Agent one" (proof))`},
-		{"expired", p(-time.Minute), nil, teleport.Record{}, teleportExpired, "TELEPORT LOGIN EXPIRED at 11:59: installation reads fail: " + teleportRenewHint},
+		{handoverExpiredMode, p(-time.Minute), nil, teleport.Record{}, teleportExpired, "TELEPORT LOGIN EXPIRED at 11:59: installation reads fail: " + teleportRenewHint},
 		{"not logged in", teleport.Profile{}, teleport.ErrNotLoggedIn, teleport.Record{}, teleportExpired, "TELEPORT LOGIN none: not logged in; installation reads fail"},
 		{"failed", p(50 * time.Minute), nil, failed, teleportFailed, "TELEPORT RENEWAL FAILED at 11:59: tsh login did not complete within 3m0s; the login expires 12:50: " + teleportRenewHint},
 		{"failed for an older login", p(11 * time.Hour), nil, failed, "", "teleport: ada@login.example.com valid until 23:00"},
@@ -93,7 +93,7 @@ func TestHoldBrowser(t *testing.T) {
 	if _, err := a.holdBrowser(session); err == nil || !strings.Contains(err.Error(), "claim the browser lease first") {
 		t.Errorf("a session without the lease: %v", err)
 	}
-	if _, err := dir.Claim(config.Browser, lease.Holder{Env: config.Browser, Session: "s1", Name: agentOne, Purpose: "proof"}); err != nil {
+	if _, err := dir.Claim(config.Browser, lease.Holder{Env: config.Browser, Session: "s1", Name: agentOne, Purpose: purposeProof}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.holdBrowser(keeper); err == nil || !strings.Contains(err.Error(), `held by "Agent one" (proof)`) {

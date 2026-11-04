@@ -36,6 +36,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
+// Projects separates the person's clones from session checkouts.
+type Projects struct {
+	Dir       string   `yaml:"dir"`
+	Worktrees []string `yaml:"worktrees"`
+}
+
+// Home names places for session state, logs and backups.
+type Home struct {
+	Places []string `yaml:"places"`
+}
+
 // Browser is the resource every machine has: the one Chrome the Claude in
 // Chrome extension drives.
 const Browser = "browser"
@@ -46,6 +57,8 @@ const ModelServer = "model-server"
 
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Projects Projects `yaml:"projects"`
+	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
@@ -469,6 +482,8 @@ type BoardStep struct {
 
 // Hooks configures where beekeeper's Claude Code hooks act.
 type Hooks struct {
+	// GuardPersonalSearch refuses cross-repository issue searches in personal sessions too.
+	GuardPersonalSearch bool `yaml:"guardPersonalSearch"`
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
@@ -476,7 +491,7 @@ type Hooks struct {
 	// Set by the supervisor, never inferred from a hook event.
 	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
-	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
+	// [~/, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
 	// ignores in the main working tree of a checkout that sits directly in
 	// one; scratch files go in the session's scratchpad. Empty, off.
@@ -674,8 +689,11 @@ type StoreRule struct {
 type Kube struct {
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string `yaml:"production"`
+	// ProtectedContexts lists additional production-class contexts (including
+	// full test installations) whose clusters agents must not change directly.
+	ProtectedContexts []string `yaml:"protectedContexts"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
@@ -3354,6 +3372,22 @@ func (c *Config) defaults() error {
 	if err != nil {
 		return err
 	}
+	setStr(&c.Projects.Dir, filepath.Join(home, "projects"))
+	c.Projects.Dir = filepath.Clean(homePath(home, c.Projects.Dir))
+	if c.Projects.Worktrees == nil {
+		c.Projects.Worktrees = []string{filepath.Join(c.Projects.Dir, "worktrees")}
+	}
+	if c.Home.Places == nil {
+		c.Home.Places = []string{filepath.Join(home, ".local", "state")}
+	}
+	for _, places := range [][]string{c.Projects.Worktrees, c.Home.Places} {
+		for i, p := range places {
+			places[i] = filepath.Clean(homePath(home, p))
+		}
+	}
+	if c.Agents.Roots == nil {
+		c.Agents.Roots = slices.Clone(c.Projects.Worktrees)
+	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		state = filepath.Join(home, ".local", "state")
@@ -3424,9 +3458,11 @@ func (c *Config) defaults() error {
 	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
 	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
+	c.Serve.Gateway.TokenFile = homePath(home, c.Serve.Gateway.TokenFile)
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
 	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
+	c.Serve.Identity.TokenFile = homePath(home, c.Serve.Identity.TokenFile)
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)
@@ -3483,6 +3519,7 @@ func (c *Config) defaults() error {
 		c.Apps.Secrets[in] = s
 	}
 	c.Sandbox.defaults(home)
+	c.Run.Remote.Kubeconfig = homePath(home, c.Run.Remote.Kubeconfig)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}
@@ -3557,6 +3594,8 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	c.Omp.SessionsDir = homePath(home, c.Omp.SessionsDir)
+	c.Omp.ModelsFile = homePath(home, c.Omp.ModelsFile)
 	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
 	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
 	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
@@ -3850,6 +3889,30 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	// These intervals drive recurring loops; zero receives a default, while
+	// negative values cannot advance the scheduler.
+	for _, interval := range []struct {
+		key   string
+		value time.Duration
+	}{
+		{"watch.interval", c.Watch.Interval.Duration},
+		{"alerts.every", c.Alerts.Every.Duration},
+		{"alerts.pagerduty.every", c.Alerts.PagerDuty.Every.Duration},
+		{"supervisor.loopInterval", c.Supervisor.LoopInterval.Duration},
+	} {
+		if interval.value < 0 {
+			report(fmt.Errorf("%s: %s is negative", interval.key, interval.value))
+		}
+	}
+
+	for key, paths := range map[string][]string{"projects.dir": {c.Projects.Dir}, "projects.worktrees": c.Projects.Worktrees, "home.places": c.Home.Places} {
+		for _, p := range paths {
+			if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) == "/") {
+				report(fmt.Errorf("%s: %q: want an absolute directory below the filesystem root (~/ allowed)", key, p))
+			}
+		}
+	}
+
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
@@ -4137,7 +4200,7 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
-		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
+		if !validResourceName(r) {
 			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
@@ -4230,8 +4293,8 @@ func (c *Config) validateEach(report func(error)) {
 					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
 				for _, n := range m.Nodes {
-					if strings.TrimSpace(n) == "" {
-						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
+					if !validResourceName(n) {
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: %q is not a valid resource name", name, mode, n))
 					}
 				}
 			}
@@ -4357,6 +4420,15 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 		}
 	}
 	return Lane{}, false
+}
+
+// validResourceName requires one local filename component. Leading dots and
+// built-in lease names are reserved; serving-mode nodes share this contract
+// because they become lease resources even when resources does not list them.
+func validResourceName(name string) bool {
+	return strings.TrimSpace(name) != "" && filepath.IsLocal(name) &&
+		filepath.Base(name) == name && name[0] != '.' &&
+		name != Browser && name != ModelServer
 }
 
 // serveModeNodeNames are the machine's nodes named by any self-hosted

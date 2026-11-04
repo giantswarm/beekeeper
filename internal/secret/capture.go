@@ -172,7 +172,9 @@ func (o *Ops) Capture(ctx context.Context, dst Ref, opt CaptureOptions) (Capture
 		v, err = opt.Docker.fill(doc, dst.File, keys, v)
 	} else {
 		v = o.Encode.Apply(v)
-		err = setAt(doc, dst.File, keys, v)
+		if err = doc.set(doc.valuePath(dst.Path), v); err != nil {
+			err = fmt.Errorf("%s: %w", dst.File, err)
+		}
 	}
 	if err != nil {
 		return CaptureResult{}, err
@@ -197,7 +199,7 @@ func (o *Ops) captureTarget(ctx context.Context, dst Ref, opt CaptureOptions) (*
 		if err != nil {
 			return nil, nil, err
 		}
-		return doc, strings.Split(dst.Path, "."), nil
+		return doc, splitPath(dst.Path), nil
 	}
 	return o.dockerTarget(ctx, dst.File, opt.New)
 }

@@ -417,7 +417,7 @@ timer from the running watches.
 | `internal/mailbox` | The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of its own. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
-| `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
+| `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<namespace>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders, default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format agy`) formats, and the PermissionRequest hook's decision. |
 | `internal/runrecord` | The shape of a run's event-log records (`run.start` / `run.end` / `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and failure tail. A leaf so both writers share it. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
@@ -477,7 +477,9 @@ a policy says, the step keeps:
 
 The scan of a large cache takes a while, so before removing anything the
 step reads the processes' references again, and right before it removes an
-entry it inspects that entry again: one a process opened meanwhile, one
+entry it inspects that entry again. In `files` mode it also rechecks the whole
+root for checkouts after refreshing process references, before deleting files.
+An entry a process opened meanwhile, one
 written since the scan, or one that now holds a checkout stays. A file is
 removed only if unchanged since the scan. The tools' own locks are only
 known to their cleaners: a cache whose tool locks it belongs in `command`
@@ -518,6 +520,13 @@ No cache is reclaimed while builds use it. New
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
 runs and `cache clear go`. Unwrapped compiler processes and open files keep
 caches intact. The module cache is never cleared by this step.
+
+A direct `beekeeper run -- go build ./...` that exits 137 is retried once
+with `-p=2` appended to `GOFLAGS` and `GOMAXPROCS=4`, reducing peak compiler
+memory under the cap. The retry logs both bounds and preserves unrelated
+`GOFLAGS`. Exit 137 is treated as a possible cap kill; no kernel journal
+access is required. Other failures and commands are not retried. Shell
+wrappers such as `sh -c 'go build ./...'` do not use this retry.
 
 Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
 place are removed with `git worktree remove` after the existing six-hour

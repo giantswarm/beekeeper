@@ -351,6 +351,18 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; other pull requests still await review or merge", nil
 		}
+		// A wake queues the continuation without clearing the current park.
+		// Its review record may already be gone after an earlier merge, so
+		// the last saved request cannot prove that the owner has finished.
+		if slices.ContainsFunc(st.Agents, func(worker state.Agent) bool {
+			p := worker.Park
+			return worker.Is(rp.Party) && !worker.Done && p != nil &&
+				!strings.EqualFold(p.On, act.Ref) && p.ReviewHead != "" &&
+				p.PostMerge != nil && strings.TrimSpace(*p.PostMerge) != ""
+		}) {
+			clearReviewPark()
+			return "merged; worker still has post-merge work", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
@@ -449,10 +461,11 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 // The reasons a reviewed merge stops for desk policy, before and after a
 // branch update alike.
 const (
-	reasonDeskStopped    = "the desk is stopped"
-	reasonMergeHeld      = "merge held by desk policy"
-	mergeableConflicting = "CONFLICTING"
-	mergeMethodRebase    = "rebase"
+	reasonDeskStopped      = "the desk is stopped"
+	reasonMergeHeld        = "merge held by desk policy"
+	reasonMergeHeadChanged = "merge head moved or current CI is not green"
+	mergeableConflicting   = "CONFLICTING"
+	mergeMethodRebase      = "rebase"
 )
 
 // reviewedMerge is the gate's mutation child. A branch behind its base it
@@ -488,7 +501,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	if p.State != superloop.Open || p.Head != head || !p.Green {
 		doc.ExitCode = github.SquashRefused
-		doc.Reason = "merge head moved or current CI is not green"
+		doc.Reason = reasonMergeHeadChanged
 		return doc
 	}
 	if latestReviewRequestsChanges(p) {
@@ -665,6 +678,42 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
+	// Validation and branch-update waits can outlive the review that admitted
+	// this run. Refresh authority after all checks, immediately before the
+	// mutation; --match-head-commit alone cannot detect a withdrawn approval.
+	p, err = readLoopPull(ctx, ref)
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if p.State != superloop.Open || p.Head != merging || !p.Green {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeadChanged
+		return doc
+	}
+	if p.Draft || p.Mergeable == mergeableConflicting {
+		doc.ExitCode, doc.Reason = github.SquashRefused, "branch became draft or conflicts with its base"
+		return doc
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, merging); authErr != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
+		return doc
+	} else if why != "" {
+		doc.ExitCode, doc.Reason = github.SquashRefused, why
+		return doc
+	}
+	if st.Stop != nil {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonDeskStopped
+		return doc
+	}
+	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
+		return doc
+	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	// A merge queue retests the merge group when the base advances; --admin
 	// would bypass it. Without a queue the lane's own merge-result check
@@ -704,7 +753,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	case p.State != superloop.Open || p.Head != merging || !p.Green:
 		doc.ExitCode = github.SquashRefused
 		if doc.Reason == "" {
-			doc.Reason = "merge head moved or current CI is not green"
+			doc.Reason = reasonMergeHeadChanged
 		}
 	case ghMergePolicyRefused(doc.Reason):
 		doc.ExitCode = github.SquashRefused

@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
+const negativeSecond = "-1s"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/state")
 	c, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
@@ -513,6 +515,9 @@ func TestExampleConfig(t *testing.T) {
 	if c.Kube.Production != "production" || c.Kube.Context("staging") != "login.example.com-staging" ||
 		c.Shell != "zsh" || c.KindClusters(1<<30) != 2 || c.MemcapMax(1<<30) != "12G" {
 		t.Errorf("kube %+v, shell %q, kind %d, memcap %s", c.Kube, c.Shell, c.KindClusters(1<<30), c.MemcapMax(1<<30))
+	}
+	if got := strings.Join(c.Kube.ProtectedContexts, ","); got != "full-test,full-test-operations" {
+		t.Errorf("protected contexts = %q", got)
 	}
 	w := c.Watch
 	for got, want := range map[int]int{w.AvailMin(1): 10240, w.SwapMax(1): 10000, w.OOMDHeadroomMin(1): 1024,
@@ -1255,7 +1260,7 @@ func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
 }
 
 func TestWatchBatchInterval(t *testing.T) {
-	for _, value := range []string{"1m", "-1s"} {
+	for _, value := range []string{"1m", negativeSecond} {
 		c, err := parse("test.yaml", []byte("watch: {batchInterval: "+value+"}"))
 		if err != nil {
 			t.Fatal(err)
