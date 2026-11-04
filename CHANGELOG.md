@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `govulncheck` source scans run without waiting for a build slot; the Bash hook no longer wraps them in `beekeeper run` (https://github.com/giantswarm/beekeeper/issues/1102).
+- Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
+
+- Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
 
