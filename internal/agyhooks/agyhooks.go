@@ -40,6 +40,9 @@ func EntryRejects(raw json.RawMessage) string {
 	if events == nil {
 		return "not an object of hook lists"
 	}
+	if why := fieldTypesRejects(raw); why != "" {
+		return why
+	}
 	for _, event := range ordered(raw) {
 		var items []json.RawMessage
 		switch strings.ToLower(event) {
@@ -90,14 +93,11 @@ func itemRejects(event string, item json.RawMessage) string {
 }
 
 func commandRejects(event string, item json.RawMessage) string {
-	var h struct {
-		Type    *string `json:"type"`
-		Command string  `json:"command"`
-	}
+	var h handlerFields
 	if err := json.Unmarshal(item, &h); err != nil {
 		return event + ": " + err.Error()
 	}
-	if (h.Type == nil || *h.Type == "command") && strings.TrimSpace(h.Command) == "" {
+	if strings.TrimSpace(h.Command) == "" {
 		return event + ": command hook must specify 'command'"
 	}
 	return ""
@@ -117,36 +117,56 @@ func Rejects(raw []byte) string {
 	if top == nil {
 		return "not a JSON object of named hook entries"
 	}
-	for _, name := range ordered(raw) {
-		if why := EntryRejects(top[name]); why != "" {
-			return fmt.Sprintf("the %q entry: %s", name, why)
+	for _, field := range orderedMembers(raw) {
+		// agy decodes every occurrence of a named entry, even if a later
+		// duplicate replaces it. Only command presence uses the final value.
+		if why := fieldTypesRejects(field.value); why != "" {
+			return fmt.Sprintf("the %q entry: %s", field.name, why)
+		}
+		if why := EntryRejects(top[field.name]); why != "" {
+			return fmt.Sprintf("the %q entry: %s", field.name, why)
 		}
 	}
 	return ""
 }
 
+type member struct {
+	name  string
+	value json.RawMessage
+}
+
 // ordered is the keys of the JSON object raw in their order in the text, or
 // nil when raw is no object.
 func ordered(raw []byte) []string {
+	var keys []string
+	for _, field := range orderedMembers(raw) {
+		keys = append(keys, field.name)
+	}
+	return keys
+}
+
+// orderedMembers retains values too, so decoding checks can inspect earlier
+// occurrences of a duplicate name rather than only its final value.
+func orderedMembers(raw []byte) []member {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil
 	}
-	var keys []string
+	var fields []member
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return keys
+			return fields
 		}
 		k, ok := t.(string)
 		if !ok {
-			return keys
+			return fields
 		}
-		keys = append(keys, k)
-		var skip json.RawMessage
-		if dec.Decode(&skip) != nil {
-			return keys
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return fields
 		}
+		fields = append(fields, member{name: k, value: value})
 	}
-	return keys
+	return fields
 }
