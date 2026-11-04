@@ -144,6 +144,10 @@ func New(cfg config.Sandbox, e Paths) Policy {
 	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig"), "XDG_CONFIG_HOME": xdg} {
 		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
 			p.Vars[name] = r
+			if name == "BEEKEEPER_CONFIG" {
+				// A file symlink can leave the allowed config directory.
+				p.Read = append(p.Read, r)
+			}
 		}
 	}
 	for _, ps := range []*[]string{&p.Read, &p.Write, &p.Deny, &p.ToolWrite} {

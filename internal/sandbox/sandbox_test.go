@@ -316,6 +316,70 @@ func TestASymlinkedPathIsListedAtItsTarget(t *testing.T) {
 	}
 }
 
+func TestAnIndividuallySymlinkedConfigIsReadableAtItsTarget(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	source := filepath.Join(home, ".config/beekeeper")
+	targetDir := filepath.Join(home, ".dotfiles")
+	for _, dir := range []string{source, targetDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(targetDir, "beekeeper.yaml")
+	neighbor := filepath.Join(targetDir, "neighbor.yaml")
+	for _, path := range []string{target, neighbor} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(source, "config.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	p := New(config.Sandbox{}, Paths{Home: home, ConfigFile: link,
+		StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if got := p.Vars["BEEKEEPER_CONFIG"]; got != target || !p.Readable(got, home) {
+		t.Errorf("BEEKEEPER_CONFIG = %q, want readable target %q", got, target)
+	}
+	if !slices.Contains(p.Read, target) {
+		t.Error("read policy lacks the individual config target")
+	}
+	if p.Writable(target, home) {
+		t.Error("the config target is writable")
+	}
+	for _, path := range []string{targetDir, neighbor} {
+		if p.Readable(path, home) || p.Writable(path, home) {
+			t.Errorf("config target's parent or neighbor opened: %s", path)
+		}
+	}
+	b, err := p.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Sandbox struct {
+			Filesystem struct{ AllowRead, AllowWrite []string }
+		}
+	}
+	if err := json.Unmarshal(b, &settings); err != nil {
+		t.Fatal(err)
+	}
+	fs := settings.Sandbox.Filesystem
+	if !slices.Contains(fs.AllowRead, p.setting(target)) {
+		t.Error("managed allowRead lacks the individual config target")
+	}
+	for _, path := range []string{targetDir, neighbor} {
+		if slices.Contains(fs.AllowRead, p.setting(path)) {
+			t.Errorf("managed allowRead opens %s", path)
+		}
+	}
+	if slices.Contains(fs.AllowWrite, p.setting(target)) {
+		t.Error("managed allowWrite includes the config target")
+	}
+}
+
 func TestASymlinkedConfigHomeIsNamedByItsTarget(t *testing.T) {
 	home := testHome(t)
 	dotfiles := filepath.Join(home, "projects/dotfiles/.config")
