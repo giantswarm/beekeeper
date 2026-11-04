@@ -143,10 +143,10 @@ func reviews(ref, name string, rounds int) bool {
 // head that conflicts, is red, carries a review's unfixed changes request,
 // or is behind a base its merge does not update; the merge go again for a
 // green head whose go was given and never carried out; a reviewer for a
-// green head awaiting its review, however many rounds it had. A head with
-// checks still running waits. Each stretch without an owner gets one action,
-// a head at most MaxSweeps; an escalation or ownership question still open
-// is the person's.
+// green head awaiting its review; a worker to take it over and park once
+// its reviews are used. A head with checks still running waits. Each
+// stretch without an owner gets one action, a head at most MaxSweeps; an
+// ownership question still open is the person's.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
 	since, ok := in.Ownerless[ref]
 	if !ok || since.IsZero() {
@@ -168,10 +168,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	if !orphanable(in, l, ref, p) || liveOwner(in, l, ref, p) != "" {
 		return
 	}
-	if e, ok := l.escalated[ref]; ok && e.open() {
-		return
-	}
-	if e, ok := l.asked[ref]; ok && e.open() {
+	if e, ok := l.asked[ref]; ok && e.answer == nil {
 		return
 	}
 	agent := cmp.Or(l.reviewer[ref], PullWorkerName(ref))
