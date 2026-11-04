@@ -38,6 +38,9 @@ func (o *Ops) RotateGenerated(ctx context.Context, ref Ref, files []string, ix *
 	if err != nil {
 		return Rotation{}, err
 	}
+	if pending, ok := ix.Rotation(ref.String()); ok {
+		return o.resumeRotation(ctx, ref, files, ix, pending, old)
+	}
 	v, err := Generate(length, charset)
 	if err != nil {
 		return Rotation{}, err
@@ -61,11 +64,22 @@ func (o *Ops) RotateIssued(ctx context.Context, ref Ref, files []string, ix *gua
 	if err != nil {
 		return Rotation{}, err
 	}
+	if pending, ok := ix.Rotation(ref.String()); ok {
+		return o.resumeRotation(ctx, ref, files, ix, pending, v)
+	}
 	if ix.Fingerprint(strings.TrimSpace(v)) == oldFP {
 		return Rotation{}, fmt.Errorf("%s still holds the value the index recorded: rotate it at its issuer into the vault first, "+
 			"or --generate a new one for a value beekeeper made", ref)
 	}
 	return o.carry(ctx, ref, files, ix, oldFP, v, false)
+}
+
+// resumeRotation uses the replacement already in the vault, never generating or storing again.
+func (o *Ops) resumeRotation(ctx context.Context, ref Ref, files []string, ix *guard.Index, pending guard.PendingRotation, v string) (Rotation, error) {
+	if ix.Fingerprint(strings.TrimSpace(v)) != pending.New {
+		return Rotation{}, fmt.Errorf("%s: vault value differs from the pending rotation replacement", ref)
+	}
+	return o.carry(ctx, ref, files, ix, pending.Old, v, false)
 }
 
 // checkRotate refuses a reference that is not a field of the shared vault,
@@ -111,6 +125,7 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 			return Rotation{}, fmt.Errorf("nothing rotated: %w", err)
 		}
 	}
+	ix.SetRotation(ref.String(), oldFP, ix.Fingerprint(strings.TrimSpace(v)))
 	rot := Rotation{Ref: ref.String(), Fingerprint: o.Fingerprint(v), Carriers: []Carrier{}}
 	var errs []error
 	for _, f := range slices.Sorted(maps.Keys(docs)) {
@@ -130,6 +145,7 @@ func (o *Ops) carry(ctx context.Context, ref Ref, files []string, ix *guard.Inde
 		return rot, fmt.Errorf("the vault and %d of %d carriers hold the new value, these not: %w",
 			len(rot.Carriers), len(carriers), errors.Join(errs...))
 	}
+	ix.CompleteRotation(ref.String())
 	return rot, nil
 }
 

@@ -1,14 +1,18 @@
 package secret_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -178,5 +182,140 @@ func TestRotatePlatformRunsTheManagersRotation(t *testing.T) {
 	}
 	if _, err := secret.ParsePlatformRef("platform://hazel/muster"); err == nil {
 		t.Error("a platform reference names installation, capability and name")
+	}
+}
+
+func TestRotateResumesAfterCarrierFailure(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		for _, failAll := range []bool{false, true} {
+			t.Run(fmt.Sprintf("generated=%t/all=%t", generated, failAll), func(t *testing.T) {
+				ctx := context.Background()
+				tools := secrettest.New(map[string]string{vaultRef: password})
+				files := carriersRepo(t, password)
+				raw, err := os.ReadFile(files[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(files[1], raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				dir := t.TempDir()
+				ix, err := guard.OpenIndex(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ix.Add(vaultRef, password)
+				ref, _ := secret.ParseRef(vaultRef)
+				o := ops(tools)
+				encrypts := 0
+				o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
+					if name == "sops" && slices.Contains(args, "encrypt") {
+						encrypts++
+						if failAll || encrypts == 2 {
+							return nil, errors.New("injected encryption failure")
+						}
+					}
+					return tools.Run(ctx, dir, env, stdin, name, args...)
+				}
+				rotate := func() (secret.Rotation, error) {
+					if generated {
+						return o.RotateGenerated(ctx, ref, files, ix, 32, "alnum")
+					}
+					return o.RotateIssued(ctx, ref, files, ix)
+				}
+				if !generated {
+					tools.Vault[vaultRef] = issued
+				}
+				if _, err := rotate(); err == nil {
+					t.Fatal("expected partial failure")
+				}
+				replacement := tools.Vault[vaultRef]
+				pending, ok := ix.Rotation(vaultRef)
+				if !ok || pending.Old != ix.Fingerprint(password) || pending.New != ix.Fingerprint(replacement) {
+					t.Fatal("missing recovery fingerprints")
+				}
+				if err := ix.Save(time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				persisted, err := os.ReadFile(filepath.Join(dir, "index.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, value := range []string{password, replacement} {
+					if bytes.Contains(persisted, []byte(value)) {
+						t.Fatal("persisted secret value")
+					}
+				}
+				ix, err = guard.OpenIndex(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tools.Vault[vaultRef] = unrelated
+				calls := len(tools.Calls)
+				if _, err := rotate(); err == nil {
+					t.Fatal("accepted unexpected vault value")
+				}
+				if len(tools.Calls) != calls+1 {
+					t.Fatal("unexpected write while rejecting vault value")
+				}
+				tools.Vault[vaultRef] = replacement
+				completed, err := os.ReadFile(files[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				o.Run = tools.Run
+				tools.Calls = nil
+				rot, err := rotate()
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 2
+				if failAll {
+					want = 4
+				}
+				if len(rot.Carriers) != want {
+					t.Fatalf("retried %d carriers, want %d", len(rot.Carriers), want)
+				}
+				for _, file := range files {
+					plain := decrypted(t, tools, file)
+					if strings.Contains(plain, password) || !strings.Contains(plain, replacement) ||
+						!strings.Contains(plain, base64.StdEncoding.EncodeToString([]byte(replacement))) {
+						t.Fatal("carrier did not receive replacement")
+					}
+				}
+				if !failAll {
+					after, _ := os.ReadFile(files[0])
+					if !bytes.Equal(completed, after) {
+						t.Fatal("completed file changed")
+					}
+					for _, call := range tools.Calls {
+						if strings.Contains(call, "encrypt") && strings.Contains(call, filepath.Base(files[0])) {
+							t.Fatal("completed file encrypted again")
+						}
+					}
+				}
+				for _, call := range tools.Calls {
+					if strings.HasPrefix(call, "op item") {
+						t.Fatal("vault rotated again")
+					}
+				}
+				if tools.Vault[vaultRef] != replacement {
+					t.Fatal("replacement changed")
+				}
+				if _, ok := ix.Rotation(vaultRef); ok {
+					t.Fatal("completed rotation still pending")
+				}
+				if err := ix.Save(time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				ix, err = guard.OpenIndex(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := ix.Rotation(vaultRef); ok {
+					t.Fatal("reopened completed rotation still pending")
+				}
+			})
+		}
 	}
 }

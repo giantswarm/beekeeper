@@ -50,8 +50,15 @@ type Index struct {
 	data   indexData
 }
 
+// PendingRotation retains only keyed fingerprints while carriers need recovery.
+type PendingRotation struct {
+	Old string `json:"old"`
+	New string `json:"new"`
+}
+
 type indexData struct {
-	Built time.Time `json:"built,omitzero"`
+	Rotations map[string]PendingRotation `json:"rotations,omitempty"`
+	Built     time.Time                  `json:"built,omitzero"`
 	// Entries maps a fingerprint (hex) to the reference it names.
 	Entries map[string]string `json:"entries"`
 	// Lengths are the byte lengths of the indexed forms: a candidate of
@@ -179,6 +186,25 @@ func (ix *Index) Drop(prefixes ...string) {
 func (ix *Index) ValueFingerprint(ref string) (string, bool) {
 	fp, ok := ix.data.Values[ref]
 	return fp, ok
+}
+
+// Rotation returns the fingerprint pair of an unfinished rotation.
+func (ix *Index) Rotation(ref string) (PendingRotation, bool) {
+	r, ok := ix.data.Rotations[ref]
+	return r, ok
+}
+
+// SetRotation records an unfinished rotation without retaining secret values.
+func (ix *Index) SetRotation(ref, old, replacement string) {
+	if ix.data.Rotations == nil {
+		ix.data.Rotations = map[string]PendingRotation{}
+	}
+	ix.data.Rotations[ref] = PendingRotation{Old: old, New: replacement}
+}
+
+// CompleteRotation removes recovery state after every carrier succeeds.
+func (ix *Index) CompleteRotation(ref string) {
+	delete(ix.data.Rotations, ref)
 }
 
 // Save writes the index, readable by the user only.
