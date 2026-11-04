@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -1024,6 +1025,68 @@ const priorAgySkills = `{
   ]
 }
 `
+
+// A shared skill name does not identify the collection as Beekeeper's.
+func TestAgyInstallKeepsUnrelatedWorkerRulesEntry(t *testing.T) {
+	for _, filtered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("filtered=%t", filtered), func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.AgySkills = filepath.Join(home, ".gemini", "config", "skills.json")
+			skillPath := filepath.Join(home, "custom-skills", "worker-rules", "SKILL.md")
+			const content = "# Worker rules\nSynthetic custom instructions.\n"
+			write(t, skillPath, content)
+			entry := json.RawMessage(`{"path":"~/custom-skills"}`)
+			if filtered {
+				entry = json.RawMessage(`{"path":"~/custom-skills","exclude":["experimental-.*"]}`)
+			}
+			write(t, e.AgySkills, `{"entries":[`+string(entry)+`]}`)
+			if got := CheckAgySkills(e.AgySkills, e.StateDir, home); !strings.Contains(got, "lacks the beekeeper skills entry") {
+				t.Errorf("before install: CheckAgySkills = %q", got)
+			}
+			var installed []byte
+			for i := 0; i < 2; i++ {
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(e.AgySkills)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					Entries []json.RawMessage `json:"entries"`
+				}
+				if err := json.Unmarshal(raw, &config); err != nil {
+					t.Fatal(err)
+				}
+				if len(config.Entries) != 2 || !sameJSON(config.Entries[0], entry) || !sameJSON(config.Entries[1], AgySkillsEntry(AgySkillsDir(e.StateDir))) {
+					t.Fatalf("install changed unrelated entry or omitted beekeeper collection: %s", raw)
+				}
+				if i > 0 && string(raw) != string(installed) {
+					t.Fatal("second install changed skills.json")
+				}
+				installed = raw
+				if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+					t.Fatalf("after install: CheckAgySkills = %q", got)
+				}
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(e.AgySkills)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameJSON(raw, json.RawMessage(`{"entries":[`+string(entry)+`]}`)) {
+				t.Fatalf("uninstall changed unrelated entry: %s", raw)
+			}
+			if raw, err := os.ReadFile(skillPath); err != nil || string(raw) != content {
+				t.Fatalf("custom skill changed: %q, %v", raw, err)
+			}
+		})
+	}
+}
 
 // Install writes the embedded skills and registers their directory in agy's
 // skills.json idempotently without touching other entries or inherits;

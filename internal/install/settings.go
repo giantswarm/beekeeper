@@ -585,8 +585,8 @@ func isBeekeeperSkillsEntry(raw json.RawMessage, wantDir, home string) bool {
 		strings.HasSuffix(clean, sep+filepath.Join(project.Name, "plugin", plugin.SkillsDir)) {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(clean, "worker-rules", "SKILL.md"))
-	return err == nil
+	// Skill names are shared across unrelated collections and do not prove ownership.
+	return false
 }
 
 // staleAgySkills returns the names of the embedded skills whose files under
