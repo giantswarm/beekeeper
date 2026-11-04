@@ -158,8 +158,7 @@ func (a *app) recordAgyQuotaExhaustedForID(id, model string, qerr *agy.QuotaErro
 	}
 	base := now
 	if !qerr.At.IsZero() {
-		diff := now.Sub(qerr.At)
-		if diff >= -10*time.Minute && diff <= 10*time.Minute {
+		if !qerr.At.After(now.Add(10 * time.Minute)) {
 			base = qerr.At
 		}
 	}
