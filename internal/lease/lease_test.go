@@ -1,7 +1,11 @@
 package lease
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -181,5 +185,68 @@ func TestToHead(t *testing.T) {
 	}
 	if !st.Grants[1].At.Equal(now) {
 		t.Errorf("the moved grant's time %v, want %v", st.Grants[1].At, now)
+	}
+}
+
+func TestDirListReportsDamagedHolder(t *testing.T) {
+	for _, kind := range []string{"truncated JSON", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			d := Dir(t.TempDir())
+			healthy := Holder{Env: "healthy", Session: "synthetic-session", Purpose: "test", Since: "2026-09-24T20:00:00Z"}
+			if _, err := d.Claim("healthy", healthy); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(d.path("pending"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Multiple failures must all be reported, even before readable entries.
+			for _, res := range []string{"damaged", "also-damaged"} {
+				if err := os.Mkdir(d.path(res), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				record := filepath.Join(d.path(res), "holder.json")
+				var err error
+				if kind == "directory" {
+					err = os.Mkdir(record, 0o700)
+				} else {
+					err = os.WriteFile(record, []byte(`{"env":`), 0o600)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			holders, err := d.List()
+			if err == nil {
+				t.Fatal("List succeeded with damaged holder records")
+			}
+			for _, res := range []string{"damaged", "also-damaged"} {
+				if !strings.Contains(err.Error(), res) {
+					t.Errorf("List error %q does not identify %s", err, res)
+				}
+			}
+			if kind == "truncated JSON" {
+				var syntax *json.SyntaxError
+				if !errors.As(err, &syntax) {
+					t.Errorf("List error does not wrap JSON error: %v", err)
+				}
+			} else {
+				var pathErr *os.PathError
+				if !errors.As(err, &pathErr) {
+					t.Errorf("List error does not wrap read error: %v", err)
+				}
+			}
+			want := []Holder{{Env: "pending", Holder: "?", Purpose: "(being claimed)"}, healthy}
+			if !reflect.DeepEqual(holders, want) {
+				t.Errorf("List holders = %+v, want %+v", holders, want)
+			}
+			for _, res := range []string{"damaged", "also-damaged"} {
+				if err := d.Release(res); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if holders, err := d.List(); err != nil || !reflect.DeepEqual(holders, want) {
+				t.Errorf("List after removing damaged records = %+v, %v; want %+v, nil", holders, err, want)
+			}
+		})
 	}
 }
