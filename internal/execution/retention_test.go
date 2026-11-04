@@ -51,7 +51,7 @@ func TestResourceAuditAndRetention(t *testing.T) {
 		}
 		return got
 	}
-	before, err := os.ReadFile(filepath.Join(f.s.Root, id+".json"))
+	before, err := os.ReadFile(filepath.Clean(filepath.Join(f.s.Root, id+".json")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestResourceAuditAndRetention(t *testing.T) {
 	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error { j.InTurn = true; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if audit()[log].State != "active" {
+	if audit()[log].State != unitActive {
 		t.Fatal("active execution misclassified")
 	}
 	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error { j.InTurn = false; return nil }); err != nil {
@@ -83,15 +83,15 @@ func TestResourceAuditAndRetention(t *testing.T) {
 			t.Fatalf("unowned entry classified as safe: %+v", rows[p])
 		}
 	}
-	after, err := os.ReadFile(filepath.Join(f.s.Root, id+".json"))
+	after, err := os.ReadFile(filepath.Clean(filepath.Join(f.s.Root, id+".json")))
 	if err != nil || string(before) != string(after) {
 		t.Fatal("audit mutated journal")
 	}
-	for _, state := range []string{unitActive, "unreachable"} {
+	for _, state := range []string{unitActive, Unreachable} {
 		f.launcher.states[h.Unit] = state
 		rows = audit()
 		want := "parked"
-		if state == "unreachable" {
+		if state == Unreachable {
 			want = Unknown
 		}
 		if rows[log].State != want {
@@ -171,7 +171,7 @@ func TestRetentionRejectsSymlinkLog(t *testing.T) {
 	if err := f.s.ReconcileResource(ctx, f.r.Ref, true); err == nil {
 		t.Fatal("accepted symlink log")
 	}
-	if b, err := os.ReadFile(target); err != nil || string(b) != "keep" {
+	if b, err := os.ReadFile(filepath.Clean(target)); err != nil || string(b) != "keep" {
 		t.Fatal("symlink target changed")
 	}
 }
@@ -284,7 +284,7 @@ func TestRetentionRechecksUnderStartLock(t *testing.T) {
 func TestResourceOrphanInventoryJoin(t *testing.T) {
 	f := testFixture(t)
 	rows := []ResourceFinding{
-		{Ref: f.r.Ref, Coordinator: f.r.Coordinator, State: "active", Reason: "owned"},
+		{Ref: f.r.Ref, Coordinator: f.r.Coordinator, State: unitActive, Reason: "owned"},
 		{Ref: f.r.Ref, Coordinator: "another-desk", State: "terminal"},
 		{State: Unknown, Reason: "unclassified"},
 	}
@@ -293,7 +293,7 @@ func TestResourceOrphanInventoryJoin(t *testing.T) {
 		t.Fatal("registered execution called orphan")
 	}
 	ReportOrphans(rows, f.r.Coordinator, nil)
-	if !rows[0].Orphan || rows[0].State != "active" || rows[1].Orphan || rows[2].Orphan {
+	if !rows[0].Orphan || rows[0].State != unitActive || rows[1].Orphan || rows[2].Orphan {
 		t.Fatal("incorrect orphan classification", rows)
 	}
 }
@@ -330,7 +330,48 @@ func TestResourceAuditLeavesUnrelatedJSONAndJournalSymlinksUnknown(t *testing.T)
 	if !found {
 		t.Fatal("symlink missing from inventory")
 	}
-	if data, err := os.ReadFile(unrelated); err != nil || string(data) != `{"unrelated":true}` {
+	if data, err := os.ReadFile(filepath.Clean(unrelated)); err != nil || string(data) != `{"unrelated":true}` {
 		t.Fatal("unrelated JSON changed")
+	}
+}
+
+func TestResourceAuditDoesNotAdoptLookalikeNames(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	id := string(f.r.Ref.Execution)
+	paths := []string{
+		filepath.Join(f.s.Root, id+".json.log"),
+		filepath.Join(f.s.Root, id+"unexpected.accepted"),
+		filepath.Join(f.s.Config.WorkspaceRoot, id+".log"),
+		filepath.Join(f.s.Root, "sources", id+".json"),
+	}
+	for _, p := range paths {
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := f.s.AuditResources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		found := false
+		for _, row := range rows {
+			if row.Path == p {
+				found = true
+				if row.State != Unknown || row.Ref != (Ref{}) {
+					t.Fatalf("unrelated entry adopted: %+v", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing finding for %s", p)
+		}
 	}
 }

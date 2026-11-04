@@ -97,7 +97,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 			findings = append(findings, ResourceFinding{Path: root, State: Unknown, Reason: "managed container unavailable or symlinked", Retry: "establish ownership; do not delete"})
 			continue
 		}
-		dir, err := os.Open(root)
+		dir, err := os.Open(filepath.Clean(root))
 		if err != nil {
 			return nil, err
 		}
@@ -128,10 +128,24 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 		e := paths[path]
 		row := ResourceFinding{Path: path, State: Unknown, Reason: "unclassified managed entry; ownership unproven", Retry: "establish ownership; do not delete"}
 		name := e.Name()
-		id := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".lock"), ".json"), ".log")
-		id = strings.TrimSuffix(id, "-agy-home")
-		if strings.HasSuffix(name, ".accepted") && len(name) > 37 {
-			id = name[:36]
+		// Match only the resource names created in each managed container.
+		// Suffix chains and UUID-prefixed unrelated files prove no ownership.
+		id := ""
+		if filepath.Dir(path) == s.Root {
+			for owner := range owners {
+				if name == owner+".json" || name == owner+".json.lock" || name == owner+".log" || name == owner+"-agy-home" {
+					id = owner
+					break
+				}
+				if receipt, ok := strings.CutPrefix(name, owner+"-"); ok {
+					if message, ok := strings.CutSuffix(receipt, ".accepted"); ok && ValidIdentity(message) {
+						id = owner
+						break
+					}
+				}
+			}
+		} else if e.IsDir() {
+			id = name
 		}
 
 		if j, ok := owners[id]; ok && e.Type()&os.ModeSymlink == 0 {
@@ -143,7 +157,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 			row.State, row.Reason, row.Retry = Unknown, "supervisor state unavailable", "retry hosts check when host supervisor is reachable"
 			if s.Launcher != nil {
 				switch states[id] {
-				case unitActive, Activating, "reloading", "deactivating":
+				case unitActive, Activating, "reloading", "deactivating": //nolint:goconst // Mirror supervisor lifecycle states in the read-only audit.
 					row.State, row.Reason, row.Retry = "active", "owned execution in progress", "leave active execution in place"
 					if !j.InTurn {
 						row.State = "parked"
@@ -169,7 +183,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 		// These are shared policy/runtime roots, never per-execution garbage.
 		if filepath.Dir(path) == s.Root {
 			switch name {
-			case "policy.json", "CLAUDE.md", "settings.json", "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock:
+			case "policy.json", "CLAUDE.md", "settings.json", "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock: //nolint:goconst // Explicit inventory of shared on-disk names.
 				if e.Type()&os.ModeSymlink == 0 {
 					row.State = "shared"
 					row.Reason = "shared policy, toolchain or retained recovery container"
