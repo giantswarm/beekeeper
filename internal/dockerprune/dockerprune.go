@@ -362,6 +362,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			if busy() {
 				return refused, ErrBusy
 			}
+			removal := img
 			if refresh && len(img.Refs) > 0 {
 				raw, err := d(ctx, imageVerb, "inspect", "--format", "{{json .RepoTags}}", img.ID)
 				var refs []string
@@ -379,20 +380,23 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 					refused = append(refused, Blocker{Image: img, Why: "Image has references outside the removal snapshot"})
 					continue
 				}
-				img.Refs = refs
+				removal.Refs = refs
+				if busy() {
+					return refused, ErrBusy
+				}
 			}
 			args := []string{imageVerb, "rm"}
-			if len(img.Refs) == 0 {
+			if len(removal.Refs) == 0 {
 				args = append(args, img.ID)
 			} else {
-				args = append(args, img.Refs...)
+				args = append(args, removal.Refs...)
 			}
 			if _, err := d(ctx, args...); err != nil {
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
 			left -= max(img.Size, img.Unique)
-			t.Removed = append(t.Removed, img.Name())
+			t.Removed = append(t.Removed, removal.Name())
 		}
 		return refused, nil
 	}

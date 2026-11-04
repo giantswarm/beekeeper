@@ -26,6 +26,8 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
+	retryID        = "retry"
+	retryChildID   = "child"
 	inspectCommand = "inspect"
 	retryRef       = "example:retry"
 	spareID        = "spare"
@@ -284,7 +286,7 @@ func refusing(f *fake, children map[string]string, stuck string) Docker {
 // one: a chain of parents goes from its child up. One refused for good is
 // the trim's to report.
 func TestTrimImagesRetriesARefusedImage(t *testing.T) {
-	const stuck, grand, parent, child = "stuck", "grand", "parent", "child"
+	const stuck, grand, parent, child = "stuck", "grand", "parent", retryChildID
 	f := &fake{}
 	run := refusing(f, map[string]string{grand: parent, parent: child}, stuck)
 	cands := []Image{{ID: stuck, Size: 1}, {ID: grand, Size: 1}, {ID: parent, Size: 1}, {ID: child, Size: 1}}
@@ -386,7 +388,7 @@ func TestTrimImagesKeepsRefusalWhenReferencesCannotBeRead(t *testing.T) {
 			}
 			return nil, nil
 		}
-		candidates := []Image{{ID: "retry", Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
+		candidates := []Image{{ID: retryID, Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
 		trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
 		if err != nil || attempts != 1 || len(trimmed.Removed) != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "remaining references") {
 			t.Fatalf("trim = %+v, %v after %d attempts; want to retain the refusal when references are unknown", trimmed, err, attempts)
@@ -406,7 +408,7 @@ func TestTrimImagesDoesNotAdoptNewTagsDuringRetry(t *testing.T) {
 		}
 		return nil, nil
 	}
-	candidates := []Image{{ID: "retry", Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
+	candidates := []Image{{ID: retryID, Refs: []string{retryRef}, Size: 2}, {ID: spareID, Size: 1}}
 	trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
 	if err != nil || attempts != 1 || len(trimmed.Refused) != 1 || !strings.Contains(trimmed.Refused[0].Why, "outside the removal snapshot") {
 		t.Fatalf("trim = %+v, %v after %d attempts; want the newly tagged image kept", trimmed, err, attempts)
@@ -527,5 +529,61 @@ func TestParseUsedAgo(t *testing.T) {
 		if got := parseUsedAgo(c.in); got != c.want {
 			t.Errorf("parseUsedAgo(%q) = %v; want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// A dangling retry may still fail on a child. Keep inspecting on the next
+// pass so a tag added while removing that child cannot be adopted.
+func TestTrimImagesRechecksReferencesAcrossPasses(t *testing.T) {
+	inspections, attempts := 0, 0
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		if args[1] == inspectCommand {
+			inspections++
+			if inspections == 1 {
+				return []byte("null"), nil
+			}
+			return []byte(`["example:new"]`), nil
+		}
+		switch args[2] {
+		case retryRef, retryID:
+			attempts++
+			return nil, errors.New("dependent child")
+		case retryChildID:
+			if inspections == 0 {
+				return nil, errors.New("temporary refusal")
+			}
+		}
+		return nil, nil
+	}
+	candidates := []Image{
+		{ID: retryChildID, Size: 1},
+		{ID: retryID, Refs: []string{retryRef}, Size: 1},
+		{ID: spareID, Size: 1},
+	}
+	trimmed, err := TrimImages(context.Background(), run, candidates, 3, 0, nil, func() bool { return false })
+	if err != nil || inspections != 2 || attempts != 2 || len(trimmed.Refused) != 1 ||
+		!strings.Contains(trimmed.Refused[0].Why, "outside the removal snapshot") {
+		t.Fatalf("trim = %+v, %v; inspections=%d attempts=%d", trimmed, err, inspections, attempts)
+	}
+}
+
+func TestTrimImagesStopsWhenInspectionBecomesBusy(t *testing.T) {
+	busy := false
+	attempts := 0
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		if args[1] == inspectCommand {
+			busy = true
+			return []byte("null"), nil
+		}
+		if args[2] == retryRef || args[2] == retryID {
+			attempts++
+			return nil, errors.New("partial removal")
+		}
+		return nil, nil
+	}
+	candidates := []Image{{ID: retryID, Refs: []string{retryRef}, Size: 1}, {ID: spareID, Size: 1}}
+	_, err := TrimImages(context.Background(), run, candidates, 2, 0, nil, func() bool { return busy })
+	if !errors.Is(err, ErrBusy) || attempts != 1 {
+		t.Fatalf("err=%v attempts=%d; want ErrBusy before retry removal", err, attempts)
 	}
 }
