@@ -572,3 +572,24 @@ bash "$gate" "$TAG"
 		t.Fatalf("patch release at new HEAD failed: %v\n%s", err, out)
 	}
 }
+
+// The public gate entry point refuses an unnamed promoter without dispatching
+// devctl or taking the named promoter's existing place.
+func TestGatePromoteRequiresNamedPromoter(t *testing.T) {
+	noSystemd(t)
+	a, _ := promotePlace(t)
+	setHold(t, a, state.Hold{Target: merge.LanePrefix + scratchRepo,
+		Reason: "promotion", By: state.Party{Name: aheadName}, At: time.Now(), ExceptSession: ownerName})
+	a.as = aheadName
+	var err error
+	stderr := gateStderr(t, func() {
+		err = a.gate(context.Background(), promoteArgv("--version", candidateA), 0, 0, false)
+	})
+	if Code(err) != ExitGateRefused || !strings.Contains(stderr, GatePrefix+"refused") || !strings.Contains(stderr, ownerName) {
+		t.Fatalf("promote: exit %d (%v), stderr %q; want 77 naming the promoter", Code(err), err, stderr)
+	}
+	st := readState(t, a)
+	if len(st.Merges) != 1 || st.Merges[0].By.Name != ownerName || st.Merges[0].Phase != state.Waiting {
+		t.Fatalf("refusal changed the promoter's place: %+v", st.Merges)
+	}
+}

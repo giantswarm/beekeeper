@@ -154,3 +154,17 @@ func TestRoleAddress(t *testing.T) {
 		t.Errorf("no session known: the name, got %q", got)
 	}
 }
+
+// Both promotion conditions must reach workers in their first prompt.
+func TestWorkerPromptCarriesPromotionRules(t *testing.T) {
+	p := workerPrompt(taskPrompt("prove a release"))
+	for _, want := range []string{
+		"One promoter per line, named by the supervisor; only they promote",
+		"stable whose unpromoted RCs carry a teammate's change",
+		"that teammate's one-line yes on their PR",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("worker prompt missing promotion rule %q", want)
+		}
+	}
+}
