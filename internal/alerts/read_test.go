@@ -270,6 +270,54 @@ func TestReadKeepsTheForwardAcrossTicks(t *testing.T) {
 	f.noForwardLeft()
 }
 
+func TestReadClosesRemovedTargets(t *testing.T) {
+	f := newFake(t)
+	f.reader.Keep = true
+	t.Cleanup(f.reader.Close)
+	f.serve("FAKE_MIMIR")
+	alpha := Target{Name: "alpha", Context: "context-alpha"}
+	beta := Target{Name: "beta", Context: "context-beta"}
+	replacement := Target{Name: "alpha", Context: "context-replacement"}
+	read := func(targets ...Target) {
+		t.Helper()
+		for i, ans := range f.reader.Read(context.Background(), targets) {
+			if !ans.OK {
+				t.Fatalf("target %d: %+v", i, ans)
+			}
+		}
+	}
+	closed := func(forward *portForward) {
+		t.Helper()
+		if forward.running() {
+			t.Error("removed target's forward still runs")
+		}
+	}
+	read(alpha, beta)
+	firstAlpha, firstBeta := f.reader.held[alpha.Context], f.reader.held[beta.Context]
+	read(alpha)
+	closed(firstBeta)
+	if len(f.reader.held) != 1 || f.reader.held[alpha.Context] != firstAlpha {
+		t.Error("expected only the original alpha forward to be kept")
+	}
+	read(alpha)
+	if f.reader.held[alpha.Context] != firstAlpha || f.runs("port-forward") != 2 {
+		t.Error("unchanged context was not reused")
+	}
+	read(replacement)
+	closed(firstAlpha)
+	newAlpha := f.reader.held[replacement.Context]
+	read(replacement)
+	if len(f.reader.held) != 1 || newAlpha == nil || f.reader.held[replacement.Context] != newAlpha || f.runs("port-forward") != 3 {
+		t.Fatal("replacement context should open exactly one forward and reuse it")
+	}
+	read()
+	closed(newAlpha)
+	if len(f.reader.held) != 0 {
+		t.Error("empty targets left cached forwards")
+	}
+	f.noForwardLeft()
+}
+
 // A kept forward whose process ended is replaced by one new forward at the
 // next tick.
 func TestReadReplacesAForwardThatEnded(t *testing.T) {

@@ -129,9 +129,9 @@ func ResolveContext(name, explicit string, template func(string) string, context
 }
 
 // Reader reads Alertmanagers through kubectl port-forwards. A Reader that
-// keeps its forwards holds each installation's open across reads, until
-// Close: a read is then an HTTP request, no kubectl or Teleport credential
-// plugin run (kubectl caches the credential until it expires).
+// keeps its forwards holds each active context's open across reads, until
+// it leaves the targets or Close: a read is then an HTTP request, no kubectl
+// or Teleport credential plugin run (kubectl caches the credential until it expires).
 type Reader struct {
 	// Kubectl is the kubectl binary.
 	Kubectl string
@@ -144,7 +144,8 @@ type Reader struct {
 	// Alertmanager is read.
 	Tenant string
 	// Keep holds each installation's port-forward open for the next read,
-	// and the kubeconfig's contexts until it changes; Close ends them.
+	// and the kubeconfig's contexts until it changes. Removed targets and
+	// Close end the forwards.
 	Keep bool
 
 	mu sync.Mutex
@@ -205,9 +206,28 @@ func kubeconfigStamp(files []string) string {
 }
 
 // Read reads every target in parallel, each within r.Timeout, and returns
-// the answers in the targets' order. Unless the Reader keeps its forwards,
+// the answers in the targets' order. Cached forwards for contexts absent
+// from targets are closed first. Unless the Reader keeps its forwards,
 // every port-forward has ended when it returns.
 func (r *Reader) Read(ctx context.Context, targets []Target) []Answer {
+	active := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		if t.Context != "" {
+			active[t.Context] = true
+		}
+	}
+	var removed []*portForward
+	r.mu.Lock()
+	for kubeContext, f := range r.held {
+		if !active[kubeContext] {
+			delete(r.held, kubeContext)
+			removed = append(removed, f)
+		}
+	}
+	r.mu.Unlock()
+	for _, f := range removed {
+		f.close()
+	}
 	out := make([]Answer, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
