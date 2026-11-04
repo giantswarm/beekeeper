@@ -179,8 +179,8 @@ func TestSessionsAttributeBrowseHelpers(t *testing.T) {
 			parent.Session, parent.HostSession = "", "codex:parent"
 		}
 		t.Run(name, func(t *testing.T) {
-			worker := &sessionView{Session: &claude.Session{ID: parent.Session, HostID: parent.HostSession, Repo: "example/tool"},
-				Work: claude.Work{Repos: []string{"example/tool"}, Refs: []string{"example/tool#7"}, Created: []string{"example/tool#8"}}}
+			worker := &sessionView{Session: &claude.Session{ID: parent.Session, HostID: parent.HostSession, Repo: exampleToolRepo},
+				Work: claude.Work{Repos: []string{exampleToolRepo}, Refs: []string{"example/tool#7"}, Created: []string{"example/tool#8"}}}
 			helper := &sessionView{Session: &claude.Session{ID: browseHelperName, Name: "test: browse helper"}}
 			own := &sessionView{Session: &claude.Session{ID: ownSessionID, Repo: otherTestRepo}, Role: "own role",
 				Work: claude.Work{Repos: []string{otherTestRepo}, Refs: []string{"example/other#2"}}}
@@ -198,7 +198,7 @@ func TestSessionsAttributeBrowseHelpers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{`"repo":"example/tool"`, `"role":"agent: fix example/tool#7"`, `"refs":["example/tool#7"]`, `"parent":`} {
+			for _, want := range []string{`"repo":exampleToolRepo`, `"role":"agent: fix example/tool#7"`, `"refs":["example/tool#7"]`, `"parent":`} {
 				if !strings.Contains(string(b), want) {
 					t.Errorf("helper JSON lacks %s: %s", want, b)
 				}
