@@ -356,10 +356,6 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		runningTag = "v0.171.0-rc.120"
 		runningSHA = "0dbeb8f"
 	)
-	oldCommit := currentCommit
-	t.Cleanup(func() { currentCommit = oldCommit })
-	currentCommit = func() string { return runningSHA }
-
 	refs := refsWithSHAJSON([][2]string{
 		{runningTag, runningSHA},
 		{"v0.171.0", "deadbeef"},
@@ -374,6 +370,7 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
 	})
+	currentCommit = func() string { return runningSHA }
 	res, err := Run(context.Background(), io.Discard, true)
 	if err != nil || res.Newer || res.Latest != runningTag {
 		t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, runningTag)
