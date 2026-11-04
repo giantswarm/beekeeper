@@ -28,7 +28,7 @@ func TestTrimWorktreesKeepsFilesNamedLikeBuildDirectories(t *testing.T) {
 			if r.err != nil || len(r.failed) > 0 || len(r.removed) != 0 || len(r.cleaned) != 1 {
 				t.Fatalf("run=%s failed=%v, want only build output cleaned", r, r.failed)
 			}
-			if raw, err := os.ReadFile(path); err != nil || string(raw) != "uncommitted build script" {
+			if raw, err := os.ReadFile(path); err != nil || string(raw) != "uncommitted build script" { //nolint:gosec // a path of this test
 				t.Fatalf("lost untracked script: %q, %v", raw, err)
 			}
 			if exists(filepath.Join(dir, "node_modules")) {
