@@ -505,7 +505,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(keyText("k"))
 	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
-	m.Update(tailMsg{session: tBee, turns: src.turns})
+	m.Update(tailMsg{session: tBee, pane: m.paneID, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
 	}
@@ -518,7 +518,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	}
 
 	// A failed re-read keeps the turns shown and says why.
-	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	m.Update(tailMsg{session: tBee, pane: m.paneID, err: errors.New("transcript moved")})
 	if v := m.screen(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
 	}
