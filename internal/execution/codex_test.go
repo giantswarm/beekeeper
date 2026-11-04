@@ -40,7 +40,7 @@ test -n "${BEEKEEPER_CONFIG}"
 # Model Codex persisting workspace trust when no command-line override exists.
 trusted=false
 for arg in "$@"; do
-  case "$arg" in projects.*.trust_level=\"trusted\") trusted=true;; esac
+  case "$arg" in projects=\{*trust_level=\"trusted\"\}\}) trusted=true;; esac
 done
 if [ "$trusted" = false ]; then
   printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$PWD" >> "$CODEX_HOME/config.toml"
@@ -221,7 +221,7 @@ func TestCodexRunnerSingleTurn(t *testing.T) {
 	}
 	line := strings.TrimSpace(string(calls))
 	project, _ := json.Marshal(j.Handle.Workspace)
-	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" -C " + j.Handle.Workspace + " -|" + f.r.Prompt
+	want := f.s.codexHomeDir() + "|exec --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects={" + string(project) + "={trust_level=\"trusted\"}} -C " + j.Handle.Workspace + " -|" + f.r.Prompt
 	if line != want {
 		t.Fatalf("first turn:\n got %q\nwant %q", line, want)
 	}
@@ -338,7 +338,7 @@ func testCodexRunnerWakesWithEffort(t *testing.T, level string) {
 	}
 	j, _ := f.s.Read(f.r.Ref)
 	project, _ := json.Marshal(j.Handle.Workspace)
-	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects." + string(project) + ".trust_level=\"trusted\" " + fixtureThread + " -|"
+	resume := "exec resume --json --strict-config --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -m gpt-fixture -c projects={" + string(project) + "={trust_level=\"trusted\"}} " + fixtureThread + " -|"
 	if !strings.HasPrefix(turns[1], resume+"Message from ") || !strings.Contains(turns[1], `"name":"supervisor"`) || !strings.HasSuffix(turns[1], "first follow-up") {
 		t.Fatalf("first wake turn: %q", turns[1])
 	}
