@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
+
 - Unregistered harness sessions keep worker transcript permissions; default repository access includes only explicitly identified worker transcripts (https://github.com/giantswarm/beekeeper/issues/2183).
 - Keep free-form Dex token-exchange response fields out of diagnostics so refused exchanges cannot echo credentials (https://github.com/giantswarm/beekeeper/pull/1478).
 

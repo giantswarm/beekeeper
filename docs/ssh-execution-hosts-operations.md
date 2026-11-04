@@ -303,6 +303,13 @@ coordinator; the host contributes machine room only.
 
 ## Codex on an execution host
 
+Managed Codex execution logs include a `harness.stderr` JSON event after each
+turn when the CLI wrote diagnostics. Capture is bounded to 64 KiB; truncation
+is marked and incomplete trailing lines are omitted. Authentication-labelled
+diagnostics are suppressed as a whole, and long opaque values (including long
+paths and identifiers) are redacted. Startup errors remain visible when no thread event was
+emitted; stderr does not count as first-task acceptance evidence.
+
 A host may run Codex workers next to or instead of Claude. Install a pinned
 Codex CLI in the supported family (`>= 0.165.0, < 1.0.0`) and add it to the
 host's `harnesses`:
