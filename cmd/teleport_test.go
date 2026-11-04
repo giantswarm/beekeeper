@@ -237,7 +237,7 @@ func TestTeleportKeeperEnsuresContextsWithoutRenewal(t *testing.T) {
 	a.cfg.Teleport.Tsh = filepath.Join(dir, "tsh")
 	a.cfg.Alerts.Kubectl = filepath.Join(dir, "kubectl")
 	a.cfg.Alerts.Kubeconfig = []string{filepath.Join(dir, "kube", "keeper")}
-	a.cfg.Alerts.Installations = []config.Installation{{Name: "alpha"}, {Name: "missing"}}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: "alpha"}, {Name: workerGitHubMissingRef}}
 	a.cfg.Kube.ContextTemplate = "ctx-{installation}"
 	script := `#!/bin/sh
 case "$*" in
@@ -247,10 +247,10 @@ case "$*" in
  *) exit 2;;
 esac
 `
-	if err := os.WriteFile(a.cfg.Teleport.Tsh, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(a.cfg.Teleport.Tsh, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test fixture
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(a.cfg.Alerts.Kubectl, []byte("#!/bin/sh\ncat \"$KUBECONFIG\" 2>/dev/null\n"), 0o700); err != nil {
+	if err := os.WriteFile(a.cfg.Alerts.Kubectl, []byte("#!/bin/sh\ncat \"$KUBECONFIG\" 2>/dev/null\n"), 0o700); err != nil { //nolint:gosec // an executable test fixture
 		t.Fatal(err)
 	}
 	c := a.teleportRenewCmd()

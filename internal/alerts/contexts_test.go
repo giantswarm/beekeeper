@@ -30,20 +30,20 @@ esac
 	machine, own := filepath.Join(dir, "machine"), filepath.Join(dir, "kube", "keeper")
 	write(t, machine, "ctx-alpha\nctx-beta\n")
 	t.Setenv("KUBECONFIG", machine)
-	d := Discoverer{Tsh: tsh, Kubectl: kubectl, Login: own, Kubeconfig: []string{machine, own}, Template: func(s string) string { return "ctx-" + s }, Exclude: []string{"beta"}}
-	targets := []Target{{Name: "alpha"}, {Name: "beta"}, {Name: "missing"}, {Name: "broken"}, {Name: "empty"}}
+	d := Discoverer{Tsh: tsh, Kubectl: kubectl, Login: own, Kubeconfig: []string{machine, own}, Template: func(s string) string { return "ctx-" + s }, Exclude: []string{instB}}
+	targets := []Target{{Name: instA}, {Name: instB}, {Name: alertMissingContext}, {Name: "broken"}, {Name: "empty"}}
 	want := []string{"missing: not listed by Teleport", "broken: tsh kube login failed", "empty: login wrote no matching kube context"}
 	if got := d.EnsureContexts(context.Background(), targets); !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
-	raw, err := os.ReadFile(own)
+	raw, err := os.ReadFile(filepath.Clean(own))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != "ctx-alpha\nctx-beta\n" {
 		t.Fatalf("keeper contexts: %q", raw)
 	}
-	raw, err = os.ReadFile(machine)
+	raw, err = os.ReadFile(filepath.Clean(machine))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ esac
 	if got := d.EnsureContexts(context.Background(), targets[:2]); len(got) != 0 {
 		t.Fatal(got)
 	}
-	raw, err = os.ReadFile(calls)
+	raw, err = os.ReadFile(filepath.Clean(calls))
 	if err != nil {
 		t.Fatal(err)
 	}

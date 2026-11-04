@@ -36,9 +36,9 @@ func newFake(t *testing.T) *fake {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		log, _ := os.OpenFile(f.calls, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		defer log.Close()
+		defer func() { _ = log.Close() }()
 		_, _ = log.WriteString("port-forward\n")
-		if kctx == "missing" {
+		if kctx == alertMissingContext {
 			return nil, `error: context "missing" does not exist`
 		}
 		if why := os.Getenv("FAKE_FAIL"); why != "" {
@@ -319,7 +319,7 @@ func TestContextsKeptUntilTheKubeconfigChanges(t *testing.T) {
 // kubectl for it.
 func TestReadMissingContextIsNotRetried(t *testing.T) {
 	f := newFake(t)
-	missing := Target{Name: "missing", Context: "missing"}
+	missing := Target{Name: alertMissingContext, Context: alertMissingContext}
 	got := f.reader.Read(context.Background(), []Target{missing})
 	if got[0].OK || !got[0].NoContext || got[0].Why != `error: context "missing" does not exist` || f.runs("port-forward") != 1 {
 		t.Errorf("answer = %+v after %d forwards", got[0], f.runs("port-forward"))

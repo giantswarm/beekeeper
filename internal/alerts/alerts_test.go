@@ -320,13 +320,13 @@ func TestSnapshotUsesWorkloadNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		name, namespace, exported string
 	}{
-		{name: "plain namespace", namespace: "jobs-a"},
-		{name: "empty exported namespace", namespace: "jobs-a"},
-		{name: "exported namespace only", exported: "jobs-a"},
+		{name: "plain namespace", namespace: plainJobsNamespace},
+		{name: "empty exported namespace", namespace: plainJobsNamespace},
+		{name: "exported namespace only", exported: plainJobsNamespace},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := []Raw{
-				alert("a", "JobFailed", "page", "batch", "", "namespace", "monitoring", "exported_namespace", "jobs-a"),
+				alert("a", "JobFailed", "page", "batch", "", "namespace", "monitoring", "exported_namespace", plainJobsNamespace),
 				alert("b", "JobFailed", "page", "batch", "", "namespace", "monitoring", "exported_namespace", "jobs-b"),
 				alert("c", "JobFailed", "page", "batch", "", "namespace", tc.namespace),
 			}
