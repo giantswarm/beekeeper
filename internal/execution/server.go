@@ -103,6 +103,25 @@ func (s *Server) journalPath(r Ref) (string, error) {
 	return filepath.Join(root, string(r.Execution)+".json"), nil
 }
 
+// journalFiles treats the owned root as a literal path. Expanding it as part
+// of a glob can hide executions or inspect a neighboring state directory.
+func (s *Server) journalFiles() ([]string, error) {
+	entries, err := os.ReadDir(s.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(s.Root, entry.Name()))
+		}
+	}
+	return paths, nil
+}
+
 func (s *Server) lock(ctx context.Context, r Ref) (*flock.Flock, string, error) {
 	p, err := s.journalPath(r)
 	if err != nil {
@@ -437,7 +456,7 @@ func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 }
 
 func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	paths, err := s.journalFiles()
 	if err != nil {
 		return nil, err
 	}
