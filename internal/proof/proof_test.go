@@ -82,6 +82,13 @@ const (
 	repo   = "o/r"
 )
 
+// The screenshot formats Normalize accepts, as image.DecodeConfig names them.
+const (
+	formatPNG  = "png"
+	formatJPEG = "jpeg"
+	formatGIF  = "gif"
+)
+
 var at = time.Date(2026, 10, 9, 7, 30, 5, 0, time.UTC)
 
 func testPNG(t *testing.T) []byte {
@@ -211,7 +218,7 @@ func TestNormalizeOversizedFormatHeaders(t *testing.T) {
 	jpegHeader = jpegHeader[:sos+2+int(binary.BigEndian.Uint16(jpegHeader[sos+2:sos+4]))]
 
 	gifHeader := append([]byte("GIF89a"), 0xff, 0xff, 0xff, 0xff, 0, 0, 0)
-	for name, header := range map[string][]byte{"jpeg": jpegHeader, "gif": gifHeader} {
+	for name, header := range map[string][]byte{formatJPEG: jpegHeader, formatGIF: gifHeader} {
 		t.Run(name, func(t *testing.T) {
 			config, _, err := image.DecodeConfig(bytes.NewReader(header))
 			if err != nil || config.Width != 65535 || config.Height != 65535 {
@@ -226,17 +233,17 @@ func TestNormalizeOversizedFormatHeaders(t *testing.T) {
 }
 
 func TestNormalizeScreenshotFormats(t *testing.T) {
-	for _, format := range []string{"png", "jpeg", "gif"} {
+	for _, format := range []string{formatPNG, formatJPEG, formatGIF} {
 		t.Run(format, func(t *testing.T) {
 			img := image.NewGray(image.Rect(0, 0, 8, 6))
 			var b bytes.Buffer
 			var err error
 			switch format {
-			case "png":
+			case formatPNG:
 				err = png.Encode(&b, img)
-			case "jpeg":
+			case formatJPEG:
 				err = jpeg.Encode(&b, img, nil)
-			case "gif":
+			case formatGIF:
 				err = gif.Encode(&b, img, nil)
 			}
 			if err != nil {
