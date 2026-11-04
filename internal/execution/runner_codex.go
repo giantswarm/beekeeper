@@ -296,7 +296,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		_ = wait()
 		return thread, false, err
 	}
-	accepted, failed := false, false
+	accepted, failed, completed := false, false, false
 	scan := bufio.NewScanner(stdout)
 	scan.Buffer(make([]byte, 64<<10), MaxWire)
 	for scan.Scan() {
@@ -329,6 +329,8 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 				}
 				thread = id
 			}
+		case codexTurnCompleted:
+			completed = accepted
 		case codexTurnFailed:
 			failed = true
 		case codexTurnStarted:
@@ -352,6 +354,12 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	}
 	if err == nil && failed {
 		err = errors.New("codex reported a failed turn")
+	}
+	// A clean process exit alone is not evidence that the accepted turn
+	// finished. Keep its delivery receipt, but surface the lifecycle failure
+	// instead of parking an interrupted worker as though it completed.
+	if err == nil && accepted && !completed {
+		err = errors.New("codex ended without completing its turn")
 	}
 	return thread, accepted, err
 }
