@@ -75,7 +75,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if latestReviewRequestsChanges(p) {
+	if latestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
 		return "", refused("a review requested changes; new supervisor approval required")
 	}
 	repair := func(code int, reason string) (string, error) {
@@ -130,11 +130,14 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	if execRef != nil {
 		use := execution.MergeUse{Ref: *execRef, Repository: ref.Repo, PR: ref.N, Head: act.Head}
-		if err := a.executionMergeLive(ctx, st, use); err != nil {
+		if err := a.executionMergeDecisionLive(ctx, st, use, true); err != nil {
 			return "", err
 		}
 	}
 	if err := l.claim(act, act.Agent); err != nil {
+		return "", err
+	}
+	if err := a.store.Record(about(event(loopParty, "merge.authorized", "%s at %s: the supervisor loop authorizes the reviewed green fixes", act.URL, act.Head), act.Ref)); err != nil {
 		return "", err
 	}
 	if err := a.store.Record(about(event(loopParty, "merge.start", "merging %s at %s", act.URL, act.Head), act.Ref)); err != nil {
@@ -202,7 +205,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	if p.State != superloop.Open || p.Head != act.Head || !p.Green {
 		return "", refused("merge head moved or current CI is not green")
 	}
-	if latestReviewRequestsChanges(p) {
+	if latestReviewRequestsChanges(p) || reviewOvertookDecision(p, act) {
 		return "", refused("a review requested changes; new supervisor approval required")
 	}
 	if mutationResult && (code == github.SquashNotApplicable || code == github.SquashRed) {
@@ -539,6 +542,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			claimed = false
 		}
 	}
+	if !claimed {
+		doc.ExitCode = github.SquashTooling
+		doc.Reason = "no pending exact-head supervisor merge claim"
+		return doc
+	}
 	var execRef *execution.Ref
 	for _, worker := range st.Agents {
 		if worker.Name == claimAgent && worker.Execution != nil {
@@ -567,16 +575,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.Reason = "execution stopped"
 			return doc
 		}
-		if err := a.authenticateExecutionReview(ctx, st, use, p); err != nil {
+		if err := a.authenticateReviewResult(ctx, st, use, p, true); err != nil {
 			doc.ExitCode = github.SquashRefused
 			doc.Reason = err.Error()
 			return doc
 		}
-	}
-	if !claimed {
-		doc.ExitCode = github.SquashTooling
-		doc.Reason = "no pending exact-head supervisor merge claim"
-		return doc
 	}
 	if claimAgent != "" {
 		doc.RequestedBy = fmt.Sprintf("%s (for %s)", loopParty.Name, claimAgent)
@@ -631,6 +634,15 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 			doc.ExitCode = github.SquashRefused
 			doc.Reason = "a review requested changes; new supervisor approval required"
 			return doc
+		}
+		if slices.ContainsFunc(up.Reviews, func(r superloop.Review) bool { return r.Verdict == superloop.ChangesRequested }) {
+			if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, up, up.Head); authErr != nil {
+				doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
+				return doc
+			} else if why != "" {
+				doc.ExitCode, doc.Reason = github.SquashRefused, why
+				return doc
+			}
 		}
 		p, merging = up, up.Head
 	}
@@ -718,8 +730,24 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 	return strconv.Atoi(strings.TrimSpace(string(out)))
 }
 
+// reviewOvertookDecision prevents a fresh exact-head authorization from
+// concealing a change request that arrived after the planner's review snapshot.
+func reviewOvertookDecision(p superloop.Pull, act superloop.Action) bool {
+	var latest *superloop.Review
+	for i := range p.Reviews {
+		r := &p.Reviews[i]
+		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+			latest = r
+		}
+	}
+	return latest != nil && latest.Verdict == superloop.ChangesRequested &&
+		(latest.ID != act.ReviewID || act.ReviewVerdict != superloop.ChangesRequested)
+}
+
 // latestReviewRequestsChanges reports whether the latest review verdict on p
-// requests changes, overriding any earlier approval.
+// requests changes on its current head, overriding any earlier approval.
+// A different head still needs the loop's exact-head decision; the executor's
+// authority check rejects any go overtaken by a later change request.
 func latestReviewRequestsChanges(p superloop.Pull) bool {
 	var latest superloop.Review
 	var found bool
@@ -732,14 +760,14 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 			found = true
 		}
 	}
-	return found && latest.Verdict == superloop.ChangesRequested
+	return found && latest.Verdict == superloop.ChangesRequested && sameCommit(cmp.Or(latest.Head, latest.Commit), p.Head)
 }
 
 // checkMergeHeadAuthority verifies that merging p at targetHead is backed by
 // an approved desk review covering that head (or a base merge into it) or an
 // explicit exact-head supervisor go: the loop's own go for that head
 // (supervisor.go), merge.authorized,
-// execution.merge-issued, or an escalation release answer. A verdict counts
+// or execution.merge-issued. A verdict counts
 // only from a login the desk trusts (trustedReview): on a public repository
 // anyone can post "Review: approved".
 func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p superloop.Pull, targetHead string) (why string, hasExplicitGo bool, err error) {
@@ -788,7 +816,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 			return strings.EqualFold(e.Subject, p.Ref)
 		}
 		evs, err := a.store.Events(0, func(e state.Event) bool {
-			return forPull(e) || e.Verb == answerRecorded
+			return forPull(e)
 		})
 		if err != nil {
 			return "", false, err
@@ -813,13 +841,6 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 			if (e.Verb == "merge.authorized" || e.Verb == "execution.merge-issued") && forPull(e) {
 				if h := headAfterAt(e.Detail); h != "" {
 					goes = append(goes, goRecord{head: h, at: e.At})
-				}
-			}
-			if e.Verb == answerRecorded {
-				if an, ok := parseAnswered(e); ok && an.Asker == loopParty.Name && strings.EqualFold(an.About, p.Ref) && superloop.Releases(an.Answer) {
-					if h := headAfterAt(an.Question); h != "" {
-						goes = append(goes, goRecord{head: h, at: e.At})
-					}
 				}
 			}
 		}

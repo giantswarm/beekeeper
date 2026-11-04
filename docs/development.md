@@ -663,7 +663,13 @@ worker for repair and another green published head. A restart reads GitHub befor
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
-around queue validation. Merge goes never go through `answer verify`.
+around queue validation. No person is asked whether to merge: the loop merges after its
+reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+For an SSH worker's fixes, the loop retains the authenticated independent review result
+and its original head, author, verdict and body digest. The loop records its exact-head
+authorization before the executor accepts the new green head without another approval
+round; a pending ownership claim alone is insufficient. Worker merge grants continue
+to require approval of their head; an empty grant ID alone confers no loop authority.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
@@ -691,13 +697,6 @@ or recover every ownerless In Progress item. The broader 15-minute orphan sweep
 remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
 pulls without saved review metadata and stale serve records from relieved or
 off-roster sessions.
-
-The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
-The receipt binds its active local note, session, thread, displayed head, selected option and
-verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
-command-line flag alone cannot select the channel. The guide keeps the note's option labels
-and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
-relay still does not verify. The central instance retains its authenticated identity checks.
 
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
