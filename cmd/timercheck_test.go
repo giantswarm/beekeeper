@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -348,5 +349,14 @@ func TestTimerProbeMarksInheritedSession(t *testing.T) {
 	out, err := probeOutput(t.Context(), `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`)
 	if err != nil || string(out) != "probe" {
 		t.Fatalf("probe subprocess marker = %q, %v", out, err)
+	}
+}
+
+// An agent a --run timer starts is its own session: the marker must not
+// follow it, or every lease claim it ever makes would be refused.
+func TestStartedAgentsDoNotInheritTheTimerMarker(t *testing.T) {
+	marker := envTimerCommand + "=run"
+	if env := cleanEnv([]string{marker, "KEPT=1"}, ""); slices.Contains(env, marker) || !slices.Contains(env, "KEPT=1") {
+		t.Fatalf("clean environment: %v", env)
 	}
 }
