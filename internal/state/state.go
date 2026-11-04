@@ -878,6 +878,10 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	// Endpoint pins the approved journal route at reservation time. Nil marks
+	// older records whose original route cannot be reconstructed.
+	Endpoint *execution.Endpoint `json:"endpoint,omitempty"`
+
 	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
 	Settled         bool                               `json:"settled,omitempty"`
