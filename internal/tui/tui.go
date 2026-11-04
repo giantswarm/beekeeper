@@ -47,14 +47,22 @@ type Options struct {
 
 // Run opens the screen and blocks until the person quits.
 func Run(src Source, opts Options) error {
+	return runProgram(src, opts, func(m tea.Model) (tea.Model, error) {
+		return tea.NewProgram(m).Run()
+	})
+}
+
+// runProgram keeps source cleanup tied to every program exit.
+func runProgram(src Source, opts Options, run func(tea.Model) (tea.Model, error)) error {
 	if opts.Interval <= 0 {
 		opts.Interval = 2 * time.Second
 	}
-	p := tea.NewProgram(newModel(src, opts))
-	final, err := p.Run()
-	if m, ok := final.(*model); ok {
+	m := newModel(src, opts).(*model)
+	defer func() {
+		m.cancel()
 		m.releaseAll() // a closed screen answers nothing
-	}
+	}()
+	_, err := run(m)
 	return err
 }
 
