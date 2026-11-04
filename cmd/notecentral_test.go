@@ -106,13 +106,26 @@ func TestNoteAddKeepsLoginsHoldsAndFoldsLocal(t *testing.T) {
 func TestNoteAddFilesLocallyWhileCentralIsUnreachable(t *testing.T) {
 	s := &noteAddStandIn{}
 	a, out, m := centralNoteApp(t, s)
-	m.Down(true)
+	m.Close()
 	if err := addNote(a, decisionNote("approve "+prURL+"?")...); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := a.store.Read()
 	if len(st.Notes) != 1 || !strings.Contains(out.String(), "filed on this machine instead") || !strings.Contains(out.String(), "note #1") {
 		t.Errorf("notes %v, out %q: want the decision filed on the machine, as stderr says", st.Notes, out.String())
+	}
+}
+
+func TestNoteAddDoesNotFallbackAfterProxyError(t *testing.T) {
+	a, out, m := centralNoteApp(t, &noteAddStandIn{})
+	m.Down(true)
+	err := addNote(a, decisionNote("approve "+prURL+"?")...)
+	st, readErr := a.store.Read()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if Code(err) != ExitCentral || !strings.Contains(err.Error(), "may be filed there") || len(st.Notes) != 0 {
+		t.Fatalf("note add = %v, local notes = %v, output = %q; want uncertainty reported without a local decision", err, st.Notes, out.String())
 	}
 }
 

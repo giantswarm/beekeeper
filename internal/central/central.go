@@ -147,14 +147,18 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v a
 	req.Params.Name = "call_tool"
 	req.Params.Arguments = map[string]any{"name": c.Tool(tool), "arguments": args}
 	res, err := mc.CallTool(ctx, req)
+	var text string
 	if err != nil {
 		err = c.timedOut(ctx, stageToolCall, deadline, c.unreachable("muster: %s: %v", c.Tool(tool), err))
-		if u := (*Unreachable)(nil); errors.As(err, &u) {
-			u.Sent = true
-		}
-		return "", err
+	} else {
+		text, err = c.result(tool, res, v)
 	}
-	return c.result(tool, res, v)
+	// Muster's own error result can also mean that the backend's reply
+	// was lost after it acted. Neither failure permits a local retry.
+	if u := (*Unreachable)(nil); errors.As(err, &u) {
+		u.Sent = true
+	}
+	return text, err
 }
 
 // bound is ctx bounded by the call timeout, and the deadline a timeout
