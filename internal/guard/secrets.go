@@ -195,6 +195,8 @@ type secretGuard struct {
 	// files are the files known to hold secret values (secretfiles.go).
 	files       secretFiles
 	transcripts transcriptAccess
+	// interpreterCode marks text supplied as an interpreter program, not shell data.
+	interpreterCode bool
 	// metadata holds helpers whose complete bodies have been checked. An empty
 	// entry shadows a utility and must not inherit its metadata exemption.
 	metadata         map[string]string
@@ -249,12 +251,13 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return nil
 	}
 	sc := scanShell(cmd)
-	// Check executable script text before shell segmentation discards path
-	// construction context. Here-document data is masked in plain; interpreter
-	// input is checked when inputLeak recursively scans its body.
-	if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(sc.plain) {
+	// Check interpreter programs before shell segmentation loses construction
+	// context. Shell arguments such as `rg process.env.HOME src` are data.
+	if g.interpreterCode && len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(sc.plain) {
 		return &leak{never: true, transcript: true, unresolvedTranscript: true}
 	}
+	// Recursive shell scans must classify their own interpreter programs.
+	g.interpreterCode = false
 	if len(g.transcripts.roots) > 0 {
 		for _, doc := range sc.heredocs {
 			if doc.quoted {
@@ -577,13 +580,9 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			}
 		case interpreters[name].code != nil || len(interpreters[name].file) > 0:
 			ip := interpreters[name]
+			g.interpreterCode = true
 			switch p := readProgram(args, ip); p.kind {
 			case programCode:
-				// Classify unresolved interpreter paths before the shell scanner
-				// splits assignments and loses their construction context.
-				if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(p.arg) {
-					return &leak{never: true, transcript: true, unresolvedTranscript: true}
-				}
 				if l := g.scan(p.arg, depth+1); l != nil {
 					return l
 				}
@@ -792,6 +791,7 @@ func (g secretGuard) script(p string, depth int) *leak {
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
 		return nil
 	}
+	g.interpreterCode = g.interpreterCode || !shellScript(raw)
 	if l := g.scan(string(raw), depth+1); l != nil {
 		l.what += ", run from " + filepath.Base(p)
 		return l

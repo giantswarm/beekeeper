@@ -400,3 +400,58 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 		t.Errorf("here-document data refused: %+v", d)
 	}
 }
+
+func TestTranscriptRuntimeRootShellData(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	for _, command := range []string{
+		`echo process.env.HOME`,
+		`rg -n process.env.HOME src`,
+		`printf '%s\n' process.env.HOME`,
+		`bash -c 'echo process.env.HOME'`,
+		`eval 'echo process.env.HOME'`,
+		`bash <<'SH'
+echo process.env.HOME
+SH`,
+		`echo echo process.env.HOME | bash`,
+		`python3 -c 'import sys; print(sys.argv[1])' process.env.HOME`,
+	} {
+		if d := decide(t, h, home, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("shell data refused: %s: %+v", command, d)
+		}
+	}
+	script := filepath.Join(home, "literal.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho process.env.HOME\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"bash " + script, script} {
+		if d := decide(t, h, home, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("shell script data refused: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptRuntimeRootProgramFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	script := filepath.Join(home, "runtime.py")
+	code := `from pathlib import Path; print(list(Path.home().rglob("*.jsonl")))`
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\n"+code+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"python3 " + script,
+		script,
+		"python3 < " + script,
+		"cat " + script + " | python3",
+		"printf '%s' '" + code + "' | python3",
+		"bash -c 'python3 " + script + "'",
+		"bash <<'SH'\npython3 <<'PY'\n" + code + "\nPY\nSH",
+	} {
+		if d := decide(t, h, home, command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") {
+			t.Errorf("runtime root program passed: %s: %+v", command, d)
+		}
+	}
+}
