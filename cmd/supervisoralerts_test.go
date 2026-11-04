@@ -12,6 +12,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const loopAlertOwner = "alert-fixture-owner"
+const loopAlertFingerprint = "fp"
+
 func loopFiring() alerts.Firing {
 	return alerts.Firing{Installation: "loop-fixture", Key: "fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: alerts.Page, Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
 }
@@ -46,7 +49,7 @@ func TestLoopAlertOwnedDoesNotPage(t *testing.T) {
 	blockLoopAlert(t, r, f)
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
+		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: loopAlertOwner}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -454,8 +457,8 @@ func TestLoopAlertLegacyOwnerKeepsItsInstallation(t *testing.T) {
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	original := loopFiring()
 	base := &alerts.State{Installations: map[string]*alerts.Installation{
-		"owner-a": {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
-		"owner-b": {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
+		"owner-a": {Reachable: true, Alerts: alerts.Set{loopAlertFingerprint: original.Alert}},
+		"owner-b": {Reachable: true, Alerts: alerts.Set{loopAlertFingerprint: original.Alert}},
 	}}
 	firing := base.Firing(alerts.Page)
 	for _, f := range firing {
@@ -463,7 +466,7 @@ func TestLoopAlertLegacyOwnerKeepsItsInstallation(t *testing.T) {
 	}
 	readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return firing, nil }
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: alerts.Key("fp", original.Alert), Name: firing[0].Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
+		st.AlertOwners = []state.AlertOwner{{Alert: alerts.Key(loopAlertFingerprint, original.Alert), Name: firing[0].Instance(), By: state.Party{Name: loopAlertOwner}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -483,7 +486,7 @@ func TestLoopAlertLegacyWatchStateKeepsOwner(t *testing.T) {
 	f := loopFiring() // An old watch snapshot's unqualified key.
 	blockLoopAlert(t, r, f)
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: "alert-fixture-owner"}}}
+		st.AlertOwners = []state.AlertOwner{{Alert: f.Key, Name: f.Instance(), By: state.Party{Name: loopAlertOwner}}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -502,7 +505,7 @@ func TestLoopAlertLegacyCompletionIsNotRepeated(t *testing.T) {
 	r.a.cfg.Alerts.PageSeverity = alerts.Page
 	original := loopFiring()
 	base := &alerts.State{Installations: map[string]*alerts.Installation{
-		original.Installation: {Reachable: true, Alerts: alerts.Set{"fp": original.Alert}},
+		original.Installation: {Reachable: true, Alerts: alerts.Set{loopAlertFingerprint: original.Alert}},
 	}}
 	f := base.Firing(alerts.Page)[0]
 	blockLoopAlert(t, r, f)

@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	otherTeam = "other-team"
-	ownedPage = "alpha/PodRestarting"
+	otherTeam                   = "other-team"
+	ownedPage                   = "alpha/PodRestarting"
+	legacyPageFingerprintPrefix = "fp1@"
 )
 
 // pageApp is stubApp with an alert baseline of one page and one notify
@@ -84,7 +85,7 @@ func TestAlertsOwnStopsTheLinesUntilTheOwnerEnds(t *testing.T) {
 	a, out := pageApp(t, start)
 	owner := &claude.Session{ID: "s2", Name: ownerName}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: owner.Party(), At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: owner.Party(), At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestWatchOnceRecordsNoOwnerEnd(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	a, out := pageApp(t, start)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: state.Party{Session: holderGone, Name: "w"}, At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: state.Party{Session: holderGone, Name: "w"}, At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -276,7 +277,7 @@ func TestAlertOwnershipSeparatesInstallations(t *testing.T) {
 				if format == "legacy instance" {
 					name += "#fp1"
 				}
-				st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: name, By: state.Party{Name: "legacy-person"}, At: start}}
+				st.AlertOwners = []state.AlertOwner{{Alert: legacyPageFingerprintPrefix + start.UTC().Format(time.RFC3339Nano), Name: name, By: state.Party{Name: "legacy-person"}, At: start}}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
