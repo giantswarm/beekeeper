@@ -42,6 +42,8 @@ const (
 // Tools are the fake tools and what they were asked.
 type Tools struct {
 	mu sync.Mutex
+	// categories keeps the category given when an item is written.
+	categories map[string]string
 	// Vault maps op://vault/item/field to its value.
 	Vault map[string]string
 	// Types maps op://vault/item/field to the type a store gave it
@@ -193,7 +195,7 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		}
 		it, ok := items[parts[1]]
 		if !ok {
-			it = &item{ID: "id-" + parts[1], Title: parts[1]}
+			it = &item{ID: "id-" + parts[1], Title: parts[1], Category: t.categories["op://"+vault+"/"+parts[1]]}
 			items[parts[1]] = it
 		}
 		f := field{ID: parts[2], Label: parts[2], Type: concealedType, Value: v}
@@ -209,7 +211,7 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 	case "list":
 		var out []item
 		for _, it := range items {
-			out = append(out, item{ID: it.ID, Title: it.Title})
+			out = append(out, item{ID: it.ID, Title: it.Title, Category: it.Category})
 		}
 		return json.Marshal(out)
 	case get:
@@ -261,6 +263,10 @@ func (t *Tools) item(args []string, stdin io.Reader) ([]byte, error) {
 		if t.Types == nil {
 			t.Types = map[string]string{}
 		}
+		if t.categories == nil {
+			t.categories = map[string]string{}
+		}
+		t.categories["op://"+vault+"/"+it.Title] = it.Category
 		for _, f := range it.Fields {
 			if _, builtin := builtins[f.ID]; builtin {
 				// op keeps a built-in field's own label
