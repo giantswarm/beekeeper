@@ -243,7 +243,7 @@ func (p Policy) Settings() map[string]any {
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{{
 				"matcher": strings.Join(FileTools, "|"),
-				"hooks":   []map[string]any{{"type": "command", "command": p.Exe + " hook pretooluse", "timeout": 10}},
+				"hooks":   []map[string]any{{"type": "command", "command": "'" + strings.ReplaceAll(p.Exe, "'", `'\''`) + "' hook pretooluse", "timeout": 10}},
 			}},
 		},
 	}
