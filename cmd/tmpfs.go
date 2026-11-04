@@ -90,6 +90,11 @@ func (a *app) freeTmpfs(dryRun bool, read func() (free.Machine, error)) tmpfsRun
 		r.err = err
 		return r
 	}
+	if !dryRun {
+		if st, err := a.store.Read(); err == nil {
+			cleanupDeadRuns(a.store.Dir(), st, time.Now())
+		}
+	}
 	o := free.Options{Apply: !dryRun, Only: free.Automatic, Stale: free.DefaultStale}
 	r.freed = (&free.Run{Options: o, Machine: m, Out: io.Discard}).Free()
 	if !dryRun && len(r.freed) > 0 {
