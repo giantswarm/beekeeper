@@ -5,7 +5,7 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 
 # worker-rules
 
-Desk rules win.
+One task; stricter desk rules win.
 
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
