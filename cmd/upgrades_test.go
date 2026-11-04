@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
@@ -362,5 +363,34 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 	}
 	if got := takeCalls(t, log); got["teleport.giantswarm.io-away"] != 1 || len(got) != 1 {
 		t.Fatalf("kubectl calls with away's context: %v", got)
+	}
+}
+
+// Snapshot readers recover versions even when a shared reading skipped events.
+func TestSnapshotUpgradeFromHold(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	st := &state.State{}
+	upgrade.Reconcile(st, "prod", []upgrade.Upgrade{{Cluster: "mc", From: "35.0.1", To: "36.1.0"}}, a.now, state.Party{})
+	rs := upgrade.Readings{}
+	rs.Keep([]upgrade.Status{{Installation: "prod", Upgrades: []upgrade.Upgrade{{Cluster: "mc", To: "36.1.0"}}}}, a.now)
+	if err := a.store.WriteFile(upgrade.ReadingsFile, rs); err != nil {
+		t.Fatal(err)
+	}
+	statuses := a.readUpgrades(context.Background(), st, a.now)
+	a.printSnapshot(&snapshot{Holds: st.Holds, Upgrades: statuses})
+	for _, line := range []string{"hold ", "upgrades: "} {
+		found := false
+		for text := range strings.Lines(out.String()) {
+			if strings.HasPrefix(text, line) {
+				found = true
+				if !strings.Contains(text, "35.0.1 → 36.1.0") {
+					t.Errorf("missing version: %s", text)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing %s line", line)
+		}
 	}
 }

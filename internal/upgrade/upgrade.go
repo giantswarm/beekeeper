@@ -326,6 +326,33 @@ func HeldClusters(st *state.State, now time.Time) func(installation, cluster str
 	return func(installation, cluster string) bool { return held[HoldTarget(installation, cluster)] }
 }
 
+// WithHoldVersions fills unknown starting releases from the matching upgrade
+// holds. Lifted holds still describe running upgrades; expired holds do not.
+// The returned status owns its upgrades so shared readings stay unchanged.
+func WithHoldVersions(s Status, st *state.State, now time.Time) Status {
+	s.Upgrades = slices.Clone(s.Upgrades)
+	for i, u := range s.Upgrades {
+		if u.From != "" || u.Rolling {
+			continue
+		}
+		for _, h := range st.Holds {
+			if h.Target != HoldTarget(s.Installation, u.Cluster) || h.Expired(now) {
+				continue
+			}
+			text, ok := strings.CutPrefix(h.Reason, reasonHead+s.Installation+"/"+u.Cluster+" ")
+			if !ok {
+				continue
+			}
+			from, to, ok := strings.Cut(text, " → ")
+			if ok && to == u.To && from != "?" && from != "" {
+				s.Upgrades[i].From = from
+				break
+			}
+		}
+	}
+	return s
+}
+
 // Reconcile makes the installation's upgrade holds those of its running
 // upgrades: a hold for each that has none (begun), none for any that no
 // longer runs (ended), nor for a rollout that runs on StallAfter after its
