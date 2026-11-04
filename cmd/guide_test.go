@@ -320,14 +320,16 @@ func TestGuideQueueSkipsAgentsThatReportedAfterTheWait(t *testing.T) {
 	}
 }
 
+const guideNoteReader = "Reader"
+
 func TestGuideCentralFeedLifecycle(t *testing.T) {
 	for _, verb := range []string{answerRecorded, noteDone, noteDefaulted, noteOvertaken} {
 		t.Run(verb, func(t *testing.T) {
 			a := &app{cfg: &config.Config{}}
-			a.cfg.Guide.Person = "Reader"
-			a.cfg.Central.Context = "central"
-			st := &state.State{Notes: []state.Note{{ID: 1, For: "Reader", Text: "local?"}}}
-			notes := []state.Note{{ID: 1, Central: "central", For: "Reader", Text: "central?"}, {ID: 2, Central: "central", For: "Someone else", Text: "other?"}}
+			a.cfg.Guide.Person = guideNoteReader
+			a.cfg.Central.Context = centralKey
+			st := &state.State{Notes: []state.Note{{ID: 1, For: guideNoteReader, Text: "local?"}}}
+			notes := []state.Note{{ID: 1, Central: centralKey, For: guideNoteReader, Text: "central?"}, {ID: 2, Central: centralKey, For: "Someone else", Text: "other?"}}
 			lines, changed := a.centralGuideLines(st, nil, notes, nil, true)
 			if !changed || len(lines) != 1 || !strings.Contains(lines[0], "GUIDE DECISION: central#1") {
 				t.Fatalf("first poll: %q, %v", lines, changed)
@@ -342,7 +344,7 @@ func TestGuideCentralFeedLifecycle(t *testing.T) {
 			if lines, changed := a.centralGuideLines(st, nil, notes, nil, true); len(lines) != 0 || changed {
 				t.Fatalf("recovery: %q", lines)
 			}
-			closed := map[int]state.Event{1: {Verb: verb, Detail: "answer", By: state.Party{Name: "Guide"}}}
+			closed := map[int]state.Event{1: {Verb: verb, Detail: verbAnswer, By: state.Party{Name: mailGuide}}}
 			lines, changed = a.centralGuideLines(st, nil, nil, closed, true)
 			want := "GUIDE CLOSED"
 			if verb == answerRecorded {
