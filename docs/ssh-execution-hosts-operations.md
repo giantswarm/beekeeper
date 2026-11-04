@@ -301,6 +301,11 @@ edits and searches; PTYs, services, asynchronous bash, URL reads and every
 other tool are refused. The extension blocks on command failure, timeout,
 invalid JSON and guard rewrites it cannot apply. Each allowed call passes the
 shared workspace and execution guards and live coordinator authority check.
+File tools accept one literal local path; reads require an existing target to
+avoid omp spelling, suffix and approved-plan fallback resolution. URL shorthand
+(`www.`) is refused. Home and `@` shorthands, whitespace,
+path lists and patterns are refused because omp expands them differently from
+the shared guard. Use guarded bash for filenames requiring those characters.
 Hooks are not an OS sandbox for arbitrary code executed inside an allowed
 shell command.
 
