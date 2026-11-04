@@ -142,7 +142,7 @@ func TestPreToolUseDeniesWhenRecordingThePanicPanics(t *testing.T) {
 	}
 	c := a.hookCmd()
 	c.SetIn(panickingStdin{})
-	c.SetArgs([]string{"pretooluse"})
+	c.SetArgs([]string{configPreToolUse})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
