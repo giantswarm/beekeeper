@@ -21,6 +21,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // GiveUp is how long the hook holds a request for the screen: under the
@@ -85,7 +87,9 @@ func Take(dir, session string, f Flag) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	return withFlagLock(dir, session, func() error {
+		return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	})
 }
 
 // Release hands session back: its held requests go to its own window at
@@ -94,11 +98,53 @@ func Release(dir, session string) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
+	return withFlagLock(dir, session, func() error { return removeFlag(dir, session) })
+}
+
+// ReleaseOwned hands session back only if its flag still matches the exact
+// generation the caller wrote. Replacement and removal share the same lock.
+func ReleaseOwned(dir, session string, owner Flag) error {
+	if err := checkName(session); err != nil {
+		return err
+	}
+	return withFlagLock(dir, session, func() error {
+		b, err := os.ReadFile(filepath.Join(dir, session+flagExt)) //nolint:gosec // validated session under the takeover folder
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var current Flag
+		if err := json.Unmarshal(b, &current); err != nil {
+			return err
+		}
+		if current.PID != owner.PID || current.By != owner.By || !current.Since.Equal(owner.Since) {
+			return nil
+		}
+		return removeFlag(dir, session)
+	})
+}
+
+func removeFlag(dir, session string) error {
 	err := os.Remove(filepath.Join(dir, session+flagExt))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
+}
+
+func withFlagLock(dir, session string, fn func() error) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// Keep the lock file: removing it could let callers lock different inodes.
+	lock := flock.New(filepath.Join(dir, session+".lock"))
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+	return fn()
 }
 
 // Taken returns session's flag when one exists and alive says its screen

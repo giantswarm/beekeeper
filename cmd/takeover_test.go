@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -199,5 +200,77 @@ func TestCollectorApprovals(t *testing.T) {
 	}
 	if ss := c.withApprovals([]tui.Session{{Name: tBeeName, ID: tTakenSession}}); ss[0].TakenOver {
 		t.Error("a released session still shows taken over")
+	}
+}
+
+func TestCollectorCleanupPreservesNewScreen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: &config.Config{StateDir: dir}, store: store}
+	older, newer := newCollector(a), newCollector(a)
+	sessions := []*claude.Session{{ID: tTakenSession, Name: tBeeName, PID: os.Getpid()}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := older.takeOver(sessions, tTakenSession, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.Release(ctx, tTakenSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := newer.takeOver(sessions, tTakenSession, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	first, replacement := older.owned[tTakenSession], newer.owned[tTakenSession]
+	if first.PID != replacement.PID || first.Since.Equal(replacement.Since) {
+		t.Fatal("expected different generations of the same process")
+	}
+	done := make(chan bool, 1)
+	go func() {
+		_, ok, _ := takeover.Hold(ctx, takeover.Dir(dir), takeover.Request{ID: "held", Session: tTakenSession}, func(int) bool { return true }, time.Millisecond)
+		done <- ok
+	}()
+	for {
+		pending, err := takeover.Pending(takeover.Dir(dir), tTakenSession)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pending) == 1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("request was not held")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := older.ReleaseOwned(ctx, tTakenSession); err != nil {
+		t.Fatal(err)
+	}
+	ss := newer.withApprovals([]tui.Session{{ID: tTakenSession}})
+	if !ss[0].TakenOver || len(ss[0].Approvals) != 1 {
+		t.Fatalf("replacement or held request lost: %+v", ss)
+	}
+	// Let the hook poll after cleanup; it must keep holding the request.
+	select {
+	case <-done:
+		t.Fatal("cleanup handed back the held request")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := newer.ReleaseOwned(ctx, tTakenSession); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("release unexpectedly answered request")
+		}
+	case <-ctx.Done():
+		t.Fatal("owner release did not hand back")
+	}
+	if ss := newer.withApprovals([]tui.Session{{ID: tTakenSession}}); ss[0].TakenOver {
+		t.Fatal("owner could not release replacement")
 	}
 }
