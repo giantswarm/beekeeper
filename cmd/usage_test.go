@@ -3818,6 +3818,92 @@ read -r keepalive
 	}
 }
 
+func TestCodexAccountStopSurvivesProbeFailure(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte("capacity:\n  ceiling: 2\n  providers:\n    codex:\n      ceiling: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	executable := filepath.Join(dir, "codex")
+	writeProbe := func(result string) {
+		t.Helper()
+		script := "#!/bin/sh\nexit 1\n"
+		if result != "" {
+			script = "#!/bin/sh\nread -r init\necho '{\"id\":1,\"result\":{}}'\nread -r ready\nread -r request\necho '{\"id\":2,\"result\":" + result + "}'\nread -r keepalive\n"
+		}
+		if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		} //nolint:gosec // executable fixture in a test-owned directory
+	}
+	healthy := fmt.Sprintf(`{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":%d}}}`, now.Add(24*time.Hour).Unix())
+	a := &app{cfg: cfg, store: store, now: now}
+	u := cfg.Capacity.Providers[codex.Harness].Usage
+	read := func() error { _, err := a.readCodexUsage(context.Background(), u); return err }
+	writeProbe(healthy)
+	if err := read(); err != nil {
+		t.Fatal(err)
+	}
+	a.now = now.Add(u.EffectiveEvery() + time.Second)
+	writeProbe(`{"ordinaryUsageAllowed":false}`)
+	if err := read(); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("account stop: %v", err)
+	}
+	writeProbe("")
+	if err := read(); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("failed refresh forgot account stop: %v", err)
+	}
+	// Reopen persisted state to model another command after the stop has aged.
+	store, err = state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = &app{cfg: cfg, store: store, now: a.now.Add(u.EffectiveEvery() + time.Second)}
+	if err := read(); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("restart forgot account stop: %v", err)
+	}
+	// Even a fresh local reading cannot supersede a newer account stop.
+	rolloutDir := codex.HomeSessionsDir(cfg.StateDir)
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(rolloutDir, "usage.jsonl")
+	writeLocal := func(at time.Time) {
+		t.Helper()
+		event := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":5,"window_minutes":10080,"resets_at":%d}}}}`+"\n", at.Format(time.RFC3339), now.Add(24*time.Hour).Unix())
+		if err := os.WriteFile(rollout, []byte(event), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLocal(now)
+	if err := read(); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("older rollout cleared stop: %v", err)
+	}
+	writeLocal(a.now)
+	if err := read(); err != nil {
+		t.Fatalf("newer local event must supersede stop: %v", err)
+	}
+	if err := os.Remove(rollout); err != nil {
+		t.Fatal(err)
+	}
+	writeProbe(healthy)
+	if err := read(); err != nil {
+		t.Fatalf("successful refresh must clear stop: %v", err)
+	}
+	a.now = a.now.Add(u.EffectiveEvery() + time.Second)
+	writeProbe("")
+	if err := read(); err != nil {
+		t.Fatalf("healthy fallback after recovery: %v", err)
+	}
+}
+
 func TestCodexStaleSourceValidation(t *testing.T) {
 	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
 	r := usageReading{At: now, SourceAt: now.Add(-8 * time.Hour), SingleWindow: true, SevenDay: &usageWindow{UsedPercent: 20, ResetsAt: now.Add(24 * time.Hour)}}

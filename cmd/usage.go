@@ -266,17 +266,18 @@ type usageBucket struct {
 // usageReading is the timestamped output of a usage command stored in
 // usageFile or usageProviderFile.
 type usageReading struct {
-	At            time.Time              `json:"at"`
-	Fallback      string                 `json:"fallback,omitempty"`
-	SourceAt      time.Time              `json:"sourceAt,omitzero"`
-	AgeMinutes    *float64               `json:"ageMinutes,omitempty"`
-	Stale         bool                   `json:"stale,omitempty"`
-	NoPlanWindows bool                   `json:"noPlanWindows,omitempty"`
-	SingleWindow  bool                   `json:"singleWindow,omitempty"`
-	FiveHour      *usageWindow           `json:"fiveHour,omitempty"`
-	SevenDay      *usageWindow           `json:"sevenDay,omitempty"`
-	Buckets       map[string]usageBucket `json:"buckets,omitempty"`
-	BucketOrder   []string               `json:"bucketOrder,omitempty"`
+	AccountStopped bool                   `json:"accountStopped,omitempty"`
+	At             time.Time              `json:"at"`
+	Fallback       string                 `json:"fallback,omitempty"`
+	SourceAt       time.Time              `json:"sourceAt,omitzero"`
+	AgeMinutes     *float64               `json:"ageMinutes,omitempty"`
+	Stale          bool                   `json:"stale,omitempty"`
+	NoPlanWindows  bool                   `json:"noPlanWindows,omitempty"`
+	SingleWindow   bool                   `json:"singleWindow,omitempty"`
+	FiveHour       *usageWindow           `json:"fiveHour,omitempty"`
+	SevenDay       *usageWindow           `json:"sevenDay,omitempty"`
+	Buckets        map[string]usageBucket `json:"buckets,omitempty"`
+	BucketOrder    []string               `json:"bucketOrder,omitempty"`
 }
 
 // usageView is how capacity, watch and snapshot present subscription usage and
@@ -915,22 +916,29 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 	if now.IsZero() {
 		now = time.Now()
 	}
-	// Fresh explicit local errors remain authoritative. Once old, probe the
-	// account so an idle desk can recover after its quota resets.
-	if err != nil && !errors.Is(err, codex.ErrNoUsage) && (cr.At.IsZero() || now.Sub(cr.At) <= u.EffectiveEvery()) {
-		return usageReading{}, err
-	}
-	if err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
-		return codexUsageToReading(cr), nil
-	}
-	// Prefer a fresh account snapshot over an older rollout. Still read local
-	// events first so a new explicit stop cannot hide behind the snapshot.
+	// Load the shared account state before accepting local readings: an older
+	// healthy event must not clear an explicit account stop.
 	var cached usageReading
 	haveCached := false
 	if a.store != nil {
 		found, e := a.store.ReadFile(codexAccountUsageFile, &cached)
 		haveCached = e == nil && found && !cached.SourceAt.IsZero()
-		if haveCached && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() && usageFresh(cached, u, now) {
+	}
+	stopped := haveCached && cached.AccountStopped && !cr.At.After(cached.SourceAt)
+	// Fresh local events remain authoritative if newer than the account stop.
+	if !stopped {
+		if err != nil && !errors.Is(err, codex.ErrNoUsage) && (cr.At.IsZero() || now.Sub(cr.At) <= u.EffectiveEvery()) {
+			return usageReading{}, err
+		}
+		if err == nil && now.Sub(cr.At) <= u.EffectiveEvery() {
+			return codexUsageToReading(cr), nil
+		}
+	}
+	if haveCached && !cached.SourceAt.Before(cr.At) && now.Sub(cached.SourceAt) <= u.EffectiveEvery() {
+		if stopped {
+			return usageReading{}, codex.ErrUsageStopped
+		}
+		if usageFresh(cached, u, now) {
 			return cached, nil
 		}
 	}
@@ -954,9 +962,17 @@ func (a *app) readCodexUsage(ctx context.Context, u config.Usage) (usageReading,
 		return r, nil
 	}
 	if errors.Is(probeErr, codex.ErrUsageStopped) {
+		if a.store != nil {
+			_ = a.store.WriteFile(codexAccountUsageFile, usageReading{At: now.UTC(), SourceAt: now.UTC(), AccountStopped: true})
+		}
 		return usageReading{}, probeErr
 	}
-	if haveCached && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
+	// Stops do not expire on transport failure. Only a successful account
+	// response or a newer authoritative local event can supersede them.
+	if stopped {
+		return usageReading{}, codex.ErrUsageStopped
+	}
+	if haveCached && !cached.AccountStopped && (err == nil || errors.Is(err, codex.ErrNoUsage)) && cached.SourceAt.After(cr.At) {
 		cached.At = now.UTC()
 		if validateReadingAt(cached, u, now) == nil {
 			cached.Fallback = "account refresh failed; using last Codex reading: " + probeErr.Error()
