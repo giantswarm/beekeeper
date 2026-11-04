@@ -118,11 +118,15 @@ func (e *Exchanger) exchange(ctx context.Context) (string, time.Duration, error)
 		ExpiresIn       int    `json:"expires_in"`
 		Error           string `json:"error"`
 	}
-	// An error page that is no JSON leaves out empty: the status says it.
-	_ = json.Unmarshal(body, &out)
+	// Decode error responses best-effort so non-JSON pages retain status diagnostics.
+	decodeErr := json.Unmarshal(body, &out)
 	if resp.StatusCode != http.StatusOK {
 		status := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 		return "", 0, fmt.Errorf("dex token exchange at %s (connector %s, client %s): %s", e.tokenURL, e.cfg.ConnectorID, e.cfg.ClientID, dexError(status, out.Error))
+	}
+	if decodeErr != nil {
+		// Decoder errors can contain response values, including credentials.
+		return "", 0, errors.New("dex token exchange: invalid JSON response")
 	}
 	switch {
 	case out.AccessToken == "":

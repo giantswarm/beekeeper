@@ -198,3 +198,63 @@ func TestExchangerDoesNotEchoResponseFields(t *testing.T) {
 		})
 	}
 }
+
+func TestExchangerRejectsMalformedSuccess(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"issued token type", `{"access_token":"synthetic-credential","issued_token_type":["urn:ietf:params:oauth:token-type:access_token"],"expires_in":1800}`},
+		{"access token", `{"access_token":["synthetic-credential"],"expires_in":1800}`},
+		{"lifetime", `{"access_token":"synthetic-credential","expires_in":"synthetic-credential"}`},
+		{"error field", `{"access_token":"synthetic-credential","expires_in":1800,"error":["synthetic-credential"]}`},
+		{"syntax", `{"access_token":"synthetic-credential","expires_in":1800`},
+		{"trailing data", `{"access_token":"synthetic-credential","expires_in":1800} synthetic-credential`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeDex{t: t, subject: "sa", scope: plainScopes, status: http.StatusOK, body: tc.body}
+			e, _ := newExchange(t, d, "")
+			ctx := context.Background()
+			for range 2 {
+				token, err := e.Token(ctx)
+				if token != "" || err == nil {
+					t.Fatalf("malformed token response accepted: token returned = %t, error = %v", token != "", err)
+				}
+				if err.Error() != "dex token exchange: invalid JSON response" {
+					t.Fatalf("unexpected diagnostic: %v", err)
+				}
+			}
+			if got := d.n.Load(); got != 2 {
+				t.Fatalf("%d exchanges, want 2 after malformed responses", got)
+			}
+			d.status = 0
+			for range 2 {
+				token, err := e.Token(ctx)
+				if err != nil || token != "dex-3" {
+					t.Fatalf("recovery: token matches = %t, error = %v", token == "dex-3", err)
+				}
+			}
+			if got := d.n.Load(); got != 3 {
+				t.Fatalf("%d exchanges, want 3 with recovered token cached", got)
+			}
+		})
+	}
+}
+
+func TestExchangerNonSuccessDiagnostics(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"non JSON", `<html>synthetic-credential</html>`, "401 Unauthorized"},
+		{"recognized code", `{"error":"access_denied","error_description":"synthetic-credential"}`, "401 Unauthorized: access_denied"},
+		{"unknown code", `{"error":"synthetic-credential"}`, "401 Unauthorized"},
+		{"partial decode", `{"error":"access_denied","expires_in":"synthetic-credential"}`, "401 Unauthorized: access_denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeDex{t: t, subject: "sa", scope: plainScopes, status: http.StatusUnauthorized, body: tc.body}
+			e, _ := newExchange(t, d, "")
+			token, err := e.Token(context.Background())
+			if token != "" || err == nil {
+				t.Fatalf("refusal: token returned = %t, error = %v", token != "", err)
+			}
+			if !strings.HasSuffix(err.Error(), ": "+tc.want) || strings.Contains(err.Error(), "synthetic-credential") {
+				t.Fatalf("unexpected refusal diagnostic: %v", err)
+			}
+		})
+	}
+}
