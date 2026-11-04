@@ -262,12 +262,18 @@ const pretooluseWord = "pretooluse"
 // that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
 // not such an entry.
 func agyHookBinary(raw json.RawMessage) (string, int) {
-	var events map[string][]hookEntry
+	var events map[string]json.RawMessage
 	if json.Unmarshal(raw, &events) != nil {
 		return "", 0
 	}
-	list := events["PreToolUse"]
-	if len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+	if value, ok := events["enabled"]; ok {
+		var enabled *bool
+		if json.Unmarshal(value, &enabled) != nil || enabled != nil && !*enabled {
+			return "", 0
+		}
+	}
+	var list []hookEntry
+	if json.Unmarshal(events["PreToolUse"], &list) != nil || len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
 		return "", 0
 	}
 	for _, suffix := range []string{" hook pretooluse --format agy", " hook pretooluse --format=agy"} {
