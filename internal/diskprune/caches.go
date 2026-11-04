@@ -55,7 +55,7 @@ type unit struct {
 // checkout is kept whole. A unit a process references, one holding a git
 // checkout (work not yet committed or pushed included) or one written within
 // CacheMinAge is kept; in files mode one reference or checkout inside the
-// root keeps all of it. A dry run measures without writes.
+// root outside nested policies keeps all of it. A dry run measures without writes.
 func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry bool) CacheResult {
 	var r CacheResult
 	fi, err := os.Lstat(p.Root)
@@ -78,11 +78,11 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 	}
 	var units []unit
 	if p.Files {
-		u, ok := scanFiles(p.Root, refs, &r)
+		u, ok := scanFiles(p.Root, refs, p.Nested, &r)
 		if !ok {
 			return r
 		}
-		units = slices.DeleteFunc(u, func(u unit) bool { return nestedIn(u.path, p.Nested) })
+		units = u
 	} else {
 		entries, err := os.ReadDir(p.Root)
 		if err != nil {
@@ -133,7 +133,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			r.Keep("process references unknown")
 			return r
 		}
-		if p.Files && InUse(p.Root, refs) {
+		if p.Files && filesInUse(p.Root, refs, p.Nested) {
 			r.Keep("in use")
 			return r
 		}
@@ -253,16 +253,33 @@ func removeFile(root *os.Root, base string, u unit) error {
 	return root.Remove(rel)
 }
 
-// scanFiles lists root's regular files. A reference or checkout anywhere in
-// root, or an unreadable subtree, keeps all of it (ok false).
-func scanFiles(dir string, refs []string, r *CacheResult) ([]unit, bool) {
-	if InUse(dir, refs) {
+// filesInUse checks only references governed by this files-mode policy.
+func filesInUse(dir string, refs, nested []string) bool {
+	for _, ref := range refs {
+		if !nestedIn(ref, nested) && InUse(dir, []string{ref}) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanFiles lists root's regular files, excluding nested policies' subtrees.
+// A reference, checkout or unreadable subtree in its domain keeps all of it
+// (ok false).
+func scanFiles(dir string, refs, nested []string, r *CacheResult) ([]unit, bool) {
+	if filesInUse(dir, refs, nested) {
 		r.Keep("in use")
 		return nil, false
 	}
 	var units []unit
 	why := ""
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if nestedIn(p, nested) {
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil

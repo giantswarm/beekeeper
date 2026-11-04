@@ -1,6 +1,7 @@
 package diskprune
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,5 +207,80 @@ func TestCacheFilesRecheckKeepsARootOpenedDuringTheScan(t *testing.T) {
 	p := Policy{Root: root, Files: true, OlderThan: 7 * day, Recheck: func() ([]string, error) { return []string{old}, nil }}
 	if r := Cache(p, time.Now(), false, nil, nil, false); r.Freed != 0 || !exists(old) || r.Kept["in use"] != 1 {
 		t.Fatalf("files recheck: %+v", r)
+	}
+}
+
+func TestCacheFilesNestedPolicyDoesNotBlockOuterCleanup(t *testing.T) {
+	for _, safeguard := range []string{"none", "checkout file", "checkout directory", "reference", "refreshed reference", "symlink reference"} {
+		for _, dry := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry=%t", safeguard, dry), func(t *testing.T) {
+				root := t.TempDir()
+				outer := cacheFile(t, root, "outer", 1000, 10*day)
+				inner := cacheFile(t, root, "project/nested/data", 2000, day)
+				p := Policy{Root: root, Files: true, OlderThan: 7 * day, Nested: []string{filepath.Dir(inner)}}
+				var refs []string
+				switch safeguard {
+				case "checkout file":
+					cacheFile(t, root, "project/nested/.git", 10, day)
+				case "checkout directory":
+					cacheFile(t, root, "project/nested/.git/HEAD", 10, day)
+				case "reference":
+					refs = []string{inner}
+				case "refreshed reference":
+					p.Recheck = func() ([]string, error) { return []string{inner}, nil }
+				case "symlink reference":
+					link := filepath.Join(t.TempDir(), "link")
+					if err := os.Symlink(filepath.Dir(inner), link); err != nil {
+						t.Fatal(err)
+					}
+					refs = []string{filepath.Join(link, "data")}
+				}
+				info, err := os.Stat(outer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := Cache(p, time.Now(), false, refs, nil, dry)
+				if r.Held != 1000 || r.Freed != 1000 || r.Removed != 1 || len(r.Errors) != 0 || len(r.Kept) != 0 {
+					t.Fatalf("outer cleanup: %+v", r)
+				}
+				if exists(outer) != dry || !exists(inner) {
+					t.Fatal("incorrect outer removal or nested data removed")
+				}
+				if !r.Newest.Equal(info.ModTime()) {
+					t.Fatalf("nested write counted: %v", r.Newest)
+				}
+				if strings.HasPrefix(safeguard, "checkout") && !exists(filepath.Join(filepath.Dir(inner), ".git")) {
+					t.Fatal("nested checkout removed")
+				}
+			})
+		}
+	}
+}
+
+func TestCacheFilesNestedPolicyKeepsOuterSafeguards(t *testing.T) {
+	for _, safeguard := range []string{"checkout", "reference", "root reference", "refreshed reference"} {
+		t.Run(safeguard, func(t *testing.T) {
+			root := t.TempDir()
+			outer := cacheFile(t, root, "outer", 1000, 10*day)
+			inner := cacheFile(t, root, "nested/data", 2000, 10*day)
+			p := Policy{Root: root, Files: true, OlderThan: 7 * day, Nested: []string{filepath.Dir(inner)}}
+			refs := []string{inner}
+			why := "in use"
+			switch safeguard {
+			case "checkout":
+				cacheFile(t, root, ".git/HEAD", 10, 10*day)
+				why = whyCheckout
+			case "reference":
+				refs = append(refs, outer)
+			case "root reference":
+				refs = append(refs, root)
+			case "refreshed reference":
+				p.Recheck = func() ([]string, error) { return []string{inner, outer}, nil }
+			}
+			r := Cache(p, time.Now(), false, refs, nil, false)
+			if r.Freed != 0 || r.Removed != 0 || r.Kept[why] != 1 || len(r.Errors) != 0 || !exists(outer) || !exists(inner) {
+				t.Fatalf("outer safeguard: %+v", r)
+			}
+		})
 	}
 }
