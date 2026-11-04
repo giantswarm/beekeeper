@@ -522,7 +522,7 @@ func (s Stdin) Check() error {
 	}
 	obj := map[string]any{}
 	if s.Template != "" {
-		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil || obj == nil {
 			return errors.New("--stdin-json: no JSON object")
 		}
 	}
@@ -539,7 +539,7 @@ func (s Stdin) input(v string) (string, error) {
 	}
 	obj := map[string]any{}
 	if s.Template != "" {
-		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil {
+		if err := json.Unmarshal([]byte(s.Template), &obj); err != nil || obj == nil {
 			return "", errors.New("--stdin-json: no JSON object")
 		}
 	}
