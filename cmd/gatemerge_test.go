@@ -994,12 +994,14 @@ func TestAMergedToolWindowWaitsForItsRelease(t *testing.T) {
 // is the caller's and stays the only one.
 func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		extra []string
-		want  string
+		name     string
+		extra    []string
+		want     string
+		override time.Duration
 	}{
-		{"none named", []string{"--update-branch"}, "--timeout 1h0m0s"},
-		{"named", []string{"--timeout", "9m"}, "--timeout 9m"},
+		{"90 minute pipeline", []string{"--update-branch"}, "--timeout 2h0m0s", 0},
+		{"repository override", nil, "--timeout 3h0m0s", 3 * time.Hour},
+		{"named", []string{"--timeout", "9m"}, "--timeout 9m", 3 * time.Hour},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			noSystemd(t)
@@ -1008,7 +1010,12 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 *) echo '{"verdict":"timeout","reason":"timeout after 30m0s"}'; exit 2 ;; esac`)
 			stubGitHub(t, "", "")
 			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
-			g.cfg.Merge.CITimeout = config.Duration{Duration: time.Hour}
+			cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.cfg.Merge.CITimeout = cfg.Merge.CITimeout
+			g.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: c.override}}
 			g.argv = mergeArgv(scratchRepo, c.extra...)
 			if err := g.runMerge(); err != nil {
 				t.Fatalf("exit %d, want 0", Code(err))
