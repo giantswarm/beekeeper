@@ -150,6 +150,8 @@ type Hook struct {
 	// Production is the installation the kube guard protects; empty, the
 	// guard is off.
 	Production string
+	// ReadOnlyExecQueries is the exact restricted SELECT allowlist for psql exec.
+	ReadOnlyExecQueries []string
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string

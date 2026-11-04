@@ -676,6 +676,8 @@ type Kube struct {
 	// a context or cluster name with it as a component. Empty, the kube
 	// guard is off.
 	Production string `yaml:"production"`
+	// ReadOnlyExecQueries lists exact SELECT queries allowed through psql -X -c.
+	ReadOnlyExecQueries []string `yaml:"readOnlyExecQueries"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
