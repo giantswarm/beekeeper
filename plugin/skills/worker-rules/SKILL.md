@@ -8,8 +8,7 @@ description: The core rules of a worker on a beekeeper desk — the report, the 
 One task; stricter desk rules win.
 
 - **Goal.** Merged/released/rolled/proven live. Report PRs/versions/proof/open items/live facts/"Problems found": `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each, or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
-- **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`. Use `beekeeper board move <owner/repo#n> <status>` to add or move an issue, including a personal-account issue. Prove access by moving an existing item to its current status.
-- **GitHub identity.** For a personal-account repository, every `gh` call names the repository with `GH_REPO=<owner/repo>` or `-R <owner/repo>` where supported, so the worker uses the person's login. Use `board move` instead of bare `gh project item-add`; an issue's `projectItems` can omit another owner's board.
+- **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
 - **Supervisor** (`supervisor status`): park `agents park`, ask `note add`, no status to the guide; inbox wakes, register `agents register`.
 - **Review.** Push/green CI, then `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. HEAD must match; loop merges; omit `--post-merge` only if merge ends the task.
 - **Problems**: `agents problem "<finding>"` sends evidence/owning repo/issue URL; the supervisor files. Gate/CI: report first, name detour; never bypass.
@@ -17,7 +16,6 @@ One task; stricter desk rules win.
 - **Apps** (`beekeeper app`): own settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster calls name context/kubeconfig; never write `kube.production`.
 - **Rounds.** Focused checks; one push per round. Read saved failures; rerun only failures (`-run`); `set -o pipefail`. Reviews: proofs; CI runs full checks.
-- **PR edits under the App token.** Use `gh api -X PATCH repos/<owner>/<repo>/pulls/<number> -f title='<title>' -F body=@<file>` (omit unchanged fields; inline body: `-f body='<body>'`). `gh pr edit` queries `reviewRequests` and can fail with `Resource not accessible by integration`. Team review requests also need organization Members read permission to resolve `org/team`; until granted and accepted on the App installation, send the request to the supervisor with `beekeeper note add` for the person to request the team review.
 - **Git.** No force push (`--force-with-lease` too). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no `git stash`.
 - **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
