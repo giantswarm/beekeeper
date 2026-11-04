@@ -606,12 +606,19 @@ func (a *app) authorizeWorkerGitHub(ctx context.Context, clientID, refreshRef st
 		if err := githubJSON(ctx, http.MethodGet, "/user", "Bearer "+tok.AccessToken, http.StatusOK, &user); err != nil {
 			return fmt.Errorf("verifying GitHub user token: %w", err)
 		}
-		if err := a.storeWorkerRefreshToken(ctx, ref, tok.RefreshToken); err != nil {
-			return errors.New("cannot persist GitHub refresh token: run beekeeper agents hosts github-login again")
-		}
+		// Device flow may take minutes: lock only its commit, using the same
+		// lock as issuance and revocation for the refresh token/cache pair.
 		oauthPath := a.workerGitHubOAuthPath()
 		if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
 			return err
+		}
+		lock := flock.New(oauthPath + ".lock")
+		if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); err != nil || !ok {
+			return errors.New("worker GitHub credentials busy during authorization")
+		}
+		defer func() { _ = lock.Unlock() }()
+		if err := a.storeWorkerRefreshToken(ctx, ref, tok.RefreshToken); err != nil {
+			return errors.New("cannot persist GitHub refresh token: run beekeeper agents hosts github-login again")
 		}
 		if err := writeWorkerGitHub(oauthPath, map[string]workerGitHubToken{workerGitHubCurrentKey: {Token: tok.AccessToken, Expires: expires}}); err != nil {
 			return err
