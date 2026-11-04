@@ -23,10 +23,12 @@ func TestRunKubeconfigWriter(t *testing.T) {
 	if err := clientcmd.ModifyConfig(rules, *cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(os.Getenv("BEEKEEPER_TEST_KUBECONFIG_REPORT"), []byte(rules.GetDefaultFilename()), 0o600); err != nil {
+	if err := os.WriteFile(os.Getenv("BEEKEEPER_TEST_KUBECONFIG_REPORT"), []byte(rules.GetDefaultFilename()), 0o600); err != nil { //nolint:gosec // a path of this test
 		t.Fatal(err)
 	}
 }
+
+const kubeconfigAssignment = "assignment"
 
 type alreadyCappedKubeconfigCapper struct{ fakeCapper }
 
@@ -34,7 +36,7 @@ func (*alreadyCappedKubeconfigCapper) Capped() bool { return true }
 
 func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 	for _, execution := range []string{"capped", "uncapped", "already-capped"} {
-		for _, mode := range []string{"unset", "empty", "inherited", "assignment"} {
+		for _, mode := range []string{"unset", "empty", "inherited", kubeconfigAssignment} {
 			t.Run(mode+"/"+execution, func(t *testing.T) {
 				saved := plat.Capper
 				plat.Capper = &fakeCapper{down: execution == "uncapped"}
@@ -70,26 +72,26 @@ func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 					t.Fatal(err)
 				}
 				argv := []string{binary, "-test.run=^TestRunKubeconfigWriter$"}
-				if mode == "assignment" {
+				if mode == kubeconfigAssignment {
 					argv = []string{"sh", "-c", `KUBECONFIG="$1" "$2" -test.run='^TestRunKubeconfigWriter$'`, "sh", explicit, binary}
 				}
 				o := Options{Max: "1M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: io.Discard}
 				if rc := Run(o, argv); rc != 0 {
 					t.Fatalf("Run exit %d", rc)
 				}
-				got, err := os.ReadFile(machine)
+				got, err := os.ReadFile(machine) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
 				if !bytes.Equal(got, original) {
 					t.Fatalf("machine kubeconfig changed: %s", got)
 				}
-				raw, err := os.ReadFile(report)
+				raw, err := os.ReadFile(report) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
 				used := string(raw)
-				if mode == "inherited" || mode == "assignment" {
+				if mode == "inherited" || mode == kubeconfigAssignment {
 					if used != explicit {
 						t.Fatalf("used %q, want explicit path", used)
 					}
@@ -104,7 +106,7 @@ func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 					if !strings.Contains(used, "beekeeper-kubeconfig-") {
 						t.Fatalf("used %q, want scratch", used)
 					}
-					if _, err := os.Stat(filepath.Dir(used)); !os.IsNotExist(err) {
+					if _, err := os.Stat(filepath.Dir(used)); !os.IsNotExist(err) { //nolint:gosec // a path of this test
 						t.Fatalf("scratch not cleaned up: %v", err)
 					}
 				}
