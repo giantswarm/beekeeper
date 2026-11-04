@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const commandPipeFixture = "--execution-command-pipe-fixture"
+const (
+	commandPipeFixture = "--execution-command-pipe-fixture"
+	commandPipeCancel  = "cancel"
+)
 
 func TestExecutionCommandsBoundInheritedPipes(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
@@ -31,7 +34,7 @@ func TestExecutionCommandsBoundInheritedPipes(t *testing.T) {
 		},
 	}
 	for name, run := range runners {
-		for _, mode := range []string{"exit", "cancel"} {
+		for _, mode := range []string{"exit", commandPipeCancel} {
 			t.Run(name+"/"+mode, func(t *testing.T) {
 				listener, err := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: "\x00beekeeper-command-test-" + newID()})
 				if err != nil {
@@ -67,7 +70,7 @@ func TestExecutionCommandsBoundInheritedPipes(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer func() { _ = child.Kill() }()
-				if mode == "cancel" {
+				if mode == commandPipeCancel {
 					cancel()
 				}
 				select {
@@ -105,7 +108,7 @@ func TestExecutionCommandPipeHelper(t *testing.T) {
 	if err := child.Start(); err != nil {
 		os.Exit(2)
 	}
-	ready, err := net.Dial("unix", os.Args[i+2])
+	ready, err := net.Dial("unix", os.Args[i+2]) //nolint:gosec // parent test supplies a local abstract Unix socket, never a network endpoint
 	if err != nil {
 		_ = child.Process.Kill()
 		_ = child.Wait()
@@ -113,7 +116,7 @@ func TestExecutionCommandPipeHelper(t *testing.T) {
 	}
 	_, _ = fmt.Fprintln(ready, child.Process.Pid)
 	_ = ready.Close()
-	if mode == "cancel" {
+	if mode == commandPipeCancel {
 		time.Sleep(30 * time.Second)
 	}
 	os.Exit(0)
