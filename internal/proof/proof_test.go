@@ -175,6 +175,7 @@ func TestUploadNewBranch(t *testing.T) {
 
 // Alt text cannot escape the image delimiter or introduce line endings.
 func TestUploadAltText(t *testing.T) {
+	const paragraphs = "shot  next"
 	for _, tt := range []struct{ name, alt, want string }{
 		{"empty", "", ""},
 		{"odd trailing backslashes", `shot\`, `shot\\`},
@@ -182,9 +183,9 @@ func TestUploadAltText(t *testing.T) {
 		{"three trailing backslashes", `shot\\\`, `shot\\\\\\`},
 		{"backslashes beside brackets", `\[shot\]\`, `\\shot\\\\`},
 		{"brackets between backslashes", `shot\[]\`, `shot\\\\`},
-		{"CR paragraphs", "shot\r\rnext", "shot  next"},
-		{"LF paragraphs", "shot\n\nnext", "shot  next"},
-		{"CRLF paragraphs", "shot\r\n\r\nnext", "shot  next"},
+		{"CR paragraphs", "shot\r\rnext", paragraphs},
+		{"LF paragraphs", "shot\n\nnext", paragraphs},
+		{"CRLF paragraphs", "shot\r\n\r\nnext", paragraphs},
 		{"mixed line endings", "a\rb\nc\r\nd", "a b c d"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
