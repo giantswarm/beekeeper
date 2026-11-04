@@ -319,9 +319,9 @@ CODEX_HOME=/srv/beekeeper/codex codex login --device-auth
 
 Workers never run in that home. `prepare` installs a managed `CODEX_HOME`
 inside the policy directory with the embedded worker rules as `AGENTS.md`, a
-`config.toml` with hooks on and the browser, computer, code-mode, image and
-plugin tools off, and a `hooks.json` whose PreToolUse hook is the execution
-guard in Codex's format. It links only `auth.json` from `configDir`. The policy
+`config.toml` with hooks and the code-mode host on and the browser, computer,
+image and plugin tools off, and a `hooks.json` whose PreToolUse hook is the
+execution guard in Codex's format. It links only `auth.json` from `configDir`. The policy
 binds those files; a changed one fails `hosts check` until a matching bundle is
 prepared again. Use a ChatGPT subscription login: an API-key login is refused.
 
