@@ -61,7 +61,8 @@ only to `generic-api-key`; other values and files remain scanned.
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
-`test-envtest` job does after `make check-crds`. The mailboxes' tests (`internal/mailbox`, and serve's, which need
+`test-envtest` job does after `make check-crds`. HTTP authentication and body-limit tests run without Postgres,
+including from a linked git worktree. The mailboxes' tests (`internal/mailbox`, and serve's, which need
 both) run against the Postgres `BEEKEEPER_TEST_DATABASE_URL` names, each in a database of its own, and skip without it;
 CI's job runs one beside it, and locally the same image does:
 
