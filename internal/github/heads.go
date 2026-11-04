@@ -62,48 +62,72 @@ type headNode struct {
 	Fork     bool       `json:"isCrossRepository"`
 }
 
-// headPulls is one request of HeadPulls, of heads of one owner, into pulls.
+// headPulls reads a bounded batch of heads of one owner, following only
+// unresolved connections, into pulls.
 func headPulls(ctx context.Context, run GH, heads []Head, pulls map[Head]HeadPull) error {
-	var q strings.Builder
-	q.WriteString("query{")
-	for i, h := range heads {
-		owner, name, ok := strings.Cut(h.Repo, "/")
-		if !ok {
-			return fmt.Errorf("%s is not owner/repo", h.Repo)
+	cursors := map[Head]string{}
+	for len(heads) > 0 {
+		var q strings.Builder
+		q.WriteString("query{")
+		for i, h := range heads {
+			owner, name, ok := strings.Cut(h.Repo, "/")
+			if !ok {
+				return fmt.Errorf("%s is not owner/repo", h.Repo)
+			}
+			after := ""
+			if cursor := cursors[h]; cursor != "" {
+				after = ",after:" + quote(cursor)
+			}
+			fmt.Fprintf(&q, "h%d:repository(owner:%s,name:%s){pullRequests(headRefName:%s,first:%d%s,orderBy:{field:CREATED_AT,direction:DESC}){pageInfo{hasNextPage endCursor} nodes{number state headRefOid closedAt isCrossRepository}}}",
+				i, quote(owner), quote(name), quote(h.Branch), pullsPerHead, after)
 		}
-		fmt.Fprintf(&q, "h%d:repository(owner:%s,name:%s){pullRequests(headRefName:%s,first:%d,orderBy:{field:CREATED_AT,direction:DESC}){nodes{number state headRefOid closedAt isCrossRepository}}}",
-			i, quote(owner), quote(name), quote(h.Branch), pullsPerHead)
-	}
-	q.WriteString("}")
-	// A repository GitHub does not answer fails the request but keeps the
-	// others' data.
-	out, err := run(ctx, "api", "graphql", "-f", "query="+q.String())
-	var doc struct {
-		Data map[string]json.RawMessage `json:"data"`
-	}
-	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
-		return cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
-	}
-	for i, h := range heads {
-		var v struct {
-			Pulls *struct {
-				Nodes []headNode `json:"nodes"`
-			} `json:"pullRequests"`
+		q.WriteString("}")
+		// A repository GitHub does not answer fails the request but keeps the
+		// others' data.
+		out, err := run(ctx, "api", "graphql", "-f", "query="+q.String())
+		var doc struct {
+			Data map[string]json.RawMessage `json:"data"`
 		}
-		raw, ok := doc.Data[fmt.Sprintf("h%d", i)]
-		if !ok || json.Unmarshal(raw, &v) != nil || v.Pulls == nil {
-			continue
+		if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
+			return cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
 		}
-		own := slices.IndexFunc(v.Pulls.Nodes, func(n headNode) bool { return !n.Fork })
-		if own < 0 {
-			continue
+		var pending []Head
+		for i, h := range heads {
+			var v struct {
+				Pulls *struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []headNode `json:"nodes"`
+				} `json:"pullRequests"`
+			}
+			raw, ok := doc.Data[fmt.Sprintf("h%d", i)]
+			if !ok || json.Unmarshal(raw, &v) != nil || v.Pulls == nil {
+				if cursors[h] != "" {
+					return cmp.Or(err, fmt.Errorf("gh api graphql: missing continuation for %s branch %s", h.Repo, h.Branch))
+				}
+				continue
+			}
+			own := slices.IndexFunc(v.Pulls.Nodes, func(n headNode) bool { return !n.Fork })
+			if own < 0 {
+				if page := v.Pulls.PageInfo; page.HasNextPage {
+					if page.EndCursor == "" || page.EndCursor == cursors[h] {
+						return fmt.Errorf("gh api graphql: invalid continuation for %s branch %s", h.Repo, h.Branch)
+					}
+					cursors[h] = page.EndCursor
+					pending = append(pending, h)
+				}
+				continue
+			}
+			n := v.Pulls.Nodes[own]
+			p := HeadPull{N: n.Number, State: n.State, HeadOid: n.HeadOid}
+			if n.ClosedAt != nil {
+				p.ClosedAt = *n.ClosedAt
+			}
+			pulls[h] = p
 		}
-		n := v.Pulls.Nodes[own]
-		p := HeadPull{N: n.Number, State: n.State, HeadOid: n.HeadOid}
-		if n.ClosedAt != nil {
-			p.ClosedAt = *n.ClosedAt
-		}
-		pulls[h] = p
+		heads = pending
 	}
 	return nil
 }
