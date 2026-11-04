@@ -823,6 +823,54 @@ func TestCopyValuesRefusesBeforeReadingAValue(t *testing.T) {
 	}
 }
 
+func TestCopyValuesRefusesDestinationAliases(t *testing.T) {
+	for _, paths := range [][2]string{
+		{"password", `"password"`},
+		{`"credentials.json"`, `credentials\.json`},
+		{`stringData."credentials.json"`, `stringData.credentials\.json`},
+		{`"credentials.json"`, "credentials.json"},
+	} {
+		for _, target := range []string{"absent", "new Secret", "skeleton"} {
+			t.Run(paths[0]+"/"+paths[1]+"/"+target, func(t *testing.T) {
+				dir, _ := scratch(t)
+				file := filepath.Join(dir, "destination.sops.yaml")
+				var nw *secret.NewSecret
+				var original []byte
+				if target == "new Secret" {
+					nw = &secret.NewSecret{Name: "app", Namespace: appNS}
+				}
+				if target == "skeleton" {
+					original = []byte("apiVersion: v1\nkind: Secret\nmetadata:\n  name: app\nstringData:\n")
+					if err := os.WriteFile(file, original, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				tools := secrettest.New(map[string]string{appVault: password, vaultRef: token})
+				pairs := []secret.Pair{
+					{Src: secret.Ref{Op: appVault}, Path: paths[0]},
+					{Src: secret.Ref{Op: vaultRef}, Path: paths[1]},
+				}
+				_, err := ops(tools).CopyValues(context.Background(), pairs, file, nw)
+				if err == nil || !strings.Contains(err.Error(), "named twice") {
+					t.Fatalf("copy = %v, want named twice", err)
+				}
+				if len(tools.Calls) != 0 {
+					t.Errorf("a refused copy ran %q", tools.Calls)
+				}
+				got, readErr := os.ReadFile(file)
+				if original == nil {
+					if !os.IsNotExist(readErr) {
+						t.Errorf("destination exists: %v", readErr)
+					}
+				} else if readErr != nil || string(got) != string(original) {
+					t.Errorf("destination changed: %v", readErr)
+				}
+				noValue(t, "the refusal", err)
+			})
+		}
+	}
+}
+
 func TestParsePair(t *testing.T) {
 	for in, want := range map[string]secret.Pair{
 		"op://Shared/app/client id=client-id": {Src: secret.Ref{Op: "op://Shared/app/client id"}, Path: "client-id"},

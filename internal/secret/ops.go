@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"gopkg.in/yaml.v3"
 )
 
 // The states compare answers per key.
@@ -216,13 +217,21 @@ func (o *Ops) CopyValues(ctx context.Context, pairs []Pair, file string, nw *New
 		return nil, err
 	}
 	paths := make([]string, len(pairs))
+	planned := make(map[*yaml.Node]bool, len(pairs))
 	for i, p := range pairs {
 		if paths[i], err = place(doc, file, p.Path); err != nil {
 			return nil, err
 		}
-		if slices.Contains(paths[:i], paths[i]) {
+		if planned[doc.node(paths[i])] {
 			return nil, fmt.Errorf("%s: %s is named twice", file, paths[i])
 		}
+		// Reserve each destination in the document so later paths resolve
+		// against the shape all preceding writes would create. No source
+		// values or external tools are needed to plan the operation.
+		if err := doc.set(paths[i], ""); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		planned[doc.node(paths[i])] = true
 	}
 	vs := make([]string, len(pairs))
 	for i, p := range pairs {
