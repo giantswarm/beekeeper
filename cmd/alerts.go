@@ -301,7 +301,7 @@ ones that did not answer, which keep what the last discovery found.`,
 			return nil
 		},
 	}
-	c.AddCommand(watch, snapshot, imp, capture, replay, discover, a.alertsOwnCmd(), a.alertsDisownCmd())
+	c.AddCommand(watch, snapshot, imp, capture, replay, discover, a.alertsOwnCmd(), a.alertsOwnersCmd(), a.alertsDisownCmd())
 	return c
 }
 
