@@ -178,7 +178,12 @@ func (s *Store) Send(ctx context.Context, m Message, now time.Time) (Sent, error
 	}
 	var out Sent
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// One sender's sends and one mailbox's cap are judged one at a time.
+		// Serialize sender admission across destinations before taking the
+		// mailbox lock that protects its cap. The two-key advisory namespace
+		// is separate from the single-key mailbox and schema locks.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_sender'), hashtext($1))`, m.Sender); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_mailbox:' || $1))`, m.Mailbox); err != nil {
 			return err
 		}

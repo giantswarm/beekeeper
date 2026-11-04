@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/mailbox/mailboxtest"
 )
@@ -226,4 +228,132 @@ func TestMailboxListen(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("the ack")
+}
+
+// Different stores model separate central instances sharing the database.
+func TestMailboxConcurrentSenderDedupe(t *testing.T) {
+	url := mailboxtest.URL(t)
+	stores := []*mailbox.Store{open(t, url), open(t, url)}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const count = 12
+	type result struct {
+		sent mailbox.Sent
+		err  error
+	}
+	results := make(chan result, count)
+	start := make(chan struct{})
+	for i := range count {
+		go func() {
+			<-start
+			sent, err := stores[i%len(stores)].Send(ctx, msg(fmt.Sprintf("receiver%d@example.com", i), ana, "same-id"), t0)
+			results <- result{sent, err}
+		}()
+	}
+	close(start)
+	fresh := 0
+	var seq int64
+	for range count {
+		r := <-results
+		if r.err != nil {
+			t.Errorf("send: %v", r.err)
+			continue
+		}
+		if !r.sent.Duplicate {
+			fresh++
+		}
+		if seq == 0 {
+			seq = r.sent.Seq
+		}
+		if r.sent.Seq != seq {
+			t.Errorf("sequence %d, want %d", r.sent.Seq, seq)
+		}
+	}
+	if fresh != 1 {
+		t.Fatalf("%d new deliveries, want 1", fresh)
+	}
+	queued := 0
+	for i := range count {
+		ds := receive(t, stores[0], fmt.Sprintf("receiver%d@example.com", i), t0)
+		queued += len(ds)
+		for _, d := range ds {
+			if d.Seq != seq {
+				t.Errorf("queued sequence %d, want %d", d.Seq, seq)
+			}
+		}
+	}
+	if queued != 1 {
+		t.Fatalf("%d queued deliveries, want 1", queued)
+	}
+}
+
+func TestMailboxConcurrentCap(t *testing.T) {
+	url := mailboxtest.URL(t)
+	stores := []*mailbox.Store{open(t, url), open(t, url)}
+	for i := range mailbox.Cap - 1 {
+		send(t, stores[0], msg(bob, ana, fmt.Sprintf("prefill-%d", i)), t0)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := range 2 {
+		go func() {
+			<-start
+			_, err := stores[i].Send(ctx, msg(bob, fmt.Sprintf("sender%d@example.com", i), "last-place"), t0)
+			results <- err
+		}()
+	}
+	close(start)
+	accepted, full := 0, 0
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, mailbox.ErrFull):
+			full++
+		default:
+			t.Errorf("send: %v", err)
+		}
+	}
+	if accepted != 1 || full != 1 {
+		t.Fatalf("accepted %d, full %d; want one each", accepted, full)
+	}
+	if ds := receive(t, stores[0], bob, t0); len(ds) != mailbox.Cap {
+		t.Fatalf("%d deliveries, want %d", len(ds), mailbox.Cap)
+	}
+}
+
+func TestMailboxSenderLockCancellation(t *testing.T) {
+	url := mailboxtest.URL(t)
+	s := open(t, url)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_sender'), hashtext($1))`, ana); err != nil {
+		t.Fatal(err)
+	}
+	waiting, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err := s.Send(waiting, msg(bob, ana, "cancelled"), t0); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send: %v, want deadline exceeded", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ds := receive(t, s, bob, t0); len(ds) != 0 {
+		t.Fatalf("cancelled send queued %d deliveries", len(ds))
+	}
+	if sent := send(t, s, msg(bob, ana, "cancelled"), t0); sent.Duplicate {
+		t.Fatal("cancelled send remembered as duplicate")
+	}
 }
