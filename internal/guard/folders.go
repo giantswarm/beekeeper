@@ -193,23 +193,27 @@ func writeTargets(cmd, cwd string, depth int) []string {
 // walkTargets is writeTargets, or with moves the existing directories the
 // command line moves or removes (movedDirs).
 func walkTargets(cmd, cwd string, depth int, moves bool) []string {
+	return walkTargetsMode(cmd, cwd, depth, moves, false)
+}
+
+func walkTargetsMode(cmd, cwd string, depth int, moves, create bool) []string {
 	if depth > 4 {
 		return nil
 	}
 	sc := scanShell(cmd)
 	segs := sc.segments()
-	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves}
+	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves, create: create}
 	st := deleteState{assigned: map[string]string{}, env: os.Getenv, nounset: depth > 0}
 	w.walk(0, st, cwd)
 	out := w.out
 	for _, cs := range shellStrings(cmd) {
 		if sc.masked[cs.at] == cmd[cs.at] {
-			out = append(out, walkTargets(cs.text, cwd, depth+1, moves)...)
+			out = append(out, walkTargetsMode(cs.text, cwd, depth+1, moves, create)...)
 		}
 	}
 	for _, hd := range sc.heredocs {
 		if shellReads(sc, segs, hd.op) {
-			out = append(out, walkTargets(cmd[hd.start:hd.end], cwd, depth+1, moves)...)
+			out = append(out, walkTargetsMode(cmd[hd.start:hd.end], cwd, depth+1, moves, create)...)
 		}
 	}
 	return out
@@ -287,9 +291,10 @@ type targetWalk struct {
 	// moves collects the directories moved or removed (liveworktrees.go)
 	// instead of the files written; loops holds what a for loop's variable
 	// takes then.
-	moves bool
-	loops map[string][]string
-	out   []string
+	moves  bool
+	create bool
+	loops  map[string][]string
+	out    []string
 }
 
 // walk follows the segments from i on with the variables st and the
@@ -299,7 +304,7 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 	st.chdir(dir)
 	for ; i < len(w.segs); i++ {
 		sg := w.segs[i]
-		if !w.moves {
+		if !w.moves && !w.create {
 			w.redirections(sg, &st, dir)
 		}
 		cmds := rawCommands(w.sc.plain[sg.start:sg.end])
@@ -333,8 +338,10 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 				dir = st.cd(dir, raw[k+1:], words[k+1:])
 			}
 			st.chdir(dir)
-		case w.moves && name == "for":
+		case (w.moves || w.create) && name == "for":
 			w.loop(&st, dir, raw[k+1:])
+		case w.create:
+			w.addWorktree(&st, dir, name, raw[k+1:])
 		case w.moves:
 			w.addMoved(&st, dir, name, raw[k+1:])
 		case name == "tee":
