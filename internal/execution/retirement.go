@@ -170,15 +170,16 @@ func (s *Server) retireLocked(ctx context.Context, j Journal) (retErr error) {
 	// This durable recovery reference protects dirty, untracked and unpublished
 	// work without attempting a commit or changing the worker's branch/index.
 	if inv.Recovery == "" {
-		inv.Recovery = filepath.Join(s.Root, "resources", string(r.Execution)+"-recovery.json")
+		recoveryPath := filepath.Join(s.Root, "resources", string(r.Execution)+"-recovery.json")
 		recovery := struct {
 			Ref       Ref             `json:"ref"`
 			Journal   Journal         `json:"journal"`
 			Resources []OwnedResource `json:"resources"`
 		}{r, j, inv.Resources}
-		if err := atomicFile(inv.Recovery, mustJSON(recovery)); err != nil {
+		if err := atomicFile(recoveryPath, mustJSON(recovery)); err != nil {
 			return err
 		}
+		inv.Recovery = recoveryPath
 	}
 	if err := save(); err != nil {
 		return err
@@ -230,7 +231,7 @@ func (s *Server) retireLocked(ctx context.Context, j Journal) (retErr error) {
 			}
 		}
 		// Persist the rename before recording its completion in another directory.
-		d, err := os.Open(parent)
+		d, err := os.Open(parent) //nolint:gosec // parent is rederived from the validated owned inventory and checked for symlinks above
 		if err != nil {
 			return err
 		}

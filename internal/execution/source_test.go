@@ -42,11 +42,7 @@ func TestWorkspaceStartsAtCoordinatorHeadWithStaleHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(f.s.Root, "sources", string(f.r.Ref.Execution), "source.bundle")
-	if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicFile(source, data); err != nil {
+	if err := f.s.ReceiveSource(ctx, f.r.Ref, SourceChunk{Total: int64(len(data)), Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	// JSON keeps this regression executable against the pre-fix request type.
@@ -124,11 +120,7 @@ func TestWorkspaceUnshallowsHostCheckoutWhenPinnedSourceIsComplete(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := f.s.sourcePath(f.r.Ref)
-	if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicFile(source, data); err != nil {
+	if err := f.s.ReceiveSource(ctx, f.r.Ref, SourceChunk{Total: int64(len(data)), Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	f.r.GitRef, f.r.SourceDigest = head, Digest(data)
@@ -229,11 +221,8 @@ func TestWorkspaceRejectsCorruptPinnedSource(t *testing.T) {
 	}
 	f.r.GitRef = strings.TrimSpace(string(head))
 	f.r.SourceDigest = Digest([]byte("expected bundle"))
-	p := f.s.sourcePath(f.r.Ref)
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte("corrupted"), 0600); err != nil {
+	data := []byte("corrupted")
+	if err := f.s.ReceiveSource(ctx, f.r.Ref, SourceChunk{Total: int64(len(data)), Data: data}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.Start(ctx, f.r); err == nil || !strings.Contains(err.Error(), "missing or corrupt") {

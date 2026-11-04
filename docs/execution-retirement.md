@@ -21,7 +21,7 @@ Before moving runtime resources, the host syncs a recovery reference containing
 the journal and retained resource locations. Worktrees, dirty/untracked files,
 unpublished commits, scratch and source bundles stay at their original paths.
 Publication, review, merge and thread evidence is not removed. This preserves the
-unpublished-work contract from #2251. Runtime resources are renamed alongside
+unpublished-work contract from https://github.com/giantswarm/beekeeper/pull/2251. Runtime resources are renamed alongside
 their original locations with a `.retired` suffix and are never hard deleted by
 this proof. No configured retention period is shortened: this slice introduces
 no expiry or purge operation.

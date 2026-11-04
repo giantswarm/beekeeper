@@ -11,8 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
+const retirementParked = "parked"
+const retirementReason = "retirement fixture"
+
 func TestRetirementLifecycle(t *testing.T) {
-	for _, mode := range []string{"stop", "failed start", "crash", "interrupted rename", "parked"} {
+	for _, mode := range []string{stopOperation, "failed start", "crash", "interrupted rename", retirementParked} {
 		t.Run(mode, func(t *testing.T) {
 			f := testFixture(t)
 			ctx := context.Background()
@@ -34,8 +37,8 @@ func TestRetirementLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if mode == "stop" {
-				if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "test"}); err != nil {
+			if mode == stopOperation {
+				if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: retirementReason}); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -50,7 +53,7 @@ func TestRetirementLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				f.launcher.states[h.Unit] = unitInactive
-				if mode == "parked" {
+				if mode == retirementParked {
 					f.launcher.states[h.Unit] = unitActive
 				}
 			}
@@ -63,7 +66,7 @@ func TestRetirementLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "parked" {
+			if mode == retirementParked {
 				if !inv.Started.IsZero() || inv.Recovery != "" {
 					t.Fatal("parked worker retired")
 				}
@@ -78,7 +81,7 @@ func TestRetirementLifecycle(t *testing.T) {
 			if _, err := os.Stat(inv.Recovery); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := os.ReadFile(dirty); err != nil || string(got) != "recover me" {
+			if got, err := readRegular(dirty, MaxWire); err != nil || string(got) != "recover me" {
 				t.Fatalf("lost work: %q %v", got, err)
 			}
 			if _, err := os.Stat(runtime + ".retired"); err != nil {
@@ -125,7 +128,7 @@ func TestRetirementRejectsSymlinkAndForeignInventory(t *testing.T) {
 	if err := os.Symlink(f.source, handleDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "test"}); err == nil {
+	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: retirementReason}); err == nil {
 		t.Fatal("retired symlink")
 	}
 	if _, err := os.Stat(filepath.Join(f.source, "tracked.txt")); err != nil {
@@ -147,7 +150,7 @@ func TestRetirementRevocationRetry(t *testing.T) {
 	f.s.Callback = func(context.Context, []string, []byte) ([]byte, error) {
 		return nil, errors.New("coordinator unavailable")
 	}
-	stop := StopRequest{ID: uuid.NewString(), Reason: "test"}
+	stop := StopRequest{ID: uuid.NewString(), Reason: retirementReason}
 	if _, err := f.s.Stop(ctx, f.r.Ref, stop); err == nil {
 		t.Fatal("reported revocation success while unavailable")
 	}
@@ -188,7 +191,7 @@ func TestRetirementLeavesOtherWorkerAndProvisionedRepository(t *testing.T) {
 	if _, err := f.s.workerEnvironment(other.Ref, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "test"}); err != nil {
+	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: retirementReason}); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{filepath.Join(h.Workspace, "tracked.txt"), filepath.Join(f.source, "tracked.txt"), filepath.Join(f.s.ownedRoot(other.Ref), "runtime")} {
@@ -252,7 +255,7 @@ func TestRetirementRetryRejectsSubstitutedDestination(t *testing.T) {
 	if err := os.Symlink(f.source, runtime+".retired"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: "test"}); err == nil {
+	if _, err := f.s.Stop(ctx, f.r.Ref, StopRequest{ID: uuid.NewString(), Reason: retirementReason}); err == nil {
 		t.Fatal("accepted substituted retirement destination")
 	}
 	inv, err := f.s.resourceInventory(f.r.Ref)
@@ -261,5 +264,57 @@ func TestRetirementRetryRejectsSubstitutedDestination(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.source, "tracked.txt")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRetirementRetriesFailedRecoveryWrite(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	if _, err := f.s.Start(ctx, f.r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.workerEnvironment(f.r.Ref, nil); err != nil {
+		t.Fatal(err)
+	}
+	recovery := filepath.Join(f.s.Root, "resources", string(f.r.Ref.Execution)+"-recovery.json")
+	// A directory at the file destination forces the atomic rename to fail.
+	if err := os.Mkdir(recovery, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stop := StopRequest{ID: uuid.NewString(), Reason: "recovery write failure"}
+	if _, err := f.s.Stop(ctx, f.r.Ref, stop); err == nil {
+		t.Fatal("recovery write unexpectedly succeeded")
+	}
+	inv, err := f.s.resourceInventory(f.r.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Recovery != "" {
+		t.Fatal("recorded a recovery reference before its file was durable")
+	}
+	runtime := filepath.Join(f.s.ownedRoot(f.r.Ref), "runtime")
+	if _, err := os.Stat(runtime); err != nil {
+		t.Fatal("runtime moved before recovery persisted", err)
+	}
+	if err := os.Remove(recovery); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Stop(ctx, f.r.Ref, stop); err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Ref       Ref             `json:"ref"`
+		Journal   Journal         `json:"journal"`
+		Resources []OwnedResource `json:"resources"`
+	}
+	if err := readJSON(recovery, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Ref != f.r.Ref || saved.Journal.Handle.Ref != f.r.Ref || len(saved.Resources) == 0 {
+		t.Fatal("missing recovery evidence")
+	}
+	inv, err = f.s.resourceInventory(f.r.Ref)
+	if err != nil || inv.Finished.IsZero() || inv.Recovery != recovery {
+		t.Fatalf("retry did not finish: %+v %v", inv, err)
 	}
 }
