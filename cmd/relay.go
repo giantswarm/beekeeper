@@ -305,8 +305,9 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 }
 
 // renameHolder gives sup the title its running session carries now: a
-// holder renamed after its start is known by its current name, not the one
-// recorded at the start. It reports whether the name changed.
+// holder with a numbered run ignores desktop fallback names across imports
+// and CLI restarts. A new run title can still replace an older one. It
+// reports whether the name changed.
 func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 	if sup == nil {
 		return false
@@ -316,6 +317,12 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 	// PID only: no rename.
 	if !live || s.Name == "" || s.Name == sup.Name || s.Name == "pid "+strconv.Itoa(s.PID) {
 		return false
+	}
+	for _, title := range []string{"Guide", "Supervisor"} {
+		rl := role{title: title}
+		if rl.runOf(sup.Name) > 0 && rl.runOf(s.Name) == 0 {
+			return false
+		}
 	}
 	sup.Name = s.Name
 	return true
