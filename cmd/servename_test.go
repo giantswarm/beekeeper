@@ -178,11 +178,12 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 }
 
 func TestServeAcceptsItems(t *testing.T) {
+	const waits = "fixture review"
 	for _, item := range []string{"example/tool", "investigate build failures", "example/tool#42"} {
 		t.Run(item, func(t *testing.T) {
 			a, store := serveApp(t)
-			out, err := serve(a, rosterName, item, "--waits", "review")
-			want := `"BK worker" serves ` + item + ", waiting on review"
+			out, err := serve(a, rosterName, item, "--waits", waits)
+			want := `"BK worker" serves ` + item + ", waiting on " + waits
 			if err != nil || !strings.Contains(out, want) {
 				t.Fatalf("serve: %q, %v; want %q", out, err, want)
 			}
@@ -190,7 +191,7 @@ func TestServeAcceptsItems(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(st.Records) != 1 || st.Records[0].Issue != item || st.Records[0].Waits != "review" {
+			if len(st.Records) != 1 || st.Records[0].Issue != item || st.Records[0].Waits != waits {
 				t.Fatalf("records: %+v", st.Records)
 			}
 			sessions, _, err := a.sessions()
@@ -217,5 +218,22 @@ func TestServeRejectsEmptyItems(t *testing.T) {
 		if len(st.Records) != 0 {
 			t.Fatalf("empty item recorded: %+v", st.Records)
 		}
+	}
+}
+
+// A session serving free text is asked about nothing: its claim gets the
+// plain refusal, never a failed read of an item that is no issue.
+func TestServedOpenSkipsItemsWithoutAState(t *testing.T) {
+	a, store := serveApp(t)
+	me := state.Party{Session: "free-text-session"}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: "example/tool"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := servedOpen(t.Context(), nil, a.store, me)
+	if err != nil || !open("investigate build failures") {
+		t.Fatalf("open=%v err=%v", open("investigate build failures"), err)
 	}
 }
