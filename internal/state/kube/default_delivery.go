@@ -1,6 +1,8 @@
 package kube
 
 import (
+	"time"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -10,6 +12,12 @@ import (
 
 const defaultDeliveredAnnotation = "beekeeper.giantswarm.io/default-delivered"
 
+// defaultDeliveryWindow bounds how long a default's delivery is retried. Older
+// closures predate this acknowledgement or cannot be delivered: without it a
+// rollout would resend every retained default, and one undeliverable note
+// would fail every tick.
+const defaultDeliveryWindow = 24 * time.Hour
+
 // PendingDefault is a retained default whose external delivery is unfinished.
 type PendingDefault struct {
 	Note      state.Note
@@ -18,7 +26,7 @@ type PendingDefault struct {
 
 // PendingDefaults survives Event failures, partial batches and server restarts.
 // The acknowledgement belongs to one closure, so a later answer supersedes it.
-func (s *Store) PendingDefaults() ([]PendingDefault, error) {
+func (s *Store) PendingDefaults(now time.Time) ([]PendingDefault, error) {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	snap, err := s.load(ctx)
@@ -29,7 +37,7 @@ func (s *Store) PendingDefaults() ([]PendingDefault, error) {
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
 		c := n.Status.Closure
-		if c != nil && c.Verb == noteDefaultedEvent && n.Annotations[defaultDeliveredAnnotation] != c.ID {
+		if c != nil && c.Verb == noteDefaultedEvent && n.Annotations[defaultDeliveredAnnotation] != c.ID && now.Sub(c.At.Time) <= defaultDeliveryWindow {
 			out = append(out, PendingDefault{Note: noteOf(n), ClosureID: c.ID})
 		}
 	}

@@ -77,7 +77,7 @@ func TestDefaultDueRecoversDurableDeliveries(t *testing.T) {
 				objects = append(objects, &v1alpha1.Note{
 					ObjectMeta: metav1.ObjectMeta{Namespace: kube.TeamNamespace(ourTeam), Name: fmt.Sprintf("note-%d", id)},
 					Spec:       v1alpha1.NoteSpec{ID: id, Kind: state.NoteDecision, Text: askedQ, Default: ownLane, Due: &metav1.Time{Time: now.Add(-time.Minute)}},
-					Status:     v1alpha1.NoteStatus{State: "open", By: v1alpha1.Party{Name: anaAgent, Team: ourTeam}, At: metav1.NewTime(now.Add(-time.Hour)), Posted: fmt.Sprintf("d%d", id)},
+					Status:     v1alpha1.NoteStatus{State: noteStatusOpen, By: v1alpha1.Party{Name: anaAgent, Team: ourTeam}, At: metav1.NewTime(now.Add(-time.Hour)), Posted: fmt.Sprintf("d%d", id)},
 				})
 			}
 			c := &interruptedDefaults{Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(objects...).Build(),

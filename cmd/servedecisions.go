@@ -321,7 +321,7 @@ func (s *server) defaultDue(ctx context.Context, now time.Time) error {
 	})
 	// A status commit survives an Event error or a later conflict in the batch.
 	// Reconcile the durable closures, including those left by a previous process.
-	pending, err := s.store.PendingDefaults()
+	pending, err := s.store.PendingDefaults(now)
 	if err != nil {
 		return errors.Join(updateErr, err)
 	}

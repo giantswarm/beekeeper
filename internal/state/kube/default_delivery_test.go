@@ -18,25 +18,25 @@ func TestDefaultDeliveryAcknowledgesOnlyItsClosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: "note-1"},
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).Name},
 		Spec: v1alpha1.NoteSpec{ID: 1, Text: asked}, Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), At: metav1.NewTime(now),
 			Closure: &v1alpha1.NoteClosure{ID: "1", Verb: noteDefaultedEvent, Detail: firstDefaulted, At: metav1.NewTime(now)}}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(n).WithObjects(n).Build()
-	pending, err := New(c).PendingDefaults()
+	pending, err := New(c).PendingDefaults(now)
 	if err != nil || len(pending) != 1 || pending[0].ClosureID != "1" || !pending[0].Note.By.Is(ana) {
 		t.Fatalf("pending: %+v, %v", pending, err)
 	}
 	if err := New(c).DefaultDelivered(team, 1, "other-closure"); err != nil {
 		t.Fatal(err)
 	}
-	pending, err = New(c).PendingDefaults()
+	pending, err = New(c).PendingDefaults(now)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("a stale acknowledgement erased delivery: %+v, %v", pending, err)
 	}
 	if err := New(c).DefaultDelivered(team, 1, "1"); err != nil {
 		t.Fatal(err)
 	}
-	pending, err = New(c).PendingDefaults()
+	pending, err = New(c).PendingDefaults(now)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("acknowledgement did not survive restart: %+v, %v", pending, err)
 	}
@@ -51,8 +51,25 @@ func TestDefaultDeliveryAcknowledgesOnlyItsClosure(t *testing.T) {
 	if err := c.Status().Update(context.Background(), n); err != nil {
 		t.Fatal(err)
 	}
-	pending, err = New(c).PendingDefaults()
+	pending, err = New(c).PendingDefaults(now)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("answered note returned as a pending default: %+v, %v", pending, err)
+	}
+}
+
+// A rollout must not resend the defaults that closed long before it.
+func TestDefaultDeliverySkipsClosuresPastItsWindow(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	n := &v1alpha1.Note{ObjectMeta: metav1.ObjectMeta{Namespace: teamNamespace(team), Name: NoteObject(team, 1).Name},
+		Spec: v1alpha1.NoteSpec{ID: 1, Text: asked}, Status: v1alpha1.NoteStatus{State: noteDefaulted, By: apiParty(ana), At: metav1.NewTime(now.Add(-48 * time.Hour)),
+			Closure: &v1alpha1.NoteClosure{ID: "1", Verb: noteDefaultedEvent, Detail: firstDefaulted, At: metav1.NewTime(now.Add(-2 * defaultDeliveryWindow))}}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(n).WithObjects(n).Build()
+	pending, err := New(c).PendingDefaults(now)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("an old default is pending: %+v, %v", pending, err)
 	}
 }
