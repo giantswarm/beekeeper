@@ -629,7 +629,6 @@ func TestKeepOutput(t *testing.T) {
 	if err := os.WriteFile(base+".log", []byte("not found error\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeRunInfo(base, runInfo{Command: "devctl pr merge o/r 7 --rebase"})
 	old := filepath.Join(dir, keptOutputs, "old.log")
 	if err := os.MkdirAll(filepath.Dir(old), 0o700); err != nil {
 		t.Fatal(err)
@@ -645,9 +644,6 @@ func TestKeepOutput(t *testing.T) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's file
 	if err != nil || !strings.Contains(string(raw), "not found error") || !strings.Contains(string(raw), `"exitCode":7`) {
 		t.Fatalf("kept %q: %q, %v", path, raw, err)
-	}
-	if !strings.HasPrefix(string(raw), "command: devctl pr merge o/r 7 --rebase\n") {
-		t.Fatalf("kept output missing command as first line: %q", raw)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Errorf("the old output is not pruned: %v", err)

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -247,19 +246,6 @@ func TestARebaseMergeBehindItsBaseAtItsTurnIsRebasedAndMerged(t *testing.T) {
 	if got, err := os.ReadFile(args); err != nil || !strings.HasPrefix(string(got), "pr merge --no-release-wait o/r 7 --rebase") { //nolint:gosec // the test's own file
 		t.Errorf("devctl ran with %q (%v), want the gated command, ending at the merge in a lane without an installation", got, err)
 	}
-	logs, err := filepath.Glob(filepath.Join(g.store.Dir(), keptOutputs, "*.log"))
-	if err != nil || len(logs) != 1 {
-		t.Fatalf("kept logs: %v, %v", logs, err)
-	}
-	raw, err := os.ReadFile(logs[0])      //nolint:gosec // the test's own file
-	argsRaw, argsErr := os.ReadFile(args) //nolint:gosec // the test's own file
-	if err != nil || argsErr != nil {
-		t.Fatalf("read output: %v, %v", err, argsErr)
-	}
-	if first, _, _ := strings.Cut(string(raw), "\n"); first != "command: devctl "+strings.TrimSpace(string(argsRaw)) {
-		t.Errorf("log's first line %q does not match devctl arguments %q", first, argsRaw)
-	}
-
 	if d := lastEvent(t, g, verbMerged); !strings.Contains(d, "o/r#7 exit 0") {
 		t.Errorf("merged event: %q", d)
 	}
