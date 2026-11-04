@@ -678,7 +678,9 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		doc, rc := finishedRun(base)
 		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
-		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
+		r.out, ok, rc = parseRunOutcome(m.PR, doc, rc)
+		r.rc = rc
+		if merge.NeedsJudging(ok, rc) {
 			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
 			if r.unanswered != nil && !workerStopped {
 				continue
