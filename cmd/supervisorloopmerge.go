@@ -434,10 +434,11 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 // The reasons a reviewed merge stops for desk policy, before and after a
 // branch update alike.
 const (
-	reasonDeskStopped    = "the desk is stopped"
-	reasonMergeHeld      = "merge held by desk policy"
-	mergeableConflicting = "CONFLICTING"
-	mergeMethodRebase    = "rebase"
+	reasonDeskStopped      = "the desk is stopped"
+	reasonMergeHeld        = "merge held by desk policy"
+	reasonMergeHeadChanged = "merge head moved or current CI is not green"
+	mergeableConflicting   = "CONFLICTING"
+	mergeMethodRebase      = "rebase"
 )
 
 // reviewedMerge is the gate's mutation child. A branch behind its base it
@@ -473,7 +474,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	if p.State != superloop.Open || p.Head != head || !p.Green {
 		doc.ExitCode = github.SquashRefused
-		doc.Reason = "merge head moved or current CI is not green"
+		doc.Reason = reasonMergeHeadChanged
 		return doc
 	}
 	if latestReviewRequestsChanges(p) {
@@ -649,7 +650,11 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		return doc
 	}
 	if p.State != superloop.Open || p.Head != merging || !p.Green {
-		doc.ExitCode, doc.Reason = github.SquashRefused, "merge head moved or current CI is not green"
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeadChanged
+		return doc
+	}
+	if p.Draft || p.Mergeable == mergeableConflicting {
+		doc.ExitCode, doc.Reason = github.SquashRefused, "branch became draft or conflicts with its base"
 		return doc
 	}
 	st, err = a.store.Read()
@@ -705,7 +710,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	case p.State != superloop.Open || p.Head != merging || !p.Green:
 		doc.ExitCode = github.SquashRefused
 		if doc.Reason == "" {
-			doc.Reason = "merge head moved or current CI is not green"
+			doc.Reason = reasonMergeHeadChanged
 		}
 	case ghMergeNeedsAdmin(doc.Reason):
 		doc.ExitCode = github.SquashRefused

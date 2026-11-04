@@ -846,8 +846,9 @@ func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
 // Refresh both public reviews and durable desk policy before invoking gh.
 func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 	const revokedGoCase = "revoked go"
+	const changesRequestedCase = "changes requested"
 	const unreadableCase = "unreadable authority"
-	for _, scenario := range []string{"unchanged", "changes requested", "dismissed approval", revokedGoCase, "moved head", "closed", "red CI", unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
+	for _, scenario := range []string{"unchanged", changesRequestedCase, "dismissed approval", revokedGoCase, "moved head", "closed", "red CI", "draft", "conflicting", unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.verdict("R1", loopHead, superloop.Approved, loopApproved)
@@ -864,7 +865,7 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 			// including runs that skip local checks because no checkout exists.
 			readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) {
 				switch scenario {
-				case "changes requested":
+				case changesRequestedCase:
 					r.verdict("R2", loopHead, superloop.ChangesRequested, "Review: changes requested")
 				case "dismissed approval":
 					r.pull.Reviews = nil
@@ -878,6 +879,10 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 					r.pull.State = superloop.Closed
 				case "red CI":
 					r.pull.Green = false
+				case "draft":
+					r.pull.Draft = true
+				case "conflicting":
+					r.pull.Mergeable = mergeableConflicting
 				case unreadableCase:
 					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						return superloop.Pull{}, errors.New("reviews unavailable")
