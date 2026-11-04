@@ -53,7 +53,7 @@ func TestRestartedTakeoverQueuesStayVisibleAndAnswerable(t *testing.T) {
 		if err := c.Answer(context.Background(), ap.Session, ap.ID, true); err != nil {
 			t.Fatal(err)
 		}
-		b, err := os.ReadFile(filepath.Join(tdir, ap.Session, ap.ID+".answer"))
+		b, err := os.ReadFile(filepath.Join(tdir, ap.Session, ap.ID+".answer")) //nolint:gosec // a path of this test
 		var d takeover.Decision
 		if err != nil || json.Unmarshal(b, &d) != nil || d.Behavior != takeover.Allow {
 			t.Fatalf("answer for %s = %s, %v", ap.Session, b, err)

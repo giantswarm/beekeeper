@@ -123,7 +123,7 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 
 	// A start taking over a stopped entry's open task keeps that task and
 	// records nothing for the brief.
-	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: "stopped", Name: worker.Name}, Task: staleTask}}}
+	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: reviewedStoppedCase, Name: worker.Name}, Task: staleTask}}}
 	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil || len(st.Records) != 0 {
 		t.Errorf("take over: records %+v, %v", st.Records, err)
 	}

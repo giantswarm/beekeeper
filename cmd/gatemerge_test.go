@@ -63,7 +63,7 @@ func runningMergeIn(t *testing.T, store *state.FileStore, repo string, lane conf
 	t.Helper()
 	hostDevctls(t, 0)
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{SeedTTL: config.Duration{Duration: time.Hour}, DevctlOwners: []string{"o", "giantswarm"}}}
-	me := state.Party{Name: "worker"}
+	me := state.Party{Name: workerRole}
 	g := &gateRun{app: &app{cfg: cfg, store: store, now: relayNow}, ctx: context.Background(), repo: repo, pr: 7, lane: lane, me: me, pid: os.Getpid(),
 		argv: mergeArgv(repo)}
 	err := store.Update(func(st *state.State) ([]state.Event, error) {
@@ -849,7 +849,7 @@ func TestAToolMergeStartOpensAWindowUnlessAlreadyMerged(t *testing.T) {
 		name, pull string
 		wantHold   bool
 	}{
-		{"open", github.Open, true},
+		{noteStatusOpen, github.Open, true},
 		{"unread", "", true},
 		{"merged", github.Merged, false},
 	} {

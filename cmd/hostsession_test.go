@@ -11,8 +11,8 @@ import (
 func TestHostSessionRosterIdentity(t *testing.T) {
 	for _, prefix := range []string{"codex_", "agy_", "omp_"} {
 		t.Run(prefix, func(t *testing.T) {
-			first := state.Party{HostSession: prefix + "first", Name: "worker"}
-			second := state.Party{HostSession: prefix + "second", Name: "worker"}
+			first := state.Party{HostSession: prefix + "first", Name: workerRole}
+			second := state.Party{HostSession: prefix + "second", Name: workerRole}
 			original := state.Agent{Party: first, Task: "unfinished"}
 			st := &state.State{Agents: []state.Agent{original}}
 			called := false
@@ -36,22 +36,22 @@ func TestHostSessionRosterIdentity(t *testing.T) {
 				t.Fatalf("predecessor found successor at %d", got)
 			}
 			renamed := second
-			renamed.Name = "renamed"
+			renamed.Name = renamedApp
 			if got := a.callerAgent(st, renamed); got != 0 {
 				t.Fatalf("renamed session lookup = %d", got)
 			}
-			a.as = "worker"
+			a.as = workerRole
 			if got := a.callerAgent(st, first); got != 0 {
 				t.Fatalf("explicit --as lookup = %d", got)
 			}
 			renamedFirst := first
-			renamedFirst.Name = "renamed"
+			renamedFirst.Name = renamedApp
 			st.Agents[0] = original
 			reg, err := registerAgent(st, renamedFirst, func(state.Party) bool {
 				t.Fatal("own session should not require liveness")
 				return true
 			}, time.Time{})
-			if err != nil || !reg.own || reg.task != "unfinished" || st.Agents[0].Name != "renamed" {
+			if err != nil || !reg.own || reg.task != "unfinished" || st.Agents[0].Name != renamedApp {
 				t.Fatalf("renamed registration = %+v, %v; roster = %+v", reg, err, st.Agents)
 			}
 		})

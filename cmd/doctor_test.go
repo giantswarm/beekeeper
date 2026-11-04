@@ -40,7 +40,7 @@ func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 			}
 			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
 				*current = *st
-				current.Agents[0].Park = &state.Park{On: "giantswarm/x#4", Waits: "desk review", At: a.now}
+				current.Agents[0].Park = &state.Park{On: "giantswarm/x#4", Waits: deskReviewWait, At: a.now}
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -61,11 +61,11 @@ func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
 }
 
 func TestPlanChoresKeepsStoppedParkedWorkers(t *testing.T) {
-	for _, reason := range []string{"stale", verbDone, testParkRelieved} {
+	for _, reason := range []string{kindStale, verbDone, testParkRelieved} {
 		t.Run(reason, func(t *testing.T) {
 			now := keepNow
-			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: "stopped"}, Done: reason == verbDone,
-				Registered: now.Add(-48 * time.Hour), Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review", At: now.Add(-time.Hour)}}
+			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: reviewedStoppedCase}, Done: reason == verbDone,
+				Registered: now.Add(-48 * time.Hour), Park: &state.Park{On: "giantswarm/x#4", Waits: deskReviewWait, At: now.Add(-time.Hour)}}
 			st := &state.State{Agents: []state.Agent{ag}}
 			if reason == testParkRelieved {
 				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
@@ -101,7 +101,7 @@ func TestPlanChores(t *testing.T) {
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
 	task.AssignedAt = now
 	st := &state.State{
-		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
+		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent(kindStale, 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
 		Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "holder"}}, Relieved: []state.Relief{{Party: state.Party{Session: "relieved"}}}},
 	}
@@ -438,7 +438,7 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
 			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
 			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
-			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review"}},
+			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: "giantswarm/x#4", Waits: deskReviewWait}},
 			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
 			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
 			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},

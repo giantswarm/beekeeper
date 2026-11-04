@@ -167,7 +167,7 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 				"user_code":        "ABCD-1234",
 				"verification_uri": "https://github.com/login/device",
 				testExpiresIn:      900,
-				"interval":         1,
+				intervalKey:        1,
 			})
 		case workerGitHubOAuthTokenPath:
 			_ = req.ParseForm()

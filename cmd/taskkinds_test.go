@@ -27,6 +27,10 @@ const (
 	tzUTC      = "UTC"
 )
 
+const intervalKey = "interval"
+
+const availableWord = "available"
+
 // kindsApp is a stub app with a filer kind (one busy, one start an hour)
 // and a meta kind over filers and scans (two busy).
 func kindsApp(t *testing.T) *app {
@@ -155,9 +159,9 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 }
 
 func TestSSHAgentStartKindAdmission(t *testing.T) {
-	for _, limit := range []string{"interval", "busy", "available"} {
+	for _, limit := range []string{intervalKey, "busy", availableWord} {
 		for _, dry := range []bool{false, true} {
-			if limit == "available" && !dry {
+			if limit == availableWord && !dry {
 				continue
 			}
 			for _, force := range []bool{false, true} {
@@ -167,13 +171,13 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 					stubSubscriptionUsage(a)
 					k := config.AgentKind{Name: kindFiler, Match: "^filer"}
 					switch limit {
-					case "interval":
+					case intervalKey:
 						k.MinInterval = config.Duration{Duration: time.Hour}
 					case "busy":
 						k.MaxBusy = 1
 					}
 					a.cfg.Agents.Kinds = []config.AgentKind{k}
-					if limit != "available" {
+					if limit != availableWord {
 						recordKindStart(t, a, filerOne, "s-filer-1", a.now.Add(-5*time.Minute))
 					}
 					a.executionTransport = func(config.ExecutionHost) execution.Transport {
@@ -189,7 +193,7 @@ func TestSSHAgentStartKindAdmission(t *testing.T) {
 					}
 					out, err := runAgents(a, args...)
 					wantStarts := 1
-					if limit == "available" {
+					if limit == availableWord {
 						wantStarts = 0
 						if err != nil || !strings.Contains(out, "dry run:") {
 							t.Fatalf("admitted dry run: %q, %v", out, err)

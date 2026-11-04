@@ -74,7 +74,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	gitT(t, clone, "remote", "add", "origin", "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
-	for _, b := range []string{mergedPR, "work", "unpushed", "open", "nopr", "live", "recent"} {
+	for _, b := range []string{mergedPR, "work", "unpushed", noteStatusOpen, "nopr", "live", "recent"} {
 		gitT(t, clone, "worktree", "add", "-q", "-b", b, filepath.Join(root, "app", b), "main")
 		writeT(t, filepath.Join(root, "app", b, "node_modules", "pkg", "index.js"), strings.Repeat("x", 4096))
 	}
@@ -92,13 +92,13 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	now := time.Now().Add(7 * time.Hour)
 	long := now.Add(-24 * time.Hour)
 	pulls := map[string]github.HeadPull{
-		mergedPR:   {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"work":     {N: 2, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"unpushed": {N: 3, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"open":     {N: 4, State: github.Open, HeadOid: head},
-		"live":     {N: 5, State: github.Closed, HeadOid: head, ClosedAt: long},
-		"pushedas": {N: 7, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"recent":   {N: 6, State: github.Merged, HeadOid: head, ClosedAt: now.Add(-time.Hour)},
+		mergedPR:       {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"work":         {N: 2, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"unpushed":     {N: 3, State: github.Merged, HeadOid: head, ClosedAt: long},
+		noteStatusOpen: {N: 4, State: github.Open, HeadOid: head},
+		"live":         {N: 5, State: github.Closed, HeadOid: head, ClosedAt: long},
+		"pushedas":     {N: 7, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"recent":       {N: 6, State: github.Merged, HeadOid: head, ClosedAt: now.Add(-time.Hour)},
 	}
 	machine := func() (worktreeMachine, error) {
 		return worktreeMachine{
@@ -316,7 +316,7 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 	if !slices.Contains(finished, filepath.Join(root, mergedPR)) {
 		t.Fatal(finished)
 	}
-	if slices.Contains(finished, filepath.Join(root, "open")) {
+	if slices.Contains(finished, filepath.Join(root, noteStatusOpen)) {
 		t.Fatal(finished)
 	}
 	if !exists(filepath.Join(root, mergedPR)) {

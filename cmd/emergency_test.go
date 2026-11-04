@@ -76,7 +76,7 @@ func TestEmergencyRequiresGuideQuoteAndFutureExpiry(t *testing.T) {
 		t.Fatalf("expiry: %v", err)
 	}
 	a.now = a.now.Add(-time.Minute)
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide.Holder.Session = "successor"; return nil, nil }); err != nil {
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide.Holder.Session = successorName; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.emergencyAction("old guide"); Code(err) != ExitRefused {
@@ -280,7 +280,7 @@ func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) 
 			a := emergencyApp(t)
 			key := "BEEKEEPER_" + harness + "_AGENT"
 			t.Setenv(key, "original")
-			t.Setenv("BEEKEEPER_AGENT_NAME", "guide")
+			t.Setenv("BEEKEEPER_AGENT_NAME", guideName)
 			setGuide := func() {
 				t.Helper()
 				me, err := a.caller()
@@ -298,7 +298,7 @@ func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) 
 			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv(key, "successor")
+			t.Setenv(key, successorName)
 			if err := emergencyCall(a, "auto-install", "pause", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
 				t.Errorf("different session authorized: %v", err)
 			}
@@ -331,7 +331,7 @@ func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) 
 }
 
 func TestEmergencySameSession(t *testing.T) {
-	base := state.Party{Session: "session", HostSession: "host-session", Name: "guide", Person: "owner@example.invalid", Host: "installation-a"}
+	base := state.Party{Session: "session", HostSession: "host-session", Name: guideName, Person: "owner@example.invalid", Host: installationA}
 	for _, tc := range []struct {
 		name  string
 		other state.Party
@@ -341,8 +341,8 @@ func TestEmergencySameSession(t *testing.T) {
 		{"session only", state.Party{Session: base.Session}, true},
 		{"host session only", state.Party{HostSession: base.HostSession}, true},
 		{"display name only", state.Party{Name: base.Name}, false},
-		{"different session", state.Party{Session: "successor", Name: base.Name}, false},
-		{"different host session", state.Party{HostSession: "successor", Name: base.Name}, false},
+		{"different session", state.Party{Session: successorName, Name: base.Name}, false},
+		{"different host session", state.Party{HostSession: successorName, Name: base.Name}, false},
 		{"different person", state.Party{Session: base.Session, Person: "other@example.invalid"}, false},
 		{"different host", state.Party{HostSession: base.HostSession, Host: "installation-b"}, false},
 	} {
@@ -352,7 +352,7 @@ func TestEmergencySameSession(t *testing.T) {
 			}
 		})
 	}
-	if emergencySameSession(state.Party{Name: "guide"}, state.Party{Name: "guide"}) {
+	if emergencySameSession(state.Party{Name: guideName}, state.Party{Name: guideName}) {
 		t.Fatal("display names matched without sessions")
 	}
 }
