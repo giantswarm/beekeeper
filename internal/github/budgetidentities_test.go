@@ -45,6 +45,29 @@ func TestBudgetCredentialsIgnoreAmbientRepositoryAndTokens(t *testing.T) {
 	}
 }
 
+func TestBudgetDevctlDiscoversGHLink(t *testing.T) {
+	for _, name := range []string{"devctl", "devctl.exe"} {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(target, []byte("offline resolution fixture"), 0o700); err != nil { //nolint:gosec // executable test fixture
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			if err := os.Symlink(target, filepath.Join(bin, "gh")); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			got, err := budgetDevctl()
+			if err != nil || got != target {
+				t.Fatalf("budgetDevctl() = %q, %v; want %q", got, err, target)
+			}
+			if got, err := budgetGH(); err == nil {
+				t.Fatalf("budgetGH() accepted devctl link: %q", got)
+			}
+		})
+	}
+}
+
 func TestLowestBudgetKeepsLowCounterAndHigherIdentityRefusal(t *testing.T) {
 	now := time.Now()
 	b := LowestBudget(map[string]Budget{

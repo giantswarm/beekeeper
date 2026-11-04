@@ -79,7 +79,11 @@ func budgetDevctl() (string, error) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		if path, err := filepath.EvalSymlinks(filepath.Join(dir, "gh")); err == nil && filepath.Base(path) == "devctl" {
+		found, err := exec.LookPath(filepath.Join(dir, "gh"))
+		if err != nil {
+			continue
+		}
+		if path, err := filepath.EvalSymlinks(found); err == nil && strings.TrimSuffix(filepath.Base(path), ".exe") == "devctl" {
 			return path, nil
 		}
 	}
@@ -125,14 +129,15 @@ func budgetGH() (string, error) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		path := filepath.Join(dir, "gh")
-		resolved, err := filepath.EvalSymlinks(path)
+		found, err := exec.LookPath(filepath.Join(dir, "gh"))
+		if err != nil {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(found)
 		if err != nil || strings.TrimSuffix(filepath.Base(resolved), ".exe") == "devctl" {
 			continue
 		}
-		if found, err := exec.LookPath(path); err == nil {
-			return found, nil
-		}
+		return found, nil
 	}
 	return "", fmt.Errorf("gh executable not found (devctl links skipped)")
 }
