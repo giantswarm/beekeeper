@@ -316,7 +316,7 @@ func (r *Run) orphans() {
 		}
 		kib := r.anonKiB(p.PID)
 		r.tally(Orphans, kib)
-		r.act("kill pid %d (%d MiB, up %s): %s", p.PID, kib/1024, uptime(p.Elapsed(r.Now)), truncate(c, 90))
+		r.act("kill pid %d (%d MiB, up %s): %s", p.PID, kib/1024, uptime(p.Elapsed(r.Now)), truncateProcessCommand(processCommand(p), 90))
 		pids = append(pids, p.PID)
 		if r.Apply {
 			r.freedKiB += kib

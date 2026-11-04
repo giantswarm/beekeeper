@@ -511,6 +511,8 @@ func TestTrimImagesCancellation(t *testing.T) {
 			}
 			if !errors.Is(err, context.Canceled) || calls != wantCalls || len(trimmed.Removed) != wantRemoved {
 				t.Fatalf("trim = %+v, %v after %d calls; want cancellation, %d calls and %d completed removals", trimmed, err, calls, wantCalls, wantRemoved)
+			}
+		})
 	}
 }
 
