@@ -506,6 +506,10 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.ghBodyRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("ghPREditRefusal")
+	if r := h.ghPREditRefusal(origCmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cwd, cmd, gated, bg)
 	}
