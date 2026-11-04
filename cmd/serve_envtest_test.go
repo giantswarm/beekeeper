@@ -302,7 +302,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	if h, _ := got["holder"].(map[string]any); h["person"] != "ana@example.com" || h["team"] != ourTeam || h["name"] != "ana-agent" {
 		t.Errorf("the lease's holder %v", got["holder"])
 	}
-	e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "again"}), false, "already yours")
+	e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "again"}), false, "was yours already")
 	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: graveler, paramPurpose: "mine"}, true, `graveler is held by "ana@example.com/ana-agent"`)
 	e.expect(t, bo, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "same agent name"}), true, `graveler is held by "ana@example.com/ana-agent"`)
 	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: "nowhere", paramPurpose: "x"}, true, "not an Environment")

@@ -338,10 +338,10 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 				// above, the claim completes; without one, the node was
 				// the caller's already.
 				if modeLine != "" {
-					msg = fmt.Sprintf("held by you since %s: %s is yours; %s", clock(a.now, cur.SinceTime()), res+lab, strings.TrimPrefix(modeLine, "; "))
+					msg = claimHeldLine(a.now, cur.SinceTime(), fmt.Sprintf("%s is yours; %s", res+lab, strings.TrimPrefix(modeLine, "; ")))
 					return append(evs, modeEvs...), nil
 				}
-				msg = fmt.Sprintf("held by you since %s: %s was yours already", clock(a.now, cur.SinceTime()), res+lab)
+				msg = claimHeldLine(a.now, cur.SinceTime(), res+lab+" was yours already")
 				return evs, nil
 			}
 			// Another party holds the node: its constraint stands, and
@@ -405,7 +405,7 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		if idx >= 0 {
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
-		msg = fmt.Sprintf("held by you since %s: claimed %s", clock(a.now, a.now), res+lab)
+		msg = claimHeldLine(a.now, a.now, "claimed "+res+lab)
 		if labRaw != nil {
 			if err := dir.KeepLabConfig(res, labRaw); err != nil {
 				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)
@@ -507,6 +507,14 @@ func (r *claimRefusal) Error() string { return r.line() }
 
 // line is the claim's first line, with what to do while it is not held.
 func (r *claimRefusal) line() string {
+	return claimOutcomeLine(time.Time{}, time.Time{}, "", r)
+}
+
+// claimOutcomeLine is the shared CLI and MCP outcome formatter.
+func claimOutcomeLine(now, since time.Time, detail string, r *claimRefusal) string {
+	if r == nil {
+		return fmt.Sprintf("held by you since %s: %s", clock(now, since), detail)
+	}
 	out := "refused: " + r.why
 	if r.queued {
 		out = "queued: " + r.why
@@ -1064,4 +1072,9 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
+}
+
+// claimHeldLine formats successful claims for both CLI and MCP.
+func claimHeldLine(now, since time.Time, detail string) string {
+	return claimOutcomeLine(now, since, detail, nil)
 }
