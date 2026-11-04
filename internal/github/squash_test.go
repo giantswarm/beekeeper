@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ type fakeGH struct {
 	comments string
 	checks   []string
 	merge    error
+	delete   func(string) error
 	calls    []string
 }
 
@@ -64,6 +66,9 @@ func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
 		}
 		return []byte(`{"sha":"abcdef1234567","merged":true}`), nil
 	case strings.HasPrefix(call, "api -X DELETE"):
+		if f.delete != nil {
+			return nil, f.delete(args[3])
+		}
 		return nil, nil
 	}
 	return nil, errors.New("unexpected gh " + call)
@@ -95,6 +100,54 @@ func TestSquashMergesAGreenHead(t *testing.T) {
 	for _, want := range []string{"sha=1234567890", "commit_title=fix: it (#7)", "merge_method=squash", "api -X DELETE repos/teemow/lab/git/refs/heads/fix"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no %q in the calls:\n%s", want, joined)
+		}
+	}
+}
+
+func TestSquashDeletesLiteralHeadBranch(t *testing.T) {
+	for _, head := range []string{"fix#topic", "fix%2Ftopic", "fix/topic", "fix+topic"} {
+		for _, fork := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fork=%t", head, fork), func(t *testing.T) {
+				refs := map[string]bool{head: true, "fix": true, "fix/topic": true, "unrelated": true}
+				f := &fakeGH{
+					pull: strings.Replace(openPull, `"headRefName":"fix"`,
+						fmt.Sprintf(`"headRefName":%q,"isCrossRepository":%t`, head, fork), 1),
+					checks: []string{`[]`},
+				}
+				deletions := 0
+				f.delete = func(endpoint string) error {
+					deletions++
+					// gh api passes the endpoint verbatim to http.NewRequest.
+					// A relative URL exercises the same path parsing without a network request.
+					req, err := http.NewRequest(http.MethodDelete, "/"+endpoint, nil)
+					if err != nil {
+						return err
+					}
+					_, branch, ok := strings.Cut(req.URL.Path, "/git/refs/heads/")
+					if !ok {
+						t.Fatalf("unexpected deletion endpoint %q", endpoint)
+					}
+					delete(refs, branch)
+					return nil
+				}
+				doc := squash(f)
+				if doc.ExitCode != SquashMerged || doc.MergeCommitSha == "" {
+					t.Fatalf("merge failed: %+v", doc)
+				}
+				wantDeletions := 1
+				if fork {
+					wantDeletions = 0
+				}
+				if deletions != wantDeletions {
+					t.Errorf("DELETE calls = %d, want %d", deletions, wantDeletions)
+				}
+				for _, branch := range []string{head, "fix", "fix/topic", "unrelated"} {
+					want := fork || branch != head
+					if refs[branch] != want {
+						t.Errorf("branch %q remains = %t, want %t", branch, refs[branch], want)
+					}
+				}
+			})
 		}
 	}
 }
