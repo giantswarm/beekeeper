@@ -25,12 +25,15 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	pruneCommand = "prune"
+	age5d        = "5 days ago"
+	age1h        = "1 hour ago"
+	nginxRef     = "docker.io/library/nginx:1"
+	kind         = "kind"
+	build        = "build"
+	docker       = "docker"
+	image        = "image"
+	oldID        = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -106,7 +109,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(f.dfv), nil
 	case args[0] == "builder" && args[1] == "du":
 		return []byte(f.du), nil
-	case args[0] == "builder" && args[1] == "prune":
+	case args[0] == "builder" && args[1] == pruneCommand:
 		f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
 		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
@@ -385,9 +388,9 @@ func duRows(rows ...duRow) string {
 // while its reserved-space floor sits above the target, is gone.
 func TestPruneBuildCacheRemovesTheOldestReclaimableToTheTarget(t *testing.T) {
 	f := &fake{du: duRows(
-		duRow{"old", 2, true, "5 days ago"},
+		duRow{"old", 2, true, age5d},
 		duRow{"mid", 1, true, age2d},
-		duRow{"new", 3, true, "1 hour ago"},
+		duRow{"new", 3, true, age1h},
 		duRow{"busy", 2, false, "3 minutes ago"},
 	)}
 	// 8 GB total, target 3 GB: old (2) and mid (1) still leave 5 GB, so
@@ -446,11 +449,11 @@ func TestPruneBuildCacheCancellation(t *testing.T) {
 			if before {
 				cancel()
 			}
-			f := &fake{du: duRows(duRow{"a", 1, true, "5 days ago"}, duRow{"b", 1, true, age2d}, duRow{"c", 1, true, "1 hour ago"})}
+			f := &fake{du: duRows(duRow{"a", 1, true, age5d}, duRow{"b", 1, true, age2d}, duRow{"c", 1, true, age1h})}
 			calls, prunes := 0, 0
 			run := func(ctx context.Context, args ...string) ([]byte, error) {
 				calls++
-				if args[1] == "prune" {
+				if args[1] == pruneCommand {
 					prunes++
 					if prunes == 2 {
 						cancel()
@@ -460,8 +463,8 @@ func TestPruneBuildCacheCancellation(t *testing.T) {
 					return nil, errors.New("Docker process was killed")
 				}
 				out, err := f.run(ctx, args...)
-				if args[1] == "prune" && err == nil {
-					f.du = duRows(duRow{"b", 1, true, age2d}, duRow{"c", 1, true, "1 hour ago"})
+				if args[1] == pruneCommand && err == nil {
+					f.du = duRows(duRow{"b", 1, true, age2d}, duRow{"c", 1, true, age1h})
 				}
 				return out, err
 			}
@@ -487,7 +490,7 @@ func TestParseUsedAgo(t *testing.T) {
 	}{
 		{"10 minutes ago", 10 * time.Minute},
 		{"26 hours ago", 26 * time.Hour},
-		{"5 days ago", 5 * 24 * time.Hour},
+		{age5d, 5 * 24 * time.Hour},
 		{"3 weeks ago", 3 * 7 * 24 * time.Hour},
 		{"Less than a second ago", -1},
 		{"", -1},
