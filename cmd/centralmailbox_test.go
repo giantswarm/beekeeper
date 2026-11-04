@@ -31,10 +31,11 @@ const (
 // mailboxStandIn is beekeeper serve's mailbox tools: receive_messages
 // returns the unacked deliveries, ack_messages acks them.
 type mailboxStandIn struct {
-	mu    sync.Mutex
-	queue []mailbox.Delivery
-	acked []int64
-	said  []string
+	mu          sync.Mutex
+	queue       []mailbox.Delivery
+	acked       []int64
+	said        []string
+	ackFailures int
 }
 
 func (m *mailboxStandIn) url(t *testing.T) string {
@@ -48,6 +49,10 @@ func (m *mailboxStandIn) url(t *testing.T) string {
 	srv.AddTool(mcp.NewTool("ack_messages"), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		if m.ackFailures > 0 {
+			m.ackFailures--
+			return mcp.NewToolResultError("acknowledgement failed"), nil
+		}
 		for _, id := range req.GetIntSlice(paramIDs, nil) {
 			m.acked = append(m.acked, int64(id))
 		}
@@ -235,6 +240,107 @@ func TestMailboxWatchDrainsOnEachUpdate(t *testing.T) {
 	<-done
 	if !slices.Equal(mb.acked, []int64{1, 2}) {
 		t.Errorf("acked %v", mb.acked)
+	}
+}
+
+func TestMailboxDrainRetriesFailedAcknowledgement(t *testing.T) {
+	mb := &mailboxStandIn{
+		queue:       []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "retry acknowledgement")},
+		ackFailures: 1,
+	}
+	w, sent, _ := mailboxWatch(t, mb)
+	if !w.drainMailbox(context.Background()) {
+		t.Error("drain says no work remains after acknowledgement failed")
+	}
+	if len(mb.acked) != 0 {
+		t.Errorf("failed acknowledgement removed the message: %v", mb.acked)
+	}
+	if w.drainMailbox(context.Background()) {
+		t.Error("drain says work remains after acknowledgement succeeded")
+	}
+	if len(*sent) != 2 || !slices.Equal(mb.acked, []int64{1}) {
+		t.Errorf("got %d deliveries and acknowledgements %v, want 2 deliveries and [1]", len(*sent), mb.acked)
+	}
+}
+
+// A standing subscription need not notify again for an unacknowledged message.
+func TestMailboxWatchRetriesFailedAcknowledgement(t *testing.T) {
+	mb := &mailboxStandIn{ackFailures: 1}
+	w, _, _, m := mailboxWatchVia(t, mb)
+	w.cfg.Watch.Interval.Duration = 20 * time.Millisecond
+	delivered := make(chan string, 10)
+	w.deliver = func(_ context.Context, _, msg string) error {
+		delivered <- msg
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.watchMailbox(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	// Establish the subscription with an empty mailbox before introducing
+	// the message, so a late startup kick cannot stand in for a retry.
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for m.Updated(resourceMailbox+mailPerson) == 0 {
+		select {
+		case <-poll.C:
+		case <-deadline.C:
+			t.Fatal("mailbox subscription did not start")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	mb.mu.Lock()
+	mb.queue = []mailbox.Delivery{slackReply(t, 1, "local:desk/Guide", "retry acknowledgement")}
+	mb.mu.Unlock()
+	if m.Updated(resourceMailbox+mailPerson) != 1 {
+		t.Fatal("mailbox subscription ended before delivery")
+	}
+	// No more resource notifications: only the interval can retry the ack.
+	var first string
+	for i := range 2 {
+		select {
+		case msg := <-delivered:
+			if i == 0 {
+				first = msg
+			} else if msg != first {
+				t.Fatalf("redelivered a different message: %q", msg)
+			}
+		case <-deadline.C:
+			t.Fatal("message was not delivered twice without another notification")
+		}
+	}
+	// Delivery precedes acknowledgement; wait for the second drain to finish.
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		mb.mu.Lock()
+		acked := slices.Equal(mb.acked, []int64{1})
+		mb.mu.Unlock()
+		if acked {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("redelivered message was not acknowledged")
+		}
+	}
+	cancel()
+	<-done
+	if len(delivered) != 0 {
+		t.Fatal("message delivered again after acknowledgement succeeded")
+	}
+	if w.drainMailbox(context.Background()) {
+		t.Error("drain says work remains after acknowledgement succeeded")
 	}
 }
 

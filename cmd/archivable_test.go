@@ -32,6 +32,8 @@ const (
 	quietHost     = "local_q"
 )
 
+const busyWord = "busy"
+
 // archiveApp is a stub app with a desktop directory and the state st.
 func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 	t.Helper()
@@ -50,7 +52,7 @@ func archiveApp(t *testing.T, st func(*state.State)) (*app, *strings.Builder) {
 // refuses a session the person started, a roster agent and a role's run.
 func TestArchivable(t *testing.T) {
 	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
-	busy := state.Party{Session: "busy", HostSession: busyHost, Name: "Board pull 902"}
+	busy := state.Party{Session: busyWord, HostSession: busyHost, Name: "Board pull 902"}
 	run := state.Party{Session: "run9", HostSession: runHost, Name: guideNine}
 	a, out := archiveApp(t, func(st *state.State) {
 		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: worker, Finished: true, At: time.Now()})

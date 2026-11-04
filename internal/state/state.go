@@ -74,7 +74,8 @@ func (p Party) Is(o Party) bool {
 		return true
 	case p.HostSession != "" && p.HostSession == o.HostSession:
 		return true
-	case p.Session == "" && o.Session == "" && p.Name != "" && p.Name == o.Name:
+	// Names identify parties only when neither carries a session identity.
+	case p.Session == "" && o.Session == "" && p.HostSession == "" && o.HostSession == "" && p.Name != "" && p.Name == o.Name:
 		return true
 	}
 	return false

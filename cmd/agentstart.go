@@ -364,6 +364,9 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 				sp := agentStart{name: name, kind: a.selectionKind, task: task, model: model, effort: effortLevel}
 				if dryRun {
+					if err := a.kindGate(name); err != nil {
+						return err
+					}
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
 				return a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })

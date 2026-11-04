@@ -89,7 +89,8 @@ func (c chore) String() string {
 // taken off the roster once it reported its work done and its CLI is idle
 // (busy: a turn or a gated merge of its own runs), once it was relieved of
 // a role, or once it stayed idle or gone staleAfter (0: never) with no CLI running,
-// unless a keep marker or a timer that wakes it keeps it (a keep chore).
+// unless it is parked, or a keep marker or a timer that wakes it keeps it
+// (a keep chore).
 // A started session the roster keeps whose desktop record shows another
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
@@ -102,6 +103,12 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 			if why := stoppedExecutionWhy(st, ag); why != "" && !busy(ag.Party) {
 				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
 			}
+			continue
+		}
+		// A parked local session may have been stopped by the watch to
+		// release memory. Its park, rather than CLI liveness or a stale
+		// done/role marker, owns its next wake and must stay on the roster.
+		if ag.Park != nil {
 			continue
 		}
 		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
@@ -644,6 +651,11 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 				return (x.Task == "" || c.gone || relieved(st, x.Party) || stoppedExecutionWhy(st, x) != "") && x.Is(c.agent.Party) && x.Task == c.agent.Task && x.ActivityAt.Equal(c.agent.ActivityAt) && x.AssignedAt.Equal(c.agent.AssignedAt)
 			})
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
+				continue
+			}
+			// A worker can park after the snapshot used to plan cleanup.
+			// Recheck under the state lock before removing a local worker.
+			if st.Agents[i].Execution == nil && st.Agents[i].Park != nil {
 				continue
 			}
 			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
