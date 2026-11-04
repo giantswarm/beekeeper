@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -95,11 +96,14 @@ func refreshCommand(p installedPlugin) string {
 	return "claude plugin marketplace update " + marketplace(p) + " && claude plugin " + strings.Join(updateArgs(p), " ")
 }
 
-// syncPlugins brings the installed beekeeper plugins up to their
-// marketplace's latest, every one when all (an update installed a new
+// syncPlugins brings the installed beekeeper plugins to this binary's
+// release tag, every one when all (an update installed a new
 // binary), else the stale ones, and says each in a line to w. A failure is
 // said with the command that fixes it, and fails nothing else.
 func syncPlugins(ctx context.Context, w io.Writer, all bool) {
+	if !syncsUnder("") || !runsInstalled() {
+		return
+	}
 	ps, err := listPlugins(ctx)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "The beekeeper plugin stays as it is: %v\n", err)
@@ -126,7 +130,10 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 	for _, p := range due {
 		m := marketplace(p)
 		if _, done := refreshed[m]; !done {
-			refreshed[m] = claudePlugin(ctx, "marketplace", "update", m)
+			refreshed[m] = pinMarketplace(m, pluginRevision())
+			if refreshed[m] == nil {
+				refreshed[m] = claudePlugin(ctx, "marketplace", "update", m)
+			}
 		}
 		err := refreshed[m]
 		if err == nil {
@@ -143,7 +150,7 @@ func syncListed(ctx context.Context, w io.Writer, ps []installedPlugin, all bool
 	}
 	now, _ := listPlugins(ctx)
 	for _, p := range updated {
-		version := "its marketplace's latest"
+		version := pluginRevision()
 		for _, q := range now {
 			if q.ID == p.ID && q.Scope == p.Scope {
 				version = q.Version
@@ -183,7 +190,104 @@ var runsInstalled = func() bool {
 // syncsUnder says whether a command under the configuration file config
 // (explicitConfig, "" for the default one) syncs the user-wide plugins: a
 // scratch configuration leaves them alone; tests replace it.
-var syncsUnder = func(config string) bool { return config == "" }
+const (
+	xdgStateHomeEnv  = "XDG_STATE_HOME"
+	xdgConfigHomeEnv = "XDG_CONFIG_HOME"
+)
+
+var syncsUnder = func(config string) bool {
+	if config != "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	for key, normal := range map[string]string{
+		xdgStateHomeEnv:  filepath.Join(home, ".local", "state"),
+		xdgConfigHomeEnv: filepath.Join(home, ".config"),
+	} {
+		if value := os.Getenv(key); value != "" && filepath.Clean(value) != normal {
+			return false
+		}
+	}
+	return true
+}
+
+// pluginRevision uses the release tag, including a candidate suffix, never
+// the marketplace's default branch. Development builds have no release tag.
+func pluginRevision() string {
+	fields := strings.Fields(binaryIdentity())
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// pinMarketplace preserves the registered source and pins its ref before Claude
+// refreshes it. Refuse sources without git revision support rather than updating
+// them to an unrelated version.
+var pinMarketplace = func(name, revision string) error {
+	if revision == "" {
+		return fmt.Errorf("no release tag for this binary")
+	}
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	path := filepath.Join(dir, "plugins", "known_marketplaces.json")
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	var entries map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return err
+	}
+	entry, ok := entries[name]
+	if !ok {
+		return fmt.Errorf("marketplace %s is not registered", name)
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(entry["source"], &source); err != nil {
+		return err
+	}
+	var kind string
+	if err := json.Unmarshal(source["source"], &kind); err != nil {
+		return err
+	}
+	if kind != "github" && kind != "git" {
+		return fmt.Errorf("marketplace %s does not support release tags", name)
+	}
+	source["ref"], _ = json.Marshal(revision)
+	delete(source, "sha")
+	entry["source"], err = json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	raw, err = json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Rename a complete file so Claude never reads a partial registry.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".beekeeper-marketplace-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
 
 // syncOnce brings the installed beekeeper plugins up to date once per
 // binary: the first command a newly installed binary runs updates every one
@@ -196,7 +300,7 @@ var syncsUnder = func(config string) bool { return config == "" }
 // process that finds another syncing goes on without. ran says whether this call synced.
 func syncOnce(ctx context.Context, w io.Writer, dir string) (ran bool) {
 	id := binaryIdentity()
-	if id == "" || dir == "" || !runsInstalled() {
+	if id == "" || dir == "" || !runsInstalled() || !syncsUnder("") {
 		return false
 	}
 	path := filepath.Join(dir, pluginSyncFile)
