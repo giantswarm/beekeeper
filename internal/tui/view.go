@@ -80,7 +80,7 @@ func bodyView(m *model, w, h int) string {
 	}
 	d := m.data
 	if m.detail != "" {
-		if s := sessionNamed(d.Sessions, m.detail); s != nil {
+		if s := m.paneSession(); s != nil {
 			return detailView(d, *s, w, h, m.pane())
 		}
 	}
@@ -1435,16 +1435,6 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// sessionNamed finds a session by name.
-func sessionNamed(sessions []Session, name string) *Session {
-	for i := range sessions {
-		if sessions[i].Name == name {
-			return &sessions[i]
-		}
-	}
-	return nil
 }
 
 // plainOrDim renders empty strings quietly.

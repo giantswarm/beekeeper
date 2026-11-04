@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,7 +164,7 @@ func (m *model) tailCmd(session string) tea.Cmd {
 	}
 	m.tailing = true
 	return func() tea.Msg {
-		turns, err := m.src.Tail(m.ctx, session, tailTurns)
+		turns, err := m.src.Tail(m.ctx, sessionQuery(session), tailTurns)
 		return tailMsg{session: session, turns: turns, err: err}
 	}
 }
@@ -194,6 +195,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keepSelection(picked)
 		}
 		m.updated = time.Now()
+		if m.detail != "" && m.paneSession() == nil {
+			m.closeDetail()
+		}
 		m.clampAll()
 		m.noticeHandedBack()
 		return m, nil
@@ -269,7 +273,7 @@ func newer(ts []Turn, last Turn) int {
 func (m *model) sendCmd(session, text string) tea.Cmd {
 	m.sending = true
 	return func() tea.Msg {
-		where, err := m.src.Send(m.ctx, session, text)
+		where, err := m.src.Send(m.ctx, sessionQuery(session), text)
 		return sentMsg{session: session, where: where, err: err}
 	}
 }
@@ -312,9 +316,9 @@ func (m *model) enter() (tea.Model, tea.Cmd) {
 	if m.tab != sessionsTab || m.sel[m.tab] >= len(s) {
 		return m, nil
 	}
-	name := s[m.sel[m.tab]].Name
-	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = name, nil, "", 0, 1, false
-	return m, m.tailCmd(name)
+	key := sessionKey(s[m.sel[m.tab]])
+	m.detail, m.tail, m.tailErr, m.tailBack, m.tailState, m.tailing = key, nil, "", 0, 1, false
+	return m, m.tailCmd(key)
 }
 
 // compose edits the message line: enter sends a non-empty draft, esc
@@ -381,7 +385,12 @@ func (m *model) paneSession() *Session {
 	if m.data == nil || m.detail == "" {
 		return nil
 	}
-	return sessionNamed(m.data.Sessions, m.detail)
+	for i := range m.data.Sessions {
+		if sessionKey(m.data.Sessions[i]) == m.detail {
+			return &m.data.Sessions[i]
+		}
+	}
+	return nil
 }
 
 // toggleTakeOver takes the pane's session over, or hands it back when this
@@ -593,24 +602,24 @@ func (m *model) rowsFor(t int) int {
 // sessionsTab is the sessions tab's index.
 const sessionsTab = 1
 
-// selectedSession is the name of the session the sessions tab selects, ""
+// selectedSession is the stable key of the session the sessions tab selects, ""
 // when it selects none.
 func (m *model) selectedSession() string {
 	if s := m.sessions(); m.sel[sessionsTab] < len(s) {
-		return s[m.sel[sessionsTab]].Name
+		return sessionKey(s[m.sel[sessionsTab]])
 	}
 	return ""
 }
 
-// keepSelection moves the sessions tab's selection to name's new row: the
+// keepSelection moves the sessions tab's selection to key's new row: the
 // list reorders as sessions get busy, and enter, t and a must act on the
 // session the person picked, not on whichever took its place.
-func (m *model) keepSelection(name string) {
-	if name == "" {
+func (m *model) keepSelection(key string) {
+	if key == "" {
 		return
 	}
 	for i, s := range m.sessions() {
-		if s.Name == name {
+		if sessionKey(s) == key {
 			m.sel[sessionsTab] = i
 			return
 		}
@@ -666,4 +675,21 @@ func (m *model) screen() string {
 		h = 24
 	}
 	return render(m, w, h)
+}
+
+// sessionKey keeps display names separate from stable session identities.
+func sessionKey(s Session) string {
+	if s.ID != "" {
+		return "id:" + s.ID
+	}
+	if s.PID != 0 {
+		return "pid:" + strconv.Itoa(s.PID)
+	}
+	return "name:" + s.Name
+}
+
+// sessionQuery supplies the ID, PID or fallback name accepted by Source.
+func sessionQuery(key string) string {
+	_, value, _ := strings.Cut(key, ":")
+	return value
 }

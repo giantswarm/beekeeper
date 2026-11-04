@@ -400,14 +400,14 @@ func TestEnterOpensSessionPaneOnlyThere(t *testing.T) {
 
 	m.key(keyText("2"))
 	_, c := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.detail != tBee || m.tailState != 1 {
+	if m.detail != sessionKey(src.data.Sessions[0]) || m.tailState != 1 {
 		t.Fatalf("detail = %q state %d, want bee loading", m.detail, m.tailState)
 	}
 	got := msgs(c)
 	if len(got) != 1 {
 		t.Fatalf("enter asked for %d messages, want one tail", len(got))
 	}
-	if src.tailCall != tBee || src.tailN != tailTurns {
+	if src.tailCall != "100" || src.tailN != tailTurns {
 		t.Errorf("Tail(%q, %d), want bee, %d", src.tailCall, src.tailN, tailTurns)
 	}
 	if body := m.screen(); !strings.Contains(body, "transcript") || !strings.Contains(body, "…") {
@@ -481,7 +481,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 		t.Fatal("a tick with the pane open asked for nothing")
 	}
 	got := msgs(c)
-	if src.tailCall != tBee {
+	if src.tailCall != "100" {
 		t.Fatalf("the tick did not re-read the tail: Tail(%q)", src.tailCall)
 	}
 	for _, msg := range got {
@@ -505,7 +505,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(keyText("k"))
 	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
-	m.Update(tailMsg{session: tBee, turns: src.turns})
+	m.Update(tailMsg{session: m.detail, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
 	}
@@ -518,7 +518,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	}
 
 	// A failed re-read keeps the turns shown and says why.
-	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	m.Update(tailMsg{session: m.detail, err: errors.New("transcript moved")})
 	if v := m.screen(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
 	}
@@ -590,7 +590,7 @@ func TestMessageFromThePane(t *testing.T) {
 		t.Error("m opened a second message while one is on its way")
 	}
 	m.Update(c())
-	if src.sendTo != tBee || src.sendText != "q jG" {
+	if src.sendTo != "100" || src.sendText != "q jG" {
 		t.Errorf("Send(%q, %q), want bee and the draft", src.sendTo, src.sendText)
 	}
 	if v := m.screen(); m.sending || !strings.Contains(v, "sent: queued in its CLI") {
@@ -763,7 +763,7 @@ func TestLateTailForClosedPaneIsDropped(t *testing.T) {
 	m.key(keyText("2"))
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m.Update(tailMsg{session: tBee, turns: []Turn{{Text: "late"}}})
+	m.Update(tailMsg{session: sessionKey(src.data.Sessions[0]), turns: []Turn{{Text: "late"}}})
 	if m.tailState != 0 || len(m.tail) != 0 {
 		t.Errorf("a late tail reopened the pane: state %d, %d turns", m.tailState, len(m.tail))
 	}
