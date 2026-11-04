@@ -4,15 +4,25 @@ package remotebuild
 // util-linux setsid. Journals survive exec disconnections, independently of
 // kubectl. stdout and stderr share one ordered byte stream.
 const upload = `set -eu
-id=$1
+id=$1 r=/work/runs/$1
+exec 9>/work/control.lock
+flock 9
 mkdir /work/busy || exit 75
 printf '%s' "$id" > /work/busy/id
 printf '%s' "$$" > /work/busy/owner
 touch /work/active
-trap 'rm -rf /work/busy /work/incoming' EXIT
-mkdir -p "/work/runs/$id" /work/incoming
-: > "/work/runs/$id/log"
-tar -xf - -C /work/incoming
+mkdir -p "$r/incoming"
+flock -u 9
+exec 9>&-
+cleanup_upload() {
+ exec 9>/work/control.lock
+ flock 9
+ rm -rf "$r/incoming"
+ if [ "$(cat /work/busy/id 2>/dev/null)" = "$id" ]; then rm -rf /work/busy; fi
+}
+trap cleanup_upload EXIT
+: > "$r/log"
+tar -xf - -C "$r/incoming"
 trap - EXIT`
 
 const wrapper = `id=$1 sub=$2 command=$3 tool=${4:-}
@@ -33,11 +43,18 @@ stop_child() {
  fi
 }
 trap 'stop_child; rc=143; finish; exit 143' TERM INT HUP
+# Cancellation and source replacement are one transition. A detached wrapper
+# can reach here after its launch connection and reservation have disappeared.
+exec 9>/work/control.lock
+flock 9
+[ "$(cat /work/busy/id 2>/dev/null)" = "$id" ] || exit 143
 printf '%s' "$$" > "$r/pid"
 printf '%s' "$$" > /work/busy/owner
 rm -rf /work/src
-mv /work/incoming /work/src || { rc=2; finish; exit 2; }
+mv "$r/incoming" /work/src || { rc=2; finish; exit 2; }
 cd "/work/src/$sub" || { rc=2; finish; exit 2; }
+flock -u 9
+exec 9>&-
 ` + cacheSetup + `
 setsid bash -c "$command" >> "$r/log" 2>&1 < /dev/null &
 child=$!; printf '%s' "$child" > "$r/child"
@@ -73,6 +90,8 @@ while :; do
 done`
 
 const interrupt = `id=$1 r=/work/runs/$1
+exec 9>/work/control.lock
+flock 9
 [ -f "$r/rc" ] && exit 0
 [ "$(cat /work/busy/id 2>/dev/null)" = "$id" ] || exit 0
 for f in child pid; do
@@ -83,7 +102,7 @@ for f in child pid; do
  fi
 done
 # If the launch never reached the wrapper, release the reservation.
-if [ ! -f "$r/pid" ]; then rm -rf /work/busy /work/incoming; fi`
+if [ ! -f "$r/pid" ]; then rm -rf /work/busy "$r/incoming"; fi`
 
 const finish = `id=$1
 [ -f "/work/runs/$id/rc" ] && rm -rf "/work/runs/$id"`
