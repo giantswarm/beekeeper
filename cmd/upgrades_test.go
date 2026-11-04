@@ -49,7 +49,7 @@ echo '{"items":[]}'
 // recorded upgrade's phase (internal/upgrade/testdata/prod).
 func phase(t *testing.T, dir, name string) {
 	t.Helper()
-	testdata := filepath.Join("..", "internal", "upgrade", "testdata", "prod", name)
+	testdata := filepath.Join("..", "internal", "upgrade", "testdata", snapshotInstallation, name)
 	list := struct {
 		Items []json.RawMessage `json:"items"`
 	}{}
@@ -104,7 +104,7 @@ func takeCalls(t *testing.T, log string) map[string]int {
 func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
-	const upgrading = "prod"
+	const upgrading = snapshotInstallation
 	kubectl, log := upgradeKubectl(t, dir, upgrading)
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = nil
@@ -194,7 +194,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
-	const upgrading = "prod"
+	const upgrading = snapshotInstallation
 	kubectl, log := upgradeKubectl(t, dir, upgrading)
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{{Name: upgrading, Context: upgrading}, {Name: "b", Context: "b"}}
@@ -277,7 +277,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	}
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
-		{Name: "prod", Context: "prod"}, {Name: "broken", Context: "broken"},
+		{Name: snapshotInstallation, Context: snapshotInstallation}, {Name: "broken", Context: "broken"},
 		{Name: "lost", Context: "teleport.giantswarm.io-lost"}, {Name: "far", Context: "teleport.giantswarm.io-far"},
 	}
 	a.cfg.Watch.Interval.Duration = 30 * time.Second
@@ -288,7 +288,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		w.upgradeCycle(context.Background())
 		clk.now = clk.now.Add(a.cfg.Upgrades.Every.Duration)
 	}
-	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got["prod"] != 3 || got["broken"] != 3 {
+	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got[snapshotInstallation] != 3 || got["broken"] != 3 {
 		t.Errorf("kubectl calls: %v", got)
 	}
 	text := out.String()
@@ -369,11 +369,11 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 // Snapshot readers recover versions even when a shared reading skipped events.
 func TestSnapshotUpgradeFromHold(t *testing.T) {
 	a, out := stubApp(t)
-	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
 	st := &state.State{}
-	upgrade.Reconcile(st, "prod", []upgrade.Upgrade{{Cluster: "mc", From: "35.0.1", To: "36.1.0"}}, a.now, state.Party{})
+	upgrade.Reconcile(st, snapshotInstallation, []upgrade.Upgrade{{Cluster: "mc", From: "35.0.1", To: "36.1.0"}}, a.now, state.Party{})
 	rs := upgrade.Readings{}
-	rs.Keep([]upgrade.Status{{Installation: "prod", Upgrades: []upgrade.Upgrade{{Cluster: "mc", To: "36.1.0"}}}}, a.now)
+	rs.Keep([]upgrade.Status{{Installation: snapshotInstallation, Upgrades: []upgrade.Upgrade{{Cluster: "mc", To: "36.1.0"}}}}, a.now)
 	if err := a.store.WriteFile(upgrade.ReadingsFile, rs); err != nil {
 		t.Fatal(err)
 	}
@@ -394,3 +394,5 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 		}
 	}
 }
+
+const snapshotInstallation = "prod"
