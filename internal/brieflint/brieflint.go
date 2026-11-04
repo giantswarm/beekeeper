@@ -86,6 +86,22 @@ func clobbers(code string) bool {
 	return false
 }
 
+// maskInternalDots keeps dots inside versions and dotted names from acting as
+// sentence boundaries. One-byte replacements preserve the rule's search bound;
+// periods beside whitespace or punctuation still end the search.
+func maskInternalDots(line string) string {
+	word := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+	}
+	masked := []byte(line)
+	for i := 1; i+1 < len(line); i++ {
+		if line[i] == '.' && word(line[i-1]) && word(line[i+1]) {
+			masked[i] = '_'
+		}
+	}
+	return string(masked)
+}
+
 // Lint reads one file's lines and returns what the rules refuse in them.
 // The clobber rule reads only shell examples: inline code spans and fenced
 // blocks without a language or with a shell's.
@@ -108,7 +124,11 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 			out = append(out, Finding{Path: name, Line: n, Rule: rule, Why: why, Text: strings.TrimSpace(line)})
 		}
 		for _, ru := range rules {
-			if ru.re.MatchString(line) {
+			subject := line
+			if ru.name == "until-ships" {
+				subject = maskInternalDots(line)
+			}
+			if ru.re.MatchString(subject) {
 				add(ru.name, ru.why)
 			}
 		}

@@ -137,3 +137,36 @@ func TestLintPassesSafeRedirects(t *testing.T) {
 		}
 	}
 }
+
+func TestLintUntilShipsDottedNamesAndBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		want bool
+	}{
+		{"Use the script until devctl v8.82.8 ships.", true},
+		{"Use the script until `devctl.rollout` ships.", true},
+		{"Use the script until `release.notes.md` lands.", true},
+		{"Use the script until v8.82.8 is released.", true},
+		{"Wait until ready. The release ships.", false},
+		{"Wait until ready; the release ships.", false},
+		{"Wait until ready\nThe release ships.", false},
+		{"Wait until ready. Ships.", false},
+		{"Wait until " + strings.Repeat("x", 118) + " ships.", true},
+		{"Wait until " + strings.Repeat("x", 119) + " ships.", false},
+		{"Wait until " + strings.Repeat("x.", 59) + "x ships.", false},
+	} {
+		t.Run(tt.text, func(t *testing.T) {
+			got, err := Lint("brief.md", strings.NewReader(tt.text))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if tt.want {
+				want = 1
+			}
+			if len(got) != want || want == 1 && (got[0].Rule != ruleUntil || got[0].Text != tt.text) {
+				t.Errorf("Lint(%q) = %+v, want %d until-ships findings", tt.text, got, want)
+			}
+		})
+	}
+}
