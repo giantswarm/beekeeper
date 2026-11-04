@@ -267,7 +267,8 @@ process tree, each running over a minute, are one STACKED line with the
 count, the oldest's age, its parent and its session. More than
 watch.toolProcsMax (1000) processes of the CLIs in watch.tools (kubectl,
 helm, tsh, gh, flux, devctl) running machine-wide are one LOAD line with
-their commands and the sessions that run them. Each ends with an ENDED
+their commands and the sessions that run them. A parent-child chain of one
+CLI longer than watch.toolProcsMax is named as a possible recursion. Each ends with an ENDED
 line; a negative threshold turns it off. A printed command line
 keeps no value: the program, its subcommands and the flag names.
 
