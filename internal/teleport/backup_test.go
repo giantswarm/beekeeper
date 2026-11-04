@@ -23,10 +23,10 @@ func TestRenewBackupFailureLeavesHome(t *testing.T) {
 	if err := os.WriteFile(archived, []byte("older profile"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(r.Previous(), 0o500); err != nil {
+	if err := os.Chmod(r.Previous(), 0o500); err != nil { //nolint:gosec // directory needs traversal permission to exercise failed cleanup
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(r.Previous(), 0o700) })
+	t.Cleanup(func() { _ = os.Chmod(r.Previous(), 0o700) }) //nolint:gosec // restore owner-only directory access for test cleanup
 	// Check the actual permission boundary, since privileged runners can
 	// remove entries even from a directory without write permission.
 	if err := os.Remove(archived); err == nil {
@@ -40,7 +40,7 @@ func TestRenewBackupFailureLeavesHome(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(r.Home, "profile")); err != nil || string(got) != homeUntil {
 		t.Fatalf("failed renewal changed the active profile: %q, %v", got, err)
 	}
-	if got, err := os.ReadFile(archived); err != nil || string(got) != "older profile" {
+	if got, err := os.ReadFile(filepath.Clean(archived)); err != nil || string(got) != "older profile" {
 		t.Fatalf("backup = %q, %v", got, err)
 	}
 	if left, err := filepath.Glob(filepath.Join(r.Dir, "staging-*")); err != nil || len(left) != 0 {
