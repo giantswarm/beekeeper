@@ -29,7 +29,7 @@ func TestSOPSWriteHeldLock(t *testing.T) {
 	if err := commitEncrypted(file, []byte("replacement"), snapshot); !errors.Is(err, ErrWriteConflict) {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	raw, err := os.ReadFile(file)
+	raw, err := os.ReadFile(file) //nolint:gosec // a path of this test
 	if err != nil {
 		t.Fatal(err)
 	}

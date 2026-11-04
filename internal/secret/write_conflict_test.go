@@ -20,7 +20,7 @@ func awaitFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil { //nolint:gosec // a path of this test
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -38,7 +38,7 @@ func TestSOPSWriterProcess(t *testing.T) {
 	o := ops(tools)
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
 		if name == "sops" && slices.Contains(args, "encrypt") {
-			if err := os.WriteFile(gate+".ready", nil, 0o600); err != nil {
+			if err := os.WriteFile(gate+".ready", nil, 0o600); err != nil { //nolint:gosec // a path of this test
 				return nil, err
 			}
 			awaitFile(t, gate+".go")
@@ -112,12 +112,12 @@ func TestConcurrentSOPSWritesConflictAndRetry(t *testing.T) {
 				}
 			}
 			release(first, a, ao)
-			before, err := os.ReadFile(file)
+			before, err := os.ReadFile(file) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
 			release(second, b, bo)
-			after, err := os.ReadFile(file)
+			after, err := os.ReadFile(file) //nolint:gosec // a path of this test
 			if err != nil {
 				t.Fatal(err)
 			}
