@@ -189,6 +189,12 @@ func Hold(ctx context.Context, dir string, r Request, alive func(pid int) bool, 
 	if err := checkName(r.ID); err != nil {
 		return Decision{}, false, err
 	}
+	folder := filepath.Join(dir, r.Session)
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		return Decision{}, false, err
+	}
+	// Remove only an empty folder, after the request and answer cleanup.
+	defer func() { _ = os.Remove(folder) }()
 	b, err := json.Marshal(r)
 	if err != nil {
 		return Decision{}, false, err
