@@ -384,6 +384,14 @@ func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	if m := l.showing(s.Before.Workspace); m != nil {
 		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
 	}
+	for _, w := range l.windows {
+		if w.Address == s.Before.Address {
+			if m := l.showing(w.Workspace); m != nil {
+				return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, w.Workspace.Name), nil
+			}
+			break
+		}
+	}
 	return "", nil
 }
 
