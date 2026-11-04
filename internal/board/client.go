@@ -517,7 +517,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
-			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
+			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I} pageInfo{hasNextPage endCursor}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
 	seen := map[string]bool{}
@@ -540,7 +540,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				if p != nil {
 					missing = p.Errors
 				}
-				more, err := applyExtras(snap, project, epics, part, missing)
+				more, err := c.applyExtras(ctx, snap, project, epics, part, missing)
 				if err != nil {
 					return err
 				}
@@ -580,11 +580,8 @@ func subIssuesPart(i int, it Item, cursor string) (extrasPart, error) {
 
 // applyExtras keeps one batch's data and missing-field evidence together.
 // Each returned part continues the sub-issue connection of that batch only.
-func applyExtras(snap *Snapshot, project string, epics []int, r map[string]json.RawMessage, missing []GraphQLError) ([]extrasPart, error) {
+func (c *Client) applyExtras(ctx context.Context, snap *Snapshot, project string, epics []int, r map[string]json.RawMessage, missing []GraphQLError) ([]extrasPart, error) {
 	var next []extrasPart
-	type nodes struct {
-		Nodes []issueJSON `json:"nodes"`
-	}
 	open := func(ns []issueJSON) []Item {
 		var out []Item
 		for _, n := range ns {
@@ -664,12 +661,22 @@ func applyExtras(snap *Snapshot, project string, epics []int, r map[string]json.
 		}
 	}
 	for i := range snap.Order {
-		var s nodes
+		var s searchPage
 		if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
 			if err := json.Unmarshal(raw, &s); err != nil {
 				return nil, fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
 			}
 			snap.Search[i] = open(s.Nodes)
+			if s.PageInfo.HasNextPage {
+				more, missing, err := c.searchAfter(ctx, snap.Order[i].Search, s.PageInfo.EndCursor)
+				if err != nil {
+					return nil, fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+				}
+				snap.Search[i] = append(snap.Search[i], more...)
+				for _, message := range missing {
+					snap.Missing = noted(snap.Missing, fmt.Sprintf("board.order %q: %s", snap.Order[i].Name, message))
+				}
+			}
 		}
 	}
 	return next, nil
