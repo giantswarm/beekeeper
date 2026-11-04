@@ -93,7 +93,7 @@ func TestCalendar(t *testing.T) {
 }
 
 func TestSystemdSetupNeedsStop(t *testing.T) {
-	const enabled = "enabled"
+	const enabled, disabled = "enabled", "disabled"
 	bin := t.TempDir()
 	command := filepath.Join(bin, "systemctl")
 	script := `#!/bin/sh
@@ -114,8 +114,14 @@ esac
 		{enabled, "active", true, true},
 		{enabled, "inactive", false, true},
 		{enabled, "failed", false, true},
-		{"disabled", "active", false, true},
-		{"disabled", "inactive", false, false},
+		{disabled, "active", false, true},
+		{disabled, "activating", false, true},
+		{disabled, "deactivating", false, true},
+		{disabled, "reloading", false, true},
+		{enabled, "activating", false, true},
+		{disabled, "inactive", false, false},
+		{disabled, "failed", false, false},
+		{disabled, "", false, false},
 	} {
 		t.Run(state.enabled+"/"+state.active, func(t *testing.T) {
 			t.Setenv("TEST_ENABLED", state.enabled)
