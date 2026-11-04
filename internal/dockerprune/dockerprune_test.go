@@ -2,6 +2,7 @@ package dockerprune
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -119,7 +120,13 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 			if !ok {
 				at = "0001-01-01T00:00:00Z"
 			}
-			out += id + "\t\"" + at + "\"\n"
+			refs, _ := json.Marshal(map[string][]string{
+				"sha256:new":  {"gsoci.azurecr.io/giantswarm/x:dev-2"},
+				oldID:         {"gsoci.azurecr.io/giantswarm/x:dev-1", "x:dev-1"},
+				"sha256:node": {"kindest/node:v1"},
+				inlabID:       {"nginx:1"},
+			}[id])
+			out += id + "\t\"" + at + "\"\t" + string(refs) + "\n"
 		}
 		return []byte(out), nil
 	case args[0] == "ps":
@@ -136,7 +143,6 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 const dfv = `{"Images":[
 {"Containers":"0","CreatedAt":"2026-10-15 01:00:00 +0200 CEST","ID":"sha256:new","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-2","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
-{"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
 {"Containers":"0","CreatedAt":"2026-10-12 01:00:00 +0200 CEST","ID":"sha256:dangling","Repository":"<none>","Tag":"<none>","Digest":"<none>","Size":"500MB","UniqueSize":"500MB"},
 {"Containers":"1","CreatedAt":"2026-01-01 01:00:00 +0200 CEST","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-01-02 01:00:00 +0200 CEST","ID":"sha256:inlab","Repository":"nginx","Tag":"1","Digest":"","Size":"3GB","UniqueSize":"3GB"}
@@ -420,5 +426,73 @@ func TestParseUsedAgo(t *testing.T) {
 		if got := parseUsedAgo(c.in); got != c.want {
 			t.Errorf("parseUsedAgo(%q) = %v; want %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestTrimImagesRemovesAllInspectedTagsInOneRun(t *testing.T) {
+	refs := []string{"example:one", "example:two"}
+	var removed [][]string
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "system":
+			return []byte(`{"Images":[{"ID":"sha256:example","Repository":"example","Tag":"one","CreatedAt":"2026-01-01 00:00:00 +0000 UTC","Size":"4GB","UniqueSize":"4GB","Containers":"0"}]}`), nil
+		case args[1] == "inspect":
+			return []byte("sha256:example\t\"2026-01-01T00:00:00Z\"\t[\"example:one\",\"example:two\"]\n"), nil
+		case args[1] == "rm":
+			removed = append(removed, slices.Clone(args[2:]))
+			for _, ref := range args[2:] {
+				if !slices.Contains(refs, ref) {
+					return nil, fmt.Errorf("unknown tag %s", ref)
+				}
+				refs = slices.DeleteFunc(refs, func(r string) bool { return r == ref })
+			}
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unexpected args %v", args)
+	}
+	images, err := ListImages(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 || !slices.Equal(images[0].Refs, refs) {
+		t.Fatalf("images = %+v; want both inspected tags", images)
+	}
+	size := func() (int64, error) {
+		if len(refs) > 0 {
+			return 4e9, nil
+		}
+		return 0, nil
+	}
+	candidates := Candidates(images, nil, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	trimmed, err := TrimImages(context.Background(), run, candidates, 4e9, 1e9, size, func() bool { return false })
+	remaining, _ := size()
+	if err != nil || remaining > 1e9 || len(removed) != 1 || !slices.Equal(trimmed.Removed, []string{"example:one example:two"}) {
+		t.Fatalf("trim = %+v, %v; remaining %d, removals %v", trimmed, err, remaining, removed)
+	}
+}
+
+func TestListImagesRejectsUnreadableInspection(t *testing.T) {
+	valid := "sha256:example\t\"2026-01-01T00:00:00Z\"\t[\"example:one\"]\n"
+	for name, output := range map[string]string{
+		"null time":       "sha256:example\tnull\t[]\n",
+		"missing image":   "",
+		"missing tags":    "sha256:example\t\"2026-01-01T00:00:00Z\"\n",
+		"bad tags":        "sha256:example\t\"2026-01-01T00:00:00Z\"\t{}\n",
+		"empty tag":       "sha256:example\t\"2026-01-01T00:00:00Z\"\t[\"\"]\n",
+		"bad time":        "sha256:example\t\"invalid\"\t[]\n",
+		"duplicate image": valid + valid,
+		"unknown image":   strings.ReplaceAll(valid, "sha256:example", "sha256:other"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := func(_ context.Context, args ...string) ([]byte, error) {
+				if args[0] == "system" {
+					return []byte(`{"Images":[{"ID":"sha256:example","Size":"4GB","UniqueSize":"4GB"}]}`), nil
+				}
+				return []byte(output), nil
+			}
+			if _, err := ListImages(context.Background(), run); err == nil {
+				t.Fatal("listed images with unreadable inspection data")
+			}
+		})
 	}
 }

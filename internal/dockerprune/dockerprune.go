@@ -101,8 +101,8 @@ func (i Image) Name() string {
 }
 
 // ListImages reads every image with its size and what removing it frees,
-// from docker system df -v, which lists an image once per tag, and when it was tagged
-// last, from docker image inspect.
+// from docker system df -v, and its complete tags and last tag time from
+// docker image inspect. The df formatter reports only the first tag.
 func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	raw, err := d(ctx, "system", "df", "-v", "--format", "{{json .}}")
 	if err != nil {
@@ -110,7 +110,7 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	}
 	var doc struct {
 		Images []struct {
-			ID, Repository, Tag, Digest, CreatedAt, Size, UniqueSize, Containers string
+			ID, Digest, CreatedAt, Size, UniqueSize, Containers string
 		}
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -119,7 +119,7 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 	var out []Image
 	at := map[string]int{}
 	for _, r := range doc.Images {
-		i, ok := at[r.ID]
+		_, ok := at[r.ID]
 		if !ok {
 			created, _ := time.Parse("2006-01-02 15:04:05 -0700 MST", r.CreatedAt)
 			size, err := ParseSize(r.Size)
@@ -131,23 +131,20 @@ func ListImages(ctx context.Context, d Docker) ([]Image, error) {
 				return nil, fmt.Errorf("docker system df -v: image %s: %w", r.ID, err)
 			}
 			containers, _ := strconv.Atoi(r.Containers)
-			i, at[r.ID] = len(out), len(out)
+			at[r.ID] = len(out)
 			out = append(out, Image{ID: r.ID, Digest: none(r.Digest), Created: created, Size: size, Unique: unique, Containers: containers})
 		}
-		if repo, tag := none(r.Repository), none(r.Tag); repo != "" && tag != "" {
-			out[i].Refs = append(out[i].Refs, repo+":"+tag)
-		}
 	}
-	return out, tagTimes(ctx, d, out)
+	return out, inspectImages(ctx, d, out)
 }
 
-// tagTimes sets each image's Tagged. An image whose tag time is unreadable
-// fails the list: what may be removed is then unknown.
-func tagTimes(ctx context.Context, d Docker, images []Image) error {
+// inspectImages sets each image's Tagged and Refs. Unreadable inspection
+// data fails the list: what may be removed is then unknown.
+func inspectImages(ctx context.Context, d Docker, images []Image) error {
 	if len(images) == 0 {
 		return nil
 	}
-	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}"}
+	args := []string{"image", "inspect", "--format", "{{.Id}}\t{{json .Metadata.LastTagTime}}\t{{json .RepoTags}}"}
 	at := map[string]int{}
 	for i, img := range images {
 		args, at[img.ID] = append(args, img.ID), i
@@ -156,21 +153,34 @@ func tagTimes(ctx context.Context, d Docker, images []Image) error {
 	if err != nil {
 		return err
 	}
-	seen := 0
+	seen := map[string]bool{}
 	for line := range bytes.Lines(raw) {
-		id, js, _ := strings.Cut(strings.TrimSpace(string(line)), "\t")
+		id, rest, _ := strings.Cut(strings.TrimSpace(string(line)), "\t")
+		js, refsJSON, complete := strings.Cut(rest, "\t")
 		i, ok := at[id]
-		if !ok {
-			continue
+		if !ok || seen[id] || !complete {
+			return fmt.Errorf("docker image inspect: unexpected or incomplete image %s", id)
+		}
+		if strings.TrimSpace(js) == "null" {
+			return fmt.Errorf("docker image inspect: image %s: missing tag time", id)
 		}
 		var t time.Time
 		if err := json.Unmarshal([]byte(js), &t); err != nil {
 			return fmt.Errorf("docker image inspect: image %s: tag time %s: %w", id, js, err)
 		}
-		images[i].Tagged, seen = t, seen+1
+		var refs []string
+		if err := json.Unmarshal([]byte(refsJSON), &refs); err != nil {
+			return fmt.Errorf("docker image inspect: image %s: repo tags: %w", id, err)
+		}
+		for _, ref := range refs {
+			if strings.TrimSpace(ref) == "" {
+				return fmt.Errorf("docker image inspect: image %s: empty repo tag", id)
+			}
+		}
+		images[i].Tagged, images[i].Refs, seen[id] = t, refs, true
 	}
-	if seen != len(images) {
-		return fmt.Errorf("docker image inspect: tag times of %d of %d images", seen, len(images))
+	if len(seen) != len(images) {
+		return fmt.Errorf("docker image inspect: inspection data of %d of %d images", len(seen), len(images))
 	}
 	return nil
 }
