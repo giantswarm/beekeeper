@@ -1068,10 +1068,12 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 	linksOK := true
 	anyExisted := exists(e.CodexSkills)
 	var links []string
+	targets := map[string]string{}
 	for _, name := range names {
 		dst := filepath.Join(e.CodexSkills, name)
 		wantTarget := filepath.Join(skillsDir, name)
 		links = append(links, dst)
+		targets[dst] = wantTarget
 		gotTarget, err := os.Readlink(dst)
 		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
 			linksOK = false
@@ -1080,6 +1082,7 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 	workerSkills := CodexWorkerSkills(e.StateDir)
 	if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
 		links = append(links, workerSkills)
+		targets[workerSkills] = skillsDir
 		gotTarget, err := os.Readlink(workerSkills)
 		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(skillsDir) {
 			linksOK = false
@@ -1090,6 +1093,7 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 	hasUserAgentsMD := exists(userAgentsMD) && filepath.Clean(resolve(userAgentsMD)) != filepath.Clean(workerAgentsMD)
 	if hasUserAgentsMD {
 		links = append(links, workerAgentsMD)
+		targets[workerAgentsMD] = userAgentsMD
 		gotTarget, err := os.Readlink(workerAgentsMD)
 		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(userAgentsMD) {
 			linksOK = false
@@ -1098,6 +1102,7 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 	skillsCurrent := len(staleAgySkills(skillsDir)) == 0
 	if linksOK && skillsCurrent {
 		m.CodexSkillLinks = links
+		m.CodexSkillTargets = targets
 		m.CodexSkillsDir = skillsDir
 		p.add("ok", what, "", nil)
 		return nil
@@ -1109,6 +1114,7 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 		m.addDirs(filepath.Dir(workerSkills))
 	}
 	m.CodexSkillLinks = links
+	m.CodexSkillTargets = targets
 	m.CodexSkillsDir = skillsDir
 	verb := "add"
 	if anyExisted {
@@ -1175,9 +1181,27 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 	}
 	var toRemove []string
 	for _, dst := range m.CodexSkillLinks {
-		if symlink(dst) {
+		want := m.CodexSkillTargets[dst]
+		// Older manifests recorded only paths. Recover the targets that
+		// those installers generated, and keep links we cannot identify.
+		if want == "" {
+			switch {
+			case dst == CodexWorkerSkills(e.StateDir):
+				want = m.CodexSkillsDir
+			case dst == filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"):
+				if e.CodexSkills != "" {
+					want = filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
+				}
+			case slices.Contains(plugin.SkillNames(), filepath.Base(dst)) && m.CodexSkillsDir != "":
+				want = filepath.Join(m.CodexSkillsDir, filepath.Base(dst))
+			}
+		}
+		got, err := os.Readlink(dst)
+		if err == nil && want != "" && filepath.Clean(got) == filepath.Clean(want) {
 			toRemove = append(toRemove, dst)
 			removed[dst] = true
+		} else if err == nil {
+			p.add("keep", dst, "a symlink changed since install wrote it", nil)
 		}
 	}
 	agyStillUses := func() bool {

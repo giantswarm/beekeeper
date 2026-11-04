@@ -433,9 +433,11 @@ type Manifest struct {
 	CodexWorkerHooksKeys    []string        `json:"codexWorkerHooksKeys,omitempty"`
 	CodexWorkerHooksCreated bool            `json:"codexWorkerHooksCreated,omitempty"`
 	// CodexSkillLinks are the skill symlinks install added under CodexSkills;
+	// CodexSkillTargets records their original targets for ownership checks.
 	// CodexSkillsDir is the directory of embedded skills they point at.
-	CodexSkillLinks []string `json:"codexSkillLinks,omitempty"`
-	CodexSkillsDir  string   `json:"codexSkillsDir,omitempty"`
+	CodexSkillLinks   []string          `json:"codexSkillLinks,omitempty"`
+	CodexSkillTargets map[string]string `json:"codexSkillTargets,omitempty"`
+	CodexSkillsDir    string            `json:"codexSkillsDir,omitempty"`
 }
 
 func readManifest(path string) (Manifest, error) {
