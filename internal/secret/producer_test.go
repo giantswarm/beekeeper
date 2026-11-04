@@ -78,7 +78,7 @@ func TestCopyDockerTakesAProducersPasswordAndAnswersNoValue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(secretRules), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(dir, "pull-secret.enc.yaml")
+	file := filepath.Join(dir, "pull-secret.sops.yaml")
 	src, err := secret.ParseRef(azGenerate)
 	if err != nil {
 		t.Fatal(err)
@@ -186,5 +186,62 @@ func TestAFailingProducerStoresNothing(t *testing.T) {
 	if _, err := producing(tools).CopyDocker(context.Background(), src, file, secret.DockerConfig{Registry: registry, Username: pullUser},
 		fluxPull); err == nil {
 		t.Error("an empty password (null) was stored")
+	}
+}
+
+func TestMissingCreationRuleRefusesBeforeProduction(t *testing.T) {
+	for name, rules := range map[string]string{
+		"empty":     "creation_rules: []\n",
+		"unmatched": "creation_rules:\n  - path_regex: '^other/'\n",
+	} {
+		for _, operation := range []string{"SecretKeys", "Capture", "CopyValue", "CopyValues", "CopyDocker"} {
+			t.Run(name+"/"+operation, func(t *testing.T) {
+				ran := fakeAz(t, 0)
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(rules), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(dir, "target.sops.yaml")
+				tools := secrettest.New(nil)
+				o := producing(tools)
+				src, err := secret.ParseRef(azGenerate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				callbacks := 0
+				ctx := context.Background()
+				switch operation {
+				case "SecretKeys":
+					_, err = o.SecretKeys(ctx, file, secret.SecretKeysOptions{
+						Keys: []string{"password"}, New: fluxPull,
+						Produce: func(context.Context) (map[string]string, error) {
+							callbacks++
+							return map[string]string{"password": "one-time-value"}, nil
+						},
+					})
+				case "Capture":
+					_, err = o.Capture(ctx, secret.Ref{File: file, Path: pwPath}, secret.CaptureOptions{
+						Producer: azGenerateArgs, JQ: captureJQ, New: fluxPull,
+					})
+				case "CopyValue":
+					_, err = o.CopyValue(ctx, src, secret.Ref{File: file, Path: pwPath})
+				case "CopyValues":
+					_, err = o.CopyValues(ctx, []secret.Pair{{Src: src, Path: "password"}}, file, fluxPull)
+				case "CopyDocker":
+					_, err = o.CopyDocker(ctx, src, file, secret.DockerConfig{Registry: "registry", Username: "test"}, fluxPull)
+				}
+				if err == nil || !strings.Contains(err.Error(), "no creation rule") {
+					t.Fatalf("expected missing rule refusal, got %v", err)
+				}
+				if callbacks != 0 || len(tools.Calls) != 0 {
+					t.Errorf("production started: callbacks=%d, tools=%q", callbacks, tools.Calls)
+				}
+				for _, path := range []string{file, ran} {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Errorf("unexpected destination or producer marker: %v", err)
+					}
+				}
+			})
+		}
 	}
 }

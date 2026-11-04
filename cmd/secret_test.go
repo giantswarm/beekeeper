@@ -59,7 +59,7 @@ func secretApp(t *testing.T) (*app, *secrettest.Tools, string) {
 	secretRun = tools.Run
 	t.Cleanup(func() { secretRun = prev })
 	repo := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\n  namespace: team-a\ndata:\n  password: " + base64.StdEncoding.EncodeToString([]byte(secretValue)) + "\n"
@@ -422,7 +422,7 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)

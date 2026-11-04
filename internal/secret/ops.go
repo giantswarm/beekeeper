@@ -301,7 +301,7 @@ func place(doc *document, file, path string) (string, error) {
 }
 
 // checkRule refuses the keys of a value's path, one key each, that file's
-// creation rule would leave in plaintext.
+// creation rule would leave in plaintext, or when no creation rule matches.
 func checkRule(file string, keys []string) error {
 	cfg, rel, err := sopsTarget(file)
 	if err != nil {
@@ -311,10 +311,11 @@ func checkRule(file string, keys []string) error {
 	if err != nil {
 		return err
 	}
-	if rule != nil {
-		if err := rule.checkKeys(keys); err != nil {
-			return fmt.Errorf("%s: %w (%s)", file, err, cfg)
-		}
+	if rule == nil {
+		return fmt.Errorf("%s: no creation rule of %s applies to it", file, cfg)
+	}
+	if err := rule.checkKeys(keys); err != nil {
+		return fmt.Errorf("%s: %w (%s)", file, err, cfg)
 	}
 	return nil
 }
