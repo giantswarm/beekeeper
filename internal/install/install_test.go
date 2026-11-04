@@ -254,7 +254,7 @@ func TestUninstallPreservesLinkedClaudeSettings(t *testing.T) {
 			if got, err := os.Readlink(e.Settings); err != nil || got != link {
 				t.Errorf("settings link = %q, %v; want %q", got, err, link)
 			}
-			raw, err := os.ReadFile(target)
+			raw, err := os.ReadFile(filepath.Clean(target))
 			if err != nil {
 				t.Fatal(err)
 			}
