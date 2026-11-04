@@ -234,3 +234,41 @@ func TestPagerDutyInstallationUnread(t *testing.T) {
 		t.Errorf("installation %q: an unread one is read again at the next reading", got)
 	}
 }
+
+// A capped oldest-first listing cannot establish that an absent newer
+// incident resolved. Refuse it before optional detail reads and keep the
+// last complete baseline; a below-limit list remains a complete reading.
+func TestPagerDutyRefusesCappedListing(t *testing.T) {
+	for _, count := range []int{incidentsLimit - 1, incidentsLimit, incidentsLimit + 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			rows := make([]string, count)
+			known := map[string]Incident{"newer": {Number: 1001, Title: "Still open", Status: "triggered", Since: now.Format(time.RFC3339Nano)}}
+			for i := range rows {
+				id := fmt.Sprintf("old-%d", i)
+				rows[i] = incident(id, i+1, "triggered", "Older incident", now.Add(-time.Hour).Format(time.RFC3339Nano))
+				known[id] = Incident{Number: i + 1, Installation: instA}
+			}
+			reader := PagerDutyReader{Services: []string{"PSVC"}, Call: func(_ context.Context, tool string, _ map[string]any) (string, error) {
+				if tool != listIncidentsTool {
+					t.Fatalf("unnecessary detail call %s", tool)
+				}
+				return `{"response":[` + strings.Join(rows, ",") + `]}`, nil
+			}}
+			ans := reader.Read(context.Background(), known)
+			if count < incidentsLimit {
+				if !ans.OK || len(ans.Incidents) != count {
+					t.Fatalf("below-limit list rejected: OK=%v, reason=%s, incidents=%d", ans.OK, ans.Why, len(ans.Incidents))
+				}
+				return
+			}
+			if ans.OK || !strings.Contains(ans.Why, "limit") {
+				t.Fatalf("accepted a %d-row capped list as complete, or omitted its reason: OK=%v, reason=%s", count, ans.OK, ans.Why)
+			}
+			prev := &PagerDuty{Reachable: true, Seen: now, Incidents: known}
+			lines, next := rules.PagerDutyStep(prev, ans, now.Add(5*time.Minute))
+			if len(next.Incidents) != len(known) || strings.Contains(strings.Join(lines, "\n"), "RESOLVED") {
+				t.Fatal("incomplete listing changed the baseline")
+			}
+		})
+	}
+}

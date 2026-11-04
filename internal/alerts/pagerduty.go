@@ -61,8 +61,8 @@ type PagerDutyReader struct {
 // listIncidentsTool is the PagerDuty server's listing of incidents.
 const listIncidentsTool = "list_incidents"
 
-// incidentsLimit bounds one listing; the open incidents of a team's
-// services are far fewer.
+// incidentsLimit bounds one listing. Reaching it leaves the completeness
+// of the set unknown, so missing incidents cannot be treated as resolved.
 const incidentsLimit = 100
 
 // Read lists the triggered and acknowledged incidents of the services, of
@@ -83,6 +83,9 @@ func (p PagerDutyReader) Read(ctx context.Context, known map[string]Incident) Pa
 	}
 	if err := json.Unmarshal([]byte(text), &list); err != nil || list.Response == nil {
 		return PagerDutyAnswer{Why: "list_incidents: no incident list: " + firstLine(text)}
+	}
+	if len(list.Response) >= incidentsLimit {
+		return PagerDutyAnswer{Why: fmt.Sprintf("list_incidents: reached the %d-incident limit; the list may be incomplete; narrow alerts.pagerduty.services", incidentsLimit)}
 	}
 	out := map[string]Incident{}
 	for _, r := range list.Response {
