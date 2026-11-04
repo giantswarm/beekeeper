@@ -505,7 +505,7 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 				}
 				subs := min(it.subIssues, subIssuesRead)
 				parts = append(parts, extrasPart{
-					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subs),
+					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d){pageInfo{hasNextPage endCursor} nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subs),
 					subs:  subs,
 					repo:  owner + "/" + repo,
 				})
@@ -517,106 +517,131 @@ func (c *Client) extras(ctx context.Context, snap *Snapshot, project string, now
 			parts = append(parts, extrasPart{field: fmt.Sprintf("s%d:search(query:%s,type:ISSUE,first:50){nodes{...I}}", i, quote(searchQuery(st.Search)))})
 		}
 	}
-	r := map[string]json.RawMessage{}
-	var missing []GraphQLError
-	// Each request reads the epics of one owner, acting on their repository
-	// (github.ActingOn), so a personal account's epic resolves too; the
-	// searches go with the board owner's epics.
-	var batches [][]extrasPart
-	for _, group := range github.ByOwner(parts, func(p extrasPart) string { return cmp.Or(p.repo, c.Board.Owner+"/") }) {
-		batches = append(batches, extrasBatches(group)...)
-	}
-	for _, batch := range batches {
-		var q strings.Builder
-		for _, p := range batch {
-			q.WriteString(p.field)
-		}
-		var part map[string]json.RawMessage
-		err := c.graphql(github.ActingOn(ctx, batch[0].repo), &part, "query{"+q.String()+"}"+issueFields, nil)
-		p, ok := partialOf(err)
-		if !ok {
+	// Consume each page before requesting continuations: error node indices
+	// belong to that page, and appending preserves each epic's child order.
+	for len(parts) > 0 {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if p != nil {
-			missing = append(missing, p.Errors...)
+		r := map[string]json.RawMessage{}
+		var missing []GraphQLError
+		// Each request reads the epics of one owner, acting on their repository
+		// (github.ActingOn), so a personal account's epic resolves too; the
+		// searches go with the board owner's epics.
+		var batches [][]extrasPart
+		for _, group := range github.ByOwner(parts, func(p extrasPart) string { return cmp.Or(p.repo, c.Board.Owner+"/") }) {
+			batches = append(batches, extrasBatches(group)...)
 		}
-		maps.Copy(r, part)
-	}
-	type nodes struct {
-		Nodes []issueJSON `json:"nodes"`
-	}
-	open := func(ns []issueJSON) []Item {
-		var out []Item
-		for _, n := range ns {
-			if n.open() {
-				out = append(out, n.item())
+		for _, batch := range batches {
+			var q strings.Builder
+			for _, p := range batch {
+				q.WriteString(p.field)
 			}
+			var part map[string]json.RawMessage
+			err := c.graphql(github.ActingOn(ctx, batch[0].repo), &part, "query{"+q.String()+"}"+issueFields, nil)
+			p, ok := partialOf(err)
+			if !ok {
+				return err
+			}
+			if p != nil {
+				missing = append(missing, p.Errors...)
+			}
+			maps.Copy(r, part)
 		}
-		return out
-	}
-	// Each error is named on what it belongs to: a sub-issue (by its epic's
-	// alias and its index among the nodes read), the epic, else snap.
-	epicOf := map[string]int{}
-	for _, i := range epics {
-		epicOf[fmt.Sprintf("e%d", i)] = i
-	}
-	subMissing := map[string][]string{}
-	for _, e := range missing {
-		alias := at(e.Path, 0)
-		i, epic := epicOf[alias]
-		switch {
-		case epic && at(e.Path, 3) == "nodes" && len(e.Path) > 5:
-			key := alias + "/" + e.Path[4]
-			subMissing[key] = noted(subMissing[key], e.Path[5]+": "+e.Message)
-		case epic:
-			snap.Items[i].Missing = noted(snap.Items[i].Missing, strings.Join(e.Path[1:], ".")+": "+e.Message)
-		default:
-			name := strings.Join(e.Path, ".")
-			if s, ok := strings.CutPrefix(alias, "s"); ok {
-				if n, err := strconv.Atoi(s); err == nil && n < len(snap.Order) {
-					name = fmt.Sprintf("board.order %q", snap.Order[n].Name)
+		type nodes struct {
+			Nodes []issueJSON `json:"nodes"`
+		}
+		open := func(ns []issueJSON) []Item {
+			var out []Item
+			for _, n := range ns {
+				if n.open() {
+					out = append(out, n.item())
 				}
 			}
-			snap.Missing = noted(snap.Missing, name+": "+e.Message)
+			return out
 		}
-	}
-	for _, i := range epics {
-		var e struct {
-			Issue struct {
-				SubIssues struct {
-					Nodes []struct {
-						issueJSON
-						ProjectItems struct {
-							Nodes []projectItem `json:"nodes"`
-						} `json:"projectItems"`
-					} `json:"nodes"`
-				} `json:"subIssues"`
-			} `json:"issue"`
+		// Each error is named on what it belongs to: a sub-issue (by its epic's
+		// alias and its index among the nodes read), the epic, else snap.
+		epicOf := map[string]int{}
+		for _, i := range epics {
+			epicOf[fmt.Sprintf("e%d", i)] = i
 		}
-		raw, ok := r[fmt.Sprintf("e%d", i)]
-		if !ok || json.Unmarshal(raw, &e) != nil {
-			continue
+		subMissing := map[string][]string{}
+		for _, e := range missing {
+			alias := at(e.Path, 0)
+			i, epic := epicOf[alias]
+			switch {
+			case epic && at(e.Path, 3) == "nodes" && len(e.Path) > 5:
+				key := alias + "/" + e.Path[4]
+				subMissing[key] = noted(subMissing[key], e.Path[5]+": "+e.Message)
+			case epic:
+				snap.Items[i].Missing = noted(snap.Items[i].Missing, strings.Join(e.Path[1:], ".")+": "+e.Message)
+			default:
+				name := strings.Join(e.Path, ".")
+				if s, ok := strings.CutPrefix(alias, "s"); ok {
+					if n, err := strconv.Atoi(s); err == nil && n < len(snap.Order) {
+						name = fmt.Sprintf("board.order %q", snap.Order[n].Name)
+					}
+				}
+				snap.Missing = noted(snap.Missing, name+": "+e.Message)
+			}
 		}
-		for k, n := range e.Issue.SubIssues.Nodes {
-			if !n.open() {
+		var next []extrasPart
+		for _, i := range epics {
+			var e struct {
+				Issue struct {
+					SubIssues struct {
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+						Nodes []struct {
+							issueJSON
+							ProjectItems struct {
+								Nodes []projectItem `json:"nodes"`
+							} `json:"projectItems"`
+						} `json:"nodes"`
+					} `json:"subIssues"`
+				} `json:"issue"`
+			}
+			raw, ok := r[fmt.Sprintf("e%d", i)]
+			if !ok || json.Unmarshal(raw, &e) != nil {
 				continue
 			}
-			it := n.item()
-			if j := slices.IndexFunc(n.ProjectItems.Nodes, func(p projectItem) bool { return p.Project.ID == project }); j >= 0 {
-				n.ProjectItems.Nodes[j].onto(&it)
+			page := e.Issue.SubIssues.PageInfo
+			if page.HasNextPage && page.EndCursor != "" {
+				owner, repo, n, err := Ref(snap.Items[i].Ref)
+				if err != nil {
+					return err
+				}
+				next = append(next, extrasPart{
+					field: fmt.Sprintf("e%d:repository(owner:%s,name:%s){issue(number:%d){subIssues(first:%d,after:%s){pageInfo{hasNextPage endCursor} nodes{...I projectItems(first:20){nodes{project{id} "+boardFields+"}}}}}}", i, quote(owner), quote(repo), n, subIssuesRead, quote(page.EndCursor)),
+					subs:  subIssuesRead,
+					repo:  owner + "/" + repo,
+				})
 			}
-			it.Missing = subMissing[fmt.Sprintf("e%d/%d", i, k)]
-			snap.Items[i].SubIssues = append(snap.Items[i].SubIssues, it)
-		}
-	}
-	for i := range snap.Order {
-		var s nodes
-		if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
-			if err := json.Unmarshal(raw, &s); err != nil {
-				return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+			for k, n := range e.Issue.SubIssues.Nodes {
+				if !n.open() {
+					continue
+				}
+				it := n.item()
+				if j := slices.IndexFunc(n.ProjectItems.Nodes, func(p projectItem) bool { return p.Project.ID == project }); j >= 0 {
+					n.ProjectItems.Nodes[j].onto(&it)
+				}
+				it.Missing = subMissing[fmt.Sprintf("e%d/%d", i, k)]
+				snap.Items[i].SubIssues = append(snap.Items[i].SubIssues, it)
 			}
-			snap.Search[i] = open(s.Nodes)
 		}
+		for i := range snap.Order {
+			var s nodes
+			if raw, ok := r[fmt.Sprintf("s%d", i)]; ok {
+				if err := json.Unmarshal(raw, &s); err != nil {
+					return fmt.Errorf("board.order %q: %w", snap.Order[i].Name, err)
+				}
+				snap.Search[i] = open(s.Nodes)
+			}
+		}
+		parts = next
 	}
 	return nil
 }

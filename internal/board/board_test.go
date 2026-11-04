@@ -410,7 +410,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case f.extrasBy != nil && (strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search(")):
 		return []byte(f.extrasBy(q)), nil
 	case strings.Contains(q, "subIssues(first:") || strings.Contains(q, "search("):
-		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:3){nodes{...I projectItems(`) ||
+		if !strings.Contains(q, `e1:repository(owner:"o",name:"r"){issue(number:2){subIssues(first:3){pageInfo{hasNextPage endCursor} nodes{...I projectItems(`) ||
 			!strings.Contains(q, `s2:search(query:"repo:o/q is:issue is:open sort:created-asc"`) {
 			f.t.Errorf("extras query %s", q)
 		}
