@@ -196,6 +196,7 @@ func restoreInflight(path string) error {
 		}
 		q.reconcile("")
 		q.StreamInputs = 0
+		q.ConfirmedInputs = 0
 		var inflight []QueuedMessage
 		if q.Inflight != nil {
 			q.Inflight.InputSeq = 0
