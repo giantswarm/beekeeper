@@ -142,6 +142,30 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateVersionFlag(t *testing.T) {
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	const tag = "v0.125.0-rc.3"
+	called := false
+	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
+		called = true
+		if !check || update.OptionsFrom(ctx).Version != tag {
+			t.Fatalf("check=%v options=%+v", check, update.OptionsFrom(ctx))
+		}
+		return update.Result{Current: tag, Latest: tag}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, "--check", "--version", tag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("update not called")
+	}
+}
+
 // Global flag values and later arguments must not be mistaken for commands.
 func TestReexecs(t *testing.T) {
 	for _, tc := range []struct {
