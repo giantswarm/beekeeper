@@ -80,11 +80,27 @@ func OpenIndex(dir string) (*Index, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, indexKeyFile), key, 0o600); err != nil {
+	// Publish only a complete key, without replacing a concurrent caller's
+	// key. Exclusive creation of the final path would expose an empty or
+	// partially written key to readers before the write completes.
+	tmp, err := os.CreateTemp(dir, ".key-*")
+	if err != nil {
 		return nil, err
 	}
-	ix.key = key
-	return ix, nil
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(key); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Link(tmp.Name(), filepath.Join(dir, indexKeyFile)); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	// A competing creator may have won. Always use the persisted key and
+	// reload any index it has already saved.
+	return LoadIndex(dir)
 }
 
 // LoadIndex reads the index in dir without creating anything: with no key
