@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
+const searchSandbox = "sandbox"
+
 func sandboxHook(t *testing.T) (Hook, string) {
 	t.Helper()
 	home := testHome(t)
@@ -83,7 +85,7 @@ func TestSandboxRecursiveSearchConfinement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, entry := range []string{"normal", "sandbox"} {
+	for _, entry := range []string{"normal", searchSandbox} {
 		t.Run(entry, func(t *testing.T) {
 			for _, tc := range []struct {
 				name, root string
@@ -117,7 +119,7 @@ func TestSandboxRecursiveSearchConfinement(t *testing.T) {
 							t.Fatal(err)
 						}
 						var out []byte
-						if entry == "sandbox" {
+						if entry == searchSandbox {
 							out = h.DecideSandbox(raw)
 						} else {
 							out = h.Decide(raw)
@@ -140,7 +142,7 @@ func TestSandboxRecursiveSearchConfinement(t *testing.T) {
 				ev["cwd"] = checkout
 				raw, _ := json.Marshal(ev)
 				var out []byte
-				if entry == "sandbox" {
+				if entry == searchSandbox {
 					out = h.DecideSandbox(raw)
 				} else {
 					out = h.Decide(raw)
