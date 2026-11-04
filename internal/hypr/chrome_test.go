@@ -578,3 +578,37 @@ func TestTurned(t *testing.T) {
 		t.Errorf("Turned of no placement = %q, %v", got, err)
 	}
 }
+
+func TestTurnedFollowsCurrentWorkspace(t *testing.T) {
+	for name, tc := range map[string]struct {
+		workspace Workspace
+		active    Workspace
+		special   Workspace
+		want      string
+	}{
+		"current numbered workspace":  {workspace: ws2, active: ws2, want: "2"},
+		"current special workspace":   {workspace: magic, active: ws2, special: magic, want: "special:magic"},
+		"surface on person's monitor": {workspace: surface, active: surface, want: Surface},
+		"output alone":                {workspace: surface, active: ws2},
+		"unshown current workspace":   {workspace: magic, active: ws2},
+		"original workspace":          {workspace: magic, active: ws2, special: music, want: "special:music"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}}
+			s, err := Show(t.Context(), f.ctl, hold)
+			if err != nil || s == nil || !s.Moved {
+				t.Fatalf("Show = %+v, %v", s, err)
+			}
+			f.windows[0].Workspace = tc.workspace
+			f.monitors[0].ActiveWorkspace = tc.active
+			f.monitors[0].SpecialWorkspace = tc.special
+			want := ""
+			if tc.want != "" {
+				want = "eDP-1 shows workspace " + tc.want + ", the shared Chrome window's"
+			}
+			if got, err := s.Turned(t.Context(), f.ctl); err != nil || got != want {
+				t.Errorf("Turned = %q, %v; want %q", got, err, want)
+			}
+		})
+	}
+}
