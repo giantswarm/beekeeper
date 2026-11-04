@@ -13,9 +13,9 @@ const (
 	headPaginationBranch = "fix"
 )
 
-const pageEndCursor = pageEndCursor
+const pageEndCursor = "endCursor"
 
-const pageData = pageData
+const pageData = "data"
 
 const pageHasNext = "hasNextPage"
 
