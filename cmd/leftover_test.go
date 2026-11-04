@@ -70,6 +70,21 @@ func TestStopBackgroundStopsAllButTheCallersShell(t *testing.T) {
 	}
 }
 
+// A claimed spare owns its tool commands just like an ordinary worker CLI.
+func TestStopBackgroundClaimedSpare(t *testing.T) {
+	stopped := captureStops(t)
+	tab := leftoverTable(true, true, true)
+	tab.Process(leftoverCLI).Args = []string{"claude bg-spare"}
+	cmds := stopBackground(tab, leftoverSelf, time.Now())
+	slices.Sort(*stopped)
+	if want := []int{leftoverWait, leftoverSleep, leftoverForward, leftoverKubectl}; !slices.Equal(*stopped, want) {
+		t.Errorf("stopped %v, want %v", *stopped, want)
+	}
+	if len(cmds) != 2 {
+		t.Errorf("reported %v, want the sleep and the port-forward", cmds)
+	}
+}
+
 // A caller whose CLI the table does not show (a sandbox's own process
 // namespace) stops nothing.
 func TestStopBackgroundWithoutItsCLI(t *testing.T) {
