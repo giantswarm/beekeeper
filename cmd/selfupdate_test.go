@@ -151,7 +151,7 @@ func TestReexecs(t *testing.T) {
 	}{
 		{"no arguments", "", false},
 		{"program only", "beekeeper", false},
-		{"gate", "beekeeper gate -- devctl pr merge o/r 1", true},
+		{"gate wrapper", "beekeeper gate -- devctl pr merge o/r 1", true},
 		{"merge child", "beekeeper merge-child /state/merge", true},
 		{"config gate", "beekeeper --config /config.yaml gate -- devctl pr merge o/r 1", true},
 		{"config merge child", "beekeeper --config /config.yaml merge-child /state/merge", true},
