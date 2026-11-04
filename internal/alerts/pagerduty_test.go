@@ -234,3 +234,51 @@ func TestPagerDutyInstallationUnread(t *testing.T) {
 		t.Errorf("installation %q: an unread one is read again at the next reading", got)
 	}
 }
+
+func TestPagerDutyListingLimit(t *testing.T) {
+	for _, count := range []int{incidentsLimit - 1, incidentsLimit, incidentsLimit + 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			f := &fakePagerDuty{}
+			for i := 0; i < count; i++ {
+				f.open = append(f.open, incident(fmt.Sprintf("older-%d", i), i+1, "triggered", "Older incident", "2026-09-24T17:00:00Z"))
+			}
+			r := PagerDutyReader{Call: func(ctx context.Context, tool string, args map[string]any) (string, error) {
+				if tool == listIncidentsTool && args["query_model"].(map[string]any)["limit"] != incidentsLimit {
+					t.Fatal("listing must request the checked limit")
+				}
+				return f.call(ctx, tool, args)
+			}}
+			base := &PagerDuty{Reachable: true, Seen: now, Incidents: map[string]Incident{
+				"newer": {Number: 1000, Title: "Still open", Status: "triggered"},
+			}}
+			ans := r.Read(context.Background(), base.Incidents)
+			if count < incidentsLimit {
+				if !ans.OK || len(ans.Incidents) != count || ans.Why != "" {
+					t.Fatalf("below-limit answer: %+v", ans)
+				}
+				if len(f.calls) != count+1 {
+					t.Fatalf("expected listing and detail lookups, got %v", f.calls)
+				}
+				return
+			}
+			want := "list_incidents: incident limit 100 reached; completeness cannot be established; narrow the selected services or reduce the open incident backlog"
+			if ans.OK || ans.Incidents != nil || ans.Why != want {
+				t.Fatalf("saturated answer: %+v", ans)
+			}
+			if !slices.Equal(f.calls, []string{listIncidentsTool}) {
+				t.Fatalf("saturated listing must skip detail lookups: %v", f.calls)
+			}
+			for _, elapsed := range []time.Duration{time.Minute, PagerDutyGrace} {
+				lines, next := rules.PagerDutyStep(base, ans, now.Add(elapsed))
+				if len(next.Incidents) != 1 || next.Incidents["newer"] != base.Incidents["newer"] || !next.Seen.Equal(base.Seen) {
+					t.Fatalf("lost last complete baseline: %+v", next)
+				}
+				for _, line := range lines {
+					if strings.Contains(line, "RESOLVED") {
+						t.Fatalf("open incident announced resolved: %s", line)
+					}
+				}
+			}
+		})
+	}
+}
