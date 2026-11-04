@@ -1122,8 +1122,16 @@ type Emergency struct {
 	Until  time.Time `json:"until"`
 }
 
+// Handover protects the outgoing session while the owning CLI moves its work.
+// PID lets readers ignore a mark left by a crashed handover.
+type Handover struct {
+	Party
+	PID int `json:"pid"`
+}
+
 // State is the whole document.
 type State struct {
+	Handovers         []Handover `json:"handovers,omitempty"`
 	Emergency         *Emergency `json:"emergency,omitempty"`
 	AutoInstallPaused bool       `json:"autoInstallPaused,omitempty"`
 	// LabIdle records when a configured kind lab was first seen unleased.

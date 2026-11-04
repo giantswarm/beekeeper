@@ -570,3 +570,76 @@ func TestNoteFailsFastNamingAPendingImport(t *testing.T) {
 		t.Errorf("the saved note = %q, %v, %v; output %q", got, ok, err, out)
 	}
 }
+
+// A revive check in another reader must leave the old CLI running even once
+// a successor is visible. Cancellation of the handover releases that guard.
+func TestHandoverProtectsOldCLIAndReleasesOnFailure(t *testing.T) {
+	a, _ := stubApp(t)
+	a.as = testSupervisor
+	a.cfg.Agents.NoteWait.Duration = time.Minute
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(`{"hooks":{"PermissionRequest":[{"hooks":[{"type":"command","command":"beekeeper hook permissionrequest"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := state.Party{Session: oldID, Name: countName}
+	next := state.Party{Session: newID, Name: countName}
+	cli := &claude.Session{ID: oldID, Name: countName, PID: 42}
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	w.store = a.store
+	w.now = time.Now()
+	ended := useEndRevived(t)
+	useLauncher(t, &stopLauncher{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	orig := sendNote
+	t.Cleanup(func() { sendNote = orig })
+	sendNote = func(context.Context, string, string, string) (peer.Result, error) {
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Starts = []state.Start{{Party: old, At: w.now.Add(-time.Hour)}, {Party: next, At: w.now}}
+			st.Agents = []state.Agent{{Party: next, Task: countTask}}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if left := w.stopRevived(t.Context(), []*claude.Session{cli}); len(left) != 1 || len(*ended) != 0 || strings.Contains(out.String(), "REVIVED") {
+			t.Fatalf("mid-handover: left %v, stopped %v, output %s", left, *ended, out)
+		}
+		if _, err := a.beginHandover(old); err == nil {
+			t.Fatal("concurrent handover accepted")
+		}
+		cancel()
+		return peer.Result{}, nil
+	}
+	err := a.handOver(ctx, handover{agent: state.Agent{Party: old, Task: countTask}, dir: dir, session: cli})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handover: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Handovers) != 0 {
+		t.Fatalf("failed handover left marks: %+v", st.Handovers)
+	}
+	w.stopRevived(t.Context(), []*claude.Session{cli})
+	if len(*ended) != 1 {
+		t.Fatalf("after failure: stopped %v", *ended)
+	}
+}
+
+func TestReviveIgnoresAbandonedHandover(t *testing.T) {
+	old := state.Party{Session: oldID, Name: countName}
+	next := state.Party{Session: newID, Name: countName}
+	now := time.Now()
+	st := &state.State{
+		Handovers: []state.Handover{{Party: old, PID: -1}},
+		Starts:    []state.Start{{Party: old, At: now.Add(-time.Hour)}, {Party: next, At: now}},
+		Agents:    []state.Agent{{Party: next}},
+	}
+	if by, _ := superseded(st, old, now); by == "" {
+		t.Fatal("abandoned handover still protects the old session")
+	}
+}

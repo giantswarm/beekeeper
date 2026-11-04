@@ -9,6 +9,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -28,6 +29,9 @@ import (
 // roster, holds a role, or beekeeper started no session under its name.
 // since is when the relief was taken; zero for a hand-over.
 func superseded(st *state.State, p state.Party, now time.Time) (by string, since time.Time) {
+	if slices.ContainsFunc(st.Handovers, func(h state.Handover) bool { return h.Is(p) && proc.Alive(h.PID) }) {
+		return "", time.Time{}
+	}
 	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(p) }) || holdsRole(st, p) {
 		return "", time.Time{}
 	}
