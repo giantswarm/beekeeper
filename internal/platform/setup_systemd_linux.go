@@ -66,7 +66,7 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	if s.TeleportEvery > 0 {
 		every := "OnCalendar=" + calendar(s.TeleportEvery)
 		files = append(files,
-			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportService)},
+			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportServiceForLoginTimeout(s.TeleportLoginTimeout))},
 			File{Path: filepath.Join(dir, teleportTimerUnit), Content: []byte(strings.Replace(systemd.TeleportTimer, systemd.TeleportTimerEvery, every, 1)), Service: true})
 	}
 	if s.RAMMiB <= 0 {

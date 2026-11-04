@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serialize a sender's mailbox sends across destinations so concurrent retries return one delivery instead of a uniqueness error (https://github.com/giantswarm/beekeeper/issues/2919).
 - An SSH omp start now runs with the effort it asked for: the execution runner passes the request's effort to omp as `--thinking` instead of dropping it, as local omp, SSH Claude and SSH Codex starts already do.
 - Read all base-head status contexts so existing CI failures beyond the first 100 contexts are judged correctly (https://github.com/giantswarm/beekeeper/issues/2757).
+- Delete exactly the merged head branch after a plain squash merge when its name contains `#` or percent escapes, preserving other branches (https://github.com/giantswarm/beekeeper/issues/2820).
+- Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Discard unusable claim caches as a whole so damaged data cannot hide a live claim behind its ETag or panic after a successful read (https://github.com/giantswarm/beekeeper/issues/2603).
 - Read every page of plan check annotations so a later PRD error cannot be mistaken for missing stage outputs (https://github.com/giantswarm/beekeeper/issues/2755).
 - Preserve open-PR worktree protection when newer fork PRs fill the first branch lookup page (https://github.com/giantswarm/beekeeper/issues/2756).

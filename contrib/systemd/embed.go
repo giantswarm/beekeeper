@@ -4,7 +4,9 @@ package systemd
 
 import (
 	_ "embed"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // NotifyService is beekeeper-notify.service, the standby watch; its
@@ -41,6 +43,23 @@ var SandboxService string
 //
 //go:embed beekeeper-teleport.service
 var TeleportService string
+
+// TeleportServiceForLoginTimeout allows both login attempts and a minute
+// for status reads and cleanup, retaining the shipped fifteen-minute minimum.
+// The finite outer timeout still ends a hung status command.
+func TeleportServiceForLoginTimeout(loginTimeout time.Duration) string {
+	// Round each attempt up to seconds before doubling. Multiplying a
+	// duration directly could overflow for a large valid configuration.
+	seconds := int64(loginTimeout / time.Second)
+	if loginTimeout%time.Second > 0 {
+		seconds++
+	}
+	budget := 2*seconds + 60
+	if budget <= 15*60 {
+		return TeleportService
+	}
+	return strings.Replace(TeleportService, "TimeoutStartSec=15min", "TimeoutStartSec="+strconv.FormatInt(budget, 10)+"s", 1)
+}
 
 // TeleportTimer is beekeeper-teleport.timer; install replaces
 // TeleportTimerEvery with teleport.every's calendar event.
