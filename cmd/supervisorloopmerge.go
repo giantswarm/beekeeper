@@ -711,7 +711,9 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 }
 
 // latestReviewRequestsChanges reports whether the latest review verdict on p
-// requests changes, overriding any earlier approval.
+// requests changes on its current head, overriding any earlier approval.
+// A different head still needs the loop's exact-head decision; the executor's
+// authority check rejects any go overtaken by a later change request.
 func latestReviewRequestsChanges(p superloop.Pull) bool {
 	var latest superloop.Review
 	var found bool
@@ -724,7 +726,7 @@ func latestReviewRequestsChanges(p superloop.Pull) bool {
 			found = true
 		}
 	}
-	return found && latest.Verdict == superloop.ChangesRequested
+	return found && latest.Verdict == superloop.ChangesRequested && sameCommit(cmp.Or(latest.Head, latest.Commit), p.Head)
 }
 
 // checkMergeHeadAuthority verifies that merging p at targetHead is backed by
