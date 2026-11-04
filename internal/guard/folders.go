@@ -196,24 +196,34 @@ func walkTargets(cmd, cwd string, depth int, moves bool) []string {
 	return collectTargets(cmd, cwd, depth, moves, false)
 }
 
+// collectTargets walks a command's write targets, with its entry checks.
 func collectTargets(cmd, cwd string, depth int, moves, entries bool) []string {
+	return walkAllTargets(cmd, cwd, depth, moves, entries, false)
+}
+
+// walkConfigTargets walks a command's write targets, with its config writes.
+func walkConfigTargets(cmd, cwd string, depth int, moves, configs bool) []string {
+	return walkAllTargets(cmd, cwd, depth, moves, false, configs)
+}
+
+func walkAllTargets(cmd, cwd string, depth int, moves, entries, configs bool) []string {
 	if depth > 4 {
 		return nil
 	}
 	sc := scanShell(cmd)
 	segs := sc.segments()
-	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves, entries: entries}
+	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves, entries: entries, configs: configs}
 	st := deleteState{assigned: map[string]string{}, env: os.Getenv, nounset: depth > 0}
 	w.walk(0, st, cwd)
 	out := w.out
 	for _, cs := range shellStrings(cmd) {
 		if sc.masked[cs.at] == cmd[cs.at] {
-			out = append(out, collectTargets(cs.text, cwd, depth+1, moves, entries)...)
+			out = append(out, walkAllTargets(cs.text, cwd, depth+1, moves, entries, configs)...)
 		}
 	}
 	for _, hd := range sc.heredocs {
 		if shellReads(sc, segs, hd.op) {
-			out = append(out, collectTargets(cmd[hd.start:hd.end], cwd, depth+1, moves, entries)...)
+			out = append(out, walkAllTargets(cmd[hd.start:hd.end], cwd, depth+1, moves, entries, configs)...)
 		}
 	}
 	return out
@@ -294,6 +304,7 @@ type targetWalk struct {
 	// takes then.
 	entries bool
 	moves   bool
+	configs bool
 	loops   map[string][]string
 	out     []string
 }
@@ -324,6 +335,9 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 		if k == len(words) {
 			st.setVars(raw, sg.after)
 			continue
+		}
+		if w.configs {
+			w.configWrites(&st, dir, path.Base(words[k]), raw[k+1:], words[k+1:])
 		}
 		switch name := path.Base(words[k]); {
 		case declarations[name]:

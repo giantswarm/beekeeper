@@ -390,6 +390,10 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("labConfigRefusal")
+	if r := h.labConfigRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("folderRefusal")
 	if r := h.entryRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
