@@ -58,11 +58,21 @@ func withReviewModel(model string, flags []string) ([]string, error) {
 	// one file per profile and model, rewritten whole: workers of one
 	// profile on different models never share it
 	out := strings.TrimSuffix(path, ".json") + "." + unsafeKey.ReplaceAllString(model, "_") + ".json"
-	tmp := out + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
+	// Each writer owns its temporary file, so a concurrent start or wake
+	// cannot truncate the published file or rename another writer's file.
+	tmp, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+".*.tmp")
+	if err != nil {
 		return nil, err
 	}
-	if err := os.Rename(tmp, out); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // private temporary file returned by CreateTemp
+	if _, err := tmp.Write(append(raw, '\n')); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp.Name(), out); err != nil { //nolint:gosec // beside the profile's own file in beekeeper's state folder
 		return nil, err
 	}
 	flags = slices.Clone(flags)
