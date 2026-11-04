@@ -20,6 +20,8 @@ import (
 
 var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 
+const freeFixtureCwd = "cwd"
+
 // The build CPU line: the slice's reading, its throttling, a slice without
 // a quota, and the configured budget while the slice does not run.
 func TestBuildCPULine(t *testing.T) {
@@ -153,7 +155,7 @@ func TestSessionDirsTranscriptAndCwdKeep(t *testing.T) {
 // project, recording cwd as its working folder, untouched for five hours.
 func transcript(t *testing.T, r *Run, sid, cwd string) {
 	t.Helper()
-	entry, err := json.Marshal(map[string]string{"cwd": cwd})
+	entry, err := json.Marshal(map[string]string{freeFixtureCwd: cwd})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +461,7 @@ func TestStateSplitsSwapAndNamesOomdRule(t *testing.T) {
 // whose former path no longer exists. No live processes are read here.
 func TestFreeKeepsHeldDirsThroughTempAlias(t *testing.T) {
 	for _, section := range []string{SessionDirs, GoBuild, TmpDirs} {
-		for _, heldKind := range []string{"cwd", "exe", "open", "deleted"} {
+		for _, heldKind := range []string{freeFixtureCwd, "exe", "open", "deleted"} {
 			t.Run(section+"/"+heldKind, func(t *testing.T) {
 				r, out := newRun(t, Options{Apply: true, Only: []string{section}})
 				realRoot, err := filepath.EvalSymlinks(r.TmpDir)
@@ -484,7 +486,7 @@ func TestFreeKeepsHeldDirsThroughTempAlias(t *testing.T) {
 				}
 				heldPath := filepath.Join(realRoot, held, "scratchpad", "a")
 				switch heldKind {
-				case "cwd":
+				case freeFixtureCwd:
 					heldPath = filepath.Dir(heldPath)
 				case "deleted":
 					// proc.Held strips the kernel's " (deleted)" suffix.
