@@ -61,6 +61,6 @@ func TestAgyMetadataGuardRequiresKnownEvent(t *testing.T) {
 	entry := strings.Replace(string(AgyHook("/opt/bin/beekeeper")), `"PreToolUse"`, `"pretooluse"`, 1)
 	write(t, path, `{"beekeeper":`+entry+`}`)
 	if why := AgyHooksUnguarded(path); why == "" {
-		t.Fatal("an ignored event cannot supply the guard")
+		t.Fatal("a noncanonical event cannot supply the required guard")
 	}
 }

@@ -23,7 +23,17 @@ var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 // with at least one hook, a lifecycle event's items are command hooks, and
 // every hook of type "command" (or of no type) names its command.
 func EntryRejects(raw json.RawMessage) string {
-	var events map[string]json.RawMessage
+	var events *struct {
+		Enabled        bool              `json:"enabled"`
+		SessionStart   []json.RawMessage `json:"SessionStart"`
+		PreInvocation  []json.RawMessage `json:"PreInvocation"`
+		PostInvocation []json.RawMessage `json:"PostInvocation"`
+		Stop           []json.RawMessage `json:"Stop"`
+		PreToolUse     []json.RawMessage `json:"PreToolUse"`
+		PostToolUse    []json.RawMessage `json:"PostToolUse"`
+	}
+	// Decode typed fields before inspecting the final event values. agy
+	// rejects a type error even if a later duplicate field replaces it.
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return "not an object of hook lists: " + err.Error()
 	}
@@ -31,21 +41,23 @@ func EntryRejects(raw json.RawMessage) string {
 		return "not an object of hook lists"
 	}
 	for _, event := range ordered(raw) {
-		switch event {
-		case "enabled":
-			var enabled bool
-			if err := json.Unmarshal(events[event], &enabled); err != nil {
-				return "enabled: " + err.Error()
-			}
-			continue
-		case "SessionStart", "PreInvocation", "PostInvocation", "Stop", "PreToolUse", "PostToolUse":
-			// Only these fields are event lists in agy's JSONHookSpec.
-		default:
-			continue
-		}
 		var items []json.RawMessage
-		if err := json.Unmarshal(events[event], &items); err != nil {
-			return "not an object of hook lists: " + err.Error()
+		switch strings.ToLower(event) {
+		case "sessionstart":
+			items = events.SessionStart
+		case "preinvocation":
+			items = events.PreInvocation
+		case "postinvocation":
+			items = events.PostInvocation
+		case "stop":
+			items = events.Stop
+		case "pretooluse":
+			event, items = "PreToolUse", events.PreToolUse
+		case "posttooluse":
+			event, items = "PostToolUse", events.PostToolUse
+		default:
+			// enabled is metadata; all other fields are ignored by agy.
+			continue
 		}
 		for _, item := range items {
 			if why := itemRejects(event, item); why != "" {
