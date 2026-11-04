@@ -184,9 +184,16 @@ func (a *app) agentFacts(views []agentView) []fact {
 		key := fmt.Sprintf("agent %q", v.Name)
 		facts = append(facts, fact{
 			Key:  key,
-			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser, v.Kept, fmt.Sprint(v.NoRow)}, "|"),
-			Line: fmt.Sprintf("%s %s since %s, %s%s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser), keptNote(v.Kept)),
+			Sig:  strings.Join([]string{task, clock(a.now, since), reach, v.Browser, v.Kept, fmt.Sprint(v.NoRow), strings.Join(v.MergeWaiting, "; ")}, "|"),
+			Line: fmt.Sprintf("%s %s since %s, %s%s%s", key, task, clock(a.now, since), v.Reachable, browserNote(v.Browser), keptNote(v.Kept)) + mergeWaitingNote(v.MergeWaiting),
 		})
 	}
 	return facts
+}
+
+func mergeWaitingNote(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	return "; merge waiting: " + strings.Join(reasons, "; ")
 }

@@ -131,7 +131,7 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		ProxyPort: cfg.ProxyPort,
 		Exe:       e.Exe,
-		Egress:    EgressDir(e.RuntimeDir),
+		Egress:    brokerEgressDir(e),
 	}
 	// the home directory is empty inside the sandbox but for the paths it
 	// mounts, at their targets: a symlinked config is named by its target,
@@ -392,4 +392,12 @@ func underGlob(path, dir string) bool {
 	}
 	ok, err := filepath.Match(dir, strings.Join(got[:len(parts)], string(filepath.Separator)))
 	return ok && err == nil
+}
+
+func brokerEgressDir(e Paths) string {
+	dir := BrokerDir(e.RuntimeDir, e.StateDir, e.Home)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "egress")
 }
