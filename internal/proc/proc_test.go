@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestParseStat(t *testing.T) {
@@ -16,6 +17,44 @@ func TestParseStat(t *testing.T) {
 	}
 	if _, err := parseStat([]byte("1 (x) S 0 1 1")); err == nil {
 		t.Fatal("a short stat parsed")
+	}
+}
+
+func TestReadAtLongUptimeAndCPUTime(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "42")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// These counters fit in a duration, but multiplying by nanoseconds
+	// before dividing by USER_HZ overflows. CPU time sums across threads,
+	// so a busy multicore process can reach this well before years pass.
+	for path, data := range map[string]string{
+		filepath.Join(root, "stat"):   "btime 1700000000\n",
+		filepath.Join(dir, "stat"):    "42 (worker) S 1 0 0 0 0 0 0 0 0 0 6000000000 4000000001 0 0 0 0 1 0 10000000001 0 1\n",
+		filepath.Join(dir, "cmdline"): "worker\x00",
+	} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	table, err := ReadAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := table.Process(42)
+	if p == nil {
+		t.Fatal("process missing from fixture table")
+	}
+	want := 100000000*time.Second + 10*time.Millisecond
+	if p.CPU != want {
+		t.Errorf("CPU = %s, want %s", p.CPU, want)
+	}
+	if start := time.Unix(1700000000, 0).Add(want); !p.Start.Equal(start) {
+		t.Errorf("Start = %s, want %s", p.Start, start)
+	}
+	if p.StartTicks != 10000000001 {
+		t.Errorf("StartTicks = %d", p.StartTicks)
 	}
 }
 

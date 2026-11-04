@@ -145,7 +145,7 @@ func readProcess(root string, pid int, boot time.Time) (*Process, error) {
 	}, nil
 }
 
-func ticks(n int64) time.Duration { return time.Duration(n) * time.Second / clockTicks }
+func ticks(n int64) time.Duration { return time.Duration(n) * (time.Second / clockTicks) }
 
 // stat is the part of /proc/<pid>/stat beekeeper reads; times in clock ticks.
 type stat struct {
