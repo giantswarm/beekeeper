@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -143,6 +145,11 @@ verdict without room refuses the start with exit 3, the guards named,
 and no session is created; --force starts it anyway and records the
 verdict overridden in the event log (agents.start).
 
+For SSH --host starts, --force overrides coordinator capacity only. The
+execution host still enforces memory, swap, load, disk, build slots (with
+--builds) and maxBusy during admission, so remote preparation can still be
+refused. Authentication, identity, version and policy checks remain required.
+
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
 user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
@@ -152,9 +159,9 @@ it shows in the sidebar as local_<id>, titled with <name> (beekeeper appends
 the name's custom-title line to the transcript first, and a steward restores
 a title or model the import dropped; the session never sets its own model,
 which the desktop refuses). --model is the model its turns keep: while the
-desktop records another, its turns run headless on --model, and start says
-so with the call that sets it. A headless turn on a model runs its security
-reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
+desktop records another and no steward can restore it, the seeded start
+is refused before its task runs. Its seed stays recorded for inspection.
+A headless turn on a model runs its security reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
 window to the new session for a moment and back to the session it showed
 (claude://code/continue); the window's focus does not hold it, the person's
 typing for 1 minute at most, and a locked screen not at all.
@@ -191,12 +198,17 @@ A start that delivers no turn of the task fails: it exits non-zero, logs
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
 
+Before sending a brief, start runs the same checks as beekeeper lint briefs.
+A finding is printed to stderr with its file, line and rule; the start goes on,
+so a generated brief quoting its issue never stops a worker.
+
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
 task: a brief carries only its task, and a worker reports to "the
 supervisor", which the PreToolUse hook delivers to the role's holder. The
 rules name the topic skills a worker loads before the step that needs
-them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park);
+them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park,
+beekeeper:alerts, beekeeper:long-proofs);
 a topic no enabled beekeeper plugin installed serves as this binary embeds
 it (none installed, or out of date) follows the rules in the first prompt
 itself, and start says so with the command that updates the plugin.
@@ -391,6 +403,7 @@ work, which takes no choice on a self-hosted provider.`,
 			if err != nil {
 				return err
 			}
+			warnBriefLint(cmd.ErrOrStderr(), briefFile)
 			// The timer whose command runs this start, from its
 			// environment or, on the broker's side, the flags a brokered
 			// start forwards it in.
@@ -604,7 +617,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
+	c.Flags().BoolVar(&force, "force", false, "override coordinator capacity or another desk's issue claim; SSH execution-host admission limits still apply; record overrides")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
@@ -878,10 +891,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
+	if err := titleTaken(sessions, sp.name, state.Party{}); err != nil {
+		return startedAgent{}, err
+	}
 	live := func(p state.Party) bool {
-		if sp.replaces != nil && p.Is(*sp.replaces) {
-			return false
-		}
 		_, ok := claude.Live(sessions, p)
 		return ok
 	}
@@ -1010,8 +1023,9 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // the desktop's import reads), the desktop imports it under its name once
 // the seed ended, past the window's focus and the person's typing within
 // desktopTurnWait, and the task's first turn then runs as a desktop turn
-// (turnInDesktop). Only a desktop that cannot run it gets the turn headless,
-// as agents wake resumes a session, and sa.turn says why.
+// (turnInDesktop). A model mismatch refuses the start before its task;
+// other desktop failures get the turn headless, as agents wake resumes a
+// session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
 	seed, err := withReviewModel(sp.model, []string{toolsFlag, "", strictMCPConfigFlag})
@@ -1062,13 +1076,24 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
-		sa.turn += " on " + w.model
+		sa.turn = fmt.Sprintf("start refused before its task: %v", err)
 	}
 	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
-	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
+	if err := resumeSeededTask(err, func() error {
+		return a.resumeTurn(ctx, by, w, taskTurn)
+	}); err != nil {
 		return sa, err
 	}
 	return sa, nil
+}
+
+// resumeSeededTask refuses a seeded desktop start whose requested model
+// could not be restored. Other desktop failures still permit a headless task.
+func resumeSeededTask(desktopErr error, resume func() error) error {
+	if errors.As(desktopErr, new(modelNotHeld)) {
+		return fmt.Errorf("start refused before its task: %w; the seed stays recorded; restore its desktop model before waking it", desktopErr)
+	}
+	return resume()
 }
 
 // importVisible imports a seeded session into the running desktop once the
@@ -1981,6 +2006,24 @@ func readBrief(path string) (string, error) {
 		return "", usageErr("%s has %d bytes, more than %d: point the brief at a file instead", path, len(brief), maxBrief)
 	}
 	return brief, nil
+}
+
+// warnBriefLint prints what beekeeper lint briefs finds in the brief at path.
+// It never refuses: agents start also carries the supervisor's generated
+// briefs, whose quoted issue text no worker can fix. It lints the original
+// file so findings keep their line numbers.
+func warnBriefLint(w io.Writer, path string) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
+	if err != nil {
+		return
+	}
+	found, err := brieflint.Lint(path, bytes.NewReader(raw))
+	if err != nil {
+		return
+	}
+	for _, f := range found {
+		_, _ = fmt.Fprintf(w, "brief lint: %s:%d: %s: %s\n  %s\n", f.Path, f.Line, f.Rule, f.Why, f.Text)
+	}
 }
 
 // taskPrompt is the part of a worker's first prompt that is its task: the

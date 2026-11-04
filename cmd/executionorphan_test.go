@@ -204,7 +204,7 @@ func TestPreInventoryHostUpgradeUnblocksMissingJournalReconciliation(t *testing.
 		return execution.HostUpdate{Protocol: execution.Protocol, Identity: sshTestSelector, Version: hostNewRelease, PolicyDigest: digest}, nil
 	}
 	a.executionProbe = func(_ context.Context, h execution.Host) (execution.Capabilities, error) {
-		return execution.Capabilities{Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: hostFixtureClaudeVersion}, Resources: execution.Resources{ObservedAt: a.now, AvailableMiB: 1 << 16}}, nil
+		return execution.Capabilities{CIWait: true, SourcePreparation: true, Publication: true, Protocol: execution.Protocol, Identity: h.Identity, Version: hostNewRelease, PolicyDigest: h.PolicyDigest, Harnesses: map[string]string{execution.HarnessClaude: hostFixtureClaudeVersion}, Resources: execution.Resources{ObservedAt: a.now, AvailableMiB: 1 << 16}}, nil
 	}
 	// Before the host upgrades, Missing returns ErrUnsupported so unit state cannot be confirmed yet.
 	if err := a.syncExecutionHost(context.Background(), sshTestSelector); err == nil {
