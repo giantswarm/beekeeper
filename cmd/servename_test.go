@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const exampleToolRepo = "example/tool"
+
 const (
 	untitledPID    = 1<<23 + 34
 	unrosteredPID  = 1<<23 + 35
@@ -179,7 +181,7 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 
 func TestServeAcceptsItems(t *testing.T) {
 	const waits = "fixture review"
-	for _, item := range []string{"example/tool", "investigate build failures", "example/tool#42"} {
+	for _, item := range []string{exampleToolRepo, "investigate build failures", "example/tool#42"} {
 		t.Run(item, func(t *testing.T) {
 			a, store := serveApp(t)
 			out, err := serve(a, rosterName, item, "--waits", waits)
@@ -227,7 +229,7 @@ func TestServedOpenSkipsItemsWithoutAState(t *testing.T) {
 	a, store := serveApp(t)
 	me := state.Party{Session: "free-text-session"}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: "example/tool"}}
+		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: exampleToolRepo}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

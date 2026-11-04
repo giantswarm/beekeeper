@@ -349,7 +349,17 @@ func (h Hook) transcriptFileRefusal(ev event) string {
 	if p == "" {
 		p = cwd
 	}
-	if h.transcriptAccess(ev.Session).denied(wordPath(p, cwd), ev.ToolName != readTool) {
+	access := h.transcriptAccess(ev.Session)
+	if ev.ToolName == globTool {
+		p = globSearchPath(ev.ToolInput, cwd)
+		// Brace alternatives and escapes are glob syntax too. Bound their
+		// search by the literal directory prefix, while retaining the full
+		// pattern below so wildcards cannot acquire an exact-file grant.
+		if access.denied(wordPath(globRoot(p), cwd), true) {
+			return transcriptRefusal
+		}
+	}
+	if access.denied(wordPath(p, cwd), ev.ToolName != readTool) {
 		return transcriptRefusal
 	}
 	return ""

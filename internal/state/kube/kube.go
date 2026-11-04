@@ -37,6 +37,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -64,9 +65,13 @@ type Store struct {
 	// home is the namespace of the store's own objects: the note counter.
 	home string
 
+	// publishMu keeps feed ID allocation and its durable write in order.
+	// Feed holds it across both lists to return a consistent cursor view.
+	publishMu sync.Mutex
+
 	// idMu guards lastID, the id of the last Event recorded or found: ids
-	// only grow, across restarts too (the first record reads the Events'
-	// highest).
+	// only grow, across restarts too (the first record reads the highest
+	// retained Event or Note closure id).
 	idMu    sync.Mutex
 	lastID  int64
 	idsRead bool
@@ -161,6 +166,8 @@ func (s *Store) Peek() (*state.State, error) { return s.Read() }
 // written before it included. An update that changes more than one object
 // other than Notes, or anything without a home in the resources, is refused
 // with nothing written.
+// A successful create whose initial status write fails is reported without
+// rerunning fn: its spec already exists.
 //
 // A note number above the last one handed out (State.NextNote) advances the
 // note counter first, under the resourceVersion read: of two concurrent
@@ -183,6 +190,8 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		if err != nil {
 			return false, err
 		}
+		s.publishMu.Lock()
+		defer s.publishMu.Unlock()
 		if err := snap.closeNotes(want, events, func(at time.Time) (string, error) { return s.nextID(ctx, at) }); err != nil {
 			return false, err
 		}
@@ -221,6 +230,11 @@ func (s *Store) Update(fn func(*state.State) ([]state.Event, error)) error {
 		var written []client.Object
 		for _, c := range changes {
 			obj, err := s.write(ctx, c)
+			if c.create && obj != nil && err != nil {
+				// The create succeeded. Replaying fn after a status conflict
+				// could issue another note number and create a second note.
+				return false, errors.Join(err, s.record(ctx, written, events, false))
+			}
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || (c.delete && apierrors.IsNotFound(err)) {
 				break
 			}
@@ -488,7 +502,7 @@ func (s *Store) holder(name string, change func(*v1alpha1.Environment) (bool, er
 		if err != nil || !changed {
 			return false, err
 		}
-		env.Status.ObservedGeneration = env.Generation
+		setObserved(env)
 		err = s.c.Status().Update(ctx, env)
 		if apierrors.IsConflict(err) {
 			return true, nil
@@ -583,6 +597,8 @@ func FeedEvent(ev *corev1.Event) (feed.Event, error) {
 // oldest first: the changes, not the audit of the calls that changed
 // nothing (serve.*).
 func (s *Store) Feed(n int) ([]feed.Event, error) {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	ctx, cancel := s.ctx()
 	defer cancel()
 	list := &corev1.EventList{}
@@ -639,8 +655,8 @@ func eventID(ev *corev1.Event) string {
 
 // nextID is the id of the next Event: its time in nanoseconds, or one
 // above the last id when the clock has not moved past it, so ids only grow.
-// The first call reads the highest id of the Events kept: a restart
-// continues from them.
+// The first call reads the highest id of the Events and Note closures kept:
+// a restart continues from them even after the core Events expire.
 func (s *Store) nextID(ctx context.Context, at time.Time) (string, error) {
 	s.idMu.Lock()
 	defer s.idMu.Unlock()
@@ -653,6 +669,18 @@ func (s *Store) nextID(ctx context.Context, at time.Time) (string, error) {
 			id, err := strconv.ParseInt(eventID(&list.Items[i]), 10, 64)
 			if err == nil && id > s.lastID {
 				s.lastID = id
+			}
+		}
+		notes := &v1alpha1.NoteList{}
+		if err := s.c.List(ctx, notes); err != nil {
+			return "", err
+		}
+		for _, note := range notes.Items {
+			if closure := note.Status.Closure; closure != nil {
+				id, err := strconv.ParseInt(closure.ID, 10, 64)
+				if err == nil && id > s.lastID {
+					s.lastID = id
+				}
 			}
 		}
 		s.idsRead = true
@@ -686,12 +714,37 @@ const (
 // noteRef is the note number an event's detail names first (#12).
 var noteRef = regexp.MustCompile(`#(\d+)`)
 
+// eventNote is the note an event names. Answers and plan events name their
+// issue or pull request before their note, so the first #number is not the note's.
+func eventNote(e state.Event) (int, bool) {
+	detail := e.Detail
+	marker := ""
+	switch e.Verb {
+	case noteAnsweredEvent:
+		marker = ", note #"
+	case "plan.grilling", "plan.ready":
+		marker = ": note #"
+	}
+	if marker != "" {
+		_, rest, ok := strings.Cut(detail, marker)
+		if !ok {
+			return 0, false
+		}
+		detail = "#" + rest
+	}
+	m := noteRef.FindStringSubmatch(detail)
+	if m == nil {
+		return 0, false
+	}
+	id, err := strconv.Atoi(m[1])
+	return id, err == nil
+}
+
 // on is the written object event e belongs to: the written Note its detail
 // names, else, once the whole update is written (all), the first object;
 // nil when it has none yet.
 func on(written []client.Object, e state.Event, all bool) client.Object {
-	if m := noteRef.FindStringSubmatch(e.Detail); m != nil {
-		id, _ := strconv.Atoi(m[1])
+	if id, ok := eventNote(e); ok {
 		for _, o := range written {
 			if n, ok := o.(*v1alpha1.Note); ok && n.Spec.ID == id {
 				return o
@@ -712,7 +765,7 @@ func (s *Store) record(ctx context.Context, written []client.Object, events []st
 		if obj == nil {
 			continue
 		}
-		if err := s.recordOn(ctx, obj, e); err != nil {
+		if err := s.recordOnLocked(ctx, obj, e); err != nil {
 			return err
 		}
 	}
@@ -721,6 +774,13 @@ func (s *Store) record(ctx context.Context, written []client.Object, events []st
 
 // recordOn writes e as a Kubernetes Event on obj.
 func (s *Store) recordOn(ctx context.Context, obj client.Object, e state.Event) error {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	return s.recordOnLocked(ctx, obj, e)
+}
+
+// recordOnLocked is called with publishMu held until the Event is persisted.
+func (s *Store) recordOnLocked(ctx context.Context, obj client.Object, e state.Event) error {
 	gvk, err := s.c.GroupVersionKindFor(obj)
 	if err != nil {
 		return err
@@ -918,14 +978,7 @@ func (snap *snapshot) state() *state.State {
 		}
 	}
 	for _, name := range sortedKeys(snap.holds) {
-		h := snap.holds[name]
-		hold := state.Hold{Target: h.Spec.Target, Reason: h.Spec.Reason, By: party(h.Status.By), At: h.Status.At.Time,
-			Until: timeOf(h.Spec.Until), Except: h.Spec.Except, UpgradeTo: h.Spec.UpgradeTo, LiftedAt: timeOf(h.Status.LiftedAt)}
-		if h.Status.LiftedBy != nil {
-			p := party(*h.Status.LiftedBy)
-			hold.LiftedBy = &p
-		}
-		st.Holds = append(st.Holds, hold)
+		st.Holds = append(st.Holds, holdOf(snap.holds[name]))
 	}
 	for _, k := range sortedKeys(snap.notes) {
 		n := snap.notes[k]
@@ -944,6 +997,16 @@ func (snap *snapshot) state() *state.State {
 	}
 	canonical(st)
 	return st
+}
+
+func holdOf(h *v1alpha1.Hold) state.Hold {
+	hold := state.Hold{Target: h.Spec.Target, Reason: h.Spec.Reason, By: party(h.Status.By), At: h.Status.At.Time,
+		Until: timeOf(h.Spec.Until), Except: h.Spec.Except, UpgradeTo: h.Spec.UpgradeTo, LiftedAt: timeOf(h.Status.LiftedAt)}
+	if h.Status.LiftedBy != nil {
+		p := party(*h.Status.LiftedBy)
+		hold.LiftedBy = &p
+	}
+	return hold
 }
 
 func noteOf(n *v1alpha1.Note) state.Note {
@@ -1060,6 +1123,12 @@ func (snap *snapshot) apply(st *state.State) (*snapshot, error) {
 		}
 		hold := &v1alpha1.Hold{ObjectMeta: metav1.ObjectMeta{Name: name}}
 		if cur, ok := snap.holds[name]; ok {
+			if equal(h, holdOf(cur)) {
+				// Expiry alone must not turn another object's update into a
+				// multi-object write, or block pruning several expired holds.
+				want.holds[name] = cur
+				continue
+			}
 			hold = cur.DeepCopy()
 		}
 		hold.Spec.Target, hold.Spec.Reason, hold.Spec.Until = h.Target, h.Reason, apiTime(h.Until)
@@ -1269,7 +1338,7 @@ func (s *Store) write(ctx context.Context, c change) (client.Object, error) {
 		err := s.c.Status().Update(ctx, c.obj)
 		if err != nil {
 			if _, ok := c.obj.(*v1alpha1.Note); ok {
-				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; it remains open and listed: %w", key(c.obj), err)
+				return c.obj, fmt.Errorf("note %s was created but its initial status write failed; read its retained state before retrying: %w", key(c.obj), err)
 			}
 		}
 		return c.obj, err
@@ -1325,19 +1394,33 @@ func restoreStatus(o client.Object, status any) {
 	}
 }
 
+// setObserved marks a successful writer operation. Ready means that the
+// object's state has been persisted, not that a hold is active or a queue empty.
 func setObserved(o client.Object) {
 	g := o.GetGeneration()
+	var conditions *[]metav1.Condition
 	switch o := o.(type) {
 	case *v1alpha1.Environment:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.MergeLane:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.Hold:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.Note:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
 	case *v1alpha1.RosterEntry:
 		o.Status.ObservedGeneration = g
+		conditions = &o.Status.Conditions
+	}
+	if conditions != nil {
+		meta.SetStatusCondition(conditions, metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionTrue, ObservedGeneration: g,
+			Reason: "StatePersisted", Message: "The writer has persisted the object's state.",
+		})
 	}
 }
 

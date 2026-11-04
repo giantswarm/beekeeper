@@ -139,6 +139,7 @@ func isHarnessEnv(kv string) bool {
 	k, v, _ := strings.Cut(kv, "=")
 	return strings.HasPrefix(k, "CLAUDE") ||
 		strings.HasPrefix(k, "CCD") ||
+		k == envTimerCommand ||
 		k == omp.EnvAgent ||
 		k == omp.EnvName ||
 		k == omp.EnvCredentials ||

@@ -385,6 +385,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
+		if err := validateParkWait(v.On, v.Waits); err != nil {
+			return "", nil, err
+		}
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
 		}
@@ -418,7 +421,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("hold is not active")
 			}
 		} else if v.On != "" {
-			if _, ok := parseRef(v.On); !ok {
+			_, _, release := parseReleaseTarget(v.On)
+			if _, ok := parseRef(v.On); !ok && !release {
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
@@ -513,7 +517,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				r.Completed = true
 			}
 		}
-		verb := "agents.idle"
+		verb := litAgentsIdle
 		if v.Finished {
 			verb = executionDone
 			clearRecords(st, me)

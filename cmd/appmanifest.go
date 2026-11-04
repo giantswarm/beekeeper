@@ -102,6 +102,10 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file string, own
 			return nil, err
 		}
 		created, err = convertManifest(ctx, code)
+		// GitHub may return a secret even when the manifest disables the hook.
+		if hook, ok := manifest["hook_attributes"].(map[string]any); ok && hook["active"] == false && created != nil {
+			created.WebhookSecret = nil
+		}
 		return created, err
 	})
 	if created != nil {

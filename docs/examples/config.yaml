@@ -11,6 +11,13 @@
 # for the machine above: tune them to yours or delete them.
 
 # stateDir: /home/ada/.local/state/beekeeper   # default: $XDG_STATE_HOME/beekeeper
+# Clones belong to the person; sessions create checkouts under worktrees.
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees] # layout: <repo>/<branch>
+home:
+  places: [~/.local/state] # session state, logs and backups; drafts use the scratchpad
+# agents.roots defaults to projects.worktrees when unset.
 identity:
   # Whose agents run here: every lease, hold, merge place and note this
   # machine's commands record names them, and lease, lanes and note list
@@ -59,6 +66,8 @@ kube:
   # as a component (login.example.com-production, production-ops). Unset, the
   # kube guard is off and snapshot says so.
   production: production
+  # Additional production-class contexts, including full test installations.
+  protectedContexts: [full-test, full-test-operations]
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
   # refusals name it. Unset: the context named after the installation, else
@@ -164,7 +173,8 @@ merge:
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   busyBudget: 4h            # a merge with --update-branch whose base moved during every devctl update wait (exit 3) runs devctl again in its lane place this long from its first run
-  ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeout: 2h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeouts: {}           # per-repository overrides, e.g. {example-org/slow-repo: 3h}
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
   devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
   admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
@@ -377,6 +387,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   sweepDepth: 5
 
 hooks:
+  guardPersonalSearch: false # opt in to refusing CLI, REST and GraphQL issue searches across repositories in personal sessions; unreadable repositories silently disappear; list each repository instead
   transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
@@ -407,6 +418,11 @@ sink:                       # dispatches a GitHub workflow on selected events, w
 
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
+  # Declare every lab callback in callback_urls at App creation. Later callback
+  # edits require access confirmation. browse reports barrier: github_sudo with
+  # the blocked setting; it cannot answer an access confirmation challenge.
+  # app installation reads repository scope and probes device flow as metadata;
+  # token expiry remains unread when no authenticated evidence is available.
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
   # template: apps/{name}/manifest.template.json   # a purpose's manifest template, {installation} and {baseDomain} in its strings (default: manifest's file as manifest.template.json)
   secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
@@ -450,6 +466,7 @@ omp:
   sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
   modelsFile: ~/.omp/agent/models.yml  # the default; omp's providers, a vault provider's apiKey there the variable's name (SPARK_API_KEY)
   model: ""                 # agents start --harness omp without --model: an exact selector omp lists (provider/id); empty: the start is refused
+  servedBy: ""              # optional lease resource serving the model; held: refuse with holder/purpose, retry after release
   providers:                # providers whose key agents start hands over from the vault, by their name in modelsFile
     spark:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone

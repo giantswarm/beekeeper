@@ -36,6 +36,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
+// Projects separates the person's clones from session checkouts.
+type Projects struct {
+	Dir       string   `yaml:"dir"`
+	Worktrees []string `yaml:"worktrees"`
+}
+
+// Home names places for session state, logs and backups.
+type Home struct {
+	Places []string `yaml:"places"`
+}
+
 // Browser is the resource every machine has: the one Chrome the Claude in
 // Chrome extension drives.
 const Browser = "browser"
@@ -46,6 +57,8 @@ const ModelServer = "model-server"
 
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Projects Projects `yaml:"projects"`
+	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
@@ -469,6 +482,8 @@ type BoardStep struct {
 
 // Hooks configures where beekeeper's Claude Code hooks act.
 type Hooks struct {
+	// GuardPersonalSearch refuses cross-repository issue searches in personal sessions too.
+	GuardPersonalSearch bool `yaml:"guardPersonalSearch"`
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
@@ -674,8 +689,11 @@ type StoreRule struct {
 type Kube struct {
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string `yaml:"production"`
+	// ProtectedContexts lists additional production-class contexts (including
+	// full test installations) whose clusters agents must not change directly.
+	ProtectedContexts []string `yaml:"protectedContexts"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
@@ -2428,6 +2446,7 @@ const DefaultQueueTTL = 15 * time.Minute
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
 	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	// Rebase also makes the ordinary devctl gate add --rebase automatically.
 	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
@@ -2464,9 +2483,11 @@ type Merge struct {
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
 	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
-	// when the gated command names none: devctl's own 30m is shorter than a
-	// repository's CI restarted from zero by --update-branch.
+	// when the gated command names none (default 2h, including CI queueing).
+	// CITimeouts can override it for repositories with longer pipelines.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// CITimeouts overrides CITimeout for repositories keyed by owner/repo.
+	CITimeouts map[string]Duration `yaml:"ciTimeouts"`
 	// BusyBudget is how long a merge with --update-branch keeps its lane
 	// place running devctl again after a run ends on a busy base (its base
 	// moved during every one of devctl's update waits, exit 3), counted from
@@ -2486,6 +2507,16 @@ type Merge struct {
 	// past their branch ruleset after the approved desk review; only their
 	// merge go names --admin.
 	Admin []string `yaml:"admin"`
+}
+
+// TimeoutFor returns the repository's CI timeout, falling back to CITimeout.
+func (m Merge) TimeoutFor(repo string) time.Duration {
+	for name, timeout := range m.CITimeouts {
+		if strings.EqualFold(name, repo) && timeout.Duration > 0 {
+			return timeout.Duration
+		}
+	}
+	return m.CITimeout.Duration
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
@@ -3101,6 +3132,8 @@ type Omp struct {
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// ServedBy is the lease resource serving Model. Starts refuse while held.
+	ServedBy string `yaml:"servedBy"`
 	// Providers are the providers of ModelsFile whose key lives in the
 	// vault, by the provider's name there.
 	Providers map[string]OmpProvider `yaml:"providers"`
@@ -3338,6 +3371,22 @@ func (c *Config) defaults() error {
 	home, err := userHomeDir()
 	if err != nil {
 		return err
+	}
+	setStr(&c.Projects.Dir, filepath.Join(home, "projects"))
+	c.Projects.Dir = filepath.Clean(homePath(home, c.Projects.Dir))
+	if c.Projects.Worktrees == nil {
+		c.Projects.Worktrees = []string{filepath.Join(c.Projects.Dir, "worktrees")}
+	}
+	if c.Home.Places == nil {
+		c.Home.Places = []string{filepath.Join(home, ".local", "state")}
+	}
+	for _, places := range [][]string{c.Projects.Worktrees, c.Home.Places} {
+		for i, p := range places {
+			places[i] = filepath.Clean(homePath(home, p))
+		}
+	}
+	if c.Agents.Roots == nil {
+		c.Agents.Roots = slices.Clone(c.Projects.Worktrees)
 	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
@@ -3587,7 +3636,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
-	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.CITimeout, 2*time.Hour)
 	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
@@ -3835,6 +3884,14 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	for key, paths := range map[string][]string{"projects.dir": {c.Projects.Dir}, "projects.worktrees": c.Projects.Worktrees, "home.places": c.Home.Places} {
+		for _, p := range paths {
+			if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) == "/") {
+				report(fmt.Errorf("%s: %q: want an absolute directory below the filesystem root (~/ allowed)", key, p))
+			}
+		}
+	}
+
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
@@ -4047,6 +4104,12 @@ func (c *Config) validateEach(report func(error)) {
 		ownerReposEach("merge.methods", []string{repo}, report)
 		if method != "squash" && method != "rebase" && method != "merge" {
 			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
+		}
+	}
+	for repo, timeout := range c.Merge.CITimeouts {
+		ownerReposEach("merge.ciTimeouts", []string{repo}, report)
+		if timeout.Duration <= 0 {
+			report(fmt.Errorf("merge.ciTimeouts.%s: %s is not positive", repo, timeout.Duration))
 		}
 	}
 	ownerReposEach("merge.admin", c.Merge.Admin, report)
@@ -4358,10 +4421,15 @@ func (c Capacity) serveModeNodeNames() []string {
 }
 
 // Leasable returns every resource a session can lease: the configured ones,
-// the nodes a self-hosted serving mode occupies, the model server when one is
-// watched, the browser last.
+// the installations under alerts, the nodes a self-hosted serving mode
+// occupies, the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	for _, in := range c.Alerts.Installations {
+		if !slices.Contains(out, in.Name) {
+			out = append(out, in.Name)
+		}
+	}
 	for _, n := range c.Capacity.serveModeNodeNames() {
 		if !slices.Contains(out, n) {
 			out = append(out, n)
@@ -4407,7 +4475,7 @@ func (c *Config) LabLease(cluster string) string {
 	return ""
 }
 
-// IsLeasable reports whether name is a configured resource or the browser.
+// IsLeasable reports whether name is one of the resources returned by Leasable.
 func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }

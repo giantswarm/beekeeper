@@ -241,7 +241,7 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 		}
 	}
 	oweArchive(st, state.Party{Session: "chain-2", Name: name}, "handed over", archiveNow)
-	if host := oweArchive(st, state.Party{Session: "person", Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
+	if host := oweArchive(st, state.Party{Session: holderPerson, Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
 		t.Fatalf("owed %q, archives %+v", host, st.Archives)
 	}
 	archived := map[string]bool{}
