@@ -214,6 +214,67 @@ func TestInstallTwiceThenUninstallRestores(t *testing.T) {
 	}
 }
 
+func TestUninstallPreservesLinkedClaudeSettings(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		name := "absolute"
+		if relative {
+			name = "relative"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(home, "dotfiles", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(e.Settings, target); err != nil {
+				t.Fatal(err)
+			}
+			link := target
+			if relative {
+				var err error
+				link, err = filepath.Rel(filepath.Dir(e.Settings), target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(link, e.Settings); err != nil {
+				t.Fatal(err)
+			}
+			before := tree(t, home)
+			e.DryRun = true
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(before, tree(t, home)) {
+				t.Fatal("dry run changed files")
+			}
+			e.DryRun = false
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.Readlink(e.Settings); err != nil || got != link {
+				t.Errorf("settings link = %q, %v; want %q", got, err, link)
+			}
+			raw, err := os.ReadFile(filepath.Clean(target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &settings); err != nil {
+				t.Fatal(err)
+			}
+			if settings == nil || len(settings) != 0 {
+				t.Errorf("target settings = %s; want an empty object", raw)
+			}
+		})
+	}
+}
+
 func TestDryRunChangesNothing(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
