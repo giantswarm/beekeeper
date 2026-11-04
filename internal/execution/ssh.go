@@ -242,6 +242,11 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
 		}
+		if op == "check" && len(reply.Payload) > 0 {
+			if err := Decode(reply.Payload, result); err != nil {
+				return &UnreachableError{Operation: op, Cause: errors.New("invalid SSH readiness response")}
+			}
+		}
 		return errors.New(reply.Error)
 	}
 	return Decode(reply.Payload, result)

@@ -156,7 +156,11 @@ func TestAgyProbeRefusesHooksAgyRejects(t *testing.T) {
 	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{})
+	readiness := HarnessReadiness{Guard: probePassed}
+	err := f.s.probe(ctx, HarnessAgy, h, &readiness)
+	if readiness.Guard != probeFailed {
+		t.Fatalf("rejected hooks reported a passing guard: %+v", readiness)
+	}
 	if err == nil || !strings.Contains(err.Error(), "agy would reject the managed hooks.json and run unguarded") || !strings.Contains(err.Error(), `the "stale" entry`) {
 		t.Fatalf("probe of a rejected hooks.json: %v", err)
 	}
