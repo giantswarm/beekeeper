@@ -77,16 +77,18 @@ type BaseRelease struct {
 // PullBase is a pull request's base branch, and the head branch and title
 // that make it a release pull request (ReleaseVersion).
 type PullBase struct {
-	Base  string `json:"base"`
-	Head  string `json:"head"`
-	Title string `json:"title"`
+	Base     string `json:"base"`
+	Head     string `json:"head"`
+	Title    string `json:"title"`
+	HeadOID  string `json:"headOid"`
+	MergeOID string `json:"mergeOid"`
 }
 
 // ReadPullBase reads repo#n's base branch, head branch and title, one REST
 // request: the core budget the merge gate checks, not GraphQL's.
 func ReadPullBase(ctx context.Context, run GH, repo string, n int) (PullBase, error) {
 	out, err := run(ctx, "api", fmt.Sprintf("repos/%s/pulls/%d", repo, n),
-		"--jq", "{base: .base.ref, head: .head.ref, title: .title}")
+		"--jq", "{base: .base.ref, head: .head.ref, title: .title, headOid: .head.sha, mergeOid: (if .merged then .merge_commit_sha else null end)}")
 	if err != nil {
 		return PullBase{}, err
 	}
@@ -95,6 +97,18 @@ func ReadPullBase(ctx context.Context, run GH, repo string, n int) (PullBase, er
 		return PullBase{}, fmt.Errorf("gh api repos/%s/pulls/%d: no base branch in its answer", repo, n)
 	}
 	return p, nil
+}
+
+// ReleaseRef is the tree the base push carries: the head before merging,
+// and the actual merge commit afterward.
+func (p PullBase) ReleaseRef() string {
+	if p.MergeOID != "" {
+		return p.MergeOID
+	}
+	if p.HeadOID != "" {
+		return p.HeadOID
+	}
+	return p.Base
 }
 
 // Of is how the pull request p merges into its base branch, which releases
@@ -114,7 +128,7 @@ func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelea
 	if err != nil {
 		return BaseRelease{}, err
 	}
-	r, err := ReadBranchRelease(ctx, run, repo, p.Base)
+	r, err := ReadReleaseAt(ctx, run, repo, p.Base, p.ReleaseRef())
 	if err != nil {
 		return BaseRelease{}, err
 	}
@@ -128,8 +142,14 @@ func ReadBaseRelease(ctx context.Context, run GH, repo string, n int) (BaseRelea
 // no auto-release; an error is GitHub not answering. Version is left to the
 // pull request (PullBase.Of).
 func ReadBranchRelease(ctx context.Context, run GH, repo, base string) (BaseRelease, error) {
+	return ReadReleaseAt(ctx, run, repo, base, base)
+}
+
+// ReadReleaseAt reads release workflows from ref, evaluating their branch
+// filters against base, the destination of the push.
+func ReadReleaseAt(ctx context.Context, run GH, repo, base, ref string) (BaseRelease, error) {
 	r := BaseRelease{Base: base}
-	raw, err := rawFile(ctx, run, repo, AutoReleaseWorkflow, r.Base)
+	raw, err := rawFile(ctx, run, repo, AutoReleaseWorkflow, ref)
 	switch {
 	case notFound(err):
 	case err != nil:
@@ -140,7 +160,7 @@ func ReadBranchRelease(ctx context.Context, run GH, repo, base string) (BaseRele
 		}
 		return r, nil
 	}
-	raw, err = rawFile(ctx, run, repo, PluginReleaseWorkflow, r.Base)
+	raw, err = rawFile(ctx, run, repo, PluginReleaseWorkflow, ref)
 	switch {
 	case notFound(err):
 	case err != nil:
@@ -153,7 +173,7 @@ func ReadBranchRelease(ctx context.Context, run GH, repo, base string) (BaseRele
 			return r, nil
 		}
 	}
-	if r.ReleasePR, err = releasesByPR(ctx, run, repo, r.Base); err != nil {
+	if r.ReleasePR, err = releasesByPR(ctx, run, repo, r.Base, ref); err != nil {
 		return BaseRelease{}, err
 	}
 	return r, nil
@@ -162,8 +182,8 @@ func ReadBranchRelease(ctx context.Context, run GH, repo, base string) (BaseRele
 // releasesByPR says whether base releases through the release-PR flow: its
 // CreateReleaseWorkflow runs on a push to it, and its
 // CreateReleasePRWorkflow is there to open the release pull request.
-func releasesByPR(ctx context.Context, run GH, repo, base string) (bool, error) {
-	raw, err := rawFile(ctx, run, repo, CreateReleaseWorkflow, base)
+func releasesByPR(ctx context.Context, run GH, repo, base, ref string) (bool, error) {
+	raw, err := rawFile(ctx, run, repo, CreateReleaseWorkflow, ref)
 	switch {
 	case notFound(err):
 		return false, nil
@@ -177,7 +197,7 @@ func releasesByPR(ctx context.Context, run GH, repo, base string) (bool, error) 
 	if !pushes {
 		return false, nil
 	}
-	_, err = rawFile(ctx, run, repo, CreateReleasePRWorkflow, base)
+	_, err = rawFile(ctx, run, repo, CreateReleasePRWorkflow, ref)
 	switch {
 	case notFound(err):
 		return false, nil
