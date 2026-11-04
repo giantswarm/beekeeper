@@ -229,7 +229,7 @@ func TestCollectorCleanupPreservesNewScreen(t *testing.T) {
 	}
 	done := make(chan bool, 1)
 	go func() {
-		_, ok, _ := takeover.Hold(ctx, takeover.Dir(dir), takeover.Request{ID: "held", Session: tTakenSession}, func(int) bool { return true }, time.Millisecond)
+		_, ok, _ := takeover.Hold(ctx, takeover.Dir(dir), takeover.Request{ID: reviewedHeldCase, Session: tTakenSession}, func(int) bool { return true }, time.Millisecond)
 		done <- ok
 	}()
 	for {
