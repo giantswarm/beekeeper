@@ -62,9 +62,11 @@ func (a *app) diskCacheEntries() []config.DiskCache {
 		{Name: config.DiskCacheGo, Path: goCacheDir(), Mode: config.DiskCacheModeGo, MaxGiB: gib(a.cfg.Doctor.GoCacheMaxGiB)},
 		{Name: config.DiskCacheSccache, Path: sccache, Mode: config.DiskCacheModeSc, MaxGiB: gib(a.cfg.Disk.SccacheMaxGiB)},
 		{Name: config.DiskCacheTmp, Path: filepath.Join(a.cfg.StateDir, "tmp"), Mode: config.DiskCacheEntries, OlderThan: config.Duration{Duration: time.Hour}},
+		{Name: config.DiskCacheTranscripts, Path: filepath.Join(a.cfg.StateDir, "transcripts"), Mode: config.DiskCacheFiles, OlderThan: config.Duration{Duration: 30 * 24 * time.Hour}, MaxGiB: 2},
 	}
+	builtins := len(entries)
 	for _, e := range a.cfg.Disk.Caches {
-		i := slices.IndexFunc(entries[:3], func(b config.DiskCache) bool { return b.Name == e.Name })
+		i := slices.IndexFunc(entries[:builtins], func(b config.DiskCache) bool { return b.Name == e.Name })
 		if i < 0 {
 			entries = append(entries, e)
 			continue

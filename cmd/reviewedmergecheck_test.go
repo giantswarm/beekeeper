@@ -295,7 +295,7 @@ func TestMergeLaneRunsCIOnTheMergeResultAndReturnsAFailingCombinationToItsOwner(
 			parkMergeCheckPR(t, r, secondWorker, secondPR, secondURL, repo.head2)
 			r.pass(t)
 			p2 := r.pulls[secondPR]
-			p2.Reviews = append(p2.Reviews, superloop.Review{ID: "R2", Head: repo.head2, Verdict: superloop.Approved, At: time.Now()})
+			p2.Reviews = append(p2.Reviews, superloop.Review{ID: "R2", Author: loopDesk, Head: repo.head2, Verdict: superloop.Approved, At: time.Now()})
 			r.pulls[secondPR] = p2
 			r.pass(t)
 
@@ -587,3 +587,15 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 		t.Fatalf("checker hook failure blamed on branch: %d: %s", code, reason)
 	}
 }
+
+// Literals the package's tests share.
+const (
+	testFixWord    = "fix"
+	testRunWord    = "run"
+	testAgyVersion = "1.4.7"
+	testExpiresIn  = "expires_in"
+)
+
+const testMergedWord = "merged"
+
+const testStatusWord = "status"

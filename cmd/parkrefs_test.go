@@ -48,7 +48,7 @@ func TestIssueParkWaitsForCloseAndBoundsReads(t *testing.T) {
 	closed = true
 	w.now = w.now.Add(5 * time.Minute)
 	st, _ = w.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 1 || !strings.Contains(out[0].answer, "closed") {
+	if out := w.settledParks(t.Context(), st); len(out) != 1 || !strings.Contains(out[0].answer, overrideClosed) {
 		t.Fatalf("close: %+v", out)
 	}
 }
@@ -168,7 +168,7 @@ func TestIssueParkOffTheRosterBoundsReadsAndSettles(t *testing.T) {
 	closed = true
 	w.now = w.now.Add(5 * time.Minute)
 	st, _ = w.store.Read()
-	if out := w.settledParks(t.Context(), st); len(out) != 1 || !out[0].party.Is(offSession) || !strings.Contains(out[0].answer, "closed") {
+	if out := w.settledParks(t.Context(), st); len(out) != 1 || !out[0].party.Is(offSession) || !strings.Contains(out[0].answer, overrideClosed) {
 		t.Fatalf("close %+v", out)
 	}
 }
