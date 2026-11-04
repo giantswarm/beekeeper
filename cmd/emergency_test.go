@@ -22,6 +22,9 @@ func emergencyApp(t *testing.T) *app {
 	t.Helper()
 	a, _ := noteApp(t)
 	a.as = ""
+	oldClock := emergencyNow
+	emergencyNow = func() time.Time { return a.now }
+	t.Cleanup(func() { emergencyNow = oldClock })
 	for _, key := range []string{"BEEKEEPER_CODEX_AGENT", "BEEKEEPER_OMP_AGENT", "BEEKEEPER_AGY_AGENT", "CLAUDE_CODE_HOST_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
@@ -199,5 +202,74 @@ func TestEmergencyHoldControlsRequireGrantAndKeepReason(t *testing.T) {
 	}
 	if err := emergencyCall(a, "capacity", "secret.store", "bad"); err == nil {
 		t.Fatal("capacity accepted unrelated config")
+	}
+}
+
+func TestEmergencyMergeRechecksExpiryAfterGitHubRead(t *testing.T) {
+	a := emergencyApp(t)
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge now.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	old := github.RunGH
+	t.Cleanup(func() { github.RunGH = old })
+	mutations := 0
+	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[1] == emergencyViewCommand {
+			a.now = a.now.Add(11 * time.Minute)
+			return []byte(`{"state":"OPEN","reviewDecision":"APPROVED","headRefOid":"abc123"}`), nil
+		}
+		mutations++
+		return nil, nil
+	}
+	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
+		t.Fatalf("expired during read: %v", err)
+	}
+	if mutations != 0 {
+		t.Fatalf("%d GitHub mutations after expiry", mutations)
+	}
+}
+
+func TestEmergencyMergePreservesStopsAndHolds(t *testing.T) {
+	for _, target := range []string{bgStopCmd, holdMerges, emergencyTestRepo, holdGitHub} {
+		t.Run(target, func(t *testing.T) {
+			a := emergencyApp(t)
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Merge now.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			block := func() error {
+				return a.store.Update(func(st *state.State) ([]state.Event, error) {
+					if target == bgStopCmd {
+						st.Stop = &state.Stop{Reason: "desk stopped"}
+					} else {
+						st.Holds = []state.Hold{{Target: target, Reason: "proving main"}}
+					}
+					return nil, nil
+				})
+			}
+			old := github.RunGH
+			t.Cleanup(func() { github.RunGH = old })
+			mutations := 0
+			github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+				if args[1] == emergencyViewCommand {
+					if err := block(); err != nil {
+						t.Fatal(err)
+					}
+					return []byte(`{"state":"OPEN","reviewDecision":"APPROVED","headRefOid":"abc123"}`), nil
+				}
+				mutations++
+				return nil, nil
+			}
+			// The stop/hold appears while the GitHub read is in flight.
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
+				t.Fatalf("policy changed during read: %v", err)
+			}
+			// A standing stop/hold also prevents a later invocation.
+			if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7"); Code(err) != ExitRefused {
+				t.Fatalf("standing policy: %v", err)
+			}
+			if mutations != 0 {
+				t.Fatalf("%d GitHub mutations past %s", mutations, target)
+			}
+		})
 	}
 }

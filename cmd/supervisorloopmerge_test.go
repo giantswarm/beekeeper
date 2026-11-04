@@ -733,10 +733,8 @@ func TestLoopCompletedStartSuppressesStaleSnapshot(t *testing.T) {
 }
 
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
-// the loop's own exact-head merge claim is its go. A head that moved past its
-// approval merges through reviewedMerge on that go as it does through the
-// gate; a desk review requesting changes on that head refuses it.
-func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
+// an ownership claim is insufficient even when an older review was fixed.
+func TestReviewedMergeRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
 	r.pull.Head = loopFixed
@@ -744,8 +742,8 @@ func TestReviewedMergeTakesTheLoopClaimAsItsExactHeadGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
-	if doc.ExitCode != 0 || len(r.cmds) != 1 {
-		t.Fatalf("fixes-only go with the loop's claim: %+v cmds=%v, want a merge", doc, r.cmds)
+	if doc.ExitCode != github.SquashRefused || len(r.cmds) != 0 {
+		t.Fatalf("ownership claim alone: %+v cmds=%v, want refusal", doc, r.cmds)
 	}
 	if doc.RequestedBy != "supervisor loop (for "+loopWorker+")" {
 		t.Fatalf("RequestedBy = %q", doc.RequestedBy)

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -20,6 +21,9 @@ const (
 	emergencyPauseCommand = "pause"
 	emergencyViewCommand  = "view"
 )
+
+// emergencyNow is read at each authorization boundary, including after slow reads.
+var emergencyNow = time.Now
 
 // emergencyGuide deliberately disallows --as: the grant belongs to a live
 // guide session, not to a caller who knows its display name.
@@ -43,7 +47,7 @@ func (a *app) emergencyAction(action string) (*state.Emergency, error) {
 			return nil, err
 		}
 		e := st.Emergency
-		if e == nil || !e.By.Is(me) || !a.now.Before(e.Until) {
+		if e == nil || !e.By.Is(me) || !emergencyNow().Before(e.Until) {
 			return nil, refused("emergency mode is off or expired; enable it with the person's quoted words and --until")
 		}
 		copy := *e
@@ -73,7 +77,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 		if err != nil {
 			return err
 		}
-		if e := st.Emergency; e != nil && a.now.Before(e.Until) {
+		if e := st.Emergency; e != nil && emergencyNow().Before(e.Until) {
 			_, err = fmt.Fprintf(a.out, "emergency until %s by %s: %q\n", e.Until.Format(time.RFC3339), e.By.Name, e.Reason)
 		} else {
 			_, err = fmt.Fprintln(a.out, "emergency off")
@@ -88,11 +92,11 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 		if strings.TrimSpace(reason) == "" || until == "" {
 			return usageErr("--reason (the person's verbatim words) and --until are required")
 		}
-		end, err := untilTime(a.now, until)
+		end, err := untilTime(emergencyNow(), until)
 		if err != nil {
 			return err
 		}
-		if !end.After(a.now) {
+		if !end.After(emergencyNow()) {
 			return usageErr("--until must be in the future")
 		}
 		return a.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -127,6 +131,9 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			return usageErr("want owner/repo and a positive pull request number")
 		}
 		return a.runEmergency(fmt.Sprintf("merge https://github.com/%s/pull/%d", args[0], n), func() error {
+			if err := a.emergencyMergePolicy(args[0], n); err != nil {
+				return err
+			}
 			raw, err := github.RunGH(cmd.Context(), "pr", emergencyViewCommand, strconv.Itoa(n), "--repo", args[0], "--json", "state,isDraft,reviewDecision,headRefOid")
 			if err != nil {
 				return err
@@ -140,6 +147,9 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			}
 			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != "APPROVED" || pr.HeadRefOid == "" {
 				return refused("emergency merge requires an approved, open, non-draft pull request")
+			}
+			if err := a.emergencyMergePolicy(args[0], n); err != nil {
+				return err
 			}
 			if _, err := a.emergencyAction(fmt.Sprintf("merge https://github.com/%s/pull/%d at %s", args[0], n, pr.HeadRefOid)); err != nil {
 				return err
@@ -241,4 +251,32 @@ func emergencyCommandText(cmd *cobra.Command, args []string) string {
 	text := cmd.CommandPath() + " " + strings.Join(args, " ")
 	cmd.Flags().Visit(func(f *pflag.Flag) { text += fmt.Sprintf(" --%s=%q", f.Name, f.Value.String()) })
 	return text
+}
+
+// emergencyMergePolicy preserves standing stops and holds; emergency control
+// lets the guide explicitly lift a hold, never silently ignore it.
+func (a *app) emergencyMergePolicy(repo string, number int) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	me, err := a.emergencyGuide(st)
+	if err != nil {
+		return err
+	}
+	if st.Stop != nil {
+		return refused("%s", reasonDeskStopped)
+	}
+	lane := a.cfg.LaneOf(repo)
+	if a.cfg.CentralLane(lane) {
+		holds, err := a.centralHolds(me)
+		if err != nil {
+			return err
+		}
+		st.Holds = append(st.Holds, holds...)
+	}
+	if h, held := merge.BlockingFor(st, emergencyNow(), me.Name, repo, number, lane); held {
+		return refused("emergency merge is held on %s: %s; lift the hold explicitly", h.Target, h.Reason)
+	}
+	return nil
 }

@@ -179,10 +179,8 @@ func TestGateRefusesMergeWithoutApprovedDeskReviewOrExactHeadSupervisorGo(t *tes
 }
 
 // Regression test for https://github.com/giantswarm/beekeeper/issues/2178:
-// the gate takes the loop's exact-head merge claim as the go, as
-// reviewedMerge does: the planner's go for a head that carries the last
-// round's fixes merges on either route.
-func TestGateTakesTheLoopClaimAsTheExactHeadGo(t *testing.T) {
+// an ownership claim alone must never stand in for an explicit merge go.
+func TestGateRefusesTheLoopClaimWithoutAnExactHeadGo(t *testing.T) {
 	stubGitHub(t, github.Open, devctlFrom)
 	r := newLoopRig(t)
 	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix bug")
@@ -200,7 +198,7 @@ func TestGateTakesTheLoopClaimAsTheExactHeadGo(t *testing.T) {
 	reviewGuard = func(context.Context, string, int) (string, error) {
 		return "desk reviewer requests changes (review at 1111111, head is 2222222)", nil
 	}
-	if why, err := g.reviewHold(); err != nil || why != "" {
-		t.Fatalf("reviewHold with the loop's exact-head claim = %q, %v; want none", why, err)
+	if why, err := g.reviewHold(); err != nil || !strings.Contains(why, "no supervisor go") {
+		t.Fatalf("reviewHold with only an ownership claim = %q, %v; want refusal", why, err)
 	}
 }
