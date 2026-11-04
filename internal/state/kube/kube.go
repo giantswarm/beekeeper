@@ -686,12 +686,37 @@ const (
 // noteRef is the note number an event's detail names first (#12).
 var noteRef = regexp.MustCompile(`#(\d+)`)
 
+// eventNote is the note an event names. Answers and plan events name their
+// issue or pull request before their note, so the first #number is not the note's.
+func eventNote(e state.Event) (int, bool) {
+	detail := e.Detail
+	marker := ""
+	switch e.Verb {
+	case noteAnsweredEvent:
+		marker = ", note #"
+	case "plan.grilling", "plan.ready":
+		marker = ": note #"
+	}
+	if marker != "" {
+		_, rest, ok := strings.Cut(detail, marker)
+		if !ok {
+			return 0, false
+		}
+		detail = "#" + rest
+	}
+	m := noteRef.FindStringSubmatch(detail)
+	if m == nil {
+		return 0, false
+	}
+	id, err := strconv.Atoi(m[1])
+	return id, err == nil
+}
+
 // on is the written object event e belongs to: the written Note its detail
 // names, else, once the whole update is written (all), the first object;
 // nil when it has none yet.
 func on(written []client.Object, e state.Event, all bool) client.Object {
-	if m := noteRef.FindStringSubmatch(e.Detail); m != nil {
-		id, _ := strconv.Atoi(m[1])
+	if id, ok := eventNote(e); ok {
 		for _, o := range written {
 			if n, ok := o.(*v1alpha1.Note); ok && n.Spec.ID == id {
 				return o
