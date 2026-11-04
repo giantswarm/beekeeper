@@ -398,7 +398,7 @@ func TestRunSignin(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no terminal to ask") {
 		t.Errorf("a failed sign-in: %v", err)
 	}
-	if _, _, err = runSignin(context.Background(), []string{"true"}); err == nil {
+	if _, _, err = runSignin(context.Background(), []string{probeHolds}); err == nil {
 		t.Error("a sign-in that printed no session was taken")
 	}
 }

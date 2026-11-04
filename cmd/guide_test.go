@@ -37,7 +37,7 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 		{ID: 2, Kind: noteDecision, Text: "check the rollout", By: owner},
 	}}
 	agent := state.Party{Session: "sC", Name: agentC.Name}
-	st.Records = []state.Record{{Session: agent, Issue: "o/r#1", Waits: personTimo + ": " + approveADR}}
+	st.Records = []state.Record{{Session: agent, Issue: refOne, Waits: personTimo + ": " + approveADR}}
 	sessions := []*claude.Session{{ID: "sC", Name: agentC.Name}, {ID: "sO", Name: "Agent seven"}}
 	lines, changed := a.feedLines(st, sessions, nil, nil)
 	if !changed || len(lines) != 2 ||

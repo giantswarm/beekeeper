@@ -335,7 +335,7 @@ func TestSecretGuardRefusesVaultUnlocks(t *testing.T) {
 		"source signin.sh":                                     true,
 		". ./helper.sh":                                        true,
 		"bash build.sh":                                        false,
-		"./build.sh":                                           false,
+		litBuildSh:                                             false,
 		"echo vault-unlock":                                    false,
 		"grep -rn vault-unlock .":                              false,
 		"beekeeper secret fingerprint op://Shared/item/password":   false,
