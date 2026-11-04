@@ -45,6 +45,37 @@ check both. The remaining syscalls are split by build tag: `statfs` (`internal/m
 the gate's re-exec of a replaced binary (`internal/platform/binary_*.go`, Linux only, a no-op
 elsewhere) and the detached merge child (`internal/platform/detach_*.go`).
 
+## Diagnosing a failed go-build without a CircleCI token
+
+For this public repository, the CircleCI v1.1 job endpoint and each step's
+`output_url` are readable without authentication. Take the numeric job ID from
+the failed check's details link, then fetch the output (requires `curl` and `jq`):
+
+```bash
+job=13711 # replace with the failing job's number
+curl -fsSL "https://circleci.com/api/v1.1/project/github/giantswarm/beekeeper/$job" > job.json
+jq -r '.steps[].actions[] | .output_url // empty' job.json |
+  while IFS= read -r url; do
+    curl -fsSL "$url" | jq -r '.[].message'
+  done > job.log
+# Names, assertion diagnostics and cleanup errors are in the complete log.
+rg -n -C 4 -- '--- FAIL:|panic:|test timed out|^FAIL' job.log
+```
+
+This also works for main and tag jobs; it does not depend on `devctl ci jobs`
+or a worker receiving a CI credential. Private repositories require a separate
+authorized log reader. Keep fetched logs local: diagnostics may contain
+execution details that should not be copied into public comments.
+
+Job 13711 identified `TestARebaseableMergeQueuesAsBefore/not_computed`: its
+fake child acknowledged startup before finishing a spec copy, racing temporary
+directory cleanup under load. The fixture now completes its writes before
+publishing its PID, and callers read the spec immediately after that handoff.
+Track further flakes in [#439](https://github.com/giantswarm/beekeeper/issues/439)
+and [#1180](https://github.com/giantswarm/beekeeper/issues/1180).
+
+## Checks before committing
+
 Pre-commit runs golangci-lint (the version CI's `pre-commit` workflow pins) over every package, test
 files included, with the linters of `.golangci.yaml`: a bare `golangci-lint run ./...` lints what CI
 does, and main lints clean. `goconst` counts a string across a whole package, production and test
