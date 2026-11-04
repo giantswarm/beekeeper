@@ -11,12 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+const duplicatePassword = "password"
+
 func TestCopyValuesRefusesResolvedDuplicateDestinations(t *testing.T) {
 	for _, tc := range []struct{ a, b string }{
-		{"password", `"password"`}, {`"credentials.json"`, `credentials\.json`}, {"nested.password", `nested."password"`},
+		{duplicatePassword, `duplicatePassword`}, {`"credentials.json"`, `credentials\.json`}, {"nested.password", `nested.duplicatePassword`},
 	} {
 		for _, skeleton := range []bool{false, true} {
-			t.Run(tc.a+tc.b+string(rune('0'+boolNumber(skeleton))), func(t *testing.T) {
+			t.Run(tc.a+tc.b+string(rune('0'+boolNumber(skeleton))), func(t *testing.T) { //nolint:gosec // small test index
 				tools := secrettest.New(map[string]string{vaultRef: password})
 				dir := t.TempDir()
 				file := filepath.Join(dir, "new.sops.yaml")
