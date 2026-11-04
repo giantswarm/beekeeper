@@ -13,8 +13,9 @@ import (
 )
 
 func TestSecretRotateSandboxFiles(t *testing.T) {
+	const readable = "readable"
 	for _, generated := range []bool{false, true} {
-		for _, access := range []string{"denied", "readable", "writable", "outside-sandbox"} {
+		for _, access := range []string{"denied", readable, "writable", "outside-sandbox"} {
 			t.Run(strings.Join([]string{map[bool]string{false: "issued", true: "generated"}[generated], access}, "/"), func(t *testing.T) {
 				a, tools, repo := secretApp(t)
 				base := t.TempDir()
@@ -30,7 +31,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 				if access == "outside-sandbox" {
 					t.Setenv(sandbox.Env, "")
 				}
-				if access == "readable" {
+				if access == readable {
 					a.cfg.Sandbox.AllowRead = []string{home}
 				}
 				if access == "writable" {
@@ -66,7 +67,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 				}
 				vaultBefore := tools.Vault[dbRef]
 				out, err := runSecret(a, args...)
-				if access == "denied" || access == "readable" {
+				if access == "denied" || access == readable {
 					if err == nil || Code(err) != ExitRefused || !strings.Contains(err.Error(), "agent sandbox does not let") {
 						t.Errorf("rotation outside the sandbox's write list: %v", err)
 					}
