@@ -25,6 +25,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
@@ -100,6 +101,9 @@ func (c *Client) unreachable(format string, args ...any) error {
 
 // endpoint is the muster context's endpoint URL.
 func (c *Client) endpoint(ctx context.Context) (string, error) {
+	if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
+		return "", c.unreachable("central access is host-only; run this command on the host outside the agent sandbox")
+	}
 	out, err := c.run(ctx, "context", "show", c.cfg.Context, "-o", "json")
 	if err != nil {
 		return "", c.unreachable("%v", err)
