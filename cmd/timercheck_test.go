@@ -342,3 +342,11 @@ func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 		t.Fatal("checked a timer that is not open")
 	}
 }
+
+func TestTimerProbeMarksInheritedSession(t *testing.T) {
+	t.Setenv(envTimerCommand, "outer")
+	out, err := probeOutput(t.Context(), `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`)
+	if err != nil || string(out) != "probe" {
+		t.Fatalf("probe subprocess marker = %q, %v", out, err)
+	}
+}
