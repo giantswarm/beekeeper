@@ -243,18 +243,26 @@ func (l *supervisorLoop) dropAdminRepairs(taken []superloop.Taken, stages map[st
 			ref = ref[:i]
 		}
 		why := "base branch policy refusal is merge configuration, not branch repair"
-		if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
-			return taken, err
+		// A preview reconciles only its in-memory plan. Leave the durable
+		// records for the next real pass, which holds the loop lock.
+		if !l.dryRun {
+			if err := l.a.store.Record(about(event(loopParty, loopUnstageVerb, "[%s] %s", stage, why), ref)); err != nil {
+				return taken, err
+			}
 		}
 		delete(stages, stage)
 		delete(stageDetail, stage)
 		if slices.ContainsFunc(taken, func(t superloop.Taken) bool { return t.Key == key }) {
-			if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
-				return taken, err
+			if !l.dryRun {
+				if err := l.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[%s] %s", key, why), ref)); err != nil {
+					return taken, err
+				}
 			}
 			taken = slices.DeleteFunc(taken, func(t superloop.Taken) bool { return t.Key == key })
 		}
-		_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; check merge.admin for its repository\n", key, why)
+		if !l.dryRun {
+			_, _ = fmt.Fprintf(l.a.out, "SUPERVISOR MERGE RETRY %s: %s; check merge.admin for its repository\n", key, why)
+		}
 	}
 	return taken, nil
 }
