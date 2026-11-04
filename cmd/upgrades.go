@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"context"
+	"path/filepath"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -44,7 +47,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		read := r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))
 		if ctx.Err() == nil {
 			rs.Keep(read, now)
-			_ = a.store.WriteFile(upgrade.ReadingsFile, rs)
+			a.saveUpgradeReadings(ctx, rs)
 		}
 	}
 	out := make([]upgrade.Status, 0, len(al.Installations))
@@ -56,6 +59,23 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		out = append(out, r.Status)
 	}
 	return out
+}
+
+// saveUpgradeReadings merges again under the state lock: another reader may
+// have published while this reader was waiting for kubectl. The merge also
+// gives this caller the newer statuses before it reconciles its holds.
+func (a *app) saveUpgradeReadings(ctx context.Context, rs upgrade.Readings) {
+	_ = a.store.Exclusive(func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var shared upgrade.Readings
+		if _, err := a.store.ReadFile(upgrade.ReadingsFile, &shared); err != nil {
+			return err
+		}
+		rs.Merge(shared)
+		return a.store.WriteFile(upgrade.ReadingsFile, rs)
+	})
 }
 
 // upgradeFresh is how long the watch uses an installation's reading: up to
@@ -99,6 +119,23 @@ func (w *watcher) upgradeWatchLive(now time.Time) bool {
 // named once per watch (sayNoContext). The standby watch runs it only while no
 // supervisor's watch does, and says so once.
 func (w *watcher) upgradeCycle(ctx context.Context) {
+	// Keep observation and reconciliation in the same watch turn. The
+	// state lock alone cannot stop an older observation being applied last.
+	// A second watch skips this tick instead of reading ahead of the writer.
+	if w.store.Dir() == "" {
+		w.fail("upgrades", "UPGRADES unknown: the watch needs a local state directory")
+		return
+	}
+	lock := flock.New(filepath.Join(w.store.Dir(), "upgrades-watch.lock"))
+	locked, err := lock.TryLock()
+	if err != nil {
+		w.fail("upgrades", "UPGRADES unknown: the watch lock does not load (%v)", err)
+		return
+	}
+	if !locked {
+		return
+	}
+	defer func() { _ = lock.Unlock() }()
 	now := w.clk().Now()
 	if w.standby {
 		live := w.upgradeWatchLive(now)
