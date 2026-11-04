@@ -196,7 +196,10 @@ func classifyBuildDirs(status []byte, extra []string) (work, build []string) {
 		code, path := e[:2], e[3:]
 		switch code {
 		case "!!", "??":
-			if regenerableWith(path, extra) {
+			// Porcelain marks directories with a trailing slash. Only
+			// directory components may identify disposable build output.
+			dirs := path[:strings.LastIndex(path, "/")+1]
+			if regenerableWith(dirs, extra) {
 				build = append(build, path)
 			} else if code == "??" {
 				work = append(work, path)

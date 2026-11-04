@@ -321,3 +321,47 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 		t.Fatal("dry run removed worktree")
 	}
 }
+
+func TestTrimWorktreesPreservesBuildNamedFiles(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		automatic bool
+		branch    string
+	}{
+		{"legacy merged", false, mergedPR},
+		{"legacy idle", false, "open"},
+		{"automatic merged", true, mergedPR},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a, machine, root := worktreeApp(t)
+			dir := filepath.Join(root, c.branch)
+			const script = "#!/bin/sh\necho build\n"
+			for _, path := range []string{"build", "scripts/bin", "scripts/target", "scripts/.cache"} {
+				writeT(t, filepath.Join(dir, path), script)
+			}
+			r := a.trimWorktrees(false, func() (worktreeMachine, error) {
+				m, err := machine()
+				// Limit the fixture to one worktree; no remote calls.
+				m.dirs = []string{dir}
+				m.automatic = c.automatic
+				m.trash = t.TempDir()
+				return m, err
+			})
+			if r.err != nil || len(r.failed) != 0 {
+				t.Fatalf("cleanup failed: %v %+v", r.err, r.failed)
+			}
+			for _, path := range []string{"build", "scripts/bin", "scripts/target", "scripts/.cache"} {
+				got, err := os.ReadFile(filepath.Join(dir, path))
+				if err != nil || string(got) != script {
+					t.Errorf("%s contents=%q err=%v; want preserved script", path, got, err)
+				}
+			}
+			if exists(filepath.Join(dir, "node_modules")) {
+				t.Error("build directory was not reclaimed")
+			}
+			if len(r.removed) != 0 || len(r.cleaned)+len(r.idle) != 1 {
+				t.Errorf("removed=%d cleaned=%d idle=%d; want no removal and one cleanup", len(r.removed), len(r.cleaned), len(r.idle))
+			}
+		})
+	}
+}

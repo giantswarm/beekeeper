@@ -170,3 +170,20 @@ func TestRemoveAllReadOnlyAndNotThroughLinks(t *testing.T) {
 		t.Errorf("the linked directory outside is %v, %v; want it untouched at 0500", fi.Mode(), err)
 	}
 }
+
+func TestClassifyBuildDirectoryComponents(t *testing.T) {
+	for _, path := range []string{"build", "bin", "target", ".cache", "pkg/build", "pkg/bin", "pkg/target", "pkg/.cache", "generated/output", "pkg/generated/output"} {
+		t.Run(path, func(t *testing.T) {
+			for _, code := range []string{"??", "!!", " M"} {
+				for _, suffix := range []string{"", "/", "/artifact"} {
+					work, build := classifyBuildDirs([]byte(code+" "+path+suffix+"\x00"), []string{"generated/output"})
+					wantBuild := code != " M" && suffix != ""
+					wantWork := code == " M" || (code == "??" && !wantBuild)
+					if (len(work) == 1) != wantWork || (len(build) == 1) != wantBuild {
+						t.Errorf("%q: work=%q build=%q; want work=%v build=%v", code+" "+path+suffix, work, build, wantWork, wantBuild)
+					}
+				}
+			}
+		})
+	}
+}
