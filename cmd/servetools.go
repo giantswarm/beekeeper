@@ -59,7 +59,7 @@ const (
 	nameAgentsLeave    = "agents_leave"
 )
 
-// callerOptions are the arguments every tool takes: who the calling agent is
+// callerOptions are the identity arguments for tools that use the caller: who it is
 // and where it runs. One person's agents share the person's token, so only
 // these tell them apart.
 func callerOptions(required bool) []mcp.ToolOption {
@@ -77,11 +77,15 @@ type hints struct {
 	readOnly, destructive, idempotent, openWorld bool
 	// identified: the tool needs agent and host, it acts on the agent itself.
 	identified bool
+	// auditOnly: caller identity is accepted for auditing but not advertised.
+	auditOnly bool
 }
 
 var (
 	// hintRead changes nothing in the shared state.
 	hintRead = hints{readOnly: true, idempotent: true}
+	// hintAuditRead reads state and uses caller identity only in its audit.
+	hintAuditRead = hints{readOnly: true, idempotent: true, auditOnly: true}
 	// hintAdd adds or updates the caller's own record; again changes nothing.
 	hintAdd = hints{idempotent: true}
 	// hintRemove takes a record away, another's too where the role allows;
@@ -99,28 +103,31 @@ func newTool(name, summary, details string, h hints, opts ...mcp.ToolOption) mcp
 		mcp.WithIdempotentHintAnnotation(h.idempotent),
 		mcp.WithOpenWorldHintAnnotation(h.openWorld),
 	}, opts...)
-	return mcp.NewTool(name, append(opts, callerOptions(h.identified)...)...)
+	if !h.auditOnly {
+		opts = append(opts, callerOptions(h.identified)...)
+	}
+	return mcp.NewTool(name, opts...)
 }
 
 func (s *server) tools() []serveTool {
 	return []serveTool{
-		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintRead), toolLeaseList},
+		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintAuditRead), toolLeaseList},
 		{newTool("lease_claim", "Claim a shared installation for the calling agent.",
 			"Refused while another holds it or while it upgrades.", hintAdd,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment"))), toolLeaseRelease},
-		{newTool("hold_list", "List the holds on merges into a repository or lane, or on every merge, until lifted.", "", hintRead), toolHoldList},
-		{newTool("hold_set", "Hold merges in the central lanes: owner/repo, lane:<name>, or merges or github for all of them.",
-			"", hintRemove,
-			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo, lane:<name>, merges or github")),
+		{newTool("hold_list", "List the holds on merges into a repository or lane until lifted.", "", hintAuditRead), toolHoldList},
+		{newTool("hold_set", "Hold merges in a central repository or lane: owner/repo or lane:<name>.",
+			"The merges and github targets are machine-local; use the local CLI for them.", hintRemove,
+			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("owner/repo or lane:<name>")),
 			mcp.WithString(paramReason, mcp.Required(), mcp.Description("why")),
 			mcp.WithString("until", mcp.Description("when it ends by itself: a time (15:30) or a duration (2h)")),
 			mcp.WithString("except", mcp.Description("the one owner/repo or owner/repo#n the hold lets through"))), toolHoldSet},
 		{newTool("hold_lift", "Lift a hold: your own, or as its setter's team's supervisor role.", "", hintRemove,
 			mcp.WithString(paramTarget, mcp.Required(), mcp.Description("the held target"))), toolHoldLift},
-		{newTool("lanes", "List the merge lanes: each lane's running merge, settling merge and queue.", "", hintRead), toolLanes},
+		{newTool("lanes", "List the merge lanes: each lane's running merge, settling merge and queue.", "", hintAuditRead), toolLanes},
 		{newTool("lane_queue", "Queue a pull request's merge at the end of its repository's merge lane.",
 			fmt.Sprintf("Queue it again while it waits: a waiting place not queued again for merge.queueTTL (default %s) holds up nobody.", shortDur(config.DefaultQueueTTL)), hintAdd,
 			prOptions()...), toolLaneQueue},
@@ -128,7 +135,7 @@ func (s *server) tools() []serveTool {
 			"", hintAdd,
 			append(prOptions(), mcp.WithBoolean("merged", mcp.Description("the pull request is merged: the lane settles until its release rolled")))...), toolLaneSettle},
 		{newTool("lane_turn", "Tell whether a queued merge is its lane's next, and which merges are ahead of it.",
-			"It does not keep the place: lane_queue does.", hintRead, prOptions()...), toolLaneTurn},
+			"It does not keep the place: lane_queue does.", hintAuditRead, prOptions()...), toolLaneTurn},
 		{newTool("lane_leave", "Take a merge out of its lane: it merged and rolled, failed, or its gate gave up.",
 			"", hintRemove,
 			append(prOptions(), mcp.WithString(paramReason, mcp.Description("why it leaves: rolled, nothing merged, refused")))...), toolLaneLeave},
@@ -145,18 +152,13 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
 			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
 			mcp.WithNumber(paramFoldInto, mcp.Description("an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned"))), toolNoteAdd},
-		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintRead), toolNoteList},
+		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintAuditRead), toolNoteList},
 		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
 			mcp.WithNumber(paramChoice, mcp.Description("the option chosen, 1-based")),
 			mcp.WithString(paramText, mcp.Description(fmt.Sprintf("the answer in the person's own words, at most %d characters", answerMax))),
 			mcp.WithString(paramVia, mcp.Description("how the answer came: cli (the default) or slack"))), toolNoteAnswer},
-		{newTool(toolAnswerVerifyName, "Show the person's recorded answer to a note, or the newest about an issue or pull request, and whether it is their own.",
-			fmt.Sprintf("Verified: through an authenticated channel (central, slack), at most %s old and, with head, naming that commit; for the answering person, their team or its supervisor role.", shortDur(answerFresh)), hintRead,
-			mcp.WithNumber(paramNote, mcp.Description("the note's number")),
-			mcp.WithString(paramAbout, mcp.Description("the issue or pull request, owner/repo#n")),
-			mcp.WithString(paramHead, mcp.Description("the commit its question or words must name"))), toolAnswerVerify},
 		{newTool("note_done", "Withdraw a note, closing it without an answer: its filer's, or the filer's team's supervisor role's.",
 			"", hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
@@ -168,9 +170,9 @@ func (s *server) tools() []serveTool {
 			mcp.WithBoolean(paramDone, mcp.Description("the agent reported its work finished: ended on the roster"))), toolAgentsRegister},
 		{newTool(nameAgentsLeave, "Take the calling agent off the roster: its machine no longer runs it.", "",
 			hints{destructive: true, idempotent: true, identified: true}), toolAgentsLeave},
-		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintRead,
+		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintAuditRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
-		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintRead), toolSnapshot},
+		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintAuditRead), toolSnapshot},
 		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "After an id, every event above it the instance still holds; gap set when it no longer holds that event, so events right after it may have aged out.", hintRead,
 			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one, all of them the instance still holds"))), toolReadFeed},
 	}
@@ -384,9 +386,13 @@ func (c *call) guardHold(target string) {
 }
 
 func toolHoldSet(c *call, req mcp.CallToolRequest) (any, error) {
-	target, err := required(req, paramTarget, "owner/repo, lane:<name>, merges or github")
+	target, err := required(req, paramTarget, "owner/repo or lane:<name>")
 	if err != nil {
 		return nil, err
+	}
+	// Machine-wide holds belong to the local budget and guard, not central lanes.
+	if target == merge.AllMerges || target == holdGitHub {
+		return nil, usageErr("%s is a machine-local hold target; use the local CLI, or hold a central repository (owner/repo) or lane (lane:<name>)", target)
 	}
 	c.concern = kube.HoldObject(target)
 	args := []string{"set", target, flagNoteReason, req.GetString(paramReason, "")}

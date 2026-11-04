@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,6 +128,16 @@ func stopMerges(store state.Store, by state.Party, pick func(state.Merge) bool, 
 		return nil, err
 	}
 	for _, s := range running {
+		if s.end || s.waiting {
+			base := mergeBase(store.Dir(), s.merge.Repo, s.merge.PR)
+			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+				return said, err
+			}
+			raw, _ := json.Marshal(by)
+			if err := os.WriteFile(base+stoppedExt, raw, 0o600); err != nil {
+				return said, err
+			}
+		}
 		switch {
 		case s.end:
 			_ = endChild(s.merge.Child)
