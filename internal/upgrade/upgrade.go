@@ -267,7 +267,13 @@ func deref(p *int32) int32 {
 	return *p
 }
 
-func (u Upgrade) clusterKey() string { return u.Namespace + "/" + u.Cluster }
+// clusterKey is namespace/name, or the bare name when no namespace is known.
+func (u Upgrade) clusterKey() string {
+	if u.Namespace == "" {
+		return u.Cluster
+	}
+	return u.Namespace + "/" + u.Cluster
+}
 
 // HoldTarget is the hold target of a cluster's upgrade. cluster must be
 // namespace/name; a bare name is a legacy target with no known namespace.
