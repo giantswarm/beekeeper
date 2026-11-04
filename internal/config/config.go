@@ -2464,9 +2464,11 @@ type Merge struct {
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
 	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
-	// when the gated command names none: devctl's own 30m is shorter than a
-	// repository's CI restarted from zero by --update-branch.
+	// when the gated command names none (default 2h, including CI queueing).
+	// CITimeouts can override it for repositories with longer pipelines.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// CITimeouts overrides CITimeout for repositories keyed by owner/repo.
+	CITimeouts map[string]Duration `yaml:"ciTimeouts"`
 	// BusyBudget is how long a merge with --update-branch keeps its lane
 	// place running devctl again after a run ends on a busy base (its base
 	// moved during every one of devctl's update waits, exit 3), counted from
@@ -2486,6 +2488,16 @@ type Merge struct {
 	// past their branch ruleset after the approved desk review; only their
 	// merge go names --admin.
 	Admin []string `yaml:"admin"`
+}
+
+// TimeoutFor returns the repository's CI timeout, falling back to CITimeout.
+func (m Merge) TimeoutFor(repo string) time.Duration {
+	for name, timeout := range m.CITimeouts {
+		if strings.EqualFold(name, repo) && timeout.Duration > 0 {
+			return timeout.Duration
+		}
+	}
+	return m.CITimeout.Duration
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
@@ -3587,7 +3599,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
-	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.CITimeout, 2*time.Hour)
 	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
@@ -4047,6 +4059,12 @@ func (c *Config) validateEach(report func(error)) {
 		ownerReposEach("merge.methods", []string{repo}, report)
 		if method != "squash" && method != "rebase" && method != "merge" {
 			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
+		}
+	}
+	for repo, timeout := range c.Merge.CITimeouts {
+		ownerReposEach("merge.ciTimeouts", []string{repo}, report)
+		if timeout.Duration <= 0 {
+			report(fmt.Errorf("merge.ciTimeouts.%s: %s is not positive", repo, timeout.Duration))
 		}
 	}
 	ownerReposEach("merge.admin", c.Merge.Admin, report)

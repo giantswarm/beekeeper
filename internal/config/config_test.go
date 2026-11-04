@@ -1277,3 +1277,46 @@ func TestLeasableInstallations(t *testing.T) {
 		t.Fatal("only configured installations should be leasable")
 	}
 }
+
+func TestMergeCITimeouts(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    example-org/slow-repo: 3h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]time.Duration{
+		"example-org/other":     2 * time.Hour,
+		"EXAMPLE-ORG/SLOW-REPO": 3 * time.Hour,
+	} {
+		if got := c.Merge.TimeoutFor(repo); got != want {
+			t.Errorf("TimeoutFor(%q) = %s, want %s", repo, got, want)
+		}
+	}
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeout: 4h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Merge.TimeoutFor("example-org/other"); got != 4*time.Hour {
+		t.Errorf("configured fallback = %s, want 4h", got)
+	}
+}
+
+func TestMergeCITimeoutsRejectInvalidOverrides(t *testing.T) {
+	for _, value := range []string{"example-org/repo: 0s", "example-org/repo: -1h", "repo: 3h"} {
+		t.Run(value, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    "+value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "merge.ciTimeouts") {
+				t.Fatalf("Load error = %v, want invalid CI timeout override", err)
+			}
+		})
+	}
+}
