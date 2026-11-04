@@ -38,7 +38,7 @@ func TestNoteShow(t *testing.T) {
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				switch {
 				case tc.answered:
-					return []state.Event{{Verb: "note-show.unrelated", Detail: strings.Repeat("z", 1_100_000)}, answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: answer}, &n)}, nil
+					return []state.Event{{Verb: "note-show.unrelated", Detail: strings.Repeat("z", 1_100_000)}, answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Via: viaCLI, Answer: answer}, &n)}, nil
 				case tc.defaulted:
 					st.Defaulted = []state.Note{n}
 				default:
@@ -114,7 +114,7 @@ func TestNoteShowAnsweredAudience(t *testing.T) {
 				const audience = "team:ops"
 				const words = "approved"
 				n := state.Note{ID: 1, For: audience, Text: laneQuestion, By: state.Party{Name: agentOne}}
-				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Channel: viaCLI, Answer: words}, &n)
+				e := answerEvent(state.Party{}, &recordedAnswer{About: refTwo, By: notePerson, Via: viaCLI, Answer: words}, &n)
 				if legacy {
 					e.Detail = strings.Replace(e.Detail, ` for "team:ops"`, "", 1)
 				}
