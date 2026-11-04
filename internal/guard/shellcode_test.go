@@ -37,6 +37,8 @@ func TestHookRefusesScriptsInShellCode(t *testing.T) {
 		line      int
 	}{
 		{`zsh -c 'bash shellcode-merge.sh'`, shellCodeScript, 2},
+		{`bash -c 'bash shellcode-merge.sh' ignored -n`, shellCodeScript, 2},
+		{`bash shellcode-merge.sh -n`, shellCodeScript, 2},
 		{`sh -c '. shellcode-merge.sh'`, shellCodeScript, 2},
 		{`bash -c './shellcode-merge.sh'`, shellCodeScript, 2},
 		{`bash -lc 'source shellcode-merge.sh'`, shellCodeScript, 2},
