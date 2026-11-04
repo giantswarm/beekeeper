@@ -334,11 +334,17 @@ CODEX_HOME=/srv/beekeeper/codex codex login --device-auth
 
 Workers never run in that home. `prepare` installs a managed `CODEX_HOME`
 inside the policy directory with the embedded worker rules as `AGENTS.md`, a
-`config.toml` with hooks on and the browser, computer, code-mode, image and
-plugin tools off, and a `hooks.json` whose PreToolUse hook is the execution
+`config.toml` with hooks and the code-mode host on and the browser, computer,
+image and plugin tools off, and a `hooks.json` whose PreToolUse hook is the execution
 guard in Codex's format. It links only `auth.json` from `configDir`. The policy
 binds those files; a changed one fails `hosts check` until a matching bundle is
 prepared again. Use a ChatGPT subscription login: an API-key login is refused.
+
+The runner supplies workspace trust in a transient inline `projects={...}`
+table override on first and resumed turns. Dynamic workspace paths are literal
+keys inside the TOML value; quoted dotted CLI override keys are rejected by
+the pinned CLI's strict configuration validator. The managed configuration
+file is not changed to persist project trust.
 
 `hosts check` probes each configured harness's version, login and guard
 without a model call. It advertises only the harnesses that pass and names
