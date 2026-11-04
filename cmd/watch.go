@@ -137,7 +137,8 @@ Every upgrades.every (5m) the same installations' Cluster API clusters are
 read, and every watch.interval an installation an upgrade runs on or holds
 (one list of Clusters, KubeadmControlPlanes, MachinePools and
 MachineDeployments per installation, one per kind on one that does not serve
-them all, within alerts.timeout, in parallel). The readings are shared
+them all, in parallel, with one retry and a deadline per attempt of at least
+two minutes or alerts.timeout if longer). The readings are shared
 (upgrades.json): a second watch, snapshot and ui use a fresh one instead of
 reading again. A
 cluster whose release changes begins an upgrade: its release label differs
@@ -151,7 +152,8 @@ installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
 "UPGRADE ENDED …" when it ends, once each; an unreadable installation is one
-line and keeps its holds. The installations whose kube context is not in the
+line naming the cause and deadline and keeps its holds. Held upgrades name
+the number of consecutive ticks their reader has failed. The installations whose kube context is not in the
 kubeconfig kubectl reads are not read, keep their holds and alert baselines,
 and are named once per watch in one line each for UPGRADES and ALERTS.
 
@@ -390,7 +392,8 @@ type watcher struct {
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// upgrades are the last upgrade readings of the installations.
-	upgrades upgrade.Readings
+	upgrades        upgrade.Readings
+	upgradeFailures map[string]int
 	// noContextSaid are the readers (ALERTS, UPGRADES) whose installations
 	// without a kube context this watch said.
 	noContextSaid map[string]bool

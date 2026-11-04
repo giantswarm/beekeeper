@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -92,7 +94,7 @@ type Reader struct {
 	// Kubeconfig are the kubeconfig files kubectl reads, as KUBECONFIG;
 	// empty, the environment's.
 	Kubeconfig []string
-	// Timeout bounds the reading of one installation.
+	// Timeout bounds each attempt to read one installation.
 	Timeout time.Duration
 }
 
@@ -108,7 +110,7 @@ const noContext = "context was not found for specified context"
 // errNoContext is a context the kubeconfig lacks.
 var errNoContext = errors.New(noContextErr)
 
-// Read reads every target in parallel, each within r.Timeout: one list of
+// Read reads every target in parallel, with one retry within r.Timeout each: one list of
 // all kinds, and for an upgrade whose hold does not exist yet and whose from
 // release is unknown, its cluster's events. held says which clusters hold
 // an upgrade, keyed by installation and namespace/name.
@@ -125,6 +127,17 @@ func (r Reader) Read(ctx context.Context, targets []Target, now time.Time, held 
 }
 
 func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(string) bool) Status {
+	var s Status
+	for attempt := 0; attempt < 2; attempt++ {
+		s = r.readAttempt(ctx, t, now, held)
+		if s.Err == "" || s.NoContext || ctx.Err() != nil {
+			return s
+		}
+	}
+	return s
+}
+
+func (r Reader) readAttempt(ctx context.Context, t Target, now time.Time, held func(string) bool) Status {
 	s := Status{Installation: t.Name}
 	if t.Context == "" {
 		return withoutContext(t.Name)
@@ -136,7 +149,7 @@ func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(
 	case errors.Is(err, errNoContext):
 		return withoutContext(t.Name)
 	case err != nil:
-		s.Err = err.Error()
+		s.Err = fmt.Sprintf("%s (deadline %s per attempt; up to 2 attempts)", err, r.Timeout)
 		return s
 	}
 	s.NoClusterAPI = served == 0
@@ -231,13 +244,21 @@ func (r Reader) kubectl(ctx context.Context, kubeContext string, args ...string)
 		return out, nil
 	}
 	msg := lastLine(stderr.String())
+	var exitErr *exec.ExitError
+	if ctx.Err() == nil && errors.As(err, &exitErr) {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return nil, err
+		}
+	}
 	switch {
 	case strings.Contains(msg, notServed):
 		return nil, errNotServed
 	case strings.Contains(msg, noContext):
 		return nil, errNoContext
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return nil, fmt.Errorf("timed out after %s", r.Timeout)
 	case ctx.Err() != nil:
-		return nil, fmt.Errorf("no answer within %s", r.Timeout)
+		return nil, ctx.Err()
 	case msg == "":
 		return nil, err
 	}

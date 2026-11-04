@@ -288,7 +288,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		w.upgradeCycle(context.Background())
 		clk.now = clk.now.Add(a.cfg.Upgrades.Every.Duration)
 	}
-	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got[snapshotInstallation] != 3 || got["broken"] != 3 {
+	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got[snapshotInstallation] != 3 || got["broken"] != 6 {
 		t.Errorf("kubectl calls: %v", got)
 	}
 	text := out.String()
@@ -307,7 +307,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	words := strings.Join(upgradeWords(a.readUpgrades(context.Background(), st, clk.now), time.Time{}), " · ")
-	if want := "prod none · broken unreadable: error: You must be logged in to the server (Unauthorized) · 2 installations without a kube context, not read: lost, far"; words != want {
+	if want := "prod none · broken unreadable: error: You must be logged in to the server (Unauthorized) (deadline 2m0s per attempt; up to 2 attempts) · 2 installations without a kube context, not read: lost, far"; words != want {
 		t.Errorf("snapshot upgrades:\n%s\nwant\n%s", words, want)
 	}
 }
@@ -363,6 +363,58 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 	}
 	if got := takeCalls(t, log); got["teleport.giantswarm.io-away"] != 1 || len(got) != 1 {
 		t.Fatalf("kubectl calls with away's context: %v", got)
+	}
+}
+
+func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
+	a, out := stubApp(t)
+	dir := t.TempDir()
+	kubectl, _ := upgradeKubectl(t, dir, "prod")
+	a.cfg.Alerts.Kubectl = kubectl
+	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
+	w := a.newWatcher(false, false)
+	w.clock = clk
+	phase(t, dir, "0827-during")
+	w.upgradeCycle(context.Background())
+	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\nkill -KILL $$\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		clk.now = clk.now.Add(time.Minute)
+		w.upgradeCycle(context.Background())
+	}
+	if !strings.Contains(out.String(), "reader failed 2 consecutive ticks: signal: killed (deadline 2m0s") {
+		t.Fatalf("no failure streak: %s", out.String())
+	}
+	upgradeKubectl(t, dir, "prod")
+	clk.now = clk.now.Add(time.Minute)
+	w.upgradeCycle(context.Background())
+	if w.upgradeFailures["prod"] != 0 {
+		t.Fatalf("failure streak not reset: %v", w.upgradeFailures)
+	}
+}
+
+func TestUpgradeRetryDoesNotReportUnreadable(t *testing.T) {
+	a, out := stubApp(t)
+	exe := filepath.Join(t.TempDir(), "kubectl")
+	script := `#!/bin/sh
+if [ "$1" = config ]; then echo prod; exit; fi
+if [ ! -f "$0.once" ]; then touch "$0.once"; kill -KILL $$; fi
+echo '{"items":[]}'
+`
+	if err := os.WriteFile(exe, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.Alerts.Kubectl = exe
+	a.cfg.Alerts.Installations = []config.Installation{{Name: "prod", Context: "prod"}}
+	w := a.newWatcher(false, false)
+	w.upgradeCycle(context.Background())
+	if strings.Contains(out.String(), "unreadable") || w.failed.Load() != 0 {
+		t.Fatalf("successful retry reported a failure: %s", out.String())
+	}
+	if _, err := os.Stat(exe + ".once"); err != nil {
+		t.Fatalf("first attempt did not run: %v", err)
 	}
 }
 

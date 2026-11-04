@@ -277,7 +277,7 @@ func TestRead(t *testing.T) {
 	}
 	t.Setenv(fakeDir, dir)
 	t.Setenv("FAIL", "Unauthorized")
-	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized" || ss[0].NoContext || len(ss[0].Upgrades) != 0 {
+	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized (deadline 10s per attempt; up to 2 attempts)" || ss[0].NoContext || len(ss[0].Upgrades) != 0 {
 		t.Errorf("an unreadable installation: %+v", ss[0])
 	}
 	// A context the kubeconfig lacks is no kube context, not unreadable.
