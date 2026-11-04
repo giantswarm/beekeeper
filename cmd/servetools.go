@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/state/kube"
@@ -113,7 +114,8 @@ func (s *server) tools() []serveTool {
 	return []serveTool{
 		{newTool("lease_list", "List the shared installations: who holds each, since when and what for, and which are free.", "", hintAuditRead), toolLeaseList},
 		{newTool("lease_claim", "Claim a shared installation for the calling agent.",
-			"Refused while another holds it or while it upgrades.", hintAdd,
+			"Returns held, queued or refused first. Queued behind a holder with your grant; refused otherwise or during upgrades. wait retries every 10s, at most 9m.", hintAdd,
+			mcp.WithString("wait", mcp.Description("foreground wait duration, at most 9m (default: claim once)")),
 			mcp.WithString(paramEnvironment, mcp.Required(), mcp.Description("the Environment, an installation's name")),
 			mcp.WithString(paramPurpose, mcp.Required(), mcp.Description("what the installation is for"))), toolLeaseClaim},
 		{newTool("lease_release", "Release an installation: your own, or as the holder's team's supervisor role.", "", hintRemove,
@@ -260,17 +262,59 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	wait, err := time.ParseDuration(req.GetString("wait", "0s"))
+	if err != nil || wait < 0 || wait > claimWaitMax {
+		return nil, usageErr("wait must be a duration from 0s to %s", dur(claimWaitMax))
+	}
+	var result any
+	for waited := time.Duration(0); ; {
+		result, err = c.claimInstallation(name, purpose)
+		if err == nil {
+			return result, nil
+		}
+		var r *claimRefusal
+		if !errors.As(err, &r) {
+			if Code(err) != ExitRefused {
+				return nil, err
+			}
+			r = &claimRefusal{res: name, why: err.Error()}
+		}
+		if waited >= wait {
+			r.waited = waited
+			return nil, refused("%s", r.line())
+		}
+		step := min(claimPoll, wait-waited)
+		if err := claimPause(c.ctx, step); err != nil {
+			return nil, err
+		}
+		waited += step
+		c.app.now = c.app.now.Add(step)
+	}
+}
+
+func (c *call) claimInstallation(name, purpose string) (any, error) {
 	env, err := c.environment(name)
 	if err != nil {
 		return nil, err
+	}
+	st := &state.State{}
+	for _, g := range env.Status.Queue {
+		st.Grants = append(st.Grants, state.Grant{Resource: name, To: kube.PartyOf(g.To), By: kube.PartyOf(g.By), At: g.At.Time})
+	}
+	if env.Status.Released != nil {
+		st.Released = map[string]time.Time{name: env.Status.Released.Time}
 	}
 	if u := env.Status.Upgrade; u != nil {
 		return nil, refused("%s upgrades to %s since %s: claims wait until the upgrade ends", name, u.To, clock(c.app.now, u.Since.Time))
 	}
 	if h := env.Status.Holder; h != nil {
 		if kube.PartyOf(h.Party).Is(c.me) {
-			_, err := fmt.Fprintf(c.out, "%s is already yours (since %s)\n", name, clock(c.app.now, h.Since.Time))
+			_, err := fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, name+" was yours already"))
 			return heldLease{Environment: name, Holder: c.me, Purpose: h.Purpose, Since: h.Since.Time}, err
+		}
+		q := lease.Pending(st, name, true, c.app.now, c.app.cfg.GrantTTL.Duration)
+		if i := slices.IndexFunc(q, func(g state.Grant) bool { return g.To.Is(c.me) }); i >= 0 {
+			return nil, &claimRefusal{res: name, queued: true, why: fmt.Sprintf("number %d behind %q, who holds %s since %s: %s", i+1, partyName(kube.PartyOf(h.Party)), name, clock(c.app.now, h.Since.Time), h.Purpose)}
 		}
 		return nil, c.heldBy(name, *h)
 	}
@@ -282,7 +326,7 @@ func toolLeaseClaim(c *call, req mcp.CallToolRequest) (any, error) {
 		return nil, err
 	}
 	c.store.wrote = true
-	_, err = fmt.Fprintf(c.out, "claimed %s\n", name)
+	_, err = fmt.Fprintln(c.out, claimHeldLine(c.app.now, h.Since.Time, "claimed "+name))
 	return heldLease{Environment: name, Holder: c.me, Purpose: purpose, Since: h.Since.Time}, err
 }
 
