@@ -36,7 +36,7 @@ func fakeDevctl(t *testing.T, script string) {
 }
 
 // labRepo is a repository devctl does not serve.
-const labRepo = "teemow/lab"
+const labRepo = "fixture-person/lab"
 
 // devctlTo is the release a devctl window's merge produced.
 const devctlTo = "v8.1.0"
@@ -575,9 +575,9 @@ func TestMergeChildUnitFailsOnlyForAPerson(t *testing.T) {
 // spelling, and nothing else of devctl's flags.
 func TestSquashArgv(t *testing.T) {
 	for want, argv := range map[string][]string{
-		"bk squash-merge teemow/lab 7":                mergeArgv(labRepo, "--progress"),
-		"bk squash-merge teemow/lab 7 --timeout 10m":  mergeArgv(labRepo, "--timeout", "10m"),
-		"bk squash-merge teemow/lab 7 --timeout 1h0m": mergeArgv(labRepo, "--timeout=1h0m"),
+		"bk squash-merge fixture-person/lab 7":                mergeArgv(labRepo, "--progress"),
+		"bk squash-merge fixture-person/lab 7 --timeout 10m":  mergeArgv(labRepo, "--timeout", "10m"),
+		"bk squash-merge fixture-person/lab 7 --timeout 1h0m": mergeArgv(labRepo, "--timeout=1h0m"),
 	} {
 		if got := strings.Join(squashArgv("bk", labRepo, 7, argv), " "); got != want {
 			t.Errorf("%v: %q, want %q", argv, got, want)
@@ -678,18 +678,18 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 		t.Fatalf("the plain squash merge: %v", err)
 	}
 	raw, _ := os.ReadFile(args) //nolint:gosec // the test's file
-	if got := strings.TrimSpace(string(raw)); got != "squash-merge teemow/lab 7" {
+	if got := strings.TrimSpace(string(raw)); got != "squash-merge fixture-person/lab 7" {
 		t.Errorf("ran %q", got)
 	}
 	d := lastEvent(t, g, testMergedWord)
-	if !strings.Contains(d, "teemow/lab#7 exit 0") || !strings.Contains(d, github.SquashRoute) || !strings.Contains(d, "output in ") {
+	if !strings.Contains(d, "fixture-person/lab#7 exit 0") || !strings.Contains(d, github.SquashRoute) || !strings.Contains(d, "output in ") {
 		t.Errorf("merged event: %q", d)
 	}
 }
 
 // unansweredDoc is a merge refused for a reviewer's unanswered COMMENTED
 // review, as either route's document says it.
-const unansweredDoc = `{"exitCode":5,"verdict":"refused","reason":"unanswered review: 1 item(s) newer than the head wait for an answer: review COMMENTED by pat https://github.com/o/r/pull/7#r; a reply from teemow on the pull request, a new commit or the reviewer's approval clears them","unansweredReviews":[{"kind":"review","login":"pat","state":"COMMENTED","at":"2026-10-11T11:00:00Z","url":"https://github.com/o/r/pull/7#r"}]}`
+const unansweredDoc = `{"exitCode":5,"verdict":"refused","reason":"unanswered review: 1 item(s) newer than the head wait for an answer: review COMMENTED by pat https://github.com/o/r/pull/7#r; a reply from fixture-person on the pull request, a new commit or the reviewer's approval clears them","unansweredReviews":[{"kind":"review","login":"pat","state":"COMMENTED","at":"2026-10-11T11:00:00Z","url":"https://github.com/o/r/pull/7#r"}]}`
 
 // On either route, devctl pr merge's and the plain squash merge's, a merge a
 // reviewer's unanswered review refuses merges nothing, ends with exit 5 and

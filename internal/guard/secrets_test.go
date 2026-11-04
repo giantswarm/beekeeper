@@ -377,7 +377,7 @@ func TestSecretGuardRefusesOp(t *testing.T) {
 		"env OP_ACCOUNT=team op vault list",
 		"command op whoami",
 		"exec op whoami",
-		"sudo -u teemow op whoami",
+		"sudo -u fixture-person op whoami",
 		"timeout 30 op whoami",
 		"nohup op whoami",
 		"setsid op whoami",

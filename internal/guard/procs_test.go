@@ -80,7 +80,7 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"ps -o pid=,comm= -p 1234",
 		"ps -p 1234",
 		"ps -C claude -o pid,etime",
-		"ps -u teemow -o pid,comm",
+		"ps -u fixture-person -o pid,comm",
 		"ps -eo pid,comm --sort=-rss | head",
 		"ps axc",
 		"ps axo pid,comm",

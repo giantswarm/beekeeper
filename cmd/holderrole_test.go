@@ -11,7 +11,7 @@ import (
 
 const (
 	runName  = "Supervisor run 82"
-	runTitle = "klaus-lab-14"
+	runTitle = "fixture-lab-14"
 	runID    = "sup-82"
 )
 

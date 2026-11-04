@@ -17,7 +17,7 @@ func TestBoardReadRefusal(t *testing.T) {
 		"item-list after a cd":               {"cd /tmp && gh project item-list 1 --owner @me", true},
 		"item-list piped into jq":            {"gh project item-list 273 --owner giantswarm -L 3000 --format json | jq '.items[]'", true},
 		"item-list narrowed by a query":      {`gh project item-list 273 --owner giantswarm --query "repo:giantswarm/beekeeper -status:Done"`, false},
-		"item-list narrowed, = form":         {`gh project item-list 273 --owner giantswarm --query="assignee:teemow"`, false},
+		"item-list narrowed, = form":         {`gh project item-list 273 --owner giantswarm --query="assignee:fixture-person"`, false},
 		"item-add":                           {"gh project item-add 273 --owner giantswarm --url https://github.com/giantswarm/beekeeper/issues/487", false},
 		"item-edit by item id":               {"gh project item-edit --id PVTI_x --project-id PVT_y --field-id PVTF_z --single-select-option-id abc", false},
 		"project view":                       {"gh project view 273 --owner giantswarm", false},
