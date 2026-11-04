@@ -52,9 +52,12 @@ func TestSystemdSetupFiles(t *testing.T) {
 		t.Errorf("without a desktop scope: files %d, skipped %v", len(files), skipped)
 	}
 
-	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, TeleportEvery: 5 * time.Minute})
+	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, TeleportEvery: 5 * time.Minute, TeleportLoginTimeout: 20 * time.Minute})
 	if len(files) != 5 {
 		t.Fatalf("with the keeper: files %v", files)
+	}
+	if !strings.Contains(string(files[3].Content), "TimeoutStartSec=2460s\n") {
+		t.Error("keeper service does not allow two configured 20-minute login attempts plus cleanup")
 	}
 	for i, want := range []struct {
 		path, content string

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,29 +18,23 @@ func TestTeleportServiceAllowsLoginBudgets(t *testing.T) {
 	// the callback retry. Its outer deadline must allow the login budgets
 	// the command actually gives its attempts. No real tsh or clock wait is
 	// needed: inspect the deadlines inside synthetic successful renewals.
-	var limit time.Duration
-	for line := range strings.Lines(TeleportService) {
-		if raw, ok := strings.CutPrefix(strings.TrimSpace(line), "TimeoutStartSec="); ok {
-			if raw == "infinity" {
-				limit = 0
-				continue
-			}
-			var err error
-			limit, err = time.ParseDuration(strings.ReplaceAll(raw, "min", "m"))
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
 	for _, tc := range []struct {
 		name     string
 		timeout  time.Duration
 		attempts int
+		limit    int64 // seconds, including time for status reads and cleanup
 	}{
-		{"long login", 20 * time.Minute, 1},
-		{"callback retry", 10 * time.Minute, 2},
+		{"default login", 3 * time.Minute, 1, 900},
+		{"long login", 20 * time.Minute, 1, 2460},
+		{"callback retry", 10 * time.Minute, 2, 1260},
+		{"fractional seconds", 20*time.Minute + time.Nanosecond, 1, 2462},
+		{"largest duration", time.Duration(1<<63 - 1), 1, 18_446_744_134},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			limit := teleportStartLimit(t, TeleportServiceForLoginTimeout(tc.timeout))
+			if limit != tc.limit {
+				t.Errorf("unit timeout is %ds, want %ds", limit, tc.limit)
+			}
 			root := t.TempDir()
 			now := time.Now()
 			calls := 0
@@ -73,9 +68,37 @@ func TestTeleportServiceAllowsLoginBudgets(t *testing.T) {
 			if calls != tc.attempts {
 				t.Fatalf("got %d attempts, want %d", calls, tc.attempts)
 			}
-			if limit > 0 && limit < budget {
-				t.Errorf("oneshot service stops after %s, before its %d login attempt(s) can use their %s budget", limit, calls, budget.Round(time.Second))
+			if float64(limit) <= budget.Seconds() {
+				t.Errorf("oneshot service stops after %ds, before its %d login attempt(s) can use their %s budget and finish cleanup", limit, calls, budget.Round(time.Second))
 			}
 		})
 	}
+}
+
+// Read the seconds/minutes used by the unit. A missing or unbounded limit
+// would lose the service's guard against a hung tsh status.
+func teleportStartLimit(t *testing.T, unit string) int64 {
+	t.Helper()
+	for line := range strings.Lines(unit) {
+		raw, ok := strings.CutPrefix(strings.TrimSpace(line), "TimeoutStartSec=")
+		if !ok {
+			continue
+		}
+		multiplier := int64(1)
+		value, ok := strings.CutSuffix(raw, "s")
+		if !ok {
+			value, ok = strings.CutSuffix(raw, "min")
+			multiplier = 60
+		}
+		if !ok {
+			t.Fatalf("service has no finite timeout in seconds or minutes: %q", raw)
+		}
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n <= 0 {
+			t.Fatalf("invalid service timeout: %q: %v", raw, err)
+		}
+		return n * multiplier
+	}
+	t.Fatal("service has no explicit start timeout")
+	return 0
 }

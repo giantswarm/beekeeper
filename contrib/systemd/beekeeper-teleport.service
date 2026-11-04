@@ -14,7 +14,7 @@ After=graphical-session.target
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/beekeeper --as "teleport keeper" teleport renew --keeper
-# Each login attempt has teleport.loginTimeout; a callback failure can retry
-# once. Let the command enforce those budgets and finish its cleanup.
-TimeoutStartSec=infinity
+# Install extends this bound for both configured login attempts plus status
+# reads and cleanup. A hung status command must still end.
+TimeoutStartSec=15min
 MemoryMax=512M
