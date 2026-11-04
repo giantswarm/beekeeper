@@ -117,6 +117,7 @@ func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string
 	if err != nil {
 		return nil, err
 	}
+	doc.snapshot = &fileSnapshot{} // CopyFile requires an absent destination.
 	if name != "" || namespace != "" {
 		if err := doc.rename(name, namespace); err != nil {
 			return nil, fmt.Errorf("%s: %w", src.File, err)
@@ -278,6 +279,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	raw, err := os.ReadFile(file) //nolint:gosec // the caller's SOPS file
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		doc.snapshot = &fileSnapshot{}
 		return doc, nil
 	case err != nil:
 		return nil, err
@@ -287,6 +289,7 @@ func (o *Ops) document(ctx context.Context, file string, nw *NewSecret) (*docume
 	case err != nil:
 		return nil, fmt.Errorf("%s: %w", file, err)
 	case skel != nil:
+		skel.snapshot = snapshotOf(raw, true)
 		return skel, nil
 	}
 	return o.decrypt(ctx, file)
