@@ -46,8 +46,8 @@ const sweptTags = `button|a|summary|input|\[role=["']?(?:button|menuitem|link)["
 // or a form value by ref) and its own words (the summary the model wrote, a
 // script's code).
 type target struct {
-	ref, words string
-	script     bool
+	ref, words, tab string
+	script          bool
 }
 
 // subscriptionRefusal returns why the hook refuses a Chrome call that clicks
@@ -56,7 +56,7 @@ func subscriptionRefusal(ev event) string {
 	if !isBrowserTool(ev.ToolName) {
 		return ""
 	}
-	var labels map[string]string
+	var labels map[string]map[string]string
 	for _, t := range clickTargets(ev.ToolName, ev.ToolInput) {
 		if m := controlWords.FindString(t.words); m != "" {
 			what := "the click's summary"
@@ -78,9 +78,9 @@ func subscriptionRefusal(ev event) string {
 		if labels == nil {
 			labels = refLines(ev.TranscriptPath)
 		}
-		if m := controlWords.FindString(labels[t.ref]); m != "" {
+		if m := controlWords.FindString(labels[t.tab][t.ref]); m != "" {
 			return subscriptionReason(fmt.Sprintf("the click's %s is %s (%q) in the page as the session last read it: %s",
-				t.ref, SubscriptionControls, m, strings.TrimSpace(labels[t.ref])))
+				t.ref, SubscriptionControls, m, strings.TrimSpace(labels[t.tab][t.ref])))
 		}
 	}
 	return ""
@@ -107,11 +107,11 @@ func clickTargets(tool string, input map[string]any) []target {
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(clicking, action) {
 			ref, _ := input[refKey].(string)
-			return []target{{ref: ref, words: summary}}
+			return []target{{ref: ref, words: summary, tab: tabOf(input[tabKey])}}
 		}
 	case chromeForm:
 		ref, _ := input[refKey].(string)
-		return []target{{ref: ref, words: summary}}
+		return []target{{ref: ref, words: summary, tab: tabOf(input[tabKey])}}
 	case chromeScript:
 		if code, _ := input[textKey].(string); scriptedClick.MatchString(code) {
 			return []target{{words: code, script: true}}
@@ -133,14 +133,24 @@ func clickTargets(tool string, input map[string]any) []target {
 // refPattern is an element's ref in a page read (read_page, find).
 var refPattern = regexp.MustCompile(`\bref_\d+\b`)
 
-// refLines are the lines of the transcript's page reads that name each ref,
-// the last read's line for a ref read again.
-func refLines(transcript string) map[string]string {
-	lines := map[string]string{}
-	scanResults(transcript, func(text string) {
+// refLines are the last labels for each ref on each tab, taken only from
+// matched browser page reads. Other tool results cannot supply page evidence.
+func refLines(transcript string) map[string]map[string]string {
+	lines := map[string]map[string]string{}
+	scanJoined(transcript, func(call chromeAction, text string) {
+		if tool := chromeTool(call.name); tool != chromeReadPage && tool != chromeFind {
+			return
+		}
+		tab := tabOf(call.input[tabKey])
+		if tab == "" {
+			return
+		}
+		if lines[tab] == nil {
+			lines[tab] = map[string]string{}
+		}
 		for l := range strings.SplitSeq(text, "\n") {
 			for _, ref := range refPattern.FindAllString(l, -1) {
-				lines[ref] = l
+				lines[tab][ref] = l
 			}
 		}
 	})

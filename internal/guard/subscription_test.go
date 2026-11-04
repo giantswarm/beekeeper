@@ -2,8 +2,6 @@ package guard
 
 import (
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,14 +26,10 @@ const issueRead = `- heading "browse: a scripted click" [ref_3]
 // click on the element the step names passes, and so does a typed text, a
 // read and a script that clicks nothing.
 func TestSubscriptionRefusal(t *testing.T) {
-	transcript := filepath.Join(t.TempDir(), "t.jsonl")
-	lines := []string{
-		resultLine(strconv.Quote(strings.ReplaceAll(issueRead, "Notifications", "Customize"))),
-		resultLine(`[{"type":"text","text":` + strconv.Quote(issueRead) + `}]`),
-	}
-	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	transcript := drawsTranscript(t,
+		drawsCall{chromeReadPage, map[string]any{tabKey: 7}, strings.ReplaceAll(issueRead, "Notifications", "Customize"), ""},
+		drawsCall{chromeFind, map[string]any{tabKey: 7}, issueRead, ""},
+	)
 	click := func(ref, summary string) map[string]any {
 		return tabInput(leftClick, map[string]any{refKey: ref, summaryKey: summary})
 	}
@@ -89,5 +83,60 @@ func TestSubscriptionRefusal(t *testing.T) {
 	ev := toolEvent("mcp__Claude_in_Chrome__"+chromeComputer, click("", "Clicks Subscribe"))
 	if d := decideEvent(t, Hook{}, ev); d == nil || d.PermissionDecision != decisionDeny {
 		t.Errorf("the desktop's spelling decided %+v, want a refusal", d)
+	}
+}
+
+func TestAuditSubscriptionIgnoresUnrelatedResults(t *testing.T) {
+	read := func(tool, tab, label string) turnCall {
+		return turnCall{tool, map[string]any{tabKey: tab}, `- button "` + label + `" [ref_45]`}
+	}
+	subscribe := read(browserTools+chromeReadPage, "7", "Subscribe")
+	ordinary := read(browserTools+chromeReadPage, "7", "Continue")
+	for name, tc := range map[string]struct {
+		calls []turnCall
+		deny  bool
+	}{
+		"subscription baseline":                            {[]turnCall{subscribe}, true},
+		"shell cannot replace subscription":                {[]turnCall{subscribe, read("Bash", "7", "Continue")}, true},
+		"other browser result cannot replace subscription": {[]turnCall{subscribe, read(browserTools+chromeScript, "7", "Continue")}, true},
+		"other tab cannot replace subscription":            {[]turnCall{subscribe, read(browserTools+chromeFind, "8", "Continue")}, true},
+		"other tab cannot block ordinary control":          {[]turnCall{ordinary, read(browserTools+chromeReadPage, "8", "Subscribe")}, false},
+		"shell cannot block ordinary control":              {[]turnCall{ordinary, read("Bash", "7", "Subscribe")}, false},
+		"same tab can update label":                        {[]turnCall{subscribe, read(browserTools+chromeFind, "7", "Continue")}, false},
+		"same tab can identify subscription":               {[]turnCall{ordinary, read(browserTools+chromeFind, "7", "Notifications")}, true},
+		"unmatched result is ignored":                      {nil, false},
+		"tabless read is ignored":                          {[]turnCall{read(browserTools+chromeReadPage, "", "Subscribe")}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			transcript := turnTranscript(t, tc.calls...)
+			if name == "unmatched result is ignored" {
+				// A result without a matching tool call cannot supply a label.
+				f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = f.WriteString(resultLine(`"- button \"Subscribe\" [ref_45]"`) + "\n")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			click := tabInput(leftClick, map[string]any{refKey: "ref_45"})
+			for _, batch := range []bool{false, true} {
+				tool, input := browserTools+chromeComputer, click
+				if batch {
+					tool = browserTools + chromeBatch
+					input = map[string]any{actionsKey: []any{batchAction(chromeComputer, tabInput(leftClick, map[string]any{refKey: "ref_99", tabKey: "8"})), batchAction(chromeComputer, click)}}
+				}
+				reason := subscriptionRefusal(event{ToolName: tool, ToolInput: input, TranscriptPath: transcript})
+				// Each action uses its own tab when resolving refs.
+				want := tc.deny
+				if (reason != "") != want {
+					t.Errorf("batch=%v: refusal %q, want deny=%v", batch, reason, want)
+				}
+			}
+		})
 	}
 }
