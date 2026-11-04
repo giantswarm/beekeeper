@@ -40,7 +40,7 @@ import (
 
 const (
 	// HoldPrefix starts the target of an upgrade's automatic hold,
-	// upgrade:<installation>/<cluster>.
+	// upgrade:<installation>/<namespace>/<cluster>.
 	HoldPrefix = "upgrade:"
 
 	releaseLabel      = "release.giantswarm.io/version"
@@ -141,7 +141,8 @@ type Upgrade struct {
 
 // Detect returns the upgrades running on the clusters in objs at now, in the
 // clusters' order. held says whether a cluster's upgrade hold is active: an
-// upgrade that began runs on until its cluster has rolled.
+// upgrade that began runs on until its cluster has rolled. The callback
+// receives namespace/name.
 func Detect(objs []Object, now time.Time, held func(cluster string) bool) []Upgrade {
 	type parts struct {
 		cp, pools   Progress
@@ -182,7 +183,7 @@ func Detect(objs []Object, now time.Time, held func(cluster string) bool) []Upgr
 		}
 		u := Upgrade{Cluster: o.Metadata.Name, Namespace: o.Metadata.Namespace, ControlPlane: p.cp, NodePools: p.pools}
 		if !begun(o, now, &u) {
-			if !held(u.Cluster) || (p.rolledOut && !p.clusterRoll) {
+			if !held(u.clusterKey()) || (p.rolledOut && !p.clusterRoll) {
 				continue
 			}
 			u.Rolling = true
@@ -266,14 +267,17 @@ func deref(p *int32) int32 {
 	return *p
 }
 
-// HoldTarget is the hold target of a cluster's upgrade.
+func (u Upgrade) clusterKey() string { return u.Namespace + "/" + u.Cluster }
+
+// HoldTarget is the hold target of a cluster's upgrade. cluster must be
+// namespace/name; a bare name is a legacy target with no known namespace.
 func HoldTarget(installation, cluster string) string {
 	return HoldPrefix + installation + "/" + cluster
 }
 
-// Describe is an upgrade in words: <installation>/<cluster> <from> → <to>.
+// Describe is an upgrade in words: <installation>/<namespace>/<cluster> <from> → <to>.
 func Describe(installation string, u Upgrade) string {
-	return fmt.Sprintf("%s/%s %s → %s", installation, u.Cluster, orUnknown(u.From), orUnknown(u.To))
+	return fmt.Sprintf("%s/%s %s → %s", installation, u.clusterKey(), orUnknown(u.From), orUnknown(u.To))
 }
 
 func orUnknown(v string) string {
@@ -286,7 +290,7 @@ func orUnknown(v string) string {
 // reasonHead starts an upgrade hold's reason.
 const reasonHead = "upgrade "
 
-// Line is a hold's begin line, UPGRADE <installation>/<cluster> <from> → <to>.
+// Line is a hold's begin line, UPGRADE <installation>/<namespace>/<cluster> <from> → <to>.
 func Line(h state.Hold) string { return "UPGRADE " + strings.TrimPrefix(h.Reason, reasonHead) }
 
 // EndLine is a hold's end line.
@@ -315,7 +319,8 @@ func Held(st *state.State, installation string, now time.Time) (state.Hold, bool
 }
 
 // HeldClusters says which clusters of which installation hold an upgrade,
-// lifted or not: an upgrade whose hold was lifted still runs.
+// lifted or not: an upgrade whose hold was lifted still runs. Cluster keys
+// are namespace/name. Legacy bare-name targets never match a namespaced key.
 func HeldClusters(st *state.State, now time.Time) func(installation, cluster string) bool {
 	held := map[string]bool{}
 	for _, h := range st.Holds {
@@ -331,11 +336,13 @@ func HeldClusters(st *state.State, now time.Time) func(installation, cluster str
 // longer runs (ended), nor for a rollout that runs on StallAfter after its
 // hold began (ended). A lifted hold stays lifted while its upgrade runs; a
 // different upgrade of the cluster (another target release) replaces it with
-// an active hold. Only a readable installation is reconciled.
+// an active hold. Legacy targets without a namespace are ended rather than
+// transferring an ambiguous lift to a cluster; detected upgrades get fresh
+// holds. Only a readable installation is reconciled.
 func Reconcile(st *state.State, installation string, running []Upgrade, now time.Time, by state.Party) (begun, ended []state.Hold) {
 	want := map[string]Upgrade{}
 	for _, u := range running {
-		want[HoldTarget(installation, u.Cluster)] = u
+		want[HoldTarget(installation, u.clusterKey())] = u
 	}
 	have := map[string]bool{}
 	st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool {
@@ -364,7 +371,7 @@ func Reconcile(st *state.State, installation string, running []Upgrade, now time
 		}
 	}
 	for _, u := range running {
-		t := HoldTarget(installation, u.Cluster)
+		t := HoldTarget(installation, u.clusterKey())
 		if have[t] || u.Rolling {
 			continue
 		}

@@ -135,7 +135,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 			t.Fatalf("first reading: %s read %d times, want %d (the upgrade's events once): %v", in.Name, got[in.Name], want, got)
 		}
 	}
-	if !strings.Contains(out.String(), "UPGRADE prod/mc 35.0.1 → 35.1.1") {
+	if !strings.Contains(out.String(), "UPGRADE prod/org-mc/mc 35.0.1 → 35.1.1") {
 		t.Fatalf("no UPGRADE line:\n%s", out.String())
 	}
 	// 08:30:30 to 08:34:30: the upgrading installation every interval, the
@@ -148,7 +148,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	if got = ticks(1); len(got) != 5 {
 		t.Fatalf("at upgrades.every: %v", got)
 	}
-	if !strings.Contains(out.String(), "UPGRADE ENDED prod/mc") {
+	if !strings.Contains(out.String(), "UPGRADE ENDED prod/org-mc/mc") {
 		t.Fatalf("no UPGRADE ENDED line:\n%s", out.String())
 	}
 	// 08:35:30 to 08:40: quiet, one read of each installation.
@@ -217,7 +217,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	if got := takeCalls(t, log); got[upgrading] == 0 || got["b"] != 1 {
 		t.Fatalf("the standby watch did not read: %v", got)
 	}
-	if !held() || !strings.Contains(out.String(), "UPGRADE prod/mc 35.0.1 → 35.1.1") {
+	if !held() || !strings.Contains(out.String(), "UPGRADE prod/org-mc/mc 35.0.1 → 35.1.1") {
 		t.Fatalf("no hold at UPGRADE:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "UPGRADES read by the standby watch") {
@@ -231,7 +231,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	if got := takeCalls(t, log); got[upgrading] != 1 || got["b"] != 0 {
 		t.Fatalf("after the upgrade: %v", got)
 	}
-	if held() || !strings.Contains(out.String(), "UPGRADE ENDED prod/mc") {
+	if held() || !strings.Contains(out.String(), "UPGRADE ENDED prod/org-mc/mc") {
 		t.Fatalf("the hold outlived UPGRADE ENDED:\n%s", out.String())
 	}
 

@@ -2029,7 +2029,7 @@ workload cluster on an older release than its management cluster is not upgradin
 upgrades from is the one the label changed from, else the one cluster-api-events' `Upgrading…`
 event names.
 
-While it runs, the installation is held: a hold `upgrade:<installation>/<cluster>` by
+While it runs, the installation is held: a hold `upgrade:<installation>/<namespace>/<cluster>` by
 `beekeeper watch`, until the upgrade ends, whose reason names the cluster and both releases. The
 merge gate refuses the merges of every lane whose `installation` it is (exit 77, with the
 reason), `lease claim <installation>` is refused unless an upgrade-unblock grant admits it (below), `lanes` shows the lanes held and `snapshot` the
@@ -2041,12 +2041,14 @@ whose kube context is not in the kubeconfig kubectl reads is not read and keeps 
 the watch names all of them once, in one `UPGRADES: <n> installations without a kube context, not
 read: …` line (`ALERTS: …` for the alerts reader), and `snapshot` in one entry of its upgrades
 and one line of its alerts, never one line each. `hold set`
-refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts one by hand
+refuses an `upgrade:` target; `hold lift upgrade:<installation>/<namespace>/<cluster>` lifts one by hand
 (a workload cluster's roll stuck on a drain need not stop the installation's merges): the hold
 stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade
 of the cluster (another target release) holds the installation again. `hold list` and `status`
 show the lifted hold and who lifted it; `hold list` marks an upgrade hold that has stood for a day
 `active, stale`, longer than the watch lets an upgrade it reads run: worth a look.
+Legacy targets without a namespace are retired on the next successful reading. Detected
+upgrades receive fresh active holds: an old lift cannot safely be assigned to a namespace.
 
 
 The one claim an upgrade admits is the work that unblocks it: a node drain stalled on a
