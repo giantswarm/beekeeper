@@ -64,9 +64,6 @@ func Install(ctx context.Context, e Env) error {
 		return err
 	}
 	before := m.encode()
-	var prior Manifest
-	// Detach the snapshot before planning mutates maps and slices.
-	_ = json.Unmarshal(before, &prior)
 	p := &plan{home: e.Spec.Home}
 	if err := e.planHooks(p, &m); err != nil {
 		return err
@@ -89,18 +86,8 @@ func Install(ctx context.Context, e Env) error {
 	m.addDirs(e.StateDir)
 	failAgyHooks(p, e.AgyHooks, agyRejected)
 	if after := m.encode(); !bytes.Equal(before, after) {
-		prior.Previous = nil
-		m.Previous = append(m.Previous, prior)
-		pending := m.encode()
 		p.first("record", e.manifest(), "what install writes, for uninstall", func() error {
-			return writeFile(e.manifest(), pending)
-		})
-	}
-	if len(m.Previous) > 0 {
-		m.Previous = nil
-		complete := m.encode()
-		p.add("record", e.manifest(), "install completed", func() error {
-			return writeFile(e.manifest(), complete)
+			return writeFile(e.manifest(), after)
 		})
 	}
 	return p.run(e.Out, e.DryRun)
@@ -114,13 +101,6 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	m, err := readManifest(e.manifest())
 	if err != nil {
 		return err
-	}
-	for _, old := range m.Previous {
-		for path := range old.Files {
-			if _, ok := m.Files[path]; !ok {
-				m.Files[path] = old.Files[path]
-			}
-		}
 	}
 	p := &plan{home: e.Spec.Home}
 	if e.Setup.Available() {
@@ -451,8 +431,6 @@ func (p *plan) tilde(s string) string {
 
 // Manifest is what install wrote, read by the next install and uninstall.
 type Manifest struct {
-	// Previous retains ownership candidates until every install step succeeds.
-	Previous []Manifest `json:"previous,omitempty"`
 	// Files are the files install wrote and the SHA-256 of their content.
 	Files map[string]string `json:"files,omitempty"`
 	// Dirs are the directories install created.
@@ -539,10 +517,7 @@ func (m *Manifest) addDirs(dir string) {
 // owns reports whether install wrote the file at path with content cur.
 func (m Manifest) owns(path string, cur []byte) bool {
 	h, ok := m.Files[path]
-	if ok && h == sum(cur) {
-		return true
-	}
-	return slices.ContainsFunc(m.Previous, func(old Manifest) bool { return old.owns(path, cur) })
+	return ok && h == sum(cur)
 }
 
 // ownsTarget reports whether install wrote the file the symlink at path
@@ -645,25 +620,4 @@ func writeFile(path string, content []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
-}
-
-// hookCandidates includes entries from interrupted installs as well as the
-// current plan. Matching exact entries preserves unrelated user edits.
-func (m Manifest) hookCandidates() []Hook {
-	out := slices.Clone(m.Hooks)
-	for _, old := range m.Previous {
-		out = append(out, old.Hooks...)
-	}
-	return out
-}
-
-func (m Manifest) ownsHook(cur json.RawMessage, codex bool) bool {
-	entry := m.AgyHook
-	if codex {
-		entry = m.CodexHook
-	}
-	if len(entry) > 0 && sameJSON(cur, entry) {
-		return true
-	}
-	return slices.ContainsFunc(m.Previous, func(old Manifest) bool { return old.ownsHook(cur, codex) })
 }

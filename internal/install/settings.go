@@ -108,7 +108,7 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 		}
 		what := e.Settings + ": " + want.Event + " hook"
 		mine := slices.IndexFunc(m.Hooks, func(h Hook) bool { return h.Event == want.Event })
-		switch i, state := find(list, want, m.hookCandidates()); state {
+		switch i, state := find(list, want, m.Hooks, mine); state {
 		case fileSame:
 			p.add("ok", what, "", nil)
 		case fileUpdated:
@@ -158,23 +158,19 @@ func writeVerb(existed bool) string {
 }
 
 // find is where want stands in list: as it is, as the entry install added
-// earlier (one of added) or one running the same
+// earlier (mine, an index into added, -1 for none) or one running the same
 // command with another matcher or timeout (fileUpdated), as a beekeeper hook
 // of the same subcommand with another command (fileKept), or absent
 // (fileNew).
-func find(list []json.RawMessage, want Hook, added []Hook) (int, fileState) {
+func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileState) {
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
 		return 0, fileSame
 	}
-	for _, candidate := range added {
-		if candidate.Event != want.Event {
-			continue
-		}
-		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, candidate.Entry) }); i >= 0 {
+	if mine >= 0 {
+		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, added[mine].Entry) }); i >= 0 {
 			return i, fileUpdated
 		}
 	}
-
 	if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameCommand(r, want.Entry) }); i >= 0 {
 		return i, fileUpdated
 	}
@@ -187,7 +183,7 @@ func find(list []json.RawMessage, want Hook, added []Hook) (int, fileState) {
 
 // planUnhooks removes the hooks install added and the keys it created.
 func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.hookCandidates()) == 0 {
+	if len(m.Hooks) == 0 {
 		return nil
 	}
 	s, err := readSettings(e.Settings)
@@ -195,7 +191,7 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 		return err
 	}
 	changed := false
-	for _, h := range m.hookCandidates() {
+	for _, h := range m.Hooks {
 		list, err := s.hooks(h.Event)
 		if err != nil {
 			return err
@@ -359,7 +355,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) (string, error) {
 	switch {
 	case ok && sameJSON(cur, want):
 		p.add("ok", what, "", nil)
-	case ok && (m.ownsHook(cur, false) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
+	case ok && (len(m.AgyHook) > 0 && sameJSON(cur, m.AgyHook) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
 		s.top.set(project.Name, want)
 		m.AgyHook = want
 		changed = true
@@ -423,7 +419,7 @@ func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error 
 		return err
 	}
 	cur, ok := s.top.get(project.Name)
-	if !ok || !m.ownsHook(cur, false) {
+	if !ok || !sameJSON(cur, m.AgyHook) {
 		return nil
 	}
 	s.top.del(project.Name)
@@ -918,7 +914,7 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, previousHook json.RawMessa
 	want := CodexHook(e.Exe)
 	what := path + ": " + project.Name + " PreToolUse hook"
 	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
-		if sameJSON(r, want) || len(previousHook) > 0 && sameJSON(r, previousHook) || m.ownsHook(r, true) {
+		if sameJSON(r, want) || len(previousHook) > 0 && sameJSON(r, previousHook) {
 			return true
 		}
 		bin, _, _ := codexHookBinary(r)
@@ -970,18 +966,18 @@ func (e Env) planCodexUnhooks(p *plan, m Manifest, removed map[string]bool) erro
 	if len(m.CodexHook) == 0 || e.CodexHooks == "" {
 		return nil
 	}
-	if err := planCodexUnhooksFile(p, m, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
+	if err := planCodexUnhooksFile(p, m.CodexHook, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
 		return err
 	}
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := planCodexUnhooksFile(p, m, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
+		if err := planCodexUnhooksFile(p, m.CodexHook, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func planCodexUnhooksFile(p *plan, m Manifest, path string, keys []string, created bool, removed map[string]bool) error {
+func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []string, created bool, removed map[string]bool) error {
 	if path == "" || symlink(path) {
 		return nil
 	}
@@ -994,7 +990,7 @@ func planCodexUnhooksFile(p *plan, m Manifest, path string, keys []string, creat
 		return err
 	}
 	kept := slices.DeleteFunc(slices.Clone(list), func(r json.RawMessage) bool {
-		return m.ownsHook(r, true)
+		return sameJSON(r, hook)
 	})
 	if len(kept) == len(list) {
 		return nil
