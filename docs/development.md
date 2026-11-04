@@ -510,6 +510,13 @@ runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
 runs and `cache clear go`. Unwrapped compiler processes and open files keep
 caches intact. The module cache is never cleared by this step.
 
+A direct `beekeeper run -- go build ./...` that exits 137 is retried once
+with `-p=2` appended to `GOFLAGS` and `GOMAXPROCS=4`, reducing peak compiler
+memory under the cap. The retry logs both bounds and preserves unrelated
+`GOFLAGS`. Exit 137 is treated as a possible cap kill; no kernel journal
+access is required. Other failures and commands are not retried. Shell
+wrappers such as `sh -c 'go build ./...'` do not use this retry.
+
 Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
 place are removed with `git worktree remove` after the existing six-hour
 grace. A task is finished when its pull request merged or a successful

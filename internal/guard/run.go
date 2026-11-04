@@ -391,12 +391,23 @@ func ParseWait(s string) (time.Duration, error) {
 
 // Run runs argv in a capped scope and returns its exit code: the command's,
 // 128+signal when a signal ended it, ExitBusy when the wait ran out.
+// A direct go build killed with exit 137 is retried once with -p=2 and
+// GOMAXPROCS=4 to reduce peak compiler memory.
 // Without a user systemd, or inside a capped scope already, it execs argv.
 // In the agent sandbox (o.Sandbox), which keeps the user systemd out of
 // reach, the host's broker caps it; without a broker it refuses, 1.
 // A run of a session that holds a slot already joins that slot at once: its
 // scope goes into the slot's slice and shares the slot's cap.
 func Run(o Options, argv []string) int {
+	rc := run(o, argv, false)
+	if rc == 137 && len(argv) > 1 && filepath.Base(argv[0]) == "go" && argv[1] == "build" {
+		return run(o, argv, true)
+	}
+	return rc
+}
+
+// run completes cleanup, including releasing the slot, before Run retries.
+func run(o Options, argv []string, boundedGo bool) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
 	kubeEnv, cleanupKube, err := runKubeconfig()
 	if err != nil {
@@ -474,6 +485,12 @@ func Run(o Options, argv []string) int {
 	defer cleanup()
 	env = append(env, kubeEnv...)
 	env = append(env, cpuEnv(o)...)
+	if boundedGo {
+		// Keep unrelated caller flags; Go uses the last occurrence of -p.
+		flags := strings.TrimSpace(os.Getenv("GOFLAGS") + " -p=2")
+		env = append(env, "GOFLAGS="+flags, "GOMAXPROCS=4")
+		logf("retrying go build once after exit 137 with GOFLAGS=-p=2 and GOMAXPROCS=4")
+	}
 	if o.GoCache != "" {
 		release, ok := holdGoCache(o, logf)
 		if !ok {
