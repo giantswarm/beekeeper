@@ -57,6 +57,12 @@ func TestWorkerRulesKeepAgentlabProofsOutOfTheSlot(t *testing.T) {
 	}
 }
 
+func TestWorkerRulesKeepDevctlWaitsOutOfTheSlot(t *testing.T) {
+	if !strings.Contains(WorkerRules(), "devctl waits/merges: never under `timeout` or `beekeeper run`") {
+		t.Error("the worker rules must keep devctl waits outside beekeeper run")
+	}
+}
+
 // The budgets a worker's context keeps, in bytes at the measured 2.7 bytes
 // per token of this text: the core rules at most 1,000 tokens, a topic
 // skill at most 700, its description at most 60.

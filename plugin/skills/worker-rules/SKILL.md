@@ -19,7 +19,7 @@ One task; stricter desk rules win.
 - **Rounds.** Focused checks; one push per round. Read saved failures; rerun only failures (`-run`); `set -o pipefail`. Reviews: proofs; CI runs full checks.
 - **Git.** No force push (`--force-with-lease` too). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no `git stash`.
 - **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
-- **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`; an agentlab proof only waits: never under `beekeeper run`.
+- **No polling**: no watch/sleep loops; devctl waits/merges: never under `timeout` or `beekeeper run`; an agentlab proof only waits: never under `beekeeper run`.
 - **Stop**: kill by PID, gated runs by `beekeeper gate stop`. Never hard-delete: move aside.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
 
