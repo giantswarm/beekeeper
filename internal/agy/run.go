@@ -341,17 +341,29 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
+	defer func() { _ = stdinPipe.Close() }()
+	// Own the output pipes so Wait can reap the process independently of
+	// stdout EOF without closing unread final events or quota diagnostics.
+	stdoutPipe, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	stderrPipe, err := cmd.StderrPipe()
+	defer func() { _ = stdoutPipe.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
+	stderrPipe, stderrWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	defer func() { _ = stderrPipe.Close() }()
+	defer func() { _ = stderrWriter.Close() }()
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	processExited := make(chan error, 1)
+	go func() { processExited <- cmd.Wait() }()
 
 	var (
 		quotaMu   sync.Mutex
@@ -483,18 +495,39 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 		busy = true
 	}
 
-	// drain waits for both readers to reach EOF before cmd.Wait closes
-	// their pipes, so no line agy wrote last (its AGY_ERROR) is lost. Only
-	// a descendant holding a pipe open past drainWait gets it closed under
-	// its reader.
+	handleEvent := func(ev streamEvent, feed bool) {
+		switch ev.Event {
+		case eventInit:
+			ready, busy = true, false
+			if feed {
+				feedIfIdle()
+			}
+		case "step_update":
+			if ev.StepUpdate != nil && ev.StepUpdate.StepType == "user_input" {
+				_ = Confirm(inbox)
+			}
+		case "result":
+			_ = finishTurn(inbox)
+			busy = false
+			if feed {
+				feedIfIdle()
+			}
+		}
+	}
+
+	// drain preserves final acknowledgements and diagnostics after process
+	// exit or cancellation. A descendant retaining an output pipe cannot
+	// postpone starting this deadline by keeping stdout open.
 	drain := func(events <-chan streamEvent, stderrDone <-chan struct{}) {
 		timer := time.NewTimer(drainWait)
 		defer timer.Stop()
 		for events != nil || stderrDone != nil {
 			select {
-			case _, ok := <-events:
+			case ev, ok := <-events:
 				if !ok {
 					events = nil
+				} else {
+					handleEvent(ev, false)
 				}
 			case <-stderrDone:
 				stderrDone = nil
@@ -502,7 +535,8 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				_ = stdoutPipe.Close()
 				_ = stderrPipe.Close()
 				if events != nil {
-					for range events {
+					for ev := range events {
+						handleEvent(ev, false)
 					}
 				}
 				if stderrDone != nil {
@@ -521,36 +555,40 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				_ = cmd.Process.Kill()
 			}
 			drain(events, stderrDone)
-			_ = cmd.Wait()
+			<-processExited
 			_ = fifo.Close()
 			qerr := getQuotaErr()
 			_ = WriteQuotaError(inbox, qerr)
 			return qerr
+		case err := <-processExited:
+			_ = stdinPipe.Close()
+			drain(events, stderrDone)
+			if qerr := getQuotaErr(); qerr != nil {
+				_ = WriteQuotaError(inbox, qerr)
+				return qerr
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		case <-ctx.Done():
+			_ = stdinPipe.Close()
+			_ = cmd.Process.Kill()
+			drain(events, stderrDone)
+			<-processExited
+			if qerr := getQuotaErr(); qerr != nil {
+				_ = WriteQuotaError(inbox, qerr)
+				return qerr
+			}
+			return ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
+				events = nil
+				ready = false
 				_ = stdinPipe.Close()
-				drain(nil, stderrDone)
-				err := cmd.Wait()
-				_ = fifo.Close()
-				if qerr := getQuotaErr(); qerr != nil {
-					_ = WriteQuotaError(inbox, qerr)
-					return qerr
-				}
-				return err
+				continue
 			}
-			switch ev.Event {
-			case eventInit:
-				ready, busy = true, false
-				feedIfIdle()
-			case "step_update":
-				if ev.StepUpdate != nil && ev.StepUpdate.StepType == "user_input" {
-					_ = Confirm(inbox)
-				}
-			case "result":
-				_ = finishTurn(inbox)
-				busy = false
-				feedIfIdle()
-			}
+			handleEvent(ev, true)
 		case <-wakeCh:
 			feedIfIdle()
 		}
