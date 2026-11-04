@@ -151,7 +151,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 func (v *view) attributeBrowseSessions() {
 	for _, s := range v.Sessions {
 		for _, start := range v.st.Starts {
-			if start.Name != browseStart || !start.Party.Is(s.Party()) {
+			if start.Name != browseStart || !start.Is(s.Party()) {
 				continue
 			}
 			s.Parent = cmp.Or(start.By.Session, start.By.HostSession)
