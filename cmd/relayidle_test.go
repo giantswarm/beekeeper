@@ -150,3 +150,75 @@ func TestGuideFeedRelaysOnANewLineAfterIdle(t *testing.T) {
 		t.Fatalf("repeated idle relay: %q, %v", lines, err)
 	}
 }
+
+// A busy run keeps adding requests within a turn. No waiting-session or
+// decision event is needed to announce the crossing or repeat the warning.
+func TestGuideFeedRelayDueCrossesMidTurnAndRepeats(t *testing.T) {
+	a, _ := stubApp(t)
+	runLive(t, a, map[int]string{1: agentOne})
+	a.cfg.Guide.RelayAt = 400_000
+	a.guideDues = relayDues{}
+	a.cfg.Claude.ProjectsDir = t.TempDir()
+	transcript := filepath.Join(a.cfg.Claude.ProjectsDir, "desk", "s1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendRequest := func(tokens int) {
+		t.Helper()
+		f, err := os.OpenFile(transcript, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // a test fixture
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = fmt.Fprintf(f, "{\"type\":\"assistant\",\"message\":{\"id\":\"request-%d\",\"usage\":{\"input_tokens\":%d}}}\n", tokens, tokens)
+		closeErr := f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+	poll := func(want bool) {
+		t.Helper()
+		lines, err := a.guideFeed(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, line := range lines {
+			if strings.Contains(line, "GUIDE RELAY DUE:") {
+				count++
+			}
+		}
+		if (count == 1) != want || count > 1 {
+			t.Fatalf("due=%v: %q", want, lines)
+		}
+	}
+	appendRequest(399_000)
+	poll(false)
+	a.now = a.now.Add(time.Second)
+	appendRequest(401_000)
+	poll(true)
+	first := a.now
+	a.now = first.Add(relayDueRepeat - time.Second)
+	poll(false)
+	a.now = first.Add(relayDueRepeat)
+	poll(true)
+	a.now = a.now.Add(relayDueRepeat)
+	poll(true)
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Guide.RelayDue.Reported.Equal(first) {
+		t.Fatal("repeat reset the relay grace")
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Guide.Relay = &state.Relay{From: st.Guide.Holder.Party, To: supB, At: a.now, Expires: a.now.Add(time.Hour)}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.now = a.now.Add(relayDueRepeat)
+	poll(false)
+}

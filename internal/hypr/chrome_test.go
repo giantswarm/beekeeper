@@ -188,7 +188,7 @@ func TestWhere(t *testing.T) {
 // Chrome under the special workspace the person works in is drawn on the
 // off-screen output for the turn and put back after: nothing floats, the
 // person's monitor, its special workspace and the focus stay as they were,
-// and the output goes again.
+// and the empty output stays for later turns.
 func TestShowUnderASpecialWorkspace(t *testing.T) {
 	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{underMagic()}, layout: "monocle"}
 	s, err := Show(t.Context(), f.ctl, hold)
@@ -208,10 +208,10 @@ func TestShowUnderASpecialWorkspace(t *testing.T) {
 	if err := s.Restore(t.Context(), f.ctl); err != nil || s.Left != "" {
 		t.Fatalf("Restore = %v, left %q", err, s.Left)
 	}
-	if want := []string{evalCmd, toWS2, remove}; !slices.Equal(f.commands(), want) {
+	if want := []string{evalCmd, toWS2}; !slices.Equal(f.commands(), want) {
 		t.Errorf("restore commands = %q, want %q", f.commands(), want)
 	}
-	if len(f.monitors) != 1 || f.monitors[0] != underMagic() || f.windows[0] != chrome || f.redirect {
+	if len(f.monitors) != 2 || f.monitors[0] != underMagic() || f.windows[0] != chrome || f.redirect {
 		t.Errorf("after Restore: monitors %+v, Chrome %+v, redirect %v", f.monitors, f.windows[0], f.redirect)
 	}
 	f.calls = nil
@@ -343,7 +343,7 @@ func TestAPopUpDuringTheTurnLandsOnTheOutput(t *testing.T) {
 			if got := f.windows[1].Workspace.Name; got != Surface || f.monitors[0] != laptop {
 				t.Fatalf("the pop-up on %s, the person's monitor %+v", got, f.monitors[0])
 			}
-			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || len(f.monitors) != 1 {
+			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || len(f.monitors) != 2 {
 				t.Fatalf("Restore = %v, %+v, monitors %+v", err, s, f.monitors)
 			}
 			if f.windows[0] != start || f.windows[1].Workspace != start.Workspace {
@@ -387,8 +387,7 @@ func TestShowRefusesAnOutputThatChangesThePersonsView(t *testing.T) {
 	}
 }
 
-// An output there already is used, not created again, and removed after:
-// it is beekeeper's by its name.
+// An output there already is reused and kept for later turns.
 func TestShowOnTheOutputThereAlready(t *testing.T) {
 	out := Monitor{ID: 1, Name: Output, ActiveWorkspace: surface}
 	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop, out}}
@@ -400,10 +399,10 @@ func TestShowOnTheOutputThereAlready(t *testing.T) {
 		t.Errorf("commands = %q", f.commands())
 	}
 	f.calls = nil
-	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 1 {
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 2 {
 		t.Fatalf("Restore = %v, monitors %+v", err, f.monitors)
 	}
-	want := []string{evalCmd, `dispatch hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`, remove}
+	want := []string{evalCmd, `dispatch hl.dsp.window.move({ workspace = "special:music", follow = false, window = "address:0xc" })`}
 	if !slices.Equal(f.commands(), want) {
 		t.Errorf("restore commands = %q, want %q", f.commands(), want)
 	}
@@ -465,8 +464,7 @@ func TestShowFailsNamingTheWorkspace(t *testing.T) {
 }
 
 // Every window on the output's workspace goes to Chrome's workspace before
-// the output is removed, so none lands on the person's screen; one that
-// does not move keeps the output.
+// the output is reused; a failed move can be retried.
 func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
 	f := &fake{windows: []Window{chrome, claudeW}, monitors: []Monitor{underMagic()}}
 	s, err := Show(t.Context(), f.ctl, hold)
@@ -483,7 +481,7 @@ func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
 		t.Errorf("the output was removed with a window on it: %q", f.calls)
 	}
 	f.calls, f.refuse = nil, nil
-	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 1 || s.Opened != 1 {
+	if err := s.Restore(t.Context(), f.ctl); err != nil || len(f.monitors) != 2 || s.Opened != 1 {
 		t.Fatalf("Restore = %v, monitors %+v, opened %d", err, f.monitors, s.Opened)
 	}
 	for _, w := range f.windows {
@@ -494,7 +492,7 @@ func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
 }
 
 // A window the person moved off the output, or closed, stays where it is;
-// the output goes all the same.
+// the empty output stays all the same.
 func TestRestoreLeavesAWindowThePersonMoved(t *testing.T) {
 	f := &fake{windows: []Window{with(chrome, func(w *Window) { w.Workspace = music })}, monitors: []Monitor{laptop}}
 	s, err := Show(t.Context(), f.ctl, hold)
@@ -503,7 +501,7 @@ func TestRestoreLeavesAWindowThePersonMoved(t *testing.T) {
 	}
 	f.calls = nil
 	f.windows[0].Workspace = Workspace{ID: 5, Name: "5"}
-	if err := s.Restore(t.Context(), f.ctl); err != nil || !slices.Equal(f.commands(), []string{evalCmd, remove}) || s.Left != "moved by the person to workspace 5" {
+	if err := s.Restore(t.Context(), f.ctl); err != nil || !slices.Equal(f.commands(), []string{evalCmd}) || s.Left != "moved by the person to workspace 5" {
 		t.Errorf("Restore of a moved window = %v, left %q, ran %q", err, s.Left, f.calls)
 	}
 	f.calls, f.windows = nil, nil
@@ -528,7 +526,7 @@ func TestShownRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil || back.Before != s.Before || back.Where != s.Where || !back.Created || !back.Moved {
 		t.Fatalf("round trip = %+v, %v", back, err)
 	}
-	if err := back.Restore(t.Context(), f.ctl); err != nil || f.windows[0] != chrome || len(f.monitors) != 1 || f.redirect {
+	if err := back.Restore(t.Context(), f.ctl); err != nil || f.windows[0] != chrome || len(f.monitors) != 2 || f.redirect {
 		t.Errorf("Restore from the record = %v, Chrome %+v, monitors %+v", err, f.windows[0], f.monitors)
 	}
 }
@@ -625,5 +623,38 @@ func TestTurned(t *testing.T) {
 	}
 	if got, err := (*Shown)(nil).Turned(t.Context(), f.ctl); err != nil || got != "" {
 		t.Errorf("Turned of no placement = %q, %v", got, err)
+	}
+}
+
+// Restoring one turn must not tear down the monitor, which makes Hyprland
+// create a transient numbered workspace. A later turn reuses the output.
+func TestConsecutiveTurnsReuseOutput(t *testing.T) {
+	f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+	for turn := range 2 {
+		s, err := Show(t.Context(), f.ctl, hold)
+		if err != nil || s == nil {
+			t.Fatalf("turn %d: Show = %+v, %v", turn, s, err)
+		}
+		if s.Created != (turn == 0) {
+			t.Errorf("turn %d: Created = %v", turn, s.Created)
+		}
+		if err := s.Restore(t.Context(), f.ctl); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.monitors) != 2 || f.windows[0] != chrome || f.redirect {
+			t.Fatalf("turn %d: monitors %+v, window %+v, redirect %v", turn, f.monitors, f.windows[0], f.redirect)
+		}
+	}
+	var creates int
+	for _, call := range f.calls {
+		if call == create {
+			creates++
+		}
+		if call == remove {
+			t.Error("turn removed the output")
+		}
+	}
+	if creates != 1 {
+		t.Errorf("created output %d times", creates)
 	}
 }

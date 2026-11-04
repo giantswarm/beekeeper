@@ -298,6 +298,9 @@ func staleLine(s staleBinary) string {
 // doctor finds the chores and the faults, and fixes what it may.
 func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	var rep doctorReport
+	if line := a.teleportContextsLine(); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return rep, err
@@ -877,6 +880,7 @@ faults but remedying none.`,
 			return nil
 		},
 	}
+	c.AddCommand(a.retryArchiveCmd())
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what the doctor would do, fixing nothing")
 	c.Flags().StringArrayVar(&attended, "fault", nil, "run this fault's remedy although it may not run unattended (repeatable)")
 	return c

@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -32,8 +34,14 @@ of each condition found.`,
 	var spec timerSpec
 	add := &cobra.Command{
 		Use:   "add <time> <what>",
-		Short: "Add a timer: a time (22:55) or a duration (45m), and what to look at",
-		Long: `Adds a timer at a time (22:55) or after a duration (45m).
+		Short: "Add a timer: now, a time (22:55) or a duration (45m), and what to look at",
+		Long: `Adds a timer now, at a time (22:55) or after a duration (45m).
+Durations for the time and --until accept w, d, h, m, s, ms, us (or µs) and ns,
+including combinations (1w2d3h). A day is 24 hours; a week is 168 hours.
+Clock times without a date mean today. One already past today is refused,
+naming the time it would have rolled to: give a date, as a timer can run a
+real action. A dated start in the past starts now. A --repeat timer takes
+the clock time's next occurrence.
 
 A plain timer is one watch line when its time comes and stays open until
 timer done. With --when or --probe it waits on a condition from its time:
@@ -41,17 +49,25 @@ the watch checks it every --every (5m) and fires the timer once it holds,
 within one tick; a condition that has not held for a day is one watch
 line (TIMER STUCK) and the timer keeps waiting. --until ends the wait: past it the timer fires as timed
 out, or with --expire closes unfired with one line. --wake names the agent
-the firing wakes with the timer's text (as agents wake does); --run runs a
+the firing wakes with the timer's text (as agents wake does). "the guide"
+resolves to the current role holder when the timer fires; --run runs a
 shell command instead, its output in timers/<id>.log of the state
 directory and its exit code logged (timer.ran). Without either the watch's
 line says it. A timer with a condition, --wake or --run closes when it
 fires. --repeat daily, weekdays or weekly re-arms a --wake or --run timer
 at the same local time instead; it stays open until timer done.
 
+A lease claim inside --probe or --run is refused: these commands inherit
+the watch session, not the timer setter. Use --wake and claim from the
+setter session when it resumes.
+
 Times carry their zone (08:30 CET). A timer firing more than a tick past
 its time says how late it is and what held it: a beekeeper stop, or no tick
-at all (the watch and the supervisor loop down, or the state locked). Its
---run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
+at all (the watch and the supervisor loop down, or the state locked).
+An interrupted --run command is reported as TIMER FAILED and re-armed
+for the next watch tick. Retried commands may repeat partial work.
+
+Its --run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
 BEEKEEPER_TIMER_LATE: an agents start it runs makes the session's first
 line, and its log entry (agents.start), the timer, its due time and the
 start in one zone and, when late, what held it (the timer's late firing,
@@ -71,7 +87,13 @@ floor:
                                          version, running it: the newest
                                          release of status.history)
   controlplane-ready context/namespace/name   (every replica ready and updated)
---probe takes any shell command that exits 0 once the condition holds. A
+--probe is a quick check that exits 0 once the condition holds, with a
+10 s budget per check. It must answer within seconds: for example, compare
+a HelmRelease version using kubectl get helmrelease … -o jsonpath, or use
+beekeeper lease status <resource>. Never use devctl … wait or
+beekeeper gate -- devctl … wait: those wait rather than check. Use
+--when "helmrelease-ready context/namespace/name version" for a rollout,
+or replace the wait with a command that reads the current state. A
 rollout is helmrelease-ready with its version: current Flux leaves a
 HelmRelease's applied revision empty, so a probe of it never holds. CI is
 pr-checks: a probe of gh pr checks exits non-zero both while checks run
@@ -84,7 +106,7 @@ and once one failed, so it never fires on red.`,
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			due, err := untilTime(a.now, args[0])
+			due, err := timerDue(a.now, args[0], spec.repeat)
 			if err != nil {
 				return err
 			}
@@ -115,11 +137,11 @@ and once one failed, so it never fires on red.`,
 	}
 	f := add.Flags()
 	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, pr-checks (green or red), issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
-	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
+	f.StringVar(&spec.probe, "probe", "", "a quick shell check (10 s budget): exits 0 when the condition holds; never a wait")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
-	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
+	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now (w, d, h, m, s, ms, us/µs, ns): the timer fires as timed out")
 	f.BoolVar(&spec.expire, "expire", false, "at --until close the timer unfired instead")
-	f.StringVar(&spec.wake, "wake", "", "the registered agent the firing wakes with the timer's text")
+	f.StringVar(&spec.wake, "wake", "", `the registered agent or "the guide" the firing wakes with the timer's text`)
 	f.StringVar(&spec.run, "run", "", "a shell command the firing runs, its exit code logged")
 	f.StringVar(&spec.repeat, "repeat", "", "re-arm a --wake or --run timer at the same local time: daily, weekdays or weekly")
 	add.MarkFlagsMutuallyExclusive("when", "probe")
@@ -266,6 +288,39 @@ func (a *app) timerCheck(ctx context.Context, arg string) error {
 	return err
 }
 
+// timerDue is a timer's first time. A recurring time means its next
+// occurrence, so a --repeat timer past today waits for it, never firing now.
+func timerDue(now time.Time, s, repeat string) (time.Time, error) {
+	if repeat != "" {
+		return timerTime(now, s)
+	}
+	return timerStartTime(now, s)
+}
+
+// timerStartTime interprets clock-only starts as today, without the next-day
+// rollover used for deadlines. A clock time already past is refused: firing at
+// once or rolling silently can both run an action at the wrong time. The
+// current minute and a dated past start are due now.
+func timerStartTime(now time.Time, s string) (time.Time, error) {
+	if t, err := time.ParseInLocation("15:04", s, time.Local); err == nil {
+		today := now.In(time.Local)
+		due := time.Date(today.Year(), today.Month(), today.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+		if now.Sub(due) >= time.Minute {
+			next := due.AddDate(0, 0, 1)
+			return time.Time{}, refused("%s is already past today (it is %s): it would roll to %s; give the date, for example %q, or start it now", s, now.In(time.Local).Format("15:04"), next.Format("2006-01-02 15:04"), next.Format("2006-01-02 15:04"))
+		}
+		if due.Before(now) {
+			return now, nil
+		}
+		return due, nil
+	}
+	due, err := timerTime(now, s)
+	if err == nil && !due.IsZero() && due.Before(now) {
+		due = now
+	}
+	return due, err
+}
+
 // timerSpec is what timer add was given beyond the time and the text.
 type timerSpec struct {
 	when, probe, until, wake, run, repeat string
@@ -273,15 +328,21 @@ type timerSpec struct {
 	expire                                bool
 }
 
+// guideRoleAlias names the guide role rather than one of its runs.
+const guideRoleAlias = "the guide"
+
 // timerFrom checks spec and returns the timer due at due it describes.
 func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run), Repeat: strings.TrimSpace(spec.repeat)}
+	if probeWaits(t.Probe) {
+		return t, usageErr("--probe is a wait command: probes have a 10 s budget and must answer within seconds; use --when \"helmrelease-ready context/namespace/name version\" for a rollout, or a quick current-state check such as kubectl get helmrelease … -o jsonpath or beekeeper lease status <resource>")
+	}
 	if t.When != "" {
 		if _, err := conditionCheck(t.When); err != nil {
 			return t, err
 		}
 	}
-	until, err := untilTime(a.now, spec.until)
+	until, err := timerTime(a.now, spec.until)
 	if err != nil {
 		return t, err
 	}
@@ -306,6 +367,13 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 		t.Due = t.Next(t.Due)
 	}
 	if q := strings.TrimSpace(spec.wake); q != "" {
+		switch strings.ToLower(q) {
+		case "the supervisor":
+			return t, errSupervisorMessage
+		case guideRoleAlias:
+			t.Wake = guideRoleAlias
+			return t, nil
+		}
 		st, err := a.store.Read()
 		if err != nil {
 			return t, err
@@ -344,4 +412,29 @@ func timerWhen(now time.Time, t state.Timer) string {
 		s += ", repeats " + t.Repeat
 	}
 	return s
+}
+
+// Expand day and week components to nanoseconds, then let the standard parser
+// validate the complete duration and reject overflow. Rational arithmetic keeps
+// fractional units exact without overflowing during conversion.
+var timerDayWeek = regexp.MustCompile(`(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[dw]`)
+
+func timerTime(now time.Time, s string) (time.Time, error) {
+	if s == "now" {
+		return now, nil
+	}
+	expanded := timerDayWeek.ReplaceAllStringFunc(s, func(part string) string {
+		n, _ := new(big.Rat).SetString(part[:len(part)-1])
+		unit := 24 * time.Hour
+		if part[len(part)-1] == 'w' {
+			unit *= 7
+		}
+		n.Mul(n, new(big.Rat).SetInt64(int64(unit)))
+		return new(big.Int).Quo(n.Num(), n.Denom()).String() + "ns"
+	})
+	t, err := untilTime(now, expanded)
+	if err != nil {
+		return time.Time{}, usageErr("%q is neither now, a time nor a duration (w, d, h, m, s, ms, us/µs, ns)", s)
+	}
+	return t, nil
 }

@@ -196,7 +196,7 @@ func TestFindPlansTakesTheOpenPlanNamingTheEpic(t *testing.T) {
 	if p, ok := got["o/r#940"]; ok {
 		t.Errorf("plan of #940 = %+v", p)
 	}
-	if len(queries) != 1 || !strings.Contains(queries[0], `p0:search(query:"repo:o/plans repo:o/more is:pr \"o/r/issues/938\" sort:updated-desc",type:ISSUE`) ||
+	if len(queries) != 1 || !strings.Contains(queries[0], `p0:search(query:"(repo:o/plans OR repo:o/more) is:pr (\"o/r/issues/938\" OR \"o/r#938\") sort:updated-desc",type:ISSUE_ADVANCED`) ||
 		!slices.Equal(repos, []string{plansRepo}) {
 		t.Errorf("queries %q acting on %q", queries, repos)
 	}
