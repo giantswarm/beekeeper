@@ -61,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret capture writes quoted, escaped and embedded-document paths consistently with its encryption preflight (https://github.com/giantswarm/beekeeper/issues/2982).
 - Secret copies to remote files reject blank source values before encoding (https://github.com/giantswarm/beekeeper/issues/2991).
 - Secret rotation checks current encryption selectors for every carrier before changing values (https://github.com/giantswarm/beekeeper/issues/3129).
+- Prefer an observed release change, then a due schedule, then a lingering upgrade mark (https://github.com/giantswarm/beekeeper/issues/3148).
+- Require an active hold to match the running upgrade target before retaining it (https://github.com/giantswarm/beekeeper/issues/3151).
 - Stop worktree cleanup when pull-request reads fail or leave any requested branch unanswered, preserving harness checkouts when PR data is unavailable (https://github.com/giantswarm/beekeeper/issues/3093).
 - Broker replies use exclusively created temporary files so planted staging links cannot overwrite other files; failed publication cleans up its temporary file (#3034).
 - Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).

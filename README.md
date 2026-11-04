@@ -273,7 +273,9 @@ owner. A running watch keeps the code it started with: every watch, `--once` inc
 installed, and that a re-arm (a restart) picks the new one up; no watch re-executes itself.
 `beekeeper self-update --check` exits 125 while a newer release is out. A running pre-release (a
 release candidate) is kept on the newest release candidate too; a release only takes releases.
-Both ask GitHub with `GH_TOKEN`, `GITHUB_TOKEN` or the gh login's token, never anonymously (a
+`beekeeper self-update --version v0.125.0-rc.3` selects an exact tag, including a release
+candidate; add `--check` to report it without installing. The same signature verification and
+atomic replacement apply. Both ask GitHub with `GH_TOKEN`, `GITHUB_TOKEN` or the gh login's token, never anonymously (a
 shared IP spends the anonymous limit): without a token they say so and stop, and a rate-limited
 lookup is named with its reset.
 
@@ -460,7 +462,7 @@ whose shared rules sit above the repositories puts them in `~/.codex/AGENTS.md` 
 | `beekeeper worktrees [--apply] [--root DIR]...` | Preview or apply the legacy worktree doctor policy under `doctor.worktreeRoots`: remove finished clean worktrees and trim regenerable build output from idle ones. A live or locked worktree stays. The watch uses this policy with `disk.prune: ask`; `beekeeper disk prune` previews the default automatic policy. |
 | `beekeeper cache clear go [--modcache] [--wait 1h]` | Clear the shared Go build cache, and the module cache with `--modcache`, once no `beekeeper run` holds it: it waits up to `--wait` for the runs, holds back new ones meanwhile, and logs a `gocache.clear` event. Refused inside a `beekeeper run`. The hook refuses `go clean -cache`, `go clean -modcache` and a delete of either cache, naming it. |
 | `beekeeper free [--apply] [--only SECTIONS] [--summary]` | Show where the memory is and, with `--apply`, free what no running work needs: dead sessions' dirs in the tmpfs `/tmp` (`session-dirs`: the CLI is gone, also a newer one of its desktop session, no roster agent with its task or role holder is the session, the git worktree it works in is gone and no process works or holds a file inside; an idle session's stay), orphaned go-build dirs (`go-build`: unchanged for an hour, no go command running that began before their last change, nothing held inside), throwaway temp dirs and orphaned jest or Claude workers; each section of dirs ends with how many it frees and their size. The watch frees `session-dirs` and `go-build` by itself every `doctor.freeEvery` (1h). Kind clusters, idle CLIs, heavy or runaway processes and Chrome renderers are only reported. Each Claude CLI is listed with its session's title and id, its roster state (busy, parked, idle), its role (supervisor, guide, relay spare) and the hours since its transcript changed; one whose session is untouched for `--cli-stale-hours` (12) with no role and not busy or parked is marked stale with the memory its exit returns, and stays running. Never runs as root: the swap reset and root-owned leftovers are printed as the commands to run. `--summary` prints the TSV rows a desktop front end parses. |
-| `beekeeper self-update` | Install the latest signed release over this binary; `--check` only asks. |
+| `beekeeper self-update [--version <tag>]` | Install the latest signed release, or an exact tag (including release candidates), over this binary; `--check` only asks and works with `--version`. |
 
 Timer times accept `now`, a clock time, or a duration. The time and `--until`
 accept duration units `w`, `d`, `h`, `m`, `s`, `ms`, `us` (or `µs`) and `ns`, including
@@ -2061,7 +2063,7 @@ workload cluster on an older release than its management cluster is not upgradin
 upgrades from is the one the label changed from, else the one cluster-api-events' `Upgrading…`
 event names.
 
-While it runs, the installation is held: a hold `upgrade:<installation>/<cluster>` by
+While it runs, the installation is held: a hold `upgrade:<installation>/<namespace>/<cluster>` by
 `beekeeper watch`, until the upgrade ends, whose reason names the cluster and both releases. The
 merge gate refuses the merges of every lane whose `installation` it is (exit 77, with the
 reason), `lease claim <installation>` is refused unless an upgrade-unblock grant admits it (below), `lanes` shows the lanes held and `snapshot` the
@@ -2073,12 +2075,14 @@ whose kube context is not in the kubeconfig kubectl reads is not read and keeps 
 the watch names all of them once, in one `UPGRADES: <n> installations without a kube context, not
 read: …` line (`ALERTS: …` for the alerts reader), and `snapshot` in one entry of its upgrades
 and one line of its alerts, never one line each. `hold set`
-refuses an `upgrade:` target; `hold lift upgrade:<installation>/<cluster>` lifts one by hand
+refuses an `upgrade:` target; `hold lift upgrade:<installation>/<namespace>/<cluster>` lifts one by hand
 (a workload cluster's roll stuck on a drain need not stop the installation's merges): the hold
 stays lifted, recorded with who lifted it, until that upgrade ends, and only a different upgrade
 of the cluster (another target release) holds the installation again. `hold list` and `status`
 show the lifted hold and who lifted it; `hold list` marks an upgrade hold that has stood for a day
 `active, stale`, longer than the watch lets an upgrade it reads run: worth a look.
+Legacy targets without a namespace are retired on the next successful reading. Detected
+upgrades receive fresh active holds: an old lift cannot safely be assigned to a namespace.
 
 
 The one claim an upgrade admits is the work that unblocks it: a node drain stalled on a
