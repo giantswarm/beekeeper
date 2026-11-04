@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Gate merges retain exit 137 diagnostics for reruns, distinguishing confirmed memory cap kills from unexplained SIGKILL or runner loss; run diagnostics include the cap limit (#624).
+
 - Include OS-level Codex exec/chdir failures in the bounded, redacted execution diagnostic log even when no child process started (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
