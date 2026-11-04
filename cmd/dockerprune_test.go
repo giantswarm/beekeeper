@@ -72,7 +72,7 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == dockerExec:
 		return []byte(`{"images":[{"id":"sha256:inside","repoTags":["gsoci.azurecr.io/giantswarm/y:dev"]}]}`), nil
 	case args[0] == dockerImage && args[1] == "rm":
-		f.removed = append(f.removed, args[2:])
+		f.removed = append(f.removed, args[3:])
 		f.images -= f.shrink
 		return nil, nil
 	case args[0] == "builder" && args[1] == "du":

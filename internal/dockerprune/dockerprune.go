@@ -360,7 +360,8 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			if busy() {
 				return refused, ErrBusy
 			}
-			args := []string{"image", "rm"}
+			// Parents must pass our keep policy as candidates themselves.
+			args := []string{"image", "rm", "--no-prune"}
 			if len(img.Refs) == 0 {
 				args = append(args, img.ID)
 			} else {
