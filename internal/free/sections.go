@@ -311,7 +311,7 @@ func (r *Run) orphans() {
 			continue
 		}
 		c := p.Cmdline()
-		if !strings.Contains(c, "processChild.js") && !strings.Contains(c, "jest-worker") && !strings.Contains(c, "claude --output-format stream-json") {
+		if !orphanWorker(p) {
 			continue
 		}
 		kib := r.anonKiB(p.PID)
@@ -328,6 +328,51 @@ func (r *Run) orphans() {
 	}
 	if r.Apply {
 		r.kill(pids)
+	}
+}
+
+// orphanWorker matches executable arguments, never text embedded in a prompt or
+// application argument. For Node, only the entry script identifies the worker.
+// Unknown runtime options fail closed because they may consume the next value.
+func orphanWorker(p *proc.Process) bool {
+	if len(p.Args) == 0 {
+		return false
+	}
+	switch filepath.Base(p.Args[0]) {
+	case "claude":
+		return len(p.Args) >= 3 && p.Args[1] == "--output-format" && p.Args[2] == "stream-json"
+	case "node", "nodejs":
+		args := p.Args[1:]
+		for len(args) > 0 {
+			arg := args[0]
+			args = args[1:]
+			if arg == "--" {
+				break
+			}
+			if !strings.HasPrefix(arg, "-") {
+				return workerScript(arg)
+			}
+			switch {
+			case arg == "--expose-gc", arg == "--no-warnings",
+				arg == "--enable-source-maps", arg == "--experimental-vm-modules":
+			case strings.HasPrefix(arg, "--max-old-space-size="),
+				strings.HasPrefix(arg, "--max_old_space_size="):
+			default:
+				return false
+			}
+		}
+		return len(args) > 0 && workerScript(args[0])
+	default:
+		return false
+	}
+}
+
+func workerScript(arg string) bool {
+	switch filepath.Base(arg) {
+	case "processChild.js", "jest-worker":
+		return true
+	default:
+		return false
 	}
 }
 
