@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"maps"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -87,6 +90,8 @@ type checkResult struct {
 // result judges the output and error of c's command.
 func (c timerCheck) result(out []byte, err error) checkResult {
 	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return checkResult{unreadable: true, reason: "probe timed out after 10 s"}
 	case err != nil && c.judge == nil:
 		// A probe that exits non-zero says "not yet".
 		return checkResult{reason: err.Error()}
@@ -149,7 +154,7 @@ func probeOutput(ctx context.Context, cmd string) ([]byte, error) {
 	case err == nil:
 		return out, nil
 	case errors.Is(pctx.Err(), context.DeadlineExceeded):
-		return out, fmt.Errorf("no answer within %s", probeTimeout)
+		return out, fmt.Errorf("probe timed out after 10 s: %w", context.DeadlineExceeded)
 	}
 	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
 	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
@@ -357,4 +362,56 @@ func controlPlaneReady(out []byte) (bool, string, error) {
 		return true, "", nil
 	}
 	return false, fmt.Sprintf("%d of %d replicas, %d ready, %d up to date", s.Replicas, want, s.ReadyReplicas, upToDate), nil
+}
+
+// probeWaits recognizes wait commands, including those wrapped by the gate.
+// Parse shell words so quoted text mentioning a wait is not a command.
+func probeWaits(probe string) bool {
+	f, err := syntax.NewParser().Parse(strings.NewReader(probe), "")
+	if err != nil {
+		return false
+	}
+	waits := false
+	syntax.Walk(f, func(n syntax.Node) bool {
+		call, ok := n.(*syntax.CallExpr)
+		if !ok {
+			return true
+		}
+		var args []string
+		for _, word := range call.Args {
+			args = append(args, probeWord(word.Parts))
+		}
+		for i, arg := range args {
+			if filepath.Base(arg) != "devctl" {
+				continue
+			}
+			// Only a direct command or the command following gate's separator.
+			if i != 0 && !(i > 1 && args[i-1] == "--" && filepath.Base(args[0]) == "beekeeper" && slices.Contains(args[1:i-1], "gate")) {
+				continue
+			}
+			if slices.Contains(args[i+1:], "wait") {
+				waits = true
+			}
+		}
+		return true
+	})
+	return waits
+}
+
+// probeWord reads literal shell words without evaluating expansions.
+func probeWord(parts []syntax.WordPart) string {
+	var b strings.Builder
+	for _, part := range parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			b.WriteString(probeWord(p.Parts))
+		default:
+			return ""
+		}
+	}
+	return b.String()
 }

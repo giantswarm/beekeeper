@@ -78,7 +78,13 @@ floor:
                                          version, running it: the newest
                                          release of status.history)
   controlplane-ready context/namespace/name   (every replica ready and updated)
---probe takes any shell command that exits 0 once the condition holds. A
+--probe is a quick check that exits 0 once the condition holds, with a
+10 s budget per check. It must answer within seconds: for example, compare
+a HelmRelease version using kubectl get helmrelease … -o jsonpath, or use
+beekeeper lease status <resource>. Never use devctl … wait or
+beekeeper gate -- devctl … wait: those wait rather than check. Use
+--when "helmrelease-ready context/namespace/name version" for a rollout,
+or replace the wait with a command that reads the current state. A
 rollout is helmrelease-ready with its version: current Flux leaves a
 HelmRelease's applied revision empty, so a probe of it never holds. CI is
 pr-checks: a probe of gh pr checks exits non-zero both while checks run
@@ -122,7 +128,7 @@ and once one failed, so it never fires on red.`,
 	}
 	f := add.Flags()
 	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, pr-checks (green or red), issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
-	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
+	f.StringVar(&spec.probe, "probe", "", "a quick shell check (10 s budget): exits 0 when the condition holds; never a wait")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
 	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
 	f.BoolVar(&spec.expire, "expire", false, "at --until close the timer unfired instead")
@@ -316,6 +322,9 @@ type timerSpec struct {
 // timerFrom checks spec and returns the timer due at due it describes.
 func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 	t := state.Timer{Due: due.UTC(), When: strings.TrimSpace(spec.when), Probe: strings.TrimSpace(spec.probe), Every: spec.every, Expire: spec.expire, Run: strings.TrimSpace(spec.run), Repeat: strings.TrimSpace(spec.repeat)}
+	if probeWaits(t.Probe) {
+		return t, usageErr("--probe is a wait command: probes have a 10 s budget and must answer within seconds; use --when \"helmrelease-ready context/namespace/name version\" for a rollout, or a quick current-state check such as kubectl get helmrelease … -o jsonpath or beekeeper lease status <resource>")
+	}
 	if t.When != "" {
 		if _, err := conditionCheck(t.When); err != nil {
 			return t, err
