@@ -45,6 +45,56 @@ const (
 	credKey   = "apiKey"
 )
 
+func TestAuditScriptAfterChdir(t *testing.T) {
+	home, h := fakeHome(t)
+	scripts := filepath.Join(home, "scripts")
+	if err := os.Mkdir(scripts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"read.sh":     "cat " + filepath.Join(home, "app", "creds.json"),
+		"safe.sh":     "echo safe",
+		"relative.sh": "cat ../app/creds.json",
+		"nested.sh":   "bash read.sh",
+	} {
+		if err := os.WriteFile(filepath.Join(scripts, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A safe script with the same name in the initial directory must not
+	// hide the script the shell actually runs after changing directories.
+	if err := os.WriteFile(filepath.Join(home, "read.sh"), []byte("echo safe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		cmd  string
+		deny bool
+	}{
+		{"bash " + filepath.Join(scripts, "read.sh"), true},
+		{"cd scripts && bash read.sh", true},
+		{"cd scripts && sh ./read.sh", true},
+		{"cd scripts && bash -- read.sh", true},
+		{"cd scripts && ./read.sh", true},
+		{"cd scripts && bash relative.sh", true},
+		{"cd scripts && bash nested.sh", true},
+		{"bash -c 'cd scripts && bash read.sh'", true},
+		{"cd scripts && bash safe.sh", false},
+		{"cd scripts && bash -n read.sh", false},
+		{"cd scripts && shellcheck read.sh", false},
+		{"bash read.sh", false},
+		{"(cd scripts && bash safe.sh); bash read.sh", false},
+		{"cd scripts && cd .. && bash read.sh", false},
+	} {
+		t.Run(tc.cmd, func(t *testing.T) {
+			d := decide(t, h, home, tc.cmd, nil)
+			denied := d != nil && d.PermissionDecision == decisionDeny
+			if denied != tc.deny {
+				t.Fatalf("denied = %v, want %v: %v", denied, tc.deny, d)
+			}
+		})
+	}
+}
+
 func TestSecretFileBashReads(t *testing.T) {
 	home, h := fakeHome(t)
 	for _, tc := range []struct {

@@ -286,7 +286,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		}
 		dirs = append(dirs, d)
 	}
-	for _, st := range walkSegments(sc, g.cwd, false) {
+	states := walkSegments(sc, g.cwd, false)
+	for _, st := range states {
 		if st.dir != "" && !slices.Contains(dirs, st.dir) {
 			dirs = append(dirs, st.dir)
 		}
@@ -311,10 +312,14 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return copyLeak
 	}
 	for i, sg := range segs {
+		// Script operands and nested shell commands resolve paths in this
+		// segment's directory. Keep the caller's directory for sibling segments.
+		nestedGuard := g
+		nestedGuard.cwd = states[i].dir
 		words := shellWords(sc.plain[sg.start:sg.end])
 		for _, exp := range expandWordsList(words, vars) {
 			exp = g.linkAllowance.resolve(exp)
-			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
+			if l := nestedGuard.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
 			}
 			g.feeds = feedsOutput(sc, segs, i)
@@ -761,7 +766,7 @@ func (g secretGuard) unlockOrScript(p string, copied map[string]string, depth in
 
 // script returns the leak of the script at p, a shell script a command line
 // runs: a regular text file of at most maxScript bytes, relative to the
-// session's working directory. Anything else is no script and passes.
+// effective working directory. Anything else is no script and passes.
 // When a guarded unlock tool is a script and a preexisting symlink to it on
 // disk is a read-only command of the same file (selected by argv[0]), the
 // symlink whose own name is not in g.unlock passes.
