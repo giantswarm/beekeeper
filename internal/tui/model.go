@@ -101,7 +101,7 @@ type model struct {
 	acting bool
 
 	// taken are the sessions (by id) this screen took over: quitting
-	// hands them back. seen are the approvals the screen showed, by
+	// hands them back if still owned. seen are the approvals the screen showed, by
 	// request id, that it did not answer: one that goes away went back to
 	// its session's window.
 	taken map[string]bool
@@ -547,7 +547,7 @@ func (m *model) closeDetail() {
 // is closing.
 func (m *model) releaseAll() {
 	for id := range m.taken {
-		_ = m.src.Release(context.Background(), id)
+		_ = m.src.ReleaseOwned(context.Background(), id)
 	}
 	m.taken = nil
 }
