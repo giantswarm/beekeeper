@@ -158,6 +158,11 @@ func (a *app) watchDisk() *watchDiskReading {
 // Budget readings expire rather than treating a dead watch as permission
 // to start workers. Thresholds and all source reads stay in watch.
 func (l *supervisorLoop) watchConditions(ctx context.Context) error {
+	if line, err := l.a.checkThroughput(l.a.timeNow(), false); err != nil {
+		return err
+	} else if line != "" {
+		_, _ = fmt.Fprintln(l.a.out, line)
+	}
 	evs, err := l.a.store.Events(0, func(e state.Event) bool {
 		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopFileVerb || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
 	})

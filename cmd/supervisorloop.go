@@ -1076,12 +1076,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		if !l.dryRun {
+			if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+				return err
+			}
+		}
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
 	l.clearSaid("graphql budget")
 	if !l.dryRun {
 		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			if saveErr := l.observeThroughput(superloop.Input{}, nil, false); saveErr != nil {
+				return saveErr
+			}
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 			return nil
 		}
@@ -1119,6 +1127,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
+	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
@@ -1292,6 +1301,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 				return nil
 			}
+			observationUnknown = true
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
@@ -1384,6 +1394,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
+			return err
+		}
+	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
@@ -2732,10 +2747,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return nil
+				return l.a.operationOutcome("start", "", act.URL, true)
 			} else if !errors.Is(rerr, errLoopLater) {
 				return rerr
 			}
@@ -2849,12 +2864,15 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused {
 			if place.remote() {
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					if saveErr := l.a.operationOutcome("start", "", act.URL, true); saveErr != nil {
+						return "", saveErr
+					}
 					return what, nil
 				} else if !errors.Is(rerr, errLoopLater) {
 					return "", rerr
@@ -3386,7 +3404,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
@@ -3396,6 +3414,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
+				if saveErr := l.a.operationOutcome("start", "", act.URL, true); saveErr != nil {
+					return "", saveErr
+				}
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {
