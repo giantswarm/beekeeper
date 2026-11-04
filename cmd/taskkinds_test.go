@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -150,6 +151,68 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 	}
 	if len(st.Starts) != 1 {
 		t.Errorf("the refused start was recorded: %+v", st.Starts)
+	}
+}
+
+func TestSSHAgentStartKindAdmission(t *testing.T) {
+	for _, limit := range []string{"interval", "busy", "available"} {
+		for _, dry := range []bool{false, true} {
+			if limit == "available" && !dry {
+				continue
+			}
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/dry=%t/force=%t", limit, dry, force), func(t *testing.T) {
+					a, brief := sshStartTestApp(t)
+					a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 10}}
+					stubSubscriptionUsage(a)
+					k := config.AgentKind{Name: kindFiler, Match: "^filer"}
+					switch limit {
+					case "interval":
+						k.MinInterval = config.Duration{Duration: time.Hour}
+					case "busy":
+						k.MaxBusy = 1
+					}
+					a.cfg.Agents.Kinds = []config.AgentKind{k}
+					if limit != "available" {
+						recordKindStart(t, a, filerOne, "s-filer-1", a.now.Add(-5*time.Minute))
+					}
+					a.executionTransport = func(config.ExecutionHost) execution.Transport {
+						t.Fatal("kind refusal or dry run reached SSH transport")
+						return nil
+					}
+					args := []string{agentStartName, filerTwo, brief, loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch, modelFlag, bgModel}
+					if dry {
+						args = append(args, testDryRunFlag)
+					}
+					if force {
+						args = append(args, usageForceFlag)
+					}
+					out, err := runAgents(a, args...)
+					wantStarts := 1
+					if limit == "available" {
+						wantStarts = 0
+						if err != nil || !strings.Contains(out, "dry run:") {
+							t.Fatalf("admitted dry run: %q, %v", out, err)
+						}
+					} else {
+						want := "minInterval"
+						if limit == "busy" {
+							want = "maxBusy"
+						}
+						if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") || !strings.Contains(err.Error(), want) || strings.Contains(out, "dry run:") {
+							t.Fatalf("kind admission: %q, %v", out, err)
+						}
+					}
+					st, err := a.store.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(st.Starts) != wantStarts || len(st.Agents) != wantStarts {
+						t.Fatal("kind refusal or dry run changed reservations")
+					}
+				})
+			}
+		}
 	}
 }
 
