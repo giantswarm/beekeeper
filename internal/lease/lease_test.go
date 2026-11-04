@@ -17,16 +17,20 @@ import (
 const (
 	lab      = "kind-1"
 	agentOne = "Agent one"
+	// since is the holders' claim time, matching now.
+	since = "2026-09-24T20:00:00Z"
 )
 
 var (
-	now   = time.Date(2026, 9, 24, 20, 0, 0, 0, time.UTC)
-	ttl   = 30 * time.Minute
-	loop  = state.Party{Name: "supervisor loop"}
-	one   = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
-	two   = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
-	alex  = state.Party{Name: "alex"}
-	grant = func(to state.Party, at time.Time) state.Grant {
+	now  = time.Date(2026, 9, 24, 20, 0, 0, 0, time.UTC)
+	ttl  = 30 * time.Minute
+	loop = state.Party{Name: "supervisor loop"}
+	// damagedRes are the resources whose holder records a test damages.
+	damagedRes = []string{"damaged", "also-damaged"}
+	one        = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
+	two        = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
+	alex       = state.Party{Name: "alex"}
+	grant      = func(to state.Party, at time.Time) state.Grant {
 		return state.Grant{Resource: lab, To: to, By: loop, At: at}
 	}
 )
@@ -89,7 +93,7 @@ func TestGrantExpiry(t *testing.T) {
 
 func TestDirClaimRelease(t *testing.T) {
 	d := Dir(t.TempDir())
-	h := Holder{Env: "browser", Session: "s1", Name: agentOne, Purpose: "proof", Since: "2026-09-24T20:00:00Z"}
+	h := Holder{Env: "browser", Session: "s1", Name: agentOne, Purpose: "proof", Since: since}
 	if cur, err := d.Claim("browser", h); err != nil || cur != nil {
 		t.Fatalf("Claim = %v, %v", cur, err)
 	}
@@ -148,7 +152,7 @@ const browserRes = "browser"
 
 func TestDirHand(t *testing.T) {
 	d := Dir(t.TempDir())
-	h := Holder{Env: browserRes, Session: "s1", Name: agentOne, Purpose: "a hand-over", Since: "2026-09-24T20:00:00Z"}
+	h := Holder{Env: browserRes, Session: "s1", Name: agentOne, Purpose: "a hand-over", Since: since}
 	if cur, err := d.Claim(browserRes, h); err != nil || cur != nil {
 		t.Fatalf("Claim = %v, %v", cur, err)
 	}
@@ -192,7 +196,7 @@ func TestDirListReportsDamagedHolder(t *testing.T) {
 	for _, kind := range []string{"truncated JSON", "directory"} {
 		t.Run(kind, func(t *testing.T) {
 			d := Dir(t.TempDir())
-			healthy := Holder{Env: "healthy", Session: "synthetic-session", Purpose: "test", Since: "2026-09-24T20:00:00Z"}
+			healthy := Holder{Env: "healthy", Session: "synthetic-session", Purpose: "test", Since: since}
 			if _, err := d.Claim("healthy", healthy); err != nil {
 				t.Fatal(err)
 			}
@@ -200,7 +204,7 @@ func TestDirListReportsDamagedHolder(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Multiple failures must all be reported, even before readable entries.
-			for _, res := range []string{"damaged", "also-damaged"} {
+			for _, res := range damagedRes {
 				if err := os.Mkdir(d.path(res), 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -219,7 +223,7 @@ func TestDirListReportsDamagedHolder(t *testing.T) {
 			if err == nil {
 				t.Fatal("List succeeded with damaged holder records")
 			}
-			for _, res := range []string{"damaged", "also-damaged"} {
+			for _, res := range damagedRes {
 				if !strings.Contains(err.Error(), res) {
 					t.Errorf("List error %q does not identify %s", err, res)
 				}
@@ -239,7 +243,7 @@ func TestDirListReportsDamagedHolder(t *testing.T) {
 			if !reflect.DeepEqual(holders, want) {
 				t.Errorf("List holders = %+v, want %+v", holders, want)
 			}
-			for _, res := range []string{"damaged", "also-damaged"} {
+			for _, res := range damagedRes {
 				if err := d.Release(res); err != nil {
 					t.Fatal(err)
 				}
