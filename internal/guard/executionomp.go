@@ -2,6 +2,7 @@ package guard
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -58,6 +59,21 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 		if !ok || !ompLiteralPath(path) {
 			return ExecutionDeny("managed omp file tools require one literal local path without shorthand, whitespace, lists or patterns; use guarded bash for other filenames")
 		}
+		if ev.ToolName == readTool {
+			target := path
+			if !filepath.IsAbs(target) {
+				cwd := ev.CWD
+				if cwd == "" {
+					cwd = workspace
+				}
+				target = filepath.Join(cwd, target)
+			}
+			// Missing reads trigger omp spelling, suffix and approved-plan
+			// recovery, whose eventual target the shared guard cannot check.
+			if _, err := os.Stat(target); err != nil {
+				return ExecutionDeny("managed omp reads require an existing literal target; use guarded bash for other reads")
+			}
+		}
 		// Do not preserve provider-specific fields which the shared guard
 		// might interpret differently from the harness.
 		ev.ToolInput = map[string]any{filePathKey: path}
@@ -78,7 +94,7 @@ func (h Hook) DecideExecutionOmp(raw []byte, session, workspace string, protecte
 // read lists and patterns. The shared guard checks a single literal path;
 // refusing these expressions keeps its target identical to the tool's target.
 func ompLiteralPath(path string) bool {
-	return path != "" && !strings.HasPrefix(path, "@") && !strings.HasPrefix(path, "~") &&
+	return path != "" && !strings.HasPrefix(strings.ToLower(path), "www.") && !strings.HasPrefix(path, "@") && !strings.HasPrefix(path, "~") &&
 		!strings.ContainsAny(path, ":;,\\*?[]{}") &&
 		!strings.ContainsFunc(path, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
