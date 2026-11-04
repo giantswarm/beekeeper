@@ -340,10 +340,11 @@ func (a *app) serveCmd() *cobra.Command {
 	var waits string
 	var clearOwn bool
 	c := &cobra.Command{
-		Use:   "serve <session> <owner/repo#n> | serve --clear",
-		Short: "Record the issue or epic a session serves and what it waits on",
-		Long: `Record, for any running session (a registered agent or not), the issue or
-epic it serves and what it waits on. A new record replaces the session's
+		Use:   "serve <session> <item> | serve --clear",
+		Short: "Record the item a session serves and what it waits on",
+		Long: `Record, for any running session (a registered agent or not), the item it
+serves and what it waits on: an issue or epic (owner/repo#n), a repository
+(owner/repo), or quoted free text. A new record replaces the session's
 last one. sessions and the hand-over show it, and beekeeper watch prints one
 line when the session ends, naming the issue to re-query. The session is a
 session id, a PID, a session's own name or a registered agent's roster name
@@ -368,8 +369,8 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if clearOwn {
 				return a.clearRecord()
 			}
-			if !issueRef.MatchString(args[1]) {
-				return usageErr("%q is not an issue: owner/repo#n", args[1])
+			if strings.TrimSpace(args[1]) == "" {
+				return usageErr("served item must not be empty")
 			}
 			me, err := a.caller()
 			if err != nil {
