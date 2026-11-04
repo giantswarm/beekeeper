@@ -476,7 +476,7 @@ type Hooks struct {
 	// Set by the supervisor, never inferred from a hook event.
 	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
-	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
+	// [~/, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
 	// ignores in the main working tree of a checkout that sits directly in
 	// one; scratch files go in the session's scratchpad. Empty, off.
