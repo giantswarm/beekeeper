@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image/color"
 	"slices"
 	"strings"
@@ -505,7 +506,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(keyText("k"))
 	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
-	m.Update(tailMsg{session: tBee, turns: src.turns})
+	m.Update(tailMsg{paneID: m.paneID, session: tBee, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
 	}
@@ -518,7 +519,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	}
 
 	// A failed re-read keeps the turns shown and says why.
-	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	m.Update(tailMsg{paneID: m.paneID, session: tBee, err: errors.New("transcript moved")})
 	if v := m.screen(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
 	}
@@ -763,7 +764,7 @@ func TestLateTailForClosedPaneIsDropped(t *testing.T) {
 	m.key(keyText("2"))
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	m.Update(tailMsg{session: tBee, turns: []Turn{{Text: "late"}}})
+	m.Update(tailMsg{paneID: m.paneID, session: tBee, turns: []Turn{{Text: "late"}}})
 	if m.tailState != 0 || len(m.tail) != 0 {
 		t.Errorf("a late tail reopened the pane: state %d, %d turns", m.tailState, len(m.tail))
 	}
@@ -784,4 +785,83 @@ func TestLoadingBeforeFirstRefresh(t *testing.T) {
 // keyText is the key press that types text.
 func keyText(text string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(text)[0], Text: text}
+}
+
+func TestReopenedPaneRejectsOldTail(t *testing.T) {
+	for _, oldFirst := range []bool{true, false} {
+		t.Run(fmt.Sprint(oldFirst), func(t *testing.T) {
+			src := &fakeSource{data: fixtureData(), turns: []Turn{{Text: "old"}}}
+			m := newTestModel(t, src)
+			m.tab = sessionsTab
+			_, oldCmd := m.enter()
+			old := oldCmd()
+			m.closeDetail()
+			_, newCmd := m.enter()
+			src.turns = []Turn{{Text: "new"}}
+			current := newCmd()
+			if oldFirst {
+				m.Update(old)
+				if !m.tailing || m.tailState != 1 || len(m.tail) != 0 {
+					t.Fatal("old tail changed loading pane or cleared its pending read")
+				}
+			}
+			m.Update(current)
+			m.Update(old)
+			if m.tailing || len(m.tail) != 1 || m.tail[0].Text != "new" {
+				t.Fatalf("old tail replaced current transcript: %+v", m.pane())
+			}
+		})
+	}
+}
+
+func TestClosedPaneResultsDoNotChangeCurrentPane(t *testing.T) {
+	for _, action := range []string{"send", "send error", "answer", "answer error", "take over", "release"} {
+		for _, sameSession := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/same=%v", action, sameSession), func(t *testing.T) {
+				src := &fakeSource{data: fixtureData()}
+				src.data.Sessions[0].ID = "session-id"
+				src.data.Sessions[0].Approvals = []Approval{{ID: "request", Gist: "approval"}}
+				m := newTestModel(t, src)
+				m.tab = sessionsTab
+				_, initial := m.enter()
+				m.Update(initial())
+				var cmd tea.Cmd
+				switch action {
+				case "send", "send error":
+					if action == "send error" {
+						src.sendErr = errors.New("delivery failed")
+					}
+					cmd = m.sendCmd(m.detail, "message")
+				case "answer", "answer error":
+					if action == "answer error" {
+						src.answerErr = errors.New("approval failed")
+					}
+					cmd = m.answer(true)
+				case "take over":
+					cmd = m.toggleTakeOver()
+				case "release":
+					src.data.Sessions[0].TakenOver = true
+					cmd = m.toggleTakeOver()
+				}
+				result := cmd()
+				m.closeDetail()
+				if m.sending || m.acting {
+					t.Fatal("closed pane retained pending action flags")
+				}
+				if !sameSession {
+					src.data.Sessions[0].Name = "another-session"
+				}
+				m.enter()
+				m.sending, m.acting = true, true
+				m.outcome = "current outcome"
+				m.Update(result)
+				if !m.sending || !m.acting || m.outcome != "current outcome" || m.outcomeErr {
+					t.Fatalf("stale result changed current pane: %+v", m.pane())
+				}
+				if action == "take over" && !m.taken["session-id"] {
+					t.Fatal("late successful take-over lost cleanup ownership")
+				}
+			})
+		}
+	}
 }

@@ -31,16 +31,17 @@ type (
 		data *Data
 		err  error
 	}
-	// tailMsg carries a detail pane's transcript; session names whose
-	// transcript it is, so a late answer about a closed pane is dropped.
+	// tailMsg carries a transcript and the pane generation that requested it.
 	// The open pane asks again at every tick: it follows the turn live.
 	tailMsg struct {
+		paneID  uint64
 		session string
 		turns   []Turn
 		err     error
 	}
 	// sentMsg carries a message's delivery: where it went, or why not.
 	sentMsg struct {
+		paneID  uint64
 		session string
 		where   string
 		err     error
@@ -48,8 +49,9 @@ type (
 	// actMsg carries a take-over's, a release's or an answer's result:
 	// done says what happened, err why it did not.
 	actMsg struct {
-		done string
-		err  error
+		paneID uint64
+		done   string
+		err    error
 		// took is the session id a take-over took, "" for anything else.
 		took string
 	}
@@ -77,6 +79,8 @@ type model struct {
 	tab int
 	sel [len(tabs)]int
 
+	// paneID changes when a pane closes, invalidating its pending results.
+	paneID    uint64
 	detail    string
 	tail      []Turn
 	tailState int // 0 closed, 1 loading, 2 ready, 3 failed
@@ -162,9 +166,10 @@ func (m *model) tailCmd(session string) tea.Cmd {
 		return nil
 	}
 	m.tailing = true
+	paneID := m.paneID
 	return func() tea.Msg {
 		turns, err := m.src.Tail(m.ctx, session, tailTurns)
-		return tailMsg{session: session, turns: turns, err: err}
+		return tailMsg{paneID: paneID, session: session, turns: turns, err: err}
 	}
 }
 
@@ -198,13 +203,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.noticeHandedBack()
 		return m, nil
 	case tailMsg:
-		if msg.session != m.detail {
+		if msg.paneID != m.paneID || msg.session != m.detail {
 			return m, nil
 		}
 		m.tailing = false
 		m.takeTail(msg)
 		return m, nil
 	case sentMsg:
+		if msg.paneID != m.paneID || msg.session != m.detail {
+			return m, nil
+		}
 		m.sending = false
 		if msg.err != nil {
 			m.outcome, m.outcomeErr = "not sent: "+msg.err.Error(), true
@@ -213,17 +221,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case actMsg:
-		m.acting = false
-		if msg.err != nil {
-			m.outcome, m.outcomeErr = msg.err.Error(), true
-			return m, m.refreshCmd()
-		}
-		m.outcome, m.outcomeErr = msg.done, false
-		if msg.took != "" {
+		// Take-over ownership belongs to the screen even after its pane closes.
+		if msg.err == nil && msg.took != "" {
 			if m.taken == nil {
 				m.taken = map[string]bool{}
 			}
 			m.taken[msg.took] = true
+		}
+		if msg.paneID != m.paneID {
+			return m, m.refreshCmd()
+		}
+		m.acting = false
+		if msg.err != nil {
+			m.outcome, m.outcomeErr = msg.err.Error(), true
+		} else {
+			m.outcome, m.outcomeErr = msg.done, false
 		}
 		return m, m.refreshCmd()
 	case tea.KeyPressMsg:
@@ -268,9 +280,10 @@ func newer(ts []Turn, last Turn) int {
 // sendCmd delivers text to session under the model's context.
 func (m *model) sendCmd(session, text string) tea.Cmd {
 	m.sending = true
+	paneID := m.paneID
 	return func() tea.Msg {
 		where, err := m.src.Send(m.ctx, session, text)
-		return sentMsg{session: session, where: where, err: err}
+		return sentMsg{paneID: paneID, session: session, where: where, err: err}
 	}
 }
 
@@ -392,21 +405,22 @@ func (m *model) toggleTakeOver() tea.Cmd {
 		return nil
 	}
 	m.acting = true
+	paneID := m.paneID
 	id, name := s.ID, s.Name
 	if s.TakenOver {
 		delete(m.taken, id)
 		return func() tea.Msg {
 			if err := m.src.Release(m.ctx, id); err != nil {
-				return actMsg{err: err}
+				return actMsg{paneID: paneID, err: err}
 			}
-			return actMsg{done: "handed back: " + name + "'s approvals go to its own window"}
+			return actMsg{paneID: paneID, done: "handed back: " + name + "'s approvals go to its own window"}
 		}
 	}
 	return func() tea.Msg {
 		if err := m.src.TakeOver(m.ctx, id); err != nil {
-			return actMsg{err: err}
+			return actMsg{paneID: paneID, err: err}
 		}
-		return actMsg{done: "taken over: " + name + "'s approvals come here", took: id}
+		return actMsg{paneID: paneID, done: "taken over: " + name + "'s approvals come here", took: id}
 	}
 }
 
@@ -417,6 +431,7 @@ func (m *model) answer(allow bool) tea.Cmd {
 		return nil
 	}
 	m.acting = true
+	paneID := m.paneID
 	ap := s.Approvals[0]
 	if m.answered == nil {
 		m.answered = map[string]bool{}
@@ -429,9 +444,9 @@ func (m *model) answer(allow bool) tea.Cmd {
 	id := s.ID
 	return func() tea.Msg {
 		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {
-			return actMsg{err: fmt.Errorf("%s: %w", ap.Gist, err)}
+			return actMsg{paneID: paneID, err: fmt.Errorf("%s: %w", ap.Gist, err)}
 		}
-		return actMsg{done: verb + ": " + ap.Gist}
+		return actMsg{paneID: paneID, done: verb + ": " + ap.Gist}
 	}
 }
 
@@ -539,6 +554,8 @@ func (m *model) pane() pane {
 
 // closeDetail dismisses the pane; a read still out lands nowhere.
 func (m *model) closeDetail() {
+	m.paneID++
+	m.sending, m.acting = false, false
 	m.detail, m.tail, m.tailBack, m.tailState, m.tailing = "", nil, 0, 0, false
 	m.composing, m.draft, m.outcome, m.outcomeErr = false, nil, "", false
 }
