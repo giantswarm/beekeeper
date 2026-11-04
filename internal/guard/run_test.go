@@ -30,7 +30,7 @@ func TestCommandHead(t *testing.T) {
 		{[]string{testShell, "-c", "cd /x &&\n  go test ./...  "}, "cd /x && go test ./..."},
 		{[]string{"/usr/bin/bash", "-c", "make test", "arg0"}, "make test"},
 		{[]string{"python3", "-c", "bytearray(200<<20)"}, "python3 -c bytearray(200<<20)"},
-		{[]string{"go", "test", strings.Repeat("x", 200)}, "go test " + strings.Repeat("x", 91) + "…"},
+		{[]string{"go", testCommand, strings.Repeat("x", 200)}, "go test " + strings.Repeat("x", 91) + "…"},
 		// too long: the heavy command leads, not the checkout before it
 		{[]string{testShell, "-c", slotIncident}, "… go test -race -timeout 25m -run '^TestSlackProof$' -count=150 -v ./internal/lab/ 2>&1 | /usr/bin/…"},
 		{[]string{testShell, "-c", "git -C " + strings.Repeat("x", 100) + " switch -q main\ngo build ./..."}, "… go build ./..."},
@@ -75,7 +75,7 @@ func TestRunEventDetail(t *testing.T) {
 }
 
 // trueCmd is the command the slot tests run.
-var trueCmd = []string{"true"}
+var trueCmd = []string{flagOn}
 
 // fakeCapper runs the command uncapped and records the slots it was asked
 // to cap and to run in.
