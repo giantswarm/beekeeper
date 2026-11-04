@@ -41,7 +41,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	defer cancel()
 	raw, err := waitReviewedRelease(ctx, doc.Repo, doc.Number)
 	out, reason, ok := merge.ParseReleaseWait(raw)
-	result.Release = &reviewedRelease{Verdict: "unconfirmed"}
+	result.Release = &reviewedRelease{Verdict: verdictUnconfirmed}
 	switch {
 	case !ok:
 		result.ExitCode = 9

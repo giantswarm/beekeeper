@@ -20,9 +20,9 @@ func takeoverGate(t *testing.T, pid int, phase string) *gateRun {
 	t.Helper()
 	now := time.Now()
 	a := queueApp(t, state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pid,
-		Phase: phase, By: state.Party{Session: "old", Name: "previous worker"}, Joined: now, Seen: now, Started: now})
+		Phase: phase, By: state.Party{Session: "stale owner", Name: "previous worker"}, Joined: now, Seen: now, Started: now})
 	return &gateRun{app: a, ctx: context.Background(), repo: scratchRepo, pr: 7, lane: a.cfg.Lanes[0],
-		me: state.Party{Session: "new", Name: "worker"}, pid: os.Getpid(), argv: mergeArgv(scratchRepo)}
+		me: state.Party{Session: "taking over", Name: "current worker"}, pid: os.Getpid(), argv: mergeArgv(scratchRepo)}
 }
 
 func TestGateTakesOverDeadOwnerAndRunsMerge(t *testing.T) {
@@ -51,7 +51,7 @@ func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 			g := takeoverGate(t, sleeper(t), phase)
 			pullState = func(context.Context, string, int) (github.Pull, error) {
 				p := github.Pull{State: github.Merged, MergedAt: time.Now().Add(-time.Minute)}
-				p.MergeCommit.OID = "abc"
+				p.MergeCommit.OID = "merge-abc"
 				return p, nil
 			}
 			was := releaseWait
@@ -66,14 +66,14 @@ func TestGateTakesOverMergedPRAndConfirmsRelease(t *testing.T) {
 				if repo != scratchRepo || strings.Join(target, " ") != "--pr 7" {
 					t.Fatalf("release wait: %s %v", repo, target)
 				}
-				return []byte(`{"verdict":"available","tag":"v1.2.4"}`)
+				return []byte(`{"verdict":"available","tag":"v1.2.6"}`)
 			}
 			stdout := gateStdout(t)
 			if why, err := g.step(); why != "" || err != nil {
 				t.Fatalf("step: %q, %v", why, err)
 			}
 			out, ok := merge.ParseDocument([]byte(stdout()))
-			if !ok || !out.Merged || out.Release != "v1.2.4" || calls != 1 {
+			if !ok || !out.Merged || out.Release != "v1.2.6" || calls != 1 {
 				t.Fatalf("outcome %+v, parsed %v, waits %d", out, ok, calls)
 			}
 			if st := gateState(t, g); len(st.Merges) != 0 {

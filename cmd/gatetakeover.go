@@ -18,6 +18,9 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+// verdictUnconfirmed is a merge whose release nobody could confirm.
+const verdictUnconfirmed = "unconfirmed"
+
 // staleMerge is local evidence that a running place has lost its writer.
 // Unknown versions are not evidence of staleness.
 func staleMerge(st *state.State, m state.Merge) string {
@@ -175,11 +178,20 @@ func (g *gateRun) recordTakenMerge(p github.Pull, handCut string) error {
 	case out.ReleaseFailed:
 		verdict = "ci_failed"
 	case out.Unconfirmed:
-		verdict = "unconfirmed"
+		verdict = verdictUnconfirmed
 	case out.NoRelease:
 		verdict = "no_release"
 	}
-	doc := map[string]any{"mergeCommitSha": p.MergeCommit.OID, "verdict": "merged", "exitCode": rc, "release": map[string]any{"tag": out.Release, "verdict": verdict}}
+	type releaseDoc struct {
+		Tag     string `json:"tag"`
+		Verdict string `json:"verdict"`
+	}
+	doc := struct {
+		MergeCommitSHA string     `json:"mergeCommitSha"`
+		Verdict        string     `json:"verdict"`
+		ExitCode       int        `json:"exitCode"`
+		Release        releaseDoc `json:"release"`
+	}{p.MergeCommit.OID, "merged", rc, releaseDoc{out.Release, verdict}}
 	if err := json.NewEncoder(os.Stdout).Encode(doc); err != nil {
 		return err
 	}
