@@ -291,3 +291,41 @@ func TestLoopback(t *testing.T) {
 		}
 	}
 }
+
+// An undecided action must not hide a denial later in the batch. Conversely,
+// an allowed action cannot turn a mixed batch into an unconditional allow.
+func TestAuditConsentBatchChecksLaterDeny(t *testing.T) {
+	click := batchAction(chromeComputer, tabInput(leftClick, map[string]any{summaryKey: clicksAuthorize}))
+	ordinary := batchAction(chromeNavigation, map[string]any{urlKey: applicationsPage, tabKey: json.Number("8")})
+	unknown := batchAction(chromeComputer, map[string]any{actionKey: leftClick, tabKey: json.Number("8")})
+	for name, tc := range map[string]struct {
+		actions  []any
+		page     Page
+		decision string
+	}{
+		"ordinary then refused":           {[]any{ordinary, click}, Page{URL: otherAppPage, Title: otherTitle}, Deny},
+		"refused then ordinary":           {[]any{click, ordinary}, Page{URL: otherAppPage, Title: otherTitle}, Deny},
+		"unknown then refused":            {[]any{unknown, click}, Page{URL: otherAppPage, Title: otherTitle}, Deny},
+		"multiple undecided then refused": {[]any{ordinary, unknown, click}, Page{URL: otherAppPage, Title: otherTitle}, Deny},
+		"ordinary then allowed":           {[]any{ordinary, click}, Page{URL: ownPage, Title: ownTitle}, ""},
+		"allowed then ordinary":           {[]any{click, ordinary}, Page{URL: ownPage, Title: ownTitle}, ""},
+		"unknown then allowed":            {[]any{unknown, click}, Page{URL: ownPage, Title: ownTitle}, ""},
+		"all allowed":                     {[]any{click, click}, Page{URL: ownPage, Title: ownTitle}, Allow},
+		"all ordinary":                    {[]any{ordinary, ordinary}, Page{URL: ownPage, Title: ownTitle}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ev := toolEvent(browserTools+chromeBatch, map[string]any{"actions": tc.actions})
+			ev["permission_mode"] = dontAsk
+			ev[sessionKey] = browseTurn
+			ev["transcript_path"] = transcriptWith(t, tc.page, false)
+			d := decideEvent(t, Hook{Apps: func() []App { return recorded }}, ev)
+			if tc.decision == "" {
+				if d != nil && d.PermissionDecision != "" {
+					t.Fatalf("decided %+v, want no decision", d)
+				}
+			} else if d == nil || d.PermissionDecision != tc.decision {
+				t.Fatalf("decided %+v, want %s", d, tc.decision)
+			}
+		})
+	}
+}

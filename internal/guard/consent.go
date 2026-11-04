@@ -329,6 +329,7 @@ func (h Hook) consent(ev event) []byte {
 	var pages map[string]Page
 	var checks map[string]pageCheck
 	allowed := ""
+	allAllowed := true
 	for i, c := range calls {
 		var d Decision
 		if c.navigate != "" {
@@ -372,8 +373,11 @@ func (h Hook) consent(ev event) []byte {
 				allowed = d.Reason
 			}
 		default:
-			return nil
+			allAllowed = false
 		}
+	}
+	if !allAllowed {
+		return nil
 	}
 	return answer(hookOutput{PermissionDecision: Allow, Reason: allowed})
 }
