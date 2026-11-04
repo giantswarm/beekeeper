@@ -346,9 +346,9 @@ func TestEnvtestServeTools(t *testing.T) {
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}
-	e.expect(t, pia, "note_list", map[string]any{}, false, "no open notes")
+	e.expect(t, pia, noteListTool, map[string]any{}, false, "no open notes")
 	for _, caller := range []*mcpCaller{ana, bo, pia} {
-		for _, tool := range []string{"note_list", "snapshot"} {
+		for _, tool := range []string{noteListTool, "snapshot"} {
 			text, result, failed := caller.call(tool, map[string]any{})
 			want := 1
 			if caller == pia {

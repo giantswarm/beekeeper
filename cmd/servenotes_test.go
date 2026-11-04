@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state/kube"
 )
 
+const noteListTool = "note_list"
+
 func TestNoteToolsScope(t *testing.T) {
 	scheme, err := kube.Scheme()
 	if err != nil {
@@ -48,7 +50,7 @@ func TestNoteToolsScope(t *testing.T) {
 		{"person without team", identity.Caller{Email: "reader@example.com"}, []state.Note{notes[0], notes[2]}},
 		{"unrelated caller", identity.Caller{Email: "stranger@example.com"}, []state.Note{}},
 	} {
-		for _, tool := range []serveTool{{tool: mcp.NewTool("note_list"), run: toolNoteList}, {tool: mcp.NewTool("snapshot"), run: toolSnapshot}} {
+		for _, tool := range []serveTool{{tool: mcp.NewTool(noteListTool), run: toolNoteList}, {tool: mcp.NewTool("snapshot"), run: toolSnapshot}} {
 			t.Run(tool.tool.Name+"/"+tc.name, func(t *testing.T) {
 				out := &bytes.Buffer{}
 				c := &call{ctx: t.Context(), s: srv, who: tc.who, out: out, app: &app{cfg: &config.Config{}, store: store, out: out}}
