@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/pkg/project"
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -621,7 +623,31 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	unlock := func() { _ = os.Remove(path) }
+	// Keep the guard inode in place permanently: unlinking an OS lock file
+	// would let another caller lock a different inode at the same path.
+	// Hold it through PID recovery and the switch, so no stale observation
+	// can remove a subsequent owner's marker. The OS releases it on exit.
+	guard := flock.New(path + ".lock")
+	locked, err := guard.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, refused("another serving-mode switch of %s runs; only one runs at a time", name)
+	}
+	owned := false
+	defer func() {
+		if !owned {
+			_ = guard.Unlock()
+		}
+	}()
+	var once sync.Once
+	unlock := func() {
+		once.Do(func() {
+			_ = os.Remove(path)
+			_ = guard.Unlock()
+		})
+	}
 	take := func() (bool, error) {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // the lock file beside the state, its own name
 		if err != nil {
@@ -639,18 +665,20 @@ func (a *app) takeServeModeLock(name string) (func(), error) {
 		return nil, err
 	}
 	if ok {
+		owned = true
 		return unlock, nil
 	}
 	// A switch whose process is gone left its lock: reap it, so a crashed
-	// switch never holds the machine's switches forever. The retry runs at
-	// most once: a switch that took the lock beside the reap keeps it, and
-	// this caller stands refused like any second switch.
+	// switch never holds the machine's switches forever. The guard serializes
+	// this read/remove/recreate sequence. Retain the PID check to refuse a
+	// live switch started by a version that does not yet use the guard.
 	if raw, rerr := os.ReadFile(path); rerr == nil { //nolint:gosec // the lock file this process just found
 		if pid, cerr := strconv.Atoi(strings.TrimSpace(string(raw))); cerr == nil && !proc.Alive(pid) {
 			_ = os.Remove(path)
 			if ok, err := take(); err != nil {
 				return nil, err
 			} else if ok {
+				owned = true
 				return unlock, nil
 			}
 		}

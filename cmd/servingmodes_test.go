@@ -823,3 +823,65 @@ func openConditions(w *watcher) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Every successful caller keeps ownership until all contenders have attempted
+// admission, making overlapping stale-lock recoveries visible without sleeps.
+func TestServeModeStaleLockExcludesConcurrentSwitches(t *testing.T) {
+	store, err := state.OpenVersion(t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.Dir(), serveModeLockFile(selfHostedProv))
+	type result struct {
+		unlock func()
+		err    error
+	}
+	for round := range 32 {
+		if err := os.WriteFile(path, []byte("999999999\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		results := make(chan result, 32)
+		for range 32 {
+			go func() {
+				<-start
+				a := &app{store: store}
+				unlock, err := a.takeServeModeLock(selfHostedProv)
+				results <- result{unlock, err}
+			}()
+		}
+		close(start)
+		var owners []func()
+		for range 32 {
+			r := <-results
+			if r.err == nil {
+				owners = append(owners, r.unlock)
+			} else if Code(r.err) != ExitRefused {
+				t.Errorf("round %d: unexpected admission error: %v", round, r.err)
+			}
+		}
+		for _, unlock := range owners {
+			unlock()
+		}
+		if len(owners) != 1 {
+			t.Fatalf("round %d: got %d owners, want exactly one", round, len(owners))
+		}
+		// A released caller must never remove a later owner's marker or
+		// release its guard, even if its cleanup runs again.
+		a := &app{store: store}
+		unlock, err := a.takeServeModeLock(selfHostedProv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owners[0]()
+		_, markerErr := os.Stat(path)
+		extraUnlock, admissionErr := a.takeServeModeLock(selfHostedProv)
+		if extraUnlock != nil {
+			extraUnlock()
+		}
+		unlock()
+		if markerErr != nil || admissionErr == nil {
+			t.Fatalf("old cleanup disturbed current owner: marker=%v admission=%v", markerErr, admissionErr)
+		}
+	}
+}
