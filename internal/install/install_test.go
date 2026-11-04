@@ -19,6 +19,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+// bashMatcher is the Claude Code tool name a narrowed hook matcher names.
+const bashMatcher = "Bash"
+
 // reload is the fake service manager's reload command.
 const reload = "reload"
 
@@ -997,7 +1000,7 @@ func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
 			if got := CheckAgyHooks(path, "", ""); got != "" {
 				t.Fatalf("install-generated hooks refused by doctor: %s", got)
 			}
-			for _, matcher := range []string{"Read", "Bash", ""} {
+			for _, matcher := range []string{"Read", bashMatcher, ""} {
 				restricted := strings.Replace(string(raw), `"matcher":"*"`, `"matcher":"`+matcher+`"`, 1)
 				write(t, path, `{"beekeeper": `+restricted+`}`)
 				if got := AgyHooksUnguarded(path); got == "" {
@@ -1253,7 +1256,7 @@ func TestCodexHooksAndSkills(t *testing.T) {
 	}
 
 	// Stale "*" matcher or narrowed "Bash" matcher is flagged by CheckCodexHooks and fixed by Install.
-	for _, badMatcher := range []string{"*", "Bash"} {
+	for _, badMatcher := range []string{"*", bashMatcher} {
 		write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[{"matcher":"`+badMatcher+`","hooks":[{"type":"command","command":"`+updatedExe+` hook pretooluse --format codex","timeout":30}]}]}}`)
 		if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); !strings.Contains(got, "differs from what install writes") {
 			t.Errorf("matcher %q: CheckCodexHooks = %q, want differs from what install writes", badMatcher, got)
@@ -1398,7 +1401,7 @@ func TestCodexRepairsQuotedHook(t *testing.T) {
 				if err := json.Unmarshal(CodexHook(exe), &entry); err != nil {
 					t.Fatal(err)
 				}
-				entry.Matcher = "Bash"
+				entry.Matcher = bashMatcher
 				entry.Hooks[0].Command = shellQuote(exe) + " hook pretooluse " + format
 				raw, err := json.Marshal(entry)
 				if err != nil {
