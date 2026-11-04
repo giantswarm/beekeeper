@@ -903,7 +903,7 @@ func unwrapWords(words []string) (rest []string, unsure string) {
 			} else {
 				i++
 			}
-		case name == selfCmd && i+1 < len(words) && words[i+1] == "run":
+		case name == selfCmd && i+1 < len(words) && words[i+1] == executionRunCommand:
 			i += 2
 		case name == "nohup" || name == "setsid" || name == "time":
 			i++

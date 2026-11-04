@@ -29,7 +29,7 @@ func Allowed(caller Caller, meta Meta, grants []state.TranscriptGrant, now time.
 	// Default worker access: transcripts of workers on the same repository.
 	callerRepo := strings.TrimSpace(caller.Repo)
 	metaRepo := cmp.Or(strings.TrimSpace(meta.Repo), RepoOfRef(meta.Ref))
-	if callerRepo != "" && metaRepo != "" && !strings.EqualFold(meta.Role, "guide") && strings.EqualFold(callerRepo, metaRepo) {
+	if callerRepo != "" && metaRepo != "" && strings.EqualFold(meta.Role, "worker") && strings.EqualFold(callerRepo, metaRepo) {
 		return true
 	}
 	for _, g := range grants {
