@@ -105,6 +105,24 @@ func TestArchiveNeverWarmsHandedOverCLI(t *testing.T) {
 	}
 }
 
+// The handover mark hides the outgoing session from superseded, so the
+// handover's own archive step needs its own refusal.
+func TestArchiveNeverWarmsCLIDuringItsHandover(t *testing.T) {
+	a, _ := stubApp(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = []state.Start{{Party: handedFrom}, {Party: handedTo}}
+		st.Agents = []state.Agent{{Party: handedTo, Task: countTask}}
+		st.Handovers = []state.Handover{{Party: handedFrom, PID: os.Getpid()}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.warmSteward(t.Context(), handedFrom.HostSession)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "will not be resumed") {
+		t.Fatalf("archive revived the session under handover: %v", err)
+	}
+}
+
 func TestHandoverRefusesLiveGateWait(t *testing.T) {
 	for _, phase := range []string{state.Waiting, state.Running, state.Settling} {
 		st := &state.State{Merges: []state.Merge{{By: handedFrom, PID: os.Getpid(), Phase: phase}}}
