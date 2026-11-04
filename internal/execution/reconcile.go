@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	checkOperation       = "check"
 	inventoryOperation   = "inventory"
 	missingOperation     = "missing"
 	syncControlOperation = "sync-control"
@@ -47,7 +48,7 @@ func (s *Server) Inventory(ctx context.Context, coordinator string) ([]Ref, erro
 	if err := ownedDirectory(s.Root); err != nil {
 		return nil, err
 	}
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	paths, err := s.journalFiles()
 	if err != nil {
 		return nil, err
 	}

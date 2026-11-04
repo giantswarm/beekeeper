@@ -1,13 +1,16 @@
 package dockerprune
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -25,12 +28,20 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	systemCommand  = "system"
+	inspectCommand = "inspect"
+	loadCommand    = "load"
+	importCommand  = "import"
+	imagesCommand  = "images"
+	execCommand    = "exec"
+	devRef         = "example:dev"
+	nginxRef       = "docker.io/library/nginx:1"
+	kind           = "kind"
+	build          = "build"
+	docker         = "docker"
+	contextFlag    = "--context"
+	image          = imageCommand
+	oldID          = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -53,20 +64,20 @@ func TestNormalize(t *testing.T) {
 
 func TestImporter(t *testing.T) {
 	yes := [][]string{
-		{kind, "load", "docker-image", "x:dev", "--name", "agentlab"},
+		{kind, loadCommand, "docker-image", "x:dev", "--name", "agentlab"},
 		{"/usr/bin/kind", "create", "cluster"},
 		{docker, build, "-t", "x", "."},
-		{docker, "--context", "default", build, "."},
-		{docker, image, "load", "-i", "x.tar"},
+		{docker, contextFlag, "default", build, "."},
+		{docker, image, loadCommand, "-i", "x.tar"},
 		{docker, "save", "x"},
 		{"/usr/lib/docker/cli-plugins/docker-buildx", "buildx", build, "."},
-		{"ctr", "-n", "k8s.io", "images", "import", "x.tar"},
+		{"ctr", "-n", "k8s.io", imagesCommand, importCommand, "x.tar"},
 	}
 	no := [][]string{
 		{kind, "get", "kubeconfig"},
 		{docker, "ps"},
 		{docker, "run", "img", "make", build},
-		{docker, "exec", "node", "crictl", "images"},
+		{docker, execCommand, "node", "crictl", imagesCommand},
 		{"go", build, "./..."},
 		{"kind"},
 	}
@@ -78,6 +89,31 @@ func TestImporter(t *testing.T) {
 	for _, a := range no {
 		if Importer(a) {
 			t.Errorf("%v is an importer", a)
+		}
+	}
+}
+
+func TestImporterWithGlobalOptions(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{docker, "--config", "/tmp/docker-fixture", contextFlag, "default", image, loadCommand, "-i", "/tmp/synthetic.tar"}, true},
+		{[]string{docker, "-H", "unix:///tmp/docker-fixture.sock", "-c", "local-fixture", "save", devRef}, true},
+		{[]string{docker, "--config=/tmp/docker-fixture", "--context=default", builderCommand, build, "."}, true},
+		{[]string{kind, "--verbosity", "2", "--quiet", loadCommand, "docker-image", devRef}, true},
+		{[]string{"/usr/bin/ctr", "--address", "/tmp/containerd-fixture.sock", "--namespace", "k8s.io", imagesCommand, importCommand, "/tmp/synthetic.tar"}, true},
+		{[]string{"buildctl", "--addr", "unix:///tmp/buildkit-fixture.sock", "--timeout=30", build}, true},
+		// The old three-word scan matched these; a prune must keep waiting.
+		{[]string{docker, "compose", "-f", "/tmp/compose-fixture.yaml", build}, true},
+		{[]string{docker, "container", importCommand, "/tmp/container-fixture.tar"}, true},
+		{[]string{docker, "compose", "ps"}, false},
+		{[]string{docker, contextFlag, loadCommand, "ps"}, false},
+		{[]string{docker, "run", devRef, build}, false},
+		{[]string{docker, execCommand, "node", loadCommand}, false},
+	} {
+		if got := Importer(c.args); got != c.want {
+			t.Errorf("Importer(%v) = %v; want %v", c.args, got, c.want)
 		}
 	}
 }
@@ -96,35 +132,37 @@ type fake struct {
 	// tagged are the images' tag times by ID; an image without one was
 	// never tagged.
 	tagged map[string]string
+	refs   map[string][]string
 }
 
 func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	switch {
-	case slices.Equal(args, []string{"system", "df", "--format", "{{json .}}"}):
+	case slices.Equal(args, []string{systemCommand, "df", "--format", "{{json .}}"}):
 		return []byte(f.df), nil
-	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
+	case slices.Equal(args, []string{systemCommand, "df", "-v", "--format", "{{json .}}"}):
 		return []byte(f.dfv), nil
-	case args[0] == "builder" && args[1] == "du":
+	case args[0] == builderCommand && args[1] == "du":
 		return []byte(f.du), nil
-	case args[0] == "builder" && args[1] == "prune":
+	case args[0] == builderCommand && args[1] == "prune":
 		f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
 		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
 		}
 		return []byte("Total:\t0B\n"), nil
-	case args[0] == image && args[1] == "inspect":
+	case args[0] == image && args[1] == inspectCommand:
 		var out string
 		for _, id := range args[4:] {
 			at, ok := f.tagged[id]
 			if !ok {
 				at = "0001-01-01T00:00:00Z"
 			}
-			out += id + "\t\"" + at + "\"\n"
+			refs, _ := json.Marshal(f.refs[id])
+			out += id + "\t\"" + at + "\"\t" + string(refs) + "\n"
 		}
 		return []byte(out), nil
 	case args[0] == "ps":
 		return []byte(f.nodes), nil
-	case args[0] == "exec":
+	case args[0] == execCommand:
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
 		if args[2] != "--no-prune" {
@@ -139,7 +177,6 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 const dfv = `{"Images":[
 {"Containers":"0","CreatedAt":"2026-10-15 01:00:00 +0200 CEST","ID":"sha256:new","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-2","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
-{"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
 {"Containers":"0","CreatedAt":"2026-10-12 01:00:00 +0200 CEST","ID":"sha256:dangling","Repository":"<none>","Tag":"<none>","Digest":"<none>","Size":"500MB","UniqueSize":"500MB"},
 {"Containers":"1","CreatedAt":"2026-01-01 01:00:00 +0200 CEST","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-01-02 01:00:00 +0200 CEST","ID":"sha256:inlab","Repository":"nginx","Tag":"1","Digest":"","Size":"3GB","UniqueSize":"3GB"}
@@ -148,6 +185,12 @@ const dfv = `{"Images":[
 func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 	f := &fake{dfv: dfv,
 		tagged: map[string]string{oldID: "2026-10-16T09:00:00.5+02:00"},
+		refs: map[string][]string{
+			"sha256:new":  {"gsoci.azurecr.io/giantswarm/x:dev-2"},
+			oldID:         {"gsoci.azurecr.io/giantswarm/x:dev-1", "x:dev-1"},
+			"sha256:node": {"kindest/node:v1"},
+			inlabID:       {"nginx:1"},
+		},
 		nodes:  "lab-control-plane\trunning\n",
 		crictl: map[string]string{"lab-control-plane": `{"images":[{"id":"sha256:other","repoTags":["docker.io/library/nginx:1"],"repoDigests":[]}]}`}}
 	images, err := ListImages(context.Background(), f.run)
@@ -197,13 +240,79 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 func TestListImagesFailsWithoutTagTimes(t *testing.T) {
 	f := &fake{dfv: dfv}
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == image && args[1] == "inspect" {
+		if args[0] == image && args[1] == inspectCommand {
 			return nil, errors.New("no such image")
 		}
 		return f.run(ctx, args...)
 	}
 	if _, err := ListImages(context.Background(), run); err == nil {
 		t.Error("images listed without their tag times")
+	}
+}
+
+func TestListImagesRemovesAllTagsFromOneDFRow(t *testing.T) {
+	refs := []string{"example:one", "example:two"}
+	remaining := map[string]bool{refs[0]: true, refs[1]: true}
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == systemCommand:
+			// Docker's verbose df prints just the first tag per image.
+			return []byte(`{"Images":[{"ID":"sha256:old","Repository":"example","Tag":"one","CreatedAt":"2026-01-01 00:00:00 +0000 UTC","Size":"4GB","UniqueSize":"4GB","Containers":"0"}]}`), nil
+		case args[0] == image && args[1] == inspectCommand:
+			// Render the requested Docker template over a complete image
+			// inspection, independently of which fields the package asks for.
+			js := func(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+			format, err := template.New(inspectCommand).Funcs(template.FuncMap{"json": js}).Parse(args[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err = format.Execute(&out, map[string]any{
+				"Id": oldID, "Metadata": map[string]any{"LastTagTime": time.Time{}}, "RepoTags": refs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out.WriteByte('\n')
+			return out.Bytes(), nil
+		case args[0] == image && args[1] == "rm":
+			for _, ref := range args[2:] {
+				delete(remaining, ref)
+			}
+			return nil, nil
+		default:
+			t.Fatalf("unexpected Docker call: %v", args)
+			return nil, nil
+		}
+	}
+	images, err := ListImages(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := func() (int64, error) {
+		if len(remaining) > 0 {
+			return 4e9, nil
+		}
+		return 0, nil
+	}
+	trimmed, err := TrimImages(context.Background(), run, Candidates(images, nil, time.Now()), 4e9, 0, size, func() bool { return false })
+	if err != nil || len(trimmed.Removed) != 1 || len(remaining) != 0 {
+		t.Fatalf("trim = %+v, %v; tags %v still retain the 4 GB image", trimmed, err, remaining)
+	}
+}
+
+func TestListImagesFailsWithUnreadableReferences(t *testing.T) {
+	for _, refs := range []string{"", "\tnot-json", "\t{}"} {
+		f := &fake{dfv: dfv}
+		run := func(ctx context.Context, args ...string) ([]byte, error) {
+			if args[0] == image && args[1] == inspectCommand {
+				return []byte("sha256:new\t\"0001-01-01T00:00:00Z\"" + refs + "\n"), nil
+			}
+			return f.run(ctx, args...)
+		}
+		if _, err := ListImages(context.Background(), run); err == nil {
+			t.Errorf("listed images with unreadable references %q", refs)
+		}
 	}
 }
 
