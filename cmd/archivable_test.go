@@ -102,7 +102,7 @@ func TestArchiveNeedsTheAgreement(t *testing.T) {
 // words without one are a decline, nothing is no answer.
 func TestStewardAnswers(t *testing.T) {
 	call := func(id string, failed bool) claude.AnswerCall {
-		in, _ := json.Marshal(map[string]string{"session_id": id})
+		in, _ := json.Marshal(map[string]string{executionOmpSession: id})
 		return claude.AnswerCall{Name: archiveTool, Input: in, Done: true, Error: failed, Result: "Archived session " + id}
 	}
 	did := stewardAnswer{steward: steward{host: doerHost}, answer: claude.Answer{Calls: []claude.AnswerCall{call(targetHost, false), call("self", false)}, Text: "Done."}}

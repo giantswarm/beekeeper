@@ -223,7 +223,7 @@ func commandHead(argv []string, n int) string {
 // shellCommand is the command argv runs: a shell's -c script rather than the
 // shell (the hook wraps every build in zsh -c), else argv joined.
 func shellCommand(argv []string) string {
-	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, "zsh"}, filepath.Base(argv[0])) {
+	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, zshCmd}, filepath.Base(argv[0])) {
 		return argv[2]
 	}
 	return strings.Join(argv, " ")

@@ -35,7 +35,7 @@ func TestRunCoreLimits(t *testing.T) {
 cd "$1" || exit 43
 sh -c 'kill -ABRT $$'
 test -z "$(find . -name 'core*' -print)"`
-			if rc := Run(o, []string{"sh", "-c", script, "test", dir}); rc != 0 {
+			if rc := Run(o, []string{"sh", "-c", script, testCommand, dir}); rc != 0 {
 				t.Fatalf("run exit %d", rc)
 			}
 			entries, err := os.ReadDir(dir)

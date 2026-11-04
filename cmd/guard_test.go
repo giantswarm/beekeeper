@@ -280,7 +280,7 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": command, "run_in_background": bg}})
+	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, "tool_input": map[string]any{"command": command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
@@ -475,7 +475,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 	}
 	dir, env := capped(t)
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // a test fixture
 		t.Fatal(err)
 	}
 	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -491,7 +491,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 		e := evs[i]
 		if e.Verb != verb || e.By.Session != "test-session" || e.By.Name != "capped test" || guard.RunScope(e.Detail) != scope ||
 			!guard.IsTestScope(scope) || !strings.HasSuffix(scope, ".scope") ||
-			guard.RunCommand(e.Detail) != "go test ./..." {
+			guard.RunCommand(e.Detail) != litGoTest {
 			t.Errorf("event %d: %+v", i, e)
 		}
 	}
@@ -605,7 +605,7 @@ func TestHookPreToolUseFormatAgy(t *testing.T) {
 		}
 		var out strings.Builder
 		c := New()
-		c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse", "--format=agy"})
+		c.SetArgs([]string{"--" + configFlag, cfgPath, configHookVerb, "pretooluse", "--format=agy"})
 		c.SetIn(strings.NewReader(string(raw)))
 		c.SetOut(&out)
 		c.SetErr(&out)
@@ -688,7 +688,7 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 		t.Helper()
 		raw, err := json.Marshal(map[string]any{
 			"session_" + "id":      "sess-1",
-			"cwd":                  cwd,
+			executionOmpCwd:        cwd,
 			"hook_event_" + "name": "PreToolUse",
 			"tool_" + "name":       tool,
 			"tool_" + "input":      input,
@@ -778,7 +778,7 @@ func TestHookPersonalSearchOptIn(t *testing.T) {
 				t.Fatal(err)
 			}
 			raw, err := json.Marshal(map[string]any{
-				"session_id": "personal", "cwd": dir, "tool_name": "Bash",
+				executionOmpSession: "personal", "cwd": dir, "tool_name": "Bash",
 				"tool_input": map[string]any{"command": `gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }'`},
 			})
 			if err != nil {

@@ -43,7 +43,7 @@ func (h Hook) searchRefusal(cmd, session string, cwd ...string) string {
 	for _, sg := range sc.segments() {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		what, repos := ghSearch(words)
-		if ep := ghAPIEndpoint(words); ep == "graphql" || graphqlURL.MatchString(ep) {
+		if ep := ghAPIEndpoint(words); ep == executionGraphQL || graphqlURL.MatchString(ep) {
 			dir := ""
 			if len(cwd) > 0 {
 				dir = cwd[0]

@@ -29,7 +29,7 @@ func TestBrowseSudoFindings(t *testing.T) {
 		transcript.WriteByte('\n')
 	}
 	// The browser's tab metadata, rather than the agent's report, identifies the barrier.
-	write(map[string]any{sudoKeyType: "assistant", sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_use", "id": "tabs", sudoKeyName: chromeToolPrefix + "tabs_context_mcp", "input": map[string]any{}}}}})
+	write(map[string]any{sudoKeyType: "assistant", sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_use", "id": litTabs, sudoKeyName: chromeToolPrefix + "tabs_context_mcp", "input": map[string]any{}}}}})
 	tabs := `{"availableTabs":[{"tabId":7,"title":"Confirm access","url":"https://github.com/organizations/example/settings/apps/demo"}]}`
 	write(map[string]any{sudoKeyType: sudoRoleUser, sudoKeyMessage: map[string]any{sudoKeyContent: []any{map[string]any{sudoKeyType: "tool_result", "tool_use_id": "tabs", sudoKeyContent: tabs}}}})
 	// A later page on the same tab must not erase evidence of the barrier.

@@ -13,11 +13,11 @@ func TestRunGoBuildRetry(t *testing.T) {
 		name, command, first, second string
 		wantRC, attempts             int
 	}{
-		{"killed build recovers", "build", "137", "0", 0, 2},
+		{"killed build recovers", ClassBuild, "137", "0", 0, 2},
 		{"retry is bounded", "build", "137", "137", 137, 2},
 		{"ordinary failure", "build", "1", "0", 1, 1},
 		{"successful build", "build", "0", "0", 0, 1},
-		{"other go command", "test", "137", "0", 137, 1},
+		{"other go command", testCommand, "137", "0", 137, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &fakeCapper{}
@@ -42,7 +42,7 @@ printf 'retry\n' >> "$RETRY_TEST_DIR/attempts"
 printf '%s\n%s\n' "$GOFLAGS" "$GOMAXPROCS" > "$RETRY_TEST_DIR/env"
 exit ` + tt.second + "\n"
 			goPath := filepath.Join(dir, "go")
-			if err := os.WriteFile(goPath, []byte(script), 0o700); err != nil {
+			if err := os.WriteFile(goPath, []byte(script), 0o700); err != nil { //nolint:gosec // a test fixture
 				t.Fatal(err)
 			}
 			var stderr bytes.Buffer
@@ -50,7 +50,7 @@ exit ` + tt.second + "\n"
 			if rc := Run(o, []string{goPath, tt.command, "./..."}); rc != tt.wantRC {
 				t.Fatalf("exit %d, want %d: %s", rc, tt.wantRC, &stderr)
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, "attempts"))
+			raw, err := os.ReadFile(filepath.Join(dir, "attempts")) //nolint:gosec // a test fixture
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +61,7 @@ exit ` + tt.second + "\n"
 				t.Fatalf("scopes %d, want %d", len(f.ran), tt.attempts)
 			}
 			if tt.attempts == 2 {
-				raw, err := os.ReadFile(filepath.Join(dir, "env"))
+				raw, err := os.ReadFile(filepath.Join(dir, "env")) //nolint:gosec // a test fixture
 				if err != nil {
 					t.Fatal(err)
 				}

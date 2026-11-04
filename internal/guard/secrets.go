@@ -162,7 +162,7 @@ var (
 	// codeFile: a file name that holds code or prose, not a secret's values.
 	codeFile = regexp.MustCompile(`(?i)\.(?:go|md|ts|tsx|js|mjs|py|sh|rs|java|kt|rb|tf|html|css|tpl|snap|golden|mod|sum)$`)
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
-	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
+	shells   = map[string]bool{"sh": true, bashCmd: true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
 	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.
@@ -467,7 +467,7 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			name := path.Base(words[c])
 			readSearchStage := isReadOnlyUnlockSearch(srcStageCmd, srcStageArgs)
 			switch name {
-			case "cp", "mv", "ln", "install":
+			case "cp", "mv", "ln", litInstall:
 				staged = true
 				if non := nonFlags(words[c+1:]); len(non) >= 2 {
 					dst := non[len(non)-1]
@@ -569,7 +569,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			if l := g.gitConfigLeak(args, copied, depth); l != nil {
 				return l
 			}
-		case name == "sed" || name == "gsed":
+		case name == litSed || name == "gsed":
 			if l := g.sedExecLeak(args, copied, depth); l != nil {
 				return l
 			}
@@ -790,12 +790,12 @@ func (g secretGuard) script(p string, depth int) *leak {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(g.cwd, p)
 	}
-	if lfi, err := os.Lstat(p); err == nil && lfi.Mode()&os.ModeSymlink != 0 && !slices.Contains(g.unlock, filepath.Base(p)) {
+	if lfi, err := os.Lstat(p); err == nil && lfi.Mode()&os.ModeSymlink != 0 && !slices.Contains(g.unlock, filepath.Base(p)) { //nolint:gosec // a path of this tool's own state
 		if target, err := filepath.EvalSymlinks(p); err == nil && slices.Contains(g.unlock, filepath.Base(target)) {
 			return nil
 		}
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Stat(p) //nolint:gosec // a path of this tool's own state
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxScript {
 		return nil
 	}
@@ -1371,7 +1371,7 @@ func isReadOnlyUnlockSearch(cmdName string, args []string) bool {
 			return false
 		}
 		switch sub[0] {
-		case "di" + "ff", "log", "st" + "atus", "blame", "grep", "add", "commit", "branch", "rev-parse":
+		case "di" + "ff", "log", "st" + "atus", "blame", "grep", worktreeAdd, "commit", "branch", "rev-parse":
 			return true
 		}
 	}
@@ -1846,7 +1846,7 @@ func flowsSafely(sc shellScan, segs []segment, i int, l *leak) bool {
 			if safeSink(words, l) {
 				return true
 			}
-			if k := commandAt(words); k < len(words) && path.Base(words[k]) == "tee" {
+			if k := commandAt(words); k < len(words) && path.Base(words[k]) == teeCmd {
 				return false
 			}
 		}

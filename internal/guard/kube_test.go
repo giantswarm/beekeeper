@@ -431,7 +431,7 @@ func TestKubeProtectedContexts(t *testing.T) {
 	h.ProtectedContexts = contexts
 	for _, context := range contexts {
 		t.Run(context, func(t *testing.T) {
-			for _, verb := range []string{"delete", "apply", "patch", "replace", "scale", "edit", "annotate", "label"} {
+			for _, verb := range []string{"delete", "apply", "patch", "replace", "scale", verbEdit, "annotate", "label"} {
 				wantRefused(t, h, "kubectl --context "+context+" "+verb+" storageclass example", "rule: kube production write gate")
 			}
 			for _, verb := range []string{"get", "describe", "logs", "top"} {

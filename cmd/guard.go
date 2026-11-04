@@ -276,7 +276,7 @@ machine's files stay untouched.`,
 				if err != nil {
 					return err
 				}
-				runPrefix := []string{exe, "run"}
+				runPrefix := []string{exe, workerGitHubRunGroup}
 				f.Visit(func(flag *pflag.Flag) {
 					runPrefix = append(runPrefix, "--"+flag.Name+"="+flag.Value.String())
 				})

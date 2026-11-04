@@ -74,10 +74,10 @@ func (w *targetWalk) configWrites(st *deleteState, dir, name string, raw, words 
 		configure := false
 		selector := ""
 		for i, word := range words {
-			if word == "--help" || word == "-h" {
+			if word == litHelp || word == "-h" {
 				return
 			}
-			if word == "config" && i+1 < len(words) && (words[i+1] == "show" || words[i+1] == "get" || words[i+1] == "list") {
+			if word == litConfig && i+1 < len(words) && (words[i+1] == "show" || words[i+1] == "get" || words[i+1] == "list") {
 				return
 			}
 			if word == "configure" || word == "config" {
@@ -98,7 +98,7 @@ func (w *targetWalk) configWrites(st *deleteState, dir, name string, raw, words 
 		} else if dir != "" {
 			w.out = append(w.out, filepath.Join(dir, "agentlab.yaml"))
 		}
-	case "cp", "mv", "install":
+	case "cp", "mv", litInstall:
 		if len(raw) > 0 {
 			w.add(st, dir, raw[len(raw)-1])
 		}
@@ -109,13 +109,13 @@ func (w *targetWalk) configWrites(st *deleteState, dir, name string, raw, words 
 				}
 			}
 		}
-	case "rm", "unlink", "touch", "truncate":
+	case "rm", "unlink", transcriptTouch, "truncate":
 		for _, r := range raw {
 			if !strings.HasPrefix(r, "-") {
 				w.add(st, dir, r)
 			}
 		}
-	case "sed":
+	case litSed:
 		for _, word := range words {
 			if word == "-i" || strings.HasPrefix(word, "-i") || strings.HasPrefix(word, "--in-place") {
 				for _, r := range raw {

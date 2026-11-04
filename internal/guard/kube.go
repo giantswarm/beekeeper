@@ -311,7 +311,7 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 		}
 	}
 	switch {
-	case verb == "config" && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
+	case verb == litConfig && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
 		return switchReason(at)
 	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == verbLogin && flags["--self-contained"] == "":
 		return switchReason(at)

@@ -16,7 +16,7 @@ func ProcessRun(argv, runPrefix, gatePrefix []string) ([]string, string) {
 	if len(argv) == 0 {
 		return nil, ""
 	}
-	if len(argv) < 3 || argv[1] != "-c" || !slices.Contains([]string{"sh", "bash", "zsh", "dash", "ksh"}, filepath.Base(argv[0])) {
+	if len(argv) < 3 || argv[1] != "-c" || !slices.Contains([]string{"sh", bashCmd, "zsh", "dash", "ksh"}, filepath.Base(argv[0])) {
 		if at := ownedRunArg(argv); at >= 0 {
 			result := append(slices.Clone(argv[:at]), gatePrefix...)
 			result = append(result, argv[at:]...)
@@ -115,7 +115,7 @@ func ownedRunArg(argv []string) int {
 	}
 	offset := 0
 	for i, word := range argv {
-		if offset == match[2] && filepath.Base(word) == "devctl" {
+		if offset == match[2] && filepath.Base(word) == litDevctl {
 			return i
 		}
 		offset += len(ShellQuote(word)) + 1

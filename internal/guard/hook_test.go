@@ -285,14 +285,14 @@ func TestHeavyClassification(t *testing.T) {
 // Detected background runs inherit the longer wait; foreground runs pass unchanged.
 func TestBackgroundRunGetsTheLongWait(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "build.sh"), []byte("#!/bin/sh\nbeekeeper run -- go test ./...\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "build.sh"), []byte("#!/bin/sh\nbeekeeper run -- go test ./...\n"), 0o700); err != nil { //nolint:gosec // a test fixture
 		t.Fatal(err)
 	}
 	for _, cmd := range []string{
 		"yarn test --maxWorkers=4",
 		"beekeeper run -- go test ./...",
 		"cd /src/x && export GOFLAGS=-p=2 && beekeeper run -- go test ./...",
-		"./build.sh",
+		litBuildSh,
 		"bash build.sh",
 		"cd " + dir + " && ./build.sh",
 	} {
@@ -321,7 +321,7 @@ func TestBackgroundRunGetsTheLongWait(t *testing.T) {
 
 func TestUnrelatedBackgroundCallsPassUnchanged(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "plain.sh"), []byte("#!/bin/sh\nsleep 1\n"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "plain.sh"), []byte("#!/bin/sh\nsleep 1\n"), 0o700); err != nil { //nolint:gosec // a test fixture
 		t.Fatal(err)
 	}
 	for _, cmd := range []string{"sleep 1", "git status", "gh pr list --repo o/r", "devctl version", "beekeeper lease claim build --wait 1m", "./plain.sh", "bash plain.sh", "./missing.sh", "echo 'beekeeper run'", "cat plain.sh"} {
@@ -1044,7 +1044,7 @@ func TestBackgroundWrapperDetection(t *testing.T) {
 		"cycle.sh": "#!/bin/sh\n./cycle.sh\n",
 		"data.sh":  "#!/bin/sh\necho 'beekeeper run'\n",
 	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil { //nolint:gosec // a test fixture
 			t.Fatal(err)
 		}
 	}

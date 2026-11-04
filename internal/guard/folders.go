@@ -357,7 +357,7 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 			w.loop(&st, dir, raw[k+1:])
 		case w.moves:
 			w.addMoved(&st, dir, name, raw[k+1:])
-		case w.entries && name != "tee":
+		case w.entries && name != teeCmd:
 			w.addEntries(&st, dir, name, withoutRedirections(raw[k+1:]))
 		case name == "tee":
 			for j, word := range words[k+1:] {

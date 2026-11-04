@@ -134,12 +134,12 @@ func entryArgs(args []string, short string, long ...string) []string {
 
 func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string) {
 	switch name {
-	case "mkdir", "touch":
+	case litMkdir, "touch":
 		short := "m"
 		longs := []string{"--mode"}
 		if name == "touch" {
 			short = "drt"
-			longs = []string{"--date", "--reference", "--time"}
+			longs = []string{"--date", litReference, "--time"}
 		}
 		for _, a := range entryArgs(args, short, longs...) {
 			w.add(st, dir, a)
@@ -178,7 +178,7 @@ func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string
 		} else {
 			w.add(st, dir, target)
 		}
-	case "git":
+	case gitCmd:
 		for len(args) > 0 {
 			a := strings.Join(shellWords(args[0]), "")
 			if a == "-C" && len(args) > 1 {
@@ -188,7 +188,7 @@ func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string
 					return
 				}
 				args = args[2:]
-			} else if (a == "-c" || a == "--git-dir" || a == "--work-tree") && len(args) > 1 {
+			} else if (a == "-c" || a == litGitDir || a == "--work-tree") && len(args) > 1 {
 				args = args[2:]
 			} else if strings.HasPrefix(a, "-") {
 				args = args[1:]
@@ -200,10 +200,10 @@ func (w *targetWalk) addEntries(st *deleteState, dir, name string, args []string
 			return
 		}
 		sub := strings.Join(shellWords(args[0]), "")
-		if sub == "clone" {
+		if sub == litClone {
 			w.cloneEntry(st, dir, args[1:], false)
 		}
-		if sub == "worktree" && len(args) > 1 && strings.Join(shellWords(args[1]), "") == "add" {
+		if sub == "worktree" && len(args) > 1 && strings.Join(shellWords(args[1]), "") == worktreeAdd {
 			ops := entryArgs(args[2:], "bB", "--branch", "--reason", "--orphan")
 			if len(ops) > 0 {
 				w.add(st, dir, ops[0])

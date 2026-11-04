@@ -130,7 +130,7 @@ func TestPersonalSearchOptIn(t *testing.T) {
 	} {
 		h := Hook{Self: hookSelf, Shell: hookShell, GuardPersonalSearch: true}
 		ev := toolEvent(bashTool, map[string]any{commandKey: command})
-		ev["cwd"], ev["session_id"] = t.TempDir(), "personal"
+		ev["cwd"], ev["session_id"] = t.TempDir(), litPersonal
 		if d := decideEvent(t, h, ev); d == nil || d.PermissionDecision != decisionDeny {
 			t.Fatalf("opted-in personal search allowed: %s", command)
 		}

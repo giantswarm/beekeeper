@@ -349,7 +349,7 @@ func (st *ghBodyState) applyCommandFileWrites(segIdx int, words, redirs []ghToke
 		for _, a := range nonFlags(args) {
 			st.recordFileWrite(a, dir, known, "", false, false)
 		}
-	case name == "sed" || name == "perl":
+	case name == litSed || name == "perl":
 		for _, a := range args {
 			if strings.HasPrefix(a, "-i") || a == "--in-place" || strings.HasPrefix(a, "-pi") {
 				for _, f := range nonFlags(args) {

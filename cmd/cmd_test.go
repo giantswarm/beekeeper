@@ -257,7 +257,7 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	}
 	h := guard.Hook{Self: "/bin/beekeeper", MaxLabs: func() int { return 2 }, Clusters: func() []string { return []string{"kind-1", "kind-2"} },
 		Leases: func() []lease.Holder { return a.namedHolders(sessions, hs) }}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "kind create cluster --name third"}, "cwd": "/"})
+	raw, _ := json.Marshal(map[string]any{"tool_name": tToolBash, "tool_input": map[string]any{"command": "kind create cluster --name third"}, "cwd": "/"})
 	var o struct {
 		D struct {
 			Reason string `json:"permissionDecisionReason"`

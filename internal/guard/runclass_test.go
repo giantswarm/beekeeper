@@ -16,7 +16,7 @@ import (
 const runAllPackages = "./..."
 
 func TestParseClass(t *testing.T) {
-	for in, want := range map[string]string{"": ClassBuild, "build": ClassBuild, "benchmark": ClassBenchmark, "lab": ClassLab} {
+	for in, want := range map[string]string{"": ClassBuild, ClassBuild: ClassBuild, "benchmark": ClassBenchmark, "lab": ClassLab} {
 		if got, err := ParseClass(in); err != nil || got != want {
 			t.Errorf("ParseClass(%q) = %q, %v; want %q", in, got, err, want)
 		}
@@ -62,7 +62,7 @@ func TestBuildsNothing(t *testing.T) {
 		{[]string{testShell, "-c", "true && go test ./..."}, false},
 		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},
 		{[]string{testShell, "-c", "echo x > out"}, false},
-		{[]string{"./build.sh"}, false},
+		{[]string{litBuildSh}, false},
 		{[]string{testShell, "-c", "  "}, false},
 	} {
 		if got := BuildsNothing(c.argv); got != c.want {

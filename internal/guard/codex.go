@@ -121,7 +121,7 @@ func parseCodexPatchHeaders(patch string) ([]codexPatchHeader, string) {
 
 func isCodexShellTool(toolName string) bool {
 	switch toolName {
-	case bashTool, "bash", "exec_command", "shell_command", "shell", "local_shell":
+	case bashTool, bashCmd, "exec_command", "shell_command", "shell", "local_shell":
 		return true
 	default:
 		return false
@@ -983,8 +983,8 @@ var (
 	anyRedirRe   = regexp.MustCompile(`(?:^|[\s;|&()])((?:\d+)?(?:>>|\|>|>\||<>|<<-|<<<|<<|>|<)|&>>|&>)\s*([^\s;|&()<>]+)`)
 	writeCmdsMap = map[string]bool{
 		"cp": true, "mv": true, "ln": true, "ins" + "tall": true, "dd": true,
-		"rm": true, "rmdir": true, "unlink": true, "shred": true, trashCmd: true, trashPutCmd: true,
-		teeCmd: true, "trun" + "cate": true, "touch": true, "mkdir": true, "chmod": true, "chown": true,
+		"rm": true, "rmdir": true, unlinkCmd: true, "shred": true, trashCmd: true, trashPutCmd: true,
+		teeCmd: true, "trun" + "cate": true, "touch": true, litMkdir: true, "chmod": true, "chown": true,
 		codexPatchKey: true,
 	}
 )

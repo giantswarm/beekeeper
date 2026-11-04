@@ -110,7 +110,7 @@ func testHome(t *testing.T) string {
 func TestLabProxyRefreshesHeldLabs(t *testing.T) {
 	h, home := sandboxHook(t)
 	h.Labs = func() []lease.Holder {
-		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: litOther}}
 	}
 	refresh := self + " lease kubeconfig --refresh lab-a lab-b >/dev/null 2>&1; "
 	run := func(h Hook, session, cmd string) *decision {

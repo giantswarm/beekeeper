@@ -14,8 +14,8 @@ import (
 )
 
 func TestProcessRun(t *testing.T) {
-	run := []string{"beekeeper", "run", "--max=2G", "--"}
-	gate := []string{"beekeeper", "gate", "--"}
+	run := []string{selfCmd, "run", "--max=2G", "--"}
+	gate := []string{"beekeeper", litGate, "--"}
 	for _, tc := range []struct{ script, want string }{
 		{"echo waiting; tail -f output", "echo waiting; tail -f output"},
 		{"devctl pr wait o/r 1 && go test ./...", "beekeeper gate -- devctl pr wait o/r 1 && beekeeper run --max=2G -- go test ./..."},
@@ -56,7 +56,7 @@ func TestProcessRunSlotFollowsChild(t *testing.T) {
 	// The executable helper below uses Run and the real flock-based slot.
 	wrapper := os.Args[0]
 	// A fake compiler verifies it owns the slot, then returns a chosen exit.
-	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/bin/sh\ntest -e \"$STATE/1.holder\" || exit 92\nexit \"${BUILD_EXIT:-0}\"\n"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/bin/sh\ntest -e \"$STATE/1.holder\" || exit 92\nexit \"${BUILD_EXIT:-0}\"\n"), 0700); err != nil { //nolint:gosec // a test fixture
 		t.Fatal(err)
 	}
 	t.Setenv("STATE", dir)
@@ -70,7 +70,7 @@ func TestProcessRunSlotFollowsChild(t *testing.T) {
 			t.Fatal("script was not split")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+		output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // a test fixture
 		cancel()
 		rc := 0
 		if err != nil {
@@ -88,7 +88,7 @@ func TestProcessRunSlotFollowsChild(t *testing.T) {
 			t.Fatalf("exit %d output %q, want %d", rc, output, want)
 		}
 	}
-	events, err := os.ReadFile(filepath.Join(dir, "events"))
+	events, err := os.ReadFile(filepath.Join(dir, "events")) //nolint:gosec // a test fixture
 	if err != nil || string(events) != "gate\nstart\nend\ngate\ngate\nstart\nend\ngate\n" {
 		t.Fatalf("events %q: %v", events, err)
 	}
@@ -108,7 +108,7 @@ func TestProcessRunHelper(t *testing.T) {
 		os.Exit(90)
 	}
 	dir := os.Getenv("STATE")
-	events, err := os.OpenFile(filepath.Join(dir, "events"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	events, err := os.OpenFile(filepath.Join(dir, "events"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600) //nolint:gosec // a test fixture
 	if err != nil {
 		os.Exit(94)
 	}
@@ -143,7 +143,7 @@ func TestProcessRunOutputBesideHeldSlot(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput() //nolint:gosec // a test fixture
 	if err != nil || string(output) != "waiting\nwait output\n" {
 		t.Fatalf("output %q: %v", output, err)
 	}

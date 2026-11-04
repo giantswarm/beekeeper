@@ -20,15 +20,15 @@ func TestLabConfigLease(t *testing.T) {
 	if err := os.Symlink(dir, alias); err != nil {
 		t.Fatal(err)
 	}
-	holder := lease.Holder{Env: "lab-1", Name: "lab-holder", Session: "owner", HostSession: "local_desktop", LabConfig: &lease.LabConfig{Path: config}}
+	holder := lease.Holder{Env: "lab-1", Name: "lab-holder", Session: ownerKey, HostSession: "local_desktop", LabConfig: &lease.LabConfig{Path: config}}
 	for _, tc := range []struct {
 		name, tool string
 		input      map[string]any
 		cwd        string
 		deny       bool
 	}{
-		{"edit", editTool, map[string]any{filePathKey: config}, dir, true},
-		{"write", writeTool, map[string]any{filePathKey: "agentlab.yaml"}, dir, true},
+		{verbEdit, editTool, map[string]any{filePathKey: config}, dir, true},
+		{ompWriteTool, writeTool, map[string]any{filePathKey: "agentlab.yaml"}, dir, true},
 		{"symlink", editTool, map[string]any{filePathKey: filepath.Join(alias, "agentlab.yaml")}, dir, true},
 		{"redirect", bashTool, map[string]any{commandKey: "echo x > agentlab.yaml"}, dir, true},
 		{"cd", bashTool, map[string]any{commandKey: "cd " + ShellQuote(dir) + " && echo x >> agentlab.yaml"}, t.TempDir(), true},
@@ -37,12 +37,12 @@ func TestLabConfigLease(t *testing.T) {
 		{"selector", bashTool, map[string]any{commandKey: "agentlab configure --lab test-lab"}, t.TempDir(), true},
 		{"move", bashTool, map[string]any{commandKey: "mv replacement agentlab.yaml"}, dir, true},
 		{"sed", bashTool, map[string]any{commandKey: "sed -i s/a/b/ agentlab.yaml"}, dir, true},
-		{"read", bashTool, map[string]any{commandKey: "cat agentlab.yaml"}, dir, false},
+		{ompReadTool, bashTool, map[string]any{commandKey: "cat agentlab.yaml"}, dir, false},
 		{"help", bashTool, map[string]any{commandKey: "agentlab configure --help"}, dir, false},
 		{"free lab", writeTool, map[string]any{filePathKey: filepath.Join(t.TempDir(), "agentlab.yaml")}, dir, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, session := range []string{"other", "owner", "desktop", ""} {
+			for _, session := range []string{litOther, "owner", "desktop", ""} {
 				h := Hook{Labs: func() []lease.Holder { return []lease.Holder{holder} }}
 				ev := toolEvent(tc.tool, tc.input)
 				ev["cwd"] = tc.cwd

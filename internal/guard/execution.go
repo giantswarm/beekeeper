@@ -500,7 +500,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			}
 		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
-		case "gh", "devctl":
+		case "gh", litDevctl:
 			args := executionVerb(words[1:])
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
@@ -518,7 +518,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if strings.Contains(args, "mergepullrequest") || strings.Contains(args, "/merge") || strings.Contains(args, "pr merge") {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-		case "git":
+		case gitCmd:
 			for _, a := range words[1:] {
 				if strings.Contains(a, "alias.") || strings.Contains(a, "core.sshCommand") {
 					refusal = errors.New("execution command aliases cannot bypass the remote guard")
