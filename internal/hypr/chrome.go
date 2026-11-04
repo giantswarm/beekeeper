@@ -312,16 +312,22 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 	}
 	where := l.where(*w)
 	s := &Shown{Before: *w, Where: where}
+	lua, redirectAttempted := true, false
 	fail := func(err error) (*Shown, error) {
+		// hyprctl can be killed after the compositor accepted a command.
+		// Undo its effects even when the preparation's context has ended.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
 		at := "shown on the person's screen"
 		if where != "" {
 			at = "on " + where
 		}
 		return nil, fmt.Errorf("the shared Chrome window is %s; readying the off-screen output %s failed: %w",
-			at, Output, joinErr(err, run(ctx, ctl, "eval", redirectOff), s.removeOutput(ctx, ctl)))
+			at, Output, joinErr(err, s.undoSetup(cleanup, ctl, lua && redirectAttempted)))
 	}
 	if l.output() == nil {
-		if err := rules.run(ctx, ctl); err != nil {
+		lua, err = rules.run(ctx, ctl)
+		if err != nil {
 			return fail(err)
 		}
 		s.Created = true
@@ -336,6 +342,7 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 			return fail(err)
 		}
 	}
+	redirectAttempted = true
 	if err := s.Redirect(ctx, ctl, true, hold); err != nil {
 		return fail(err)
 	}
@@ -346,6 +353,34 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 		s.Moved = true
 	}
 	return s, nil
+}
+
+// undoSetup stops a possibly applied redirect and returns any windows it
+// caught before removing an output this preparation created. A failed
+// cleanup keeps the output, so its windows cannot land on the person's
+// screen. A classic configuration has no redirect to stop or windows to
+// return, even though eval reports an error there.
+func (s *Shown) undoSetup(ctx context.Context, ctl Ctl, redirected bool) error {
+	off := run(ctx, ctl, "eval", redirectOff)
+	if redirected {
+		if off != nil {
+			return fmt.Errorf("%w; the output %s stays until the Chrome redirect is stopped", off, Output)
+		}
+		var windows []Window
+		if err := query(ctx, ctl, &windows, "clients"); err != nil {
+			return fmt.Errorf("%w; the output %s stays until its windows can be read", err, Output)
+		}
+		var moves []error
+		for _, w := range windows {
+			if w.Workspace.Name == Surface {
+				moves = append(moves, moveTo(w.Address, s.Before.Workspace).run(ctx, ctl))
+			}
+		}
+		if err := joinErr(moves...); err != nil {
+			return fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output)
+		}
+	}
+	return joinErr(off, s.removeOutput(ctx, ctl))
 }
 
 // Redirect turns the redirect of the windows Chrome opens on, until hold at
@@ -510,17 +545,20 @@ type setting struct {
 	classic [][2]string
 }
 
-func (s setting) run(ctx context.Context, ctl Ctl) error {
+// run reports whether the compositor accepted the Lua configuration. The
+// distinction lets failed setup remove a classic output without requiring
+// the Lua-only redirect API to work there.
+func (s setting) run(ctx context.Context, ctl Ctl) (lua bool, err error) {
 	lerr := run(ctx, ctl, "eval", s.lua)
 	if lerr == nil {
-		return nil
+		return true, nil
 	}
 	for _, k := range s.classic {
 		if err := run(ctx, ctl, "keyword", k[0], k[1]); err != nil {
-			return joinErr(lerr, err)
+			return false, joinErr(lerr, err)
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // run runs a hyprctl command that answers ok.
