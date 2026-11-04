@@ -346,7 +346,23 @@ func TestEnvtestServeTools(t *testing.T) {
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}
-	e.expect(t, pia, "note_list", map[string]any{}, false, "which lane for muster?")
+	e.expect(t, pia, "note_list", map[string]any{}, false, "no open notes")
+	for _, caller := range []*mcpCaller{ana, bo, pia} {
+		for _, tool := range []string{"note_list", "snapshot"} {
+			text, result, failed := caller.call(tool, map[string]any{})
+			want := 1
+			if caller == pia {
+				want = 0
+			}
+			notes, ok := result[keyNotes].([]any)
+			if failed || !ok || len(notes) != want {
+				t.Errorf("%s: notes = %v, failed = %v, want %d", tool, result[keyNotes], failed, want)
+			}
+			if strings.Contains(text, "which lane for muster?") != (want == 1) {
+				t.Errorf("%s: unexpected note visibility in text: %s", tool, text)
+			}
+		}
+	}
 	e.expect(t, pia, "note_answer", map[string]any{paramNote: 1, paramText: "the merge lane"}, true, "only its addressee")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "the portal lane"}, false, "note #1 answered and closed")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "again"}, true, "not open")
