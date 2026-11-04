@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -150,9 +152,19 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		// A holder restarting its CLI still holds the role.
 		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
+		prev := rl.get(st).Holder
 		msg, evs, err = rl.start(st, me, sv.live || sv.restarting(), takeOver, a.now)
 		if err != nil {
 			return nil, err
+		}
+		if prev != nil && !prev.Is(me) {
+			handed, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), prev.Party, rl.get(st).Holder.Party)
+			if err != nil {
+				return nil, err
+			}
+			if len(handed) > 0 {
+				evs = append(evs, event(me, "lease.handover", "%s", strings.Join(handed, ", ")))
+			}
 		}
 		evs = append(before, evs...)
 		// The start titles me with the run's name: never one another live

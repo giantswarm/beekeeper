@@ -276,6 +276,9 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 	if err != nil {
 		return "", err
 	}
+	if err := a.releaseEndedClaim(res, me, sessions); err != nil {
+		return "", err
+	}
 	lab := a.claimedLab(res)
 	var labCfg *lease.LabConfig
 	var labRaw []byte
@@ -1064,4 +1067,64 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
+}
+
+// leaseHolderEnded protects recent claims, successors still starting, remote
+// executions and holders whose liveness cannot be checked on this machine.
+func (a *app) leaseHolderEnded(st *state.State, sessions []*claude.Session, h lease.Holder) bool {
+	// Claims store whole seconds. Protect that entire second so a
+	// claim made after the process snapshot cannot appear older.
+	if a.leaseView(sessions, h).State != holderGone || h.Host != "" && h.Host != a.cfg.Identity.Host || !h.SinceTime().Before(a.now.Truncate(time.Second)) {
+		return false
+	}
+	// Handover keeps the original claim time, but records the
+	// successor before launching it. Read that start under the lock
+	// and allow the first-reply startup window, including starts
+	// recorded after this doctor's process snapshot.
+	if i := st.StartIndex(h.Party()); i >= 0 {
+		started := st.Starts[i].At
+		if !started.IsZero() && a.now.Sub(started) <= replyWait {
+			return false
+		}
+	}
+	// A registration may have handed this lease over after the process snapshot.
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Is(h.Party()) && !ag.Registered.IsZero() && a.now.Sub(ag.Registered) <= replyWait
+	}) {
+		return false
+	}
+	// A managed remote execution has no local CLI to discover.
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Is(h.Party()) && ag.Execution != nil && executionReserved(st, ag)
+	}) {
+		return false
+	}
+	return true
+}
+
+// releaseEndedClaim checks under the state lock so a registration's handover
+// cannot race a stale release. Keep the event even if the subsequent claim is refused.
+func (a *app) releaseEndedClaim(res string, me state.Party, sessions []*claude.Session) error {
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		dir := lease.Dir(a.cfg.LeaseDir)
+		h, err := dir.Get(res)
+		if err != nil || h == nil {
+			return nil, err
+		}
+		if h.Party().Is(me) || !a.leaseHolderEnded(st, sessions, *h) {
+			return nil, nil
+		}
+		line, err := a.labRelease(dir, *h, me, false, "", true)
+		if err != nil {
+			return nil, err
+		}
+		if err := dir.Release(res); err != nil {
+			return nil, err
+		}
+		if st.Released == nil {
+			st.Released = map[string]time.Time{}
+		}
+		st.Released[res] = a.now.UTC()
+		return []state.Event{event(me, "lease.release-gone", "released %s: holder %q's session ended%s", res, h.Name, line)}, nil
+	})
 }

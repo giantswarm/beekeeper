@@ -82,7 +82,7 @@ func TestWatchLeaseRound(t *testing.T) {
 func TestLeaseClaimUsesConfiguredRound(t *testing.T) {
 	a := claimApp(t, claimGrant(graveler, claimMe, time.Minute))
 	a.cfg.LeaseRound.Duration = 5 * time.Minute
-	holdLease(t, a, graveler, claimOther)
+	holdStartingLease(t, a, graveler, claimOther)
 	out, err := runLease(a, "claim", graveler, "-p", "next proof")
 	if Code(err) != ExitRefused || !strings.Contains(out, "overrun 5m past its 5m round") {
 		t.Errorf("configured round: %q, %v", out, err)
