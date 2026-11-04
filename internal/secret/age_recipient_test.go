@@ -109,7 +109,8 @@ func TestAutomaticAgeVaultAccess(t *testing.T) {
 	id := isolateAge(t)
 	r := id.Recipient().String()
 	file := sopsFile(t, "", r)
-	for _, entry := range []string{"identity", "recipients"} {
+	const identity = "identity"
+	for _, entry := range []string{identity, "recipients"} {
 		for _, mode := range []struct {
 			name, token string
 			session     bool
@@ -122,7 +123,7 @@ func TestAutomaticAgeVaultAccess(t *testing.T) {
 				f := &itemTools{items: map[string]string{AgeItemTitle(r): id.String()}}
 				o := &Ops{Run: f.run, Vault: ageVault, Token: mode.token, Session: mode.session}
 				var err error
-				if entry == "identity" {
+				if entry == identity {
 					var values map[string]string
 					values, err = o.values(context.Background(), Ref{File: file})
 					if err == nil && values["stringData.password"] != "x" {
@@ -147,7 +148,7 @@ func TestAutomaticAgeVaultAccess(t *testing.T) {
 						t.Fatal(err)
 					}
 					want := 1
-					if entry == "identity" {
+					if entry == identity {
 						want = 3 // listing, identity read, SOPS decrypt
 					}
 					if len(f.calls) != want {
