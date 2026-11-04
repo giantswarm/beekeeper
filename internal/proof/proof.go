@@ -32,6 +32,10 @@ const Branch = "beekeeper-proofs"
 // MaxBytes bounds the image read: a screenshot is far smaller.
 const MaxBytes = 10 << 20
 
+// MaxPixels bounds decoded images, including highly compressed inputs. It
+// allows an 8K screenshot and at most 256 MiB of 16-bit RGBA pixel data.
+const MaxPixels = 32 << 20
+
 // attempts bounds the retries of an upload whose branch moved under it.
 const attempts = 3
 
@@ -65,9 +69,19 @@ type Result struct {
 
 // Normalize decodes a PNG, JPEG or GIF image and encodes it as PNG, which
 // keeps the pixels and drops every metadata chunk (EXIF, text, comments).
+// Both the encoded bytes and decoded pixel count are bounded.
 func Normalize(raw []byte) ([]byte, error) {
 	if len(raw) > MaxBytes {
 		return nil, fmt.Errorf("the image is %d bytes, more than %d", len(raw), MaxBytes)
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("not a PNG, JPEG or GIF image: %w", err)
+	}
+	// Divide instead of multiplying dimensions: image headers can advertise
+	// sizes whose product overflows an int, especially on 32-bit platforms.
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > MaxPixels/cfg.Height {
+		return nil, fmt.Errorf("the image is %dx%d pixels, outside the limit of %d pixels", cfg.Width, cfg.Height, MaxPixels)
 	}
 	img, format, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
