@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Let the Teleport keeper finish configured login attempts and its callback retry without the systemd unit terminating valid long renewals after 15 minutes (https://github.com/giantswarm/beekeeper/issues/2442).
+
 - Preserve bounded, credential-redacted Codex stderr in owned execution logs so failures before first-task acceptance can be diagnosed (https://github.com/giantswarm/beekeeper/issues/2281).
 
 - Unregistered harness sessions keep worker transcript permissions; default repository access includes only explicitly identified worker transcripts (https://github.com/giantswarm/beekeeper/issues/2183).
