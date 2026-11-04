@@ -367,7 +367,7 @@ func TestRetryGivenUpArchive(t *testing.T) {
 			if err := retryArchive(st, id, unarchived, now); err != nil {
 				t.Fatal(err)
 			}
-			owe(st, []archiveOutcome{{agent: worker, line: "archived"}}, now)
+			owe(st, []archiveOutcome{{agent: worker, line: "archive done"}}, now)
 			if len(st.Archives) != 0 {
 				t.Fatal("successful retry still owed")
 			}
