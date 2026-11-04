@@ -33,8 +33,8 @@ const mainBranch = "main"
 func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 	t.Helper()
 	asked := new(int)
-	wasPull, wasBranch := pullBase, branchRelease
-	t.Cleanup(func() { pullBase, branchRelease = wasPull, wasBranch })
+	wasPull, wasBranch := pullBase, releaseAt
+	t.Cleanup(func() { pullBase, releaseAt = wasPull, wasBranch })
 	p := github.PullBase{Base: r.Base, Head: testFixWord, Title: "fix: a thing"}
 	if r.Version != "" {
 		p.Head, p.Title = r.Base+"#release#patch", "chore(release): "+r.Version
@@ -43,7 +43,7 @@ func stubBaseRelease(t *testing.T, r github.BaseRelease, err error) *int {
 		*asked++
 		return p, err
 	}
-	branchRelease = func(context.Context, string, string) (github.BaseRelease, error) {
+	releaseAt = func(context.Context, string, string, string) (github.BaseRelease, error) {
 		return r, nil
 	}
 	return asked
@@ -348,4 +348,72 @@ func TestAMergeIntoAReleasePRBranchTracksTheReleasePullRequestsTag(t *testing.T)
 			t.Errorf("merged event: %q", d)
 		}
 	})
+}
+
+func TestMergeRefreshesItsReleaseTree(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		before, after bool
+	}{
+		{"adds workflow", true, true},
+		{"removes workflow", false, false},
+		{"branch excluded", false, false},
+		{"another merge adds workflow", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noSystemd(t)
+			fakeDevctl(t, `echo '{"mergeCommitSha":"def","verdict":"merged","release":null}'`)
+			stubGitHub(t, github.Merged, "")
+			stubBaseRelease(t, github.BaseRelease{Base: mainBranch}, nil)
+			wasAt, wasWait := releaseAt, releaseWait
+			t.Cleanup(func() { releaseAt, releaseWait = wasAt, wasWait })
+			reads := 0
+			pullBase = func(context.Context, string, int) (github.PullBase, error) {
+				reads++
+				p := github.PullBase{Base: mainBranch, HeadOID: "head-oid"}
+				if reads > 1 {
+					p.MergeOID = "merge-oid"
+				}
+				return p, nil
+			}
+			var refs []string
+			releaseAt = func(_ context.Context, repo, base, ref string) (github.BaseRelease, error) {
+				refs = append(refs, ref)
+				auto := tc.before
+				if ref == "def" {
+					auto = tc.after
+				}
+				return github.BaseRelease{Base: base, Auto: auto}, nil
+			}
+			lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
+			g := runningMerge(t, scratchRepo, lane)
+			waits := 0
+			releaseWait = func(context.Context, string, ...string) []byte {
+				waits++
+				if st := gateState(t, g); len(st.Merges) != 1 {
+					t.Error("lane freed before release settled")
+				}
+				return []byte(`{"verdict":"available","tag":"v1.2.5"}`)
+			}
+			var err error
+			output := gateStderr(t, func() { err = startMerge(t, g) })
+			if err != nil {
+				t.Fatalf("merge: %v\n%s", err, output)
+			}
+			if strings.Join(refs, ",") != "head-oid,def" {
+				t.Fatalf("release refs: %v", refs)
+			}
+			st := gateState(t, g)
+			if tc.after {
+				if waits != 1 || len(st.Merges) != 1 || st.Merges[0].Release != "v1.2.5" || st.Merges[0].HandCut != "" {
+					t.Fatalf("release not held: waits=%d merges=%+v", waits, st.Merges)
+				}
+				if strings.Contains(output, "a tag of main is cut by hand") {
+					t.Error(output)
+				}
+			} else if waits != 0 || len(st.Merges) != 0 {
+				t.Fatalf("hand cut waited: waits=%d merges=%+v", waits, st.Merges)
+			}
+		})
+	}
 }

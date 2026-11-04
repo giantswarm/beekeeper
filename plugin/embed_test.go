@@ -49,11 +49,11 @@ func TestWorkerRulesNameTheTopics(t *testing.T) {
 	}
 }
 
-// The worker rules say where an agentlab proof runs: outside beekeeper run,
+// The long-proofs skill says where an agentlab proof runs: outside beekeeper run,
 // whose build slot it would hold while it only waits.
-func TestWorkerRulesKeepAgentlabProofsOutOfTheSlot(t *testing.T) {
-	if !strings.Contains(strings.Join(strings.Fields(WorkerRules()), " "), "an agentlab proof only waits: never under `beekeeper run`") {
-		t.Error("the worker rules do not say an agentlab proof never runs under beekeeper run")
+func TestLongProofsKeepAgentlabProofsOutOfTheSlot(t *testing.T) {
+	if !strings.Contains(strings.Join(strings.Fields(Skill("long-proofs")), " "), "An agentlab proof only waits: never under `beekeeper run`") {
+		t.Error("the long-proofs skill does not say an agentlab proof never runs under beekeeper run")
 	}
 }
 
@@ -289,5 +289,32 @@ func TestTheGuideAsksWaitingDecisionsInItsConversation(t *testing.T) {
 	guide := strings.Join(strings.Fields(Skill("guide")), " ")
 	if !strings.Contains(guide, "in the question dialog of this conversation") || !strings.Contains(guide, "without waiting for them to ask") {
 		t.Error("the guide skill does not ask waiting decisions in its conversation")
+	}
+}
+
+// Topic procedures stay out of the core prompt, leaving room for shared rules.
+func TestWorkerRulesLeaveTopicHeadroom(t *testing.T) {
+	const maxCoreBytes = 2500
+	if n := len(WorkerRules()); n > maxCoreBytes {
+		t.Errorf("worker rules: %d bytes, want at most %d for headroom", n, maxCoreBytes)
+	}
+	for _, procedure := range []string{"alerts snapshot", "systemd-run", "agentlab proof"} {
+		if strings.Contains(WorkerRules(), procedure) {
+			t.Errorf("topic procedure %q remains in worker rules", procedure)
+		}
+	}
+}
+
+func TestOperationalTopicRules(t *testing.T) {
+	for topic, rules := range map[string][]string{
+		"alerts":      {"KUBECONFIG=", "beekeeper alerts snapshot", "never Alertmanager/Mimir"},
+		"long-proofs": {"10 minutes", "slot wait", "systemd-run --user", "beekeeper timer add", "--probe", "--wake", "RemainAfterExit=yes", "SubState", "exited|failed", "ExecMainStatus"},
+	} {
+		text := strings.Join(strings.Fields(Skill(topic)), " ")
+		for _, rule := range rules {
+			if !strings.Contains(text, rule) {
+				t.Errorf("%s skill lacks %q", topic, rule)
+			}
+		}
 	}
 }
