@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -32,8 +34,10 @@ of each condition found.`,
 	var spec timerSpec
 	add := &cobra.Command{
 		Use:   "add <time> <what>",
-		Short: "Add a timer: a time (22:55) or a duration (45m), and what to look at",
-		Long: `Adds a timer at a time (22:55) or after a duration (45m).
+		Short: "Add a timer: now, a time (22:55) or a duration (45m), and what to look at",
+		Long: `Adds a timer now, at a time (22:55) or after a duration (45m).
+Durations for the time and --until accept w, d, h, m, s, ms, us (or µs) and ns,
+including combinations (1w2d3h). A day is 24 hours; a week is 168 hours.
 
 A plain timer is one watch line when its time comes and stays open until
 timer done. With --when or --probe it waits on a condition from its time:
@@ -84,7 +88,7 @@ and once one failed, so it never fires on red.`,
   beekeeper timer add 08:15 "morning overview" --run "beekeeper agents start Overview ~/brief.md" --repeat weekdays`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			due, err := untilTime(a.now, args[0])
+			due, err := timerTime(a.now, args[0])
 			if err != nil {
 				return err
 			}
@@ -117,7 +121,7 @@ and once one failed, so it never fires on red.`,
 	f.StringVar(&spec.when, "when", "", "a condition to wait on from the time: pr-merged, pr-checks (green or red), issue-closed, helmrelease-ready (with a version: rolled), controlplane-ready and its reference")
 	f.StringVar(&spec.probe, "probe", "", "a shell command to wait on from the time: it exits 0 once the condition holds")
 	f.DurationVar(&spec.every, "every", 0, "how often the condition is checked (default 5m)")
-	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now: the timer fires as timed out")
+	f.StringVar(&spec.until, "until", "", "the end of the wait, a time or a duration from now (w, d, h, m, s, ms, us/µs, ns): the timer fires as timed out")
 	f.BoolVar(&spec.expire, "expire", false, "at --until close the timer unfired instead")
 	f.StringVar(&spec.wake, "wake", "", "the registered agent the firing wakes with the timer's text")
 	f.StringVar(&spec.run, "run", "", "a shell command the firing runs, its exit code logged")
@@ -281,7 +285,7 @@ func (a *app) timerFrom(spec timerSpec, due time.Time) (state.Timer, error) {
 			return t, err
 		}
 	}
-	until, err := untilTime(a.now, spec.until)
+	until, err := timerTime(a.now, spec.until)
 	if err != nil {
 		return t, err
 	}
@@ -344,4 +348,29 @@ func timerWhen(now time.Time, t state.Timer) string {
 		s += ", repeats " + t.Repeat
 	}
 	return s
+}
+
+// Expand day and week components to nanoseconds, then let the standard parser
+// validate the complete duration and reject overflow. Rational arithmetic keeps
+// fractional units exact without overflowing during conversion.
+var timerDayWeek = regexp.MustCompile(`(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[dw]`)
+
+func timerTime(now time.Time, s string) (time.Time, error) {
+	if s == "now" {
+		return now, nil
+	}
+	expanded := timerDayWeek.ReplaceAllStringFunc(s, func(part string) string {
+		n, _ := new(big.Rat).SetString(part[:len(part)-1])
+		unit := 24 * time.Hour
+		if part[len(part)-1] == 'w' {
+			unit *= 7
+		}
+		n.Mul(n, new(big.Rat).SetInt64(int64(unit)))
+		return new(big.Int).Quo(n.Num(), n.Denom()).String() + "ns"
+	})
+	t, err := untilTime(now, expanded)
+	if err != nil {
+		return time.Time{}, usageErr("%q is neither now, a time nor a duration (w, d, h, m, s, ms, us/µs, ns)", s)
+	}
+	return t, nil
 }
