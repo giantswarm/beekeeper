@@ -13,7 +13,7 @@ import (
 )
 
 func loopFiring() alerts.Firing {
-	return alerts.Firing{Installation: "loop-fixture", Key: "fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: alerts.Page, Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
+	return alerts.Firing{Installation: "loop-fixture", Key: "loop-fixture/fp@2026-01-01T00:00:00Z", Alert: alerts.Alert{Alertname: "WorkloadDown", Severity: alerts.Page, Where: "ns/app", Since: "2026-01-01T00:00:00Z"}}
 }
 
 func TestLoopAlertBlockedWorkPagesOnceAcrossRestartAndRefire(t *testing.T) {
@@ -111,7 +111,7 @@ func TestLoopAlertTeamPageUnderWorkingHoursInhibitionCounts(t *testing.T) {
 	rules := alerts.Rules{Team: loopDeskTeam, Ignore: []string{alerts.WorkingHours}}
 	var firing []alerts.Firing
 	for fp, al := range rules.Normalize([]alerts.Raw{hours, page, other}, "loop-fixture") {
-		firing = append(firing, alerts.Firing{Installation: "loop-fixture", Key: alerts.Key(fp, al), Alert: al})
+		firing = append(firing, alerts.Firing{Installation: "loop-fixture", Key: "loop-fixture/" + alerts.Key(fp, al), Alert: al})
 	}
 	if len(firing) != 1 || firing[0].Team != loopDeskTeam {
 		t.Fatalf("read alerts: %+v", firing)
@@ -444,5 +444,35 @@ func TestLoopAlertBlockedNotesScopeInstallation(t *testing.T) {
 		if len(note.Refs) != 1 || !strings.Contains(note.StatusQuo, "blocks "+note.Refs[0]) {
 			t.Fatalf("note lost blocked item: %+v", note)
 		}
+	}
+}
+
+func TestLoopAlertLegacyOwnerInstallation(t *testing.T) {
+	for _, installation := range []string{"loop-fixture", "other"} {
+		t.Run(installation, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.a.cfg.Alerts.PageSeverity = alerts.Page
+			f := loopFiring()
+			blockLoopAlert(t, r, f)
+			readLoopAlerts = func(context.Context, *app) ([]alerts.Firing, error) { return []alerts.Firing{f}, nil }
+			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.AlertOwners = []state.AlertOwner{{Alert: strings.TrimPrefix(f.Key, f.Installation+"/"), Name: installation + "/" + f.Alertname + "#fp", By: state.Party{Name: "owner"}}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			r.pass(t)
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if installation != f.Installation {
+				want = 1
+			}
+			if len(st.Notes) != want {
+				t.Fatalf("notes = %d, want %d", len(st.Notes), want)
+			}
+		})
 	}
 }

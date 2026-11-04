@@ -112,7 +112,7 @@ func TestWatchOnceRecordsNoOwnerEnd(t *testing.T) {
 	start := time.Now().Add(-2 * time.Hour)
 	a, out := pageApp(t, start)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), By: state.Party{Session: holderGone, Name: "w"}, At: start}}
+		st.AlertOwners = []state.AlertOwner{{Alert: "fp1@" + start.UTC().Format(time.RFC3339Nano), Name: ownedPage, By: state.Party{Session: holderGone, Name: "w"}, At: start}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestAlertsOwnOneInstance(t *testing.T) {
 		t.Fatalf("own of one instance said:\n%s", got)
 	}
 	st, _ := a.store.Read()
-	if len(st.AlertOwners) != 1 || !strings.HasPrefix(st.AlertOwners[0].Alert, "fp1@") {
+	if len(st.AlertOwners) != 1 || !strings.HasPrefix(st.AlertOwners[0].Alert, "alpha/fp1@") {
 		t.Fatalf("owners: %+v", st.AlertOwners)
 	}
 	w := a.newWatcher(false, true)
@@ -247,5 +247,57 @@ func TestAlertsDisown(t *testing.T) {
 	}
 	if _, err := runAlerts(t, a.alertsDisownCmd(), out, "alpha/Nope"); err == nil || !strings.Contains(err.Error(), "firing pages: ") {
 		t.Fatalf("disown of no alert: %v", err)
+	}
+}
+
+func TestAlertOwnersRemainScopedAcrossInstallations(t *testing.T) {
+	now := time.Date(2026, 10, 2, 4, 0, 0, 0, time.UTC)
+	a := alerts.Alert{Alertname: "Page", Since: now.Add(-time.Hour).Format(time.RFC3339Nano)}
+	base := &alerts.State{Installations: map[string]*alerts.Installation{
+		"alpha": {Reachable: true, Alerts: alerts.Set{"fp": a}},
+		"beta":  {Reachable: true, Alerts: alerts.Set{"fp": a}},
+	}}
+	firing := base.Firing("")
+	for _, name := range []string{"alpha/Page", "alpha/Page#fp"} {
+		t.Run(name, func(t *testing.T) {
+			legacy := state.AlertOwner{Alert: alerts.Key("fp", a), Name: name, By: state.Party{Name: "owner"}, At: now.Add(-time.Hour)}
+			owners := []state.AlertOwner{legacy}
+			lookup := ownedUntil(owners, nil, now)
+			if _, ok := lookup(firing[0].Key); !ok {
+				t.Fatal("legacy ownership lost")
+			}
+			if _, ok := lookup(firing[1].Key); ok {
+				t.Fatal("legacy ownership crossed installations")
+			}
+			kept, changed := endedOwners(owners, firing, nil, now)
+			if changed || len(kept) != 1 {
+				t.Fatalf("legacy owner removed: %+v", kept)
+			}
+			_, released := disownAlerts(owners, firing[1:], now)
+			if len(released) != 0 {
+				t.Fatal("beta disowned alpha")
+			}
+			_, released = disownAlerts(owners, firing[:1], now)
+			if len(released) != 1 {
+				t.Fatal("legacy owner cannot disown")
+			}
+			owners = ownAlerts(owners, firing, firing[1:], state.Party{Name: "other"}, now)
+			if len(owners) != 2 {
+				t.Fatal("owning beta removed alpha")
+			}
+			owners = ownAlerts(owners, firing, firing[:1], state.Party{Name: "replacement"}, now)
+			if len(owners) != 2 {
+				t.Fatal("takeover did not replace legacy owner")
+			}
+			owners, _ = endedOwners([]state.AlertOwner{legacy}, firing[1:], nil, now)
+			if len(owners) != 0 {
+				t.Fatal("resolved legacy owner retained by beta")
+			}
+		})
+	}
+	for _, name := range []string{"", "Page", "alpha/Page#other"} {
+		if key := alertOwnerKey(state.AlertOwner{Alert: alerts.Key("fp", a), Name: name}); key != "" {
+			t.Fatalf("unsafe legacy name %q matched %q", name, key)
+		}
 	}
 }

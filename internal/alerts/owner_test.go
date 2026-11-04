@@ -112,3 +112,30 @@ func TestMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditFiringIdentityIncludesInstallation(t *testing.T) {
+	start := time.Date(2026, 10, 2, 3, 11, 0, 0, time.UTC)
+	st := pageState(start)
+	st.Installations["beta"] = &Installation{Reachable: true, Alerts: Set{"fp1": st.Installations["alpha"].Alerts["fp1"]}}
+	pages := st.Firing(Page)
+	if len(pages) != 2 {
+		t.Fatalf("pages: %+v", pages)
+	}
+	for _, f := range pages {
+		if f.Fingerprint() != "fp1" || len(Match(pages, f.Instance())) != 1 {
+			t.Fatalf("selection changed: %+v", f)
+		}
+	}
+	if len(Match(pages, "fp1")) != 2 {
+		t.Fatal("fingerprint selection lost an installation")
+	}
+	owned := func(key string) (time.Time, bool) { return time.Time{}, key == pages[0].Key }
+	due := UnownedPages(pages, 15*time.Minute, owned, start.Add(time.Hour))
+	if len(due) != 1 || due[0].Installation != "beta" {
+		t.Errorf("alpha ownership suppressed beta: %+v", due)
+	}
+	due = UnownedPages(pages, 15*time.Minute, neverOwned, start.Add(time.Hour))
+	if len(due) != 2 || due[0].Mark == due[1].Mark {
+		t.Errorf("reminder identities collide: %+v", due)
+	}
+}

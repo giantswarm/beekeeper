@@ -170,6 +170,25 @@ func noAlertMatches(q string, pages []alerts.Firing) error {
 	return fmt.Errorf("no firing alert matches %q; firing pages: %s", q, strings.Join(names, ", "))
 }
 
+// alertOwnerKey qualifies legacy owner identities using their recorded name.
+// A missing installation cannot safely identify an owner across installations.
+func alertOwnerKey(o state.AlertOwner) string {
+	if strings.Contains(o.Alert, "/") {
+		return o.Alert
+	}
+	installation, name, ok := strings.Cut(o.Name, "/")
+	if !ok || installation == "" || name == "" {
+		return ""
+	}
+	if _, fp, instance := strings.Cut(name, "#"); instance {
+		fingerprint, _, _ := strings.Cut(o.Alert, "@")
+		if fp != fingerprint {
+			return ""
+		}
+	}
+	return installation + "/" + o.Alert
+}
+
 // ownAlerts are the owners with hits owned by owner at now: a new owner
 // takes an alert over, and the owners of alerts no longer firing are gone.
 func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner state.Party, now time.Time) []state.AlertOwner {
@@ -177,7 +196,7 @@ func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner st
 		return slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == key }) &&
 			!slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == key })
 	}
-	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool { return !keep(o.Alert) })
+	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool { return !keep(alertOwnerKey(o)) })
 	for _, f := range hits {
 		out = append(out, state.AlertOwner{Alert: f.Key, Name: f.Instance(), By: owner, At: now})
 	}
@@ -189,7 +208,7 @@ func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner st
 func disownAlerts(owners []state.AlertOwner, hits []alerts.Firing, now time.Time) (out, released []state.AlertOwner) {
 	out = slices.Clone(owners)
 	for i, o := range out {
-		if o.Ended.IsZero() && slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == o.Alert }) {
+		if o.Ended.IsZero() && slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == alertOwnerKey(o) }) {
 			out[i].Ended = now
 			released = append(released, out[i])
 		}
@@ -206,7 +225,7 @@ func ownedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.
 		var until time.Time
 		found := false
 		for _, o := range owners {
-			if o.Alert != key {
+			if alertOwnerKey(o) != key {
 				continue
 			}
 			found = true
@@ -231,7 +250,7 @@ func ownedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.
 func endedOwners(owners []state.AlertOwner, firing []alerts.Firing, sessions []*claude.Session, now time.Time) ([]state.AlertOwner, bool) {
 	changed := false
 	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool {
-		gone := !slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == o.Alert })
+		gone := !slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == alertOwnerKey(o) })
 		changed = changed || gone
 		return gone
 	})

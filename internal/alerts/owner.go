@@ -13,7 +13,7 @@ import (
 // nobody.
 func Key(fingerprint string, a Alert) string { return fingerprint + "@" + a.Since }
 
-// Firing is one alert of the baseline with its key.
+// Firing is one alert of the baseline with its installation-qualified key.
 type Firing struct {
 	Installation string
 	Key          string
@@ -25,7 +25,8 @@ func (f Firing) Name() string { return f.Installation + "/" + f.Alertname }
 
 // Fingerprint is the alert's fingerprint in the baseline.
 func (f Firing) Fingerprint() string {
-	fp, _, _ := strings.Cut(f.Key, "@")
+	key := strings.TrimPrefix(f.Key, f.Installation+"/")
+	fp, _, _ := strings.Cut(key, "@")
 	return fp
 }
 
@@ -44,7 +45,7 @@ func (st *State) Firing(severity string) []Firing {
 		}
 		for fp, a := range in.Alerts {
 			if severity == "" || a.Severity == severity {
-				out = append(out, Firing{Installation: name, Key: Key(fp, a), Alert: a})
+				out = append(out, Firing{Installation: name, Key: name + "/" + Key(fp, a), Alert: a})
 			}
 		}
 	}

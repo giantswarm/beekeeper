@@ -125,7 +125,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			return err
 		}
 		owned := slices.ContainsFunc(st.AlertOwners, func(o state.AlertOwner) bool {
-			if o.Alert != f.Key || !o.Ended.IsZero() {
+			if alertOwnerKey(o) != f.Key || !o.Ended.IsZero() {
 				return false
 			}
 			_, live := claude.Live(sessions, o.By)
