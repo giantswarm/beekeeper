@@ -2434,6 +2434,9 @@ func reportLines(r state.WorkerReport) []string {
 // name only the supervisor or the guide wait on an operational handoff,
 // including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
+	if p.Checks {
+		return false
+	}
 	// Desk reviews belong to the supervisor loop, including an unproven
 	// review park that the worker still needs to correct.
 	if strings.Contains(strings.ToLower(p.Waits), "desk review") {
