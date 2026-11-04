@@ -132,13 +132,13 @@ func headPullPage(ctx context.Context, run GH, heads []headPage, pulls map[Head]
 		}
 		raw, ok := doc.Data[fmt.Sprintf("h%d", i)]
 		if !ok {
-			return fmt.Errorf("gh api graphql: no answer for %s branch %s", h.Repo, h.Branch)
+			return nil, fmt.Errorf("gh api graphql: no answer for %s branch %s", h.Repo, h.Branch)
 		}
 		if err := json.Unmarshal(raw, &v); err != nil {
-			return fmt.Errorf("gh api graphql: %s branch %s: %w", h.Repo, h.Branch, err)
+			return nil, fmt.Errorf("gh api graphql: %s branch %s: %w", h.Repo, h.Branch, err)
 		}
 		if v.Pulls == nil || v.Pulls.Nodes == nil {
-			return fmt.Errorf("gh api graphql: unavailable pull requests for %s branch %s", h.Repo, h.Branch)
+			return nil, fmt.Errorf("gh api graphql: unavailable pull requests for %s branch %s", h.Repo, h.Branch)
 		}
 		own := slices.IndexFunc(v.Pulls.Nodes, func(n headNode) bool { return !n.Fork })
 		if own < 0 {
