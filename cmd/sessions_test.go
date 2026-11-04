@@ -198,7 +198,7 @@ func TestSessionsAttributeBrowseHelpers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{`"repo":exampleToolRepo`, `"role":"agent: fix example/tool#7"`, `"refs":["example/tool#7"]`, `"parent":`} {
+			for _, want := range []string{`"repo":"example/tool"`, `"role":"agent: fix example/tool#7"`, `"refs":["example/tool#7"]`, `"parent":`} {
 				if !strings.Contains(string(b), want) {
 					t.Errorf("helper JSON lacks %s: %s", want, b)
 				}
