@@ -164,7 +164,7 @@ func TestCheckAdvertisesOnlyPassingHarnesses(t *testing.T) {
 	f, dir := codexFixture(t)
 	ctx := context.Background()
 	caps, err := f.s.Check(ctx)
-	if err != nil || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
+	if err != nil || !caps.SourcePreparation || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
 		t.Fatalf("both harnesses should pass: %+v %v", caps, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
@@ -248,7 +248,7 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
-	for _, level := range []string{"", "high"} {
+	for _, level := range []string{"", testEffortHigh} {
 		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
 	}
 }
