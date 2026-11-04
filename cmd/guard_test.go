@@ -46,9 +46,6 @@ func TestMain(m *testing.M) {
 	// built as: the coordinator is a development build, and a test of the
 	// host updates names its own release.
 	coordinatorVersion = func() string { return "dev" }
-	// Nor does an answer read where it runs: the person types it at
-	// their terminal; a test that wants a session stubs its own.
-	answerSeat = func(*app) (string, bool) { return "", true }
 	// Nor does a claim: every issue's thread is an empty one of its own; a
 	// test of the claims keeps its own.
 	claimGH = claimtest.New().GH
