@@ -88,3 +88,32 @@ func TestLeaseClaimUsesConfiguredRound(t *testing.T) {
 		t.Errorf("configured round: %q, %v", out, err)
 	}
 }
+
+func TestLeaseLeadingDecimalRound(t *testing.T) {
+	for _, purpose := range []string{"a .5h round", ".5-hour round"} {
+		t.Run(purpose, func(t *testing.T) {
+			a := claimApp(t, claimGrant(graveler, claimMe, time.Minute))
+			h := lease.Holder{Env: graveler, Name: claimOther.Name, Purpose: purpose, Since: a.now.Add(-45 * time.Minute).Format(time.RFC3339)}
+			if _, err := lease.Dir(a.cfg.LeaseDir).Claim(graveler, h); err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			a.out = &out
+			w := &watcher{app: a, reported: map[string]bool{}, last: map[string]time.Time{}}
+			w.staleLeases(context.Background(), nil)
+			if !strings.Contains(out.String(), "LEASE HELD PAST ROUND:") || !strings.Contains(out.String(), "overrun 15m past its 30m round") {
+				t.Errorf("watch output = %q", out.String())
+			}
+			was := claimPause
+			t.Cleanup(func() { claimPause = was })
+			claimPause = func(context.Context, time.Duration) error { return nil }
+			queued, err := runLease(a, "claim", graveler, "-p", "next proof", "--wait", "1m")
+			if Code(err) != ExitRefused || !strings.Contains(queued, "queued: number 1 behind") || !strings.Contains(queued, "overrun 16m past its 30m round") {
+				t.Errorf("queued claim = %q, %v", queued, err)
+			}
+			if cur, err := lease.Dir(a.cfg.LeaseDir).Get(graveler); err != nil || cur == nil || cur.Name != h.Name || cur.Since != h.Since {
+				t.Errorf("queued claim changed the holder: %+v, %v", cur, err)
+			}
+		})
+	}
+}
