@@ -22,6 +22,31 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+func TestPlanChoresKeepsStoppedParkedWorkers(t *testing.T) {
+	for _, reason := range []string{"stale", "done", "relieved"} {
+		t.Run(reason, func(t *testing.T) {
+			now := keepNow
+			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: "stopped"}, Done: reason == "done",
+				Registered: now.Add(-48 * time.Hour), Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review", At: now.Add(-time.Hour)}}
+			st := &state.State{Agents: []state.Agent{ag}}
+			if reason == "relieved" {
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
+			}
+			plan := func() []chore {
+				return planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false },
+					func(state.Party) bool { return false }, 24*time.Hour, now, nil)
+			}
+			if chores := plan(); slices.ContainsFunc(chores, func(c chore) bool { return c.kind == choreRemove }) {
+				t.Fatalf("stopped parked worker would be removed: %+v", chores)
+			}
+			st.Agents[0].Park = nil
+			if chores := plan(); len(chores) != 1 || chores[0].kind != choreRemove {
+				t.Fatalf("unparked %s worker should be removed: %+v", reason, chores)
+			}
+		})
+	}
+}
+
 // The doctor takes a finished worker off the roster once its CLI is idle,
 // a desktop CLI kept warm included, a relieved role holder at once and an idle worker without a CLI once it
 // went stale, archiving the desktop sessions of the finished and the stale
