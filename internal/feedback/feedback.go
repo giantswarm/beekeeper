@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -49,13 +50,12 @@ type Thread struct {
 }
 
 var (
-	// header opens the parent ("=== THREAD PARENT MESSAGE ===") or a reply
-	// ("--- Reply 1 of 2 ---").
-	header = regexp.MustCompile(`(?m)^(?:=== THREAD PARENT MESSAGE ===|--- Reply \d+ of \d+ ---)\n`)
-	from   = regexp.MustCompile(`(?m)^From: .*\((\w+)\)$`)
-	ts     = regexp.MustCompile(`(?m)^Message TS: (\d+\.\d+)$`)
-	// replies closes the parent: the header of the replies' list.
-	replies = regexp.MustCompile(`(?m)^=== THREAD REPLIES \(\d+ total\) ===\n?`)
+	// Boundaries are reserved by the unescaped wire format. Recognize even
+	// malformed boundaries so message text cannot hide an ambiguous structure.
+	boundary      = regexp.MustCompile(`(?m)^(?:=== THREAD|--- Reply)[^\n]*(?:\n|$)`)
+	replyHeader   = regexp.MustCompile(`^--- Reply (\d+) of (\d+) ---$`)
+	repliesHeader = regexp.MustCompile(`^=== THREAD REPLIES \((\d+) total\) ===$`)
+	metadata      = regexp.MustCompile(`^From: [^\n]*\((\w+)\)\nTime: [^\n]+\nMessage TS: (\d+\.\d+)(?:\n|$)`)
 	// trailer is what the server and the connector append to a message's
 	// text: its reactions, and the "Sent using Claude" attribution of a
 	// message posted through the claude.ai connector.
@@ -72,38 +72,55 @@ func ParseThread(result string) (Thread, error) {
 	if err := json.Unmarshal([]byte(result), &v); err != nil {
 		return Thread{}, fmt.Errorf("the thread: %w", err)
 	}
-	text := replies.ReplaceAllString(v.Messages, "")
-	idx := header.FindAllStringIndex(text, -1)
-	if len(idx) == 0 {
-		return Thread{}, fmt.Errorf("the thread names no parent message")
+	text := v.Messages
+	idx := boundary.FindAllStringIndex(text, -1)
+	if len(idx) < 2 || idx[0][0] != 0 || strings.TrimSuffix(text[idx[0][0]:idx[0][1]], "\n") != "=== THREAD PARENT MESSAGE ===" {
+		return Thread{}, fmt.Errorf("the thread has no leading parent message")
 	}
-	var t Thread
-	for i, at := range idx {
+	section := repliesHeader.FindStringSubmatch(strings.TrimSuffix(text[idx[1][0]:idx[1][1]], "\n"))
+	if section == nil {
+		return Thread{}, fmt.Errorf("the thread has no replies section after its parent")
+	}
+	count, err := strconv.Atoi(section[1])
+	if err != nil || count != len(idx)-2 {
+		return Thread{}, fmt.Errorf("the thread's reply count does not match its boundaries")
+	}
+	parent, err := parseMessage(text[idx[0][1]:idx[1][0]])
+	if err != nil {
+		return Thread{}, err
+	}
+	resultThread := Thread{Parent: parent}
+	if count == 0 && strings.TrimSpace(text[idx[1][1]:]) != "" {
+		return Thread{}, fmt.Errorf("the empty replies section contains text")
+	}
+	for i := 2; i < len(idx); i++ {
+		if i == 2 && strings.TrimSpace(text[idx[1][1]:idx[i][0]]) != "" {
+			return Thread{}, fmt.Errorf("the replies section contains unexpected text")
+		}
+		h := replyHeader.FindStringSubmatch(strings.TrimSuffix(text[idx[i][0]:idx[i][1]], "\n"))
+		if h == nil || h[1] != strconv.Itoa(i-1) || h[2] != strconv.Itoa(count) {
+			return Thread{}, fmt.Errorf("the thread's reply sequence is inconsistent")
+		}
 		end := len(text)
 		if i+1 < len(idx) {
 			end = idx[i+1][0]
 		}
-		m, err := parseMessage(text[at[1]:end])
+		message, err := parseMessage(text[idx[i][1]:end])
 		if err != nil {
 			return Thread{}, err
 		}
-		if i == 0 {
-			t.Parent = m
-			continue
-		}
-		t.Replies = append(t.Replies, m)
+		resultThread.Replies = append(resultThread.Replies, message)
 	}
-	return t, nil
+	return resultThread, nil
 }
 
-// parseMessage reads one message: its From, Time and Message TS lines, then
-// its text without the trailer.
+// parseMessage reads only the leading metadata, then the text without trailers.
 func parseMessage(s string) (Message, error) {
-	f, n := from.FindStringSubmatch(s), ts.FindStringSubmatchIndex(s)
-	if f == nil || n == nil {
-		return Message{}, fmt.Errorf("a message of the thread names no author or ts: %q", firstLine(s))
+	m := metadata.FindStringSubmatchIndex(s)
+	if m == nil {
+		return Message{}, fmt.Errorf("a message of the thread has invalid leading metadata: %q", firstLine(s))
 	}
-	return Message{User: f[1], TS: s[n[2]:n[3]], Text: strings.TrimSpace(trailer.ReplaceAllString(strings.TrimSpace(s[n[1]:]), ""))}, nil
+	return Message{User: s[m[2]:m[3]], TS: s[m[4]:m[5]], Text: strings.TrimSpace(trailer.ReplaceAllString(strings.TrimSpace(s[m[1]:]), ""))}, nil
 }
 
 // Later reports whether Slack ts a is after b; an empty b is before all.
