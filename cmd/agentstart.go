@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -190,6 +191,10 @@ A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
+
+Before sending a brief, start runs the same checks as beekeeper lint briefs.
+A finding refuses the start with exit 3 and names the file, line and rule;
+fix the brief before starting it.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
@@ -1963,7 +1968,7 @@ func recordStart(st *state.State, s state.Start, task, serves string, live func(
 	return reg, nil
 }
 
-// readBrief reads the brief file: one command-line argument, not empty.
+// readBrief reads and lints the brief file: one command-line argument, not empty.
 func readBrief(path string) (string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
 	if err != nil {
@@ -1975,6 +1980,20 @@ func readBrief(path string) (string, error) {
 		return "", usageErr("%s is empty", path)
 	case len(brief) > maxBrief:
 		return "", usageErr("%s has %d bytes, more than %d: point the brief at a file instead", path, len(brief), maxBrief)
+	}
+	// Lint the original file so findings retain its line numbers, including
+	// leading blank lines trimmed from the prompt.
+	found, err := brieflint.Lint(path, bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	if len(found) > 0 {
+		var message strings.Builder
+		fmt.Fprintf(&message, "brief refused: %d lint findings", len(found))
+		for _, f := range found {
+			fmt.Fprintf(&message, "\n%s:%d: %s: %s\n  %s", f.Path, f.Line, f.Rule, f.Why, f.Text)
+		}
+		return "", refused("%s", message.String())
 	}
 	return brief, nil
 }
