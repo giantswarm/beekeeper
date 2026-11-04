@@ -340,7 +340,7 @@ func TestLiftSticks(t *testing.T) {
 	if len(st.Holds) != 1 || st.Holds[0].LiftedBy == nil || st.Holds[0].LiftedBy.Name != "Supervisor" {
 		t.Fatalf("holds %+v", st.Holds)
 	}
-	if !HeldClusters(st, at)(prod, "/wc") {
+	if !HeldClusters(st, at)(prod, "wc") {
 		t.Error("a lifted upgrade's rollout must still count as running")
 	}
 	rolling := []Upgrade{{Cluster: "wc", Rolling: true}}
