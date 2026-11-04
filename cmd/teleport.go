@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -215,6 +216,21 @@ browser's sign-in is retried once first, both attempts in the log.`,
 			if err != nil {
 				return err
 			}
+			// Keep this inode outside the profile directories that renewal replaces.
+			// Defer order keeps it held through browser release and result recording.
+			lock := flock.New(filepath.Join(a.cfg.StateDir, "teleport-renew.lock"))
+			locked, err := lock.TryLock()
+			if err != nil {
+				return err
+			}
+			if !locked {
+				if keeper {
+					_, err := fmt.Fprintln(a.out, "teleport: the renewal waits: another renewal is in progress")
+					return err
+				}
+				return refused("another Teleport renewal is in progress")
+			}
+			defer lock.Close()
 			rec, err := a.teleportRecord()
 			if err != nil {
 				return err
