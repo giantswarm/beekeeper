@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated fixture and protocol literals make the failure scenarios readable.
 package remotebuild
 
 import (
