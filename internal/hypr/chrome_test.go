@@ -259,7 +259,7 @@ func TestShowClassicSyntax(t *testing.T) {
 func TestRedirect(t *testing.T) {
 	on := redirectOn(hold)
 	for _, want := range []string{
-		`match = { class = "^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
+		`match = { class = "(?i)^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
 		`workspace = "name:beekeeper-browse silent"`,
 		"no_initial_focus = true",
 		`suppress_event = "activate activatefocus fullscreen maximize"`,
@@ -275,6 +275,55 @@ func TestRedirect(t *testing.T) {
 	}
 	if re := regexp.MustCompile(browserPattern()); re.MatchString("chrome-tidal.com__-Default") || !re.MatchString(chromeClass) {
 		t.Errorf("browserPattern %q matches an app window or misses Chrome", browserPattern())
+	}
+}
+
+// Selection and redirection must agree on whole browser classes, including
+// XWayland capitalization, without admitting installed web apps.
+func TestBrowserPatternMatchesSelection(t *testing.T) {
+	re := regexp.MustCompile(browserPattern())
+	for _, class := range browserClasses {
+		for _, variant := range []string{class, strings.ToUpper(class), strings.ToUpper(class[:1]) + class[1:]} {
+			t.Run(variant, func(t *testing.T) {
+				if !isBrowser(Window{Class: variant}) || !re.MatchString(variant) {
+					t.Errorf("class %q: selected %v, redirected %v", variant, isBrowser(Window{Class: variant}), re.MatchString(variant))
+				}
+			})
+		}
+	}
+	for _, class := range []string{"chrome-tidal.com__-Default", "Chrome-tidal.com__-Default", "Google-chrome-app", "Chromium-app", "prefix-google-chrome", "firefox", "terminal", ""} {
+		if isBrowser(Window{Class: class}) || re.MatchString(class) {
+			t.Errorf("non-browser class %q selected or redirected", class)
+		}
+	}
+}
+
+func TestMixedCaseBrowserPopupLifecycle(t *testing.T) {
+	for _, class := range []string{"Google-chrome", "Chromium", "GOOGLE-CHROME-BETA", "Google-chrome-unstable", "Chromium-browser"} {
+		t.Run(class, func(t *testing.T) {
+			start := with(chrome, func(w *Window) { w.Class, w.Workspace = class, music })
+			f := &fake{windows: []Window{start}, monitors: []Monitor{laptop}}
+			s, err := Show(t.Context(), f.ctl, hold)
+			if err != nil || s == nil || !s.Moved || f.windows[0].Workspace != surface {
+				t.Fatalf("Show = %+v, %v; windows %+v", s, err, f.windows)
+			}
+			f.open(Window{Address: "0xe", Class: class, Floating: true})
+			f.open(Window{Address: "0xf", Class: "Chrome-tidal.com__-Default"})
+			f.open(Window{Address: "0xa", Class: "terminal"})
+			if f.windows[1].Workspace != surface || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 || f.monitors[0] != laptop {
+				t.Fatalf("during redirect: windows %+v, monitors %+v", f.windows, f.monitors)
+			}
+			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || f.redirect || len(f.monitors) != 1 {
+				t.Fatalf("Restore = %v, %+v, redirect %v, monitors %+v", err, s, f.redirect, f.monitors)
+			}
+			if f.windows[0] != start || f.windows[1].Workspace != music || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 {
+				t.Fatalf("after Restore: windows %+v", f.windows)
+			}
+			f.open(Window{Address: "0xb", Class: class})
+			if f.windows[4].Workspace != ws2 {
+				t.Errorf("after redirect: popup on %+v", f.windows[4].Workspace)
+			}
+		})
 	}
 }
 
