@@ -169,6 +169,9 @@ leaves its own park with agents resume, no agent named.`,
 			if name != "" {
 				me.Name = name
 			}
+			if err := titleTaken(sessions, me.Name, me); err != nil {
+				return err
+			}
 			live := func(p state.Party) bool {
 				_, ok := claude.Live(sessions, p)
 				return ok

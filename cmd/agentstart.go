@@ -887,10 +887,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
+	if err := titleTaken(sessions, sp.name, state.Party{}); err != nil {
+		return startedAgent{}, err
+	}
 	live := func(p state.Party) bool {
-		if sp.replaces != nil && p.Is(*sp.replaces) {
-			return false
-		}
 		_, ok := claude.Live(sessions, p)
 		return ok
 	}
