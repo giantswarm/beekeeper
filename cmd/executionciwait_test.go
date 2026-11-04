@@ -63,9 +63,25 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			now := a.now.Add(2 * timerEvery)
 			found = checkTimers(context.Background(), st.Timers, now, false)
 			_, _, fires, _ = settleTimers(st, found, now)
-			if len(fires) != 1 || len(st.Timers) != 0 || fires[0].t.Wake != r.Name || !strings.Contains(fires[0].message(), "CI ") {
+			if len(fires) != 1 || len(st.Timers) != 1 || fires[0].t.Wake != r.Name || !strings.Contains(fires[0].message(), "CI ") {
 				t.Fatalf("settled CI did not produce worker wake: %+v", fires)
 			}
+			// Persist settlement, then lose the in-memory fires as a restart would.
+			if err := a.store.Update(func(saved *state.State) ([]state.Event, error) {
+				saved.Timers = st.Timers
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, fires, _ = settleTimers(restarted, found, now)
+			if len(fires) != 1 {
+				t.Fatal("restart lost the CI wake before outbox insertion")
+			}
+			w = &watcher{app: a}
 			// A replaced park cannot consume an old timer's wake.
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.Agents[0].Park.At = p.At.Add(time.Second)
@@ -78,7 +94,11 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 				if len(st.Starts[0].Execution.Messages) != 0 {
 					t.Error("stale timer woke replacement park")
 				}
+				if len(st.Timers) != 0 {
+					t.Error("obsolete CI timer was retained")
+				}
 				st.Agents[0].Park.At = p.At
+				st.Timers = restarted.Timers
 				return nil, nil
 			}); err != nil {
 				t.Fatal(err)
@@ -90,8 +110,14 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 			a.executionTransport = func(execution.Host) execution.Transport { return fake }
 			w.wakeTimer(context.Background(), fires[0])
 			stored, err := a.store.Read()
-			if err != nil || stored.Agents[0].Park == nil || len(stored.Starts[0].Execution.Messages) != 1 {
+			if err != nil || stored.Agents[0].Park == nil || len(stored.Starts[0].Execution.Messages) != 1 || len(stored.Timers) != 0 {
 				t.Fatalf("park lost before acceptance: %v", err)
+			}
+			// Replaying a fire after outbox insertion must reuse the receipt.
+			w.wakeTimer(context.Background(), fires[0])
+			replayed, err := a.store.Read()
+			if err != nil || len(replayed.Starts[0].Execution.Messages) != 1 {
+				t.Fatalf("replayed CI wake duplicated delivery: %v", err)
 			}
 			stage = execution.Accepted
 			if err := a.syncExecutionMessages(context.Background(), r.Ref); err != nil {

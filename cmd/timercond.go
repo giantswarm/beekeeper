@@ -229,7 +229,10 @@ func settleTimersMatching(st *state.State, found map[int]checkResult, now time.T
 		case t.Run != "":
 			act = fmt.Sprintf("running `%s`: ", truncate(t.Run, 80))
 		}
-		if t.Repeat != "" {
+		if !t.WakeParkAt.IsZero() {
+			// Keep CI wakes durable across a restart before outbox insertion.
+			kept = append(kept, t)
+		} else if t.Repeat != "" {
 			t.Due, t.Checked, t.Held = t.Next(now), time.Time{}, ""
 			act += "next " + clock(now, t.Due) + ": "
 			kept = append(kept, t)
@@ -285,6 +288,7 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if !f.t.WakeParkAt.IsZero() {
 		p := wakeTargetPark(st, f.t.Wake)
 		if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
+			w.closeCIWakeTimer(f.t)
 			return // The worker has already left or replaced this CI wait.
 		}
 	}
@@ -310,10 +314,26 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 	if err := wakeErr; err != nil {
 		var pending *executionDeliveryPending
 		if errors.As(err, &pending) {
+			w.closeCIWakeTimer(f.t)
 			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))
 			return
 		}
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200))
+		return
+	}
+	w.closeCIWakeTimer(f.t)
+}
+
+// closeCIWakeTimer retires a CI timer only after durable handoff or obsolescence.
+func (w *watcher) closeCIWakeTimer(t state.Timer) {
+	if t.WakeParkAt.IsZero() {
+		return
+	}
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = slices.DeleteFunc(st.Timers, func(current state.Timer) bool { return current.ID == t.ID })
+		return nil, nil
+	}); err != nil {
+		w.emitNow("timer", "TIMER WAKE CLEANUP FAILED: #%d: %v", t.ID, err)
 	}
 }
 
