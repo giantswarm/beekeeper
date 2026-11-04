@@ -462,7 +462,7 @@ func (k OOMKill) RunMemcg() string {
 }
 
 var (
-	oomLine    = regexp.MustCompile(`oom-kill:constraint=([A-Z_]+),.*?oom_memcg=([^,]*),(?:task_memcg=([^,]*),)?.*?task=([^,]*),pid=(\d+)`)
+	oomLine    = regexp.MustCompile(`oom-kill:constraint=([A-Z_]+),.*?(?:oom_memcg=([^,]*)|global_oom),(?:task_memcg=([^,]*),)?.*?task=([^,]*),pid=(\d+)`)
 	killedLine = regexp.MustCompile(`Killed process (\d+) \(([^)]*)\).*?anon-rss:(\d+)kB`)
 )
 

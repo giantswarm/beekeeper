@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve whole-machine OOM kill constraints and victim cgroups so snapshots identify global exhaustion and capped runs can find their victims (https://github.com/giantswarm/beekeeper/issues/2896).
 - Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).
 - Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
 - Serialize a sender's mailbox sends across destinations so concurrent retries return one delivery instead of a uniqueness error (https://github.com/giantswarm/beekeeper/issues/2919).
