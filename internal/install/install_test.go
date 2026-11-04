@@ -1227,6 +1227,69 @@ const priorCodexHooks = `{
 }
 `
 
+func TestCodexHookUpgradeUpdatesWorker(t *testing.T) {
+	for _, preexisting := range []bool{false, true} {
+		name := "created files"
+		if preexisting {
+			name = "existing files with unrelated hooks"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+			paths := []string{e.CodexHooks, CodexWorkerHooks(e.StateDir)}
+			if preexisting {
+				for _, path := range paths {
+					write(t, path, priorCodexHooks)
+				}
+			}
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			e.Exe, e.Spec.Exe = replacementExe, replacementExe
+			for i := 0; i < 2; i++ {
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range paths {
+					if got := CheckCodexHooks(path, e.Exe, home); got != "" {
+						t.Errorf("install %d: %s: %s", i, path, got)
+					}
+					s, err := readSettings(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					list, err := s.hooks("PreToolUse")
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantLen := 1
+					if preexisting {
+						wantLen = 2
+					}
+					if len(list) != wantLen || !sameJSON(list[len(list)-1], CodexHook(e.Exe)) {
+						t.Errorf("install %d: %s: hooks = %s", i, path, list)
+					}
+				}
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				raw, err := os.ReadFile(path)
+				if preexisting {
+					if err != nil || string(raw) != priorCodexHooks {
+						t.Errorf("uninstall: %s = %s (%v), want original hooks", path, raw, err)
+					}
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("uninstall: %s remains (%v): %s", path, err, raw)
+				}
+			}
+		})
+	}
+}
+
 func TestCodexHooksAndSkills(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
