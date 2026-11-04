@@ -2428,6 +2428,7 @@ const DefaultQueueTTL = 15 * time.Minute
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
 	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	// Rebase also makes the ordinary devctl gate add --rebase automatically.
 	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
