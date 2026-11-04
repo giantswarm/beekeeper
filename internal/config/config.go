@@ -4105,7 +4105,7 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
-		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
+		if !validResourceName(r) {
 			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
@@ -4197,9 +4197,9 @@ func (c *Config) validateEach(report func(error)) {
 				if c, ok := p.ServeModeCeilings[mode]; ok && c != m.Sessions {
 					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
-				for _, n := range m.Nodes {
-					if strings.TrimSpace(n) == "" {
-						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
+				for i, n := range m.Nodes {
+					if strings.TrimSpace(n) == "" || !validResourceName(n) {
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s.nodes[%d]: %q is not a valid resource name", name, mode, i, n))
 					}
 				}
 			}
@@ -4325,6 +4325,13 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 		}
 	}
 	return Lane{}, false
+}
+
+// validResourceName keeps a configured lease below its lease directory and
+// distinct from the built-in browser and model-server resources.
+func validResourceName(name string) bool {
+	return name != "" && name != Browser && name != ModelServer &&
+		filepath.IsLocal(name) && filepath.Base(name) == name && name[0] != '.'
 }
 
 // serveModeNodeNames are the machine's nodes named by any self-hosted
