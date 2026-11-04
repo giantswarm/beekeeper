@@ -198,17 +198,17 @@ func begun(o Object, now time.Time, u *Upgrade) bool {
 	a := o.Metadata.Annotations
 	label := o.Metadata.Labels[releaseLabel]
 	u.Since, _ = time.Parse(time.RFC3339, a[upgradeStartTime])
+	target, scheduledAt, scheduled := due(a, label, now)
 	switch last := a[lastKnownRelease]; {
 	case label != "" && last != "" && label != last:
 		u.From, u.To = last, label
+	case scheduled:
+		// A previous upgrade's mark may remain after the next one is due.
+		u.From, u.To, u.Since = label, target, scheduledAt
 	case a[upgradingMark] == "true":
 		u.To = label
 	default:
-		target, t, ok := due(a, label, now)
-		if !ok {
-			return false
-		}
-		u.From, u.To, u.Since = label, target, t
+		return false
 	}
 	return true
 }
