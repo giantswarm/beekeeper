@@ -101,7 +101,11 @@ func Remove(dir string) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	name := filepath.Base(dir)
+	return remove(root, filepath.Base(dir))
+}
+
+// remove keeps inspection and deletion beneath the already opened parent.
+func remove(root *os.Root, name string) error {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -132,7 +136,7 @@ func Remove(dir string) error {
 			return err
 		}
 	}
-	return root.RemoveAll(filepath.Base(dir))
+	return root.RemoveAll(name)
 }
 
 // Result is one cleanup's measured bytes and keep/error reasons.
