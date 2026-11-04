@@ -51,10 +51,13 @@ func LinkedWorktree(dir string) bool {
 }
 
 func findGitDir(dir string) string {
-	for d := dir; d != "" && d != "/" && d != "."; d = filepath.Dir(d) {
+	for d := dir; d != "" && d != "."; d = filepath.Dir(d) {
 		p := filepath.Join(d, ".git")
 		fi, err := os.Stat(p)
 		if err != nil {
+			if filepath.Dir(d) == d {
+				return "" // volume roots on Windows are their own parent too
+			}
 			continue
 		}
 		if fi.IsDir() {

@@ -171,3 +171,33 @@ func TestParseTurn(t *testing.T) {
 		}
 	}
 }
+
+// A directory outside every checkout has no repository or branch. Walking
+// to its platform root must finish, including at a Windows volume root.
+func TestGitInfoOutsideCheckout(t *testing.T) {
+	dir := t.TempDir()
+	root := dir
+	for {
+		if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+			t.Skip("the temporary directory has a Git checkout ancestor")
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			break
+		}
+		root = parent
+	}
+	for _, tc := range []struct{ name, path string }{
+		{"case 0: temporary directory", dir},
+		{"case 1: filesystem root", root},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, branch := GitInfo(tc.path)
+			if repo != "" || branch != "" {
+				t.Fatalf("GitInfo = %q, %q outside a checkout", repo, branch)
+			}
+		})
+	}
+}
