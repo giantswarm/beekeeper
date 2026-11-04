@@ -23,7 +23,7 @@ var docsServer = sync.OnceValue(func() *mcpserver.MCPServer { return (&server{})
 func TestToolsDocIsCurrent(t *testing.T) {
 	tooldesctest.AssertServerDoc(t, docsServer(),
 		"# The tools\n\nGenerated from the registered tools of `beekeeper serve` (`make tools-doc`); through muster every tool is `x_<central.server>_<name>`. "+
-			"Every tool takes `agent` and `host`, which tell one person's agents apart.",
+			"Tools that use caller identity declare `agent` and `host`, which tell one person's agents apart; other tools still accept them for auditing.",
 		"../docs/tools.md")
 }
 
@@ -70,8 +70,10 @@ func TestCallerRequired(t *testing.T) {
 		for _, r := range st.Tool.InputSchema.Required {
 			required[r] = true
 		}
-		if got := required[paramAgent] && required[paramHost]; got != identified[name] {
-			t.Errorf("%s requires agent and host: %v, its handler: %v", name, got, identified[name])
+		for _, param := range []string{paramAgent, paramHost} {
+			if got := required[param]; got != identified[name] {
+				t.Errorf("%s requires %s: %v, its handler: %v", name, param, got, identified[name])
+			}
 		}
 	}
 	// The roster tools refuse before they read the store.
@@ -85,6 +87,18 @@ func TestCallerRequired(t *testing.T) {
 		c := s.newCall(t.Context(), identity.Caller{Email: "ada@example.com"}, req)
 		if _, err := tool.run(c, req); Code(err) != ExitUsage {
 			t.Errorf("%s without agent and host: %v, want a usage error", tool.tool.Name, err)
+		}
+	}
+}
+
+func TestCallerSchema(t *testing.T) {
+	auditOnly := map[string]bool{"lease_list": true, "hold_list": true, "lanes": true, "lane_turn": true, "note_list": true, "list_agents": true, "snapshot": true, "receive_messages": true, "ack_messages": true}
+	for name, st := range docsServer().ListTools() {
+		for _, param := range []string{paramAgent, paramHost} {
+			_, declared := st.Tool.InputSchema.Properties[param]
+			if declared == auditOnly[name] {
+				t.Errorf("%s declares %s: %v", name, param, declared)
+			}
 		}
 	}
 }
