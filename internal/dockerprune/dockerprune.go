@@ -354,6 +354,9 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 	pass := func(images []Image) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
+			if err := ctx.Err(); err != nil {
+				return refused, err
+			}
 			if more, err := over(); err != nil || !more {
 				return refused, err
 			}
@@ -367,6 +370,9 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 				args = append(args, img.Refs...)
 			}
 			if _, err := d(ctx, args...); err != nil {
+				if stop := cancellation(ctx, err); stop != nil {
+					return refused, stop
+				}
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
@@ -454,8 +460,14 @@ type CacheTrim struct {
 // reclaimable is never touched and is counted in Kept.
 func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
 	var t CacheTrim
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	records, err := CacheRecords(ctx, d)
 	if err != nil {
+		if stop := cancellation(ctx, err); stop != nil {
+			return t, stop
+		}
 		return t, err
 	}
 	var total int64
@@ -473,11 +485,18 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 	})
 	var refused []error
 	removed := map[string]bool{}
+	var stop error
 	for _, r := range candidates {
+		if stop = ctx.Err(); stop != nil {
+			break
+		}
 		if total-t.Freed <= keep {
 			break
 		}
 		if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+r.ID); err != nil {
+			if stop = cancellation(ctx, err); stop != nil {
+				break
+			}
 			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
 			continue
 		}
@@ -490,6 +509,9 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 			t.Kept++
 			t.KeptBytes += r.Size
 		}
+	}
+	if stop != nil {
+		return t, stop
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)
@@ -566,4 +588,16 @@ func ParseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("size %q: unit %q", s, s[i:])
 	}
 	return int64(n * mult), nil
+}
+
+// cancellation recognizes context termination even when a killed Docker command
+// returns an exit error rather than wrapping the context error.
+func cancellation(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }

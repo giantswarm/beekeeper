@@ -422,3 +422,83 @@ func TestParseUsedAgo(t *testing.T) {
 		}
 	}
 }
+
+func TestTrimImagesCancellation(t *testing.T) {
+	for _, fail := range []error{nil, context.Canceled, errors.New("signal: killed")} {
+		for _, cancelAt := range []int{0, 1, 2} {
+			t.Run(fmt.Sprintf("%v/at%d", fail, cancelAt), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelAt == 0 {
+					cancel()
+				}
+				calls, guards, reads := 0, 0, 0
+				run := func(context.Context, ...string) ([]byte, error) {
+					calls++
+					if calls == cancelAt {
+						cancel()
+						return nil, fail
+					}
+					return nil, nil
+				}
+				tr, err := TrimImages(ctx, run, []Image{{ID: "a", Size: 1}, {ID: "b", Size: 1}, {ID: "c", Size: 1}}, 3, 0,
+					func() (int64, error) { reads++; return 3, nil }, func() bool { guards++; return false })
+				wantRemoved := max(0, cancelAt-1)
+				if fail == nil && cancelAt > 0 {
+					wantRemoved = cancelAt
+				}
+				if !errors.Is(err, context.Canceled) || calls != cancelAt || guards != cancelAt || reads != 0 || len(tr.Removed) != wantRemoved || len(tr.Refused) != 0 {
+					t.Fatalf("trim = %+v, %v; calls=%d guards=%d reads=%d", tr, err, calls, guards, reads)
+				}
+				if wantRemoved == 1 && tr.Removed[0] != "a" {
+					t.Fatalf("removed = %v", tr.Removed)
+				}
+			})
+		}
+	}
+}
+
+func TestPruneBuildCacheCancellation(t *testing.T) {
+	for _, fail := range []error{nil, context.Canceled, errors.New("signal: killed")} {
+		for _, cancelAt := range []int{0, 1, 2} {
+			t.Run(fmt.Sprintf("%v/at%d", fail, cancelAt), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelAt == 0 {
+					cancel()
+				}
+				f := &fake{du: duRows(duRow{"a", 1, true, "5 days ago"}, duRow{"b", 2, true, age2d}, duRow{"c", 3, true, "1 hour ago"}, duRow{"busy", 4, false, age2d})}
+				calls, prunes := 0, 0
+				run := func(ctx context.Context, args ...string) ([]byte, error) {
+					calls++
+					if args[1] == "prune" {
+						prunes++
+						if prunes == cancelAt {
+							cancel()
+							return nil, fail
+						}
+					}
+					return f.run(ctx, args...)
+				}
+				tr, err := PruneBuildCache(ctx, run, 0)
+				wantRemoved, wantKept, wantBytes := max(0, cancelAt-1), 4, int64(10e9)
+				if fail == nil && cancelAt > 0 {
+					wantRemoved = cancelAt
+				}
+				wantFreed := int64(wantRemoved*(wantRemoved+1)/2) * 1e9
+				if cancelAt == 0 {
+					wantKept, wantBytes = 0, 0
+				}
+				wantKept -= wantRemoved
+				wantBytes -= wantFreed
+				wantCalls := cancelAt + 1
+				if cancelAt == 0 {
+					wantCalls = 0
+				}
+				if !errors.Is(err, context.Canceled) || calls != wantCalls || prunes != cancelAt || tr.Removed != wantRemoved || tr.Freed != wantFreed || tr.Kept != wantKept || tr.KeptBytes != wantBytes {
+					t.Fatalf("trim = %+v, %v; calls=%d prunes=%d", tr, err, calls, prunes)
+				}
+			})
+		}
+	}
+}
