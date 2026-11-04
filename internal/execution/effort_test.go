@@ -5,10 +5,12 @@ import (
 	"testing"
 )
 
+const testEffortHigh = "high"
+
 func TestEffortRequestValidationAndPersistence(t *testing.T) {
 	f := testFixture(t)
 	base := f.r.Digest()
-	for _, level := range []string{"", "low", "medium", "high", "xhigh", "max", "invalid"} {
+	for _, level := range []string{"", "low", "medium", testEffortHigh, "xhigh", "max", "invalid"} {
 		r := f.r
 		r.Effort = level
 		if err := r.Validate(); (err == nil) != (level != "invalid") {
