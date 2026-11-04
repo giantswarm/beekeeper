@@ -10,10 +10,11 @@ import (
 )
 
 func TestSchedulerIntervalsRejectNegative(t *testing.T) {
+	const negativeInterval = "-1s"
 	for _, key := range []string{"watch.interval", "alerts.every", "alerts.pagerduty.every", "supervisor.loopInterval"} {
 		t.Run(key, func(t *testing.T) {
 			p := writeConfig(t, "")
-			raw, err := apply(nil, []Setting{{Key: key, Value: "-1s"}}, nil)
+			raw, err := apply(nil, []Setting{{Key: key, Value: negativeInterval}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -30,7 +31,7 @@ func TestSchedulerIntervalsRejectNegative(t *testing.T) {
 			if err := os.WriteFile(p, []byte(original), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Set(p, []Setting{{Key: key, Value: "-1s"}}); !errors.Is(err, ErrInvalid) {
+			if _, err := Set(p, []Setting{{Key: key, Value: negativeInterval}}); !errors.Is(err, ErrInvalid) {
 				t.Errorf("negative scheduler edit accepted: %v", err)
 			}
 			if raw, err := os.ReadFile(filepath.Clean(p)); err != nil || string(raw) != original {
