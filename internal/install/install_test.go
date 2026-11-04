@@ -1785,6 +1785,87 @@ func TestCodexRepairsQuotedHook(t *testing.T) {
 	}
 }
 
+// A failed replacement must retain both the old and proposed ownership,
+// including when some earlier replacements have already succeeded.
+func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
+	for _, failure := range []string{"settings", "unit"} {
+		for _, recovery := range []string{"retry", "uninstall"} {
+			t.Run(failure+"/"+recovery, func(t *testing.T) {
+				home := t.TempDir()
+				setup := &fakeSetup{}
+				e, _ := env(t, home, setup, setup.run)
+				e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+				e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+				ctx := context.Background()
+				if err := Install(ctx, e); err != nil {
+					t.Fatal(err)
+				}
+				unit := filepath.Join(e.Spec.ConfigDir, "units", "notify.service")
+				blocked := filepath.Dir(e.Settings)
+				if failure == "unit" {
+					blocked = filepath.Dir(unit)
+				}
+				if err := os.Chmod(blocked, 0o500); err != nil { //nolint:gosec // read-only on purpose
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(blocked, 0o750) }) //nolint:gosec // the test's own directory
+				probe, err := os.CreateTemp(blocked, "permission-probe")
+				if err == nil {
+					_ = probe.Close()
+					_ = os.Remove(probe.Name())
+					t.Skip("directory permissions do not prevent writes")
+				}
+				for _, exe := range []string{replacementExe, "/next/bin/beekeeper"} {
+					e.Exe, e.Spec.Exe = exe, exe
+					if err := Install(ctx, e); err == nil {
+						t.Fatal("upgrade unexpectedly succeeded")
+					}
+				}
+				m, err := readManifest(e.manifest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(m.Previous) == 0 {
+					t.Fatal("failed install discarded previous ownership")
+				}
+				if err := os.Chmod(blocked, 0o750); err != nil { //nolint:gosec // the test's own directory
+					t.Fatal(err)
+				}
+				paths := []string{e.Settings, e.AgyHooks, e.CodexHooks, CodexWorkerHooks(e.StateDir), unit}
+				if recovery == "retry" {
+					if err := Install(ctx, e); err != nil {
+						t.Fatal(err)
+					}
+					for _, path := range paths {
+						raw, err := os.ReadFile(filepath.Clean(path))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !bytes.Contains(raw, []byte(e.Exe)) || bytes.Contains(raw, []byte("/opt/bin/beekeeper")) || bytes.Contains(raw, []byte(replacementExe)) {
+							t.Errorf("%s did not replace previous hooks or unit: %s", path, raw)
+						}
+					}
+					m, err = readManifest(e.manifest())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(m.Previous) != 0 {
+						t.Fatal("successful install retained previous ownership")
+					}
+				}
+				if err := Uninstall(ctx, e, false); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range append(paths, e.manifest()) {
+					if exists(path) {
+						t.Errorf("uninstall left %s behind", path)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestCodexHookBinaryRejectsShellExpressions(t *testing.T) {
 	for _, command := range []string{
 		"$HOME/beekeeper hook pretooluse --format codex",
