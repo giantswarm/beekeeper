@@ -26,7 +26,8 @@ const (
 // document is a decrypted SOPS file as a YAML tree, kept as nodes so that
 // a copy keeps its keys' order and comments.
 type document struct {
-	root *yaml.Node
+	root     *yaml.Node
+	snapshot *fileSnapshot
 }
 
 // errSeveralDocuments refuses a YAML stream of several documents.
