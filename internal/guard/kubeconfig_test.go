@@ -36,7 +36,7 @@ func (*alreadyCappedKubeconfigCapper) Capped() bool { return true }
 
 func TestRunProtectsDefaultKubeconfig(t *testing.T) {
 	for _, execution := range []string{"capped", "uncapped", "already-capped"} {
-		for _, mode := range []string{"unset", "empty", "inherited", kubeconfigAssignment} {
+		for _, mode := range []string{"unset", "blank", "inherited", kubeconfigAssignment} {
 			t.Run(mode+"/"+execution, func(t *testing.T) {
 				saved := plat.Capper
 				plat.Capper = &fakeCapper{down: execution == "uncapped"}
