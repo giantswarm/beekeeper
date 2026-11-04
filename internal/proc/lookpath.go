@@ -18,13 +18,12 @@ import (
 // the directories looked in; a name with a path separator is exec's alone.
 func LookPath(name string) (string, error) {
 	path, err := exec.LookPath(name)
-	if err == nil || strings.ContainsRune(name, os.PathSeparator) {
+	if err == nil || filepath.Base(name) != name {
 		return path, err
 	}
 	dirs := goToolDirs()
 	for _, dir := range dirs {
-		p := filepath.Join(dir, name)
-		if fi, serr := os.Stat(p); serr == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+		if p, serr := exec.LookPath(filepath.Join(dir, name)); serr == nil {
 			return p, nil
 		}
 	}
