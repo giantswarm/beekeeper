@@ -919,9 +919,8 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
-// says that the roster agent of that name (or session id) runs no CLI and
-// whether its import is pending, "" when a CLI carries the name or no agent
-// does.
+// describes the roster agent's CLI and message route when no CLI carries
+// the requested name, "" when a CLI carries it or no agent does.
 func (a *app) absentPeer(name string) string {
 	if a.loadConfig() != nil {
 		return ""
@@ -953,5 +952,9 @@ func absentAgent(st *state.State, sessions []*claude.Session, name string, now t
 	if i < 0 {
 		return ""
 	}
-	return noCLI(st.Agents[i], now) + ". A message by name reaches it once a CLI of it runs"
+	ag := st.Agents[i]
+	if s, ok := wakeLive(sessions, ag.Party, ag.Session); ok {
+		return runningCLI(ag, s) + fmt.Sprintf(". `beekeeper agents wake %q \"<message>\"` reaches its session", ag.Name)
+	}
+	return noCLI(ag, now) + ". A message by name reaches it once a CLI of it runs"
 }
