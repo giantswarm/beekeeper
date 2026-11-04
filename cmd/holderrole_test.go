@@ -28,8 +28,8 @@ func TestMessageByRunNameReachesTheRenamedSupervisor(t *testing.T) {
 	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: holder, Since: now}})
 	sessions := []*claude.Session{{ID: runID, Name: runTitle, PID: 4242}}
 
-	if r := absentAgent(st, sessions, runName, now); !strings.Contains(r, "no CLI") {
-		t.Fatalf("the run name alone reads as an agent with no CLI: %q", r)
+	if r := absentAgent(st, sessions, runName, now); !strings.Contains(r, "runs a CLI") {
+		t.Fatalf("the run name alone does not name its running CLI: %q", r)
 	}
 	for _, name := range []string{runName, "supervisor RUN 82", runTitle, runID, "local_sup82"} {
 		if got := holderRole(st, name); got != guideRole.name {

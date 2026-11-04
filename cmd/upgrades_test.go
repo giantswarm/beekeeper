@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 )
 
@@ -48,7 +49,7 @@ echo '{"items":[]}'
 // recorded upgrade's phase (internal/upgrade/testdata/prod).
 func phase(t *testing.T, dir, name string) {
 	t.Helper()
-	testdata := filepath.Join("..", "internal", "upgrade", "testdata", "prod", name)
+	testdata := filepath.Join("..", "internal", "upgrade", "testdata", snapshotInstallation, name)
 	list := struct {
 		Items []json.RawMessage `json:"items"`
 	}{}
@@ -103,7 +104,7 @@ func takeCalls(t *testing.T, log string) map[string]int {
 func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
-	const upgrading = "prod"
+	const upgrading = snapshotInstallation
 	kubectl, log := upgradeKubectl(t, dir, upgrading)
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = nil
@@ -135,7 +136,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 			t.Fatalf("first reading: %s read %d times, want %d (the upgrade's events once): %v", in.Name, got[in.Name], want, got)
 		}
 	}
-	if !strings.Contains(out.String(), "UPGRADE prod/mc 35.0.1 → 35.1.1") {
+	if !strings.Contains(out.String(), "UPGRADE prod/org-mc/mc 35.0.1 → 35.1.1") {
 		t.Fatalf("no UPGRADE line:\n%s", out.String())
 	}
 	// 08:30:30 to 08:34:30: the upgrading installation every interval, the
@@ -148,7 +149,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 	if got = ticks(1); len(got) != 5 {
 		t.Fatalf("at upgrades.every: %v", got)
 	}
-	if !strings.Contains(out.String(), "UPGRADE ENDED prod/mc") {
+	if !strings.Contains(out.String(), "UPGRADE ENDED prod/org-mc/mc") {
 		t.Fatalf("no UPGRADE ENDED line:\n%s", out.String())
 	}
 	// 08:35:30 to 08:40: quiet, one read of each installation.
@@ -193,7 +194,7 @@ func TestWatchReadsUpgradesOncePerEvery(t *testing.T) {
 func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
-	const upgrading = "prod"
+	const upgrading = snapshotInstallation
 	kubectl, log := upgradeKubectl(t, dir, upgrading)
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{{Name: upgrading, Context: upgrading}, {Name: "b", Context: "b"}}
@@ -217,7 +218,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	if got := takeCalls(t, log); got[upgrading] == 0 || got["b"] != 1 {
 		t.Fatalf("the standby watch did not read: %v", got)
 	}
-	if !held() || !strings.Contains(out.String(), "UPGRADE prod/mc 35.0.1 → 35.1.1") {
+	if !held() || !strings.Contains(out.String(), "UPGRADE prod/org-mc/mc 35.0.1 → 35.1.1") {
 		t.Fatalf("no hold at UPGRADE:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "UPGRADES read by the standby watch") {
@@ -231,7 +232,7 @@ func TestStandbyWatchHoldsUpgradesWithoutSupervisorWatch(t *testing.T) {
 	if got := takeCalls(t, log); got[upgrading] != 1 || got["b"] != 0 {
 		t.Fatalf("after the upgrade: %v", got)
 	}
-	if held() || !strings.Contains(out.String(), "UPGRADE ENDED prod/mc") {
+	if held() || !strings.Contains(out.String(), "UPGRADE ENDED prod/org-mc/mc") {
 		t.Fatalf("the hold outlived UPGRADE ENDED:\n%s", out.String())
 	}
 
@@ -276,7 +277,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	}
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
-		{Name: "prod", Context: "prod"}, {Name: "broken", Context: "broken"},
+		{Name: snapshotInstallation, Context: snapshotInstallation}, {Name: "broken", Context: "broken"},
 		{Name: "lost", Context: "teleport.giantswarm.io-lost"}, {Name: "far", Context: "teleport.giantswarm.io-far"},
 	}
 	a.cfg.Watch.Interval.Duration = 30 * time.Second
@@ -287,7 +288,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		w.upgradeCycle(context.Background())
 		clk.now = clk.now.Add(a.cfg.Upgrades.Every.Duration)
 	}
-	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got["prod"] != 3 || got["broken"] != 3 {
+	if got := takeCalls(t, log); got["lost"] != 0 || got["far"] != 0 || got["teleport.giantswarm.io-lost"] != 0 || got[snapshotInstallation] != 3 || got["broken"] != 6 {
 		t.Errorf("kubectl calls: %v", got)
 	}
 	text := out.String()
@@ -306,7 +307,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	words := strings.Join(upgradeWords(a.readUpgrades(context.Background(), st, clk.now), time.Time{}), " · ")
-	if want := "prod none · broken unreadable: error: You must be logged in to the server (Unauthorized) · 2 installations without a kube context, not read: lost, far"; words != want {
+	if want := "prod none · broken unreadable: error: You must be logged in to the server (Unauthorized) (deadline 2m0s per attempt; up to 2 attempts) · 2 installations without a kube context, not read: lost, far"; words != want {
 		t.Errorf("snapshot upgrades:\n%s\nwant\n%s", words, want)
 	}
 }
@@ -364,3 +365,86 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 		t.Fatalf("kubectl calls with away's context: %v", got)
 	}
 }
+
+func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
+	a, out := stubApp(t)
+	dir := t.TempDir()
+	kubectl, _ := upgradeKubectl(t, dir, snapshotInstallation)
+	a.cfg.Alerts.Kubectl = kubectl
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
+	clk := &stepClock{now: time.Date(2026, 9, 25, 8, 30, 0, 0, time.UTC)}
+	w := a.newWatcher(false, false)
+	w.clock = clk
+	phase(t, dir, "0827-during")
+	w.upgradeCycle(context.Background())
+	if err := os.WriteFile(kubectl, []byte("#!/bin/sh\nkill -KILL $$\n"), 0700); err != nil { //nolint:gosec // a path of this test
+		t.Fatal(err)
+	}
+	for range 2 {
+		clk.now = clk.now.Add(time.Minute)
+		w.upgradeCycle(context.Background())
+	}
+	if !strings.Contains(out.String(), "reader failed 2 consecutive ticks: signal: killed (deadline 2m0s") {
+		t.Fatalf("no failure streak: %s", out.String())
+	}
+	upgradeKubectl(t, dir, snapshotInstallation)
+	clk.now = clk.now.Add(time.Minute)
+	w.upgradeCycle(context.Background())
+	if w.upgradeFailures[snapshotInstallation] != 0 {
+		t.Fatalf("failure streak not reset: %v", w.upgradeFailures)
+	}
+}
+
+func TestUpgradeRetryDoesNotReportUnreadable(t *testing.T) {
+	a, out := stubApp(t)
+	exe := filepath.Join(t.TempDir(), "kubectl")
+	script := `#!/bin/sh
+if [ "$1" = config ]; then echo prod; exit; fi
+if [ ! -f "$0.once" ]; then touch "$0.once"; kill -KILL $$; fi
+echo '{"items":[]}'
+`
+	if err := os.WriteFile(exe, []byte(script), 0700); err != nil { //nolint:gosec // a path of this test
+		t.Fatal(err)
+	}
+	a.cfg.Alerts.Kubectl = exe
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
+	w := a.newWatcher(false, false)
+	w.upgradeCycle(context.Background())
+	if strings.Contains(out.String(), "unreadable") || w.failed.Load() != 0 {
+		t.Fatalf("successful retry reported a failure: %s", out.String())
+	}
+	if _, err := os.Stat(exe + ".once"); err != nil {
+		t.Fatalf("first attempt did not run: %v", err)
+	}
+}
+
+// Snapshot readers recover versions even when a shared reading skipped events.
+func TestSnapshotUpgradeFromHold(t *testing.T) {
+	a, out := stubApp(t)
+	a.cfg.Alerts.Installations = []config.Installation{{Name: snapshotInstallation, Context: snapshotInstallation}}
+	st := &state.State{}
+	upgrade.Reconcile(st, snapshotInstallation, []upgrade.Upgrade{{Cluster: "mc", From: "35.0.1", To: "36.1.0"}}, a.now, state.Party{})
+	rs := upgrade.Readings{}
+	rs.Keep([]upgrade.Status{{Installation: snapshotInstallation, Upgrades: []upgrade.Upgrade{{Cluster: "mc", To: "36.1.0"}}}}, a.now)
+	if err := a.store.WriteFile(upgrade.ReadingsFile, rs); err != nil {
+		t.Fatal(err)
+	}
+	statuses := a.readUpgrades(context.Background(), st, a.now)
+	a.printSnapshot(&snapshot{Holds: st.Holds, Upgrades: statuses})
+	for _, line := range []string{"hold ", "upgrades: "} {
+		found := false
+		for text := range strings.Lines(out.String()) {
+			if strings.HasPrefix(text, line) {
+				found = true
+				if !strings.Contains(text, "35.0.1 → 36.1.0") {
+					t.Errorf("missing version: %s", text)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing %s line", line)
+		}
+	}
+}
+
+const snapshotInstallation = "prod"
