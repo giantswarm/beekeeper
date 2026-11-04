@@ -31,10 +31,23 @@ session, and beekeeper takes this one off the roster and archives it once its tu
   <session name> idle, ready for a task`. `beekeeper agents idle` marks a finished task and prints
   the same line; `--done` marks the work finished, so beekeeper retires the session. The body says what the supervisor routes work by: the worktree and its branch, the
   permission mode, and which connectors this session has (the browser extension, GitHub, chat, the
-  board tools). A connector can attach only at the next turn boundary, so one missing in the first
-  turn is looked for again before it is reported missing.
+  board tools). A connector can attach only at the next turn boundary; use the connector handshake
+  below when a connector tool is missing.
 - **The supervisor's words** and the worker's are in the `lease` and `merge` skills. Where the
   supervisor states a different rule for its watch, the supervisor's rule wins.
+
+## Connector handshake
+
+- When a connector tool is missing, use `ListAgents` once to choose an idle peer and send it
+  exactly `SYN <own session name>: reply "ACK" to me with SendMessage and do nothing else.` with
+  `SendMessage`, substituting this session's name. Finish the turn's other work and end the turn;
+  do not keep it open with a background wait. The peer's ACK opens the next turn so the connector
+  can attach.
+- On receiving a message that starts with `SYN <name>:`, reply exactly `ACK` to that name with
+  `SendMessage` and do nothing else. End the turn.
+- In the turn the ACK opened, look for the connector tool again. Only if it is still missing in
+  that turn, ask the person to switch it on through the normal `note add` route. Never hand the
+  work back to the person because a connector tool is missing.
 
 ## Constraints
 
@@ -50,7 +63,8 @@ session, and beekeeper takes this one off the roster and archives it once its tu
 - **Subagents** only when the supervisor's brief allows them.
 - **Waiting is quiet.** While a desktop agent waits for a task or a grant, one bounded background
   wait keeps it reachable (a `sleep` of at most 25 minutes, `run_in_background`, re-armed when it
-  expires). It never polls `ListAgents` and never asks "any task?"; a task, grant or hold arrives as
+  expires). The connector handshake above ends the turn instead. It never polls `ListAgents`
+  (the handshake's one lookup is not polling) and never asks "any task?"; a task, grant or hold arrives as
   a message. When the person ends the session's shift, the wait is stopped, so nothing is left
   running.
 - **No supervisor running:** the session says so to the person in its own transcript and waits for

@@ -3376,6 +3376,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 		}
 		if Code(err) == ExitRefused {
+			if strings.Contains(err.Error(), "omp start waits on lease") {
+				l.sayOnce("omp lease "+act.Key, "SUPERVISOR NEXT WAITS %s: %v", next.URL, err)
+			}
 			return "", errLoopLater
 		}
 		return "", err

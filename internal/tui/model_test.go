@@ -47,6 +47,7 @@ type fakeSource struct {
 	sendErr          error
 
 	took, released []string
+	cleaned        []string
 	answers        []string
 	answerErr      error
 }
@@ -70,6 +71,11 @@ func (f *fakeSource) Release(_ context.Context, id string) error {
 			f.data.Sessions[i].TakenOver, f.data.Sessions[i].Approvals = false, nil
 		}
 	}
+	return nil
+}
+
+func (f *fakeSource) ReleaseOwned(_ context.Context, id string) error {
+	f.cleaned = append(f.cleaned, id)
 	return nil
 }
 
@@ -704,8 +710,8 @@ func TestTakeOverFromThePane(t *testing.T) {
 	}
 	m.taken = map[string]bool{"sid-wasp": true}
 	m.releaseAll()
-	if len(src.released) != 2 || src.released[1] != "sid-wasp" {
-		t.Errorf("closing released %v, want wasp's too", src.released)
+	if len(src.released) != 1 || len(src.cleaned) != 1 || src.cleaned[0] != "sid-wasp" {
+		t.Errorf("closing cleaned %v, manual releases %v", src.cleaned, src.released)
 	}
 }
 

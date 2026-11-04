@@ -1,7 +1,6 @@
 package github
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,7 +36,7 @@ const (
 // HeadPulls reads, in GraphQL requests per repository owner (ByOwner) of at
 // most headsPerRequest branches, the newest pull request each branch of
 // heads opened from the repository itself, never a fork's. A branch that
-// heads none, or that GitHub does not answer, is missing from the map.
+// heads none is missing from the map. An unavailable answer fails the read.
 func HeadPulls(ctx context.Context, run GH, heads []Head) (map[Head]HeadPull, error) {
 	pulls := map[Head]HeadPull{}
 	for _, group := range ByOwner(heads, func(h Head) string { return h.Repo }) {
@@ -75,14 +74,18 @@ func headPulls(ctx context.Context, run GH, heads []Head, pulls map[Head]HeadPul
 			i, quote(owner), quote(name), quote(h.Branch), pullsPerHead)
 	}
 	q.WriteString("}")
-	// A repository GitHub does not answer fails the request but keeps the
-	// others' data.
 	out, err := run(ctx, "api", "graphql", "-f", "query="+q.String())
+	if err != nil {
+		return fmt.Errorf("gh api graphql: %w", err)
+	}
 	var doc struct {
 		Data map[string]json.RawMessage `json:"data"`
 	}
-	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
-		return cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return fmt.Errorf("gh api graphql: %w", err)
+	}
+	if doc.Data == nil {
+		return fmt.Errorf("gh api graphql: no data")
 	}
 	for i, h := range heads {
 		var v struct {
@@ -91,8 +94,14 @@ func headPulls(ctx context.Context, run GH, heads []Head, pulls map[Head]HeadPul
 			} `json:"pullRequests"`
 		}
 		raw, ok := doc.Data[fmt.Sprintf("h%d", i)]
-		if !ok || json.Unmarshal(raw, &v) != nil || v.Pulls == nil {
-			continue
+		if !ok {
+			return fmt.Errorf("gh api graphql: no answer for %s branch %s", h.Repo, h.Branch)
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return fmt.Errorf("gh api graphql: %s branch %s: %w", h.Repo, h.Branch, err)
+		}
+		if v.Pulls == nil || v.Pulls.Nodes == nil {
+			return fmt.Errorf("gh api graphql: unavailable pull requests for %s branch %s", h.Repo, h.Branch)
 		}
 		own := slices.IndexFunc(v.Pulls.Nodes, func(n headNode) bool { return !n.Fork })
 		if own < 0 {

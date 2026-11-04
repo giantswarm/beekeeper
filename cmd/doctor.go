@@ -298,6 +298,9 @@ func staleLine(s staleBinary) string {
 // doctor finds the chores and the faults, and fixes what it may.
 func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	var rep doctorReport
+	if line := a.teleportContextsLine(); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return rep, err
