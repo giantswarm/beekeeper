@@ -25,6 +25,7 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 			continue
 		}
 
+		key, _, _ = strings.Cut(key, " episode ")
 		switch e.Verb {
 		case loopGoVerb:
 			if strings.HasPrefix(key, "go "+ref+"@") {
@@ -44,7 +45,7 @@ func recordedMergeGo(events []state.Event, worker state.Party, ref, head string)
 				allowed = false
 			}
 		case loopEndVerb:
-			if key == "end "+ref {
+			if key == "end "+ref || key == "end "+ref+" merged" {
 				allowed = false
 			}
 		case "supervisor.done":

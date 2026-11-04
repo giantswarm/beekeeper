@@ -51,6 +51,7 @@ type sweepLedger struct {
 
 // sweptBy reads the sweep's ledger from taken.
 func sweptBy(taken []Taken) sweepLedger {
+	taken, _, _, _ = episodeTaken(taken)
 	sw := sweepLedger{sweeps: map[string]int{}, lastAct: map[string]time.Time{}}
 	for _, t := range taken {
 		if IsSweep(t.Key) {
@@ -86,7 +87,7 @@ func Ownerless(in Input) []string {
 // orphanable reports whether p is a pull request the sweep may give an
 // owner: open, not a draft, the desk's own, still tracked.
 func orphanable(in Input, l ledger, ref string, p Pull) bool {
-	if p.State != Open || p.Head == "" || p.Draft || l.ended[ref] {
+	if p.State != Open || p.Head == "" || p.Draft || l.merged[ref] {
 		return false
 	}
 	if reason, _ := in.Desk.unread(ref); reason != "" {

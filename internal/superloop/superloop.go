@@ -6,6 +6,7 @@
 package superloop
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"regexp"
 	"slices"
@@ -49,6 +50,8 @@ const (
 	KindFile = "file"
 	// KindEnd ends the tracking of a pull request that merged or closed.
 	KindEnd = "end"
+	// KindReopen begins a new tracking episode after observing OPEN.
+	KindReopen = "reopen"
 	// KindLeave says once why the loop leaves a parked pull request alone:
 	// outside the desk's organisations, in supervisor.ownership.never,
 	// parked before the loop's first start, opened by somebody else,
@@ -86,7 +89,7 @@ const OverlapWait = 30 * time.Minute
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
 	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
-		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindOwner, KindMerge}
+		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindOwner, KindMerge, KindReopen}
 }
 
 // The verbs of the events the rules act on.
@@ -549,6 +552,9 @@ type ledger struct {
 	rounds    map[string][]round
 	escalated map[string]escalation
 	ended     map[string]bool
+	ends      map[string]Taken
+	episodes  map[string]string
+	merged    map[string]bool
 	reviewer  map[string]string // a pull request's worker, from its last review
 	// goAgent is the worker the go for a pull request was given to; goHead
 	// is the last head given a go and not superseded by a later review,
@@ -565,9 +571,46 @@ type ledger struct {
 	red map[string]bool
 }
 
+// episodeAction excludes worker events and issue intake from PR episodes.
+func episodeAction(key, kind string) bool {
+	return !strings.Contains(key, " agents.") && kind != KindIntake
+}
+
+// episodeTaken isolates PR actions while preserving unrelated worker events.
+func episodeTaken(taken []Taken) ([]Taken, map[string]string, map[string]Taken, map[string]bool) {
+	episodes := map[string]string{}
+	ends := map[string]Taken{}
+	merged := map[string]bool{}
+	starts := map[string]int{}
+	for i, t := range taken {
+		if t.Kind == KindEnd {
+			ends[t.Ref] = t
+			if strings.Contains(t.Key, " merged") {
+				merged[t.Ref] = true
+			}
+		}
+		if t.Kind == KindReopen {
+			episodes[t.Ref] = t.Key
+			starts[t.Ref] = i + 1
+			delete(ends, t.Ref)
+		}
+	}
+	var active []Taken
+	for i, t := range taken {
+		if start, ok := starts[t.Ref]; ok && i < start && episodeAction(t.Key, t.Kind) {
+			continue
+		}
+		t.Key, _, _ = strings.Cut(t.Key, " episode ")
+		active = append(active, t)
+	}
+	return active, episodes, ends, merged
+}
+
 func newLedger(taken []Taken, answers []Answer) ledger {
+	taken, episodes, ends, merged := episodeTaken(taken)
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
 		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
+	l.episodes, l.ends, l.merged = episodes, ends, merged
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
@@ -583,7 +626,7 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			delete(l.keys, goKey(t.Ref, head))
 			delete(l.goHead, t.Ref)
 		case KindEscalate:
-			_, head, _ := strings.Cut(t.Key, "@")
+			head := KeyHead(t.Key)
 			l.escalated[t.Ref] = escalation{head: head, at: t.At}
 			delete(l.goHead, t.Ref)
 		case KindRework:
@@ -772,7 +815,9 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		}
 		// An open question about its ownership keeps it read: the owning
 		// team's reviews still reach its worker meanwhile.
-		if !l.ended[ref] || l.workerDue(ref, workers) {
+		if !l.ended[ref] || l.workerDue(ref, workers) || slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.ParkedOn == ref && w.ReviewRequested && w.ParkedHead != "" && fresh[ref] && w.ParkedAt.After(l.ends[ref].At) && !l.merged[ref]
+		}) {
 			out = append(out, ref)
 		}
 	}
@@ -888,7 +933,7 @@ func Plan(in Input) []Action {
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
 			// The end action durably marks when the merge was observed. A
 			// quiet worker retains its inbox while waiting for its release.
-			if end, ok := l.keys[endKey(ref)]; ok {
+			if end, ok := l.ends[ref]; ok {
 				last := end.At
 				for _, w := range in.Workers {
 					if w.Name == l.goAgent[ref] {
@@ -919,6 +964,10 @@ func Plan(in Input) []Action {
 			}
 		}
 		if l.ended[ref] {
+			if p.State == Open && !l.merged[ref] {
+				end := l.ends[ref]
+				add(Action{Key: fmt.Sprintf("reopen %s %x", ref, sha256.Sum256([]byte(end.Key))), Kind: KindReopen, Ref: ref, URL: p.URL, Message: "open: begin another tracking episode"})
+			}
 			continue
 		}
 		// An escalation an earlier loop filed and nobody answered holds
@@ -928,7 +977,11 @@ func Plan(in Input) []Action {
 		ask, asked := l.asked[ref]
 		if p.State == Merged || p.State == Closed {
 			if len(l.rounds[ref]) > 0 {
-				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
+				key := endKey(ref)
+				if p.State == Merged {
+					key += " merged"
+				}
+				add(Action{Key: key, Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
 			}
 			continue
 		}
@@ -1153,6 +1206,12 @@ func Plan(in Input) []Action {
 		}
 		return 0
 	})
+	for i := range out {
+		a := &out[i]
+		if episode := l.episodes[a.Ref]; episode != "" && a.Kind != KindReopen && episodeAction(a.Key, a.Kind) {
+			a.Key += " episode " + episode
+		}
+	}
 	return out
 }
 

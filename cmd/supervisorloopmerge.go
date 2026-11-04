@@ -516,6 +516,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if !ok {
 			continue
 		}
+		key, _, _ = strings.Cut(key, " episode ")
 		// The sweep's go again for a head whose go was never carried out
 		// is the same authority, keyed by its stretch without an owner.
 		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
@@ -527,7 +528,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 				claimed = false
 			}
 		}
-		if e.Verb == loopEndVerb && key == "end "+ref {
+		if e.Verb == loopEndVerb && (key == "end "+ref || key == "end "+ref+" merged") {
 			claimed = false
 		}
 	}
@@ -789,6 +790,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		for _, e := range evs {
 			if e.By == loopParty && strings.EqualFold(e.Subject, p.Ref) {
 				if key, _, ok := keyed(e.Detail); ok {
+					key, _, _ = strings.Cut(key, " episode ")
 					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
 						switch e.Verb {
 						case loopGoVerb:
@@ -797,7 +799,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 							delete(activeGo, after)
 						}
 					}
-					if e.Verb == loopEndVerb && strings.EqualFold(key, "end "+p.Ref) {
+					if e.Verb == loopEndVerb && (strings.EqualFold(key, "end "+p.Ref) || strings.EqualFold(key, "end "+p.Ref+" merged")) {
 						clear(activeGo)
 					}
 				}

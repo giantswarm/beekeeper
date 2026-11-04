@@ -2316,7 +2316,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 			return "", err
 		}
 		return "to the guide: " + act.Message, nil
-	case superloop.KindLeave, superloop.KindOverride:
+	case superloop.KindLeave, superloop.KindOverride, superloop.KindReopen:
 		return act.Message, nil
 	case superloop.KindEnd:
 		return l.endMerged(ctx, st, act)
@@ -2368,6 +2368,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 
 // redChecks are the checks a red wake's key names.
 func redChecks(key string) string {
+	key, _, _ = strings.Cut(key, " episode ")
 	_, checks, _ := strings.Cut(key, ": ")
 	return checks
 }
