@@ -26,7 +26,13 @@ func TestHookRecordsGitHubCalls(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	raw := func(cwd, command string) string {
-		b, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", executionOmpSession: finishedSession, executionOmpCwd: cwd, "tool_name": tToolBash, executionHookInput: map[string]string{hookTypeCommand: command}})
+		b, _ := json.Marshal(struct {
+			Event   string            `json:"hook_event_name"`
+			Session string            `json:"session_id"`
+			CWD     string            `json:"cwd"`
+			Tool    string            `json:"tool_name"`
+			Input   map[string]string `json:"tool_input"`
+		}{"PreToolUse", finishedSession, cwd, tToolBash, map[string]string{hookTypeCommand: command}})
 		return string(b)
 	}
 	// No gh executable or credentials are needed to record the call.
