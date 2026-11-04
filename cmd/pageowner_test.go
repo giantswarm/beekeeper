@@ -249,3 +249,89 @@ func TestAlertsDisown(t *testing.T) {
 		t.Fatalf("disown of no alert: %v", err)
 	}
 }
+
+func TestAlertsOwnershipMatchers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  int
+	}{
+		{"alertname only", nil, 4},
+		{"cluster", []string{"--cluster", "cluster-a"}, 2},
+		{"namespace", []string{"--namespace", "namespace-a"}, 2},
+		{"both", []string{"--cluster", "cluster-a", "--namespace", "namespace-a"}, 1},
+		{"no match", []string{"--cluster", "missing"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now().Add(-20 * time.Minute)
+			a, out := pageApp(t, start)
+			store := alerts.NewStore(a.cfg.StateDir)
+			base, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			base.Installations["alpha"].Alerts = alerts.Set{}
+			for i, labels := range [][2]string{{"cluster-a", "namespace-a"}, {"cluster-a", "namespace-b"}, {"cluster-b", "namespace-a"}, {"cluster-b", "namespace-b"}} {
+				fp := []string{"fp1", "fp2", "fp3", "fp4"}[i]
+				base.Installations["alpha"].Alerts[fp] = alerts.Alert{Alertname: "PodRestarting", Severity: alerts.Page, Team: "t", Cluster: labels[0], Labels: map[string]string{"namespace": labels[1]}, Since: start.UTC().Format(time.RFC3339Nano)}
+			}
+			if err := store.Save(base); err != nil {
+				t.Fatal(err)
+			}
+			_, err = runAlerts(t, a.alertsOwnCmd(), out, append([]string{"PodRestarting"}, tc.flags...)...)
+			if tc.want == 0 {
+				if err == nil {
+					t.Fatal("unmatched scope accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.AlertOwners) != tc.want {
+				t.Fatalf("owners = %d, want %d", len(st.AlertOwners), tc.want)
+			}
+			until := ownedUntil(st.AlertOwners, nil, a.now)
+			for _, f := range base.Firing("") {
+				wantOwned := (tc.name == "alertname only" || tc.name == "namespace" || f.Cluster == "cluster-a") && (tc.name == "alertname only" || tc.name == "cluster" || f.Labels["namespace"] == "namespace-a")
+				_, owned := until(f.Key)
+				if owned != wantOwned {
+					t.Errorf("%s owned = %v, want %v", f.Instance(), owned, wantOwned)
+				}
+			}
+			listing, err := runAlerts(t, a.alertsOwnersCmd(), out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range st.AlertOwners {
+				wantCluster, wantNamespace := "", ""
+				for i := 0; i < len(tc.flags); i += 2 {
+					if tc.flags[i] == "--cluster" {
+						wantCluster = tc.flags[i+1]
+					} else {
+						wantNamespace = tc.flags[i+1]
+					}
+				}
+				if o.Cluster != wantCluster || o.Namespace != wantNamespace {
+					t.Fatalf("stored matchers = %q %q, want %q %q", o.Cluster, o.Namespace, wantCluster, wantNamespace)
+				}
+				if !strings.Contains(listing, o.Name+" cluster=\""+o.Cluster+"\" namespace=\""+o.Namespace+"\"") {
+					t.Fatalf("missing matchers in listing: %s", listing)
+				}
+			}
+			if _, err := runAlerts(t, a.alertsDisownCmd(), out, append([]string{"PodRestarting"}, tc.flags...)...); err != nil {
+				t.Fatal(err)
+			}
+			st, _ = a.store.Read()
+			for _, o := range st.AlertOwners {
+				if o.Ended.IsZero() {
+					t.Error("scoped disown left owner active")
+				}
+			}
+		})
+	}
+}

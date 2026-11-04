@@ -3679,6 +3679,17 @@ second, the SessionStart hook two) and then fails naming the holder's PID, comma
 has held the lock. The desktop import freezes a session's headless turns only while no process
 holds the lock, so a frozen turn never holds it.
 
+### Scoped alert ownership
+
+`beekeeper alerts own AlertName --cluster cluster-a --namespace namespace-a`
+owns only currently firing instances with both exact label values. Either
+matcher can be omitted; an alertname without matchers still selects every
+firing instance of that name. Ownership remains tied to each instance's
+fingerprint and firing start, and ends when it resolves or its owner ends.
+Use the same optional matchers with `beekeeper alerts disown` to release a
+selection. `beekeeper alerts owners` lists ownership records with their
+cluster and namespace matchers; an empty matcher means unrestricted.
+
 ## Development
 
 Workers read Dependabot alert states with `beekeeper security alert <owner/repo> <number>`

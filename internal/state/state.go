@@ -717,6 +717,9 @@ type Claim struct {
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
 type AlertOwner struct {
+	// Cluster and Namespace are optional exact matchers used when taking ownership.
+	Cluster   string `json:"cluster,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 	// Alert is the alert's key in the alert baseline (fingerprint@start).
 	Alert string    `json:"alert"`
 	Name  string    `json:"name"`
