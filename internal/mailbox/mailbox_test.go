@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/giantswarm/beekeeper/internal/mailbox"
 	"github.com/giantswarm/beekeeper/internal/mailbox/mailboxtest"
 )
@@ -226,4 +228,100 @@ func TestMailboxListen(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("the ack")
+}
+
+func TestMailboxConcurrentSenderDedupe(t *testing.T) {
+	url := mailboxtest.URL(t)
+	stores := []*mailbox.Store{open(t, url), open(t, url)}
+	// Exercise both initial admission and reuse of an ID outside the window.
+	for _, now := range []time.Time{t0, t0.Add(mailbox.DedupeWindow + time.Hour)} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		const callers = 12
+		type result struct {
+			sent mailbox.Sent
+			err  error
+		}
+		results := make(chan result, callers)
+		start := make(chan struct{})
+		for i := range callers {
+			go func() {
+				<-start
+				sender := ana
+				if i%2 == 0 {
+					sender = " ANA@example.com "
+				}
+				sent, err := stores[i%len(stores)].Send(ctx, msg(fmt.Sprintf("destination-%d@example.com", i), sender, "shared-id"), now)
+				results <- result{sent, err}
+			}()
+		}
+		close(start)
+		var seq int64
+		fresh := 0
+		for range callers {
+			r := <-results
+			if r.err != nil {
+				t.Fatalf("concurrent send: %v", r.err)
+			}
+			if seq == 0 {
+				seq = r.sent.Seq
+			}
+			if r.sent.Seq != seq {
+				t.Fatalf("sequence %d, want %d", r.sent.Seq, seq)
+			}
+			if !r.sent.Duplicate {
+				fresh++
+			}
+		}
+		if fresh != 1 {
+			t.Fatalf("%d new deliveries, want 1", fresh)
+		}
+		total := 0
+		for i := range callers {
+			ds := receive(t, stores[0], fmt.Sprintf("destination-%d@example.com", i), now)
+			total += len(ds)
+			for _, d := range ds {
+				if d.Seq != seq {
+					t.Fatalf("queued sequence %d, want %d", d.Seq, seq)
+				}
+			}
+		}
+		if total != 1 {
+			t.Fatalf("%d queued deliveries, want 1", total)
+		}
+	}
+}
+
+func TestMailboxSenderLockCancellation(t *testing.T) {
+	url := mailboxtest.URL(t)
+	s := open(t, url)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_sender'), hashtext($1))`, ana); err != nil {
+		t.Fatal(err)
+	}
+	waiting, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err := s.Send(waiting, msg(bob, " ANA@example.com ", "cancelled"), t0); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked send: %v, want deadline exceeded", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := send(t, s, msg(bob, ana, "cancelled"), t0)
+	if first.Duplicate {
+		t.Fatal("cancelled send admitted a delivery")
+	}
+	if ds := receive(t, s, bob, t0); len(ds) != 1 || ds[0].Seq != first.Seq {
+		t.Fatalf("deliveries after cancellation and retry: %+v", ds)
+	}
 }

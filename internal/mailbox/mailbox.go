@@ -178,7 +178,13 @@ func (s *Store) Send(ctx context.Context, m Message, now time.Time) (Sent, error
 	}
 	var out Sent
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// One sender's sends and one mailbox's cap are judged one at a time.
+		// Serialize a sender's admission across destinations before checking dedupe.
+		// The two-key namespace is separate from the mailbox's single-key locks,
+		// so hash collisions cannot reverse the lock order and cause a deadlock.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_sender'), hashtext($1))`, m.Sender); err != nil {
+			return err
+		}
+		// Keep the destination lock: different senders share its cap.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('beekeeper_mailbox:' || $1))`, m.Mailbox); err != nil {
 			return err
 		}
