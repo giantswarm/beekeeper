@@ -37,7 +37,7 @@ func TestSecretRotateSandboxFiles(t *testing.T) {
 				if access == "writable" {
 					a.cfg.Sandbox.AllowWrite = []string{home}
 				}
-				if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: credentials\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				closed := filepath.Join(home, "credentials.sops.yaml")
