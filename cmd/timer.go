@@ -51,8 +51,11 @@ at the same local time instead; it stays open until timer done.
 
 Times carry their zone (08:30 CET). A timer firing more than a tick past
 its time says how late it is and what held it: a beekeeper stop, or no tick
-at all (the watch and the supervisor loop down, or the state locked). Its
---run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
+at all (the watch and the supervisor loop down, or the state locked).
+An interrupted --run command is reported as TIMER FAILED and re-armed
+for the next watch tick. Retried commands may repeat partial work.
+
+Its --run command gets BEEKEEPER_TIMER_ID, BEEKEEPER_TIMER_DUE and
 BEEKEEPER_TIMER_LATE: an agents start it runs makes the session's first
 line, and its log entry (agents.start), the timer, its due time and the
 start in one zone and, when late, what held it (the timer's late firing,
