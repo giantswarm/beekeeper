@@ -44,7 +44,7 @@ func TestSignalMergeRecoversReleaseBeforeSettling(t *testing.T) {
 }
 
 func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
-	for _, version := range []string{"v1.2.4", "v1.2.4-rc.1"} {
+	for _, version := range []string{"v1.2.5", "v1.2.5-rc.1"} {
 		t.Run(version, func(t *testing.T) {
 			lane := config.Lane{Name: serving, Installation: gazelle, Repositories: []string{scratchRepo}}
 			g := runningMerge(t, scratchRepo, lane)
@@ -74,7 +74,7 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 			if ready != merge.PreRelease(version) {
 				t.Fatalf("before roll ready=%v for %s", ready, version)
 			}
-			hrs[0].Version = "1.2.4"
+			hrs[0].Version = "1.2.5"
 			if ready, why := merge.Ready(lane, hrs, &m, now, time.Hour); !ready {
 				t.Fatalf("rolled/unadmitted release did not settle: %s", why)
 			}
@@ -89,7 +89,7 @@ func TestNameReleaseRefusesRunningAndMissingMerges(t *testing.T) {
 	g := runningMerge(t, scratchRepo, localLane)
 	g.out = io.Discard
 	for _, pr := range []int{7, 8} {
-		if err := g.nameSettlingRelease(g.me, scratchRepo, pr, "v1.2.4"); Code(err) != ExitRefused {
+		if err := g.nameSettlingRelease(g.me, scratchRepo, pr, "v1.2.6"); Code(err) != ExitRefused {
 			t.Fatalf("named a non-settling merge: %v", err)
 		}
 	}
