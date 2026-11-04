@@ -1639,6 +1639,12 @@ interpreter reads from its input (`echo '…' | bash`, `bash <<< '…'`, `sh < m
 an interpreter (`zsh -c 'bash merge.sh'`, `sh -c '. merge.sh'`, `bash -c './merge.sh'`).
 Nested `-c` strings share the script recursion bound; a refusal names the script and its line.
 
+Configure a fork repository with `merge.methods: {example/fork: rebase}` to keep
+its upstream-ready commits separate and linear. The gate adds `--rebase` before
+checking or queuing its devctl PR merges, including when the worker omits the flag or
+passes `--rebase=false`. Repositories without this setting keep the default squash
+method; an explicit worker `--rebase` still works.
+
 A merge a runner runs from its arguments (`xargs devctl pr merge o/r`, `find … -exec devctl pr
 merge … \;`, `parallel`, `sudo`, `watch`, `ssh`, …) or a backquote substitution runs (`` x=`devctl
 pr wait o/r 7` ``) is refused too, on the command line, in a here-document or here-string a shell

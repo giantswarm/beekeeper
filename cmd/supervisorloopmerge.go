@@ -544,6 +544,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if !ok {
 			continue
 		}
+		key = superloop.BaseActionKey(key)
 		// The sweep's go again for a head whose go was never carried out
 		// is the same authority, keyed by its stretch without an owner.
 		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
@@ -885,6 +886,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		for _, e := range evs {
 			if e.By == loopParty && strings.EqualFold(e.Subject, p.Ref) {
 				if key, _, ok := keyed(e.Detail); ok {
+					key = superloop.BaseActionKey(key)
 					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
 						switch e.Verb {
 						case loopGoVerb:
