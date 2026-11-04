@@ -176,3 +176,64 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 		t.Fatalf("serve --clear again: %q, %v", out, err)
 	}
 }
+
+func TestServeAcceptsItems(t *testing.T) {
+	const waits = "fixture review"
+	for _, item := range []string{"example/tool", "investigate build failures", "example/tool#42"} {
+		t.Run(item, func(t *testing.T) {
+			a, store := serveApp(t)
+			out, err := serve(a, rosterName, item, "--waits", waits)
+			want := `"BK worker" serves ` + item + ", waiting on " + waits
+			if err != nil || !strings.Contains(out, want) {
+				t.Fatalf("serve: %q, %v; want %q", out, err, want)
+			}
+			st, err := store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Records) != 1 || st.Records[0].Issue != item || st.Records[0].Waits != waits {
+				t.Fatalf("records: %+v", st.Records)
+			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := printedRecords(st, sessions); !strings.Contains(got, want) {
+				t.Errorf("listing: %q; want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestServeRejectsEmptyItems(t *testing.T) {
+	for _, item := range []string{"", " \t\n"} {
+		a, store := serveApp(t)
+		if _, err := serve(a, rosterName, item); err == nil || !strings.Contains(err.Error(), "served item must not be empty") {
+			t.Fatalf("serve(%q): %v", item, err)
+		}
+		st, err := store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Records) != 0 {
+			t.Fatalf("empty item recorded: %+v", st.Records)
+		}
+	}
+}
+
+// A session serving free text is asked about nothing: its claim gets the
+// plain refusal, never a failed read of an item that is no issue.
+func TestServedOpenSkipsItemsWithoutAState(t *testing.T) {
+	a, store := serveApp(t)
+	me := state.Party{Session: "free-text-session"}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: "example/tool"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := servedOpen(t.Context(), nil, a.store, me)
+	if err != nil || !open("investigate build failures") {
+		t.Fatalf("open=%v err=%v", open("investigate build failures"), err)
+	}
+}

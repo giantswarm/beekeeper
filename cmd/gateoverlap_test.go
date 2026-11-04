@@ -80,6 +80,7 @@ func TestAMergeInALaneWithoutAnInstallationFreesItsLaneForTheNextCIWhileItsRelea
 // settle rule.
 func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerdict(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
+		const failedReleaseTag = "v1.2.4"
 		noSystemd(t)
 		fakeDevctl(t, handCutDevctl)
 		stubGitHub(t, github.Merged, "")
@@ -96,6 +97,14 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 		out := gateStderr(t, func() { err = startMerge(t, g) })
 		if Code(err) != devctlReleaseFailed {
 			t.Fatalf("exit %d, want %d\n%s", Code(err), devctlReleaseFailed, out)
+		}
+		st := gateState(t, g)
+		if len(st.Merges) != 1 {
+			t.Fatalf("failed release barrier was deleted: %+v", st.Merges)
+		}
+		m := st.Merges[0]
+		if m.Phase != state.Settling || m.Releasing || !m.ReleaseFailed || m.Release != failedReleaseTag || m.Exit != devctlReleaseFailed || m.Finished.IsZero() {
+			t.Fatalf("failed release verdict not persisted: %+v", m)
 		}
 		if merges == "" {
 			t.Error("the next merge could land while the release ran")

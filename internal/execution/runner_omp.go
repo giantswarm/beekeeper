@@ -19,7 +19,7 @@ const (
 func (s *Server) probeOmpGuard(ctx context.Context, h HarnessConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, h.Executable, append(s.ompArgs(""), "--no-session")...) //nolint:gosec // pinned harness and typed flags
+	c := exec.CommandContext(ctx, h.Executable, append(s.ompArgs("", ""), "--no-session")...) //nolint:gosec // pinned harness and typed flags
 	c.Dir, c.Env, c.Stderr = s.Root, s.ompEnvironment(), io.Discard
 	in, err := c.StdinPipe()
 	if err != nil {
@@ -78,7 +78,7 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 	if err != nil {
 		return err
 	}
-	c := exec.CommandContext(ctx, h.Executable, s.ompArgs(j.Request.Model)...) //nolint:gosec // pinned harness and typed arguments
+	c := exec.CommandContext(ctx, h.Executable, s.ompArgs(j.Request.Model, j.Request.Effort)...) //nolint:gosec // pinned harness and typed arguments
 	c.Dir, c.Env, c.Stdin, c.Stderr = j.Handle.Workspace, env, stream.reader, io.Discard
 	log, err := s.openLog(ref)
 	if err != nil {
