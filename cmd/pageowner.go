@@ -25,7 +25,7 @@ const verbAlertDisowned = "alert.disowned"
 const pageKey = "page "
 
 func (a *app) alertsOwnCmd() *cobra.Command {
-	var by string
+	var by, cluster, namespace string
 	c := &cobra.Command{
 		Use:   "own <installation/alertname#fingerprint | fingerprint | installation/alertname | alertname>",
 		Short: "Record the session that owns a firing alert, so the watch stops saying PAGE UNOWNED",
@@ -40,6 +40,9 @@ session ends, alerts disown releases it, or the alert resolves; an alert that
 fires again is a new one. A person (--as) owns an alert until it resolves or
 is disowned.
 
+--cluster and --namespace restrict the selection to alerts whose cluster and
+namespace equal the given values. When both are set, both must match.
+
 The watch says PAGE UNOWNED for a firing alert at alerts.pageSeverity
 (default page), of alerts.team when it is set, that has had no owner for alerts.ownerGrace (15m), and again
 every alerts.ownerGrace while it stays unowned; --notify sends it to the
@@ -51,13 +54,18 @@ starts the count again.`,
 			if err != nil {
 				return err
 			}
-			firing, hits, err := a.matchFiring(args[0])
+			firing, hits, err := a.matchScopedFiring(args[0], cluster, namespace)
 			if err != nil {
 				return err
 			}
 			now := a.now.UTC()
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.AlertOwners = ownAlerts(st.AlertOwners, firing, hits, owner, now)
+				for i := range st.AlertOwners {
+					if slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == st.AlertOwners[i].Alert }) {
+						st.AlertOwners[i].Cluster, st.AlertOwners[i].Namespace = cluster, namespace
+					}
+				}
 				evs := make([]state.Event, len(hits))
 				for i, f := range hits {
 					evs[i] = event(owner, verbAlertOwned, "%s %s since %s", f.Instance(), f.Where, f.Since)
@@ -72,12 +80,15 @@ starts the count again.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&cluster, "cluster", "", "only alerts with this cluster (exact match)")
+	c.Flags().StringVar(&namespace, "namespace", "", "only alerts with this namespace (exact match)")
 	c.Flags().StringVar(&by, "by", "", "the running session that owns it (name or id; default the caller)")
 	return c
 }
 
 func (a *app) alertsDisownCmd() *cobra.Command {
-	return &cobra.Command{
+	var cluster, namespace string
+	c := &cobra.Command{
 		Use:   "disown <installation/alertname#fingerprint | fingerprint | installation/alertname | alertname>",
 		Short: "Release the ownership of a firing alert, so the watch counts it unowned again",
 		Long: `Release the owner of the firing alerts the argument names, in the forms
@@ -92,7 +103,7 @@ argument naming no owned alert is refused.`,
 			if err != nil {
 				return err
 			}
-			_, hits, err := a.matchFiring(args[0])
+			_, hits, err := a.matchScopedFiring(args[0], cluster, namespace)
 			if err != nil {
 				return err
 			}
@@ -117,17 +128,22 @@ argument naming no owned alert is refused.`,
 			return nil
 		},
 	}
+	c.Flags().StringVar(&cluster, "cluster", "", "only alerts with this cluster (exact match)")
+	c.Flags().StringVar(&namespace, "namespace", "", "only alerts with this namespace (exact match)")
+	return c
 }
 
-// matchFiring is the alert baseline's firing alerts and those q names, or
-// an error listing the firing pages when it names none.
-func (a *app) matchFiring(q string) (firing, hits []alerts.Firing, err error) {
+// matchScopedFiring selects firing alerts by name and optional exact matchers.
+func (a *app) matchScopedFiring(q, cluster, namespace string) (firing, hits []alerts.Firing, err error) {
 	base, err := alerts.NewStore(a.cfg.StateDir).Load()
 	if err != nil {
 		return nil, nil, err
 	}
 	firing = base.Firing("")
 	hits = alerts.Match(firing, q)
+	hits = slices.DeleteFunc(hits, func(f alerts.Firing) bool {
+		return (cluster != "" && f.Cluster != cluster) || (namespace != "" && f.Labels["namespace"] != namespace)
+	})
 	if len(hits) == 0 {
 		return nil, nil, noAlertMatches(q, base.Firing(a.cfg.Alerts.PageSeverity))
 	}
@@ -170,6 +186,17 @@ func noAlertMatches(q string, pages []alerts.Firing) error {
 	return fmt.Errorf("no firing alert matches %q; firing pages: %s", q, strings.Join(names, ", "))
 }
 
+// alertOwnerKey scopes legacy owner keys using their recorded installation.
+// New records already include it; a legacy record's display name was always
+// installation-qualified, including before fingerprint selection was added.
+func alertOwnerKey(o state.AlertOwner) string {
+	installation, _, qualified := strings.Cut(o.Name, "/")
+	if qualified {
+		return (alerts.Firing{Installation: installation, Key: o.Alert}).ScopedKey()
+	}
+	return o.Alert
+}
+
 // ownAlerts are the owners with hits owned by owner at now: a new owner
 // takes an alert over, and the owners of alerts no longer firing are gone.
 func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner state.Party, now time.Time) []state.AlertOwner {
@@ -177,7 +204,7 @@ func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner st
 		return slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == key }) &&
 			!slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == key })
 	}
-	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool { return !keep(o.Alert) })
+	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool { return !keep(alertOwnerKey(o)) })
 	for _, f := range hits {
 		out = append(out, state.AlertOwner{Alert: f.Key, Name: f.Instance(), By: owner, At: now})
 	}
@@ -189,7 +216,7 @@ func ownAlerts(owners []state.AlertOwner, firing, hits []alerts.Firing, owner st
 func disownAlerts(owners []state.AlertOwner, hits []alerts.Firing, now time.Time) (out, released []state.AlertOwner) {
 	out = slices.Clone(owners)
 	for i, o := range out {
-		if o.Ended.IsZero() && slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == o.Alert }) {
+		if o.Ended.IsZero() && slices.ContainsFunc(hits, func(f alerts.Firing) bool { return f.Key == alertOwnerKey(o) }) {
 			out[i].Ended = now
 			released = append(released, out[i])
 		}
@@ -206,7 +233,7 @@ func ownedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.
 		var until time.Time
 		found := false
 		for _, o := range owners {
-			if o.Alert != key {
+			if alertOwnerKey(o) != key {
 				continue
 			}
 			found = true
@@ -231,7 +258,7 @@ func ownedUntil(owners []state.AlertOwner, sessions []*claude.Session, now time.
 func endedOwners(owners []state.AlertOwner, firing []alerts.Firing, sessions []*claude.Session, now time.Time) ([]state.AlertOwner, bool) {
 	changed := false
 	out := slices.DeleteFunc(slices.Clone(owners), func(o state.AlertOwner) bool {
-		gone := !slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == o.Alert })
+		gone := !slices.ContainsFunc(firing, func(f alerts.Firing) bool { return f.Key == alertOwnerKey(o) })
 		changed = changed || gone
 		return gone
 	})
@@ -292,5 +319,27 @@ func (w *watcher) unownedPages(ctx context.Context, sessions []*claude.Session) 
 			delete(w.reported, k)
 			w.dirty = true
 		}
+	}
+}
+
+// alertsOwnersCmd lists the active ownership records and their selection matchers.
+func (a *app) alertsOwnersCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "owners",
+		Short: "List alert ownerships and their cluster and namespace matchers",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			st, err := a.store.Read()
+			if err != nil {
+				return err
+			}
+			for _, o := range st.AlertOwners {
+				if !o.Ended.IsZero() {
+					continue
+				}
+				_, _ = fmt.Fprintf(a.out, "%q owns %s cluster=%q namespace=%q\n", o.By.Name, o.Name, o.Cluster, o.Namespace)
+			}
+			return nil
+		},
 	}
 }

@@ -583,7 +583,7 @@ func TestPrintNextPreviewListsTheFreeItemsAndCountsTheSkips(t *testing.T) {
 	res.Missing, res.AfterPick[0].Missing = nil, nil
 	// The preview names each epic in planning or past its go with its plan.
 	res.Epics = []board.Epic{
-		{Ref: "o/r#8", Title: "Epic", Status: "Up Next", Plan: &board.Plan{URL: "https://github.com/o/plans/pull/1", State: "draft", Head: "6a672cdede08"}},
+		{Ref: "o/r#8", Title: "Epic", Status: "Up Next", Plan: &board.Plan{URL: "https://github.com/o/plans/pull/1", State: litDraft, Head: "6a672cdede08"}},
 		{Ref: "o/r#12", Title: "Other", Status: "In Progress"},
 	}
 	out.Reset()

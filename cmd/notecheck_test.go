@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const noteCheckAPI = "api"
+
 const (
 	prURL  = "https://github.com/o/r/pull/7"
 	sqNow  = "the PR waits for review"
@@ -33,7 +35,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 
 func addNote(a *app, args ...string) error {
 	c := a.noteCmd()
-	c.SetArgs(append([]string{"add"}, args...))
+	c.SetArgs(append([]string{loopAdd}, args...))
 	c.SetOut(a.out)
 	c.SetErr(a.out)
 	c.SilenceUsage, c.SilenceErrors = true, true
@@ -237,7 +239,7 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	t.Cleanup(func() { notesGH = prev })
 	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
-		if args[0] == "api" {
+		if args[0] == noteCheckAPI {
 			return []byte(annotations[strings.Split(args[1], "/")[4]]), nil
 		}
 		return []byte(rollups[args[2]]), nil
@@ -290,5 +292,22 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	}
 	if want := []string{"plan.grilling o/plans#2", "plan.ready o/plans#3"}; !slices.Equal(plans, want) {
 		t.Fatalf("an added note records its plan at the grill stage or ready for review, neither a merged one, a refused note's nor a folded one's: %q, want %q", plans, want)
+	}
+}
+
+func TestPlanStagesAdmitsPRDRevisionWithoutContrarianPlaceholder(t *testing.T) {
+	prev := notesGH
+	t.Cleanup(func() { notesGH = prev })
+	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == noteCheckAPI {
+			// The PRD already ran; the revision is now grilled before its next output.
+			// No contrarian file or missing-contrarian finding is needed.
+			return []byte(`["revision: index.html missing: the last revision/index.html is older than the PRD's last change"]`), nil
+		}
+		return []byte(`{"state":"OPEN","statusCheckRollup":[{"__typename":"CheckRun","name":"plan-stages","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/o/plans/actions/runs/1/job/9"}]}`), nil
+	}
+	p, err := planStages(t.Context(), config.Plans{Repositories: []string{"o/plans"}, Check: config.DefaultPlansCheck}, "https://github.com/o/plans/pull/9")
+	if err != nil || len(p.Refused) != 0 || !slices.Equal(p.Grilling, []string{"o/plans#9"}) {
+		t.Fatalf("PRD revision requires no placeholder: %+v, %v", p, err)
 	}
 }
