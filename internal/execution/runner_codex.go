@@ -38,8 +38,10 @@ func codexArgs(model, workspace, thread string, effort ...string) []string {
 	}
 	// Supply trust in memory so Codex does not persist it in the policy-bound
 	// config.toml. Resumed turns need the same override as the first turn.
+	// Override the table: the CLI splits override keys on dots without TOML
+	// quoted-key parsing, so a quoted workspace in a dotted key fails strict mode.
 	project, _ := json.Marshal(workspace)
-	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects."+string(project)+".trust_level=\"trusted\"")
+	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects={"+string(project)+"={trust_level=\"trusted\"}}")
 	if len(effort) > 0 && effort[0] != "" {
 		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort[0]))
 	}
