@@ -3854,6 +3854,21 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	// These intervals drive recurring loops; zero receives a default, while
+	// negative values cannot advance the scheduler.
+	for _, interval := range []struct {
+		key   string
+		value time.Duration
+	}{
+		{"watch.interval", c.Watch.Interval.Duration},
+		{"alerts.every", c.Alerts.Every.Duration},
+		{"alerts.pagerduty.every", c.Alerts.PagerDuty.Every.Duration},
+		{"supervisor.loopInterval", c.Supervisor.LoopInterval.Duration},
+	} {
+		if interval.value < 0 {
+			report(fmt.Errorf("%s: %s is negative", interval.key, interval.value))
+		}
+	}
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
