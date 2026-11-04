@@ -62,7 +62,7 @@ func (s Status) Words(now time.Time) string {
 	for _, u := range s.Upgrades {
 		w := Describe(s.Installation, u)
 		if u.Rolling {
-			w = s.Installation + "/" + u.Cluster + " rolling out"
+			w = s.Installation + "/" + u.clusterKey() + " rolling out"
 		}
 		if !now.IsZero() {
 			if !u.Since.IsZero() {
@@ -111,7 +111,7 @@ var errNoContext = errors.New(noContextErr)
 // Read reads every target in parallel, each within r.Timeout: one list of
 // all kinds, and for an upgrade whose hold does not exist yet and whose from
 // release is unknown, its cluster's events. held says which clusters hold
-// an upgrade.
+// an upgrade, keyed by installation and namespace/name.
 func (r Reader) Read(ctx context.Context, targets []Target, now time.Time, held func(installation, cluster string) bool) []Status {
 	out := make([]Status, len(targets))
 	var wg sync.WaitGroup
@@ -142,7 +142,7 @@ func (r Reader) readOne(ctx context.Context, t Target, now time.Time, held func(
 	s.NoClusterAPI = served == 0
 	s.Upgrades = Detect(objs, now, held)
 	for i, u := range s.Upgrades {
-		if u.From == "" && !u.Rolling && !held(u.Cluster) {
+		if u.From == "" && !u.Rolling && !held(u.clusterKey()) {
 			s.Upgrades[i].From = r.from(ctx, t.Context, u)
 		}
 	}
