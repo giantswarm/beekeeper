@@ -351,6 +351,18 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; other pull requests still await review or merge", nil
 		}
+		// A wake queues the continuation without clearing the current park.
+		// Its review record may already be gone after an earlier merge, so
+		// the last saved request cannot prove that the owner has finished.
+		if slices.ContainsFunc(st.Agents, func(worker state.Agent) bool {
+			p := worker.Park
+			return worker.Is(rp.Party) && !worker.Done && p != nil &&
+				!strings.EqualFold(p.On, act.Ref) && p.ReviewHead != "" &&
+				p.PostMerge != nil && strings.TrimSpace(*p.PostMerge) != ""
+		}) {
+			clearReviewPark()
+			return "merged; worker still has post-merge work", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
