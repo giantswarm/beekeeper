@@ -522,6 +522,69 @@ func TestAnOlderReleasesSaveIsRefused(t *testing.T) {
 	}
 }
 
+// Refusal must precede callbacks that change files outside state.json.
+func TestStaleWriterDoesNotInvokeUpdateCallback(t *testing.T) {
+	for _, within := range []bool{false, true} {
+		t.Run(strconv.FormatBool(within), func(t *testing.T) {
+			dir := t.TempDir()
+			newer, err := OpenVersion(dir, "v2.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := newer.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			older, err := OpenVersion(dir, "v1.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			holder := filepath.Join(dir, "synthetic-holder")
+			called := false
+			update := older.Update
+			if within {
+				update = func(fn func(*State) ([]Event, error)) error {
+					return older.UpdateWithin(time.Second, fn)
+				}
+			}
+			for range 2 {
+				err := update(func(*State) ([]Event, error) {
+					called = true
+					err := os.WriteFile(holder, []byte("holder"), 0o600)
+					return []Event{{Verb: "lease.granted"}}, err
+				})
+				var stale *StaleWriterError
+				if !errors.As(err, &stale) || stale.Version != "v1.0.0" || stale.Newer != "v2.0.0" {
+					t.Fatalf("update error = %v, want stale writer", err)
+				}
+			}
+			if called {
+				t.Error("stale writer invoked the callback")
+			}
+			if _, err := os.Stat(holder); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("holder stat = %v, want no side file", err)
+			}
+			after, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Error("state bytes changed")
+			}
+			events, err := older.Events(0, func(Event) bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || events[0].Verb != VerbStaleWriter {
+				t.Errorf("events = %+v, want only one refusal diagnostic", events)
+			}
+		})
+	}
+}
+
 // A branch build's stamp judges no release: the next release overwrites it,
 // and drops the record of stale saves that releases before the refusal kept.
 func TestABranchBuildsStampJudgesNoRelease(t *testing.T) {

@@ -1867,7 +1867,8 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back atomically together with the events fn returns. When fn fails nothing
-// is written, nor when a newer release wrote the state (StaleWriterError).
+// is written. When a newer release wrote the state, fn is not invoked and
+// Update returns StaleWriterError.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1881,6 +1882,9 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	defer unlock()
 	st, err := s.load()
 	if err != nil {
+		return err
+	}
+	if err := s.checkWriter(st, time.Now()); err != nil {
 		return err
 	}
 	events, err := fn(st)
@@ -1951,6 +1955,22 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
+	_, ok := release(s.version)
+	if !ok {
+		return nil
+	}
+	if err := s.checkWriter(st, now); err != nil {
+		return err
+	}
+	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	// Releases before the refusal recorded their stale saves here instead.
+	delete(st.rest, "staleWriters")
+	return nil
+}
+
+// checkWriter refuses an older release before an update can have side effects.
+// The caller holds the state lock.
+func (s *FileStore) checkWriter(st *State, now time.Time) error {
 	own, ok := release(s.version)
 	if !ok {
 		return nil
@@ -1960,9 +1980,6 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 			return s.refuse(st.Writer.Version, now)
 		}
 	}
-	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
-	// Releases before the refusal recorded their stale saves here instead.
-	delete(st.rest, "staleWriters")
 	return nil
 }
 
