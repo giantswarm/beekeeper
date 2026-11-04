@@ -71,6 +71,11 @@ type Ops struct {
 	// file's installation ([AgeInstallationItem]) is looked up in Vault and
 	// each of them.
 	AgeVaults []string
+	// AgeCache stores only public recipient-to-item metadata; nil disables caching.
+	AgeCache interface {
+		ReadFile(string, any) (bool, error)
+		WriteFile(string, any) error
+	}
 	// Store is the person's own credential store for sources and age identities.
 	Store Store
 	// Index is the value scanner's index reveal checks a value against, its
