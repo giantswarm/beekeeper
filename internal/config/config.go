@@ -4137,7 +4137,7 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
-		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
+		if !validResourceName(r) {
 			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
@@ -4230,8 +4230,8 @@ func (c *Config) validateEach(report func(error)) {
 					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
 				for _, n := range m.Nodes {
-					if strings.TrimSpace(n) == "" {
-						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
+					if !validResourceName(n) {
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: %q is not a valid resource name", name, mode, n))
 					}
 				}
 			}
@@ -4357,6 +4357,15 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 		}
 	}
 	return Lane{}, false
+}
+
+// validResourceName requires one local filename component. Leading dots and
+// built-in lease names are reserved; serving-mode nodes share this contract
+// because they become lease resources even when resources does not list them.
+func validResourceName(name string) bool {
+	return strings.TrimSpace(name) != "" && filepath.IsLocal(name) &&
+		filepath.Base(name) == name && name[0] != '.' &&
+		name != Browser && name != ModelServer
 }
 
 // serveModeNodeNames are the machine's nodes named by any self-hosted
