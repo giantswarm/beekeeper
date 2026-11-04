@@ -1081,7 +1081,7 @@ func TestAgyInstallKeepsUnrelatedWorkerRulesEntry(t *testing.T) {
 			if !sameJSON(raw, json.RawMessage(`{"entries":[`+string(entry)+`]}`)) {
 				t.Fatalf("uninstall changed unrelated entry: %s", raw)
 			}
-			if raw, err := os.ReadFile(skillPath); err != nil || string(raw) != content {
+			if raw, err := os.ReadFile(filepath.Clean(skillPath)); err != nil || string(raw) != content {
 				t.Fatalf("custom skill changed: %q, %v", raw, err)
 			}
 		})
