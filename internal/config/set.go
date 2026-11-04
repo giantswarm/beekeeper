@@ -66,14 +66,14 @@ func Change(path string, settings []Setting, unset []string) (*Config, error) {
 		return nil, err
 	}
 	defer func() { _ = lock.Close() }()
-	raw, err := os.ReadFile(filepath.Clean(target))
+	raw, err := os.ReadFile(filepath.Clean(target)) //nolint:gosec // the configuration file explicitly selected by the caller, with symlinks resolved
 	mode := fs.FileMode(0o600)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return nil, err
 	default:
-		if fi, err := os.Stat(target); err == nil {
+		if fi, err := os.Stat(target); err == nil { //nolint:gosec // preserve the mode of the explicitly selected configuration file
 			mode = fi.Mode().Perm()
 		}
 	}
@@ -272,5 +272,5 @@ func writeAtomic(path string, b []byte, mode fs.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return os.Rename(f.Name(), path) //nolint:gosec // atomically replace the explicitly selected configuration file
 }

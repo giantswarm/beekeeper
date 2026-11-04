@@ -106,7 +106,7 @@ func TestChangeLockFailureLeavesConfig(t *testing.T) {
 	if _, err := Set(p, []Setting{{Key: keyGrantTTL, Value: "1m"}}); err == nil {
 		t.Fatal("edit succeeded without a lock")
 	}
-	if got, err := os.ReadFile(p); err != nil || string(got) != raw {
+	if got, err := os.ReadFile(filepath.Clean(p)); err != nil || string(got) != raw {
 		t.Fatalf("lock failure changed configuration: %v", err)
 	}
 }
