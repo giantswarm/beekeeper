@@ -1,13 +1,16 @@
 package dockerprune
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -96,6 +99,7 @@ type fake struct {
 	// tagged are the images' tag times by ID; an image without one was
 	// never tagged.
 	tagged map[string]string
+	refs   map[string][]string
 }
 
 func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
@@ -119,7 +123,8 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 			if !ok {
 				at = "0001-01-01T00:00:00Z"
 			}
-			out += id + "\t\"" + at + "\"\n"
+			refs, _ := json.Marshal(f.refs[id])
+			out += id + "\t\"" + at + "\"\t" + string(refs) + "\n"
 		}
 		return []byte(out), nil
 	case args[0] == "ps":
@@ -136,7 +141,6 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 const dfv = `{"Images":[
 {"Containers":"0","CreatedAt":"2026-10-15 01:00:00 +0200 CEST","ID":"sha256:new","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-2","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"gsoci.azurecr.io/giantswarm/x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
-{"Containers":"0","CreatedAt":"2026-10-10 01:00:00 +0200 CEST","ID":"sha256:old","Repository":"x","Tag":"dev-1","Digest":"","Size":"2GB","UniqueSize":"2GB"},
 {"Containers":"0","CreatedAt":"2026-10-12 01:00:00 +0200 CEST","ID":"sha256:dangling","Repository":"<none>","Tag":"<none>","Digest":"<none>","Size":"500MB","UniqueSize":"500MB"},
 {"Containers":"1","CreatedAt":"2026-01-01 01:00:00 +0200 CEST","ID":"sha256:node","Repository":"kindest/node","Tag":"v1","Digest":"","Size":"1GB","UniqueSize":"1GB"},
 {"Containers":"0","CreatedAt":"2026-01-02 01:00:00 +0200 CEST","ID":"sha256:inlab","Repository":"nginx","Tag":"1","Digest":"","Size":"3GB","UniqueSize":"3GB"}
@@ -145,6 +149,12 @@ const dfv = `{"Images":[
 func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 	f := &fake{dfv: dfv,
 		tagged: map[string]string{oldID: "2026-10-16T09:00:00.5+02:00"},
+		refs: map[string][]string{
+			"sha256:new":  {"gsoci.azurecr.io/giantswarm/x:dev-2"},
+			oldID:         {"gsoci.azurecr.io/giantswarm/x:dev-1", "x:dev-1"},
+			"sha256:node": {"kindest/node:v1"},
+			inlabID:       {"nginx:1"},
+		},
 		nodes:  "lab-control-plane\trunning\n",
 		crictl: map[string]string{"lab-control-plane": `{"images":[{"id":"sha256:other","repoTags":["docker.io/library/nginx:1"],"repoDigests":[]}]}`}}
 	images, err := ListImages(context.Background(), f.run)
@@ -201,6 +211,72 @@ func TestListImagesFailsWithoutTagTimes(t *testing.T) {
 	}
 	if _, err := ListImages(context.Background(), run); err == nil {
 		t.Error("images listed without their tag times")
+	}
+}
+
+func TestListImagesRemovesAllTagsFromOneDFRow(t *testing.T) {
+	refs := []string{"example:one", "example:two"}
+	remaining := map[string]bool{refs[0]: true, refs[1]: true}
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		switch {
+		case args[0] == "system":
+			// Docker's verbose df prints just the first tag per image.
+			return []byte(`{"Images":[{"ID":"sha256:old","Repository":"example","Tag":"one","CreatedAt":"2026-01-01 00:00:00 +0000 UTC","Size":"4GB","UniqueSize":"4GB","Containers":"0"}]}`), nil
+		case args[0] == image && args[1] == "inspect":
+			// Render the requested Docker template over a complete image
+			// inspection, independently of which fields the package asks for.
+			js := func(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+			format, err := template.New("inspect").Funcs(template.FuncMap{"json": js}).Parse(args[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err = format.Execute(&out, map[string]any{
+				"Id": oldID, "Metadata": map[string]any{"LastTagTime": time.Time{}}, "RepoTags": refs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out.WriteByte('\n')
+			return out.Bytes(), nil
+		case args[0] == image && args[1] == "rm":
+			for _, ref := range args[2:] {
+				delete(remaining, ref)
+			}
+			return nil, nil
+		default:
+			t.Fatalf("unexpected Docker call: %v", args)
+			return nil, nil
+		}
+	}
+	images, err := ListImages(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := func() (int64, error) {
+		if len(remaining) > 0 {
+			return 4e9, nil
+		}
+		return 0, nil
+	}
+	trimmed, err := TrimImages(context.Background(), run, Candidates(images, nil, time.Now()), 4e9, 0, size, func() bool { return false })
+	if err != nil || len(trimmed.Removed) != 1 || len(remaining) != 0 {
+		t.Fatalf("trim = %+v, %v; tags %v still retain the 4 GB image", trimmed, err, remaining)
+	}
+}
+
+func TestListImagesFailsWithUnreadableReferences(t *testing.T) {
+	for _, refs := range []string{"", "\tnot-json", "\t{}"} {
+		f := &fake{dfv: dfv}
+		run := func(ctx context.Context, args ...string) ([]byte, error) {
+			if args[0] == image && args[1] == "inspect" {
+				return []byte("sha256:new\t\"0001-01-01T00:00:00Z\"" + refs + "\n"), nil
+			}
+			return f.run(ctx, args...)
+		}
+		if _, err := ListImages(context.Background(), run); err == nil {
+			t.Errorf("listed images with unreadable references %q", refs)
+		}
 	}
 }
 

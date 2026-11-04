@@ -64,7 +64,11 @@ func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 		var out []byte
 		for _, id := range args[4:] {
 			js, _ := json.Marshal(f.tagged[id])
-			out = fmt.Appendf(out, "%s\t%s\n", id, js)
+			refs, _ := json.Marshal(map[string][]string{
+				"sha256:old": {devOne}, "sha256:mid": {devTwo}, "sha256:new": {devThree},
+				"sha256:lab": {labRef}, "sha256:node": {"kindest/node:v1"},
+			}[id])
+			out = fmt.Appendf(out, "%s\t%s\t%s\n", id, js, refs)
 		}
 		return out, nil
 	case args[0] == "ps":
