@@ -25,8 +25,8 @@ func TestFailedReleaseRemainsOwnedForShutdown(t *testing.T) {
 
 	src.releaseErr = nil
 	m.releaseAll()
-	if len(src.released) != 2 || src.released[0] != tBeeID || src.released[1] != tBeeID {
-		t.Fatalf("shutdown did not retry the failed release: %v", src.released)
+	if len(src.cleaned) != 1 || src.cleaned[0] != tBeeID {
+		t.Fatalf("shutdown did not retry the failed release: %v", src.cleaned)
 	}
 }
 

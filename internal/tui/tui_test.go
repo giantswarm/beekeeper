@@ -28,6 +28,10 @@ func (s *lifecycleSource) Send(ctx context.Context, _, _ string) (string, error)
 	return "", ctx.Err()
 }
 
+func (s *lifecycleSource) ReleaseOwned(ctx context.Context, id string) error {
+	return s.Release(ctx, id)
+}
+
 func (s *lifecycleSource) Release(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
