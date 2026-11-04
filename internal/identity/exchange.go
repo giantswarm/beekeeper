@@ -117,33 +117,33 @@ func (e *Exchanger) exchange(ctx context.Context) (string, time.Duration, error)
 		IssuedTokenType string `json:"issued_token_type"`
 		ExpiresIn       int    `json:"expires_in"`
 		Error           string `json:"error"`
-		Description     string `json:"error_description"`
 	}
 	// An error page that is no JSON leaves out empty: the status says it.
 	_ = json.Unmarshal(body, &out)
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("dex token exchange at %s (connector %s, client %s): %s", e.tokenURL, e.cfg.ConnectorID, e.cfg.ClientID, dexError(resp.Status, out.Error, out.Description))
+		status := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+		return "", 0, fmt.Errorf("dex token exchange at %s (connector %s, client %s): %s", e.tokenURL, e.cfg.ConnectorID, e.cfg.ClientID, dexError(status, out.Error))
 	}
 	switch {
 	case out.AccessToken == "":
 		return "", 0, fmt.Errorf("dex token exchange at %s: the answer carries no token", e.tokenURL)
 	case out.IssuedTokenType != "" && out.IssuedTokenType != tokenTypeID:
-		return "", 0, fmt.Errorf("dex token exchange at %s: issued %s, not an ID token", e.tokenURL, out.IssuedTokenType)
+		return "", 0, fmt.Errorf("dex token exchange at %s: the answer did not issue an ID token", e.tokenURL)
 	case out.ExpiresIn <= 0:
 		return "", 0, fmt.Errorf("dex token exchange at %s: the answer carries no lifetime (expires_in)", e.tokenURL)
 	}
 	return out.AccessToken, time.Duration(out.ExpiresIn) * time.Second, nil
 }
 
-// dexError words a refused exchange: the status, Dex's error code and its
-// description where it gave them.
-func dexError(status, code, desc string) string {
-	parts := []string{status}
-	if code != "" {
-		parts = append(parts, code)
+// dexError includes only recognized protocol codes. Free-form response fields
+// can echo the subject token and must never reach diagnostics.
+func dexError(status, code string) string {
+	switch code {
+	case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+		"unsupported_grant_type", "invalid_scope", "invalid_target", "access_denied",
+		"server_error", "temporarily_unavailable":
+		return status + ": " + code
+	default:
+		return status
 	}
-	if desc != "" {
-		parts = append(parts, desc)
-	}
-	return strings.Join(parts, ": ")
 }

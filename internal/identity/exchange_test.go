@@ -177,3 +177,24 @@ func TestExchangerEmptyTokenFile(t *testing.T) {
 		t.Fatal("an empty token file reached Dex")
 	}
 }
+
+func TestExchangerDoesNotEchoResponseFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"description", http.StatusUnauthorized, `{"error":"access_denied","error_description":"synthetic-credential"}`},
+		{"code", http.StatusUnauthorized, `{"error":"synthetic-credential"}`},
+		{"type", http.StatusOK, `{"access_token":"stand-in","issued_token_type":"synthetic-credential","expires_in":1800}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeDex{t: t, subject: "sa", scope: plainScopes, status: tc.status, body: tc.body}
+			e, _ := newExchange(t, d, "")
+			_, err := e.Token(context.Background())
+			if err == nil || strings.Contains(err.Error(), "synthetic-credential") {
+				t.Fatalf("response field reached diagnostic: %v", err)
+			}
+		})
+	}
+}
