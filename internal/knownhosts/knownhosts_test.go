@@ -131,7 +131,7 @@ func TestParseableDropsInvalidHostEntries(t *testing.T) {
 					wantDropped++
 				}
 				write(t, src, lines...)
-				before, err := os.ReadFile(src)
+				before, err := os.ReadFile(src) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -145,7 +145,7 @@ func TestParseableDropsInvalidHostEntries(t *testing.T) {
 				if _, err := knownhosts.New(dst); err != nil {
 					t.Fatalf("consumer rejected filtered file: %v", err)
 				}
-				got, err := os.ReadFile(dst)
+				got, err := os.ReadFile(dst) //nolint:gosec // a path of this test
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -153,7 +153,7 @@ func TestParseableDropsInvalidHostEntries(t *testing.T) {
 				if string(got) != want {
 					t.Fatal("filtered file did not preserve usable lines")
 				}
-				after, err := os.ReadFile(src)
+				after, err := os.ReadFile(src) //nolint:gosec // a path of this test
 				if err != nil || string(after) != string(before) {
 					t.Fatalf("source changed; error: %v", err)
 				}
