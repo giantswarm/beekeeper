@@ -91,3 +91,33 @@ func (st *State) UpsertReviewPark(rp ReviewPark) {
 	}
 	st.ReviewParks = append(st.ReviewParks, rp)
 }
+
+// ReviewRequest reserves a review before its session starts.
+// It survives roster pruning and prevents duplicate starts on an unchanged head.
+type ReviewRequest struct {
+	Ref   string `json:"ref"`
+	Head  string `json:"head"`
+	Round int    `json:"round"`
+}
+
+// ReviewNitCheck is a supervisor's explicit attestation that a new head only
+// fixes nits in an approval. It never substitutes for that original review.
+type ReviewNitCheck struct {
+	Ref          string    `json:"ref"`
+	Head         string    `json:"head"`
+	ApprovedHead string    `json:"approvedHead"`
+	By           Party     `json:"by"`
+	At           time.Time `json:"at"`
+}
+
+func (st *State) ReviewNitsChecked(ref, head, approved string) bool {
+	if st == nil || head == "" || approved == "" {
+		return false
+	}
+	for _, check := range st.ReviewNitChecks {
+		if strings.EqualFold(check.Ref, ref) && check.Head == head && check.ApprovedHead == approved && check.By.Session == "" && check.By.HostSession == "" {
+			return true
+		}
+	}
+	return false
+}
