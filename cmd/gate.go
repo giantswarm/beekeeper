@@ -386,11 +386,17 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
+		argv = merge.RequireRebase(argv)
+	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
 	if len(reviewedHead) > 0 {
 		g.reviewedHead = reviewedHead[0]
+	}
+	if err := g.checkMergeRoute(); err != nil {
+		return err
 	}
 	g.central = pr != 0 && a.cfg.CentralLane(g.lane)
 	g.leaveAt = leaveAt(time.Now(), limit, queued)
@@ -414,6 +420,8 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 	if pr == 0 {
 		_, pin, _ := merge.ParsePromote(argv)
 		switch {
+		case pin != "" && !strings.HasPrefix(pin, "v"):
+			return gateRefusedWith(3, "invalid promotion version %q: expected vX.Y.Z (for example v1.2.3 or v1.2.3-rc.1); nothing promoted", pin)
 		case pin != "":
 			g.candidate, g.candidateRead, g.pinned = pin, true, true
 		case !queued:
@@ -688,6 +696,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
+	if err := g.reloadQueueConfig(); err != nil {
+		return "", err
+	}
 	g.passive = false
 	liveWait, claimed := g.waitBehindLive()
 	if liveWait != "" && claimed {
@@ -873,6 +884,37 @@ func (g *gateRun) step() (string, error) {
 	return why, err
 }
 
+// reloadQueueConfig lets waiting gates observe edits without replacing the
+// binary. An incomplete edit keeps the last valid settings until the next poll.
+func (g *gateRun) reloadQueueConfig() error {
+	path := cmp.Or(g.cfgPath, g.loadedCfg)
+	if path == "" {
+		return nil
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		gateLine("queue configuration could not be reloaded; keeping the last valid settings")
+		return nil
+	}
+	lane := c.LaneOf(g.repo)
+	if lane.Name != g.lane.Name {
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := g.mine(st, state.Waiting); i >= 0 {
+				st.Merges[i].Lane = lane.Name
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	next := *g.cfg
+	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
+	g.cfg = &next
+	g.lane = lane
+	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
+	return nil
+}
+
 // checkCandidate refuses a promotion whose turn came, its place running,
 // when the newest release candidate is not the one it was queued or pinned
 // for: an unpinned promotion would promote another worker's candidate, and a
@@ -969,13 +1011,9 @@ func (g *gateRun) checkOutside() string {
 	return ""
 }
 
-// readRelease reads, once per merge, whether a merge into the pull
-// request's base branch is tagged by its Auto-release workflow: the pull
-// request's base branch, and how that branch releases once per repository
-// and branch for the lane's pass (branchReleaseOf). Only a devctl merge
-// waits for a release. GitHub refusing a read under a spent limit is a wait
-// for its reset in the merge's place (spentWait); GitHub not answering
-// otherwise refuses, the place kept (refuseKeeping).
+// readRelease reads the pull request's release tree once before merging.
+// Commit reads bypass the branch cache because the PR may change workflows.
+// A post-merge refresh reads the tree that actually landed.
 func (g *gateRun) readRelease() (string, error) {
 	if g.release != nil || g.pr == 0 || !g.runsDevctl() {
 		return "", nil
@@ -993,7 +1031,12 @@ func (g *gateRun) readRelease() (string, error) {
 	})
 	var r github.BaseRelease
 	if err == nil {
-		r, err = g.branchReleaseOf(what, p.Base)
+		err = g.readRetrying(what, func() (err error) {
+			ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
+			defer cancel()
+			r, err = releaseAt(ctx, g.repo, p.Base, p.ReleaseRef())
+			return err
+		})
 	}
 	switch {
 	case github.RateLimited(err):
@@ -1004,62 +1047,6 @@ func (g *gateRun) readRelease() (string, error) {
 	r = p.Of(r)
 	g.release = &r
 	return "", nil
-}
-
-// branchReleaseFresh bounds how long the gate reuses a base branch's
-// release read: a merge in the pass may change its workflows.
-const branchReleaseFresh = time.Hour
-
-// branchReleaseOf is how the repository's branch base releases: the read
-// the lane's pass made (cachedRelease), else a fresh one, kept for the
-// merges after it.
-func (g *gateRun) branchReleaseOf(what, base string) (github.BaseRelease, error) {
-	if st, err := g.store.Read(); err == nil {
-		if r, ok := cachedRelease(st, g.repo, base, g.now); ok {
-			return r, nil
-		}
-	}
-	var r github.BaseRelease
-	err := g.readRetrying(what, func() (err error) {
-		ctx, cancel := context.WithTimeout(g.ctx, time.Minute)
-		defer cancel()
-		r, err = branchRelease(ctx, g.repo, base)
-		return err
-	})
-	if err != nil {
-		return r, err
-	}
-	_ = g.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.BranchReleases = slices.DeleteFunc(st.BranchReleases, func(c state.BranchRelease) bool {
-			return c.Repo == g.repo && c.Base == base || !passes(st, c, g.now)
-		})
-		st.BranchReleases = append(st.BranchReleases, state.BranchRelease{Repo: g.repo, Base: base, Auto: r.Auto, Plugins: r.Plugins,
-			ReleasePR: r.ReleasePR, At: g.now.UTC()})
-		return nil, nil
-	})
-	return r, nil
-}
-
-// cachedRelease is the release read of repo's branch base the lane's pass
-// made, if it still holds at now (passes).
-func cachedRelease(st *state.State, repo, base string, now time.Time) (github.BaseRelease, bool) {
-	for _, c := range st.BranchReleases {
-		if c.Repo == repo && c.Base == base && passes(st, c, now) {
-			return github.BaseRelease{Base: base, Auto: c.Auto, Plugins: c.Plugins, ReleasePR: c.ReleasePR}, true
-		}
-	}
-	return github.BaseRelease{}, false
-}
-
-// passes says the lane's pass that read c goes on at now: c is younger
-// than branchReleaseFresh and a place of its repository that was in the
-// gate when it was read still is. A repository whose places all left
-// starts a new pass, and its next merge reads again.
-func passes(st *state.State, c state.BranchRelease, now time.Time) bool {
-	if now.Sub(c.At) > branchReleaseFresh {
-		return false
-	}
-	return slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.Repo == c.Repo && !m.Joined.After(c.At) })
 }
 
 // spentWait is the wait of a merge whose read GitHub refused under a spent
@@ -1901,6 +1888,9 @@ func (g *gateRun) runMerge() error {
 // hand-cut base, or the plain squash merge for a repository devctl does not
 // serve.
 func (g *gateRun) mergeArgv() ([]string, error) {
+	if err := g.checkMergeRoute(); err != nil {
+		return nil, err
+	}
 	if g.reviewedHead != "" {
 		self, err := selfExe()
 		if err != nil {
@@ -1921,7 +1911,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		argv = squashArgv(self, g.repo, g.pr, g.argv)
 	}
 	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
@@ -2128,8 +2118,8 @@ func (g *gateRun) failureWake(run childRun) string {
 // warranted no release or whose lane has no installation to roll leaves it
 // once its release is known, and so does one with nothing merged. A run without
 // its document or ended by a signal is GitHub's to judge: merged, its
-// release is unconfirmed; unanswered, the lane settles by the settle rule as
-// for a lost merge. The run's files go with the record; a save the newer
+// release is recovered with release wait; unanswered, the lane settles by
+// the settle rule as for a lost merge. The run's files go with the record; a save the newer
 // release that wrote the state refuses leaves them, document and exit code,
 // for the watch, which records the run from them at its next poll.
 func (g *gateRun) record(base string, run childRun) error {
@@ -2143,15 +2133,87 @@ func (g *gateRun) record(base string, run childRun) error {
 	if output != "" {
 		note += ", output in " + output
 	}
-	if g.pr != 0 {
-		note += g.answerAuthority(fmt.Sprintf("%s#%d", g.repo, g.pr), time.Now().UTC())
-	}
 	r := runOutcome{rc: rc, reason: withInfra(runFailure(doc, lastLine(base+".log"), g.handCut()), g.infra)}
 	var ok bool
-	if r.out, ok = parseOutcome(g.pr, doc); merge.NeedsJudging(ok, rc) {
+	r.out, ok, rc = parseRunOutcome(g.pr, doc, rc)
+	r.rc = rc
+	if merge.NeedsJudging(ok, rc) {
 		r.out, r.unanswered = judgeRun(g.ctx, g.repo, g.pr, judgeTries)
 	}
+	// Keep the running place until recovery finishes, so an unknown release
+	// cannot enter settling while this gate can still identify it. A gate
+	// that was itself stopped ends now: lanes settle --release names it later.
+	if r.out.Merged && r.out.Unconfirmed && r.unanswered == nil && g.pr != 0 && g.handCut() == "" && !run.stopped {
+		gateLine("%s merged per GitHub; recovering its release (%s release wait %s --pr %d)", g.key(), merge.Tool, g.repo, g.pr)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+		recovered, _, found := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
+		cancel()
+		if found && !recovered.Unconfirmed && (recovered.Release != "" || recovered.NoRelease || recovered.ReleaseFailed) {
+			recovered.MergedAt = r.out.MergedAt
+			r.out = recovered
+		}
+	}
 	releaseLine := ""
+	// Refresh after merging: another merge may have changed the workflows
+	// since the preflight read. Never free a lane on an unread release flow.
+	if r.out.Merged && g.pr != 0 && g.release != nil {
+		baseBranch := g.release.Base
+		wasAuto := g.release.Auto
+		var fresh github.BaseRelease
+		err := g.readRetrying("the merged release workflow", func() (err error) {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), time.Minute)
+			defer cancel()
+			if sha := merge.MergeCommit(doc); sha != "" {
+				fresh, err = releaseAt(ctx, g.repo, baseBranch, sha)
+				fresh.Version = g.release.Version
+			} else {
+				var p github.PullBase
+				p, err = pullBase(ctx, g.repo, g.pr)
+				if err == nil && p.MergeOID == "" {
+					err = fmt.Errorf("no merge commit reported")
+				}
+				if err == nil {
+					fresh, err = releaseAt(ctx, g.repo, p.Base, p.MergeOID)
+					fresh = p.Of(fresh)
+				}
+			}
+			return err
+		})
+		if err == nil {
+			g.release = &fresh
+		}
+		if err != nil {
+			r.out.Unconfirmed, r.out.NoRelease = true, false
+			r.out.Release, rc = "", devctlUnconfirmed
+			g.release = &github.BaseRelease{Base: baseBranch, Auto: true}
+			releaseLine = fmt.Sprintf("%s merged; its release workflow cannot be read (%v): release unconfirmed, lane %s remains held", g.key(), err, g.lane.Name)
+		} else if g.release.Auto && r.out.Release == "" && (!r.out.NoRelease || !wasAuto) && !g.overlaps() {
+			r.out.NoRelease = false
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(g.ctx), releasePRWait)
+			waited, _, ok := merge.ParseReleaseWait(releaseWait(ctx, g.repo, "--pr", strconv.Itoa(g.pr)))
+			cancel()
+			if ok {
+				r.out.Release, r.out.NoRelease = waited.Release, waited.NoRelease
+				r.out.ReleaseFailed, r.out.Unconfirmed = waited.ReleaseFailed, waited.Unconfirmed
+			} else {
+				r.out.Unconfirmed = true
+			}
+			if r.out.Unconfirmed {
+				rc = devctlUnconfirmed
+			}
+			if r.out.ReleaseFailed {
+				rc = devctlReleaseFailed
+			}
+			releaseLine = fmt.Sprintf("%s merged into %s with Auto-release: release %s", g.key(), g.release.Base, cmp.Or(r.out.Release, "unconfirmed"))
+		} else if g.handCut() != "" {
+			r.out.NoRelease = true
+		} else if g.release.Auto && !wasAuto {
+			r.out.NoRelease = false
+		}
+		if err == nil && g.release.Auto && r.out.Release != "" && releaseLine == "" {
+			releaseLine = fmt.Sprintf("%s merged into %s with Auto-release: release %s", g.key(), g.release.Base, r.out.Release)
+		}
+	}
 	switch sha := merge.MergeCommit(doc); {
 	case g.plugins() && r.out.Merged && sha != "":
 		releaseLine = g.awaitPluginTags(&r.out, sha)
@@ -2170,6 +2232,7 @@ func (g *gateRun) record(base string, run childRun) error {
 			return nil, nil
 		}
 		r.confirming = confirm
+		st.Merges[i].HandCut = g.handCut()
 		ev := recordRun(st, i, g.lane, g.me, r, time.Now().UTC(), note)
 		j := slices.IndexFunc(st.Merges, func(m state.Merge) bool {
 			return m.Repo == g.repo && m.PR == g.pr && m.Phase == state.Settling
@@ -2178,7 +2241,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		if confirm = confirm && settles; confirm {
 			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
 		}
-		return ev, nil
+		return g.mergeEvents(ev)
 	})
 	if confirm && err == nil {
 		releaseLine, rc = g.confirmRelease(&r.out, rc)
@@ -2187,6 +2250,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
 			g.key(), stale.Version, stale.Newer, filepath.Dir(base), project.Name)
+	} else if err != nil {
+		return err
 	} else {
 		removeMergeFiles(base)
 	}
@@ -2214,8 +2279,8 @@ func (g *gateRun) record(base string, run childRun) error {
 		gateLine("%s merged and its release failed (exit %d): nothing rolls, lane %s settles at once; the fix is the next pull request or a rerun of the failed workflow, do not merge again",
 			g.key(), rc, g.lane.Name)
 	case out.Unconfirmed:
-		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, confirm it with `devctl release wait %s --pr %d`, do not merge again",
-			rc, g.repo, g.pr, g.repo, g.pr)
+		gateLine("devctl ended with exit %d before its document, and GitHub reports %s#%d merged: its release is unconfirmed, recover it with `devctl release wait %s --pr %d`, then name it with `beekeeper lanes settle %s %d --release <version>`; do not merge again",
+			rc, g.repo, g.pr, g.repo, g.pr, g.repo, g.pr)
 	case !out.Merged && (rc == devctlUsage || rc == devctlAuth):
 		gateLine("%s (exit %d, a tooling fault): the same command fails the same way until what the reason names is fixed (output in %s); %s left lane %s",
 			nothingDone(g.pr, out), rc, output, g.key(), g.lane.Name)
@@ -2258,6 +2323,16 @@ func parseOutcome(pr int, doc []byte) (merge.Outcome, bool) {
 	return merge.ParseDocument(doc)
 }
 
+// parseRunOutcome treats promote's usage exit as a certain refusal, even
+// without a JSON document. No GitHub mutation can have happened.
+func parseRunOutcome(pr int, doc []byte, rc int) (merge.Outcome, bool, int) {
+	if pr == 0 && rc == devctlUsage {
+		return merge.Outcome{}, true, 3
+	}
+	out, ok := parseOutcome(pr, doc)
+	return out, ok, rc
+}
+
 // toolMerge says whether the gate merges or promotes the merge tool's own
 // repository, which opens the tool-release window.
 func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.ToolRepo) }
@@ -2266,6 +2341,15 @@ func (g *gateRun) toolMerge() bool { return strings.EqualFold(g.repo, merge.Tool
 // merge of a repository devctl serves; any other merge takes the plain
 // squash merge.
 func (g *gateRun) runsDevctl() bool { return g.pr == 0 || g.cfg.Merge.DevctlServes(g.repo) }
+
+// checkMergeRoute refuses flags the plain squash route cannot honor, before
+// queuing and again before launch for runs resumed from an earlier version.
+func (g *gateRun) checkMergeRoute() error {
+	if !g.runsDevctl() && merge.UpdatesBranch(g.argv) {
+		return gateRefused("--update-branch is unsupported for repositories outside merge.devctlOwners: the squash merge route cannot update the branch; nothing merged")
+	}
+	return nil
+}
 
 // judgeTries is how often the gate asks GitHub about a run without its
 // document, judgeWait the pause between the tries.
@@ -2464,8 +2548,8 @@ func toolMergeRuns(st *state.State) bool {
 // release, the moment the release's binary assets exist and verify: a
 // window whose pull request merged, or a promotion's, runs the tool's update
 // (updateTool) also while the merge's devctl still waits for the release
-// workflow, and lifts once the tool reports another version than at its
-// opening (the release, once the merge recorded it). Once no merge of the
+// workflow, and lifts once the tool reports the release tagged on the merge
+// commit (or a later release). Once no merge of the
 // tool's repository runs, a window whose pull request GitHub reports not
 // merged lifts too: its merge ended without the gate recording it (a gate
 // killed, GitHub unanswered). It reads the tool and GitHub every time: a
@@ -2479,9 +2563,17 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	v := devctlVersion(ctx)
 	pulls := map[int]github.Pull{}
 	for _, h := range st.Holds {
-		if h.Tool != "" && h.ToolPR != 0 && !h.ToolMerged && (running || v == "" || !merge.Installed(h, v)) {
+		if h.Tool != "" && h.ToolPR != 0 && (!h.ToolMerged || h.ToolRelease == "") {
 			if p, err := pullState(ctx, merge.ToolRepo, h.ToolPR); err == nil {
 				pulls[h.ToolPR] = p
+			}
+		}
+	}
+	releases := map[int]string{}
+	for pr, p := range pulls {
+		if p.State == github.Merged {
+			if tag, err := toolRelease(ctx, p.MergeCommit.OID); err == nil {
+				releases[pr] = tag
 			}
 		}
 	}
@@ -2490,6 +2582,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 			for i, h := range st.Holds {
 				if p, ok := pulls[h.ToolPR]; ok && h.Tool != "" && p.State == github.Merged {
 					st.Holds[i].ToolMerged = true
+					if h.ToolRelease == "" {
+						st.Holds[i].ToolRelease = releases[h.ToolPR]
+					}
 				}
 			}
 			return nil, nil
@@ -2497,6 +2592,9 @@ func (a *app) closeToolWindow(ctx context.Context, by state.Party) {
 	}
 	if v != "" && a.updateTool(ctx, v, by) {
 		v = devctlVersion(ctx)
+	}
+	if current, err := a.store.Read(); err == nil {
+		st = current
 	}
 	candidates := publishedCandidates(ctx, st, pulls)
 	if v == "" && len(candidates) == 0 && (running || len(pulls) == 0) {
@@ -2554,10 +2652,10 @@ func awaitsCandidate(h state.Hold, pulls map[int]github.Pull) bool {
 func publishedCandidates(ctx context.Context, st *state.State, pulls map[int]github.Pull) map[int]string {
 	found := map[int]string{}
 	for _, h := range st.Holds {
-		if !awaitsCandidate(h, pulls) {
+		if !awaitsCandidate(h, pulls) || h.ToolRelease == "" {
 			continue
 		}
-		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && (h.ToolRelease == "" || merge.Bare(c) == merge.Bare(h.ToolRelease)) {
+		if c, err := toolCandidate(ctx, h.At); err == nil && c != "" && merge.Bare(c) == merge.Bare(h.ToolRelease) {
 			found[h.ToolPR] = c
 		}
 	}
@@ -2807,6 +2905,7 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // runChild runs the command with this process's stdin and stderr, its
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
+	started := time.Now()
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
@@ -2827,10 +2926,17 @@ func runChild(argv []string, out io.Writer) int {
 		}
 	}()
 	_ = c.Wait()
-	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+	return childExit(c.ProcessState, os.Stderr, started)
+}
+
+// childExit preserves signal deaths as shell exit codes and reports how long
+// the command ran, including when a caller or the watch stopped it.
+func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), time.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())
 	}
-	return c.ProcessState.ExitCode()
+	return ps.ExitCode()
 }
 
 func exitCode(rc int) error {

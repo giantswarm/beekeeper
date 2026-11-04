@@ -185,7 +185,7 @@ func (g *gateRun) stopWaiting(s os.Signal) error {
 // head current and judged, and merges at once. Its outcome is devctl's to
 // judge, never the warm-up's.
 func (g *gateRun) warmUp(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.CITimeout.Duration)
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.TimeoutFor(g.repo))
 	defer cancel()
 	if merge.UpdatesBranch(g.argv) {
 		update := updateBranch
