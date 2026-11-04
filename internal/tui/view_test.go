@@ -380,3 +380,31 @@ func TestCostAndPct(t *testing.T) {
 		t.Errorf("pct = %q", got)
 	}
 }
+
+func TestDedupAlertsKeepsEarliestSince(t *testing.T) {
+	for _, tc := range []struct {
+		name, earlier, later string
+	}{
+		{"offsets", "2026-09-26T10:00:00+02:00", "2026-09-26T09:00:00Z"},
+		{"fractional seconds", "2026-09-26T09:00:00Z", "2026-09-26T09:00:00.1Z"},
+		{"same format", "2026-09-26T08:00:00Z", "2026-09-26T09:00:00Z"},
+		{"empty", "2026-09-26T09:00:00Z", ""},
+		{"malformed", "2026-09-26T09:00:00Z", "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, stamps := range [][2]string{{tc.earlier, tc.later}, {tc.later, tc.earlier}} {
+				alerts := []Alert{
+					{Severity: "page", Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[0]},
+					{Severity: "page", Alertname: "ExampleAlert", Cluster: "example", Where: "workload", Since: stamps[1]},
+				}
+				got := dedupAlerts(alerts)
+				if len(got) != 1 {
+					t.Fatalf("dedupAlerts(%q): got %d rows, want 1", stamps, len(got))
+				}
+				if got[0].Since != tc.earlier || got[0].n != 2 {
+					t.Errorf("dedupAlerts(%q): got Since %q, count %d; want %q, 2", stamps, got[0].Since, got[0].n, tc.earlier)
+				}
+			}
+		})
+	}
+}
