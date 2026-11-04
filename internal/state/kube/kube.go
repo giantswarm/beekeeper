@@ -65,8 +65,8 @@ type Store struct {
 	home string
 
 	// idMu guards lastID, the id of the last Event recorded or found: ids
-	// only grow, across restarts too (the first record reads the Events'
-	// highest).
+	// only grow, across restarts too (the first record reads the highest
+	// Event or retained closure ID).
 	idMu    sync.Mutex
 	lastID  int64
 	idsRead bool
@@ -639,8 +639,8 @@ func eventID(ev *corev1.Event) string {
 
 // nextID is the id of the next Event: its time in nanoseconds, or one
 // above the last id when the clock has not moved past it, so ids only grow.
-// The first call reads the highest id of the Events kept: a restart
-// continues from them.
+// The first call reads the highest id of the Events and retained note
+// closures: a restart continues above either source of the feed.
 func (s *Store) nextID(ctx context.Context, at time.Time) (string, error) {
 	s.idMu.Lock()
 	defer s.idMu.Unlock()
@@ -653,6 +653,18 @@ func (s *Store) nextID(ctx context.Context, at time.Time) (string, error) {
 			id, err := strconv.ParseInt(eventID(&list.Items[i]), 10, 64)
 			if err == nil && id > s.lastID {
 				s.lastID = id
+			}
+		}
+		notes := &v1alpha1.NoteList{}
+		if err := s.c.List(ctx, notes); err != nil {
+			return "", err
+		}
+		for _, n := range notes.Items {
+			if n.Status.Closure != nil {
+				id, err := strconv.ParseInt(n.Status.Closure.ID, 10, 64)
+				if err == nil && id > s.lastID {
+					s.lastID = id
+				}
 			}
 		}
 		s.idsRead = true
