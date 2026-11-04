@@ -285,3 +285,29 @@ func TestSampleProcsNamesTheWatchsOwnReads(t *testing.T) {
 		t.Errorf("the watch said:\n%s", out.String())
 	}
 }
+
+func TestToolLoadNamesRecursion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		parents []int
+		max     int
+		want    bool
+	}{
+		{"chain", []int{0, 1, 2, 3}, 3, true},
+		{"at bound", []int{0, 1, 2}, 3, false},
+		{"independent calls", []int{0, 0, 0, 0}, 3, false},
+		{"siblings", []int{0, 1, 1, 1}, 3, false},
+		{"cycle", []int{2, 1, 0, 0}, 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ps []*proc.Process
+			for i, parent := range tc.parents {
+				ps = append(ps, &proc.Process{PID: i + 1, PPID: parent, Comm: "gh"})
+			}
+			line := toolLoadLine(proc.NewTable(ps...), []string{"gh"}, tc.max, nil)
+			if got := strings.Contains(line, "possible recursion: gh"); got != tc.want {
+				t.Fatalf("LOAD = %q, recursion = %v, want %v", line, got, tc.want)
+			}
+		})
+	}
+}
