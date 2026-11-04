@@ -45,6 +45,8 @@ var ErrConflict = errors.New("the proofs branch moved")
 // shaKey names an object's id in the Git data API.
 const shaKey = "sha"
 
+var objectID = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
 var repoName = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 
 // Upload is one image hosted in Repo.
@@ -163,7 +165,11 @@ func (u Upload) head(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	sha := strings.TrimSpace(string(out))
+	if !objectID.MatchString(sha) {
+		return "", fmt.Errorf("gh api ref: invalid object ID %q", sha)
+	}
+	return sha, nil
 }
 
 // send sends body to the repository's endpoint with method and returns the
@@ -186,13 +192,16 @@ func (u Upload) send(ctx context.Context, method, endpoint string, body any) (st
 	if err := json.Unmarshal(out, &obj); err != nil {
 		return "", fmt.Errorf("gh api %s: %w", endpoint, err)
 	}
-	if sha := cmp.Or(obj.SHA, obj.Object.SHA); sha != "" {
+	if sha := cmp.Or(obj.SHA, obj.Object.SHA); objectID.MatchString(sha) {
 		return sha, nil
 	}
-	return "", fmt.Errorf("gh api %s: no sha in the answer", endpoint)
+	return "", fmt.Errorf("gh api %s: missing or invalid object ID in the answer", endpoint)
 }
 
 func (u Upload) api(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return u.GH(ctx, input, append([]string{"api"}, args...)...)
 }
 

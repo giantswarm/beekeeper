@@ -55,7 +55,7 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 		f.bodies[call] = body
 	}
 	f.n++
-	sha := fmt.Sprintf(`{"sha":"sha%d"}`, f.n)
+	sha := fmt.Sprintf(`{"sha":"%040x"}`, f.n)
 	switch {
 	case strings.HasSuffix(path, "/o/r") || path == "repos/o/r":
 		return []byte(f.visibility + "\n"), nil
@@ -66,7 +66,7 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 		return []byte(f.head + "\n"), nil
 	case method == "PATCH" && f.conflicts > 0:
 		f.conflicts--
-		f.head = "moved"
+		f.head = fmt.Sprintf("%040x", 999)
 		return nil, errors.New("gh api: exit status 1: gh: Update is not a fast forward (HTTP 422)")
 	case method == "POST" && strings.HasSuffix(path, "/git/refs"), method == "PATCH":
 		f.head = f.bodies[call]["sha"].(string)
@@ -176,7 +176,7 @@ func TestUploadNewBranch(t *testing.T) {
 // An upload onto the branch builds on its head and moves it without force;
 // a branch that moved meanwhile is retried on its new head.
 func TestUploadExistingBranchRetries(t *testing.T) {
-	f := &fakeGH{visibility: public, head: "h0", conflicts: 1}
+	f := &fakeGH{visibility: public, head: fmt.Sprintf("%040x", 998), conflicts: 1}
 	res, err := Upload{GH: f.run, Repo: repo, Now: at}.Run(context.Background(), []byte("img"))
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestUploadExistingBranchRetries(t *testing.T) {
 	if patch["force"] != false || patch["sha"] != res.Commit {
 		t.Errorf("ref update = %v", patch)
 	}
-	if p := f.bodies["POST repos/o/r/git/commits"]["parents"].([]any); len(p) != 1 || p[0] != "moved" {
+	if p := f.bodies["POST repos/o/r/git/commits"]["parents"].([]any); len(p) != 1 || p[0] != fmt.Sprintf("%040x", 999) {
 		t.Errorf("retried commit parents = %v, want the moved head", p)
 	}
 	if n := slices.Index(f.calls, "POST repos/o/r/git/blobs"); n < 0 || slices.Contains(f.calls[n+1:], "POST repos/o/r/git/blobs") {
