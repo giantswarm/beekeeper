@@ -434,6 +434,9 @@ func (msg message) price(m config.Metrics) (float64, bool) {
 	t := msg.tokens
 	c := (float64(t.Input)*p.Input + float64(t.CacheWrite5m)*p.CacheWrite5m + float64(t.CacheWrite1h)*p.CacheWrite1h +
 		float64(t.CacheRead)*p.CacheRead + float64(t.Output)*p.Output) / 1e6
+	if p.LongContextThreshold > 0 && t.Input+t.CacheWrite5m+t.CacheWrite1h+t.CacheRead > p.LongContextThreshold {
+		c *= p.LongContextMultiplier
+	}
 	if msg.fast {
 		c *= p.Fast
 	}

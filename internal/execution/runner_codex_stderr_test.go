@@ -2,6 +2,7 @@ package execution
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,35 @@ import (
 )
 
 const codexStartupDiagnostic = "config.toml: permission denied\n"
+
+func TestCodexRunnerLogsExecFailure(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("exec failure diagnostic is asserted for Linux")
+	}
+	f, _ := codexFixture(t)
+	h := f.s.Config.Harnesses[HarnessCodex]
+	h.Executable = filepath.Join(t.TempDir(), "missing-codex")
+	j := Journal{Request: f.r}
+	j.Handle.Workspace = t.TempDir()
+	var log bytes.Buffer
+	_, accepted, err := f.s.codexTurn(context.Background(), f.r.Ref, h, nil, &log, j, f.r.Prompt, "", func() error {
+		t.Fatal("failed exec accepted the task")
+		return nil
+	})
+	if err == nil || accepted {
+		t.Fatal("failed exec was accepted")
+	}
+	var event struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(log.Bytes(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Type != codexStderrEvent || !strings.Contains(event.Text, "no such file or directory") {
+		t.Fatalf("OS startup diagnostic missing: %+v", event)
+	}
+}
 
 func TestCodexRunnerLogsStartupStderr(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
@@ -35,7 +65,7 @@ func TestCodexRunnerLogsStartupStderr(t *testing.T) {
 	if err := json.Unmarshal(page.Data, &event); err != nil {
 		t.Fatal(err)
 	}
-	if event.Type != "harness.stderr" || event.Text != codexStartupDiagnostic {
+	if event.Type != codexStderrEvent || event.Text != codexStartupDiagnostic {
 		t.Fatalf("startup diagnostic missing: %+v", event)
 	}
 	j, err := f.s.Read(f.r.Ref)
@@ -49,7 +79,7 @@ func TestCodexStderrRedactsAuthentication(t *testing.T) {
 	for _, diagnostic := range []string{
 		"Authorization:\nBearer opaque-fixture-value\n",
 		"refresh_token: opaque-fixture-value\n",
-		"-----BEGIN PRIVATE KEY-----\nopaque-fixture-value\n",
+		strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " ") + "\nopaque-fixture-value\n",
 		"gitleaks:allow " + patternValue,
 		"unexpected value " + patternValue,
 	} {

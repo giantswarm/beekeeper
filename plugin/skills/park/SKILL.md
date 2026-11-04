@@ -10,9 +10,8 @@ description: Ending a turn with the task open on a beekeeper desk: parking on a 
   "<what>"`. The inbox resume carries what settled it. A hold refusal (77) parks on that hold,
   `--on hold:<target>` as the refusal names it, and runs the same merge once the resume says it lifted.
 - **Desk review**, after push/green CI: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. Matching published HEAD requests review; otherwise re-park there. The loop merges. Omit `--post-merge` only if merge ends the task without a wake.
-- **External state** (rollout, registry, CI outside `devctl`): set a wake timer, then park: `beekeeper timer add <time> "<what>" --when "<condition>"` (CI: `pr-checks <owner/repo#n>`, green or red)
-  or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`. A rollout is
-  checked once, when its timer falls due.
+- **SSH CI:** `beekeeper agents park --checks --on <owner/repo#n> "CI"`; coordinator wakes on green/red; then fix or park for review.
+- **Other waits:** `beekeeper timer add <time> "<what>" --when "<condition>"` or `--probe "<command>"`, with `--wake "<agent>" --until <duration>`; then park. CI: `pr-checks <owner/repo#n>`.
 - **Overlap:** name it in your PR, build on the other, or park `--on <owner/repo#n>` for merge. No coordination wait.
 - **Park only on external waits** or a person's decision. Report problems; continue work that can move.
 - **A park on a person is news.** Tell the supervisor in one line at once for an answer,
