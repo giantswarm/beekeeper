@@ -2,6 +2,7 @@ package cmd
 
 // Shared literals, kept as constants for goconst.
 const (
+	repo                 = "o/r"
 	litADevice           = "a device"
 	litAgentOne          = "agent-one"
 	litAlertnameOnly     = "alertname only"
