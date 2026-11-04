@@ -450,6 +450,7 @@ omp:
   sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
   modelsFile: ~/.omp/agent/models.yml  # the default; omp's providers, a vault provider's apiKey there the variable's name (SPARK_API_KEY)
   model: ""                 # agents start --harness omp without --model: an exact selector omp lists (provider/id); empty: the start is refused
+  servedBy: ""              # optional lease resource serving the model; held: refuse with holder/purpose, retry after release
   providers:                # providers whose key agents start hands over from the vault, by their name in modelsFile
     spark:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone
