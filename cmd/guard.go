@@ -106,7 +106,9 @@ A launcher whose scope becomes empty is stopped and releases its slot;
 when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
 position only when its turn reaches a free slot. While builds occupy the
 slots, waiters keep FIFO order. The host watch also recovers expired, empty
-slot holders after checking their lifecycle and process identity. The run exits 1
+slot holders after checking their lifecycle and process identity. Once cache setup
+finishes, holder recovery uses the 30s startup grace independently of --wait
+and does not require a run.start event. The run exits 1
 and reports the empty scope. Queue diagnostics also name an empty holder
 scope. Scope read errors leave the command running.
 Bound the command's parallelism rather than raising --max.
@@ -596,8 +598,10 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				}
 				if out := guard.DecideUnsandboxed(raw); out != nil {
 					_, _ = w.Write(out)
+					return nil
 				}
-				return nil
+				// SendMessage is exempt from the sandbox requirement, but
+				// still needs the normal scope and tool checks below.
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
@@ -631,6 +635,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
 				h.LiveDirs = a.hookLiveDirs
+				h.WorktreeOwner = a.hookWorktreeOwner
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}
