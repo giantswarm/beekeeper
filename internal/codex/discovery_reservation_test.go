@@ -20,14 +20,15 @@ func TestDiscoverReservesExplicitThreads(t *testing.T) {
 
 func testDiscoverReservedThread(t *testing.T, resumedFirst, haveNewRollout bool) {
 	t.Helper()
+	const execSubcommand = "exec"
 	now := time.Now()
 	stateDir := t.TempDir()
 	// The synthetic processes have no live /proc entries, so both cwd reads
 	// return empty. This models two processes in the same working directory.
 	path := writeRollout(t, HomeSessionsDir(stateDir), "rollout-resumed.jsonl", now,
 		`{"type":"session_meta","payload":{"id":"resumed-thread","timestamp":"2026-10-01T10:00:00Z","cwd":""}}`)
-	resumed := &proc.Process{PID: 1000000000, Comm: Comm, Args: []string{Comm, "exec", "resume", "resumed-thread", "-"}, Start: now.Add(-time.Minute)}
-	starting := &proc.Process{PID: 1000000001, Comm: Comm, Args: []string{Comm, "exec", "-"}, Start: now.Add(-time.Second)}
+	resumed := &proc.Process{PID: 1000000000, Comm: Comm, Args: []string{Comm, execSubcommand, "resume", "resumed-thread", "-"}, Start: now.Add(-time.Minute)}
+	starting := &proc.Process{PID: 1000000001, Comm: Comm, Args: []string{Comm, execSubcommand, "-"}, Start: now.Add(-time.Second)}
 	if !resumedFirst {
 		resumed.PID, starting.PID = starting.PID, resumed.PID
 	}
