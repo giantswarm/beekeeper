@@ -1,6 +1,7 @@
 package worktrees
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,10 +36,37 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestClassifyBuildDirsPreservesFilesNamedLikeDirectories(t *testing.T) {
+	for i, tc := range []struct {
+		status      string
+		work, build []string
+	}{
+		{status: "?? build", work: []string{"build"}},
+		{status: "?? tools/build", work: []string{"tools/build"}},
+		{status: "?? .cache", work: []string{".cache"}},
+		{status: "?? .yarn/cache", work: []string{".yarn/cache"}},
+		{status: "?? generated/output", work: []string{"generated/output"}},
+		{status: "!! build"},
+		{status: "?? build/", build: []string{"build/"}},
+		{status: "?? tools/build/", build: []string{"tools/build/"}},
+		{status: "!! .yarn/cache/", build: []string{".yarn/cache/"}},
+		{status: "!! build/output.o", build: []string{"build/output.o"}},
+		{status: "?? generated/output/result", build: []string{"generated/output/result"}},
+		{status: " M build/source.go", work: []string{"build/source.go"}},
+	} {
+		t.Run(fmt.Sprintf("case %d: %s", i, tc.status), func(t *testing.T) {
+			work, build := classifyBuildDirs([]byte(tc.status+"\x00"), []string{"generated/output"})
+			if !slices.Equal(work, tc.work) || !slices.Equal(build, tc.build) {
+				t.Fatalf("work=%q build=%q, want work=%q build=%q", work, build, tc.work, tc.build)
+			}
+		})
+	}
+}
+
 func TestHeadBranch(t *testing.T) {
 	for _, c := range []struct{ branch, pushed, want string }{
 		{"wt/feat/x", "feat/x", "feat/x"},
-		{"fix-1", "main", "fix-1"},
+		{"fix-1", automaticDefault, "fix-1"},
 		{"fix-2", "", "fix-2"},
 	} {
 		if got := (Tree{Branch: c.branch, Pushed: c.pushed}).HeadBranch(); got != c.want {
