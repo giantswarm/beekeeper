@@ -17,6 +17,8 @@ import (
 
 const mergedSinkYAML = "sink: {repo: o/site, workflow: refresh.yaml, verbs: [merged]}\n"
 
+const sinkReplacement = "replacement"
+
 func recoveredMergeOwed() state.Owed {
 	return state.Owed{
 		Ask: true, Repo: scratchRepo, PR: 7,
@@ -90,7 +92,7 @@ func TestTheSinkDispatchesARecoveredMerge(t *testing.T) {
 // The gate and its replacement may confirm a merge before or after owed
 // recovery. Both paths retain their log details, but dispatch only once.
 func TestTheSinkDispatchesAMergeOnceAcrossRecoveryAndGate(t *testing.T) {
-	for _, producer := range []string{gateCmdName, "replacement"} {
+	for _, producer := range []string{gateCmdName, sinkReplacement} {
 		for _, recoveryFirst := range []bool{false, true} {
 			name := producer + "/gate-first"
 			if recoveryFirst {
@@ -231,7 +233,7 @@ func TestARecoveredMergeWaitsUntilItsEventCanBeRecorded(t *testing.T) {
 
 // A history read failure must leave the runner's evidence for a later poll.
 func TestMergeRecordersKeepResultsWhenHistoryFails(t *testing.T) {
-	for _, producer := range []string{gateCmdName, "replacement"} {
+	for _, producer := range []string{gateCmdName, sinkReplacement} {
 		t.Run(producer, func(t *testing.T) {
 			a, _ := sinkApp(t, mergedSinkYAML)
 			base := mergeBase(a.store.Dir(), scratchRepo, 7)
