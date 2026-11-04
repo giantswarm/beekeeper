@@ -11,8 +11,8 @@ import (
 )
 
 func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
-	from := state.Party{Session: "old", Name: "Guide run 1"}
-	to := state.Party{Session: "current", Name: "Guide run 2"}
+	from := state.Party{Session: "relieved-run", Name: "Guide run 1"}
+	to := state.Party{Session: "current-run", Name: "Guide run 2"}
 	now := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: from}}}
 	st.Agents = []state.Agent{{Party: from}, {Party: to}}
@@ -30,11 +30,11 @@ func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
 	// Simulate a stale roster entry whose CLI still runs after the relay.
 	st.Agents = append(st.Agents, state.Agent{Party: from})
 	st.Agents = append(st.Agents,
-		state.Agent{Party: state.Party{Session: "busy", Name: "Busy"}, Task: "work"},
-		state.Agent{Party: state.Party{Session: "idle", Name: "Idle"}},
-		state.Agent{Party: state.Party{Session: "parked", Name: "Parked"}, Task: "work", Park: &state.Park{}},
-		state.Agent{Party: state.Party{Session: "done", Name: "Done"}, Done: true},
-		state.Agent{Party: state.Party{Session: "stopped", Name: "Stopped"}},
+		state.Agent{Party: state.Party{Session: "busy-run", Name: "Busy"}, Task: "work"},
+		state.Agent{Party: state.Party{Session: "idle-run", Name: "Idle"}},
+		state.Agent{Party: state.Party{Session: "parked-run", Name: "Parked"}, Task: "work", Park: &state.Park{}},
+		state.Agent{Party: state.Party{Session: "done-run", Name: "Finished"}, Done: true},
+		state.Agent{Party: state.Party{Session: "stopped-run", Name: "Stopped"}},
 	)
 	var sessions []*claude.Session
 	for _, ag := range st.Agents {
