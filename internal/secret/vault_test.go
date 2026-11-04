@@ -320,3 +320,79 @@ func TestWaits(t *testing.T) {
 		t.Errorf("ReadWaits = %+v, %v", ws, err)
 	}
 }
+
+// A delayed unlock must not overwrite the state published by a later lock.
+func TestKeeperCallbacksPersistTransitionOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vault-state.json")
+	entered, release := make(chan struct{}), make(chan struct{})
+	writes := make(chan error, 2)
+	k := NewKeeper(time.Hour, func(st VaultState) {
+		if st.Unlocked {
+			close(entered)
+			<-release
+		}
+		writes <- WriteState(path, st)
+	})
+	done := make(chan error, 1)
+	go func() { done <- k.Unlock(testSession, testToken, time.Now()) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unlock callback did not start")
+	}
+	k.Lock()
+	locked := !k.State().Unlocked && k.Env() == ""
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("unlock did not finish")
+	}
+	for range 2 {
+		select {
+		case err := <-writes:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("state callback did not finish")
+		}
+	}
+	if !locked {
+		t.Fatal("Lock did not clear the session")
+	}
+	if st, err := ReadState(path); err != nil || st.Unlocked {
+		t.Fatalf("persisted state after lock: %+v, %v", st, err)
+	}
+}
+
+func TestKeeperCallbackReentersLock(t *testing.T) {
+	var k *Keeper
+	var states []VaultState
+	k = NewKeeper(time.Hour, func(st VaultState) {
+		_ = k.State()
+		if st.Unlocked {
+			k.Lock()
+		}
+		states = append(states, st)
+	})
+	done := make(chan error, 1)
+	go func() { done <- k.Unlock(testSession, testToken, time.Now()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback deadlocked when reentering keeper")
+	}
+	if len(states) != 2 || !states[0].Unlocked || states[1].Unlocked {
+		t.Fatalf("callback states: %+v", states)
+	}
+	if k.State().Unlocked || k.Env() != "" {
+		t.Fatal("callback did not lock keeper")
+	}
+}
