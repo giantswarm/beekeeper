@@ -6,13 +6,15 @@ import (
 	"time"
 )
 
+const timerPastClock = "13:00"
+
 func TestTimerStartTime(t *testing.T) {
 	now := time.Date(2026, 9, 24, 14, 30, 15, 0, time.Local)
 	for _, tc := range []struct {
 		input string
 		want  time.Time
 	}{
-		{"13:00", now},
+		{timerPastClock, now},
 		{"14:30", now},
 		{"2026-09-24 13:00", now},
 		{now.Add(-time.Hour).Format(time.RFC3339), now},
@@ -37,7 +39,7 @@ func TestTimerStartTime(t *testing.T) {
 func TestTimerPastStartAcceptsUntil(t *testing.T) {
 	now := time.Date(2026, 9, 24, 14, 30, 0, 0, time.Local)
 	a := &app{now: now}
-	for _, start := range []string{"13:00", "2026-09-24 13:00", now.Add(-time.Hour).Format(time.RFC3339)} {
+	for _, start := range []string{timerPastClock, "2026-09-24 13:00", now.Add(-time.Hour).Format(time.RFC3339)} {
 		t.Run(start, func(t *testing.T) {
 			due, err := timerStartTime(now, start)
 			if err != nil {
