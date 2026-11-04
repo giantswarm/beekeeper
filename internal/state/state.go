@@ -1869,6 +1869,11 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err != nil {
 		return err
 	}
+	// Callbacks can change side files under this lock (a lease's holder, for
+	// one). Refuse a stale writer before any such change can take place.
+	if err := s.checkWriter(st, time.Now()); err != nil {
+		return err
+	}
 	events, err := fn(st)
 	if err != nil {
 		return err
@@ -1937,18 +1942,28 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
-	own, ok := release(s.version)
-	if !ok {
-		return nil
+	if err := s.checkWriter(st, now); err != nil {
+		return err
 	}
-	if st.Writer != nil {
-		if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
-			return s.refuse(st.Writer.Version, now)
-		}
+	if _, ok := release(s.version); !ok {
+		return nil
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	// Releases before the refusal recorded their stale saves here instead.
 	delete(st.rest, "staleWriters")
+	return nil
+}
+
+// checkWriter refuses a release older than the state's writer before the
+// update callback runs, and again before stamping its result.
+func (s *FileStore) checkWriter(st *State, now time.Time) error {
+	own, ok := release(s.version)
+	if !ok || st.Writer == nil {
+		return nil
+	}
+	if newer, ok := release(st.Writer.Version); ok && own.LessThan(newer) {
+		return s.refuse(st.Writer.Version, now)
+	}
 	return nil
 }
 
