@@ -91,7 +91,7 @@ func TestAMergeCallsServerErrorIsRetried(t *testing.T) {
 	if d := lastEvent(t, g, "merge.retry"); !strings.Contains(d, "o/r#7: a 5xx on the merge call, retry 2 of 3") {
 		t.Errorf("merge.retry event: %q", d)
 	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event: %q", d)
 	}
 	if st := gateState(t, g); len(st.Merges) != 0 {
@@ -139,7 +139,7 @@ func TestAServerErrorOfALandedMergeIsNotRetried(t *testing.T) {
 	if n := runs(t, count); n != 1 {
 		t.Errorf("devctl ran %d times, want 1", n)
 	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 7, release unconfirmed (merged per GitHub)") {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 7, release unconfirmed (merged per GitHub)") {
 		t.Errorf("merged event: %q", d)
 	}
 }

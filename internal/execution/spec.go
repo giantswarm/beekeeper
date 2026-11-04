@@ -89,6 +89,7 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	Effort         string `json:"effort,omitempty"`
 	GitHub         bool   `json:"github,omitempty"`
 	MCP            bool   `json:"mcp,omitempty"`
 	LeaseRequired  bool   `json:"leaseRequired,omitempty"`
@@ -114,6 +115,12 @@ type StartRequest struct {
 }
 
 func (r StartRequest) Validate() error {
+	switch r.Effort {
+	case "", "low", "medium", "high", "xhigh", "max":
+	default:
+		return errors.New("invalid execution effort")
+	}
+
 	if err := r.Ref.Validate(); err != nil {
 		return err
 	}
@@ -324,6 +331,15 @@ func (r Resources) Validate(now time.Time) error {
 	return nil
 }
 
+// HarnessReadiness reports only probe outcomes and the pinned version, never
+// authentication output. A skipped check must not be mistaken for a pass.
+type HarnessReadiness struct {
+	Version      string `json:"version"`
+	VersionCheck string `json:"versionCheck"`
+	Login        string `json:"login"`
+	Guard        string `json:"guard"`
+}
+
 type Capabilities struct {
 	GitHub       bool              `json:"github,omitempty"`
 	Publication  bool              `json:"publication"`
@@ -334,7 +350,8 @@ type Capabilities struct {
 	Harnesses    map[string]string `json:"harnesses"`
 	// Unavailable names each configured harness that failed its version,
 	// login or guard probe. The host advertises only the passing ones.
-	Unavailable map[string]string `json:"unavailable,omitempty"`
+	Unavailable map[string]string           `json:"unavailable,omitempty"`
+	Readiness   map[string]HarnessReadiness `json:"readiness,omitempty"`
 	// Tools names each provisioned worker tool and its pinned version.
 	Tools     map[string]string `json:"tools,omitempty"`
 	Resources Resources         `json:"resources"`

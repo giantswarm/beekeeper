@@ -69,6 +69,7 @@ func TestMain(m *testing.M) {
 	// Nor does a gated merge read its reviews: nothing holds it; a test
 	// that wants a reviewer stubs its own.
 	reviewGuard = func(context.Context, string, int) (string, error) { return "", nil }
+	mergeAuthority = func(context.Context, *app, string, int, string) (string, bool, error) { return "", false, nil }
 	liveTmpfs = func(*app) (free.Machine, error) {
 		return free.Machine{TableErr: errors.New("no machine in a test")}, nil
 	}
@@ -76,6 +77,7 @@ func TestMain(m *testing.M) {
 	// gives it a machine.
 	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
 	liveDisk = func(*app) (diskMachine, error) { return diskMachine{}, errors.New("no disk machine in a test") }
+	liveHolders = func(*app) (holderMachine, error) { return holderMachine{}, errors.New("no holder machine in a test") }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
 	binaryIdentity = func() string { return "" }
@@ -97,6 +99,9 @@ func TestMain(m *testing.M) {
 		}
 		return ""
 	}
+	// Nor does an agy start read the machine's agy hooks.json: it loads
+	// beekeeper's guard; a test of the refusal stubs its own.
+	agyUnguarded = func() string { return "" }
 	// Nor its Docker: the prune sees no docker CLI; a test that wants one
 	// gives it a fake.
 	dockerCLI = nil

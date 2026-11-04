@@ -81,6 +81,13 @@ func TestVerify(t *testing.T) {
 			if !errors.As(err, &r) || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("Verify = %v, want a refusal with %q", err, tc.want)
 			}
+			if tc.name == "not a member" || tc.name == "no groups" {
+				for _, remedy := range []string{"ask an administrator", "serve.organization/serve.organizations", "sign in again through muster"} {
+					if err == nil || !strings.Contains(err.Error(), remedy) {
+						t.Errorf("refusal %v lacks remedy %q", err, remedy)
+					}
+				}
+			}
 		})
 	}
 }

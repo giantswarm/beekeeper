@@ -526,14 +526,20 @@ type watcher struct {
 	diskPruneOn   bool
 	diskPruning   atomic.Bool
 	diskPruneNext time.Time
+	// holdersOn lists the state home's holders (not for --once);
+	// holdering orders access to holdersNext across background looks.
+	holdersOn   bool
+	holdering   atomic.Bool
+	holdersNext time.Time
 	// worktreesOn trims finished workers' worktrees for the legacy ask mode.
 	worktreesOn       bool
 	worktreesTrimming atomic.Bool
 	worktreesNext     time.Time
 	// slotsOn stops orphaned slot scopes (not for --once); orphanSince is
 	// when the watch first saw each orphaned slot scope.
-	slotsOn     bool
-	orphanSince map[string]time.Time
+	slotsOn          bool
+	orphanSince      map[string]time.Time
+	emptyHolderSince map[string]time.Time
 	// doctored are the chore lines the doctor said, each said once.
 	doctored map[string]bool
 	// timerActs are the fired timers' wakes and commands under way, and
@@ -641,6 +647,7 @@ func (w *watcher) run(ctx context.Context, once bool) error {
 	}
 	w.diskPruneOn = !w.loopOwned
 	w.goCacheOn = true
+	w.holdersOn = true
 	w.dockerOn = true
 	w.freeOn = true
 	w.worktreesOn = true
@@ -1231,6 +1238,7 @@ func (w *watcher) sample(ctx context.Context) {
 	w.autoFree(now)
 	w.worktrees(now)
 	w.diskPrune(now, false)
+	w.stateHolders(now)
 	w.slotOrphans(now, table)
 	s, err := plat.Machine.DesktopScope()
 	w.unavailable(secScope, err)
@@ -1763,7 +1771,11 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		}
 		lane, ok := w.cfg.LaneNamed(m.Lane)
 		if !ok || lane.Installation == "" {
-			// A release unknown settles by the settle rule: it may be cutting.
+			// A release its gate confirms settles with the verdict, one
+			// unknown by the settle rule: it may be cutting.
+			if merge.Confirming(m, proc.Alive) {
+				continue
+			}
 			if ready, _ := merge.Ready(lane, nil, &m, now, w.cfg.Merge.Settle.Duration); ready {
 				done[m.Key()] = "no installation to roll"
 			}
@@ -2005,6 +2017,9 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	} else {
 		found = checkTimers(ctx, st.Timers, w.now, githubHeld)
 	}
+	if w.chores {
+		w.overrides(ctx, githubHeld)
+	}
 	var settles func(state.Timer) bool // nil: a running watch settles every timer
 	if !w.chores {
 		w.wouldFireTimers(st, found)
@@ -2173,6 +2188,9 @@ func (w *watcher) stoppedAgents(st *state.State, sessions []*claude.Session) {
 			}
 			if gone {
 				hint = goneActivityPrefix + last.UTC().Format(time.RFC3339) + "; doctor retires it; " + hint
+				if qerr := agyQuotaError(w.cfg, ag); qerr != nil {
+					hint = qerr.Error() + "; slot freed; doctor retires it and supervisor re-queues its task"
+				}
 			}
 			now = append(now, fmt.Sprintf("%q (%s)", ag.Name, hint))
 		}
@@ -2412,6 +2430,11 @@ func reportLines(r state.WorkerReport) []string {
 // name only the supervisor or the guide wait on an operational handoff,
 // including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
+	// Desk reviews belong to the supervisor loop, including an unproven
+	// review park that the worker still needs to correct.
+	if strings.Contains(strings.ToLower(p.Waits), "desk review") {
+		return false
+	}
 	if _, note := parkNote(p.On); note {
 		return true
 	}

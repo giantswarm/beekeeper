@@ -109,8 +109,32 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		return json.NewEncoder(output).Encode(reply)
 	}
+	if req.Operation == executionRerun {
+		value, callErr := a.executionCIRerun(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	if req.Operation == execution.MCPList || req.Operation == execution.MCPCall {
 		value, callErr := a.executionMCP(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
+	if req.Operation == transcriptsListOp || req.Operation == transcriptsSearchOp || req.Operation == transcriptsReadOp {
+		value, callErr := a.executionTranscriptRPC(ctx, host, req)
 		if callErr != nil {
 			reply.Error = callErr.Error()
 		} else {
@@ -360,6 +384,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
+		if err := validateOverlapPark(v.On, v.Waits); err != nil {
+			return "", nil, err
+		}
 		if id, ok := parkNote(v.On); ok {
 			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
 				return "", nil, refused("note is not open")
@@ -494,6 +521,16 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			verb = "agents.note"
 		}
 		return "recorded by coordinator", []state.Event{event(me, verb, "%s", v.Text)}, nil
+	case transcriptsRequestOp:
+		var v remoteTranscriptAccessReq
+		if err := execution.Decode(c.Data, &v); err != nil {
+			return "", nil, err
+		}
+		created, events, err := a.recordTranscriptRequest(st, me, v)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("transcript access request #%d recorded for the guide (%s)", created.ID, transcriptScopeText(created.Repo, created.Session, created.All)), events, nil
 	default:
 		return "", nil, refused("unsupported worker control")
 	}
@@ -511,7 +548,7 @@ var executionReviewGH = github.RunGH
 // or a pull request GitHub does not answer for, is a plain wait.
 func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head string) string {
 	ref, ok := parseRef(on)
-	if !ok || !strings.EqualFold(ref.Repo, r.Request.Repository) || head != "" && !publicationCommit(head) {
+	if !ok || (!r.Request.GitHub && !strings.EqualFold(ref.Repo, r.Request.Repository)) || head != "" && !publicationCommit(head) {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -528,7 +565,7 @@ func executionReviewHead(ctx context.Context, r *state.ExecutionRecord, on, head
 			}
 		}
 	}
-	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, r.Request.Repository) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
+	if json.Unmarshal(out, &p) != nil || p.Head.Ref != executionOwnedBranch(r) || !strings.EqualFold(p.Head.Repo.FullName, ref.Repo) || !publicationCommit(p.Head.SHA) || head != "" && p.Head.SHA != head {
 		return ""
 	}
 	return p.Head.SHA

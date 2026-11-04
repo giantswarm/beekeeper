@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,12 +19,13 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/secret"
 )
 
-// Only these responses, over the authenticated SSH callback, carry an App
-// installation token. They never enter journals, control receipts or logs.
+// Only these responses, over the authenticated SSH callback, carry a short-lived
+// user-to-server token. They never enter journals, control receipts or logs.
 type workerGitHubToken struct {
 	Token   string    `json:"token"`
 	Expires time.Time `json:"expires_at"`
@@ -34,17 +36,45 @@ type workerGitHubRequest struct {
 	Write      bool   `json:"write"`
 }
 
+type workerOAuthTokenResponse struct {
+	AccessToken      string    `json:"access_token"`
+	TokenType        string    `json:"token_type"`
+	ExpiresIn        int64     `json:"expires_in"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	RefreshToken     string    `json:"refresh_token"`
+	Error            string    `json:"error"`
+	ErrorDescription string    `json:"error_description"`
+}
+
 const (
 	workerGitHubConfigOption = "--config"
-	workerGitHubRead         = "read"
 	workerGitHubWrite        = "write"
 	workerGitHubCreate       = "create"
 	workerGitHubPush         = "push"
 	workerGitHubOrigin       = "origin"
 )
 
-const workerGitHubRevokePath = "/installation/token"
-const workerGitHubReadSuffix = "/read"
+const (
+	workerGitHubOAuthTokenPath    = "/login/oauth/access_token" //nolint:gosec // G101: GitHub OAuth endpoint path, not a credential
+	workerGitHubDeviceCodePath    = "/login/device/code"
+	workerGitHubDeviceGrant       = "urn:ietf:params:oauth:grant-type:device_code"
+	workerGitHubClientIDField     = "client_id"
+	workerGitHubRefreshTokenField = "refresh_token"
+	workerGitHubCurrentKey        = "current"
+	workerGitHubOutstandingKey    = "outstanding"
+	workerGitHubReadSuffix        = "/read"
+)
+
+var workerGitHubPollSleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 const (
 	workerGitHubIssueGroup    = "issue"
@@ -77,6 +107,10 @@ func (a *app) workerGitHubPath(ref execution.Ref) string {
 	return filepath.Join(a.cfg.StateDir, "execution-github", string(ref.Host)+"-"+string(ref.Execution)+"-"+strconv.FormatUint(ref.Generation, 10)+".json")
 }
 
+func (a *app) workerGitHubOAuthPath() string {
+	return filepath.Join(a.cfg.StateDir, "execution-github", "oauth.json")
+}
+
 func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) error {
 	st, err := a.store.Read()
 	if err != nil {
@@ -99,14 +133,14 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 		}
 	}
 	owner, _, ok := strings.Cut(request.Repository, "/")
-	if !ok || execution.RepositoryIdentity("https://github.com/"+request.Repository) != request.Repository || !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
+	if !ok || execution.RepositoryIdentity("https://github.com/"+request.Repository) != request.Repository {
+		return errors.New("invalid worker GitHub repository")
+	}
+	if request.Write && !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 		return errors.New("worker GitHub repository is outside configured owners")
 	}
-	if a.cfg.GitHub.WorkerApp == nil || a.cfg.GitHub.WorkerApp.Installations[owner] <= 0 {
-		return errors.New("worker GitHub App installation is no longer configured")
-	}
-	if request.Write && !strings.EqualFold(request.Repository, r.Request.Repository) {
-		return errors.New("worker may write only its task repository")
+	if a.cfg.GitHub.WorkerApp == nil || a.cfg.GitHub.WorkerApp.Validate() != nil {
+		return errors.New("worker GitHub App is no longer configured")
 	}
 	return nil
 }
@@ -165,7 +199,7 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 		return nil, err
 	}
 	lock := flock.New(path + ".lock")
-	if ok, err := lock.TryLockContext(ctx, 20*time.Millisecond); err != nil || !ok {
+	if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); err != nil || !ok {
 		return nil, errors.New("worker GitHub credentials busy")
 	}
 	defer func() { _ = lock.Unlock() }()
@@ -178,26 +212,32 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 	}
 	key := request.Repository + workerGitHubReadSuffix
 	if request.Write {
-		key = request.Repository + "/write"
+		key = request.Repository + "/" + workerGitHubWrite
 	}
-	if token, ok := tokens[key]; ok && time.Until(token.Expires) > 5*time.Minute {
-		return token, nil
-	}
+	// Always consult the coordinator cache: refresh invalidates every older
+	// access token, including unexpired entries in execution ledgers.
 	token, err := a.mintWorkerGitHub(ctx, request)
 	if err != nil {
 		return nil, err
+	}
+	if cached, ok := tokens[key]; ok && cached == token {
+		if err := a.workerGitHubLive(req.Ref, request); err != nil {
+			_ = a.revokeWorkerGitHubToken(ctx, req.Ref, token.Token)
+			return nil, err
+		}
+		return token, nil
 	}
 	// Keep old tokens until revoked: replacing a token must not lose authority
 	// to revoke credentials a command may still be using.
 	tokens[key+"/"+strconv.FormatInt(time.Now().UnixNano(), 10)] = token
 	tokens[key] = token
 	if err := writeWorkerGitHub(path, tokens); err != nil {
-		_ = revokeWorkerGitHubToken(ctx, token.Token)
+		_ = a.revokeWorkerGitHubToken(ctx, req.Ref, token.Token)
 		return nil, err
 	}
 	// A stop may have been recorded while the vault or GitHub answered.
 	if err := a.workerGitHubLive(req.Ref, request); err != nil {
-		_ = revokeWorkerGitHubToken(ctx, token.Token)
+		_ = a.revokeWorkerGitHubToken(ctx, req.Ref, token.Token)
 		return nil, err
 	}
 	return token, nil
@@ -266,7 +306,7 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 		return nil
 	}
 	lock := flock.New(path + ".lock")
-	if ok, err := lock.TryLockContext(ctx, 20*time.Millisecond); err != nil || !ok {
+	if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); err != nil || !ok {
 		return errors.New("worker GitHub credentials busy during revocation")
 	}
 	defer func() { _ = lock.Unlock() }()
@@ -283,7 +323,7 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 		}
 		err, ok := seen[token.Token]
 		if !ok {
-			err = revokeWorkerGitHubToken(ctx, token.Token)
+			err = a.revokeWorkerGitHubToken(ctx, ref, token.Token)
 			seen[token.Token] = err
 		}
 		if err != nil {
@@ -291,7 +331,9 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 		}
 	}
 	if len(tokens) == 0 {
-		return nil
+		// A previous execution may have deferred rotation while this one
+		// was live, even if this execution never requested a credential.
+		return a.revokeWorkerGitHubToken(ctx, ref, "")
 	}
 	if err := writeWorkerGitHub(path, remaining); err != nil {
 		return err
@@ -299,31 +341,98 @@ func (a *app) revokeWorkerGitHub(ctx context.Context, ref execution.Ref) error {
 	if len(remaining) > 0 {
 		return errors.New("worker GitHub revocation failed; ledger retained for retry")
 	}
-	return nil
+	// This ledger may contain only an old token, while another execution
+	// handed out the current shared credential before completing.
+	return a.revokeWorkerGitHubToken(ctx, ref, "")
 }
 
-func revokeWorkerGitHubToken(ctx context.Context, token string) error {
-	resp, err := githubRequest(ctx, http.MethodDelete, workerGitHubRevokePath, "Bearer "+token)
+// Shared authority can only be rotated when no other live execution uses it.
+// Stopped executions immediately lose callback access; their already-issued
+// credential remains valid until the last live execution finishes or it expires.
+func (a *app) revokeWorkerGitHubToken(ctx context.Context, ref execution.Ref, token string) error {
+	oauthPath := a.workerGitHubOAuthPath()
+	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
+		return err
+	}
+	lock := flock.New(oauthPath + ".lock")
+	if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); err != nil || !ok {
+		return errors.New("worker GitHub credentials busy during revocation")
+	}
+	defer func() { _ = lock.Unlock() }()
+	st, err := a.store.Read()
 	if err != nil {
-		return errors.New("worker GitHub revocation transport failed")
+		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusUnauthorized {
-		return fmt.Errorf("worker GitHub revocation: HTTP %d", resp.StatusCode)
+	for _, start := range st.Starts {
+		r := start.Execution
+		if r != nil && r.Request.Ref != ref && r.Request.GitHub && r.Request.Coordinator == a.cfg.Identity.Host && !r.Completed && !r.Terminal() && r.StopRequest == nil && st.Stop == nil {
+			if !r.Request.LeaseRequired || (r.Lease != nil && r.Lease.ExpiresAt.After(time.Now())) {
+				return nil
+			}
+		}
 	}
-	return nil
+	cached, err := readWorkerGitHub(oauthPath)
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		outstanding, ok := cached[workerGitHubOutstandingKey]
+		if !ok || outstanding.Token == "" {
+			return nil
+		}
+		token = outstanding.Token
+	}
+	if current, ok := cached[workerGitHubCurrentKey]; ok && current.Token != "" && current.Token != token && time.Now().Before(current.Expires) {
+		return nil
+	}
+	delete(cached, workerGitHubCurrentKey)
+	_ = writeWorkerGitHub(oauthPath, cached)
+	_, err = a.refreshWorkerGitHubToken(ctx, oauthPath)
+	return err
 }
 
-func (a *app) mintWorkerGitHub(ctx context.Context, request workerGitHubRequest) (workerGitHubToken, error) {
+func (a *app) mintWorkerGitHub(ctx context.Context, _ workerGitHubRequest) (workerGitHubToken, error) {
+	oauthPath := a.workerGitHubOAuthPath()
+	if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
+		return workerGitHubToken{}, err
+	}
+	lock := flock.New(oauthPath + ".lock")
+	if ok, err := lock.TryLockContext(ctx, 100*time.Millisecond); err != nil || !ok {
+		return workerGitHubToken{}, errors.New("worker GitHub credentials busy")
+	}
+	defer func() { _ = lock.Unlock() }()
+	cached, err := readWorkerGitHub(oauthPath)
+	if err != nil {
+		return workerGitHubToken{}, err
+	}
+	token, ok := cached[workerGitHubCurrentKey]
+	if !ok || token.Token == "" || time.Until(token.Expires) <= 5*time.Minute {
+		token, err = a.refreshWorkerGitHubToken(ctx, oauthPath)
+		if err != nil {
+			return workerGitHubToken{}, err
+		}
+		cached = map[string]workerGitHubToken{workerGitHubCurrentKey: token}
+	}
+	// Remember shared authority independently of any execution ledger so the
+	// last execution can revoke it even if it never fetched a token itself.
+	if outstanding, ok := cached[workerGitHubOutstandingKey]; !ok || outstanding != token {
+		cached[workerGitHubOutstandingKey] = token
+		if err := writeWorkerGitHub(oauthPath, cached); err != nil {
+			return workerGitHubToken{}, err
+		}
+	}
+	return token, nil
+}
+
+func (a *app) refreshWorkerGitHubToken(ctx context.Context, oauthPath string) (workerGitHubToken, error) {
 	var token workerGitHubToken
-	app := a.cfg.GitHub.WorkerApp
-	owner, repo, _ := strings.Cut(request.Repository, "/")
-	if app == nil || app.AppID <= 0 || app.Installations[owner] <= 0 {
-		return token, errors.New("configure github.workerApp and its owner installation before starting GitHub-enabled workers")
+	w := a.cfg.GitHub.WorkerApp
+	if w == nil || w.Validate() != nil {
+		return token, errors.New("configure github.workerApp with clientID and refreshToken before starting GitHub-enabled workers")
 	}
-	ref, err := secret.ParseRef(app.PrivateKey)
-	if err != nil {
-		return token, errors.New("invalid github.workerApp.privateKey vault reference")
+	ref, err := secret.ParseRef(w.RefreshToken)
+	if err != nil || !ref.Single() || ref.IsSource() {
+		return token, errors.New("invalid github.workerApp.refreshToken reference")
 	}
 	if err := a.sandboxFiles([]secret.Ref{ref}, nil); err != nil {
 		return token, err
@@ -332,45 +441,185 @@ func (a *app) mintWorkerGitHub(ctx context.Context, request workerGitHubRequest)
 	if err != nil {
 		return token, err
 	}
-	err = ops.Use(ctx, ref, func(pem string) error {
-		key, err := parseAppKey(pem)
-		if err != nil {
-			return errors.New("invalid worker GitHub App key")
+	var nextRefresh string
+	err = ops.Use(ctx, ref, func(refreshToken string) error {
+		refreshToken = strings.TrimSpace(refreshToken)
+		if refreshToken == "" {
+			return errors.New("empty worker GitHub refresh token")
 		}
-		jwt, err := appJWT(app.AppID, key, time.Now())
-		if err != nil {
-			return errors.New("worker GitHub App signing failed")
-		}
-		permissions := map[string]string{"contents": workerGitHubRead, "issues": workerGitHubRead, "pull_requests": workerGitHubRead, "checks": workerGitHubRead, "actions": workerGitHubRead, "statuses": workerGitHubRead, "metadata": workerGitHubRead}
-		if request.Write {
-			permissions["contents"] = workerGitHubWrite
-			permissions["workflows"] = workerGitHubWrite
-			permissions["pull_requests"] = workerGitHubWrite
-		}
-		body, _ := json.Marshal(map[string]any{"repositories": []string{repo}, "permissions": permissions})
-		endpoint := githubAPI + "/app/installations/" + strconv.FormatInt(app.Installations[owner], 10) + "/access_tokens"
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		if err != nil {
-			return errors.New("invalid worker GitHub token request")
-		}
-		req.Header.Set("Authorization", "Bearer "+jwt)
-		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		resp, err := githubClient.Do(req)
+		resp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubOAuthTokenPath, "application/json", "", url.Values{
+			workerGitHubClientIDField:     {w.ClientID},
+			"grant_type":                  {workerGitHubRefreshTokenField},
+			workerGitHubRefreshTokenField: {refreshToken},
+		})
 		if err != nil {
 			return errors.New("worker GitHub token transport failed")
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 			return fmt.Errorf("worker GitHub token refused: HTTP %d", resp.StatusCode)
 		}
-		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&token) != nil || token.Token == "" || !token.Expires.After(time.Now()) || time.Until(token.Expires) > time.Hour+time.Minute {
+		var out workerOAuthTokenResponse
+		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out) != nil {
 			return errors.New("invalid worker GitHub token response")
 		}
+		if out.Error != "" {
+			return fmt.Errorf("worker GitHub token refused: %s", bounded(out.Error, phraseRunes))
+		}
+		expires := out.ExpiresAt
+		if expires.IsZero() && out.ExpiresIn > 0 {
+			expires = time.Now().UTC().Add(time.Duration(out.ExpiresIn) * time.Second)
+		}
+		if out.AccessToken == "" || out.RefreshToken == "" || !expires.After(time.Now()) || time.Until(expires) > 8*time.Hour+time.Minute {
+			return errors.New("invalid worker GitHub token response")
+		}
+		token = workerGitHubToken{Token: out.AccessToken, Expires: expires}
+		nextRefresh = out.RefreshToken
 		return nil
 	})
-	return token, err
+	if err != nil {
+		return workerGitHubToken{}, err
+	}
+	if err := a.storeWorkerRefreshToken(ctx, ref, nextRefresh); err != nil {
+		return workerGitHubToken{}, errors.New("cannot persist rotated GitHub refresh token; authorization is lost: run beekeeper agents hosts github-login again")
+	}
+	if oauthPath != "" {
+		if err := writeWorkerGitHub(oauthPath, map[string]workerGitHubToken{workerGitHubCurrentKey: token}); err != nil {
+			return workerGitHubToken{}, err
+		}
+	}
+	return token, nil
+}
+
+func (a *app) storeWorkerRefreshToken(ctx context.Context, ref secret.Ref, value string) error {
+	switch {
+	case ref.Op != "":
+		_, err := a.storeValue(ctx, ref, value)
+		return err
+	case ref.File != "" && ref.Path != "":
+		if err := a.sandboxFiles(nil, []secret.Ref{ref}); err != nil {
+			return err
+		}
+		ops, err := a.secretOpsKeyed()
+		if err != nil {
+			return err
+		}
+		return ops.SetSOPSValue(ctx, ref, value)
+	default:
+		return errors.New("github.workerApp.refreshToken must name an op:// or sops:// secret reference")
+	}
+}
+
+func (a *app) authorizeWorkerGitHub(ctx context.Context, clientID, refreshRef string, out io.Writer) error {
+	if a.managedExecutionID() != "" {
+		return refused("managed workers cannot authorize coordinator GitHub credentials")
+	}
+	if w := a.cfg.GitHub.WorkerApp; w != nil {
+		if clientID == "" {
+			clientID = w.ClientID
+		}
+		if refreshRef == "" {
+			refreshRef = w.RefreshToken
+		}
+	}
+	w := &config.WorkerGitHub{ClientID: strings.TrimSpace(clientID), RefreshToken: strings.TrimSpace(refreshRef)}
+	if err := w.Validate(); err != nil {
+		return usageErr("%v", err)
+	}
+	ref, err := secret.ParseRef(w.RefreshToken)
+	if err != nil || !ref.Single() || ref.IsSource() {
+		return usageErr("invalid github.workerApp.refreshToken reference")
+	}
+	resp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubDeviceCodePath, "application/json", "", url.Values{workerGitHubClientIDField: {w.ClientID}})
+	if err != nil {
+		return fmt.Errorf("requesting GitHub device code: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var dc struct {
+		DeviceCode      string `json:"device_code"`
+		UserCode        string `json:"user_code"`
+		VerificationURI string `json:"verification_uri"`
+		ExpiresIn       int    `json:"expires_in"`
+		Interval        int    `json:"interval"`
+		Error           string `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&dc) != nil {
+		return fmt.Errorf("requesting GitHub device code: HTTP %d, no JSON", resp.StatusCode)
+	}
+	if dc.Error != "" {
+		return fmt.Errorf("requesting GitHub device code: %s", bounded(dc.Error, phraseRunes))
+	}
+	if dc.DeviceCode == "" || dc.UserCode == "" {
+		return fmt.Errorf("requesting GitHub device code: HTTP %d returned no code", resp.StatusCode)
+	}
+	uri := dc.VerificationURI
+	if uri == "" {
+		uri = githubWeb + "/login/device"
+	}
+	if _, err := fmt.Fprintf(out, "Open %s and enter code: %s\n", uri, dc.UserCode); err != nil {
+		return err
+	}
+	interval := time.Duration(max(dc.Interval, 1)) * time.Second
+	expiresIn := dc.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 900
+	}
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+	for time.Now().Before(deadline) {
+		if err := workerGitHubPollSleep(ctx, interval); err != nil {
+			return err
+		}
+		pollResp, err := githubSend(ctx, http.MethodPost, githubWeb+workerGitHubOAuthTokenPath, "application/json", "", url.Values{
+			workerGitHubClientIDField: {w.ClientID},
+			"device_code":             {dc.DeviceCode},
+			"grant_type":              {workerGitHubDeviceGrant},
+		})
+		if err != nil {
+			return fmt.Errorf("polling GitHub device flow: %w", err)
+		}
+		var tok workerOAuthTokenResponse
+		decodeErr := json.NewDecoder(io.LimitReader(pollResp.Body, 1<<20)).Decode(&tok)
+		_ = pollResp.Body.Close()
+		if decodeErr != nil {
+			return fmt.Errorf("polling GitHub device flow: HTTP %d, no JSON", pollResp.StatusCode)
+		}
+		switch tok.Error {
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 5 * time.Second
+			continue
+		case "":
+		default:
+			return fmt.Errorf("GitHub device flow: %s", bounded(tok.Error, phraseRunes))
+		}
+		expires := tok.ExpiresAt
+		if expires.IsZero() && tok.ExpiresIn > 0 {
+			expires = time.Now().UTC().Add(time.Duration(tok.ExpiresIn) * time.Second)
+		}
+		if tok.AccessToken == "" || tok.RefreshToken == "" || !expires.After(time.Now()) {
+			return errors.New("GitHub device flow returned no expiring user-to-server token; enable user token expiration on the GitHub App")
+		}
+		var user struct {
+			Login string `json:"login"`
+		}
+		if err := githubJSON(ctx, http.MethodGet, "/user", "Bearer "+tok.AccessToken, http.StatusOK, &user); err != nil {
+			return fmt.Errorf("verifying GitHub user token: %w", err)
+		}
+		if err := a.storeWorkerRefreshToken(ctx, ref, tok.RefreshToken); err != nil {
+			return errors.New("cannot persist GitHub refresh token: run beekeeper agents hosts github-login again")
+		}
+		oauthPath := a.workerGitHubOAuthPath()
+		if err := os.MkdirAll(filepath.Dir(oauthPath), 0o700); err != nil { //nolint:gosec // operator-owned coordinator state directory
+			return err
+		}
+		if err := writeWorkerGitHub(oauthPath, map[string]workerGitHubToken{workerGitHubCurrentKey: {Token: tok.AccessToken, Expires: expires}}); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(out, "authorized %s for github.workerApp (%s)\n", user.Login, ref.String())
+		return err
+	}
+	return errors.New("GitHub device flow timed out before authorization")
 }
 
 func (a *app) remoteGitHubBudget(ctx context.Context, request workerBudgetRequest) error {

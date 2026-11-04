@@ -70,7 +70,7 @@ func TestARedCheckBrokenOnTheBaseIsLetThrough(t *testing.T) {
 	if d := lastEvent(t, g, "merge.acceptred"); !strings.Contains(d, "e2e-test let through: not required, and red on the head 0123456 of main too") {
 		t.Errorf("merge.acceptred event: %q", d)
 	}
-	if d := lastEvent(t, g, "merged"); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "o/r#7 exit 0, release v1.2.4") {
 		t.Errorf("merged event: %q", d)
 	}
 }

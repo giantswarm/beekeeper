@@ -167,18 +167,42 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 		{ID: 6, For: notePerson, Kind: noteDecision, Due: past, Default: "waits; nothing is closed"},
 	}}
 	lines, evs, closed := closeDefaulted(st, notePerson, watchParty, now)
-	if want := []string{"NOTE DEFAULTED #1: " + dfltOK, "NOTE DEFAULTED #5: the older decision's default"}; !slices.Equal(lines, want) {
+	if want := []string{"NOTE DEFAULTED #1: " + dfltOK, "NOTE DEFAULTED #5: the older decision's default", "NOTE DEFAULTED #6: waits; nothing is closed"}; !slices.Equal(lines, want) {
 		t.Fatalf("lines %q, want %q", lines, want)
 	}
-	if len(evs) != 2 || evs[0].Verb != noteDefaulted || !strings.HasPrefix(evs[0].Detail, "#1 defaulted for "+notePerson+": "+dfltOK) || len(closed) != 2 {
+	if len(evs) != 3 || evs[0].Verb != noteDefaulted || !strings.HasPrefix(evs[0].Detail, "#1 defaulted for "+notePerson+": "+dfltOK) || len(closed) != 3 {
 		t.Fatalf("events %+v, closed %+v", evs, closed)
 	}
 	var open []int
 	for _, n := range st.Notes {
 		open = append(open, n.ID)
 	}
-	if !slices.Equal(open, []int{2, 3, 4, 6}) {
+	if !slices.Equal(open, []int{2, 3, 4}) {
 		t.Fatalf("open %v", open)
+	}
+}
+
+func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
+	for _, dflt := range []string{"wait", ghNone, "nothing happens", "", "ask again"} {
+		t.Run(dflt, func(t *testing.T) {
+			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
+			st := &state.State{Notes: []state.Note{n}}
+			lines, events, closed := closeDefaulted(st, notePerson, watchParty, relayNow)
+			if len(lines) != 1 || len(events) != 1 || events[0].Verb != noteDefaulted || len(closed) != 1 || len(st.Notes) != 0 {
+				t.Fatalf("default not applied: %q %+v %+v %+v", lines, events, closed, st)
+			}
+			if got, defaulted := answerable(st, n.ID, relayNow); got == nil || !defaulted || got.Default != dflt {
+				t.Fatal("default is not retained for a late answer")
+			}
+			lines, events, closed = closeDefaulted(st, notePerson, watchParty, relayNow)
+			if len(lines)+len(events)+len(closed) != 0 || len(st.Defaulted) != 1 {
+				t.Fatal("default applied twice")
+			}
+			closeDefaulted(st, notePerson, watchParty, relayNow.Add(defaultedKeep))
+			if len(st.Defaulted) != 0 {
+				t.Fatal("expired default remains answerable")
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,4 +65,14 @@ func (Capper) Reap(string) ([]int, error) { return nil, nil }
 // unit, in cp.Slice.
 func EnterScope(dir, unit string, cp platform.Cap) error {
 	return Ask(dir, Request{Op: OpScope, Unit: unit, Slice: cp.Slice, Max: cp.Max, Swap: cp.Swap}, askTimeout)
+}
+
+// ScopePopulated reads host cgroup state through the broker, including when
+// the sandbox hides the service manager or the cgroup filesystem.
+func (c Capper) ScopePopulated(unit string) (bool, error) {
+	r, err := Call(c.Dir, Request{Op: OpScopeState, Unit: unit}, pingTimeout)
+	if err != nil {
+		return false, err
+	}
+	return strconv.ParseBool(r.Out)
 }

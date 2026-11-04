@@ -54,12 +54,17 @@ func TestGitHubLookupBeyondAnonymousReleaseLimit(t *testing.T) {
 	}
 }
 
+// stubLogin is the gh login's token in the GitHub stubs.
+const stubLogin = "test-login"
+
+// stubGitHub answers GitHub's API with respond, the gh login's token
+// required on every request, and counts the requests.
 func stubGitHub(t *testing.T, current string, respond func(*http.Request) (int, string, http.Header)) *int {
 	t.Helper()
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "")
 	oldToken := githubToken
-	githubToken = func(context.Context) (string, error) { return "", errors.New("no login") }
+	githubToken = func(context.Context) (string, error) { return stubLogin, nil }
 	t.Cleanup(func() { githubToken = oldToken })
 	oldTransport, oldVersion, oldCommit := http.DefaultTransport, currentVersion, currentCommit
 	t.Cleanup(func() { http.DefaultTransport, currentVersion, currentCommit = oldTransport, oldVersion, oldCommit })
@@ -68,8 +73,8 @@ func stubGitHub(t *testing.T, current string, respond func(*http.Request) (int, 
 	calls := 0
 	http.DefaultTransport = releaseTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.Header.Get("Authorization") != "" {
-			t.Error("anonymous lookup sent authorization")
+		if r.Header.Get("Authorization") != "Bearer "+stubLogin {
+			t.Error("the lookup did not send the gh login's token")
 		}
 		status, body, header := respond(r)
 		if header == nil {
@@ -377,7 +382,7 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 
 func TestGitHubLookupAuthentication(t *testing.T) {
 	const (
-		loginToken     = "test-login"
+		loginToken     = stubLogin
 		githubEnvToken = "test-github"
 		ghEnvToken     = "test-gh"
 	)
@@ -385,7 +390,7 @@ func TestGitHubLookupAuthentication(t *testing.T) {
 		{name: "login", login: loginToken, want: loginToken},
 		{name: "gh environment", gh: ghEnvToken, github: githubEnvToken, login: loginToken, want: ghEnvToken},
 		{name: "github environment", github: githubEnvToken, login: loginToken, want: githubEnvToken},
-		{name: "anonymous"},
+		{name: "no token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stubGitHub(t, githubRunningRC, func(r *http.Request) (int, string, http.Header) { return 200, "[]", nil })
@@ -409,7 +414,14 @@ func TestGitHubLookupAuthentication(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("[]")), Request: r}, nil
 			})
-			_, _ = Run(context.Background(), io.Discard, true)
+			_, err := Run(context.Background(), io.Discard, true)
+			if tc.want == "" {
+				// Never anonymously: the machine's IP shares that limit.
+				if !errors.Is(err, errNoToken) || requests != 0 {
+					t.Fatalf("without a token: %v after %d requests, want a refusal before any", err, requests)
+				}
+				return
+			}
 			if requests != emptyRefAttempts {
 				t.Fatalf("got %d requests, want %d", requests, emptyRefAttempts)
 			}
