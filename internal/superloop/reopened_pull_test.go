@@ -7,10 +7,12 @@ import (
 	"time"
 )
 
+const reopenClosed = "closed"
+
 // A closed PR can reopen under the same ref and request review again.
 func TestReopenedPullWithFreshRequestIsTracked(t *testing.T) {
 	tk := taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
-	tk = append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr, Message: "closed"})...)
+	tk = append(tk, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr, Message: reopenClosed})...)
 	w := parkedOn(head2, t0.Add(time.Hour))
 	if got := Tracked(w, tk, nil, Desk{}); !slices.Equal(got, []string{pr}) {
 		t.Errorf("fresh request after close was lost: %v", got)
@@ -20,7 +22,7 @@ func TestReopenedPullWithFreshRequestIsTracked(t *testing.T) {
 func TestReopenedPullCanBeSwept(t *testing.T) {
 	in := sweepInput(pull(head2, true), OrphanWait)
 	in.Taken = taken(t, t0, Action{Key: reviewKey(pr, head1), Kind: KindReview, Ref: pr, Agent: worker})
-	in.Taken = append(in.Taken, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr, Message: "closed"})...)
+	in.Taken = append(in.Taken, taken(t, t1, Action{Key: endKey(pr), Kind: KindEnd, Ref: pr, Message: reopenClosed})...)
 	if got := Ownerless(in); !slices.Equal(got, []string{pr}) {
 		t.Errorf("reopened PR is excluded from recovery: %v", got)
 	}
