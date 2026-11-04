@@ -226,8 +226,11 @@ func Scan(dir string) (Usage, error) {
 				continue
 			}
 			info, err := f.Info()
-			if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
 				continue // removed since the directory was read
+			}
+			if err != nil {
+				return u, err
 			}
 			u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, s.Name(), f.Name()), Size: info.Size(), Used: info.ModTime()})
 			u.Bytes += info.Size()
