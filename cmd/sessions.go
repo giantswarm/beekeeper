@@ -135,6 +135,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		}
 		v.Sessions = append(v.Sessions, sv)
 	}
+	v.attributeBrowseSessions()
 	slices.SortFunc(v.Sessions, func(x, y *sessionView) int { return y.LastActive.Compare(x.LastActive) })
 	if withWork {
 		v.Overlaps = claude.Overlaps(raw, work, claude.OverlapOptions{
@@ -143,6 +144,39 @@ func (a *app) collect(withWork bool) (*view, error) {
 		})
 	}
 	return v, nil
+}
+
+// attributeBrowseSessions uses browse's explicit start record: its CLI has
+// intentionally shed the caller's environment and may run outside a checkout.
+func (v *view) attributeBrowseSessions() {
+	for _, s := range v.Sessions {
+		for _, start := range v.st.Starts {
+			if start.Name != browseStart || !start.Is(s.Party()) {
+				continue
+			}
+			s.Parent = cmp.Or(start.By.Session, start.By.HostSession)
+			parent := &claude.Session{ID: start.By.Session, HostID: start.By.HostSession}
+			if s.Role == "" {
+				s.Role = roleOf(v.st, parent)
+			}
+			for _, p := range v.Sessions {
+				if p == s || !start.By.Is(p.Party()) {
+					continue
+				}
+				if s.Repo == "" {
+					s.Repo = p.Repo
+				}
+				if len(s.Work.Repos) == 0 {
+					s.Work.Repos = slices.Clone(p.Work.Repos)
+				}
+				if len(s.Work.Refs) == 0 {
+					s.Work.Refs = slices.Clone(p.Work.Refs)
+				}
+				break
+			}
+			break
+		}
+	}
 }
 
 func roleOf(st *state.State, s *claude.Session) string {
