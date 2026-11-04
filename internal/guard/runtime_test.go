@@ -22,6 +22,14 @@ func TestRunTimeout(t *testing.T) {
 	}{
 		{Options{}, []string{"go", "test", "./..."}, 30 * time.Minute},
 		{Options{}, []string{"golangci-lint", "run"}, 5 * time.Minute},
+		{Options{}, []string{"/usr/local/bin/golangci-lint", "run"}, 5 * time.Minute},
+		{Options{}, []string{"./bin/golangci-lint", "run"}, 5 * time.Minute},
+		{Options{}, []string{"sh", "-c", "cd /tmp && /usr/local/bin/golangci-lint run"}, 5 * time.Minute},
+		{Options{}, []string{"sh", "-c", "./bin/golangci-lint run"}, 5 * time.Minute},
+		{Options{}, []string{"echo", "/usr/local/bin/golangci-lint", "run"}, 30 * time.Minute},
+		{Options{}, []string{"/usr/local/bin/golangci-lint", "--help"}, 30 * time.Minute},
+		{Options{Class: ClassLab}, []string{"/usr/local/bin/golangci-lint", "run"}, 0},
+		{Options{Timeout: time.Hour}, []string{"/usr/local/bin/golangci-lint", "run"}, time.Hour},
 		{Options{}, []string{"sh", "-c", "cd /tmp && golangci-lint run"}, 5 * time.Minute},
 		{Options{Class: ClassLab}, []string{"agentlab", "prove"}, 0},
 		{Options{Class: ClassBenchmark}, []string{"bench"}, 0},
@@ -38,6 +46,17 @@ func TestRunTimeout(t *testing.T) {
 	argv = []string{"golangci-lint", "run", "--timeout", "10m"}
 	if !reflect.DeepEqual(lintTimeout(argv, time.Minute), argv) {
 		t.Fatal("overwrote explicit timeout")
+	}
+}
+
+func TestLintTimeoutExecutablePaths(t *testing.T) {
+	for _, executable := range []string{"/usr/local/bin/golangci-lint", "./bin/golangci-lint"} {
+		argv := []string{executable, "run", "./..."}
+		got := lintTimeout(argv, RunTimeout(Options{}, argv))
+		want := []string{executable, "run", "--timeout=5m0s", "./..."}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
 	}
 }
 
