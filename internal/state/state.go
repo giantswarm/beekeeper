@@ -2144,27 +2144,23 @@ func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) 
 	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	sc.Split(wholeLines)
-	for sc.Scan() {
-		at.offset += int64(len(sc.Bytes())) + 1
+	reader := bufio.NewReader(f)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if errors.Is(readErr, io.EOF) {
+			// Leave a line still being appended at its original offset.
+			return slices.Clone(at.kept), nil
+		}
+		if readErr != nil {
+			return slices.Clone(at.kept), readErr
+		}
+		at.offset += int64(len(line))
 		var e Event
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			at.kept = append(at.kept, e)
 		}
 	}
-	return slices.Clone(at.kept), sc.Err()
-}
-
-// wholeLines splits the log into its complete lines: a line still being
-// appended, without its newline yet, is left for the next read.
-func wholeLines(data []byte, _ bool) (advance int, token []byte, err error) {
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	return 0, nil, nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);

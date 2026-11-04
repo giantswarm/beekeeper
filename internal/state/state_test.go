@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -711,5 +712,88 @@ func TestAStateANewerReleaseWroteLoadsOrNamesTheSkew(t *testing.T) {
 	write(`{"writer":{"version":"v0.81.0"},"nextNote":"three"}`)
 	if _, err := s.Read(); err == nil || errors.As(err, &stale) {
 		t.Errorf("err = %v, want a plain decode error", err)
+	}
+}
+
+func TestFollowLargeEvents(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := Event{Verb: "agents.report", Detail: strings.Repeat("x", 2<<20)}
+	want := []Event{{Verb: "before"}, report, {Verb: "after"}}
+	if err := s.Record(want...); err != nil {
+		t.Fatal(err)
+	}
+	// Compare with the persisted events, including any fields Record sets.
+	all, err := s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 || all[1].Detail != report.Detail {
+		t.Fatal("large report was not persisted")
+	}
+	keep := func(e Event) bool { return e.Verb != "agents.report" }
+	filtered := []Event{all[0], all[2]}
+	for i := 0; i < 3; i++ {
+		got, err := s.Follow("filtered", keep)
+		if err != nil || !reflect.DeepEqual(got, filtered) {
+			t.Fatalf("filtered read %d: count=%d, err=%v", i, len(got), err)
+		}
+	}
+	fresh, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		got, err := fresh.Follow("replay", nil)
+		if err != nil || !reflect.DeepEqual(got, all) {
+			t.Fatalf("full replay %d: count=%d, err=%v", i, len(got), err)
+		}
+	}
+}
+
+func TestFollowLargeIncompleteLine(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Record(Event{Verb: "before"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	event := Event{Verb: "agents.report", Detail: strings.Repeat("x", 2<<20)}
+	raw, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		got, err := s.Follow("t", nil)
+		if err != nil || len(got) != 1 || got[0].Verb != "before" {
+			t.Fatalf("incomplete read %d: count=%d, err=%v", i, len(got), err)
+		}
+	}
+	if _, err := f.WriteString("\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Record(Event{Verb: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		got, err := s.Follow("t", nil)
+		if err != nil || len(got) != 3 {
+			t.Fatalf("completed read %d: count=%d, err=%v", i, len(got), err)
+		}
+		if got[0].Verb != "before" || got[1] != event || got[2].Verb != "after" {
+			t.Fatal("completed events differ")
+		}
 	}
 }
