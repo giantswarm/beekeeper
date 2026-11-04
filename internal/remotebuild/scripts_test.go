@@ -31,7 +31,7 @@ func TestRemoteWrapperAndFollow(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
 			script := func(s string) string { return strings.ReplaceAll(s, "/work", dir) }
-			for _, d := range []string{"busy", "src", "incoming/nested", "runs/test"} {
+			for _, d := range []string{"busy", "src", "runs/test/incoming/nested", "runs/test"} {
 				if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -79,7 +79,7 @@ func TestRemoteWrapperInterrupt(t *testing.T) {
 	}
 	dir := t.TempDir()
 	script := func(s string) string { return strings.ReplaceAll(s, "/work", dir) }
-	for _, d := range []string{"busy", "src", "incoming", "runs/test"} {
+	for _, d := range []string{"busy", "src", "runs/test/incoming", "runs/test"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -205,5 +205,92 @@ func TestRemoteRunThroughShellTransport(t *testing.T) {
 	}
 	if ring.String() != "remote output\n" {
 		t.Fatalf("tail ring %q", ring.String())
+	}
+}
+
+// Execute the production scripts with deterministic FIFO gates at the two
+// detached-process boundaries. No pod or network service is involved.
+func TestRemoteCancelledSourceOwnership(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux builder shell contract")
+	}
+	for _, scenario := range []string{"uploader", "wrapper"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			if err := os.Mkdir(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fixtures := map[string]string{
+				"tar": `#!/bin/bash
+if [ "${SLOW:-}" = yes ]; then
+ printf 'ready\n' > "$ROOT/ready"
+ read -r release < "$ROOT/release"
+ exit 19
+fi
+printf new-source > "${@: -1}/source"
+`,
+				"nohup": `#!/bin/bash
+printf 'ready\n' > "$ROOT/ready"
+read -r release < "$ROOT/release"
+"$@"
+printf '%s' "$?" > "$ROOT/launch-rc"
+`,
+			}
+			for name, body := range fixtures {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable owned shell fixture
+					t.Fatal(err)
+				}
+			}
+			harness := `set -eu
+upload=$1 interrupt=$2 start=$3 wrapper=$4 scenario=$5
+mkfifo "$ROOT/ready" "$ROOT/release"
+mkdir -p /work/src
+printf original > /work/src/source
+if [ "$scenario" = uploader ]; then
+ SLOW=yes bash -c "$upload" -- old &
+ old=$!
+else
+ bash -c "$upload" -- old
+ bash -c "$start" -- old . 'touch /work/executed' "$wrapper" ''
+fi
+read -r ready < "$ROOT/ready"
+bash -c "$interrupt" -- old
+bash -c "$upload" -- new
+printf 'release\n' > "$ROOT/release"
+if [ "$scenario" = uploader ]; then
+ rc=0
+ wait "$old" || rc=$?
+ [ "$rc" = 19 ]
+else
+ # Wait for the detached launcher, including its rejected wrapper.
+ for ((i=0;i<100;i++)); do
+  [ -f "$ROOT/launch-rc" ] && break
+  sleep 0.01
+ done
+ [ "$(cat "$ROOT/launch-rc")" = 75 ]
+fi
+[ "$(cat /work/busy/id)" = new ]
+[ "$(cat /work/runs/new/incoming/source)" = new-source ]
+[ "$(cat /work/src/source)" = original ]
+[ ! -e /work/executed ]
+[ ! -e /work/runs/old/pid ]
+`
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			script := func(s string) string { return strings.ReplaceAll(s, "/work", dir) }
+			cmd := exec.CommandContext(ctx, shellBash, "-c", script(harness), "--", script(upload), script(interrupt), script(start), script(wrapper), scenario) //nolint:gosec // production scripts in an owned fixture
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.WaitDelay = time.Second
+			defer func() {
+				if cmd.Process != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
+			}()
+			cmd.Env = append(os.Environ(), "ROOT="+dir, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("scenario failed: %v %s", err, out)
+			}
+		})
 	}
 }

@@ -63,7 +63,7 @@ func TestCacheStartupFailureDoesNotFailCommand(t *testing.T) {
 			dir := t.TempDir()
 			bin := t.TempDir()
 			script := func(s string) string { return strings.ReplaceAll(s, "/work", dir) }
-			for _, d := range []string{"busy", "src", "incoming", "runs/test"} {
+			for _, d := range []string{"busy", "src", "runs/test/incoming", "runs/test"} {
 				if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -113,7 +113,7 @@ func TestCacheFiltersDiagnosticsAndCleansDisk(t *testing.T) {
 			dir := t.TempDir()
 			bin := t.TempDir()
 			script := func(s string) string { return strings.ReplaceAll(s, "/work", dir) }
-			for _, d := range []string{"busy", "src", "incoming", "runs/test"} {
+			for _, d := range []string{"busy", "src", "runs/test/incoming", "runs/test"} {
 				if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 					t.Fatal(err)
 				}
