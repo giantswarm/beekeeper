@@ -21,7 +21,7 @@ func TestEntryRejects(t *testing.T) {
 	}{
 		{"beekeeper's entry", guard, ""},
 		{"a lifecycle event of flat commands", `{"PostInvocation": [{"command": "/usr/bin/true"}]}`, ""},
-		{"a hook of another type", `{"PreInvocation": [{"type": "http", "url": "http://localhost"}]}`, ""},
+		{"a hook of another type", `{"PreInvocation": [{"type": "http", "url": "https://example.invalid/hook"}]}`, `invalid hook fields: unsupported hook type: "http"`},
 		{"a PostToolUse matcher", `{"PostToolUse": [{"matcher": "*", "hooks": [{"command": "/usr/bin/true"}]}]}`, ""},
 		{"a matcher under PreInvocation", `{"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/bin/true"}]}]}`,
 			"PreInvocation: command hook must specify 'command'"},
