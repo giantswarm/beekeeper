@@ -103,6 +103,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 		if p == "" || !executionWithin(workspace, p) {
 			return ExecutionDeny("file tool target is outside its owned workspace")
 		}
+		if ev.ToolName == globTool && !executionWithin(workspace, globRoot(globSearchPath(ev.ToolInput, ev.CWD))) {
+			return ExecutionDeny("glob pattern is outside its owned workspace")
+		}
 	default:
 		return ExecutionDeny("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 	}

@@ -349,6 +349,9 @@ func (h Hook) transcriptFileRefusal(ev event) string {
 	if p == "" {
 		p = cwd
 	}
+	if ev.ToolName == globTool {
+		p = globSearchPath(ev.ToolInput, cwd)
+	}
 	if h.transcriptAccess(ev.Session).denied(wordPath(p, cwd), ev.ToolName != readTool) {
 		return transcriptRefusal
 	}
