@@ -3531,6 +3531,7 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	c.Omp.ModelsFile = homePath(home, c.Omp.ModelsFile)
 	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
 	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
 	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
