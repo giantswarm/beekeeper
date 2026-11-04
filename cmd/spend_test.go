@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,5 +74,46 @@ unpriced, left out of the total (metrics.models): q/n, x
 	}
 	if want := strings.Replace(want, "2026-10-08T12:00:00Z", "2026-10-09T00:00:00Z", 1); out.String() != want {
 		t.Errorf("--since 2026-10-08 --until 2026-10-09: got\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
+// Exercise the real transcript reader and default prices, including the
+// per-request long-context tier (cached input counts; output does not).
+func TestSpendCmdHaiku55(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage, cost string
+	}{
+		{"at threshold", `"input_tokens":100000,"output_tokens":20000`, "0.02"},
+		{"above threshold", `"input_tokens":100001,"output_tokens":10000`, "0.08"},
+		{"output does not count", `"input_tokens":100000,"output_tokens":100000`, "0.06"},
+		{"cache read counts", `"input_tokens":1,"cache_read_input_tokens":100000,"output_tokens":10000`, "0.03"},
+		{"5m write counts", `"input_tokens":1,"cache_creation_input_tokens":100000,"output_tokens":10000`, "0.09"},
+		{"1h write counts", `"input_tokens":1,"cache_creation_input_tokens":100000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":100000},"output_tokens":10000`, "0.13"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			line := fmt.Sprintf(`{"type":"assistant","timestamp":"2026-10-08T09:00:00Z","message":{"id":"haiku-request","model":"claude-haiku-5-5","usage":{%s}}}`+"\n", tc.usage)
+			if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(line), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{}
+			cfg.Claude.ProjectsDir = dir
+			cfg.Metrics.Models = config.DefaultModels
+			var out bytes.Buffer
+			a := &app{cfg: cfg, now: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), out: &out}
+			c := a.spendCmd()
+			c.SetArgs([]string{sinceFlag, oct8, untilFlag, oct9, "--tz=UTC"})
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{": $" + tc.cost + ", 1 requests", "claude-haiku-5-5: $" + tc.cost} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output %q lacks %q", out.String(), want)
+				}
+			}
+			if strings.Contains(out.String(), "unpriced") {
+				t.Errorf("Haiku requests must be priced: %s", out.String())
+			}
+		})
 	}
 }
