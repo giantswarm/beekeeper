@@ -2,7 +2,7 @@
 
 package hypr
 
-// The live proof that a re-created output shows its own workspace whatever
+// The live proof that a reused output shows its own workspace whatever
 // named workspaces were made since: a turn, then a named workspace made
 // between turns (it takes the first named workspace number, which the named
 // beekeeper-browse of an earlier beekeeper had), then a second turn. Run it
@@ -32,7 +32,7 @@ func TestLiveSurfaceAfterNamedWorkspace(t *testing.T) {
 	t.Cleanup(func() { browserClasses = classes })
 	chrome := []string{"google-chrome-stable", "--user-data-dir=" + filepath.Join(dir, "profile"), "--class=" + liveClass,
 		"--no-first-run", "--no-default-browser-check", "--password-store=basic", "about:blank"}
-	launch := fmt.Sprintf("hl.exec_cmd(%q, { workspace = %q, no_initial_focus = true })", strings.Join(chrome, " "), hiddenNumber+" silent")
+	launch := fmt.Sprintf("hl.exec_cmd(%q, { workspace = %q, no_initial_focus = true })", strings.Join(chrome, " "), "name:"+hidden+" silent")
 	if err := run(ctx, Hyprctl, "eval", launch); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,7 @@ func TestLiveSurfaceAfterNamedWorkspace(t *testing.T) {
 
 	turn := func(name string) Workspace {
 		t.Helper()
+		stop := events(t)
 		s, err := Show(ctx, Hyprctl, time.Minute)
 		if err != nil || s == nil || !s.Moved {
 			t.Fatalf("%s: Show = %+v, %v", name, s, err)
@@ -58,6 +59,16 @@ func TestLiveSurfaceAfterNamedWorkspace(t *testing.T) {
 		if err := s.Restore(ctx, Hyprctl); err != nil {
 			t.Fatalf("%s: Restore = %v", name, err)
 		}
+		time.Sleep(100 * time.Millisecond) // let the event reader drain the restore batch
+		ev := stop()
+		if err := os.WriteFile(filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+"-events.txt"), []byte(strings.Join(ev, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range ev {
+			if numberedWorkspaceEvent(event) {
+				t.Errorf("%s: numbered workspace event: %s", name, event)
+			}
+		}
 		t.Logf("%s: the output showed %+v; the window went back to %s", name, shown, s.Before.Workspace.Name)
 		return shown
 	}
@@ -66,7 +77,7 @@ func TestLiveSurfaceAfterNamedWorkspace(t *testing.T) {
 	}
 
 	// Between turns a named workspace is made, the scratch window on it.
-	if err := moveTo(main.Address, Workspace{Name: hidden}).run(ctx, Hyprctl); err != nil {
+	if err := moveTo(main.Address, Workspace{Name: hidden + "-between"}).run(ctx, Hyprctl); err != nil {
 		t.Fatal(err)
 	}
 	var named Window
