@@ -190,3 +190,25 @@ func TestExecutionCodexChoicesFollowTheHostCatalogue(t *testing.T) {
 		t.Fatalf("a codex host: hosted %v, mixed %v", hosted, mixed)
 	}
 }
+
+func TestExecutionCodexReviewerUsesCoordinatorRelayWithoutWorkerApp(t *testing.T) {
+	a, brief, requests := sshCodexTestApp(t, map[string]string{codex.Harness: "0.166.0"})
+	if _, err := runAgents(a, agentStartName, "--name", "remote-codex-review", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--harness", codex.Harness, "--model", codexTestModel, "--review"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("expected prepared and activated starts, got %d", len(*requests))
+	}
+	request := (*requests)[1]
+	if request.GitHub {
+		t.Fatal("review unexpectedly requires the worker GitHub App")
+	}
+	for _, instruction := range []string{"beekeeper agents review`", "beekeeper agents review --diff", "beekeeper agents review --body-file"} {
+		if !strings.Contains(request.Prompt, instruction) {
+			t.Fatalf("review lacks relay instruction %q", instruction)
+		}
+	}
+	if strings.Contains(request.Prompt, "SSH execution publication:") {
+		t.Fatal("reviewer received author publication instructions")
+	}
+}
