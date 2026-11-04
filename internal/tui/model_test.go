@@ -16,6 +16,7 @@ import (
 // Fixture names shared by the model and view tests.
 const (
 	tBee        = "bee"
+	tBeeID      = "sid-bee"
 	tWasp       = "wasp"
 	tSup        = "sup"
 	tGuide      = "guide"
@@ -505,7 +506,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	// Scrolled back, the view keeps its place as turns arrive.
 	m.key(keyText("k"))
 	src.turns = append(slices.Clone(src.turns), Turn{At: testAt, Role: roleAssistant, Text: "green"})
-	m.Update(tailMsg{session: tBee, turns: src.turns})
+	m.Update(tailMsg{session: tBee, pane: m.paneID, turns: src.turns})
 	if m.tailBack != 2 {
 		t.Errorf("scrolled back %d after one new turn, want 2 (the place kept)", m.tailBack)
 	}
@@ -518,7 +519,7 @@ func TestOpenPaneFollowsLive(t *testing.T) {
 	}
 
 	// A failed re-read keeps the turns shown and says why.
-	m.Update(tailMsg{session: tBee, err: errors.New("transcript moved")})
+	m.Update(tailMsg{session: tBee, pane: m.paneID, err: errors.New("transcript moved")})
 	if v := m.screen(); m.tailState != 2 || !strings.Contains(v, "green") || !strings.Contains(v, "transcript moved") {
 		t.Errorf("a failed re-read dropped the turns or the reason (state %d):\n%s", m.tailState, v)
 	}
@@ -634,7 +635,7 @@ func run(m *model, c tea.Cmd) {
 
 func TestTakeOverFromThePane(t *testing.T) {
 	src := &fakeSource{data: fixtureData(), turns: []Turn{{At: testAt, Role: roleAssistant, Text: "about to clean"}}}
-	src.data.Sessions[0].ID = "sid-bee"
+	src.data.Sessions[0].ID = tBeeID
 	m := newTestModel(t, src)
 	m.tickFn = func() tea.Cmd { return nil }
 	m.key(keyText("2"))
@@ -643,7 +644,7 @@ func TestTakeOverFromThePane(t *testing.T) {
 
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.took) != 1 || src.took[0] != "sid-bee" || !m.taken["sid-bee"] {
+	if len(src.took) != 1 || src.took[0] != tBeeID || !m.taken[tBeeID] {
 		t.Fatalf("t took %v (screen holds %v), want bee's id", src.took, m.taken)
 	}
 	if v := m.screen(); !strings.Contains(v, "taken over") || !strings.Contains(v, "t hand back") {
@@ -699,7 +700,7 @@ func TestTakeOverFromThePane(t *testing.T) {
 	// t again hands back; quitting hands back what is still taken.
 	_, c = m.key(keyText("t"))
 	run(m, c)
-	if len(src.released) != 1 || m.taken["sid-bee"] {
+	if len(src.released) != 1 || m.taken[tBeeID] {
 		t.Fatalf("t did not hand back: released %v, taken %v", src.released, m.taken)
 	}
 	m.taken = map[string]bool{"sid-wasp": true}
