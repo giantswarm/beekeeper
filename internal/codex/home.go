@@ -145,10 +145,12 @@ type hookEntry struct {
 
 // HooksJSON returns the hooks.json content for the isolated CODEX_HOME.
 func HooksJSON(exe string) ([]byte, error) {
-	bin := strings.TrimSpace(exe)
-	if bin == "" {
+	bin := exe
+	if strings.TrimSpace(bin) == "" {
 		bin = "beekeeper"
 	}
+	// Quote the executable as one POSIX shell word, including literal apostrophes.
+	bin = "'" + strings.ReplaceAll(bin, "'", `'\''`) + "'"
 	hf := hooksFile{
 		Hooks: map[string][]hookMatcher{
 			"PreToolUse": {

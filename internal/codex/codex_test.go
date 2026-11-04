@@ -143,7 +143,7 @@ func TestEnsureHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(hooksRaw), "/usr/local/bin/beekeeper hook pretooluse --format codex") ||
+	if !strings.Contains(string(hooksRaw), "'/usr/local/bin/beekeeper' hook pretooluse --format codex") ||
 		!strings.Contains(string(hooksRaw), `"matcher": ".*"`) {
 		t.Errorf("unexpected hooks.json: %s", string(hooksRaw))
 	}
