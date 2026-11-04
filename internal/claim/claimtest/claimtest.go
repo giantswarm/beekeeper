@@ -27,7 +27,8 @@ type GitHub struct {
 	// Calls counts the calls by kind: list, notModified, post, edit,
 	// delete, issue.
 	Calls map[string]int
-	// Pulls are the refs (owner/repo#n) that are pull requests.
+	// Pulls are the refs (owner/repo#n) that are pull requests. Repository
+	// names are case insensitive, as they are in GitHub's API.
 	Pulls map[string]bool
 }
 
@@ -46,6 +47,7 @@ func New() *GitHub {
 func (g *GitHub) Add(issue, body string) int64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	issue = strings.ToLower(issue)
 	g.next++
 	g.comments[issue] = append(g.comments[issue], Comment{ID: g.next, Body: body})
 	return g.next
@@ -55,7 +57,7 @@ func (g *GitHub) Add(issue, body string) int64 {
 func (g *GitHub) Comments(issue string) []Comment {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return append([]Comment(nil), g.comments[issue]...)
+	return append([]Comment(nil), g.comments[strings.ToLower(issue)]...)
 }
 
 // Delete removes comment id wherever it is.
@@ -104,11 +106,13 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 	if len(parts) < 5 || len(parts) > 6 || parts[0] != "repos" || parts[3] != "issues" {
 		return nil, fmt.Errorf("gh api %s: not a call claims make", path)
 	}
-	repo := parts[1] + "/" + parts[2]
+	repo := strings.ToLower(parts[1] + "/" + parts[2])
 	if len(parts) == 5 {
 		g.Calls["issue"]++
-		if g.Pulls[repo+"#"+parts[4]] {
-			return []byte(`{"number":` + parts[4] + `,"pull_request":{"url":"x"}}`), nil
+		for issue, pull := range g.Pulls {
+			if pull && strings.EqualFold(issue, repo+"#"+parts[4]) {
+				return []byte(`{"number":` + parts[4] + `,"pull_request":{"url":"x"}}`), nil
+			}
 		}
 		return []byte(`{"number":` + parts[4] + `}`), nil
 	}
