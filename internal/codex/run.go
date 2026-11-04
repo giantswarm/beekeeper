@@ -190,7 +190,7 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 
 	accepted := false
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxLine)
 	for sc.Scan() {
 		line := sc.Bytes()
 		_, _ = logFile.Write(append(append([]byte(nil), line...), '\n'))
@@ -208,7 +208,17 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 			_ = Confirm(inbox)
 		}
 	}
+	// A failed reader can leave Codex blocked writing to its stdout pipe.
+	// Stop the whole turn before waiting, and preserve the scanner failure
+	// even if the process happens to exit successfully.
+	scanErr := sc.Err()
+	if scanErr != nil {
+		stopTurnProcessGroup(cmd)
+	}
 	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return fmt.Errorf("read codex stdout: %w", scanErr)
+	}
 	if waitErr == nil && (accepted || *threadID != "") {
 		_ = Confirm(inbox)
 	}

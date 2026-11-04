@@ -3,10 +3,12 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -519,5 +521,92 @@ func TestUnconfirmedTurnRetryAndConfirm(t *testing.T) {
 	msgs, err = Drain(inbox)
 	if err != nil || len(msgs) != 0 {
 		t.Fatalf("Drain after Confirm = (%v, %v), want empty", msgs, err)
+	}
+}
+
+// Oversized stdout must fail without relying on cancellation to unblock Wait.
+func TestRunTurnOversizedOutput(t *testing.T) {
+	for _, size := range []int{maxLine, 17 * 1024 * 1024} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			stateDir := t.TempDir()
+			inbox := InboxPath(stateDir, "oversized")
+			if err := MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			fifo, err := openInboxRDWR(inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer fifo.Close()
+			const prompt = "keep this prompt pending"
+			if err := Send(inbox, prompt); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Drain(inbox); err != nil {
+				t.Fatal(err)
+			}
+			logFile, err := os.Create(filepath.Join(stateDir, "turn.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer logFile.Close()
+
+			// The smaller case can finish writing as the scanner hits its ceiling;
+			// the larger case remains blocked in the stdout pipe.
+			prefix := `{"type":"item.completed","item":{"type":"agent_message","text":"`
+			suffix := `"}}`
+			output := prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix
+			outputPath := filepath.Join(stateDir, "output.json")
+			if err := os.WriteFile(outputPath, []byte(output), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bin := filepath.Join(stateDir, "fake-codex.sh")
+			script := "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"thread.started\",\"thread_id\":\"oversized-thread\"}'\nexec cat '" + outputPath + "'\n"
+			stoppedPath := filepath.Join(stateDir, "child-stopped")
+			pidPath := filepath.Join(stateDir, "turn.pid")
+			if size > maxLine {
+				readyPath := filepath.Join(stateDir, "child-ready")
+				// This child does not write stdout. Only process-group cleanup
+				// can stop it when the parent's stdout scanner fails.
+				script = "#!/bin/sh\ncat >/dev/null\necho $$ > '" + pidPath + "'\n" +
+					"(trap 'echo stopped > \"" + stoppedPath + "\"; exit' TERM; echo ready > '" + readyPath + "'; while :; do :; done) &\n" +
+					"while [ ! -f '" + readyPath + "' ]; do sleep 0.01; done\n" +
+					"exec cat '" + outputPath + "'\n"
+			}
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			var threadID string
+			var stderr bytes.Buffer
+			err = runTurn(ctx, stateDir, inbox, logFile, bin, testModel, &threadID, prompt, &stderr)
+			if ctx.Err() != nil {
+				t.Fatalf("runTurn required cleanup deadline: %v", err)
+			}
+			if !errors.Is(err, bufio.ErrTooLong) {
+				t.Errorf("runTurn = %v, want scanner token-too-long error", err)
+			}
+			if size > maxLine {
+				if _, err := os.Stat(stoppedPath); err != nil {
+					t.Errorf("process-group child was not stopped: %v", err)
+				}
+				pidBytes, err := os.ReadFile(pidPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var pid int
+				if _, err := fmt.Sscan(string(pidBytes), &pid); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+					t.Errorf("turn process was not reaped: %v", err)
+				}
+			}
+			msgs, err := Drain(inbox)
+			if err != nil || len(msgs) != 1 || msgs[0] != prompt {
+				t.Fatalf("pending prompt = %v, %v", msgs, err)
+			}
+		})
 	}
 }
