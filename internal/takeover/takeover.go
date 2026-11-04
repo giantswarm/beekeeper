@@ -85,7 +85,9 @@ func Take(dir, session string, f Flag) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	return withSessionLock(context.Background(), dir, session, func() error {
+		return writeAtomic(filepath.Join(dir, session+flagExt), b)
+	})
 }
 
 // Release hands session back: its held requests go to its own window at
@@ -94,11 +96,13 @@ func Release(dir, session string) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
-	err := os.Remove(filepath.Join(dir, session+flagExt))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+	return withSessionLock(context.Background(), dir, session, func() error {
+		err := os.Remove(filepath.Join(dir, session+flagExt))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
 }
 
 // Taken returns session's flag when one exists and alive says its screen
@@ -145,26 +149,39 @@ func Pending(dir, session string) ([]Request, error) {
 // Answer gives the held request id of session the screen's decision; a
 // request no longer held is ErrHandedBack.
 func Answer(dir, session, id string, d Decision) error {
+	return answer(dir, session, id, d, writeAtomic)
+}
+
+// answer keeps the existence check and publication in one transition.
+// publish is injectable so tests can check the lock at the write boundary.
+func answer(dir, session, id string, d Decision, publish func(string, []byte) error) error {
 	if err := checkName(session); err != nil {
 		return err
 	}
 	if err := checkName(id); err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(dir, session, id+requestExt)); err != nil {
-		return ErrHandedBack
-	}
 	b, err := json.Marshal(d)
 	if err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(dir, session, id+answerExt), b)
+	return withSessionLock(context.Background(), dir, session, func() error {
+		if _, taken := Taken(dir, session, func(int) bool { return true }); !taken {
+			return ErrHandedBack
+		}
+		if _, err := os.Stat(filepath.Join(dir, session, id+requestExt)); err != nil {
+			return ErrHandedBack
+		}
+		return publish(filepath.Join(dir, session, id+answerExt), b)
+	})
 }
 
 // Hold holds r for the screen until it answers, its flag goes or its
-// screen stops, or ctx ends (the caller's GiveUp): ok is false for each
-// of the latter, and the request goes to the session's own window. Hold
-// leaves no file behind.
+// screen stops, or ctx ends (the caller's GiveUp). Release and decision
+// acceptance serialize on the session lock: an invalidation observed before
+// consumption wins over a queued answer. A replacement flag starts a new
+// takeover and cannot revive this hold. Request finalization holds the same
+// lock as Answer, so an answer cannot be published after cleanup.
 func Hold(ctx context.Context, dir string, r Request, alive func(pid int) bool, poll time.Duration) (d Decision, ok bool, err error) {
 	if err := checkName(r.Session); err != nil {
 		return Decision{}, false, err
@@ -172,40 +189,79 @@ func Hold(ctx context.Context, dir string, r Request, alive func(pid int) bool, 
 	if err := checkName(r.ID); err != nil {
 		return Decision{}, false, err
 	}
-	folder := filepath.Join(dir, r.Session)
-	if err := os.MkdirAll(folder, 0o700); err != nil {
-		return Decision{}, false, err
-	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return Decision{}, false, err
 	}
-	req, ans := filepath.Join(folder, r.ID+requestExt), filepath.Join(folder, r.ID+answerExt)
-	if err := writeAtomic(req, b); err != nil {
+	var owner Flag
+	published := false
+	err = withSessionLock(context.Background(), dir, r.Session, func() error {
+		var taken bool
+		owner, taken = Taken(dir, r.Session, alive)
+		if ctx.Err() != nil || !taken {
+			return nil
+		}
+		if err := writeAtomic(filepath.Join(dir, r.Session, r.ID+requestExt), b); err != nil {
+			return err
+		}
+		published = true
+		return nil
+	})
+	if err != nil || !published {
 		return Decision{}, false, err
 	}
 	defer func() {
-		_ = os.Remove(req)
-		_ = os.Remove(ans)
-	}()
-	t := time.NewTicker(poll)
-	defer t.Stop()
-	for {
-		if b, err := os.ReadFile(ans); err == nil { //nolint:gosec // the answer beside the request
-			var d Decision
-			if json.Unmarshal(b, &d) == nil && (d.Behavior == Allow || d.Behavior == Deny) {
-				return d, true, nil
-			}
+		// Also clean up if a read or lock operation failed. This transition
+		// has its own short deadline even when the hold's context ended.
+		cleanupErr := withSessionLock(context.Background(), dir, r.Session, func() error {
+			return removeHeld(dir, r)
+		})
+		if err == nil && cleanupErr != nil {
+			ok, err = false, cleanupErr
 		}
-		if _, taken := Taken(dir, r.Session, alive); !taken {
-			return Decision{}, false, nil
+	}()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		var done bool
+		d, ok, done, err = inspectHeld(ctx, dir, r, owner, alive)
+		if done || err != nil {
+			return d, ok, err
 		}
 		select {
 		case <-ctx.Done():
-			return Decision{}, false, nil
-		case <-t.C:
+		case <-ticker.C:
 		}
 	}
+}
+
+// inspectHeld checks invalidation, consumes an answer and removes finished
+// files in one short transition. Tests can drive this boundary directly.
+func inspectHeld(ctx context.Context, dir string, r Request, owner Flag, alive func(int) bool) (d Decision, ok, done bool, err error) {
+	err = withSessionLock(context.Background(), dir, r.Session, func() error {
+		current, taken := Taken(dir, r.Session, alive)
+		if ctx.Err() != nil || !taken || current.PID != owner.PID || current.By != owner.By || !current.Since.Equal(owner.Since) {
+			done = true
+			return removeHeld(dir, r)
+		}
+		b, readErr := os.ReadFile(filepath.Join(dir, r.Session, r.ID+answerExt)) //nolint:gosec // the answer beside the request
+		if readErr == nil && json.Unmarshal(b, &d) == nil && (d.Behavior == Allow || d.Behavior == Deny) {
+			ok, done = true, true
+			return removeHeld(dir, r)
+		}
+		d = Decision{}
+		return nil
+	})
+	return d, ok, done, err
+}
+
+func removeHeld(dir string, r Request) error {
+	for _, ext := range []string{requestExt, answerExt} {
+		if err := os.Remove(filepath.Join(dir, r.Session, r.ID+ext)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // checkName refuses a session or request id that is not one plain file
