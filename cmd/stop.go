@@ -71,7 +71,8 @@ stopped until beekeeper resume:
   them whole stands already: one that lets a merge through (--except, a
   tool-release window) or ends by itself (--until, --lift-when) gives way
   to the stop's, and resume puts it back as it was;
-- ends the devctl of every running gated merge and promotion before it
+- interrupts running gates waiting to start devctl, and ends the devctl
+  of every running gated merge and promotion before it
   merges, saying whether GitHub reports it merged before the stop (a
   release wait) or nothing merged; a waiting merge keeps its place;
 - stops every unit of beekeeper's starts, wakes, reopens and status
@@ -96,7 +97,7 @@ beekeeper status, capacity and the watch say the stop with its reason.
 
 Run it again while stopped to stop what has come up since: the record
 keeps its first reason. It prints what it stopped. A unit that does not
-stop, a session that does not end or a devctl that cannot be signalled is
+stop, a session that does not end or a gate or devctl that does not stop is
 named on a FAILED line and makes it exit 1; the stop stands.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -251,23 +252,22 @@ func fullHold(h state.Hold) bool {
 	return h.Except == "" && h.ExceptSession == "" && h.Tool == "" && h.Until.IsZero() && h.LiftWhen == ""
 }
 
-// endMerges ends the devctl of every running gated merge or promotion
-// before it merges: the stop's merges hold refuses new ones, but a devctl
-// already waiting for CI would merge on. It is a TaskStop's stopMerges on
-// the running merges only (a waiting merge keeps its place behind the
-// hold): only a merge's recorded merge-child is signalled, and each line
-// says, as GitHub reports it, whether the pull request merged before the
-// stop or nothing merged. A devctl that still runs after the stop's wait
-// fails.
+// endMerges stops running gated merges and promotions: their recorded
+// merge-child, or their gate while waiting for a release before devctl
+// starts. Waiting lane entries keep their places behind the stop's hold.
+// Each outcome says whether anything merged, and any process that survives
+// the stop's wait is a failure.
 func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string) {
 	running := func(m state.Merge) bool { return m.Phase == state.Running }
-	var children []state.Merge
+	var children, gates []state.Merge
 	for _, m := range st.Merges {
 		if running(m) && m.Child != 0 && proc.Alive(m.Child) {
 			children = append(children, m)
+		} else if running(m) && m.Child == 0 && m.PID != 0 && proc.Alive(m.PID) {
+			gates = append(gates, m)
 		}
 	}
-	if len(children) == 0 {
+	if len(children) == 0 && len(gates) == 0 {
 		return nil, nil
 	}
 	said, err := stopMerges(a.store, me, running, true, func(state.Merge) string { return "beekeeper stop" })
@@ -277,6 +277,11 @@ func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string
 	for _, m := range children {
 		if proc.Alive(m.Child) {
 			failed = append(failed, fmt.Sprintf("the devctl of %s (merge-child pid %d) still runs", m.Key(), m.Child))
+		}
+	}
+	for _, m := range gates {
+		if proc.Alive(m.PID) {
+			failed = append(failed, fmt.Sprintf("the gate of %s (pid %d) still runs before its devctl started", m.Key(), m.PID))
 		}
 	}
 	return said, failed

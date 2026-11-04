@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -467,6 +468,75 @@ func TestStopEndsARunningMergesDevctl(t *testing.T) {
 	st, _ := a.store.Read()
 	if !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return m.PR == 8 && m.Phase == state.Waiting }) {
 		t.Errorf("the waiting merge lost its place: %+v", st.Merges)
+	}
+}
+
+// A running gate waiting for a release has no merge-child yet. The standing
+// stop must interrupt it, preserve queued entries, and fail if it stays alive.
+func TestStopInterruptsMergeAwaitingRelease(t *testing.T) {
+	for _, stubborn := range []bool{false, true} {
+		name := "interrupts"
+		if stubborn {
+			name = "reports a gate that stays alive"
+		}
+		t.Run(name, func(t *testing.T) {
+			a, _, _ := stopDesk(t)
+			c := exec.Command("sleep", "60")
+			if stubborn {
+				c = exec.Command("sh", "-c", "trap '' INT; printf ready; exec sleep 60")
+			}
+			ready, err := c.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			// Reap promptly so waitGone observes the exit rather than a zombie.
+			// For the stubborn fixture, first wait until SIGINT is ignored.
+			t.Cleanup(func() { _ = c.Process.Kill(); <-done })
+			if stubborn {
+				buf := make([]byte, len("ready"))
+				_, err = io.ReadFull(ready, buf)
+			}
+			go func() { _ = c.Wait(); close(done) }()
+			if err != nil {
+				t.Fatal(err)
+			}
+			origWait := stopWait
+			stopWait = 200 * time.Millisecond
+			t.Cleanup(func() { stopWait = origWait })
+			queued := state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, Phase: state.Waiting}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges = append(st.Merges,
+					state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, Phase: state.Running, PID: c.Process.Pid}, queued)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err = a.stop(context.Background(), "stop")
+			out := a.out.(interface{ String() string }).String()
+			if stubborn {
+				if err == nil || !strings.Contains(out, "FAILED the gate of "+scratchRepo+"#7") || strings.Contains(out, "until beekeeper resume") {
+					t.Fatalf("stop should report the surviving gate: %v\n%s", err, out)
+				}
+			} else {
+				if err != nil || proc.Alive(c.Process.Pid) {
+					t.Fatalf("stop left its release-waiting gate running: %v\n%s", err, out)
+				}
+				if !strings.Contains(out, "cancelled while it waited") || !strings.Contains(out, "before its devctl started") {
+					t.Errorf("missing gate outcome:\n%s", out)
+				}
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Stop == nil || !slices.ContainsFunc(st.Merges, func(m state.Merge) bool { return reflect.DeepEqual(m, queued) }) {
+				t.Errorf("stop or queued place lost: %+v", st)
+			}
+		})
 	}
 }
 
