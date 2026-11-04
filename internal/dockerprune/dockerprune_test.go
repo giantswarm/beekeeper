@@ -190,7 +190,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == execCommand:
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
-		if args[len(args)-1] != "--no-prune" {
+		if args[2] != "--no-prune" {
 			return nil, errors.New("image removal must disable parent pruning")
 		}
 		f.removed = append(f.removed, args[3:])
