@@ -1,13 +1,17 @@
 package central_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,20 +81,72 @@ func TestCall(t *testing.T) {
 	// Each way of not reaching beekeeper serve is Unreachable, naming the
 	// context and why.
 	m.Down(true)
-	if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Context != labContext || !strings.Contains(u.Reason, "does not answer") {
+	if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || !u.Sent || u.Context != labContext || !strings.Contains(u.Reason, "does not answer") {
 		t.Errorf("backend down: %v, want Unreachable", err)
 	}
 	m.Down(false)
 	if err := os.Remove(token); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || !strings.Contains(u.Reason, "muster auth login --context lab") {
+	if _, err := c.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Sent || !strings.Contains(u.Reason, "muster auth login --context lab") {
 		t.Errorf("no sign-in: %v, want Unreachable naming the login", err)
 	}
 	gone, _ := client(t, m.URL)
 	m.Close()
-	if _, err := gone.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) {
+	if _, err := gone.Call(ctx, "lease_claim", map[string]any{}, nil); !errors.As(err, &u) || u.Sent {
 		t.Errorf("muster down: %v, want Unreachable", err)
+	}
+}
+
+// Losing the backend reply after a write can still produce a successful MCP
+// exchange with muster, whose generic error cannot establish whether it acted.
+func TestCallLostBackendReplyIsSent(t *testing.T) {
+	var writes atomic.Int64
+	s := mcpserver.NewMCPServer("beekeeper", "test")
+	s.AddTool(mcp.NewTool("note_add"), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		writes.Add(1)
+		return mcp.NewToolResultStructured(map[string]any{"id": 41}, "note #41"), nil
+	})
+	h := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithStateLess(true))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if bytes.Contains(body, []byte(`"note_add"`)) {
+			// Run the real handler to completion, then lose its successful reply.
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = fmt.Fprintf(rw, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n{", rec.Body.Len()+100)
+			_ = rw.Flush()
+			return
+		}
+		for k, vs := range rec.Header() {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}))
+	defer srv.Close()
+	m := centraltest.New(t, srv.URL+"/mcp", "beekeeper")
+	c, _ := client(t, m.URL)
+	_, err := c.Call(context.Background(), "note_add", map[string]any{}, nil)
+	if got := writes.Load(); got != 1 {
+		t.Fatalf("backend writes = %d, want 1", got)
+	}
+	var u *central.Unreachable
+	if !errors.As(err, &u) || !u.Sent {
+		t.Fatalf("lost backend reply = %v (%T), want Unreachable with Sent=true", err, err)
 	}
 }
 
