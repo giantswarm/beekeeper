@@ -319,7 +319,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	if h, _ := got["holder"].(map[string]any); h["person"] != "ana@example.com" || h["team"] != ourTeam || h["name"] != "ana-agent" {
 		t.Errorf("the lease's holder %v", got["holder"])
 	}
-	e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "again"}), false, "already yours")
+	e.expect(t, ana, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "again"}), false, "was yours already")
 	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: graveler, paramPurpose: "mine"}, true, `graveler is held by "ana@example.com/ana-agent"`)
 	e.expect(t, bo, "lease_claim", agent(map[string]any{paramEnvironment: graveler, paramPurpose: "same agent name"}), true, `graveler is held by "ana@example.com/ana-agent"`)
 	e.expect(t, bo, "lease_claim", map[string]any{paramEnvironment: "nowhere", paramPurpose: "x"}, true, "not an Environment")
@@ -330,7 +330,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	}
 	e.expect(t, sup, "lease_release", map[string]any{paramEnvironment: graveler}, false, `released graveler (held by "ana@example.com/ana-agent": e2e for #123)`)
 	e.expect(t, ana, "lease_release", map[string]any{paramEnvironment: graveler}, false, "graveler was free")
-	e.expect(t, ana, "lease_claim", map[string]any{paramEnvironment: glean, paramPurpose: "proof"}, false, "claimed glean")
+	e.expect(t, ana, "lease_claim", map[string]any{paramEnvironment: glean, paramPurpose: purposeProof}, false, "claimed glean")
 	e.expect(t, ana, "lease_release", agent(map[string]any{paramEnvironment: glean}), false, "released glean")
 
 	// Holds: anyone sets one; its setter or the setter's team's supervisor lifts it.

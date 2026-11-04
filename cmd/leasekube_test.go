@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,8 +57,15 @@ func TestLeaseKubeconfigOnlyForTheHolder(t *testing.T) {
 	}
 	path := labKubeconfig(a.cfg.LeaseDir, labOne)
 	out, err := runLease(a, "kubeconfig", labOne)
-	if err != nil || out != "export KUBECONFIG="+path+"\n" {
+	if err != nil || out != path+"\n" {
 		t.Fatalf("the holder's kubeconfig: %q, %v", out, err)
+	}
+	// The default output can be passed directly to a kubeconfig consumer.
+	if _, err := os.ReadFile(strings.TrimSuffix(out, "\n")); err != nil {
+		t.Fatalf("load the printed path: %v", err)
+	}
+	if out, err := runLease(a, "kubeconfig", "--export", labOne); err != nil || out != "export KUBECONFIG="+path+"\n" {
+		t.Fatalf("export output: %q, %v", out, err)
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's lease
 	if st, _ := os.Stat(path); err != nil || string(raw) != secrettest.Kubeconfig(labCluster) || st.Mode().Perm() != 0o600 {

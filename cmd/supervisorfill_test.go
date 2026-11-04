@@ -34,7 +34,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 	}
 	r.a.cfg.Supervisor.WorkerBrief = brief
 	r.a.cfg.Supervisor.FillRetryEvery.Duration = 5 * time.Minute
-	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "test-model"}}
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: litTestModel}}
 	busy := 0
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {

@@ -77,12 +77,32 @@ func validateOverlapPark(on, waits string) error {
 	return nil
 }
 
+// validateParkWait rejects a GitHub target when the stated condition is
+// independent of that reference's lifecycle. Keep this shared by local and
+// remote parks and by the watch, which also reads parks from older releases.
+func validateParkWait(on, waits string) error {
+	if _, ok := parseRef(on); !ok {
+		return nil
+	}
+	words := strings.FieldsFunc(strings.ToLower(waits), func(r rune) bool {
+		return r < 'a' || r > 'z'
+	})
+	text := " " + strings.Join(words, " ") + " "
+	if strings.Contains(text, " hold ") || strings.Contains(text, " held ") || strings.Contains(text, " release window ") {
+		return refused("%s does not settle a hold wait; park on --on hold:<target>, using the target named by the gate refusal or beekeeper hold", on)
+	}
+	if strings.Contains(text, " gate run ") || strings.Contains(text, " gate runs ") || strings.Contains(text, " gated run ") {
+		return refused("%s does not settle a gate run wait; the target is the run listed by beekeeper gate runs; park without --on and arrange an explicit wake for that run's outcome", on)
+	}
+	return nil
+}
+
 func (a *app) agentParkCmd() *cobra.Command {
 	var on, postMerge string
 	var checks bool
 	c := &cobra.Command{
 		Use:   "park <what it waits for>",
-		Short: "Park the calling agent on a note, a pull request or a person: it keeps its task without holding a busy slot",
+		Short: "Park the calling agent on a note, a release, a pull request or a person: it keeps its task without holding a busy slot",
 		Long: `park marks the calling agent parked: it keeps its task, but agents and
 capacity count it parked, not busy, the doctor and the watch leave it
 alone, and it ends its turn instead of waiting in a sleep that holds its
@@ -95,10 +115,16 @@ the wake that ends the park resumes it from its transcript (claude --bg
 --on names what settles the wait: a note (#12; on a machine with a central
 instance <context>#12 is its note, and a bare number the machine has no
 note of is the central instance's), an issue or pull request
-(owner/repo#n) or a hold (hold:<target>, the one a gate's exit 77 names);
+(owner/repo#n), a release (owner/repo@v1.2.3), or a hold (hold:<target>,
+the one a gate's exit 77 names);
 alert:<name> waits for a firing alert (a bare alertname or installation/alertname);
 lease claim --park parks on a lease. The supervisor loop wakes alert waits
 and replaces a parked session that cannot be resumed, keeping its task.
+
+A GitHub target is refused when the wait names a hold or a gate run. Use
+hold:<target> for a hold. Gate runs have no automatic park target: identify
+the run with gate runs, park without --on and arrange an explicit wake on
+its outcome.
 
 GitHub targets are resolved before the park is recorded; a confirmed unknown,
 closed or merged target is refused. If GitHub cannot be read, the park is
@@ -107,7 +133,8 @@ enter pull request review. Once the note is closed (answered, defaulted, done
 or overtaken), the issue closed, the pull request merged or closed or given a
 review or comment by anyone but its author since the park (a review posted
 under the author's own login settles nothing), the hold
-lifted or ended, or the lease free and the agent's to claim, the watch says AGENT
+lifted or ended, the release available (artifacts and CI, checked with
+devctl release wait), or the lease free and the agent's to claim, the watch says AGENT
 RESUMABLE once. With agents.autoResume the watch then resumes the agent
 with what settled it, a person's answer word for word, as agents wake
 does: by name to a running CLI, else headless. agents resume does the same
@@ -141,6 +168,7 @@ again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
 		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
+  beekeeper agents park --on example/tool@v1.2.3 "release to promote"
   beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"
   beekeeper agents park --on hold:merges "the devctl release window my merge was refused on"
   beekeeper agents park --on giantswarm/beekeeper#371 "overlap: waiting for this PR to merge"`,
@@ -164,14 +192,19 @@ agents wake: its task is that message's first line.`,
 					return usageErr("--on alert:<name> needs an alert name")
 				}
 				on = alertParkPrefix + strings.TrimSpace(name)
+			} else if _, _, release := parseReleaseTarget(on); release {
+				// The repository and exact version are retained in On.
 			} else if _, isNote := parkNote(on); on != "" && !isNote {
 				if _, _, central := parkCentralNote(on); !central {
 					r, ok := parseRef(on)
 					if !ok {
-						return usageErr("--on %s is neither a note (#12, <context>#12), an issue or pull request (owner/repo#n) nor a hold (hold:<target>)", on)
+						return usageErr("--on %s is neither a note (#12, <context>#12), an issue or pull request (owner/repo#n), a release (owner/repo@v1.2.3) nor a hold (hold:<target>)", on)
 					}
 					on = refName(r)
 				}
+			}
+			if err := validateParkWait(on, waits); err != nil {
+				return err
 			}
 			if err := validateOverlapPark(on, waits); err != nil {
 				return err
@@ -202,7 +235,7 @@ agents wake: its task is that message's first line.`,
 	}
 	c.Flags().BoolVar(&checks, "checks", false, "SSH worker: park for CI on --on owner/repo#n; coordinator wakes on green or red, without requesting review")
 	c.Flags().StringVar(&postMerge, "post-merge", "", "work to wake for after merge (release, rollout, proof); empty closes the task without a wake")
-	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a hold (hold:<target>) or an alert (alert:<name>)")
+	c.Flags().StringVar(&on, "on", "", "what settles the wait: a note (#12, <context>#12 for a central instance's), an issue or pull request (owner/repo#n), a release (owner/repo@v1.2.3), a hold (hold:<target>) or an alert (alert:<name>)")
 	c.MarkFlagsMutuallyExclusive("checks", "post-merge")
 	return c
 }
@@ -213,6 +246,9 @@ agents wake: its task is that message's first line.`,
 // returns the line that says so. A bare note number is the central
 // instance's note when the machine has none of it open, as note answer's.
 func (a *app) park(me state.Party, on, waits string, postMerge ...string) (string, error) {
+	if err := validateParkWait(on, waits); err != nil {
+		return "", err
+	}
 	if err := validateOverlapPark(on, waits); err != nil {
 		return "", err
 	}
@@ -682,11 +718,14 @@ func (w *watcher) settledParks(ctx context.Context, st *state.State) []settledPa
 	var parked, centralParked []state.Agent
 	var closed []int
 	var refs []github.PR
-	var out []settledPark
+	out := w.settledReleaseParks(ctx, st)
 	for _, ag := range parkedAgents(st) {
 		p := ag.Park
 		if p == nil || p.Checks || p.On == "" || !p.Resumable.IsZero() {
 			continue
+		}
+		if validateParkWait(p.On, p.Waits) != nil {
+			continue // A PR event cannot settle this condition.
 		}
 		if p.ReviewHead != "" && p.PostMerge != nil && slices.ContainsFunc(st.Agents, func(registered state.Agent) bool { return registered.Is(ag.Party) }) {
 			continue

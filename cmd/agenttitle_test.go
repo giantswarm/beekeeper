@@ -216,7 +216,7 @@ func TestPickSteward(t *testing.T) {
 // or it keeps a role, also a role's run whose relief was forgotten.
 func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
-	ag := state.Party{Session: "a", Name: "worker"}
+	ag := state.Party{Session: "a", Name: workerRole}
 	archive := func(st *state.State, ag state.Party) string {
 		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0].line
 	}

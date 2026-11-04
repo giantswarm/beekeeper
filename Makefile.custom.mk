@@ -57,3 +57,7 @@ test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with lo
 # The generated go-build release prerequisite invokes make test. Keep the same
 # uncached regression mandatory there, so publication cannot bypass this suite.
 test: test-loop-workflow
+
+.PHONY: browse-upload-live
+browse-upload-live: ## Check browse --file against the installed Claude CLI and connected Chrome.
+	go test -tags browselive -run '^TestBrowseUploadLive$$' -count=1 -timeout=10m ./cmd

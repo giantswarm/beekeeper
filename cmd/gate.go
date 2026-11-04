@@ -696,6 +696,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
+	if err := g.reloadQueueConfig(); err != nil {
+		return "", err
+	}
 	g.passive = false
 	liveWait, claimed := g.waitBehindLive()
 	if liveWait != "" && claimed {
@@ -879,6 +882,37 @@ func (g *gateRun) step() (string, error) {
 		g.settleUrgent(urgent, b)
 	}
 	return why, err
+}
+
+// reloadQueueConfig lets waiting gates observe edits without replacing the
+// binary. An incomplete edit keeps the last valid settings until the next poll.
+func (g *gateRun) reloadQueueConfig() error {
+	path := cmp.Or(g.cfgPath, g.loadedCfg)
+	if path == "" {
+		return nil
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		gateLine("queue configuration could not be reloaded; keeping the last valid settings")
+		return nil
+	}
+	lane := c.LaneOf(g.repo)
+	if lane.Name != g.lane.Name {
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := g.mine(st, state.Waiting); i >= 0 {
+				st.Merges[i].Lane = lane.Name
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	next := *g.cfg
+	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
+	g.cfg = &next
+	g.lane = lane
+	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
+	return nil
 }
 
 // checkCandidate refuses a promotion whose turn came, its place running,
@@ -2207,7 +2241,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		if confirm = confirm && settles; confirm {
 			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
 		}
-		return ev, nil
+		return g.mergeEvents(ev)
 	})
 	if confirm && err == nil {
 		releaseLine, rc = g.confirmRelease(&r.out, rc)
@@ -2216,6 +2250,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
 			g.key(), stale.Version, stale.Newer, filepath.Dir(base), project.Name)
+	} else if err != nil {
+		return err
 	} else {
 		removeMergeFiles(base)
 	}
@@ -2869,6 +2905,7 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // runChild runs the command with this process's stdin and stderr, its
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
+	started := time.Now()
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
@@ -2889,10 +2926,17 @@ func runChild(argv []string, out io.Writer) int {
 		}
 	}()
 	_ = c.Wait()
-	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+	return childExit(c.ProcessState, os.Stderr, started)
+}
+
+// childExit preserves signal deaths as shell exit codes and reports how long
+// the command ran, including when a caller or the watch stopped it.
+func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), time.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())
 	}
-	return c.ProcessState.ExitCode()
+	return ps.ExitCode()
 }
 
 func exitCode(rc int) error {

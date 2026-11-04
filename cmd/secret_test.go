@@ -59,7 +59,7 @@ func secretApp(t *testing.T) (*app, *secrettest.Tools, string) {
 	secretRun = tools.Run
 	t.Cleanup(func() { secretRun = prev })
 	repo := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\n  namespace: team-a\ndata:\n  password: " + base64.StdEncoding.EncodeToString([]byte(secretValue)) + "\n"
@@ -109,7 +109,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{copyOp, src, dst, "--name", "db-copy", "--namespace", "team-b"},
+		{copyOp, src, dst, nameFlag, "db-copy", "--namespace", "team-b"},
 		{compareOp, src, dst},
 		{compareOp, src + "#data.password", dst + "#data.password"},
 		{fingerprintOp, src},
@@ -422,7 +422,7 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
@@ -524,7 +524,7 @@ func gitCheckout(t *testing.T, url string) string {
 	t.Helper()
 	dir := t.TempDir()
 	const gitInit = "init"
-	for _, args := range [][]string{{gitInit, "-q"}, {"remote", "add", "origin", url}} {
+	for _, args := range [][]string{{gitInit, "-q"}, {"remote", loopAdd, "origin", url}} {
 		c := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own git calls
 		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := c.CombinedOutput(); err != nil {
@@ -573,7 +573,7 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 		{append([]string{setOp, file, newKey, generateFlag, "--"}, pod...), ExitRefused},
 		{append([]string{copyOp, file + "#stringData.secretKey", "--"}, pod...), ExitRefused},
 		{[]string{setOp, file, newKey, generateFlag, "--stdin-json", "{}", "--stdin-field", "k"}, ExitUsage},
-		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, "--name", "y"}, ExitUsage},
+		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, nameFlag, "y"}, ExitUsage},
 	} {
 		a.out = &bytes.Buffer{}
 		calls := len(tools.Calls)
