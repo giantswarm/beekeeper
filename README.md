@@ -590,8 +590,7 @@ A path the person named for the task is created by the person or with their go-a
 Commands follow `cd` (bare `cd` goes home), `git -C`, `~`, `$HOME` and shell
 assignments; use `cd "${dir:?}"` to stop on an empty directory variable.
 
-
-`hooks.personFolders` names the person's folders (`~/` and globs: `[~, ~/projects, ~/projects/*]`;
+`hooks.personFolders` names the person's folders (`~/` and globs: `[~/, ~/projects, ~/projects/*]`;
 unset, the guard is off). The PreToolUse hook refuses a Write, Edit, MultiEdit or NotebookEdit, and a
 Bash command's output redirection (`>`, `>|`, `>>`, `&>`, `n>`) or `tee` target, that creates a file
 directly in one of them (an existing dotfile there is written in place), or writes a file in the main
@@ -689,7 +688,9 @@ beekeeper keeps that login:
   it first; the keeper claims it itself when it is free and granted to nobody, and otherwise waits
   for its next run, which the `TELEPORT LOGIN` line names.
 - A login that does not complete within `teleport.loginTimeout` (default 3m: the browser's SSO
-  session is gone, or the sign-in needs a click) leaves the profile as it was. The keeper does not
+  session is gone, or the sign-in needs a click) leaves the profile as it was. Re-run `beekeeper
+  install` after increasing this timeout so the keeper's unit allows both login attempts and
+  cleanup. The keeper does not
   try that login again: it leaves a sign-in note for `guide.person` that closes by itself once the
   login is renewed, and the watch says `TELEPORT RENEWAL FAILED`. The run after a missed tick (more
   than two `teleport.every` since the keeper's last run) tries a failed login again, and a failure

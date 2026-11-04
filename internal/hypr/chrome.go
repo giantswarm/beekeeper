@@ -152,11 +152,14 @@ func query(ctx context.Context, ctl Ctl, v any, args ...string) error {
 }
 
 // browser is Chrome's most recently focused browser window, the one the
-// extension opens a turn's tabs in; nil without one.
+// extension opens a turn's tabs in; nil without one. If none has focus
+// history, the first browser in the client list is the fallback.
 func (l layout) browser() *Window {
 	var b *Window
 	for i, w := range l.windows {
-		if isBrowser(w) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
+		// Hyprland uses -1 for windows absent from its focus history.
+		if isBrowser(w) && (b == nil || (w.FocusHistoryID >= 0 &&
+			(b.FocusHistoryID < 0 || w.FocusHistoryID < b.FocusHistoryID))) {
 			b = &l.windows[i]
 		}
 	}
@@ -384,6 +387,14 @@ func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	if m := l.showing(s.Before.Workspace); m != nil {
 		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
 	}
+	for _, w := range l.windows {
+		if w.Address == s.Before.Address {
+			if m := l.showing(w.Workspace); m != nil {
+				return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, w.Workspace.Name), nil
+			}
+			break
+		}
+	}
 	return "", nil
 }
 
@@ -414,6 +425,9 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 		return nil
 	}
 	errs := []error{run(ctx, ctl, "eval", redirectOff)}
+	if err := errs[0]; err != nil {
+		return fmt.Errorf("%w; the output %s stays until the Chrome redirect is stopped", err, Output)
+	}
 	s.redirecting = false
 	l, err := read(ctx, ctl)
 	if err != nil {
@@ -491,13 +505,13 @@ func redirectOn(hold time.Duration) string {
 const redirectOff = `if beekeeper_browse_timer then beekeeper_browse_timer:set_enabled(false) end; ` +
 	`for _, r in pairs(beekeeper_browse_windows or {}) do r:set_enabled(false) end;`
 
-// browserPattern matches the class of a browser window and nothing else.
+// browserPattern matches whole browser classes case-insensitively, like isBrowser.
 func browserPattern() string {
 	q := make([]string, len(browserClasses))
 	for i, c := range browserClasses {
 		q[i] = regexp.QuoteMeta(c)
 	}
-	return "^(" + strings.Join(q, "|") + ")$"
+	return "(?i)^(" + strings.Join(q, "|") + ")$"
 }
 
 // setting is runtime configuration in both of Hyprland's syntaxes: a Lua

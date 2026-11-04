@@ -401,7 +401,7 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
 	case strings.Contains(q, boardItemsQuery):
-		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
+		if vars["q"] != `is:open team:"X"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}
 		page := 0
@@ -665,14 +665,14 @@ func TestRankMovesTheItemByItsPosition(t *testing.T) {
 	}
 	f.mutations, f.moved = nil, ""
 	rk, err = c.Rank(ctx, issue5, Place{After: "https://github.com/o/r/issues/9"})
-	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine}) {
 		t.Errorf("Rank after = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	// Before is the item after the other one, then the other one after the
 	// item: the other one's predecessor is never read.
 	f.mutations = nil
 	rk, err = c.Rank(ctx, issue5, Place{Before: issue9})
-	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`, `I9 after "I1"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine, `I9 after "I1"`}) {
 		t.Errorf("Rank before = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	if readsItems(slices.DeleteFunc(slices.Clone(f.queries), func(q string) bool { return strings.Contains(q, "items(first:2)") })) {
@@ -972,8 +972,8 @@ func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
 
 func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing.T) {
 	// GitHub omits another owner's project from issue.projectItems, so
-	// placing an item after a cross-owner anchor on a personal board probes
-	// addProjectV2ItemById to resolve the anchor's existing item ID.
+	// placing an item after a cross-owner anchor on a personal board reads
+	// project membership to resolve the anchor's existing item ID.
 	f := &fakeGH{t: t,
 		byIssue: map[string]string{
 			"7": issue7OffBoard,
@@ -984,15 +984,19 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 	origRun := f.run
 	c := &Client{Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
 	c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[3], "node(id:$p)") {
+			checkSelectionSchema(t, args)
+			return []byte(`{"data":{"node":{"items":{"nodes":[{"id":"I9","content":{"id":"ISSUE9"}}]}}}}`), nil
+		}
 		if strings.Contains(args[3], "addProjectV2ItemById") && slices.Contains(args, "c=I7") {
 			f.mutations = append(f.mutations, addIssue7)
 			return []byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"I71","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`), nil
 		}
 		return origRun(ctx, args...)
 	}
-	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: "org/engine#9"})
-	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
-		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
+	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: crossOwnerAnchor})
+	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: crossOwnerAnchor, Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{addIssue7, "I71=t1", `I71 after "I9"`}) {
 		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 }

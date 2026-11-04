@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const installationA = "installation-a"
+
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	t.Helper()
 	a, r := executionTestApp(t)
@@ -85,7 +87,7 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			a, use, pull := mergeReviewRig(t)
 			completeMergeReview(t, a, use, &pull.Reviews[0])
-			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: "installation-a"}}
+			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: installationA}}
 			old := readHelmReleases
 			t.Cleanup(func() { readHelmReleases = old })
 			readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
@@ -180,7 +182,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	completeMergeReview(t, a, use, &pull.Reviews[0])
-	lane := config.Lane{Name: "repair-lane", Repositories: []string{use.Repository}, Installation: "installation-a"}
+	lane := config.Lane{Name: "repair-lane", Repositories: []string{use.Repository}, Installation: installationA}
 	a.cfg.Lanes = []config.Lane{lane}
 	st, err := a.store.Read()
 	if err != nil {

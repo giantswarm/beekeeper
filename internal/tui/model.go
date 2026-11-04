@@ -56,6 +56,8 @@ type (
 		// took is the session id a take-over took, "" for anything else.
 		took     string
 		released string
+		// releasedAlias is the original id a restarted session's take-over kept.
+		releasedAlias string
 	}
 )
 
@@ -246,6 +248,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outcome, m.outcomeErr = msg.done, false
 		}
 		delete(m.taken, msg.released)
+		delete(m.taken, msg.releasedAlias)
 		if msg.took != "" {
 			if m.taken == nil {
 				m.taken = map[string]bool{}
@@ -460,11 +463,17 @@ func (m *model) toggleTakeOver() tea.Cmd {
 	id, name := s.ID, s.Name
 	paneID := m.paneID
 	if s.TakenOver {
+		alias := s.TakeoverAlias
 		return func() tea.Msg {
 			if err := m.src.Release(m.ctx, id); err != nil {
 				return actMsg{pane: paneID, err: err}
 			}
-			return actMsg{pane: paneID, released: id, done: "handed back: " + name + "'s approvals go to its own window"}
+			if alias != "" && alias != id {
+				if err := m.src.Release(m.ctx, alias); err != nil {
+					return actMsg{pane: paneID, err: err}
+				}
+			}
+			return actMsg{pane: paneID, released: id, releasedAlias: alias, done: "handed back: " + name + "'s approvals go to its own window"}
 		}
 	}
 	return func() tea.Msg {
@@ -492,6 +501,9 @@ func (m *model) answer(allow bool) tea.Cmd {
 		verb = "allowed"
 	}
 	id := s.ID
+	if ap.Session != "" {
+		id = ap.Session
+	}
 	paneID := m.paneID
 	return func() tea.Msg {
 		if err := m.src.Answer(m.ctx, id, ap.ID, allow); err != nil {

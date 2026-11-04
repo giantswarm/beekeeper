@@ -383,7 +383,7 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   paths: [~/projects/notebook/plans]   # files whose Write and Edit are scanned like a post; a directory covers what is under it
   storeDeny:                # op item|document create|edit, vault kv put|patch refused (globs; empty: any)
     - {vault: Shared*, item: "*personal*"}
-  sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
+  sweepRoots: [~/]          # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
 
 hooks:
@@ -391,7 +391,7 @@ hooks:
   transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
-  personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
+  personFolders: [~/, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
 
 scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
   sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
@@ -403,8 +403,8 @@ sandbox:                    # the agent sandbox (README: The agent sandbox); bee
   allowWrite: [~/projects, ~/.cache, ~/go/pkg/mod]   # writable too: checkouts and worktrees, build and module caches
   domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org, 127.0.0.1:6443]   # hosts commands reach besides GitHub; loopback by port only (a kind lab's API server)
   required: false          # true: a session the policy does not hold (not installed, started before) is refused every tool call but SendMessage
-  mask:                     # the default: GH_TOKEN and GITHUB_TOKEN, to GitHub's hosts only
-    - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
+  # The broker's egress proxy keeps devctl's App token in memory and sets
+  # the GitHub request headers itself (README: The agent sandbox).
 
 plans:                      # note add --for <guide.person> links a pull request here only once merged, or open with its stage check green or at the grill stage (red only for missing stage outputs)
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it

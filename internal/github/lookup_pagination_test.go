@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// draftFixtureRepo is the repository the draft search fixtures name.
-const draftFixtureRepo = "example/plans"
-
 func TestLookupReadsEveryDraftPage(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -23,7 +20,7 @@ func TestLookupReadsEveryDraftPage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			repo := draftFixtureRepo
+			repo := examplePlansRepo
 			run := func(ctx context.Context, args ...string) ([]byte, error) {
 				calls++
 				if Repo(ctx) != repo {
@@ -89,7 +86,7 @@ func TestLookupRejectsIncompleteDraftSearch(t *testing.T) {
 				}
 				return []byte(`{"data":{"d":` + search + `}}`), nil
 			}
-			if _, _, err := Lookup(t.Context(), run, nil, []string{draftFixtureRepo}); err == nil {
+			if _, _, err := Lookup(t.Context(), run, nil, []string{examplePlansRepo}); err == nil {
 				t.Fatal("incomplete search returned as complete")
 			}
 		})
@@ -108,7 +105,7 @@ func TestLookupStopsAfterCancellation(t *testing.T) {
 		cancel()
 		return []byte(`{"data":{"d":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}`), nil
 	}
-	if _, _, err := Lookup(ctx, run, nil, []string{draftFixtureRepo}); !errors.Is(err, context.Canceled) {
+	if _, _, err := Lookup(ctx, run, nil, []string{examplePlansRepo}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want cancellation", err)
 	}
 }

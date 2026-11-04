@@ -824,6 +824,90 @@ func TestANoReleaseToolMergeLiftsItsWindow(t *testing.T) {
 	}
 }
 
+func TestAToolMergeRerunDoesNotReopenItsClosedWindow(t *testing.T) {
+	stubGitHub(t, github.Merged, devctlTo)
+	// Stop after the startup transaction so no external merge runs.
+	reviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
+	g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+	g.cfg.Merge.Cap = 10
+	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds[0].ToolMerged, st.Holds[0].ToolRelease = true, devctlTo
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	held := func() bool {
+		h, ok := merge.Blocking(gateState(t, g), time.Now(), scratchRepo, 8, config.Lane{Name: scratchRepo})
+		if ok && h.Reason == "" {
+			t.Fatal("blocking window has no reason")
+		}
+		return ok
+	}
+	if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Holds[0].Reason = "waiting for the devctl release"
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !held() {
+		t.Fatal("open window admitted another repository's merge")
+	}
+	g.closeToolWindow(context.Background(), watchParty)
+	if held() {
+		t.Fatal("installed release still blocks another repository's merge")
+	}
+	waiting := gateState(t, g).Merges[0]
+	waiting.Phase, waiting.Started = state.Waiting, time.Time{}
+	for range 2 {
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges = []state.Merge{waiting}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if why, err := g.start("", nil); Code(err) != ExitGateRefused || why != "" {
+			t.Fatalf("rerun start: %q, %v", why, err)
+		}
+		if st := gateState(t, g); len(st.Holds) != 0 || held() {
+			t.Fatalf("rerun reopened the release window: %+v", st.Holds)
+		}
+	}
+	if d := lastEvent(t, g, "hold.set"); d != "" {
+		t.Fatalf("rerun set a hold: %s", d)
+	}
+}
+
+func TestAToolMergeStartOpensAWindowUnlessAlreadyMerged(t *testing.T) {
+	for _, tc := range []struct {
+		name, pull string
+		wantHold   bool
+	}{
+		{noteStatusOpen, github.Open, true},
+		{"unread", "", true},
+		{"merged", github.Merged, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubGitHub(t, tc.pull, devctlFrom)
+			reviewGuard = func(context.Context, string, int) (string, error) { return "stop before merge", nil }
+			g := runningMerge(t, merge.ToolRepo, config.Lane{Name: merge.ToolRepo})
+			g.cfg.Merge.Cap = 10
+			if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Merges[0].Phase, st.Merges[0].Started = state.Waiting, time.Time{}
+				st.Holds = nil
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if why, err := g.start("", nil); Code(err) != ExitGateRefused || why != "" {
+				t.Fatalf("start: %q, %v", why, err)
+			}
+			if st := gateState(t, g); (len(st.Holds) != 0) != tc.wantHold {
+				t.Fatalf("holds %+v, want window %v", st.Holds, tc.wantHold)
+			}
+		})
+	}
+}
+
 // A devctl merge queued behind a devctl release starts on that release: the
 // gate runs devctl's update before it starts, and the merge waits while the
 // window of the previous release is open, as devctl would otherwise run on
