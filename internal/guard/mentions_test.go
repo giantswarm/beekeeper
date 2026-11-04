@@ -14,7 +14,10 @@ func TestMentions(t *testing.T) {
 		"@fiunchinho":                      "fiunchinho",
 		"git@github.com:giantswarm/x":      "",
 		"go install x@latest":              "",
-		"npm i @types/node":                "",
+		"npm i @types/node":                "types/node",
+		"please @example/review-team":      "example/review-team",
+		"(@example/team_name), thanks":     "example/team_name",
+		"`@example/review-team`":           "",
 		"mail me at @example.com":          "",
 		"the `@marians` handle, an @-ping": "",
 		"gh api -F body=@body.md":          "",
@@ -44,6 +47,10 @@ func TestMentionRefusal(t *testing.T) {
 		refuse bool
 	}{
 		{bashTool, bash(`gh pr comment 12 --repo giantswarm/x --body "thanks @marians"`), true},
+		{bashTool, bash(`gh issue comment 3 --repo example/project --body "please @example/review-team"`), true},
+		{bashTool, bash(`gh issue create --title t --repo example/project --body "please @example/review-team"`), true},
+		{bashTool, bash(`gh pr comment 3 --repo example/project --body "please @example/review-team"`), true},
+		{bashTool, bash(`gh pr create --title t --repo example/project --body "please @example/review-team"`), true},
 		{bashTool, bash(`gh issue comment 3 --repo giantswarm/x --body-file ` + body), true},
 		{bashTool, bash(`gh api repos/giantswarm/x/issues/3/comments -F body=@` + body), true},
 		{bashTool, bash(`gh api -X POST repos/giantswarm/x/issues -f title=t -f body="cc @marians"`), true},
@@ -63,5 +70,22 @@ func TestMentionRefusal(t *testing.T) {
 		if got := mentionRefusal(c.tool, c.input, dir) != ""; got != c.refuse {
 			t.Errorf("%s %v: refused %v, want %v", c.tool, c.input, got, c.refuse)
 		}
+	}
+}
+
+func TestTeamMentionRefusalBodyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body.md"), []byte("Please @example/review-team take a look."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"issue", "pr"} {
+		t.Run(kind, func(t *testing.T) {
+			reason := mentionRefusal(bashTool, map[string]any{commandKey: "gh " + kind + " comment 3 --body-file body.md"}, dir)
+			for _, want := range []string{"Refused:", "example/review-team", "ask the supervisor"} {
+				if !strings.Contains(reason, want) {
+					t.Errorf("refusal %q does not contain %q", reason, want)
+				}
+			}
+		})
 	}
 }
