@@ -1877,7 +1877,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		argv = squashArgv(self, g.repo, g.pr, g.argv)
 	}
 	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
