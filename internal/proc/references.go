@@ -75,7 +75,21 @@ func referencesWith(root string, pid int, protected bool, files referenceIO) ([]
 		} else {
 			for line := range strings.Lines(string(raw)) {
 				if i := strings.Index(line, "/"); i >= 0 {
-					paths = append(paths, strings.TrimSuffix(strings.TrimSpace(line[i:]), " (deleted)"))
+					// Remove only the record delimiter: whitespace belongs to
+					// the filename, including a trailing carriage return.
+					p := strings.TrimSuffix(line[i:], "\n")
+					// seq_path escapes newlines as \012 without escaping
+					// literal backslashes. Any occurrence is ambiguous,
+					// including mixtures of literal and escaped sequences.
+					if strings.Contains(p, `\012`) {
+						return nil, errors.New("ambiguous newline escape in mapped pathname")
+					}
+					paths = append(paths, p)
+					// The suffix may be kernel metadata or literal filename
+					// bytes. Keep both interpretations conservatively.
+					if original, deleted := strings.CutSuffix(p, " (deleted)"); deleted {
+						paths = append(paths, original)
+					}
 				}
 			}
 		}

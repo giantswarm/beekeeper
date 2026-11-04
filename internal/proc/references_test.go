@@ -10,6 +10,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/diskprune"
 )
 
 const (
@@ -542,6 +545,69 @@ func TestUserScanSkipsForeignNamespacesOnPermissionDenied(t *testing.T) {
 			}
 			if !slices.Contains(s.Refs, "/scratch/held") {
 				t.Errorf("readable process's references lost: %v", s.Refs)
+			}
+		})
+	}
+}
+
+// These fixtures leave mappings as the only references to disposable files.
+func mappedProcessFixture(t *testing.T, mapping string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "42")
+	if err := os.MkdirAll(filepath.Join(dir, "fd"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	uid := os.Getuid()
+	for name, data := range map[string]string{
+		fixtureStatus:      fmt.Sprintf("Uid: %d %d %d %d\n", uid, uid, uid, uid) + fixtureLiveStatus,
+		fixtureCommand:     fixtureName,
+		fixtureEnvironment: "",
+		fixtureMappings:    "00-10 r--p 0 0:0 1   " + mapping + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestUserScanPreservesMappedFilenames(t *testing.T) {
+	for _, name := range []string{"ordinary", "space ", "tab\t", "carriage\r", "internal space", "literal (deleted)", "repeated (deleted) (deleted)", "space before suffix  (deleted)"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, []byte("artifact"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			root := mappedProcessFixture(t, path)
+			scan, err := userScanAt(root, os.Getuid(), referenceFiles())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(scan.Refs, path) {
+				t.Errorf("pathname bytes changed: %q", scan.Refs)
+			}
+			if strings.HasSuffix(path, " (deleted)") && !slices.Contains(scan.Refs, strings.TrimSuffix(path, " (deleted)")) {
+				t.Errorf("missing deleted-file interpretation: %q", scan.Refs)
+			}
+			result := diskprune.Output(path, time.Time{}, scan.Refs, true)
+			if result.Removed != 0 || result.Kept["in use"] != 1 || len(result.Errors) != 0 {
+				t.Fatalf("mapped artifact not protected: %+v", result)
+			}
+		})
+	}
+}
+
+func TestUserScanFailsClosedOnAmbiguousMappingNewlines(t *testing.T) {
+	for _, name := range []string{"newline\nfile", `literal\012file`, "mixed\\012and\nfile", "newline\nfile (deleted)"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			rendered := strings.ReplaceAll(path, "\n", `\012`)
+			root := mappedProcessFixture(t, rendered)
+			scan, err := userScanAt(root, os.Getuid(), referenceFiles())
+			var unknown *UnknownError
+			if !errors.As(err, &unknown) || len(unknown.Processes) != 1 || unknown.Processes[0].PID != 42 || unknown.Processes[0].Command != fixtureName {
+				t.Fatalf("ambiguous mapping did not fail closed: scan=%+v err=%v", scan, err)
 			}
 		})
 	}
