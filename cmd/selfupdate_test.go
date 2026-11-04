@@ -149,7 +149,7 @@ func TestReexecs(t *testing.T) {
 		args string
 		want bool
 	}{
-		{"empty", "", false},
+		{"no arguments", "", false},
 		{"program only", "beekeeper", false},
 		{"gate", "beekeeper gate -- devctl pr merge o/r 1", true},
 		{"merge child", "beekeeper merge-child /state/merge", true},
