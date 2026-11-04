@@ -59,6 +59,10 @@ ignores one if supplied. webhook-secret is conditional on GitHub returning
 it. An absent file is an error; create a Secret skeleton first. This checks
 configuration, not access to a recipient’s private identity.
 
+Before writing, the target clone is fetched from origin. Local changes
+(including untracked files) or a checkout missing commits from origin/main
+are refused; commit or stash changes and update the checkout before retrying.
+
 Every check runs before the code is spent: the installation's entry, the
 file a Secret or absent with a name, each key under a creation rule that
 encrypts it, and no key the Secret holds already unless --replace.
@@ -163,6 +167,9 @@ func (a *app) appSecret(installation string) (config.AppSecret, error) {
 // on stderr.
 func (a *app) writeGitHubApp(cmd *cobra.Command, installation string, target config.AppSecret, replace bool, convert func(context.Context) (*githubApp, error)) error {
 	if err := a.sandboxFiles(nil, []secret.Ref{{File: target.File}}); err != nil {
+		return err
+	}
+	if err := checkGitHubAppCheckout(cmd.Context(), target.File); err != nil {
 		return err
 	}
 	ops, err := a.secretOpsKeyed()
