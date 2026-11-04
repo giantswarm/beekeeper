@@ -28,8 +28,6 @@ type laneView struct {
 	Hold           *state.Hold       `json:"hold,omitempty"`
 	ToolWaiting    map[string]bool   `json:"toolWaiting,omitempty"`
 	WaitingReasons map[string]string `json:"waitingReasons,omitempty"`
-	Installation   string            `json:"installation,omitempty"`
-	Hold           *state.Hold       `json:"hold,omitempty"`
 	// Stall is set when the lane's first arrived merge has waited longer
 	// than merge.stallAfter behind places whose merges are not in the gate.
 	Stall *merge.Stall `json:"stall,omitempty"`
