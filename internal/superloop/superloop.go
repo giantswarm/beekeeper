@@ -1434,18 +1434,23 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 				if hasPlanned(serves) {
 					continue
 				}
-				sHead, sURL := p.Head, p.URL
-				if sp, ok := in.Pulls[serves]; ok && sp.Head != "" {
-					sHead, sURL = sp.Head, sp.URL
+				// The handoff changes the target: validate its observation and
+				// ownership independently of the pull request being visited.
+				sp, ok := in.Pulls[serves]
+				if !ok || sp.State != Open || sp.Head == "" {
+					continue
+				}
+				if o, _, _ := in.Desk.owner(sp, l.overridden[serves]); o != ours {
+					continue
 				}
 				add(Action{
-					Key:     ownerKey(serves, sHead, waiter.ParkedAt),
+					Key:     ownerKey(serves, sp.Head, waiter.ParkedAt),
 					Kind:    KindOwner,
 					Ref:     serves,
 					Block:   ref,
-					URL:     sURL,
+					URL:     sp.URL,
 					Agent:   waiter.Name,
-					Head:    sHead,
+					Head:    sp.Head,
 					Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
 				})
 				continue

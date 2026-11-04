@@ -1559,6 +1559,58 @@ func TestMutualOverlappingPullsGivesFirstALiveOwner(t *testing.T) {
 	}
 }
 
+func TestMutualOverlapRequiresObservedOwnedTarget(t *testing.T) {
+	const targetRef = "o/a#5"
+	for _, tc := range []struct {
+		name   string
+		change func(*Input, *Pull)
+	}{
+		{"allowed", func(*Input, *Pull) {}},
+		{"unobserved", func(in *Input, _ *Pull) { delete(in.Pulls, targetRef) }},
+		{"closed", func(_ *Input, p *Pull) { p.State = Closed }},
+		{"merged", func(_ *Input, p *Pull) { p.State = Merged }},
+		{"missing head", func(_ *Input, p *Pull) { p.Head = "" }},
+		{"other author", func(_ *Input, p *Pull) { p.Author = "other-author" }},
+		{"other team", func(_ *Input, p *Pull) { p.Team = teamB }},
+		{"unknown teams", func(in *Input, _ *Pull) { in.Desk.TeamsUnknown = true }},
+		{"named never", func(_ *Input, p *Pull) { p.Title = "update o/tool" }},
+		{"incomplete files", func(_ *Input, p *Pull) { p.ChangedFiles = 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Input{
+				Desk: desk(), Now: t0.Add(time.Minute),
+				Workers: []Worker{
+					{Name: overlapWaiter, Serves: targetRef, ParkedOn: overlapPRB, ParkedAt: t0},
+					{Name: "worker B", Serves: overlapPRB, ParkedOn: targetRef, ParkedAt: t0},
+				},
+				Pulls: map[string]Pull{
+					targetRef:  {Ref: targetRef, URL: "target-url", State: Open, Head: head1, Author: me, Team: ourTeam},
+					overlapPRB: {Ref: overlapPRB, URL: "visited-url", State: Open, Head: head2, Author: me, Team: ourTeam},
+				},
+			}
+			// Keep the visited PR allowed even when team discovery is unavailable.
+			in.Desk.Review = []string{"o/r"}
+			p := in.Pulls[targetRef]
+			tc.change(&in, &p)
+			if _, observed := in.Pulls[targetRef]; observed {
+				in.Pulls[targetRef] = p
+			}
+			var acts []Action
+			planOverlap(in, ledger{}, overlapPRB, in.Pulls[overlapPRB], nil, func(string) bool { return false }, func(a Action) { acts = append(acts, a) })
+			if tc.name != "allowed" {
+				if len(acts) != 0 {
+					t.Fatalf("unsafe handoff: %+v", acts)
+				}
+				return
+			}
+			a := only(t, acts, KindOwner)
+			if a.Ref != targetRef || a.Head != head1 || a.URL != p.URL || a.Block != overlapPRB || a.Agent != overlapWaiter {
+				t.Fatalf("handoff must use target identity: %+v", a)
+			}
+		})
+	}
+}
+
 func TestOverlapClosingIssuesMutual(t *testing.T) {
 	in := Input{
 		Now: t0.Add(time.Minute),
