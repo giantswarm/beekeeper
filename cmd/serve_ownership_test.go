@@ -25,6 +25,7 @@ const (
 	ownershipFirst  = "first@example.com"
 	ownershipSecond = "second@example.com"
 	ownershipTeam   = "test-team"
+	ownershipLift   = "lift"
 )
 
 // holdOwnershipClient returns the authorization read, then lets a second
@@ -63,13 +64,13 @@ func TestCentralLaneRechecksOwnerAtWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	lane := kube.LaneObject("test-lane").(*v1alpha1.MergeLane)
-	lane.Spec.Repositories = []string{"o/r"}
-	lane.Status.Queue = []v1alpha1.LaneEntry{{Repo: "o/r", PR: 1, Phase: state.Waiting, By: v1alpha1.Party{Person: ownershipFirst, Name: "worker", Team: ownershipTeam}}}
+	lane.Spec.Repositories = []string{scratchRepo}
+	lane.Status.Queue = []v1alpha1.LaneEntry{{Repo: scratchRepo, PR: 1, Phase: state.Waiting, By: v1alpha1.Party{Person: ownershipFirst, Name: workerRole, Team: ownershipTeam}}}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.MergeLane{}).WithObjects(lane).Build()
 	store := kube.New(&laneOwnershipClient{Client: base, owner: ownershipSecond})
 	s := &server{cfg: &config.Config{}, store: store, ids: &identity.Verifier{}, now: time.Now}
 	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{paramRepo: "o/r", "pr": 1}
+	req.Params.Arguments = map[string]any{paramRepo: scratchRepo, "pr": 1}
 	c := s.newCall(t.Context(), identity.Caller{Email: ownershipFirst, Team: ownershipTeam}, req)
 	if _, err := toolLaneLeave(c, req); err == nil || Code(err) != ExitRefused {
 		t.Errorf("former owner removed the new person's lane entry: %v", err)
@@ -88,7 +89,7 @@ func TestCentralConversationRechecksOwnerAtWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	party := state.Party{Name: "worker", Host: "test-host", Person: ownershipFirst, Team: ownershipTeam}
+	party := state.Party{Name: workerRole, Host: "test-host", Person: ownershipFirst, Team: ownershipTeam}
 	roster := kube.RosterObject(party).(*v1alpha1.RosterEntry)
 	store := kube.New(fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.RosterEntry{}).Build())
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
@@ -151,15 +152,15 @@ func TestCentralHoldRechecksOwnerAtWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name, operation string
 		changeAt        int
-	}{{"set", "set", 2}, {"lift", "lift", 2}, {"set-conflict", "set", 3}} {
+	}{{"replace existing hold", setOp, 2}, {"lift existing hold", ownershipLift, 2}, {"conflict retry", setOp, 3}} {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme, err := kube.Scheme()
 			if err != nil {
 				t.Fatal(err)
 			}
-			hold := kube.HoldObject("o/r").(*v1alpha1.Hold)
-			hold.Spec = v1alpha1.HoldSpec{Target: "o/r", Reason: "repair in progress"}
-			hold.Status.By = v1alpha1.Party{Person: ownershipFirst, Name: "worker", Team: ownershipTeam}
+			hold := kube.HoldObject(scratchRepo).(*v1alpha1.Hold)
+			hold.Spec = v1alpha1.HoldSpec{Target: scratchRepo, Reason: "repair in progress"}
+			hold.Status.By = v1alpha1.Party{Person: ownershipFirst, Name: workerRole, Team: ownershipTeam}
 			hold.Status.At = metav1.NewTime(time.Now().UTC().Truncate(time.Second))
 			base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Hold{}).WithObjects(hold).Build()
 			store := kube.New(&holdOwnershipClient{Client: base, owner: ownershipSecond, changeAt: tc.changeAt})
@@ -168,7 +169,7 @@ func TestCentralHoldRechecksOwnerAtWrite(t *testing.T) {
 			req.Params.Arguments = map[string]any{paramTarget: hold.Spec.Target, paramReason: "replace hold"}
 			c := s.newCall(t.Context(), identity.Caller{Email: ownershipFirst, Team: ownershipTeam}, req)
 			call := toolHoldSet
-			if tc.operation == "lift" {
+			if tc.operation == ownershipLift {
 				call = toolHoldLift
 			}
 			if _, err := call(c, req); err == nil || Code(err) != ExitRefused {
