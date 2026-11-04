@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
+const negativeSecond = "-1s"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/state")
 	c, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
@@ -1258,7 +1260,7 @@ func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
 }
 
 func TestWatchBatchInterval(t *testing.T) {
-	for _, value := range []string{"1m", "-1s"} {
+	for _, value := range []string{"1m", negativeSecond} {
 		c, err := parse("test.yaml", []byte("watch: {batchInterval: "+value+"}"))
 		if err != nil {
 			t.Fatal(err)

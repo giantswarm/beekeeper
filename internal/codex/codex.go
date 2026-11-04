@@ -87,6 +87,34 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 		}
 	}
 	taken := map[string]bool{}
+	// Reserve explicit threads before any process can claim them heuristically.
+	explicit := map[int]file{}
+	reserve := func(pid int, threadID string) {
+		if f, ok := byID[threadID]; ok && !taken[f.path] {
+			explicit[pid] = f
+			taken[f.path] = true
+		}
+	}
+	for _, r := range runners {
+		env, _ := proc.Environ(r.PID)
+		inbox := runnerInbox(r.Args, stateDir, strings.TrimSpace(env[EnvAgent]))
+		threadID := ReadThread(stateDir, inbox)
+		if threadID == "" {
+			if c := childCodex[r.PID]; c != nil {
+				threadID = resumeThreadArg(c.Args)
+			}
+		}
+		reserve(r.PID, threadID)
+	}
+	for _, p := range standalone {
+		reserve(p.PID, resumeThreadArg(p.Args))
+		if _, ok := explicit[p.PID]; !ok {
+			env, _ := proc.Environ(p.PID)
+			if agentID := strings.TrimSpace(env[EnvAgent]); agentID != "" {
+				reserve(p.PID, ReadThread(stateDir, InboxPath(stateDir, agentID)))
+			}
+		}
+	}
 	var out []*claude.Session
 
 	// 1. Beekeeper-started codex-run processes (live for the lifetime of the unit,
@@ -113,13 +141,7 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 				threadID = resumeThreadArg(c.Args)
 			}
 		}
-		var matched file
-		var hasFile bool
-		if threadID != "" {
-			if f, ok := byID[threadID]; ok {
-				matched, hasFile = f, true
-			}
-		}
+		matched, hasFile := explicit[r.PID]
 		if !hasFile {
 			for _, f := range files {
 				if !taken[f.path] && f.cwd == cwd && !f.mod.Before(r.Start.Add(-startSlack)) {
@@ -171,7 +193,13 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 			remainingFiles = append(remainingFiles, f)
 		}
 	}
-	assigned := assign(remainingFiles, standalone, proc.Cwd)
+	var unmatched []*proc.Process
+	for _, p := range standalone {
+		if _, ok := explicit[p.PID]; !ok {
+			unmatched = append(unmatched, p)
+		}
+	}
+	assigned := assign(remainingFiles, unmatched, proc.Cwd)
 	for _, p := range standalone {
 		cwd := proc.Cwd(p.PID)
 		s := &claude.Session{
@@ -189,22 +217,12 @@ func Discover(stateDir, sessionsDir string, t *proc.Table, now time.Time) []*cla
 			}
 			s.Name = envName
 		}
-		var matched file
-		var hasFile bool
-		if tid := resumeThreadArg(p.Args); tid != "" {
-			if f, ok := byID[tid]; ok && !taken[f.path] {
-				matched, hasFile = f, true
-			}
-		}
-		if !hasFile && agentID != "" {
-			if tid := ReadThread(stateDir, InboxPath(stateDir, agentID)); tid != "" {
-				if f, ok := byID[tid]; ok && !taken[f.path] {
-					matched, hasFile = f, true
-				}
-			}
-		}
+		matched, hasFile := explicit[p.PID]
 		if !hasFile {
 			matched, hasFile = assigned[p.PID]
+			if hasFile && taken[matched.path] {
+				hasFile = false
+			}
 		}
 		if hasFile {
 			taken[matched.path] = true

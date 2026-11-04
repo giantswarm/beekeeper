@@ -638,11 +638,13 @@ func toolShells(t *proc.Table, tree []*proc.Process, now time.Time) []ToolShell 
 }
 
 // OwnCLI is the CLI of the session whose tool command runs the process
-// pid: its nearest ancestor that is a session's CLI; nil when none is in
-// the table (a sandbox's own process namespace hides it).
+// pid: its nearest ancestor that is a session's CLI, including a claimed
+// spare. A tool command beneath a spare establishes ownership without a
+// session record. Returns nil when none is in the table (a sandbox's own
+// process namespace hides it).
 func OwnCLI(t *proc.Table, pid int) *proc.Process {
 	for _, p := range t.Ancestors(pid) {
-		if isCLI(p) {
+		if isCLI(p) || isSpare(p) {
 			return p
 		}
 	}
