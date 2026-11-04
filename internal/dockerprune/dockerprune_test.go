@@ -28,12 +28,14 @@ func TestParseSize(t *testing.T) {
 }
 
 const (
-	nginxRef = "docker.io/library/nginx:1"
-	kind     = "kind"
-	build    = "build"
-	docker   = "docker"
-	image    = "image"
-	oldID    = "sha256:old"
+	systemCommand  = "system"
+	inspectCommand = "inspect"
+	nginxRef       = "docker.io/library/nginx:1"
+	kind           = "kind"
+	build          = "build"
+	docker         = "docker"
+	image          = "image"
+	oldID          = "sha256:old"
 	// inlabID is the fixture's image a kind node holds, danglingID its
 	// image without a tag.
 	inlabID, danglingID = "sha256:inlab", "sha256:dangling"
@@ -104,9 +106,9 @@ type fake struct {
 
 func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	switch {
-	case slices.Equal(args, []string{"system", "df", "--format", "{{json .}}"}):
+	case slices.Equal(args, []string{systemCommand, "df", "--format", "{{json .}}"}):
 		return []byte(f.df), nil
-	case slices.Equal(args, []string{"system", "df", "-v", "--format", "{{json .}}"}):
+	case slices.Equal(args, []string{systemCommand, "df", "-v", "--format", "{{json .}}"}):
 		return []byte(f.dfv), nil
 	case args[0] == "builder" && args[1] == "du":
 		return []byte(f.du), nil
@@ -116,7 +118,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
 		}
 		return []byte("Total:\t0B\n"), nil
-	case args[0] == image && args[1] == "inspect":
+	case args[0] == image && args[1] == inspectCommand:
 		var out string
 		for _, id := range args[4:] {
 			at, ok := f.tagged[id]
@@ -204,7 +206,7 @@ func TestListImagesGroupsTagsAndCandidatesSkipTheUsed(t *testing.T) {
 func TestListImagesFailsWithoutTagTimes(t *testing.T) {
 	f := &fake{dfv: dfv}
 	run := func(ctx context.Context, args ...string) ([]byte, error) {
-		if args[0] == image && args[1] == "inspect" {
+		if args[0] == image && args[1] == inspectCommand {
 			return nil, errors.New("no such image")
 		}
 		return f.run(ctx, args...)
@@ -219,14 +221,14 @@ func TestListImagesRemovesAllTagsFromOneDFRow(t *testing.T) {
 	remaining := map[string]bool{refs[0]: true, refs[1]: true}
 	run := func(_ context.Context, args ...string) ([]byte, error) {
 		switch {
-		case args[0] == "system":
+		case args[0] == systemCommand:
 			// Docker's verbose df prints just the first tag per image.
 			return []byte(`{"Images":[{"ID":"sha256:old","Repository":"example","Tag":"one","CreatedAt":"2026-01-01 00:00:00 +0000 UTC","Size":"4GB","UniqueSize":"4GB","Containers":"0"}]}`), nil
-		case args[0] == image && args[1] == "inspect":
+		case args[0] == image && args[1] == inspectCommand:
 			// Render the requested Docker template over a complete image
 			// inspection, independently of which fields the package asks for.
 			js := func(v any) string { raw, _ := json.Marshal(v); return string(raw) }
-			format, err := template.New("inspect").Funcs(template.FuncMap{"json": js}).Parse(args[3])
+			format, err := template.New(inspectCommand).Funcs(template.FuncMap{"json": js}).Parse(args[3])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -269,7 +271,7 @@ func TestListImagesFailsWithUnreadableReferences(t *testing.T) {
 	for _, refs := range []string{"", "\tnot-json", "\t{}"} {
 		f := &fake{dfv: dfv}
 		run := func(ctx context.Context, args ...string) ([]byte, error) {
-			if args[0] == image && args[1] == "inspect" {
+			if args[0] == image && args[1] == inspectCommand {
 				return []byte("sha256:new\t\"0001-01-01T00:00:00Z\"" + refs + "\n"), nil
 			}
 			return f.run(ctx, args...)
