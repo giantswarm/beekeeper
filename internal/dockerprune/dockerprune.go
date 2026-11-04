@@ -438,9 +438,8 @@ type CacheTrim struct {
 	Freed int64
 	// Removed names how many records went.
 	Removed int
-	// Kept counts the records that stay above the target because no
-	// removal may take them (a build or container uses them), and KeptBytes
-	// is what they hold.
+	// Kept counts the records left after pruning, and KeptBytes is what
+	// the latest du reading says they hold.
 	Kept      int
 	KeptBytes int64
 }
@@ -451,7 +450,9 @@ type CacheTrim struct {
 // best-effort pass of the daemon's GC policy and frees nothing while the
 // policy's reserved or min-free-space floor sits above the target, which
 // on a nearly full disk is always. A record Docker does not call
-// reclaimable is never touched and is counted in Kept.
+// reclaimable is never touched and is counted in Kept. Successful prunes
+// are verified with fresh du data; retained candidates are retried only
+// while a pass confirms removals, so children can unblock their parents.
 func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
 	var t CacheTrim
 	records, err := CacheRecords(ctx, d)
@@ -472,24 +473,52 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 		return cmp.Or(cmp.Compare(b.UsedAgo, a.UsedAgo), cmp.Compare(a.ID, b.ID))
 	})
 	var refused []error
-	removed := map[string]bool{}
-	for _, r := range candidates {
-		if total-t.Freed <= keep {
+	for total > keep {
+		before := t.Removed
+		for _, candidate := range candidates {
+			if total <= keep {
+				break
+			}
+			// Recheck eligibility against the latest reading: a build may
+			// have started using a record since the initial du.
+			if !slices.ContainsFunc(records, func(r CacheRecord) bool {
+				return r.ID == candidate.ID && r.Reclaimable && r.UsedAgo >= 0
+			}) {
+				continue
+			}
+			if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+candidate.ID); err != nil {
+				refused = append(refused, fmt.Errorf("%s: %w", candidate.ID, err))
+				continue
+			}
+			// Success can mean no deletion. Only count records that have
+			// disappeared, and stop using the observed remaining size.
+			remaining, err := CacheRecords(ctx, d)
+			if err != nil {
+				return t, err
+			}
+			present := make(map[string]bool, len(remaining))
+			total = 0
+			for _, r := range remaining {
+				present[r.ID] = true
+				total += r.Size
+			}
+			for _, r := range records {
+				if !present[r.ID] {
+					t.Freed += r.Size
+					t.Removed++
+				}
+			}
+			records = remaining
+		}
+		// Removing children can unblock parents. Retry only while a
+		// pass really removed records, never after a successful no-op.
+		if t.Removed == before {
 			break
 		}
-		if _, err := d(ctx, "builder", "prune", "--force", "--filter", "id="+r.ID); err != nil {
-			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
-			continue
-		}
-		t.Freed += r.Size
-		t.Removed++
-		removed[r.ID] = true
 	}
 	for _, r := range records {
-		if !removed[r.ID] {
-			t.Kept++
-			t.KeptBytes += r.Size
-		}
+		t.Kept++
+		t.KeptBytes += r.Size
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)

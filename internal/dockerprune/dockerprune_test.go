@@ -2,6 +2,7 @@ package dockerprune
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -111,6 +112,18 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
 		}
+		id := strings.TrimPrefix(args[4], "id=")
+		var remaining []string
+		for line := range strings.Lines(f.du) {
+			var row struct{ ID string }
+			if err := json.Unmarshal([]byte(line), &row); err != nil {
+				return nil, err
+			}
+			if row.ID != id {
+				remaining = append(remaining, line)
+			}
+		}
+		f.du = strings.Join(remaining, "")
 		return []byte("Total:\t0B\n"), nil
 	case args[0] == image && args[1] == "inspect":
 		var out string
@@ -420,5 +433,104 @@ func TestParseUsedAgo(t *testing.T) {
 		if got := parseUsedAgo(c.in); got != c.want {
 			t.Errorf("parseUsedAgo(%q) = %v; want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// All responses are synthetic: a successful prune may leave the selected
+// record present, including parents blocked by children and excluded records.
+func TestPruneBuildCacheVerifiesProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rows      []duRow
+		keep      int64
+		blocked   map[string]string
+		busy      bool
+		wantCalls []string
+		want      CacheTrim
+	}{
+		{
+			name: "record becomes busy",
+			rows: []duRow{{"old", 4, true, "5 days ago"}, {"next", 2, true, age2d}},
+			keep: 3e9, blocked: map[string]string{"old": "forever"}, busy: true,
+			wantCalls: []string{"old", "next"},
+			want:      CacheTrim{Freed: 2e9, Removed: 1, Kept: 1, KeptBytes: 4e9},
+		},
+		{
+			name:      "parents retried after children",
+			rows:      []duRow{{"grand", 4, true, "9 days ago"}, {"parent", 2, true, "5 days ago"}, {"child", 1, true, age2d}},
+			blocked:   map[string]string{"grand": "parent", "parent": "child"},
+			wantCalls: []string{"grand", "parent", "child", "grand", "parent", "grand"},
+			want:      CacheTrim{Freed: 7e9, Removed: 3},
+		},
+		{
+			name:      "excluded records stop after no progress",
+			rows:      []duRow{{"old", 4, true, "5 days ago"}, {"next", 2, true, age2d}},
+			blocked:   map[string]string{"old": "forever", "next": "forever"},
+			wantCalls: []string{"old", "next"},
+			want:      CacheTrim{Kept: 2, KeptBytes: 6e9},
+		},
+		{
+			name:      "retained no-op retried once after progress",
+			rows:      []duRow{{"old", 4, true, "5 days ago"}, {"next", 2, true, age2d}},
+			blocked:   map[string]string{"old": "forever"},
+			wantCalls: []string{"old", "next", "old"},
+			want:      CacheTrim{Freed: 2e9, Removed: 1, Kept: 1, KeptBytes: 4e9},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fake{du: duRows(tc.rows...)}
+			var calls []string
+			run := func(ctx context.Context, args ...string) ([]byte, error) {
+				if args[0] == "builder" && args[1] == "prune" {
+					id := strings.TrimPrefix(args[4], "id=")
+					calls = append(calls, id)
+					if len(calls) > len(tc.wantCalls) {
+						t.Fatal("pruning continued without progress")
+					}
+					if dependency := tc.blocked[id]; dependency != "" && (dependency == "forever" || strings.Contains(f.du, `"ID":"`+dependency+`"`)) {
+						if tc.busy {
+							f.du = strings.Replace(f.du, `"Reclaimable":true`, `"Reclaimable":false`, 1)
+						}
+						return []byte("Total:\t0B\n"), nil
+					}
+				}
+				return f.run(ctx, args...)
+			}
+			got, err := PruneBuildCache(context.Background(), run, tc.keep)
+			if err != nil || got != tc.want || !slices.Equal(calls, tc.wantCalls) {
+				t.Fatalf("trim = %+v, %v, calls %v; want %+v, calls %v", got, err, calls, tc.want, tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestPruneBuildCacheUsesObservedRemainingSize(t *testing.T) {
+	f := &fake{du: duRows(duRow{"old", 4, true, "5 days ago"}, duRow{"next", 2, true, age2d})}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		out, err := f.run(ctx, args...)
+		if args[1] == "prune" && strings.HasSuffix(args[4], "old") {
+			// Concurrent cache growth makes the initial size estimate stale.
+			f.du = duRows(duRow{"next", 5, true, age2d})
+		}
+		return out, err
+	}
+	got, err := PruneBuildCache(context.Background(), run, 3e9)
+	if err != nil || got.Removed != 2 || got.Freed != 9e9 || got.Kept != 0 || len(f.pruneArgs) != 2 {
+		t.Fatalf("trim = %+v, %v; prunes %v", got, err, f.pruneArgs)
+	}
+}
+
+func TestPruneBuildCacheFailsWhenVerificationFails(t *testing.T) {
+	f := &fake{du: duRows(duRow{"old", 4, true, age2d})}
+	verificationErr := errors.New("du unavailable")
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[1] == "du" && len(f.pruneArgs) > 0 {
+			return nil, verificationErr
+		}
+		return f.run(ctx, args...)
+	}
+	got, err := PruneBuildCache(context.Background(), run, 0)
+	if !errors.Is(err, verificationErr) || got.Removed != 0 || got.Freed != 0 {
+		t.Fatalf("unverified trim = %+v, %v", got, err)
 	}
 }
