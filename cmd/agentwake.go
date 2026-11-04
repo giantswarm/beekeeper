@@ -117,6 +117,10 @@ type wakeTarget struct {
 	profile string
 }
 
+// leaseResumeKey marks a lease resume whose turn must start without waiting
+// for a desktop import. Live CLI routing and overlap checks still apply.
+type leaseResumeKey struct{}
+
 // wakeAgent delivers msg from by to the registered agent q (wake).
 func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string) (err error) {
 	st, err := a.store.Read()
@@ -218,6 +222,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	if ag.Import.Pending(a.now) {
 		return a.importRefusal(by, ag)
+	}
+	if immediate, _ := ctx.Value(leaseResumeKey{}).(bool); immediate {
+		return a.resumeTurn(ctx, by, w, msg)
 	}
 	if line, err := a.turnInDesktop(ctx, w, msg, 0); err == nil {
 		_ = a.store.Record(event(by, "agents.wake", "%s: %s", ag.Name, line))
