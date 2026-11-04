@@ -2,6 +2,7 @@ package proc
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,55 @@ import (
 	"testing"
 	"time"
 )
+
+func TestReadAtLongUptimeAndCPUTime(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		ticks int64
+		want  time.Duration
+	}{
+		{"before overflow boundary", 9223372036, 92233720*time.Second + 360*time.Millisecond},
+		{"at overflow boundary", 9223372037, 92233720*time.Second + 370*time.Millisecond},
+		{"reported counter", 10000000001, 100000000*time.Second + 10*time.Millisecond},
+		{"largest representable counter", 922337203685, 9223372036*time.Second + 850*time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "42"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			// Split CPU ticks across utime and stime to exercise their sum.
+			stat := fmt.Sprintf("42 (worker) S 1 42 42 0 -1 0 0 0 0 0 %d 1 0 0 20 0 1 0 %d 4096 1\n", tt.ticks-1, tt.ticks)
+			for name, data := range map[string]string{
+				"stat":       "btime 1700000000\n",
+				"42/stat":    stat,
+				"42/cmdline": "worker\x00",
+			} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tab, err := ReadAt(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := tab.Process(42)
+			if p == nil {
+				t.Fatal("process missing")
+			}
+			if p.CPU != tt.want {
+				t.Errorf("CPU = %v, want %v", p.CPU, tt.want)
+			}
+			wantStart := time.Unix(1700000000, 0).Add(tt.want)
+			if !p.Start.Equal(wantStart) {
+				t.Errorf("Start = %v, want %v", p.Start, wantStart)
+			}
+			if p.StartTicks != tt.ticks {
+				t.Errorf("StartTicks = %d, want %d", p.StartTicks, tt.ticks)
+			}
+		})
+	}
+}
 
 func TestParseStat(t *testing.T) {
 	raw := []byte("4242 (tmux: server) (x)) S 1 4242 4242 0 -1 4194560 1 0 0 0 300 45 0 0 20 0 1 0 123456 1 2560 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0")
