@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -268,5 +269,27 @@ func TestSandboxRequiredRefusesUnheldSessions(t *testing.T) {
 	}
 	if got := runHook(t, a, &out, "sessionstart", start); strings.Contains(got, "sandbox.required") {
 		t.Errorf("required, held, session start: %q", got)
+	}
+}
+
+func TestHookBrokenConfigRecovery(t *testing.T) {
+	for _, command := range []string{"beekeeper config set watch.interval 1m", "ls", "rm config.yaml"} {
+		t.Run(command, func(t *testing.T) {
+			var out bytes.Buffer
+			a, _ := scopeApp(t, &out)
+			if err := os.WriteFile(a.cfgPath, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]string{"command": command}})
+			ev := string(raw)
+			got := runHook(t, a, &out, "pretooluse", ev)
+			decision := "allow"
+			if command == "rm config.yaml" {
+				decision = "deny"
+			}
+			if !strings.Contains(got, `"permissionDecision":"`+decision+`"`) || !strings.Contains(got, "watch.interval") {
+				t.Fatalf("want %s and key diagnostic, got %s", decision, got)
+			}
+		})
 	}
 }

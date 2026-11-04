@@ -90,10 +90,10 @@ func TestCodexFailClosed(t *testing.T) {
 		}
 	}
 
-	// ConfigErr fails closed.
+	// ConfigErr permits inspection while naming the error.
 	errHook := h
 	errHook.ConfigErr = errors.New("broken config.yaml")
-	if d := decideCodexCmd(t, errHook, featRepo, "git status"); d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "broken config.yaml") {
+	if d := decideCodexCmd(t, errHook, featRepo, "git status"); d.PermissionDecision != decisionAllow || !strings.Contains(d.Reason, "broken config.yaml") {
 		t.Errorf("ConfigErr: got %+v, want deny naming config error", d)
 	}
 
