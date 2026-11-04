@@ -146,7 +146,9 @@ func runningWorker(st *state.State, n state.Note) *state.Agent {
 // closing keyword closed one and no worker runs for it. While the filing
 // worker still runs, or a pull request's closing keyword closed a ref
 // before any worker's task ended, the note is kept: the decision is still
-// nobody's. A note without refs is never overtaken: its filing session
+// nobody's. A PR already merged when the note was added keeps it open:
+// that merge cannot settle a question about the merged PR.
+// A note without refs is never overtaken: its filing session
 // archived says the asker is gone, not that the question is settled
 // (findOrphaned).
 func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over, kept []overtake) {
@@ -157,6 +159,21 @@ func findOvertaken(st *state.State, states map[github.PR]github.RefState) (over,
 		}
 		settled, keyword := settledRefs(n.Refs, states)
 		if settled == "" {
+			continue
+		}
+		// A merge that predates the question cannot answer it, even when
+		// the filing worker has since finished its task.
+		alreadyMerged := false
+		for _, ref := range n.Refs {
+			r, _ := parseRef(ref)
+			at := states[r]
+			if at.State == github.Merged && !at.MergedAt.IsZero() && !n.At.IsZero() && !at.MergedAt.After(n.At) {
+				kept = append(kept, overtake{n.ID, refName(r) + " already merged when the note was added"})
+				alreadyMerged = true
+				break
+			}
+		}
+		if alreadyMerged {
 			continue
 		}
 		// The task's end is recorded first: a worker on its next task still
