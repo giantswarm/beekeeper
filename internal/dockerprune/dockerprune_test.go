@@ -127,7 +127,7 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 	case args[0] == "exec":
 		return []byte(f.crictl[args[1]]), nil
 	case args[0] == image && args[1] == "rm":
-		f.removed = append(f.removed, args[2:])
+		f.removed = append(f.removed, args[3:])
 		return nil, nil
 	}
 	return nil, errors.New("unexpected docker " + strings.Join(args, " "))
@@ -235,6 +235,33 @@ func TestTrimImagesStopsAtTheTargetAndWhenBusy(t *testing.T) {
 	}
 }
 
+func TestTrimImagesKeepsARecentlyTaggedParent(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	parent := Image{ID: "parent", Created: now.Add(-48 * time.Hour), Tagged: now.Add(-time.Hour), Size: 2}
+	child := Image{ID: "child", Created: now.Add(-48 * time.Hour), Size: 1}
+	remaining := map[string]bool{parent.ID: true, child.ID: true}
+	run := func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] != image || args[1] != "rm" || args[len(args)-1] != child.ID {
+			t.Fatalf("unexpected Docker call: %v", args)
+		}
+		delete(remaining, child.ID)
+		// Docker's classic image store also removes untagged parents by
+		// default, regardless of when they were last tagged.
+		if !slices.Contains(args, "--no-prune") {
+			delete(remaining, parent.ID)
+		}
+		return nil, nil
+	}
+	candidates := Candidates([]Image{parent, child}, nil, now.Add(-24*time.Hour))
+	trimmed, err := TrimImages(context.Background(), run, candidates, 3, 2, nil, func() bool { return false })
+	if err != nil || !slices.Equal(trimmed.Removed, []string{child.ID}) {
+		t.Fatalf("trim = %+v, %v; want only the child removed", trimmed, err)
+	}
+	if !remaining[parent.ID] {
+		t.Fatal("removing the child also deleted its recently tagged parent")
+	}
+}
+
 // The images share their layers: none frees anything alone (Unique 0),
 // each 2 GB once all sharing them are gone. The trim counts removals by
 // their whole size, so it reads the size again before it could pass the
@@ -264,7 +291,7 @@ func TestTrimImagesReadsTheSizeBeforeItCouldPassTheTarget(t *testing.T) {
 func refusing(f *fake, children map[string]string, stuck string) Docker {
 	return func(ctx context.Context, args ...string) ([]byte, error) {
 		if args[0] == image && args[1] == "rm" {
-			id := args[2]
+			id := args[3]
 			if id == stuck {
 				return nil, errors.New("conflict: image is being used by a container")
 			}
