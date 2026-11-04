@@ -120,6 +120,12 @@ case "$allowed" in *mcp__coordinator*) ;; *) exit 11;; esac
 	}
 }
 
+const (
+	testCallerRootEnv = "BEEKEEPER_TEST_EXECUTION_ROOT"
+	testCallerIDEnv   = "BEEKEEPER_TEST_EXECUTION_ID"
+	testCallerProof   = "execution caller identity verified"
+)
+
 func TestCallerPreservesIdentityAcrossLoginShell(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution identity uses Linux process ancestry")
@@ -141,9 +147,13 @@ func TestCallerPreservesIdentityAcrossLoginShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.CommandContext(ctx, shell, "-lc", `exec "$1" -test.run=^TestExecutionCallerHelper$`, "fixture-shell", os.Args[0]) //nolint:gosec // runs only this test binary through a local login shell
-	child.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "BEEKEEPER_EXECUTION_TEST_ROOT=" + f.s.Root, "BEEKEEPER_EXECUTION_TEST_ID=" + string(f.r.Ref.Execution)}
-	if output, err := child.CombinedOutput(); err != nil {
+	child.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", testCallerRootEnv + "=" + f.s.Root, testCallerIDEnv + "=" + string(f.r.Ref.Execution)}
+	output, err := child.CombinedOutput()
+	if err != nil {
 		t.Fatalf("login shell lost execution identity: %v, %s", err, output)
+	}
+	if !strings.Contains(string(output), testCallerProof) {
+		t.Fatalf("execution caller helper did not verify identity: %s", output)
 	}
 	// A reused PID is not sufficient: the recorded process start must match.
 	if err := f.s.update(ctx, f.r.Ref, func(j *Journal) error { j.RunnerStarted = j.RunnerStarted.Add(-1); return nil }); err != nil {
@@ -155,18 +165,19 @@ func TestCallerPreservesIdentityAcrossLoginShell(t *testing.T) {
 }
 
 func TestExecutionCallerHelper(t *testing.T) {
-	root := os.Getenv("BEEKEEPER_EXECUTION_TEST_ROOT")
+	root := os.Getenv(testCallerRootEnv)
 	if root == "" {
 		return
 	}
 	s := &Server{Root: root, Config: HostConfig{Identity: fixtureHost}, OwnUnit: func() string { return "fixture-build.scope" }}
-	j, err := s.Caller(os.Getenv("BEEKEEPER_EXECUTION_TEST_ID"))
+	j, err := s.Caller(os.Getenv(testCallerIDEnv))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if j.Request.Name != fixtureWorker || j.Request.Coordinator != fixtureCoordinator {
 		t.Fatal("incorrect worker identity after login shell")
 	}
+	_, _ = fmt.Fprintln(os.Stdout, testCallerProof)
 }
 
 func TestRunnerPinsWorkerContractToInstalledExecutable(t *testing.T) {
