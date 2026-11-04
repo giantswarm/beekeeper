@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
+	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -178,5 +180,58 @@ func TestAHoldsExceptionTakesARunningMergeBackToItsPlace(t *testing.T) {
 	}
 	if err := g.requeue(base, h); err != nil {
 		t.Errorf("a merged run was requeued: %v", err)
+	}
+}
+
+// Opening a release window preserves both queued places, and closing it
+// admits them in their original order without refusing either queued gate.
+func TestTwoQueuedMergesKeepTheirOrderThroughToolWindow(t *testing.T) {
+	joined := time.Now().Add(-time.Minute).UTC()
+	pids := []int{os.Getpid(), sleeper(t)}
+	a := heldApp(t,
+		state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, PID: pids[0], Phase: state.Waiting, Joined: joined, Seen: time.Now()},
+		state.Merge{Repo: scratchRepo, PR: 8, Lane: scratchRepo, PID: pids[1], Phase: state.Waiting, Joined: joined.Add(time.Second), Seen: time.Now()})
+	gates := []*gateRun{placedGate(a, 7, pids[0]), placedGate(a, 8, pids[1])}
+	setHold(t, a, state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, Tool: merge.Tool, ToolMerged: true,
+		ToolPR: 1, ToolChecked: time.Now(), At: time.Now(), Reason: "devctl release"})
+	for _, g := range gates {
+		if why, err := g.step(); err != nil || !strings.Contains(why, "keeps its place") {
+			t.Fatalf("queued #%d during window: %q, %v", g.pr, why, err)
+		}
+	}
+	var out bytes.Buffer
+	a.out = &out
+	a.printLanes(a.laneViews(readState(t, a)))
+	if strings.Count(out.String(), "waiting for the devctl window") != 2 {
+		t.Fatalf("lanes during window:\n%s", out.String())
+	}
+	setHold(t, a)
+	out.Reset()
+	a.printLanes(a.laneViews(readState(t, a)))
+	if strings.Contains(out.String(), "waiting for the devctl window") {
+		t.Fatalf("lanes after window:\n%s", out.String())
+	}
+	if why, err := gates[1].step(); err != nil || !strings.Contains(why, "o/r#7") {
+		t.Fatalf("second merge must still wait behind first: %q, %v", why, err)
+	}
+	for i, g := range gates {
+		if why, err := g.step(); err != nil || !strings.Contains(why, g.key()+" is next in lane") {
+			t.Fatalf("queued #%d after window: %q, %v", g.pr, why, err)
+		}
+		m, ok := mergeOf(readState(t, a), g.pr)
+		if !ok || !m.Joined.Equal(joined.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("queued #%d lost its original place: %+v", g.pr, m)
+		}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool { return m.PR == g.pr })
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out.Reset()
+	a.printLanes(a.laneViews(readState(t, a)))
+	if strings.Contains(out.String(), "waiting for the devctl window") {
+		t.Fatalf("lanes after window:\n%s", out.String())
 	}
 }
