@@ -1,9 +1,12 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"time"
@@ -35,8 +38,8 @@ type Check struct {
 var checkJob = regexp.MustCompile(`/job/(\d+)`)
 
 // PullCheck reads repo#n's state and the newest check run named name on its
-// head (one GraphQL request); a failed one's annotations titled name take a
-// second, which leaves out the runner's own ("Process completed with exit
+// head (one GraphQL request); a failed one's annotations titled name are read
+// across all pages, leaving out the runner's own ("Process completed with exit
 // code 1").
 func PullCheck(ctx context.Context, run GH, repo string, n int, name string) (Check, error) {
 	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "state,statusCheckRollup")
@@ -80,12 +83,20 @@ func PullCheck(ctx context.Context, run GH, repo string, n int, name string) (Ch
 	if m == nil {
 		return c, nil
 	}
-	out, err = run(ctx, "api", fmt.Sprintf("repos/%s/check-runs/%s/annotations", repo, m[1]), "--jq", fmt.Sprintf("[.[] | select(.title == %s) | .message]", strconv.Quote(name)))
+	out, err = run(ctx, "api", fmt.Sprintf("repos/%s/check-runs/%s/annotations", repo, m[1]), "--paginate", "--jq", fmt.Sprintf("[.[] | select(.title == %s) | .message]", strconv.Quote(name)))
 	if err != nil {
 		return Check{}, err
 	}
-	if err := json.Unmarshal(out, &c.Annotations); err != nil {
-		return Check{}, fmt.Errorf("check run %s annotations: %w", m[1], err)
+	// gh applies the filter to each page and emits one JSON array per page.
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var page []string
+		if err := dec.Decode(&page); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return Check{}, fmt.Errorf("check run %s annotations: %w", m[1], err)
+		}
+		c.Annotations = append(c.Annotations, page...)
 	}
 	return c, nil
 }
