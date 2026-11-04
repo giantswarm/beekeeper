@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -440,6 +441,76 @@ func TestRestoreMovesEveryWindowOffTheOutput(t *testing.T) {
 	for _, w := range f.windows {
 		if w.Address != claudeW.Address && w.Workspace != ws2 {
 			t.Errorf("window %s on %+v, want workspace 2", w.Address, w.Workspace)
+		}
+	}
+}
+
+// A refused redirect shutdown must leave the surface available for a retry,
+// including when recovery loaded the placement from JSON.
+func TestRestoreRetainsSurfaceWhenRedirectFails(t *testing.T) {
+	for _, fromJSON := range []bool{false, true} {
+		for _, stopFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("json=%t/stopFirst=%t", fromJSON, stopFirst), func(t *testing.T) {
+				f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+				s, err := Show(t.Context(), f.ctl, hold)
+				if err != nil || s == nil {
+					t.Fatalf("Show = %+v, %v", s, err)
+				}
+				f.open(Window{Address: "0xe", Class: chromeClass})
+				if fromJSON {
+					b, err := json.Marshal(s)
+					if err != nil {
+						t.Fatal(err)
+					}
+					s = new(Shown)
+					if err := json.Unmarshal(b, s); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := *s
+				windows := slices.Clone(f.windows)
+				monitors := slices.Clone(f.monitors)
+				ctl := func(ctx context.Context, args ...string) ([]byte, error) {
+					if slices.Equal(args, []string{evalCmd, redirectOff}) {
+						f.calls = append(f.calls, strings.Join(args, " "))
+						return []byte("error: refused"), nil
+					}
+					return f.ctl(ctx, args...)
+				}
+				f.calls = nil
+				if err := s.Restore(t.Context(), ctl); err == nil || !strings.Contains(err.Error(), "refused") {
+					t.Fatalf("Restore = %v; want redirect shutdown error", err)
+				}
+				if !slices.Equal(f.commands(), []string{evalCmd}) || !slices.Equal(f.windows, windows) || !slices.Equal(f.monitors, monitors) {
+					t.Fatalf("failed stop changed the surface: commands %q, windows %+v, monitors %+v", f.commands(), f.windows, f.monitors)
+				}
+				before.redirecting = true
+				if *s != before || !f.redirect {
+					t.Fatalf("failed stop lost recovery state: %+v, redirect %t", s, f.redirect)
+				}
+				if stopFirst {
+					f.calls = nil
+					if err := s.Redirect(t.Context(), ctl, false, 0); err == nil || !s.redirecting {
+						t.Fatalf("repeated refused stop = %v, redirecting %t", err, s.redirecting)
+					}
+					f.calls = nil
+					if err := s.Redirect(t.Context(), f.ctl, false, 0); err != nil || s.redirecting || f.redirect || !slices.Equal(f.commands(), []string{evalCmd}) {
+						t.Fatalf("stop retry = %v, commands %q, redirecting %t", err, f.commands(), s.redirecting)
+					}
+				}
+				f.calls = nil
+				if err := s.Restore(t.Context(), f.ctl); err != nil {
+					t.Fatal(err)
+				}
+				if len(f.calls) != 4 || f.calls[0] != evalCmd+" "+redirectOff || f.calls[3] != remove || len(f.monitors) != 1 || s.redirecting || f.redirect || s.Opened != 1 {
+					t.Fatalf("restore retry: commands %q, monitors %+v, state %+v", f.commands(), f.monitors, s)
+				}
+				for _, w := range f.windows {
+					if w.Workspace != chrome.Workspace {
+						t.Errorf("restored window on %+v", w.Workspace)
+					}
+				}
+			})
 		}
 	}
 }

@@ -286,7 +286,7 @@ type Shown struct {
 	// Opened counts the other windows Restore moved off the output: ones
 	// Chrome opened during the turn and still open after it.
 	Opened int `json:"opened,omitempty"`
-	// redirecting says the windows Chrome opens map on the output now.
+	// redirecting says the redirect is active or its shutdown failed.
 	redirecting bool
 }
 
@@ -408,15 +408,21 @@ func checkOutput(before, after layout) error {
 // window failed to move off it, which removing the output would put on the
 // person's screen. One closed since, or moved by the person to a third
 // workspace, is left where it is, and Left says so.
+// If ending the redirect fails, windows and the output stay for a retry.
 func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if s == nil {
 		return nil
 	}
-	errs := []error{run(ctx, ctl, "eval", redirectOff)}
-	s.redirecting = false
+	// JSON recovery has no private redirect state. Always stop the real
+	// compositor redirect before moving windows or removing its output.
+	// Keep it active locally on failure so Redirect(false) also retries.
+	s.redirecting = true
+	if err := s.Redirect(ctx, ctl, false, 0); err != nil {
+		return err
+	}
 	l, err := read(ctx, ctl)
 	if err != nil {
-		return joinErr(append(errs, err)...)
+		return err
 	}
 	s.Left, s.Opened = "closed", 0
 	var moves []error
@@ -436,12 +442,12 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 		}
 	}
 	if err := joinErr(moves...); err != nil {
-		return joinErr(append(errs, fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output))...)
+		return fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output)
 	}
 	// The output is beekeeper's by its name: one a died turn left is
 	// removed too.
 	s.Created = l.output() != nil
-	return joinErr(append(errs, s.removeOutput(ctx, ctl))...)
+	return s.removeOutput(ctx, ctl)
 }
 
 // removeOutput removes the output the placement created, once.
