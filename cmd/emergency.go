@@ -25,6 +25,13 @@ const (
 // emergencyNow is read at each authorization boundary, including after slow reads.
 var emergencyNow = time.Now
 
+// emergencySameSession retains Party.Is's person and host checks while requiring
+// an actual session identifier; a shared display name cannot authorize controls.
+func emergencySameSession(p, o state.Party) bool {
+	return p.Is(o) && ((p.Session != "" && p.Session == o.Session) ||
+		(p.HostSession != "" && p.HostSession == o.HostSession))
+}
+
 // emergencyGuide deliberately disallows --as: the grant belongs to a live
 // guide session, not to a caller who knows its display name.
 func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
@@ -33,7 +40,7 @@ func (a *app) emergencyGuide(st *state.State) (state.Party, error) {
 		return me, err
 	}
 	h := st.GuideRole().Holder
-	if a.as != "" || (me.Session == "" && me.HostSession == "") || h == nil || !h.Is(me) {
+	if a.as != "" || (me.Session == "" && me.HostSession == "") || h == nil || !emergencySameSession(h.Party, me) {
 		return me, refused("only the current guide session can use emergency controls")
 	}
 	return me, nil
@@ -47,7 +54,7 @@ func (a *app) emergencyAction(action string) (*state.Emergency, error) {
 			return nil, err
 		}
 		e := st.Emergency
-		if e == nil || !e.By.Is(me) || !emergencyNow().Before(e.Until) {
+		if e == nil || !emergencySameSession(e.By, me) || !emergencyNow().Before(e.Until) {
 			return nil, refused("emergency mode is off or expired; enable it with the person's quoted words and --until")
 		}
 		copy := *e
