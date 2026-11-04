@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"slices"
 	"strings"
@@ -140,31 +142,36 @@ func (b *BaseChecks) readCheckRuns(ctx context.Context, run GH, repo string) err
 // readStatuses sets the outcome of each status context on the head, its
 // latest state (the combined status); a check run of the same name wins.
 func (b *BaseChecks) readStatuses(ctx context.Context, run GH, repo string) error {
-	out, err := run(ctx, "api", fmt.Sprintf("repos/%s/commits/%s/status?per_page=100", repo, b.Head))
+	out, err := run(ctx, "api", "--paginate", fmt.Sprintf("repos/%s/commits/%s/status?per_page=100", repo, b.Head))
 	if err != nil {
 		return err
 	}
-	var s struct {
-		Statuses []struct {
-			Context string `json:"context"`
-			State   string `json:"state"`
-		} `json:"statuses"`
-	}
-	if err := json.Unmarshal(out, &s); err != nil {
-		return fmt.Errorf("the statuses of %s at %s: %w", repo, short(b.Head), err)
-	}
-	for _, st := range s.Statuses {
-		if _, ok := b.Outcomes[st.Context]; ok {
-			continue
+	// gh --paginate prints one combined-status object per page.
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var s struct {
+			Statuses []struct {
+				Context string `json:"context"`
+				State   string `json:"state"`
+			} `json:"statuses"`
 		}
-		switch strings.ToLower(st.State) {
-		case "success":
-			b.Outcomes[st.Context] = CheckPass
-		case "pending":
-			b.Outcomes[st.Context] = CheckPending
-		default:
-			b.Outcomes[st.Context] = CheckFail
+		if err := dec.Decode(&s); errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("the statuses of %s at %s: %w", repo, short(b.Head), err)
+		}
+		for _, st := range s.Statuses {
+			if _, ok := b.Outcomes[st.Context]; ok {
+				continue
+			}
+			switch strings.ToLower(st.State) {
+			case "success":
+				b.Outcomes[st.Context] = CheckPass
+			case "pending":
+				b.Outcomes[st.Context] = CheckPending
+			default:
+				b.Outcomes[st.Context] = CheckFail
+			}
 		}
 	}
-	return nil
 }
