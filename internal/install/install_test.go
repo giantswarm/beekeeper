@@ -1405,10 +1405,10 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 				if failure == "unit" {
 					blocked = filepath.Dir(unit)
 				}
-				if err := os.Chmod(blocked, 0o500); err != nil {
+				if err := os.Chmod(blocked, 0o500); err != nil { //nolint:gosec // read-only on purpose
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { _ = os.Chmod(blocked, 0o750) })
+				t.Cleanup(func() { _ = os.Chmod(blocked, 0o750) }) //nolint:gosec // the test's own directory
 				probe, err := os.CreateTemp(blocked, "permission-probe")
 				if err == nil {
 					_ = probe.Close()
@@ -1428,7 +1428,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 				if len(m.Previous) == 0 {
 					t.Fatal("failed install discarded previous ownership")
 				}
-				if err := os.Chmod(blocked, 0o750); err != nil {
+				if err := os.Chmod(blocked, 0o750); err != nil { //nolint:gosec // the test's own directory
 					t.Fatal(err)
 				}
 				paths := []string{e.Settings, e.AgyHooks, e.CodexHooks, CodexWorkerHooks(e.StateDir), unit}
@@ -1437,7 +1437,7 @@ func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
 						t.Fatal(err)
 					}
 					for _, path := range paths {
-						raw, err := os.ReadFile(path)
+						raw, err := os.ReadFile(filepath.Clean(path))
 						if err != nil {
 							t.Fatal(err)
 						}
