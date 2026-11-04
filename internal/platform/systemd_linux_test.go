@@ -256,8 +256,8 @@ func TestRunArgsReplacesStaleSSHSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
-	unit := Unit{Name: "worker", Argv: []string{"claude"}, Env: []string{"SSH_AUTH_SOCK=/stale-manager"}}
+	defer func() { _ = listener.Close() }()
+	unit := Unit{Name: "worker", Argv: []string{"/bin/true"}, Env: []string{"SSH_AUTH_SOCK=/stale-manager"}}
 	args := runArgs(unit, false)
 	if !slices.Contains(args, "--setenv=SSH_AUTH_SOCK="+socket) || slices.Contains(args, "--setenv=SSH_AUTH_SOCK=/stale-manager") {
 		t.Fatalf("socket not replaced: %q", args)
