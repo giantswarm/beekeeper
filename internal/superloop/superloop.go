@@ -655,7 +655,7 @@ const episodeTag = " reopened "
 func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
 	episodes := map[string]string{}
 	for _, t := range taken {
-		if _, episode, ok := strings.Cut(t.Key, episodeTag); ok && t.Ref != "" {
+		if _, episode := splitEpisode(t.Key); episode != "" && t.Ref != "" {
 			episodes[t.Ref] = episode
 		}
 	}
@@ -665,7 +665,7 @@ func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
 			active = append(active, t)
 			continue
 		}
-		key, episode, _ := strings.Cut(t.Key, episodeTag)
+		key, episode := splitEpisode(t.Key)
 		if t.Ref != "" && episode != episodes[t.Ref] {
 			continue
 		}
@@ -675,12 +675,36 @@ func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
 	return active, episodes
 }
 
+// splitEpisode recognizes only a trailing episode timestamp. Check names and
+// other key text may themselves contain episodeTag.
+func splitEpisode(key string) (string, string) {
+	if i := strings.LastIndex(key, episodeTag); i >= 0 {
+		episode := key[i+len(episodeTag):]
+		if _, err := time.Parse(time.RFC3339Nano, episode); err == nil {
+			return key[:i], episode
+		}
+	}
+	return key, ""
+}
+
+// BaseActionKey removes a reopened episode suffix for action comparisons.
+// Durable claim and completion records must still use the full key.
+func BaseActionKey(key string) string {
+	base, _ := splitEpisode(key)
+	return base
+}
+
 // reopen discards the closed episode only after GitHub reports OPEN.
 func (l ledger) reopen(ref string) {
 	l.episode[ref] = l.keys[endKey(ref)].At.UTC().Format(time.RFC3339Nano)
 	for key, t := range l.keys {
 		if t.Ref == ref {
 			delete(l.keys, key)
+		}
+	}
+	for key := range l.red {
+		if strings.HasPrefix(key, "red "+ref+"@") {
+			delete(l.red, key)
 		}
 	}
 	delete(l.rounds, ref)
@@ -895,9 +919,6 @@ func Plan(in Input) []Action {
 	add := func(a Action) {
 		if l.has(a.Key) {
 			return
-		}
-		if episode := l.episode[a.Ref]; episode != "" {
-			a.Key += episodeTag + episode
 		}
 		if !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
 			out = append(out, a)
@@ -1223,6 +1244,13 @@ func Plan(in Input) []Action {
 		}
 		return 0
 	})
+	// Keep canonical keys throughout planning: pending forwards are compared
+	// with event findings before actions receive their durable episode suffix.
+	for i := range out {
+		if episode := l.episode[out[i].Ref]; episode != "" {
+			out[i].Key += episodeTag + episode
+		}
+	}
 	return out
 }
 
