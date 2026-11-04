@@ -413,9 +413,11 @@ its key first in the detail):
             published HEAD (agents park --on owner/repo#n), with every
             check on the head green, for the
             first round and for each new head the last approval does not
-            cover, including fixes after changes requested. There is one
-            review per head; supervisor.reviewRounds never releases an
-            unapproved head. A reviewer starts
+            cover, including fixes after changes requested, while a round
+            is left: supervisor.reviewRounds caps the rounds that ask for
+            changes, superloop.MaxReviews all rounds. With the cap used, a
+            green head with fixes gets the merge go and no new review.
+            A reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), using reserved review headroom; a worker on a
