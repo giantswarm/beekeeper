@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const choiceMergeWord = "merge"
+
 // A decision's two options, the first recommended, and a name nobody has.
 const (
 	nobodyNamed = "nobody"
@@ -378,7 +380,7 @@ func TestNoteAnswerResolvesStoredLabelAndRefusesConflictingRelay(t *testing.T) {
 	if err := addNote(a, args...); err != nil {
 		t.Fatal(err)
 	}
-	for _, words := range []string{"merge", "merge (Recommended)", optMerge, "merge — ship today"} {
+	for _, words := range []string{choiceMergeWord, "merge (Recommended)", optMerge, "merge — ship today"} {
 		if _, err := noteCommand(a, verbAnswer, "1", flagChoice, "wait", words); err == nil || !strings.Contains(err.Error(), "relayed text") {
 			t.Fatalf("conflicting relay %q: %v", words, err)
 		}
@@ -416,7 +418,7 @@ func TestResolveNoteChoiceUsesStoredOrder(t *testing.T) {
 		value string
 		want  int
 	}{
-		{"wait", 1}, {"merge", 2}, {"1", 1}, {"2", 2}, {"", 0}, {"0", 0},
+		{"wait", 1}, {choiceMergeWord, 2}, {"1", 1}, {"2", 2}, {"", 0}, {"0", 0},
 	} {
 		if got, err := resolveNoteChoice(n, tc.value); err != nil || got != tc.want {
 			t.Fatalf("%q: got %d, %v; want %d", tc.value, got, err, tc.want)
