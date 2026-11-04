@@ -148,8 +148,10 @@ type Hook struct {
 	// only for a command that creates one.
 	MaxLabs func() int
 	// Production is the installation the kube guard protects; empty, the
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string
+	// ProtectedContexts lists additional contexts protected by the write gate.
+	ProtectedContexts []string
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string

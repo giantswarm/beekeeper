@@ -674,8 +674,11 @@ type StoreRule struct {
 type Kube struct {
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string `yaml:"production"`
+	// ProtectedContexts lists additional production-class contexts (including
+	// full test installations) whose clusters agents must not change directly.
+	ProtectedContexts []string `yaml:"protectedContexts"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in

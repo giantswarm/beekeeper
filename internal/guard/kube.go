@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,7 +18,7 @@ import (
 // without an explicit target fails instead of reaching production; a
 // command that would set one is refused. Reads stay allowed everywhere.
 // False positives beat a production write. Without a production
-// installation (Hook.Production) it is off.
+// installation (Hook.Production) or protected contexts it is off.
 
 const (
 	envKubeconfig  = "KUBECONFIG"
@@ -103,8 +104,8 @@ type kubeEnv struct {
 }
 
 // KubeGuardOff says why the kube guard is off, "" while it is on.
-func KubeGuardOff(production string) string {
-	if production != "" {
+func KubeGuardOff(production string, protectedContexts ...string) string {
+	if production != "" || len(protectedContexts) > 0 {
 		return ""
 	}
 	return "kube guard off: kube.production is unset"
@@ -134,7 +135,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
-		if env.wrapped == "" || IsProduction(m[1], h.Production) {
+		if env.wrapped == "" || IsProduction(m[1], h.Production) || slices.Contains(h.ProtectedContexts, m[1]) {
 			env.wrapped = m[1]
 		}
 	}
@@ -233,7 +234,7 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string
 				args = append([]string{plugin}, args...)
 			}
 		}
-		if h.Production == "" {
+		if h.Production == "" && len(h.ProtectedContexts) == 0 {
 			continue
 		}
 		var r string
@@ -501,7 +502,10 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	}
 	target := ""
 	for _, n := range []string{context, cluster, kc.clusters[context]} {
-		if IsProduction(n, h.Production) {
+		if IsProduction(n, h.Production) || (n != "" && slices.Contains(h.ProtectedContexts, n)) ||
+			(n != "" && slices.ContainsFunc(h.ProtectedContexts, func(c string) bool {
+				return kc.clusters[c] != "" && kc.clusters[c] == n
+			})) {
 			target = n
 			break
 		}
@@ -509,7 +513,7 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	if target == "" {
 		return ""
 	}
-	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (" + h.Production + "). " +
+	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (rule: kube production write gate). " +
 		"Agents never change production directly: changes go through a GitOps pull request and platformctl. " +
 		"Reads stay allowed (kubectl get, describe, logs, top, auth can-i; helm list, status, get; flux get), " +
 		"and so do writes to a lab with --context kind-<lab>."
