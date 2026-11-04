@@ -59,14 +59,26 @@ func captureStops(t *testing.T) *[]int {
 // agents idle --done stops every tool shell its session left running, the
 // processes below them included, and never the shell it runs under.
 func TestStopBackgroundStopsAllButTheCallersShell(t *testing.T) {
-	stopped := captureStops(t)
-	cmds := stopBackground(leftoverTable(true, true, true), leftoverSelf, time.Now())
-	slices.Sort(*stopped)
-	if want := []int{leftoverWait, leftoverSleep, leftoverForward, leftoverKubectl}; !slices.Equal(*stopped, want) {
-		t.Errorf("stopped %v, want %v", *stopped, want)
-	}
-	if len(cmds) != 2 {
-		t.Errorf("reported %v, want the sleep and the port-forward", cmds)
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"case 0: ordinary worker", []string{claudeComm, sessionIDFlag, "w1"}},
+		{"case 1: worker in a claimed spare", []string{claudeComm + " bg-spare", "--bg-spare", "s"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stopped := captureStops(t)
+			tab := leftoverTable(true, true, true)
+			tab.ByPID[leftoverCLI].Args = tc.args
+			cmds := stopBackground(tab, leftoverSelf, time.Now())
+			slices.Sort(*stopped)
+			if want := []int{leftoverWait, leftoverSleep, leftoverForward, leftoverKubectl}; !slices.Equal(*stopped, want) {
+				t.Errorf("stopped %v, want %v", *stopped, want)
+			}
+			if len(cmds) != 2 {
+				t.Errorf("reported %v, want the sleep and the port-forward", cmds)
+			}
+		})
 	}
 }
 
