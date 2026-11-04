@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Masterminds/semver/v3"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
 )
 
