@@ -351,7 +351,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 		left = n
 		return left > target, nil
 	}
-	pass := func(images []Image) ([]Blocker, error) {
+	pass := func(images []Image, retry bool) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
 			if more, err := over(); err != nil || !more {
@@ -359,6 +359,21 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			}
 			if busy() {
 				return refused, ErrBusy
+			}
+			// A failed rm may already have untagged some or all references.
+			// Inspect by ID so the next attempt uses only surviving tags,
+			// or the ID when the image became dangling.
+			if retry && len(img.Refs) > 0 {
+				raw, err := d(ctx, "image", "inspect", "--format", "{{json .RepoTags}}", img.ID)
+				var refs []string
+				if err == nil {
+					err = json.Unmarshal(raw, &refs)
+				}
+				if err != nil {
+					refused = append(refused, Blocker{Image: img, Why: "Docker image references unreadable: " + err.Error()})
+					return refused, fmt.Errorf("docker image inspect: image %s: references: %w", img.ID, err)
+				}
+				img.Refs = refs
 			}
 			args := []string{"image", "rm"}
 			if len(img.Refs) == 0 {
@@ -375,7 +390,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 		}
 		return refused, nil
 	}
-	refused, err := pass(candidates)
+	refused, err := pass(candidates, false)
 	slices.Reverse(refused)
 	for removed := len(t.Removed); err == nil && len(refused) > 0 && removed > 0; {
 		retry := make([]Image, len(refused))
@@ -383,7 +398,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			retry[i] = b.Image
 		}
 		before := len(t.Removed)
-		refused, err = pass(retry)
+		refused, err = pass(retry, true)
 		removed = len(t.Removed) - before
 	}
 	t.Refused = refused

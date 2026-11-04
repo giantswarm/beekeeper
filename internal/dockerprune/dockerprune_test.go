@@ -2,6 +2,7 @@ package dockerprune
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -420,5 +421,115 @@ func TestParseUsedAgo(t *testing.T) {
 		if got := parseUsedAgo(c.in); got != c.want {
 			t.Errorf("parseUsedAgo(%q) = %v; want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// partialRemoval processes every argument even when an earlier one fails,
+// like the Docker CLI. Untagging can also precede a dependency refusal.
+type partialRemoval struct {
+	tags       []string
+	parent     bool
+	progress   bool
+	deleted    bool
+	calls      [][]string
+	inventory  string
+	inspectErr error
+}
+
+func (f *partialRemoval) run(_ context.Context, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, slices.Clone(args))
+	if slices.Equal(args, []string{"image", "inspect", "--format", "{{json .RepoTags}}", "a"}) {
+		if f.inventory != "" || f.inspectErr != nil {
+			return []byte(f.inventory), f.inspectErr
+		}
+		return json.Marshal(f.tags)
+	}
+	if len(args) < 3 || args[0] != "image" || args[1] != "rm" {
+		return nil, fmt.Errorf("unexpected command: %v", args)
+	}
+	var out strings.Builder
+	var errs []error
+	for _, ref := range args[2:] {
+		switch {
+		case ref == "b":
+			f.progress = true // The child goes, or the transient container exits.
+		case ref == "a" && len(f.tags) == 0:
+			if !f.progress {
+				errs = append(errs, errors.New("dependent child"))
+			} else {
+				f.deleted = true
+			}
+		case slices.Contains(f.tags, ref):
+			if !f.parent && ref == "example:two" && !f.progress {
+				errs = append(errs, errors.New("container uses image"))
+				continue
+			}
+			f.tags = slices.DeleteFunc(f.tags, func(tag string) bool { return tag == ref })
+			fmt.Fprintln(&out, "Untagged: "+ref)
+			if len(f.tags) == 0 {
+				if f.parent && !f.progress {
+					errs = append(errs, errors.New("dependent child"))
+				} else {
+					f.deleted = true
+				}
+			}
+		default:
+			errs = append(errs, errors.New("no such image: "+ref))
+		}
+	}
+	return []byte(out.String()), errors.Join(errs...)
+}
+
+func TestTrimImagesRefreshesReferencesAfterPartialRemoval(t *testing.T) {
+	for _, parent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent=%t", parent), func(t *testing.T) {
+			tags := []string{"example:one", "example:two"}
+			if parent {
+				tags = tags[:1]
+			}
+			f := &partialRemoval{tags: slices.Clone(tags), parent: parent}
+			reads := 0
+			size := func() (int64, error) {
+				reads++
+				return 1, nil
+			}
+			tr, err := TrimImages(context.Background(), f.run,
+				[]Image{{ID: "a", Refs: tags, Size: 1}, {ID: "b", Size: 2}},
+				2, 0, size, func() bool { return false })
+			name := "example:two"
+			if parent {
+				name = "a"
+			}
+			if err != nil || !f.deleted || len(tr.Refused) != 0 || !slices.Equal(tr.Removed, []string{"b", name}) || reads != 1 {
+				t.Fatalf("trim = %+v, %v; deleted %t, size reads %d", tr, err, f.deleted, reads)
+			}
+			want := [][]string{
+				append([]string{"image", "rm"}, tags...),
+				{"image", "rm", "b"},
+				{"image", "inspect", "--format", "{{json .RepoTags}}", "a"},
+				{"image", "rm", name},
+			}
+			if !slices.EqualFunc(f.calls, want, slices.Equal) {
+				t.Errorf("calls = %v; want %v", f.calls, want)
+			}
+		})
+	}
+}
+
+func TestTrimImagesFailsClosedWhenRetryReferencesAreUnreadable(t *testing.T) {
+	for _, inventory := range []string{"command error", "invalid json", `{"RepoTags":[]}`, `""`} {
+		t.Run(inventory, func(t *testing.T) {
+			f := &partialRemoval{tags: []string{"example:one", "example:two"}, inventory: inventory}
+			if inventory == "command error" {
+				f.inspectErr = errors.New("inspect failed")
+			}
+			tr, err := TrimImages(context.Background(), f.run,
+				[]Image{{ID: "a", Refs: slices.Clone(f.tags), Size: 1}, {ID: "b", Size: 1}},
+				2, 0, nil, func() bool { return false })
+			if err == nil || !strings.Contains(err.Error(), "references") || len(f.calls) != 3 || f.deleted ||
+				!slices.Equal(tr.Removed, []string{"b"}) || len(tr.Refused) != 1 || tr.Refused[0].Image.ID != "a" {
+				t.Fatalf("trim = %+v, %v; calls %v, deleted %t", tr, err, f.calls, f.deleted)
+			}
+		})
 	}
 }
