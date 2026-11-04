@@ -13,18 +13,21 @@ func TestStoreAddsFirstSecretAfterText(t *testing.T) {
 	const (
 		itemRef       = "op://Shared/widget/"
 		firstValue    = "fixture-original-value"
-		secretValue   = "fixture-new-secret"
+		secretValue   = storedValue
 		concealedType = "CONCEALED"
 		passwordField = "password"
+		appField      = "app-id"
+		stringType    = "STRING"
 	)
 	for _, tc := range []struct {
 		field string
 		batch bool
 	}{
-		{field: "app-id", batch: true},
+		{field: appField, batch: true},
 		{field: "username"},
 		{field: "notesPlain"},
 		{field: passwordField},
+		{field: passwordField, batch: true},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			tools := secrettest.New(nil)
@@ -46,7 +49,7 @@ func TestStoreAddsFirstSecretAfterText(t *testing.T) {
 			if tools.Vault[itemRef+tc.field] != firstValue || tools.Vault[itemRef+"client-secret"] != secretValue {
 				t.Error("the store did not preserve both fields")
 			}
-			wantPassword, wantFirstType := secretValue, "STRING"
+			wantPassword, wantFirstType := secretValue, stringType
 			if tc.field == passwordField {
 				wantPassword, wantFirstType = firstValue, concealedType
 			}
