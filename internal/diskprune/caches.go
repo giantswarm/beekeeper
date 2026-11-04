@@ -191,6 +191,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				continue
 			}
 			if errors.Is(err, os.ErrNotExist) {
+				left -= u.size
 				continue // gone already: nothing freed by this run
 			}
 			if err != nil {
