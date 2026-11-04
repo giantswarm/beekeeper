@@ -9,15 +9,21 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const orphanChildScript = "processChild.js"
+
+const orphanPython = "python3"
+
+const orphanApp = "app.js"
+
 func TestOrphansDoNotMatchTaskText(t *testing.T) {
 	r, _ := newRun(t, Options{Apply: true, Only: []string{Orphans}, Orphan: 30 * time.Minute})
 	r.Table.ByPID[2] = &proc.Process{PID: 2, Comm: "systemd"}
 	for _, p := range []*proc.Process{
 		{PID: 10, Args: []string{"claude", "-p", "Investigate jest-worker and processChild.js"}},
-		{PID: 11, Args: []string{"python3", "-c", `print("claude --output-format stream-json")`}},
-		{PID: 12, Args: []string{"node", "app.js", "--label", "jest-worker processChild.js"}},
+		{PID: 11, Args: []string{orphanPython, "-c", `print("claude --output-format stream-json")`}},
+		{PID: 12, Args: []string{"node", orphanApp, "--label", "jest-worker processChild.js"}},
 		{PID: 20, Args: []string{"/usr/bin/node", "/app/node_modules/jest-worker/build/workers/processChild.js"}},
-		{PID: 21, Args: []string{"node", "--expose-gc", "processChild.js"}},
+		{PID: 21, Args: []string{"node", "--expose-gc", orphanChildScript}},
 		{PID: 22, Args: []string{"/usr/bin/claude", "--output-format", "stream-json"}},
 	} {
 		p.PPID = 2
@@ -40,15 +46,15 @@ func TestOrphanWorkerArguments(t *testing.T) {
 	}{
 		{"empty", nil, false},
 		{"worker basename", []string{"node", "jest-worker"}, true},
-		{"runtime option", []string{"node", "--max-old-space-size=256", "processChild.js"}, true},
-		{"option terminator", []string{"node", "--", "processChild.js"}, true},
-		{"eval", []string{"node", "-e", "processChild.js"}, false},
+		{"runtime option", []string{"node", "--max-old-space-size=256", orphanChildScript}, true},
+		{"option terminator", []string{"node", "--", orphanChildScript}, true},
+		{"eval", []string{"node", "-e", orphanChildScript}, false},
 		{"print", []string{"node", "--print", "jest-worker"}, false},
-		{"option value", []string{"node", "--require", "processChild.js", "app.js"}, false},
-		{"script argument", []string{"node", "app.js", "processChild.js"}, false},
+		{"option value", []string{"node", "--require", orphanChildScript, orphanApp}, false},
+		{"script argument", []string{"node", orphanApp, orphanChildScript}, false},
 		{"script suffix", []string{"node", "processChild.js.backup"}, false},
 		{"directory", []string{"node", "/jest-worker/app.js"}, false},
-		{"other executable", []string{"python3", "processChild.js"}, false},
+		{"other executable", []string{orphanPython, orphanChildScript}, false},
 		{"headless brief", []string{"claude", "-p", "claude --output-format stream-json"}, false},
 		{"joined argument", []string{"claude --output-format stream-json"}, false},
 	} {
@@ -64,7 +70,7 @@ func TestOrphansRetainGuards(t *testing.T) {
 	for _, guard := range []string{"parent", "age", "uid", "dry run"} {
 		t.Run(guard, func(t *testing.T) {
 			r, _ := newRun(t, Options{Apply: true, Only: []string{Orphans}, Orphan: 30 * time.Minute})
-			p := &proc.Process{PID: 20, PPID: 1, Args: []string{"node", "processChild.js"}, Start: now.Add(-time.Hour)}
+			p := &proc.Process{PID: 20, PPID: 1, Args: []string{"node", orphanChildScript}, Start: now.Add(-time.Hour)}
 			r.Table.ByPID[p.PID] = p
 			switch guard {
 			case "parent":

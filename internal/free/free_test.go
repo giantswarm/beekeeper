@@ -321,13 +321,13 @@ func TestSummaryRows(t *testing.T) {
 	}
 	for _, p := range []*proc.Process{
 		{PID: 10, PPID: 2, Comm: node, Args: []string{node, "big\tjob"}, Start: start, RSSKiB: 700 << 10},
-		{PID: 11, PPID: 2, Comm: "graphify", Args: []string{"python3", "graphify"}, Start: start, CPU: 40 * time.Minute, RSSKiB: 20 << 10},
+		{PID: 11, PPID: 2, Comm: "graphify", Args: []string{orphanPython, "graphify"}, Start: start, CPU: 40 * time.Minute, RSSKiB: 20 << 10},
 		{PID: 12, PPID: 2, Comm: "go", Args: []string{"go", "test"}, Start: start, CPU: 59 * time.Minute, RSSKiB: 900 << 10},
 		{PID: 20, PPID: 2, Comm: tumblerd, Args: []string{tumblerd}, Start: start, RSSKiB: 600 << 10},
 		{PID: 21, PPID: 20, Comm: tumblerd, Args: []string{tumblerd}, Start: start, RSSKiB: 600 << 10},
 		{PID: 30, PPID: 2, Comm: "chrome", Args: []string{"/opt/google/chrome/chrome --type=renderer --lang=en"}, Start: start, RSSKiB: 1000 << 10},
 		{PID: 40, PPID: 2, Comm: "dockerd", Args: []string{"dockerd"}, Start: start, RSSKiB: 800 << 10},
-		{PID: 50, PPID: 1, Comm: node, Args: []string{node, "processChild.js"}, Start: start, RSSKiB: 60 << 10},
+		{PID: 50, PPID: 1, Comm: node, Args: []string{node, orphanChildScript}, Start: start, RSSKiB: 60 << 10},
 	} {
 		r.Table.ByPID[p.PID] = p
 	}
