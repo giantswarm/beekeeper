@@ -1378,6 +1378,11 @@ type member struct {
 }
 
 func decodeObject(raw []byte) (object, error) {
+	// Validate the entire document, including its closing delimiter and
+	// trailing input, before trusting any hook entries it contains.
+	if !json.Valid(raw) {
+		return nil, errors.New("not valid JSON")
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil, errors.New("not a JSON object")
