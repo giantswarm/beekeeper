@@ -69,7 +69,7 @@ func (w *browsingWriter) String() string {
 func manifestApp(t *testing.T) (*app, *fakeGitHub, *secrettest.Tools, string, string) {
 	t.Helper()
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	manifest := filepath.Join(t.TempDir(), "manifest.json")
 	if err := os.WriteFile(manifest, []byte(fixtureManifest), 0o600); err != nil {
 		t.Fatal(err)
