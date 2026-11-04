@@ -355,9 +355,9 @@ func TestKillReport(t *testing.T) {
 		not    string
 	}{
 		{"own scope's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: scope}},
-			[]string{"the 6G cap killed: 7 (go) 6100 MiB", ownAdvice}, sharedCap},
+			[]string{"the 6G cap killed: 7 (go) 6100 MiB", "MemoryMax=6G", ownAdvice}, sharedCap},
 		{"the held slot's slice, capped at the run's cap", false, []machine.OOMKill{{PID: 7, Task: "go", AnonMiB: 6100, Memcg: slice, TaskMemcg: scope}},
-			[]string{"the 6G cap killed: 7 (go) 6100 MiB", ownAdvice}, sharedCap},
+			[]string{"the 6G cap killed: 7 (go) 6100 MiB", "MemoryMax=6G", ownAdvice}, sharedCap},
 		{"systemd-run at the slice's cap", false, []machine.OOMKill{{PID: 8, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},
 			[]string{"slot 1's cap (" + o.SlotSlice(1) + ") killed systemd-run before the command started: 8 (systemd-run) 0 MiB", "not this command"}, ownAdvice},
 		{"systemd-run in a joined slot", true, []machine.OOMKill{{PID: 9, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},
@@ -365,7 +365,7 @@ func TestKillReport(t *testing.T) {
 		{"the command at a joined slot's cap", true, []machine.OOMKill{{PID: 10, Task: "node", AnonMiB: 900, Memcg: slice, TaskMemcg: scope}},
 			[]string{"slot 1's shared cap", "together filled it"}, ownAdvice},
 		{"the command at its own cap in a joined slot", true, []machine.OOMKill{{PID: 11, Task: "node", AnonMiB: 6100, Memcg: scope}},
-			[]string{"the 6G cap killed", ownAdvice}, sharedCap},
+			[]string{"the 6G cap killed", "MemoryMax=6G", ownAdvice}, sharedCap},
 	} {
 		what, advice, _ := killReport(o, unit, 1, c.shared, c.kills)
 		line := what + " — " + advice
@@ -524,6 +524,37 @@ func TestRunHoldsBuildCachesWithoutGoCache(t *testing.T) {
 		t.Fatalf("run left the cache held: %v", err)
 	}
 	release()
+}
+
+func TestRunReportsUnconfirmedSIGKILL(t *testing.T) {
+	var stderr strings.Builder
+	var end string
+	o := Options{Max: "64M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Stderr: &stderr,
+		Record: func(verb, detail string) {
+			if verb == VerbEnd {
+				end = detail
+			}
+		}}
+	if rc := runCappedOn(t, o, []string{"sh", "-c", "kill -KILL $$"}); rc != 137 {
+		t.Fatalf("exit %d, want 137", rc)
+	}
+	for _, got := range []string{stderr.String(), end} {
+		if !strings.Contains(got, "SIGKILL (exit 137)") || !strings.Contains(got, "no cap kill confirmed") {
+			t.Errorf("missing SIGKILL reason: %q", got)
+		}
+	}
+}
+
+func TestSharedCapReportsHolderLimit(t *testing.T) {
+	dir := t.TempDir()
+	holdSlot(t, dir, 1, "holder")
+	o := Options{Max: "6G", SlotDir: dir}
+	unit := "memcap-test"
+	slice := "/memcap.slice/" + o.SlotSlice(1)
+	what, _, _ := killReport(o, unit, 1, true, []machine.OOMKill{{Task: "worker", Memcg: slice, TaskMemcg: slice + "/" + unit + ".scope"}})
+	if !strings.Contains(what, "MemoryMax=12G") || !strings.Contains(what, "shared cap") {
+		t.Fatalf("wrong shared limit: %s", what)
+	}
 }
 
 func TestRunReturns137AsStepOutcome(t *testing.T) {

@@ -198,7 +198,8 @@ func (g *gateRun) mergeFiles() (string, error) {
 // (.pid), the command it runs (.spec), what gate runs shows of it (.run),
 // the file its output is kept in (.kept), who stopped it with gate stop
 // (.stopped) and, for a wait, the gate's mark that it left the run to run on
-// (.left). Not the caller's pipes, which close with the caller's session.
+// (.left). A termination diagnostic (.termination) survives cleanup for the
+// next invocation. Not the caller's pipes, which close with the caller's session.
 func mergeBase(stateDir, repo string, pr int) string {
 	return filepath.Join(stateDir, "merges", fmt.Sprintf("%s-%d", strings.ReplaceAll(repo, "/", "_"), pr))
 }
@@ -295,12 +296,57 @@ func finishedRun(base string) (doc []byte, rc int) {
 	doc, _ = os.ReadFile(base + ".json")  //nolint:gosec // the gate's own file
 	raw, err := os.ReadFile(base + ".rc") //nolint:gosec // as above
 	if err != nil {
+		recordLostMergeRunner(base)
 		return doc, 128 + int(syscall.SIGKILL)
 	}
 	if rc, err = strconv.Atoi(strings.TrimSpace(string(raw))); err != nil {
+		recordLostMergeRunner(base)
 		return doc, 128 + int(syscall.SIGKILL)
 	}
+	if rc == 128+int(syscall.SIGKILL) {
+		if _, err := os.Stat(base + terminationExt); err != nil {
+			log, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
+			recordMergeTermination(base, mergeKillReason(log))
+		}
+	}
 	return doc, rc
+}
+
+// terminationExt survives merge file cleanup so a later invocation can explain
+// the previous failed run even when its runner could not write an exit record.
+const terminationExt = ".termination"
+
+func recordLostMergeRunner(base string) {
+	log, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
+	reason := mergeKillReason(log)
+	if strings.Contains(reason, "no cap kill confirmed") {
+		reason = "runner disappeared without a valid exit record (exit 137): session end, reboot or external SIGKILL possible; no cap kill confirmed"
+	}
+	recordMergeTermination(base, reason)
+}
+
+func recordMergeTermination(base, reason string) {
+	line := time.Now().UTC().Format(time.RFC3339) + " " + reason + "\n"
+	if err := os.WriteFile(base+terminationExt, []byte(line), 0o600); err != nil { //nolint:gosec // the gate's own state file
+		gateLine("cannot keep merge termination reason: %v", err)
+	}
+	f, err := os.OpenFile(base+".log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // as above
+	if err == nil {
+		_, _ = fmt.Fprint(f, GatePrefix+line)
+		_ = f.Close()
+	}
+	gateLine("%s", strings.TrimSpace(line))
+}
+
+// mergeKillReason preserves the wrapper's confirmed cap report when present.
+// SIGKILL alone cannot identify its sender and must never be called an OOM.
+func mergeKillReason(log []byte) string {
+	for _, line := range strings.Split(string(log), "\n") {
+		if strings.HasPrefix(line, guard.LogPrefix) && strings.Contains(line, "cap") && strings.Contains(line, "killed") {
+			return "exit 137: " + strings.TrimPrefix(line, guard.LogPrefix)
+		}
+	}
+	return "SIGKILL (exit 137): external signal or session end possible; no cap kill confirmed (OOM evidence may be unavailable)"
 }
 
 // followPoll is how often the gate copies devctl's new stderr lines and
@@ -575,6 +621,17 @@ const stopGrace = 2 * time.Second
 func launchChild(spec childSpec, base string) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		return 0, err
+	}
+	if _, err := os.Stat(base + ".pid"); err == nil {
+		if raw, err := os.ReadFile(base + ".pid"); err == nil {
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if pid > 0 && !proc.Alive(pid) {
+				_, _ = finishedRun(base)
+			}
+		}
+	}
+	if raw, err := os.ReadFile(base + terminationExt); err == nil {
+		gateLine("previous merge termination: %s", strings.TrimSpace(string(raw)))
 	}
 	removeMergeFiles(base)
 	path, err := exec.LookPath(spec.Argv[0])
@@ -918,6 +975,12 @@ func mergeChild(base string) childResult {
 			_, _ = fmt.Fprintf(errs, "%sdevctl run %d landed the merge on the busy base, %s of the busy-base budget %s spent\n",
 				GatePrefix, run+1, time.Since(start).Round(time.Second), spec.BusyBudget)
 		}
+	}
+	if rc == 128+int(syscall.SIGKILL) {
+		log, _ := os.ReadFile(base + ".log") //nolint:gosec // the gate's own file
+		recordMergeTermination(base, mergeKillReason(log))
+	} else {
+		_ = os.Remove(base + terminationExt) // a newer completed run supersedes the old diagnostic
 	}
 	r.rc = rc
 	r.stop, _ = stop.Load().(syscall.Signal)

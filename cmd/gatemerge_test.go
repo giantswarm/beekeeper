@@ -192,8 +192,45 @@ func TestAKilledMergeChildIsJudgedByGitHub(t *testing.T) {
 	if err := g.runMerge(); Code(err) != 137 {
 		t.Fatalf("exit %d, want 137", Code(err))
 	}
+	raw, err := os.ReadFile(mergeBase(g.store.Dir(), scratchRepo, 7) + terminationExt)
+	if err != nil || !strings.Contains(string(raw), "runner disappeared") || !strings.Contains(string(raw), "no cap kill confirmed") {
+		t.Fatalf("missing runner-loss diagnostic: %q, %v", raw, err)
+	}
 	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "exit 137, release unconfirmed") {
 		t.Errorf("merged event: %q", d)
+	}
+}
+
+func TestMergeKillDiagnosticsSurviveCleanupAndRerun(t *testing.T) {
+	for _, tc := range []struct{ name, script, want string }{
+		{"external", "kill -KILL $$", "no cap kill confirmed"},
+		{"cap", "echo 'beekeeper run: the 6G cap killed: 7 (worker) 6100 MiB (MemoryMax=6G)' >&2; kill -KILL $$", "MemoryMax=6G"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noSystemd(t)
+			fakeDevctl(t, tc.script)
+			stubGitHub(t, github.Open, "")
+			g := runningMerge(t, scratchRepo, config.Lane{Name: scratchRepo, Repositories: []string{scratchRepo}})
+			out := gateStderr(t, func() {
+				if err := g.runMerge(); Code(err) != 137 {
+					t.Fatalf("exit %d, want 137", Code(err))
+				}
+			})
+			base := mergeBase(g.store.Dir(), scratchRepo, 7)
+			raw, err := os.ReadFile(base + terminationExt)
+			if err != nil || !strings.Contains(string(raw), tc.want) {
+				t.Fatalf("persisted reason %q: %v", raw, err)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("gate output lacks reason: %s", out)
+			}
+			out = gateStderr(t, func() {
+				_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+			})
+			if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, tc.want) {
+				t.Fatalf("rerun lost reason: %s", out)
+			}
+		})
 	}
 }
 
@@ -1040,6 +1077,23 @@ func TestKeepOutputStartsWithTheMergeCommandAndFlags(t *testing.T) {
 	}
 	if want := "command: " + command + "\nmerge refused\n"; !strings.HasPrefix(string(raw), want) {
 		t.Fatalf("kept output %q, want prefix %q", raw, want)
+	}
+}
+
+func TestMergeRerunRecoversMissingExitRecord(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "merge")
+	if err := os.WriteFile(base+".pid", []byte("2147483647"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := gateStderr(t, func() {
+		_, _ = launchChild(childSpec{Argv: []string{"/missing-merge-command"}}, base)
+	})
+	if !strings.Contains(out, "previous merge termination:") || !strings.Contains(out, "runner disappeared") || !strings.Contains(out, "no cap kill confirmed") {
+		t.Fatalf("rerun did not recover lost runner: %s", out)
+	}
+	raw, err := os.ReadFile(base + terminationExt)
+	if err != nil || !strings.Contains(string(raw), "runner disappeared") {
+		t.Fatalf("lost diagnostic after cleanup: %q, %v", raw, err)
 	}
 }
 
