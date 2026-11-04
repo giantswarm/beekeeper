@@ -150,7 +150,7 @@ func (d Dir) LeaveLabChange(res string, c LabChange) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	_, err = f.Write(append(raw, '\n'))
 	if cerr := f.Close(); err == nil {
 		err = cerr
