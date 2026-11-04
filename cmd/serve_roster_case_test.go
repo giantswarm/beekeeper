@@ -37,7 +37,7 @@ func TestAgentsRegisterKeepsObjectAcrossNameCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := client.ObjectKeyFromObject(kube.RosterObject(me))
-	for _, name := range []string{"worker", "WORKER"} {
+	for _, name := range []string{workerRole, "WORKER"} {
 		me.Name = name
 		call := &call{me: me, app: &app{store: store, now: now.Add(time.Second)}, out: &bytes.Buffer{}}
 		var req mcp.CallToolRequest
