@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,9 +17,9 @@ import (
 const comments = "comments"
 
 // GitHub keeps the comments of issues in memory and answers the gh api
-// calls claim.Client makes: a listing with an ETag (an If-None-Match that
-// still matches is gh's "HTTP 304"), a post and an edit (an unknown comment
-// is gh's "HTTP 404").
+// calls claim.Client makes: a paginated listing with an ETag (an
+// If-None-Match that still matches is gh's "HTTP 304"), a post and an edit
+// (an unknown comment is gh's "HTTP 404").
 type GitHub struct {
 	mu       sync.Mutex
 	next     int64
@@ -94,7 +95,7 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 			path = args[i]
 		}
 	}
-	path, _, _ = strings.Cut(path, "?")
+	path, query, _ := strings.Cut(path, "?")
 	parts := strings.Split(path, "/") // repos o r issues n [comments] | repos o r issues comments id
 	if len(parts) < 5 || len(parts) > 6 || parts[0] != "repos" || parts[3] != "issues" {
 		return nil, fmt.Errorf("gh api %s: not a call claims make", path)
@@ -110,14 +111,48 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 	switch {
 	case method == "" && parts[5] == comments:
 		issue := repo + "#" + parts[4]
-		raw, _ := json.Marshal(append([]Comment{}, g.comments[issue]...))
-		tag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(raw))
+		params, err := url.ParseQuery(query)
+		if err != nil {
+			return nil, fmt.Errorf("gh api %s: invalid pagination: %w", path, err)
+		}
+		page, perPage := 1, 30
+		if v := params.Get("page"); v != "" {
+			page, err = strconv.Atoi(v)
+		}
+		if err != nil || page < 1 {
+			return nil, fmt.Errorf("gh api %s: invalid page", path)
+		}
+		if v := params.Get("per_page"); v != "" {
+			perPage, err = strconv.Atoi(v)
+		}
+		if err != nil || perPage < 1 {
+			return nil, fmt.Errorf("gh api %s: invalid per_page", path)
+		}
+		perPage = min(perPage, 100)
+		cs := g.comments[issue]
+		start := len(cs)
+		if page-1 <= len(cs)/perPage {
+			start = (page - 1) * perPage
+		}
+		end := start + min(perPage, len(cs)-start)
+		var link string
+		if end < len(cs) {
+			link = fmt.Sprintf(`<https://api.github.com/%s?per_page=%d&page=%d>; rel="next"`, path, perPage, page+1)
+		}
+		raw, _ := json.Marshal(append([]Comment{}, cs[start:end]...))
+		// A new next page changes the response even when this page's
+		// comments stay the same: invalidate a cached single-page read.
+		tag := fmt.Sprintf(`W/"%x"`, sha256.Sum256([]byte(link+string(raw))))
 		if etag == tag {
 			g.Calls["notModified"]++
 			return []byte("HTTP/2.0 304 Not Modified\r\n\r\n"), fmt.Errorf("gh api %s: exit status 1: gh: HTTP 304", path)
 		}
 		g.Calls["list"]++
-		return []byte("HTTP/2.0 200 OK\r\nEtag: " + tag + "\r\n\r\n" + string(raw)), nil
+		head := "HTTP/2.0 200 OK\r\nEtag: " + tag + "\r\n"
+		if link != "" {
+			head += "Link: " + link + "\r\n"
+		}
+		return []byte(head + "\r\n" + string(raw)), nil
 	case method == "POST" && parts[5] == comments:
 		g.Calls["post"]++
 		g.next++
