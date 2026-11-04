@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,6 +246,56 @@ func TestReadTranscriptTailFollowSpend(t *testing.T) {
 	}
 	if spends[0].Requests[0].Model != testModel || spends[0].Requests[0].Tokens != wantTokens {
 		t.Errorf("spend request = %+v", spends[0].Requests[0])
+	}
+}
+
+func TestDiscoverReservesExplicitThreads(t *testing.T) {
+	for _, source := range []string{"resume", "runner-state", "fresh-runner"} {
+		for _, explicitNewer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/newer=%t", source, explicitNewer), func(t *testing.T) {
+				stateDir := t.TempDir()
+				sessionsDir := t.TempDir()
+				now := time.Now().UTC()
+				path := filepath.Join(sessionsDir, "rollout-resumed-thread.jsonl")
+				data := `{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"resumed-thread","timestamp":"2026-01-01T00:00:00Z","cwd":""}}` + "\n"
+				if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(path, now, now); err != nil {
+					t.Fatal(err)
+				}
+				explicit := &proc.Process{PID: -100, PPID: 1, Comm: Comm, Args: []string{Comm, "exec", "resume", "resumed-thread", "-"}, Start: now.Add(-time.Minute)}
+				fresh := &proc.Process{PID: -101, PPID: 1, Comm: Comm, Args: []string{Comm, "exec", "-"}, Start: now.Add(-30 * time.Second)}
+				if explicitNewer {
+					explicit.Start, fresh.Start = fresh.Start, explicit.Start
+				}
+				if source == "runner-state" {
+					inbox := InboxPath(stateDir, "test-agent")
+					if err := RecordThread(stateDir, inbox, "resumed-thread"); err != nil {
+						t.Fatal(err)
+					}
+					explicit.Comm = "beekeeper"
+					explicit.Args = []string{"beekeeper", "codex-run", inbox, LogPath(stateDir, "test-agent"), Comm, testModel}
+				}
+				if source == "fresh-runner" {
+					fresh.Comm = "beekeeper"
+					fresh.Args = []string{"beekeeper", "codex-run", InboxPath(stateDir, "fresh-agent"), LogPath(stateDir, "fresh-agent"), Comm, testModel}
+				}
+				sessions := Discover(stateDir, sessionsDir, proc.NewTable(explicit, fresh), now)
+				if len(sessions) != 2 {
+					t.Fatalf("got %d sessions, want 2", len(sessions))
+				}
+				for _, s := range sessions {
+					if s.PID == explicit.PID {
+						if s.ID != "resumed-thread" || s.Transcript != path {
+							t.Errorf("explicit session ID=%q transcript=%q", s.ID, s.Transcript)
+						}
+					} else if s.ID != "" || s.Transcript != "" {
+						t.Errorf("fresh session ID=%q transcript=%q, want both empty", s.ID, s.Transcript)
+					}
+				}
+			})
+		}
 	}
 }
 
