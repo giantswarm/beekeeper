@@ -103,6 +103,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 		if p == "" || !executionWithin(workspace, p) {
 			return ExecutionDeny("file tool target is outside its owned workspace")
 		}
+		if ev.ToolName == globTool && !executionWithin(workspace, globRoot(globSearchPath(ev.ToolInput, ev.CWD))) {
+			return ExecutionDeny("glob pattern is outside its owned workspace")
+		}
 	default:
 		return ExecutionDeny("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 	}
@@ -497,7 +500,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			}
 		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
-		case "gh", "devctl":
+		case "gh", litDevctl:
 			args := executionVerb(words[1:])
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")

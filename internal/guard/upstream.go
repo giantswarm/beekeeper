@@ -47,7 +47,7 @@ var ghWrites = map[string]map[string]bool{
 	"issue": {verbCreate: true, verbComment: true, verbClose: true, verbEdit: true, "reopen": true, "lock": true, verbUnlock: true,
 		verbDelete: true, "transfer": true, "pin": true, "unpin": true, "develop": true},
 	"release":  {verbCreate: true, verbEdit: true, verbDelete: true, "upload": true, "delete-asset": true},
-	"label":    {verbCreate: true, verbEdit: true, verbDelete: true, "clone": true},
+	"label":    {verbCreate: true, verbEdit: true, verbDelete: true, litClone: true},
 	ghRepoVerb: {verbEdit: true, verbDelete: true, "archive": true, "unarchive": true, "rename": true},
 }
 
@@ -380,7 +380,7 @@ func (u Upstream) ghAPIWrite(args []string, cwd, env string, known bool) (what, 
 	if ep == "" {
 		return "", ""
 	}
-	if ep == "graphql" {
+	if ep == executionGraphQL {
 		return u.gqlWrite("gh api graphql", strings.Join(args, " ")+"\n"+ghAPIBodies(words, cwd))
 	}
 	method := ghAPIMethod(args)

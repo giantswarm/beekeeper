@@ -440,7 +440,7 @@ func (a *app) handOver(ctx context.Context, h handover) (err error) {
 	if err := a.stopHandoverPredecessor(ctx, ag.Party); err != nil {
 		return err
 	}
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: a.workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}

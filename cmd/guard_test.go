@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -279,7 +280,7 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": command, "run_in_background": bg}})
+	raw, _ := json.Marshal(map[string]any{executionHookTool: tToolBash, executionHookInput: map[string]any{hookTypeCommand: command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
@@ -408,6 +409,11 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 	holdSlots(t, state)
 	self, _ := os.Executable()
 	dir := t.TempDir()
+	binary := filepath.Join(dir, "beekeeper")
+	if err := os.Symlink(self, binary); err != nil {
+		t.Fatal(err)
+	}
+	self = binary
 	script := filepath.Join(dir, "build.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run --class build -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
 		t.Fatal(err)
@@ -468,7 +474,12 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	dir, env := capped(t)
-	if _, errOut, rc := zsh(t, env, rewrite(t, `echo  built;  if false; then go test ./...; fi`)); rc != 0 {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // a test fixture
+		t.Fatal(err)
+	}
+	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, errOut, rc := zsh(t, env, rewrite(t, `echo built; go test ./...`)); rc != 0 {
 		t.Fatalf("rc %d, stderr %q", rc, errOut)
 	}
 	evs := runEvents(t, dir)
@@ -480,7 +491,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 		e := evs[i]
 		if e.Verb != verb || e.By.Session != "test-session" || e.By.Name != "capped test" || guard.RunScope(e.Detail) != scope ||
 			!guard.IsTestScope(scope) || !strings.HasSuffix(scope, ".scope") ||
-			guard.RunCommand(e.Detail) != "echo built; if false; then go test ./...; fi" {
+			guard.RunCommand(e.Detail) != litGoTest {
 			t.Errorf("event %d: %+v", i, e)
 		}
 	}
@@ -553,7 +564,7 @@ func TestRunTakesTheEnvSlots(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	out, errOut, rc := zsh(t, append(env, "MEMCAP_SLOTS=3"), self+` run --wait 1s -- sh -c 'cat "$MEMCAP_STATE/slots/3.holder"'`)
+	out, errOut, rc := zsh(t, append(env, "MEMCAP_SLOTS=3"), self+` run --wait 1s --class build -- sh -c 'cat "$MEMCAP_STATE/slots/3.holder"'`)
 	if rc != 0 || !strings.Contains(out, `"pid":`) {
 		t.Errorf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
@@ -594,7 +605,7 @@ func TestHookPreToolUseFormatAgy(t *testing.T) {
 		}
 		var out strings.Builder
 		c := New()
-		c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse", "--format=agy"})
+		c.SetArgs([]string{"--" + configFlag, cfgPath, configHookVerb, configPreToolUse, "--format=agy"})
 		c.SetIn(strings.NewReader(string(raw)))
 		c.SetOut(&out)
 		c.SetErr(&out)
@@ -755,4 +766,36 @@ func emptyTestConfig(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHookPersonalSearchOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			cfg := fmt.Sprintf("stateDir: %s\nhooks:\n  guardPersonalSearch: %v\n", filepath.Join(dir, "state"), enabled)
+			if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(map[string]any{
+				executionOmpSession: "personal", "cwd": dir, "tool_name": "Bash",
+				"tool_input": map[string]any{"command": `gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }'`},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			c := New()
+			c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse"})
+			c.SetIn(strings.NewReader(string(raw)))
+			c.SetOut(&out)
+			c.SetErr(&out)
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if refused := strings.Contains(out.String(), "gh issue list --repo"); refused != enabled {
+				t.Fatalf("guard enabled=%v, output=%s", enabled, out.String())
+			}
+		})
+	}
 }

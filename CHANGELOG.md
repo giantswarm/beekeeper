@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
 - Honor saved Go cache settings, including GOENV selection and persisted GOPATH, when discovering build and module cache directories (https://github.com/giantswarm/beekeeper/issues/2758).
 - Dispatch recovered merge confirmations to the workflow sink once per pull request and preserve saved results when recording fails (https://github.com/giantswarm/beekeeper/issues/3023).
+- Apply the five-minute local lint deadline when `golangci-lint` is invoked by an absolute or relative executable path (https://github.com/giantswarm/beekeeper/issues/2327).
+
+- Keep subscription-control labels scoped to browser reads of the clicked tab so unrelated output cannot replace them.
+- Concurrent fingerprint index saves publish separate complete snapshots instead of colliding on one temporary filename (https://github.com/giantswarm/beekeeper/issues/2917).
+- Keep unacknowledged mailbox deliveries until their own deadline when a sender reuses a message ID after the deduplication window (https://github.com/giantswarm/beekeeper/issues/2893).
+- Check Glob patterns against workspace, transcript and sandbox boundaries, including absolute and parent-relative search targets.
+- Refuse browser batches containing a denied consent even when an earlier action needs no consent decision.
+- Inspect scripts for protected-file reads from the directory where their command runs after a literal cd.
 - Stop worktree cleanup when pull-request reads fail or leave any requested branch unanswered, preserving harness checkouts when PR data is unavailable (https://github.com/giantswarm/beekeeper/issues/3093).
 - Broker replies use exclusively created temporary files so planted staging links cannot overwrite other files; failed publication cleans up its temporary file (#3034).
 - Bound remote-build kubectl output draining after exit or cancellation so inherited pipes cannot hold the worktree lock indefinitely (https://github.com/giantswarm/beekeeper/issues/2974).
