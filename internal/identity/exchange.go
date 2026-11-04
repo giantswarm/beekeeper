@@ -119,10 +119,15 @@ func (e *Exchanger) exchange(ctx context.Context) (string, time.Duration, error)
 		Error           string `json:"error"`
 	}
 	// An error page that is no JSON leaves out empty: the status says it.
-	_ = json.Unmarshal(body, &out)
+	decodeErr := json.Unmarshal(body, &out)
 	if resp.StatusCode != http.StatusOK {
 		status := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 		return "", 0, fmt.Errorf("dex token exchange at %s (connector %s, client %s): %s", e.tokenURL, e.cfg.ConnectorID, e.cfg.ClientID, dexError(status, out.Error))
+	}
+	if decodeErr != nil {
+		// Decoder errors can include response values. Report neither those
+		// values nor a partially decoded token as a successful exchange.
+		return "", 0, fmt.Errorf("dex token exchange at %s: the answer is not a valid token response", e.tokenURL)
 	}
 	switch {
 	case out.AccessToken == "":
