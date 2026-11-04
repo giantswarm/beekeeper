@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,13 +68,27 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file string, own
 		}
 	}()
 	var created *githubApp
+	var declared string
 	unrecord := func() {}
 	defer func() { unrecord() }()
 	err = a.writeGitHubApp(cmd, installation, target, replace, func(ctx context.Context) (*githubApp, error) {
+		// Preserve the declaration before the flow adds its temporary redirect.
+		raw, err := json.Marshal(manifest)
+		if err != nil {
+			return nil, err
+		}
+		copyName := fmt.Sprintf("app-manifest-%x.json", sha256.Sum256(raw))
+		if err := a.store.WriteFile(copyName, manifest); err != nil {
+			return nil, fmt.Errorf("preserve App manifest: %w", err)
+		}
+		declared, err = filepath.Abs(filepath.Join(a.store.Dir(), copyName))
+		if err != nil {
+			return nil, fmt.Errorf("locate preserved App manifest: %w", err)
+		}
 		if flow, err = serveManifest(owner, name, file, manifest); err != nil {
 			return nil, err
 		}
-		if unrecord, err = a.recordRun(name, owner.login, file, flow); err != nil {
+		if unrecord, err = a.recordRun(name, owner.login, declared, flow); err != nil {
 			return nil, err
 		}
 		if _, err := fmt.Fprintf(say, "App %s, declared in %s, its credentials for %s (%s)\n", name, file, installation, target.File); err != nil {
@@ -98,7 +113,7 @@ func (a *app) appCreateSecret(cmd *cobra.Command, installation, file string, own
 		if err != nil {
 			stored = ""
 		}
-		a.recordCreated(say, name, owner.login, file, stored, created)
+		a.recordCreated(say, name, owner.login, declared, stored, created)
 	}
 	if flow != nil {
 		// the callback holds the browser until the Secret is written

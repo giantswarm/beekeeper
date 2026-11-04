@@ -5,6 +5,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -174,7 +175,7 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	// the run is off the record, the App in beekeeper's ledger with the
 	// Secret that holds its credentials
 	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].Slug != fixtureApp ||
-		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || st.AppsCreated[0].Declared != manifest {
+		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || !strings.HasPrefix(st.AppsCreated[0].Declared, a.store.Dir()+string(os.PathSeparator)) {
 		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
 	}
 }
@@ -287,6 +288,25 @@ func TestAppAllowPersonalAccountApp(t *testing.T) {
 	if _, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, userFlag, fixtureUser, timeoutFlag, tenSeconds); err != nil {
 		t.Fatalf("app create --manifest --user: %v\n%s", err, stderr.String())
 	}
+	ledger, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable := ledger.AppsCreated[0].Declared
+	raw, err := os.ReadFile(filepath.Clean(durable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved["name"] != fixtureApp || saved[appRedirectField] != nil {
+		t.Fatalf("saved manifest = %v", saved)
+	}
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
 	a.cfg.Apps.Repo, a.cfg.Apps.Manifest = fixtureOrg+"/github", "apps/{name}/manifest.json"
 	person := fixtureUser
 	created := appsGH
@@ -330,13 +350,26 @@ func TestAppAllowPersonalAccountApp(t *testing.T) {
 		t.Errorf("app allow for an App declared nowhere = %v", err)
 	}
 	out, err := allow(clientIDFlag, fixtureClientID)
-	declared := manifest + " (App 4242 on " + fixtureUser + "'s own account)"
+	declared := durable + " (App 4242 on " + fixtureUser + "'s own account)"
 	if err != nil || out != "App "+fixtureApp+" on record, declared in "+declared+": its consent page with callback "+callback+" is answered by the hook\n" {
 		t.Fatalf("app allow = %q, %v", out, err)
 	}
 	st, err := a.store.Read()
 	if err != nil || len(st.Apps) != 1 || st.Apps[0].Org != fixtureUser || st.Apps[0].ClientID != fixtureClientID || st.Apps[0].Declared != declared {
 		t.Fatalf("the record = %+v, %v", st.Apps, err)
+	}
+	// Older entries may still point at a deleted source file.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AppsCreated[0].Declared = manifest
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allow(clientIDFlag, fixtureClientID); err == nil || !strings.Contains(err.Error(), "--manifest") || !strings.Contains(err.Error(), manifest) {
+		t.Fatalf("missing legacy manifest: %v", err)
+	}
+	if _, err := allow(clientIDFlag, fixtureClientID, manifestFlag, durable); err != nil {
+		t.Fatalf("explicit replacement: %v", err)
 	}
 	consent := "https://github.com/login/oauth/authorize?client_id=" + fixtureClientID + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&state=x"
 	title := "Authorize " + fixtureApp
