@@ -114,7 +114,7 @@ complete.`,
 				return err
 			}
 			sections := []handoverSection{
-				{"supervisor", "", func(bool) { a.printSupervisor(v) }},
+				{supervisorCommand, "", func(bool) { a.printSupervisor(v) }},
 				{secSessions, fmt.Sprintf("Sessions (%d running)", len(v.Sessions)), func(bool) { a.printSessions(v) }},
 				{"leases", "Leases", func(bool) { a.printLeases(l) }},
 				{"holds", "Holds", func(bool) { a.printHolds(holds) }},
