@@ -40,7 +40,13 @@ func (rec builderRecord) file(name string) string {
 
 func (r Runner) remember(root, host, name string) error {
 	dir := filepath.Join(r.StateDir, "remote-build")
-	record := builderRecord{root, host, r.Config.Kubeconfig, r.Config.Context, r.Config.Namespace}
+	// Retirement may run outside this worktree, or outside its original
+	// subdirectory. Preserve the connection selected from the build's cwd.
+	kubeconfig, err := filepath.Abs(r.Config.Kubeconfig)
+	if err != nil {
+		return err
+	}
+	record := builderRecord{root, host, kubeconfig, r.Config.Context, r.Config.Namespace}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -130,6 +136,9 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 			}
 			if rec.Kubeconfig == "" || rec.Context == "" || rec.Namespace == "" {
 				return errors.New("incomplete builder connection record")
+			}
+			if !filepath.IsAbs(rec.Kubeconfig) {
+				return fmt.Errorf("cannot safely retire builder %s: relative kubeconfig in ownership record %s; original connection must be recovered", name, entry.Name())
 			}
 			target := r
 			target.Config.Kubeconfig, target.Config.Context, target.Config.Namespace = rec.Kubeconfig, rec.Context, rec.Namespace
