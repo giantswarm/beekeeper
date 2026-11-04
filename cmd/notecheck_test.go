@@ -11,6 +11,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const noteCheckAPI = "api"
+
 const (
 	prURL  = "https://github.com/o/r/pull/7"
 	sqNow  = "the PR waits for review"
@@ -237,7 +239,7 @@ func TestNoteOnAPlanPullNeedsItsStageCheckGreenOrAtTheGrillStage(t *testing.T) {
 	t.Cleanup(func() { notesGH = prev })
 	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
-		if args[0] == "api" {
+		if args[0] == noteCheckAPI {
 			return []byte(annotations[strings.Split(args[1], "/")[4]]), nil
 		}
 		return []byte(rollups[args[2]]), nil
@@ -297,7 +299,7 @@ func TestPlanStagesAdmitsPRDRevisionWithoutContrarianPlaceholder(t *testing.T) {
 	prev := notesGH
 	t.Cleanup(func() { notesGH = prev })
 	notesGH = func(_ context.Context, args ...string) ([]byte, error) {
-		if args[0] == "api" {
+		if args[0] == noteCheckAPI {
 			// The PRD already ran; the revision is now grilled before its next output.
 			// No contrarian file or missing-contrarian finding is needed.
 			return []byte(`["revision: index.html missing: the last revision/index.html is older than the PRD's last change"]`), nil
