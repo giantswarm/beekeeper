@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const goSettingsOff = "settings off"
+
 func TestCacheDirectoriesUseGoEnvSettings(t *testing.T) {
 	dir := t.TempDir()
 	build := filepath.Join(dir, "build")
@@ -27,7 +29,7 @@ func TestCacheDirectoriesUseGoEnvSettings(t *testing.T) {
 
 func TestCacheDirectoriesSettingsPrecedence(t *testing.T) {
 	const missingSettings = "missing settings"
-	for _, name := range []string{"process overrides", "persisted GOPATH", "cache off", "settings off", missingSettings} {
+	for _, name := range []string{"process overrides", "persisted GOPATH", "cache off", goSettingsOff, missingSettings} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("GOCACHE", "")
@@ -54,14 +56,14 @@ func TestCacheDirectoriesSettingsPrecedence(t *testing.T) {
 			case "cache off":
 				content = "GOCACHE=off\nGOMODCACHE=" + modules + "\n"
 				build = ""
-			case "settings off", missingSettings:
+			case goSettingsOff, missingSettings:
 				cache, err := os.UserCacheDir()
 				if err != nil {
 					t.Fatal(err)
 				}
 				build = filepath.Join(cache, "go-build")
 				modules = filepath.Join(dir, "home", "go", "pkg", "mod")
-				if name == "settings off" {
+				if name == goSettingsOff {
 					t.Setenv("GOENV", "off")
 				}
 			}
