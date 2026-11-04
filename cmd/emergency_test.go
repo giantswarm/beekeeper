@@ -273,3 +273,86 @@ func TestEmergencyMergePreservesStopsAndHolds(t *testing.T) {
 		})
 	}
 }
+
+func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) {
+	for _, harness := range []string{"CODEX", "OMP", "AGY"} {
+		t.Run(harness, func(t *testing.T) {
+			a := emergencyApp(t)
+			key := "BEEKEEPER_" + harness + "_AGENT"
+			t.Setenv(key, "original")
+			t.Setenv("BEEKEEPER_AGENT_NAME", "guide")
+			setGuide := func() {
+				t.Helper()
+				me, err := a.caller()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Guide.Holder.Party = me
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setGuide()
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(key, "successor")
+			if err := emergencyCall(a, "auto-install", "pause", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+				t.Errorf("different session authorized: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.AutoInstallPaused {
+				t.Error("unauthorized pause persisted")
+			}
+			setGuide()
+			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+				t.Fatalf("successor reused grant: %v", err)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Holds) != 0 {
+				t.Fatal("unauthorized hold persisted")
+			}
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestEmergencySameSession(t *testing.T) {
+	base := state.Party{Session: "session", HostSession: "host-session", Name: "guide", Person: "owner@example.invalid", Host: "installation-a"}
+	for _, tc := range []struct {
+		name  string
+		other state.Party
+		want  bool
+	}{
+		{"same session", base, true},
+		{"session only", state.Party{Session: base.Session}, true},
+		{"host session only", state.Party{HostSession: base.HostSession}, true},
+		{"display name only", state.Party{Name: base.Name}, false},
+		{"different session", state.Party{Session: "successor", Name: base.Name}, false},
+		{"different host session", state.Party{HostSession: "successor", Name: base.Name}, false},
+		{"different person", state.Party{Session: base.Session, Person: "other@example.invalid"}, false},
+		{"different host", state.Party{HostSession: base.HostSession, Host: "installation-b"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := emergencySameSession(base, tc.other); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if emergencySameSession(state.Party{Name: "guide"}, state.Party{Name: "guide"}) {
+		t.Fatal("display names matched without sessions")
+	}
+}
