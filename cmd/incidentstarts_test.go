@@ -20,6 +20,8 @@ const (
 	incidentReason      = "merge engine unavailable"
 	incidentExceptFlag  = "--except"
 	incidentModeFlag    = "--incident"
+	incidentFixerKind   = "fixer"
+	incidentRoomJSON    = `{"room":1}`
 )
 
 func TestIncidentBoardSkipsOtherWorkButOffersRepair(t *testing.T) {
@@ -120,7 +122,7 @@ func TestIncidentStartsRestrictOnlyHeldRepositoryUntilLift(t *testing.T) {
 // Save the hold after the initial incident check, during an external read.
 // No real capacity command, GitHub request, or agent start is performed.
 func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
-	for _, kind := range []string{"worker", "reviewer", "fixer"} {
+	for _, kind := range []string{"worker", "reviewer", incidentFixerKind} {
 		for _, repair := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/repair=%t", kind, repair), func(t *testing.T) {
 				r, _ := fillRig(t)
@@ -141,14 +143,14 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 				}
 				r.answer = func(args []string) (string, int) {
 					if args[0] == loopCapacity {
-						if kind != "fixer" {
+						if kind != incidentFixerKind {
 							setHold()
 						}
-						return `{"room":1}`, 0
+						return incidentRoomJSON, 0
 					}
 					return "", 0
 				}
-				if kind == "fixer" {
+				if kind == incidentFixerKind {
 					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
 						setHold()
 						return r.pull, nil
@@ -162,14 +164,14 @@ func TestIncidentHoldSetDuringStartPreparation(t *testing.T) {
 					_, err = l.startItem(context.Background(), act, loopBoardItem{Ref: loopPR, URL: loopURL})
 				case "reviewer":
 					_, err = l.startReviewer(context.Background(), act)
-				case "fixer":
+				case incidentFixerKind:
 					err = l.startFixer(context.Background(), &state.State{}, act)
 				}
 				if !inserted {
 					t.Fatal("test did not reach the preparation read")
 				}
 				if repair {
-					if err != nil || len(r.logged(t, loopClaimVerb)) != 1 {
+					if err != nil || len(r.logged(t, loopClaimVerb)) != 1 || r.called(agentsName, agentStartName) == nil {
 						t.Fatalf("repair should start: %v; calls %v", err, r.calls)
 					}
 					return
