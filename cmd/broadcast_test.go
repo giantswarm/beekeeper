@@ -30,10 +30,10 @@ func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
 	// Simulate a stale roster entry whose CLI still runs after the relay.
 	st.Agents = append(st.Agents, state.Agent{Party: from})
 	st.Agents = append(st.Agents,
-		state.Agent{Party: state.Party{Session: "busy-run", Name: "Busy"}, Task: "work"},
+		state.Agent{Party: state.Party{Session: "busy-run", Name: "Busy"}, Task: "broadcast fixture task"},
 		state.Agent{Party: state.Party{Session: "idle-run", Name: "Idle"}},
-		state.Agent{Party: state.Party{Session: "parked-run", Name: "Parked"}, Task: "work", Park: &state.Park{}},
-		state.Agent{Party: state.Party{Session: "done-run", Name: "Finished"}, Done: true},
+		state.Agent{Party: state.Party{Session: "parked-run", Name: "Parked"}, Task: "broadcast fixture task", Park: &state.Park{}},
+		state.Agent{Party: state.Party{Session: "done-run", Name: "Retired"}, Done: true},
 		state.Agent{Party: state.Party{Session: "stopped-run", Name: "Stopped"}},
 	)
 	var sessions []*claude.Session
