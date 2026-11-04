@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -101,5 +102,33 @@ func TestExecutionConfirmedMissingPreparationPinsFreshSource(t *testing.T) {
 	}
 	if uploads != 1 || starts != 2 || !running {
 		t.Fatal("fresh preparation was not activated exactly once")
+	}
+}
+
+func TestExecutionAmbiguousPreparationInspectionDoesNotUploadOrStart(t *testing.T) {
+	rig := newPublicationRig(t)
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rec, _ := executionRecord(st, rig.request.Ref)
+		rec.Phase = executionPending
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inspectionErr := errors.New("ambiguous inspection failure")
+	fake := &testExecutionTransport{}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{}, inspectionErr
+	}
+	fake.start = func(context.Context, execution.StartRequest) (execution.Handle, error) {
+		t.Fatal("ambiguous inspection started preparation")
+		return execution.Handle{}, nil
+	}
+	transport := &sourceRecoveryTransport{testExecutionTransport: fake, upload: func(context.Context, execution.Ref, []byte) error {
+		t.Fatal("ambiguous inspection uploaded source")
+		return nil
+	}}
+	rig.a.executionTransport = func(execution.Host) execution.Transport { return transport }
+	if err := rig.a.activateExecution(context.Background(), rig.request.Ref); !errors.Is(err, inspectionErr) {
+		t.Fatalf("inspection error lost: %v", err)
 	}
 }

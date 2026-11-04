@@ -341,13 +341,16 @@ type HarnessReadiness struct {
 }
 
 type Capabilities struct {
-	GitHub       bool              `json:"github,omitempty"`
-	Publication  bool              `json:"publication"`
-	Protocol     int               `json:"protocol"`
-	Identity     HostID            `json:"identity"`
-	Version      string            `json:"version"`
-	PolicyDigest string            `json:"policyDigest"`
-	Harnesses    map[string]string `json:"harnesses"`
+	// SourcePreparation promises source-chunk upload and typed not-found
+	// responses when inspecting an execution whose journal does not exist.
+	SourcePreparation bool              `json:"sourcePreparation"`
+	GitHub            bool              `json:"github,omitempty"`
+	Publication       bool              `json:"publication"`
+	Protocol          int               `json:"protocol"`
+	Identity          HostID            `json:"identity"`
+	Version           string            `json:"version"`
+	PolicyDigest      string            `json:"policyDigest"`
+	Harnesses         map[string]string `json:"harnesses"`
 	// Unavailable names each configured harness that failed its version,
 	// login or guard probe. The host advertises only the passing ones.
 	Unavailable map[string]string           `json:"unavailable,omitempty"`
