@@ -2714,6 +2714,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
@@ -2831,6 +2835,10 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -3368,6 +3376,10 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
