@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,7 +33,7 @@ func TestSchedulerIntervalsRejectNegative(t *testing.T) {
 			if _, err := Set(p, []Setting{{Key: key, Value: "-1s"}}); !errors.Is(err, ErrInvalid) {
 				t.Errorf("negative scheduler edit accepted: %v", err)
 			}
-			if raw, err := os.ReadFile(p); err != nil || string(raw) != original {
+			if raw, err := os.ReadFile(filepath.Clean(p)); err != nil || string(raw) != original {
 				t.Errorf("refused edit changed file: %v", err)
 			}
 		})
