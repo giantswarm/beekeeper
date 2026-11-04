@@ -2,6 +2,7 @@ package dockerprune
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -93,6 +94,7 @@ type fake struct {
 	du           string
 	pruneArgs    [][]string
 	pruneRefused map[string]bool
+	pruneNoop    map[string]bool
 	// tagged are the images' tag times by ID; an image without one was
 	// never tagged.
 	tagged map[string]string
@@ -111,7 +113,22 @@ func (f *fake) run(_ context.Context, args ...string) ([]byte, error) {
 		if len(args) == 5 && args[4] != "" && f.pruneRefused[strings.TrimPrefix(args[4], "id=")] {
 			return nil, errors.New("failed to remove " + strings.TrimPrefix(args[4], "id="))
 		}
-		return []byte("Total:\t0B\n"), nil
+		id := strings.TrimPrefix(args[4], "id=")
+		if f.pruneNoop[id] {
+			return []byte("Total:\t0B\n"), nil
+		}
+		var remaining []string
+		freed := "0B"
+		for _, line := range strings.Split(f.du, "\n") {
+			var r struct{ ID, Size string }
+			if json.Unmarshal([]byte(line), &r) == nil && r.ID == id {
+				freed = r.Size
+				continue
+			}
+			remaining = append(remaining, line)
+		}
+		f.du = strings.Join(remaining, "\n")
+		return []byte("Total:\t" + freed + "\n"), nil
 	case args[0] == image && args[1] == "inspect":
 		var out string
 		for _, id := range args[4:] {
@@ -402,6 +419,60 @@ func TestPruneBuildCacheUnderTheTargetAndWithRefusals(t *testing.T) {
 		pruneRefused: map[string]bool{"a": true}}
 	if trimmed, err := PruneBuildCache(context.Background(), f.run, 0); err == nil || !strings.Contains(err.Error(), "a") || trimmed.Removed != 0 {
 		t.Errorf("all-refused trim = %+v, %v; want an error naming a", trimmed, err)
+	}
+}
+
+func TestPruneBuildCacheChecksActualProgress(t *testing.T) {
+	f := &fake{du: duRows(duRow{"old", 4, true, "5 days ago"}, duRow{"next", 2, true, age2d}),
+		pruneNoop: map[string]bool{"old": true}}
+	trimmed, err := PruneBuildCache(context.Background(), f.run, 3e9)
+	if err != nil || trimmed.Removed != 1 || trimmed.Freed != 2e9 || trimmed.Kept != 1 || trimmed.KeptBytes != 4e9 {
+		t.Fatalf("trim = %+v, %v; want next removed and the unchanged old record kept", trimmed, err)
+	}
+	if !strings.Contains(f.du, `"ID":"old"`) || strings.Contains(f.du, `"ID":"next"`) {
+		t.Fatalf("remaining cache = %s; want only old", f.du)
+	}
+	// A pass with no real progress must end even if every prune exits 0.
+	f = &fake{du: duRows(duRow{"old", 4, true, age2d}), pruneNoop: map[string]bool{"old": true}}
+	trimmed, err = PruneBuildCache(context.Background(), f.run, 0)
+	if err != nil || trimmed.Removed != 0 || trimmed.Freed != 0 || trimmed.KeptBytes != 4e9 || len(f.pruneArgs) != 1 {
+		t.Fatalf("no-op trim = %+v, %v after %d prunes", trimmed, err, len(f.pruneArgs))
+	}
+}
+
+func TestPruneBuildCacheRetriesAnUnblockedParent(t *testing.T) {
+	f := &fake{du: duRows(duRow{"parent", 2, true, "5 days ago"}, duRow{"child", 2, true, age2d})}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[1] == "prune" && args[4] == "id=parent" && strings.Contains(f.du, `"ID":"child"`) {
+			f.pruneArgs = append(f.pruneArgs, slices.Clone(args[2:]))
+			return []byte("Total:\t0B\n"), nil
+		}
+		return f.run(ctx, args...)
+	}
+	trimmed, err := PruneBuildCache(context.Background(), run, 0)
+	if err != nil || trimmed.Removed != 2 || trimmed.Freed != 4e9 || trimmed.Kept != 0 {
+		t.Fatalf("trim = %+v, %v; want both records removed after the child unblocks its parent", trimmed, err)
+	}
+	if len(f.pruneArgs) != 3 {
+		t.Fatalf("prunes = %v; want parent, child, then parent again", f.pruneArgs)
+	}
+}
+
+func TestPruneBuildCacheStopsWhenProgressCannotBeRead(t *testing.T) {
+	f := &fake{du: duRows(duRow{"a", 2, true, age2d}, duRow{"b", 2, true, age2d})}
+	unreadable := errors.New("cache usage unavailable")
+	reads := 0
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		if args[1] == "du" {
+			reads++
+			if reads > 1 {
+				return nil, unreadable
+			}
+		}
+		return f.run(ctx, args...)
+	}
+	if _, err := PruneBuildCache(context.Background(), run, 0); !errors.Is(err, unreadable) || len(f.pruneArgs) != 1 {
+		t.Fatalf("trim error = %v after %d prunes; want to stop when remaining usage is unknown", err, len(f.pruneArgs))
 	}
 }
 
