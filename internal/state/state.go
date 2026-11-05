@@ -934,7 +934,38 @@ type ExecutionRecord struct {
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
 	ReleaseReason string    `json:"releaseReason,omitempty"`
-	rest          rest
+	// Retirement is the execution's one retirement, nil until a terminal path
+	// (final report, stop, failed start, crash) enters it.
+	Retirement *ExecutionRetirement `json:"retirement,omitempty"`
+	rest       rest
+}
+
+// ExecutionRetirement is the coordinator's resumable retirement of an
+// execution: its GitHub authorization and its host resources end independently,
+// each confirmed only by its own success, and a failed step keeps its error
+// and its next attempt so that neither outage can stand in for the other.
+type ExecutionRetirement struct {
+	ID          string    `json:"id"`
+	Trigger     string    `json:"trigger"`
+	RequestedAt time.Time `json:"requestedAt"`
+	// RevokedAt is when the worker's GitHub authorization was confirmed
+	// revoked, zero until then; RevokeError is why the last attempt failed.
+	RevokedAt   time.Time `json:"revokedAt,omitzero"`
+	RevokeError string    `json:"revokeError,omitempty"`
+	// RetiredAt is when the host confirmed Stage, zero until then; HostError is
+	// why the last attempt failed.
+	RetiredAt   time.Time           `json:"retiredAt,omitzero"`
+	Stage       string              `json:"stage,omitempty"`
+	HostError   string              `json:"hostError,omitempty"`
+	Recovery    *execution.Recovery `json:"recovery,omitempty"`
+	RetainUntil time.Time           `json:"retainUntil,omitzero"`
+	Attempts    int                 `json:"attempts,omitempty"`
+	NextAttempt time.Time           `json:"nextAttempt,omitzero"`
+}
+
+// Finished says both ends of the retirement are confirmed.
+func (r *ExecutionRetirement) Finished() bool {
+	return r != nil && !r.RevokedAt.IsZero() && !r.RetiredAt.IsZero()
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
