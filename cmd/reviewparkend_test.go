@@ -316,32 +316,85 @@ func TestServesIgnoresPullRequestInTask(t *testing.T) {
 // did not read: an ownerless stretch must not end on that.
 func TestHeldPassKeepsOwnerlessStretchOfUnreadPull(t *testing.T) {
 	r := newLoopRig(t)
-	const orphan = "o/r#9"
-	r.pulls[orphan] = superloop.Pull{Ref: orphan, URL: "https://github.com/o/r/pull/9", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk, Branch: "fix-9"}
+	// The first orphan's read meets the hold, the second is not read at all.
+	orphans := []string{sweepRef(31), sweepRef(32)}
+	for _, orphan := range orphans {
+		r.pulls[orphan] = superloop.Pull{Ref: orphan, URL: "https://github.com/" + strings.Replace(orphan, "#", "/pull/", 1), State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	}
 	listed := readOpenPulls
 	t.Cleanup(func() { readOpenPulls = listed })
-	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) {
-		return []string{orphan}, nil
-	}
+	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return orphans, nil }
 	r.pass(t)
-	stretches := func() []state.Event {
-		return slices.DeleteFunc(r.logged(t, loopOwnerlessVerb), func(e state.Event) bool { return e.Subject != orphan })
-	}
-	if evs := stretches(); len(evs) != 1 {
-		t.Fatalf("stretch did not start: %+v", evs)
+	if evs := r.logged(t, loopOwnerlessVerb); len(evs) != len(orphans) {
+		t.Fatalf("stretches did not start: %+v", evs)
 	}
 	r.park(t, loopPR, time.Now())
 	prev := readLoopPull
+	held := 0
 	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if ref == loopPR {
 			// The active pull request is read; the hold starts right after.
 			return prev(ctx, ref)
 		}
+		held++
 		return superloop.Pull{}, errLoopLater
 	}
 	r.pass(t)
-	if evs := stretches(); len(evs) != 1 {
+	if evs := r.logged(t, loopOwnerlessVerb); len(evs) != len(orphans) {
 		t.Fatalf("a held pass ended the stretch of a pull request it did not read: %+v", evs)
+	}
+	if held != 1 {
+		t.Fatalf("the pass read on after the hold: %d reads met it", held)
+	}
+}
+
+// With no pull request read, the hold ends the pass before it plans anything.
+func TestHeldPassWithNothingReadPlansNothing(t *testing.T) {
+	r := newLoopRig(t)
+	const finished = "finished worker"
+	party := state.Party{Name: finished}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: party, Task: "done work", Done: true}}
+		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: time.Now(), ReviewHead: loopHead, Agent: "other", Party: state.Party{Name: "other"}}}
+		return []state.Event{event(party, superloop.VerbDone, "%s done: done work", finished)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prev := readLoopPull
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return superloop.Pull{}, errLoopLater }
+	r.pass(t)
+	if c := r.called(agentsName, loopRemove, finished); c != nil {
+		t.Fatalf("a pass that read nothing took an action: %v", c)
+	}
+	// The same pass plans it once the hold is gone: the check above saw a pass
+	// that stopped, not one with nothing to do.
+	readLoopPull = prev
+	r.pulls[multiParkSecondPR] = superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Open, Head: loopHead, Author: loopDesk}
+	r.pass(t)
+	if r.called(agentsName, loopRemove, finished) == nil {
+		t.Fatalf("no action once the hold ended: %v\n%s", r.calls, r.out)
+	}
+}
+
+// A park ends with its own pull request's end, not with an end from before
+// it: a reopened pull request can be parked on again.
+func TestReviewParkEndedOnlyByLaterEndOfItsPull(t *testing.T) {
+	at := time.Now()
+	taken := []superloop.Taken{{Kind: superloop.KindEnd, Ref: "O/R#7", At: at}, {Kind: superloop.KindReview, Ref: multiParkSecondPR, At: at}}
+	for _, tc := range []struct {
+		name string
+		rp   state.ReviewPark
+		want bool
+	}{
+		{"parked before the end", state.ReviewPark{On: loopPR, At: at.Add(-time.Second)}, true},
+		{"parked after the end", state.ReviewPark{On: loopPR, At: at.Add(time.Second)}, false},
+		{"other pull request", state.ReviewPark{On: multiParkSecondPR, At: at.Add(-time.Second)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reviewParkEnded(taken, tc.rp); got != tc.want {
+				t.Errorf("reviewParkEnded = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }
 

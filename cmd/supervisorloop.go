@@ -1249,12 +1249,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		})
 	}
 	if endedParks && !l.dryRun {
-		ended := func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) }
 		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
-			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, ended)
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) })
 			return nil, nil
 		})
-		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, ended)
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
@@ -1293,9 +1291,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.mu.Unlock()
 		if wasMerged {
 			in.Pulls[ref] = mergedPull
-			if !hasLoopRound(in.Taken, ref) {
-				unreviewedEnded[strings.ToLower(ref)] = true
-			}
 			continue
 		}
 		if pullHeld {
@@ -1338,12 +1333,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				return unreviewedEnded[strings.ToLower(rp.On)]
 			})
 			return nil, nil
-		})
-		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
-			return unreviewedEnded[strings.ToLower(rp.On)]
-		})
-		in.Workers = slices.DeleteFunc(in.Workers, func(w superloop.Worker) bool {
-			return w.Saved && unreviewedEnded[strings.ToLower(w.ParkedOn)]
 		})
 	}
 	if pullHeld && len(in.Pulls) == 0 {

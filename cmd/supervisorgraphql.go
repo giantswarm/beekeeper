@@ -281,10 +281,10 @@ func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed ti
 		l.pulls = map[string]loopPullObservation{}
 	}
 	at := l.a.timeNow()
+	// A running loop's clock stays at the start of its pass: this read may be
+	// minutes later, and the next pass must not take it for an old one.
 	if l.a.loopNow != nil {
-		if now := time.Now(); now.After(at) {
-			at = now
-		}
+		at = time.Now()
 	}
 	l.pulls[ref] = loopPullObservation{pull: p, at: at, changed: changed}
 	return p, nil
