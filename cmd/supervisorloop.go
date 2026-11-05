@@ -2573,7 +2573,8 @@ func reviewParkSettled(st *state.State, taken []superloop.Taken, events []superl
 		return true
 	}
 	if slices.ContainsFunc(taken, func(t superloop.Taken) bool {
-		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
+		return (t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)) ||
+			(t.Kind == superloop.KindDone && rp.Agent != "" && strings.EqualFold(t.Agent, rp.Agent) && !rp.At.After(t.At))
 	}) {
 		return true
 	}

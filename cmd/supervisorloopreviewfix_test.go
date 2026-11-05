@@ -640,17 +640,17 @@ func TestLoopPrunesSettledReviewParksAndStartsActiveReviewUnderAllowanceHold(t *
 	r.pulls[otherPR] = superloop.Pull{Ref: otherPR, URL: "https://github.com/o/r/pull/9", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReviewParks = []state.ReviewPark{
-			{On: donePR, At: now.Add(-30 * time.Minute), ReviewHead: loopHead, Agent: doneWorker, Party: state.Party{Name: doneWorker, Host: "done-id"}},
-			{On: endedPR, At: now.Add(-20 * time.Minute), ReviewHead: loopHead, Agent: "ended-worker", Party: state.Party{Name: "ended-worker", Host: "ended-id"}},
-			{On: unreviewedPR, At: now.Add(-10 * time.Minute), ReviewHead: loopHead, Agent: "merged-worker", Party: state.Party{Name: "merged-worker", Host: "merged-id"}},
+			{On: donePR, At: now.Add(-50 * time.Second), ReviewHead: loopHead, Agent: doneWorker, Party: state.Party{Name: doneWorker, Host: "done-id"}},
+			{On: endedPR, At: now.Add(-40 * time.Second), ReviewHead: loopHead, Agent: "ended-worker", Party: state.Party{Name: "ended-worker", Host: "ended-id"}},
+			{On: unreviewedPR, At: now.Add(-20 * time.Second), ReviewHead: loopHead, Agent: "merged-worker", Party: state.Party{Name: "merged-worker", Host: "merged-id"}},
 		}
 		st.Agents = append(st.Agents, state.Agent{
 			Party: state.Party{Name: "plain-waiter", Host: "plain-id"},
-			Park:  &state.Park{On: otherPR, At: now.Add(-5 * time.Minute), Waits: "overlap: waiting for o/r#9"},
+			Park:  &state.Park{On: otherPR, At: now.Add(-10 * time.Second), Waits: "overlap: waiting for o/r#9"},
 		})
 		return []state.Event{
-			{At: now.Add(-25 * time.Minute), By: state.Party{Name: doneWorker, Host: "done-id"}, Verb: superloop.VerbDone, Detail: doneWorker + " done: finished task"},
-			{At: now.Add(-15 * time.Minute), By: loopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
+			{At: now.Add(-45 * time.Second), By: state.Party{Name: doneWorker, Host: "done-id"}, Verb: superloop.VerbDone, Detail: doneWorker + " done: finished task"},
+			{At: now.Add(-35 * time.Second), By: loopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
