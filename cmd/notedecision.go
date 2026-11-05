@@ -206,7 +206,9 @@ func noteOptionLabel(n *state.Note, choice int, words string) (string, bool) {
 
 // defaultedEvent is the note.defaulted event of n closed at its due time.
 func defaultedEvent(by state.Party, n *state.Note) state.Event {
-	return event(by, noteDefaulted, "#%d defaulted for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), n.Default, n.By.Name, n.Text)
+	e := event(by, noteDefaulted, "#%d defaulted for %s: %s (asked by %s: %s)", n.ID, cmp.Or(n.For, "nobody named"), n.Default, n.By.Name, n.Text)
+	e.NoteTeam = n.By.Team
+	return e
 }
 
 // answeredLine and defaultedLine are what the watch says of a closed

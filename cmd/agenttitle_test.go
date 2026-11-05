@@ -46,7 +46,7 @@ func TestRetitle(t *testing.T) {
 		{desc: "kept", titles: []string{name}, find: own, want: "keeps its title"},
 		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: "the session retitled it"},
 		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_retitled"`, want: "steward local_2 retitled it"},
-		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"klaus-lab" instead of`},
+		{desc: "replaced, then retitled", titles: []string{"fixture-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"fixture-lab" instead of`},
 		{desc: "no steward", titles: []string{""}, find: func(context.Context, []string) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
 		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: ownTo, wantArg: selfArg, want: "not sent", wantErr: true},
 		{desc: "never recorded", titles: []string{""}, find: own, wantTo: ownTo, wantArg: selfArg, want: "did not record it", wantErr: true},

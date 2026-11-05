@@ -8,7 +8,7 @@ import (
 
 const (
 	guideSession = "guide-session"
-	guidePerson  = "Timo"
+	guidePerson  = "Alex"
 	scratch      = "/tmp/x"
 )
 
@@ -50,13 +50,13 @@ var guideReads = map[string]map[string]any{
 	"gh pr view":       bashCall("gh pr view 7 --repo o/r && gh pr checks 7 --repo o/r"),
 	"devctl pr list":   bashCall("devctl pr list o/r"),
 	selfCmd:            bashCall("beekeeper guide next && beekeeper note answer 3 'yes'"),
-	"note add":         bashCall("beekeeper note add --for Timo 'merge?'"),
+	"note add":         bashCall("beekeeper note add --for Alex 'merge?'"),
 	"hold lift":        bashCall("beekeeper hold lift o/r"),
-	"hold narrow":      bashCall("beekeeper hold set o/r --reason 'Timo: only 7' --except o/r#7"),
+	"hold narrow":      bashCall("beekeeper hold set o/r --reason 'Alex: only 7' --except o/r#7"),
 	"lanes clear":      bashCall("beekeeper lanes clear app"),
 	"agents resume":    bashCall("beekeeper agents resume 'Agent one'"),
 	ompReadTool:        toolEvent("Read", map[string]any{filePathKey: scratch}),
-	"send":             toolEvent(SendMessageTool, map[string]any{"to": "Agent one", "message": "Timo says yes"}),
+	"send":             toolEvent(SendMessageTool, map[string]any{"to": "Agent one", "message": "Alex says yes"}),
 	"browser navigate": toolEvent(browserTools+"navigate", map[string]any{"url": "https://example.com"}),
 	"browser read":     toolEvent(browserTools+"get_page_text", map[string]any{"tabId": 1}),
 	"browser shot":     computerCall("screenshot"),
@@ -180,7 +180,7 @@ func TestGuidesQuestionsAreChecked(t *testing.T) {
 	}
 	// A worker's question is refused as before, without the check.
 	got = nil
-	if d := ask("worker-session", "Merge it?"); d == nil || !strings.Contains(d.Reason, "beekeeper note add --for Timo") || got != nil {
+	if d := ask("worker-session", "Merge it?"); d == nil || !strings.Contains(d.Reason, "beekeeper note add --for Alex") || got != nil {
 		t.Errorf("a worker's question: want the note refusal unchecked, got %+v (checked %v)", d, got)
 	}
 }

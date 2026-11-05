@@ -48,7 +48,7 @@ func TestSquashDeletesLiteralHeadBranch(t *testing.T) {
 				if err != nil {
 					return nil, err
 				}
-				branch := strings.TrimPrefix(req.URL.Path, "/repos/teemow/lab/git/refs/heads/")
+				branch := strings.TrimPrefix(req.URL.Path, "/repos/fixture-person/lab/git/refs/heads/")
 				if !refs[branch] {
 					return nil, fmt.Errorf("HTTP 422: unknown synthetic ref %q", branch)
 				}

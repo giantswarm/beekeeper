@@ -32,7 +32,7 @@ type Session struct {
 	Name   string `json:"name"`
 	// Peer is the name the CLI takes messages under: the name in its record,
 	// else its -n. A desktop title that follows a rename (Name) is not it
-	// when the CLI derived its own, from its folder ("klaus-lab-16").
+	// when the CLI derived its own, from its folder ("fixture-lab-16").
 	Peer       string    `json:"peer,omitempty"`
 	Cwd        string    `json:"cwd"`
 	Repo       string    `json:"repo,omitempty"`

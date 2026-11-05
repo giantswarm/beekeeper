@@ -166,7 +166,7 @@ nothing to wait for. One
 that reported its task idle (agents idle, --done included) has a task
 again once the supervisor's next message re-tasks it, by SendMessage or
 agents wake: its task is that message's first line.`,
-		Example: `  beekeeper agents park --on 41 "Timo's answer on the rollout window"
+		Example: `  beekeeper agents park --on 41 "Alex's answer on the rollout window"
   beekeeper agents park --on giantswarm/beekeeper#371 "the merge ahead of mine in the lane"
   beekeeper agents park --on example/tool@v1.2.3 "release to promote"
   beekeeper agents park --on alert:WorkloadDown "the workload alert firing again"
@@ -212,6 +212,12 @@ agents wake: its task is that message's first line.`,
 			if checks && a.managedExecutionID() == "" {
 				return refused("--checks is for SSH workers; use timer add --when pr-checks --wake on the coordinator")
 			}
+			var declaration *string
+			var remaining []string
+			if cmd.Flags().Changed("post-merge") {
+				declaration = &postMerge
+				remaining = []string{postMerge}
+			}
 			if a.managedExecutionID() != "" {
 				if checks {
 					return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, Checks: true})
@@ -223,9 +229,9 @@ agents wake: its task is that message's first line.`,
 				// The coordinator proves the review head against the
 				// execution's owned branch: the workspace's own branch
 				// never is the published one, nor does the host read GitHub.
-				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: &postMerge})
+				return a.remoteControl(cmd.Context(), "park", executionPark{On: on, Waits: waits, RefKind: kind, Head: a.executionWorkspaceHead(cmd.Context(), on), PostMerge: declaration})
 			}
-			line, err := a.park(me, on, waits, postMerge)
+			line, err := a.park(me, on, waits, remaining...)
 			if err != nil {
 				return err
 			}
@@ -285,19 +291,11 @@ func (a *app) park(me state.Party, on, waits string, postMerge ...string) (strin
 		}
 		park := &state.Park{By: me, At: a.now.UTC(), On: on, Waits: waits, RefKind: kind, ReviewHead: reviewHead}
 		if i >= 0 && reviewHead != "" {
-			pm := ""
+			var declaration *string
 			if len(postMerge) > 0 {
-				pm = postMerge[0]
+				declaration = &postMerge[0]
 			}
-			if pm == "" && st.Agents[i].Park != nil && strings.EqualFold(st.Agents[i].Park.On, on) && st.Agents[i].Park.PostMerge != nil && *st.Agents[i].Park.PostMerge != "" {
-				pm = *st.Agents[i].Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(on); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
-					pm = *rp.PostMerge
-				}
-			}
-			park.PostMerge = &pm
+			park.PostMerge = reviewPostMerge(st, on, st.Agents[i].Park, declaration)
 			park.Worktree = parkWorktree(".")
 		}
 		name, counted, resume := me.Name, "off the roster, woken by its session id", fmt.Sprintf("beekeeper agents resume %s", wakeID(me))

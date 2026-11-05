@@ -34,7 +34,7 @@ func TestPersonParkEightHoursWithoutTurns(t *testing.T) {
 		}
 		return nil, fmt.Errorf("probe still waiting")
 	})
-	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -89,7 +89,7 @@ func TestTimerRechecksTheCurrentParkAtDelivery(t *testing.T) {
 		{name: "guide note", on: "#3", guide: true},
 		{name: "guide external wait", guide: true, wantWake: true},
 		{name: "plain external wait", waits: "deployment ready", wantWake: true},
-		{name: "person without note", waits: "Timo's answer"},
+		{name: "person without note", waits: "Alex's answer"},
 		{name: "local note", on: "#3"},
 		{name: "central note", on: parkedCentralNote},
 		{name: "off roster note by id", on: "#3", offRoster: true},
@@ -152,7 +152,7 @@ func TestSupervisorLeavesPersonParkAsleep(t *testing.T) {
 func TestPersonMessageStillReachesParkedSession(t *testing.T) {
 	w := parkingWatch(t, nil)
 	woke := stubWakes(t)
-	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.quietWake(t.Context(), state.Party{Name: personTimo}, agentOne, parkAnswer); err != nil {

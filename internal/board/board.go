@@ -61,6 +61,10 @@ type Item struct {
 	// subIssues counts its sub-issues, closed ones too: what a read of
 	// them returns.
 	subIssues int
+	// Remaining label pages must be read before labels are used to select
+	// work or determine its required leases.
+	labelsMore   bool
+	labelsCursor string
 }
 
 // missingBoardFields is the start of Missing's entry for a sub-issue's

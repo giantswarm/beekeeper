@@ -66,6 +66,9 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 				if err != nil || len(st.Agents) != 1 || len(st.Starts) != 1 || st.Agents[0].Execution == nil || *st.Agents[0].Execution != r.Ref {
 					t.Fatal("SSH start preceded durable roster registration")
 				}
+				if endpoint := st.Starts[0].Execution.Endpoint; endpoint == nil || *endpoint != a.cfg.Agents.Hosts[sshTestSelector].Endpoint {
+					t.Fatal("SSH start preceded durable endpoint pin")
+				}
 				if handle.Ref.Execution != "" && handle.Ref != r.Ref {
 					t.Fatal("recovery allocated another execution")
 				}

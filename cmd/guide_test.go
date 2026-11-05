@@ -33,7 +33,7 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	owner := state.Party{Session: "sO", Name: "Agent seven"}
 	a := &app{now: relayNow, cfg: &config.Config{}} // guide.person unset: every --for note
 	st := &state.State{Notes: []state.Note{
-		{ID: 1, Kind: noteDecision, For: "Timo", Text: "merge the bump?", Default: "it waits", By: owner},
+		{ID: 1, Kind: noteDecision, For: "Alex", Text: "merge the bump?", Default: "it waits", By: owner},
 		{ID: 2, Kind: noteDecision, Text: "check the rollout", By: owner},
 	}}
 	agent := state.Party{Session: "sC", Name: agentC.Name}
@@ -41,26 +41,26 @@ func TestGuideFeedSaysEachItemOnce(t *testing.T) {
 	sessions := []*claude.Session{{ID: "sC", Name: agentC.Name}, {ID: "sO", Name: "Agent seven"}}
 	lines, changed := a.feedLines(st, sessions, nil, nil)
 	if !changed || len(lines) != 2 ||
-		lines[0] != `GUIDE DECISION: #1 for Timo from "Agent seven": merge the bump?; if unanswered: it waits` ||
-		lines[1] != `GUIDE WAITING: "Agent three" needs its person: Timo: approve the ADR` {
+		lines[0] != `GUIDE DECISION: #1 for Alex from "Agent seven": merge the bump?; if unanswered: it waits` ||
+		lines[1] != `GUIDE WAITING: "Agent three" needs its person: Alex: approve the ADR` {
 		t.Fatalf("first poll: %q", lines)
 	}
 	if lines, changed := a.feedLines(st, sessions, nil, nil); changed || lines != nil {
 		t.Fatalf("second poll said again: %q", lines)
 	}
 	st.Notes = st.Notes[1:]
-	st.Records[0].Waits = "Timo: pick a name"
-	closed := map[int]state.Event{1: {Verb: answerRecorded, By: state.Party{Name: "Guide"}, Detail: refOne + " answered by \"Timo\" via cli, recorded at https://c/1, note #1 asked by \"Agent seven\": \"merge the bump?\": yes, merge it"}}
+	st.Records[0].Waits = "Alex: pick a name"
+	closed := map[int]state.Event{1: {Verb: answerRecorded, By: state.Party{Name: "Guide"}, Detail: refOne + " answered by \"Alex\" via cli, recorded at https://c/1, note #1 asked by \"Agent seven\": \"merge the bump?\": yes, merge it"}}
 	lines, _ = a.feedLines(st, sessions, closed, nil)
-	if len(lines) != 2 || lines[0] != `GUIDE WAITING: "Agent three" needs its person: Timo: pick a name` ||
-		lines[1] != "GUIDE ANSWERED (Guide): "+refOne+" answered by \"Timo\" via cli, recorded at https://c/1, note #1 asked by \"Agent seven\": \"merge the bump?\": yes, merge it" {
+	if len(lines) != 2 || lines[0] != `GUIDE WAITING: "Agent three" needs its person: Alex: pick a name` ||
+		lines[1] != "GUIDE ANSWERED (Guide): "+refOne+" answered by \"Alex\" via cli, recorded at https://c/1, note #1 asked by \"Agent seven\": \"merge the bump?\": yes, merge it" {
 		t.Fatalf("answer and new wait: %q", lines)
 	}
 }
 
 const (
 	approveADR = "approve the ADR"
-	personTimo = "Timo"
+	personTimo = "Alex"
 	ciWait     = "CI on #12"
 )
 
@@ -161,7 +161,7 @@ func TestGuideFeedSaysOnlyItsPersonsNotesOnce(t *testing.T) {
 const guideHost = "local_g"
 
 func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
-	guide := state.Party{Session: "sG", HostSession: guideHost, Name: "Guide Timo through his decisions"}
+	guide := state.Party{Session: "sG", HostSession: guideHost, Name: "Guide Alex through his decisions"}
 	st := &state.State{}
 	guideRole.set(st, state.Role{Holder: &state.Supervisor{Party: guide, Since: relayNow}})
 	party := func(id, host, name string) state.Party {
@@ -173,7 +173,7 @@ func TestGuideQueueSkipsArchivedTestAndOwnSessions(t *testing.T) {
 		{Session: party("sT", "local_t", "test: beekeeper#60 permission hook"), Waits: ask},
 		{Session: guide, Waits: ask},
 		{Session: party("sC", "local_c", agentC.Name), Waits: ask},
-		{Session: party("sS", "local_s", "Land the follow-ups"), Waits: "Timo: merge it"},
+		{Session: party("sS", "local_s", "Land the follow-ups"), Waits: "Alex: merge it"},
 		{Session: party("sX", "local_x", "test: a stopped run"), Waits: ask},
 	}
 	sessions := []*claude.Session{
@@ -207,7 +207,7 @@ func TestGuideQueueIgnoresTheDesktopsTurnSummary(t *testing.T) {
 	// its person; it filed no note and serves no --waits for the person.
 	sup := state.Party{Session: "sP", Name: "Supervisor run 17"}
 	st := &state.State{Records: []state.Record{{Session: sup, Issue: "o/r#1"}}}
-	sessions := []*claude.Session{{ID: "sP", Name: sup.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "clarify: is klaus-lab-67 an agent"}}}
+	sessions := []*claude.Session{{ID: "sP", Name: sup.Name, Waiting: &claude.Waiting{Turn: "t1", Action: "clarify: is fixture-lab-67 an agent"}}}
 	if q, _ := guideQueue(st, sessions, personTimo, time.Time{}); len(q) != 0 {
 		t.Fatalf("a report read as an ask is queued: %+v", q)
 	}
@@ -222,8 +222,8 @@ func TestWaitsOnReadsTheAskOfThePerson(t *testing.T) {
 		person, waits, ask string
 		ok                 bool
 	}{
-		{personTimo, "Timo: 8 questions in the plan", "8 questions in the plan", true},
-		{"timo", "TIMO:merge it", "merge it", true},
+		{personTimo, "Alex: 8 questions in the plan", "8 questions in the plan", true},
+		{"alex", "ALEX:merge it", "merge it", true},
 		{personTimo, "Supervisor: the lease", "", false},
 		{personTimo, ciWait, "", false},
 		{personTimo, "", "", false},
@@ -235,7 +235,7 @@ func TestWaitsOnReadsTheAskOfThePerson(t *testing.T) {
 	}
 }
 
-// stoppedWaits are three sessions waiting on Timo: one runs, one stopped
+// stoppedWaits are three sessions waiting on Alex: one runs, one stopped
 // 30m ago, one stopped 3h ago, and one whose wait is 3h old and whose end
 // no watch saw.
 func stoppedWaits() (*state.State, []*claude.Session, *app) {
@@ -259,7 +259,7 @@ func TestGuideQueueFoldsSessionsStoppedPastTheTTL(t *testing.T) {
 	_, _ = fmt.Fprintln(a.out, a.stoppedLine(stopped))
 	want := `"Runs" waits on its person: approve the ADR
 "Stopped lately" (stopped) waits on its person: approve the ADR
-2 stopped session(s) waited on Timo, stopped over 2h ago: beekeeper guide queue --full lists them
+2 stopped session(s) waited on Alex, stopped over 2h ago: beekeeper guide queue --full lists them
 `
 	if got := a.out.(*strings.Builder).String(); got != want {
 		t.Fatalf("queue:\n%s\nwant:\n%s", got, want)

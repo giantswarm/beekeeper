@@ -560,7 +560,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 
 // labIssue7 is an issue of a personal account's repository, outside the
 // board's owner o.
-const labIssue7 = "teemow/lab#7"
+const labIssue7 = "fixture-person/lab#7"
 
 // homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
@@ -573,12 +573,12 @@ func homeItem(id, project, owner string, number int, status string) string {
 
 func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 	for _, owner := range []string{"o", personalOwner} {
-		for _, nodes := range []string{"", homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "teemow", 2, "Backlog")} {
+		for _, nodes := range []string{"", homeItem("U1", "Q", "fixture-person", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "fixture-person", 2, "Backlog")} {
 			t.Run(owner+nodes, func(t *testing.T) {
 				f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + nodes + `]}}}}}`,
 					added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 				c := &Client{GH: f.run, Board: config.Board{Owner: owner, Project: 7, Team: "X"}}
-				mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+				mv, err := c.Move(context.Background(), "https://github.com/fixture-person/lab/issues/7", "progress")
 				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{addIssue7, "I3=t1", "I3=s3"}) {
 					t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 				}
@@ -644,7 +644,7 @@ func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
 // personal account's repository.
 const (
 	issue9  = "o/r#9"
-	labRepo = "teemow/lab"
+	labRepo = "fixture-person/lab"
 )
 
 // item9 is the issue the ranks place an item against: its item I9 is on
@@ -755,7 +755,7 @@ func TestOpenActsOnTheRepository(t *testing.T) {
 		f.repos = append(f.repos, github.Repo(ctx))
 		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"OPEN"}}}}`), nil
 	}}
-	if open, err := c.Open(context.Background(), "teemow/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{labRepo}) {
+	if open, err := c.Open(context.Background(), "fixture-person/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{labRepo}) {
 		t.Errorf("Open = %v, %v acting on %q", open, err, f.repos)
 	}
 }
@@ -782,28 +782,28 @@ func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
 	gh := func(ctx context.Context, args ...string) ([]byte, error) {
 		queries = append(queries, args[3])
 		acting = append(acting, github.Repo(ctx))
-		if strings.Contains(args[3], `owner:"teemow"`) {
+		if strings.Contains(args[3], `owner:"fixture-person"`) {
 			// A personal account's repository resolves only on the login
 			// that reaches it: acting on it (github.ActingOn).
-			if github.Repo(ctx) != "teemow/lab" {
-				return []byte(`{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`), errors.New("exit status 1")
+			if github.Repo(ctx) != "fixture-person/lab" {
+				return []byte(`{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'fixture-person/lab'."}]}`), errors.New("exit status 1")
 			}
-			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":3,"repository":{"nameWithOwner":"teemow/lab"}}]}}}}}`), nil
+			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":3,"repository":{"nameWithOwner":"fixture-person/lab"}}]}}}}}`), nil
 		}
 		return []byte(`{"data":{
 			"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":1,"repository":{"nameWithOwner":"O/R"}},{"number":2,"repository":{"nameWithOwner":"other/x"}}]}}},
 			"r1":{"issueOrPullRequest":{}}}}`), nil
 	}
-	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "teemow/lab#9", issue5, "not a ref"})
+	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "fixture-person/lab#9", issue5, "not a ref"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "fixture-person/lab#9": {"fixture-person/lab#3"}}
 	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
-		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
+		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["fixture-person/lab#9"], want["fixture-person/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)
 	}
-	if !slices.Equal(acting, []string{"O/R", "teemow/lab"}) {
+	if !slices.Equal(acting, []string{"O/R", "fixture-person/lab"}) {
 		t.Errorf("requests acted on %q, want one per owner", acting)
 	}
 	queries = nil
@@ -863,7 +863,7 @@ func TestStatusThenBoardOrderDecide(t *testing.T) {
 	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
 		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
 	}}
-	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", searchedFreeRef, "o/r#31"}
 	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
 	var got []string
 	for _, c := range cands {
@@ -1027,7 +1027,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 			for _, c := range Rank(snap, b, now) {
 				got[c.Ref] = c
 			}
-			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
+			for _, ref := range []string{ref4, partialSubIssue, searchedFreeRef} {
 				c, ok := got[ref]
 				if !ok {
 					t.Fatalf("missing candidate %s: %+v", ref, got)

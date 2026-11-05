@@ -252,8 +252,8 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	a := &app{}
 	sessions := []*claude.Session{{PID: 7, ID: "s-1", Name: agentOne}}
 	hs := []lease.Holder{
-		{Env: "kind-1", Holder: "teemow@lab", Session: "s-1", Purpose: "e2e", Since: "2026-09-25T10:00:00Z"},
-		{Env: "kind-2", Holder: "teemow@lab", Purpose: "by hand", Since: "2026-09-25T11:00:00Z"},
+		{Env: "kind-1", Holder: "fixture-person@lab", Session: "s-1", Purpose: "e2e", Since: "2026-09-25T10:00:00Z"},
+		{Env: "kind-2", Holder: "fixture-person@lab", Purpose: "by hand", Since: "2026-09-25T11:00:00Z"},
 	}
 	h := guard.Hook{Self: "/bin/beekeeper", MaxLabs: func() int { return 2 }, Clusters: func() []string { return []string{"kind-1", "kind-2"} },
 		Leases: func() []lease.Holder { return a.namedHolders(sessions, hs) }}
@@ -266,7 +266,7 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	if err := json.Unmarshal(h.Decide(raw), &o); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"kind-1: Agent one since", "kind-2: teemow@lab since"} {
+	for _, want := range []string{"kind-1: Agent one since", "kind-2: fixture-person@lab since"} {
 		if !strings.Contains(o.D.Reason, want) {
 			t.Errorf("refusal lacks %q:\n%s", want, o.D.Reason)
 		}

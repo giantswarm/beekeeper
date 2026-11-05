@@ -746,10 +746,13 @@ func eventNote(e state.Event) (int, bool) {
 func on(written []client.Object, e state.Event, all bool) client.Object {
 	if id, ok := eventNote(e); ok {
 		for _, o := range written {
-			if n, ok := o.(*v1alpha1.Note); ok && n.Spec.ID == id {
+			if n, ok := o.(*v1alpha1.Note); ok && n.Spec.ID == id && (e.NoteTeam == "" || n.Namespace == teamNamespace(e.NoteTeam)) {
 				return o
 			}
 		}
+	}
+	if e.NoteTeam != "" {
+		return nil
 	}
 	if all && len(written) > 0 {
 		return written[0]

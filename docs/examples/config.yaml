@@ -359,7 +359,7 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
   dockerBuildCacheMaxGiB: 20  # the default; prunes Docker's build cache over this to 3/4; negative: off
   dockerEvery: 1h           # the default; how often a watch reads Docker's sizes
   freeEvery: 1h             # the default; how often a watch frees dead sessions' scratch and orphaned go-build dirs in /tmp; negative: off
-  worktreeRoots: [~/.local/state/klaus-lab/worktrees]  # the default; where a watch looks for workers' git worktrees
+  worktreeRoots: [~/.local/state/beekeeper/worktrees]  # the default; where a watch looks for workers' git worktrees
   worktreesEvery: 6h        # the default; how often it removes those whose pull request merged or closed, and the build output of idle ones; negative: off
 # disk:                     # beekeeper disk's cache pruning policies; built-in entries: tmp (/tmp, olderThan 24h) and transcripts (<stateDir>/transcripts, mode files, olderThan 30d, maxGiB 2)
 #   caches:

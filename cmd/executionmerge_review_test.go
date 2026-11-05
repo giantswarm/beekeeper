@@ -519,7 +519,7 @@ func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
 	assignMergeReview(t, a, use, 1)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		round := executionReviewRound(st, use)
-		round.Reviewer.Host = "spaceage"
+		round.Reviewer.Host = "host-b"
 		round.Reviewer.HostSession = "remote-review-session"
 		return nil, nil
 	}); err != nil {

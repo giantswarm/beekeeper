@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The merge-result validation commits with signing off, so a machine whose git config signs commits no longer refuses every merge with `merge-result validation unavailable` ([https://github.com/giantswarm/beekeeper/issues/3265](https://github.com/giantswarm/beekeeper/issues/3265)).
 - `beekeeper lease kubeconfig <lab>` prints the bare path for use with `kubectl --kubeconfig`; `--export` prints the shell export line (#690).
 
 ### Added
@@ -41,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
 - Honor saved Go cache settings, including GOENV selection and persisted GOPATH, when discovering build and module cache directories (https://github.com/giantswarm/beekeeper/issues/2758).
@@ -78,6 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Delete exactly the merged head branch after a plain squash merge when its name contains `#` or percent escapes, preserving other branches (https://github.com/giantswarm/beekeeper/issues/2820).
 - Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Discard unusable claim caches as a whole so damaged data cannot hide a live claim behind its ETag or panic after a successful read (https://github.com/giantswarm/beekeeper/issues/2603).
+- Read every page of plan check annotations so a later PRD error cannot be mistaken for missing stage outputs (https://github.com/giantswarm/beekeeper/issues/2755).
+- Preserve open-PR worktree protection when newer fork PRs fill the first branch lookup page (https://github.com/giantswarm/beekeeper/issues/2756).
 
 - Pass managed Codex workspace trust as an inline table so strict configuration accepts literal workspace paths without modifying the prepared config (https://github.com/giantswarm/beekeeper/issues/2281).
 
@@ -324,7 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `beekeeper serve`'s tools follow [giantswarm#38592](https://github.com/giantswarm/giantswarm/issues/38592): each description leads with a summary line of at most 120 runes, built with mcp-toolkit's `tooldesc`, and every tool states all four annotations. Before, every tool, the 8 reads included, reported mcp-go's defaults: destructive, not idempotent, open world. Now the reads are read-only and idempotent; releasing a lease, setting or lifting a hold, taking a merge out of its lane, answering or withdrawing a note, leaving the roster and acking messages are destructive; the tools that reach Slack or muster (`note_add`, `note_answer`, `note_done`, `send_message`, `converse`) are open world. `agents_register`, `agents_leave` and `converse` declare `agent` and `host` required, and `note_add` `for`, as they always refused without them. The hold tools say a central hold stops merges in the central lanes; `note_add` offers decisions only. `docs/tools.md` lists every tool as a model reads it (`make tools-doc`), kept current by a test, and a test holds the descriptions to the budget.
-- `doctor.worktreeRoots` defaults to `~/.local/state/klaus-lab/worktrees`, no longer `~/projects/worktrees`.
+- `doctor.worktreeRoots` defaults to `~/.local/state/beekeeper/worktrees`, no longer `~/projects/worktrees`.
 - The worker rules make the settings, installs and consents of the organisation's own Apps (`beekeeper app`) the worker's `beekeeper browse` job, never the person's; a consent that acts as the person towards another's App still needs their word. The `github` skill records an own App's grant first (`beekeeper app allow`) and reports a refusal as a barrier ([#1455](https://github.com/giantswarm/beekeeper/issues/1455)).
 - The worker rules say where an agentlab proof runs: it only waits on its lab, its model and GitHub, so it never runs under `beekeeper run`, whose build slot it would hold while every build behind it exits 75. The hook already passes `agentlab … backstage-test` and the other e2e commands unwrapped and still wraps `go test ./...`; a test now holds both through the hook ([#907](https://github.com/giantswarm/beekeeper/issues/907)).
 
@@ -334,7 +338,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After a handover, the old session's CLI that archived its own desktop session is no longer stopped as `REVIVED` a moment after the archive: the watch stops it as done, logs it as `agents.archive`, and owes no archive ([#1511](https://github.com/giantswarm/beekeeper/issues/1511)).
 - A build slot no longer stays held by a scope its command left behind: `beekeeper run` stops its scope, with what the command left running in it (an envtest kube-apiserver), before it releases the slot and names those processes; `beekeeper watch` names a slot scope whose run is gone (`ORPHANED SLOT SCOPE`) at its first sample and stops it after a minute, so the slot frees without a person. Every other run waited and gave up with exit 75, `slot 1: free, but its slice still runs memcap-….scope` ([#1513](https://github.com/giantswarm/beekeeper/issues/1513)).
 - A handed-over session's desktop CLI that the doctor warms to archive itself is no longer stopped as `REVIVED` before its archive call runs, which left the session unarchived and warmed and stopped its CLI again every few minutes: the archive owed records the warm, and the watch leaves that CLI running, without `SAME TITLE` beside its follow-up, for 5 minutes ([#1511](https://github.com/giantswarm/beekeeper/issues/1511)).
-- A `SendMessage` to "the supervisor", "the guide" or a holder's run name ("Supervisor run 250") reaches the holder's CLI by the name it takes messages under, the name in its CLI record, not by its desktop title: a desktop CLI that derived its name from its folder (`klaus-lab-16`) keeps it while its title follows the run, so the hook's rewrite to the title found nobody after a relay. `agents wake`, broadcasts, `beekeeper ui` and a desktop session id's redirect send by that name too ([#1509](https://github.com/giantswarm/beekeeper/issues/1509)).
+- A `SendMessage` to "the supervisor", "the guide" or a holder's run name ("Supervisor run 250") reaches the holder's CLI by the name it takes messages under, the name in its CLI record, not by its desktop title: a desktop CLI that derived its name from its folder (`fixture-lab-16`) keeps it while its title follows the run, so the hook's rewrite to the title found nobody after a relay. `agents wake`, broadcasts, `beekeeper ui` and a desktop session id's redirect send by that name too ([#1509](https://github.com/giantswarm/beekeeper/issues/1509)).
 - The merge gate no longer refuses (77) a merge whose GitHub budget read failed in transit (a resolver error, a refused or reset connection, a timeout) on every try: it exits 74 (unread), its line `beekeeper gate: unread, reading the GitHub budget failed in transit (…), the merge was not judged`, and the same command runs again once GitHub answers. A budget GitHub refuses to tell (no login) still refuses (77) ([#1472](https://github.com/giantswarm/beekeeper/issues/1472)).
 - `note add --holds` holds every `--ref` of the decision, not only the first: each is set `Blocked / Waiting`, `board next` skips each as `held: decision #<n> for <person> until it closes`, and each is set back once the decision closes; a `--ref` the hold refuses leaves none held ([#1475](https://github.com/giantswarm/beekeeper/issues/1475)).
 - Builds on Go 1.27.3 (`toolchain go1.27.3`), which fixes the standard library vulnerability GO-2026-6809 that govulncheck reports for Go 1.27.2.
@@ -879,7 +883,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `beekeeper sessions serve` and `board next --claim` store a registered agent's roster name in the serve record: they stored the session's own name, which for a session the desktop has not titled is its process name (`klaus-lab-34`), so the record, `beekeeper sessions`, the hand-over and every row that prints a record named the process, not the agent working the item. A session that is not on the roster keeps its own name ([#1027](https://github.com/giantswarm/beekeeper/issues/1027)).
+- `beekeeper sessions serve` and `board next --claim` store a registered agent's roster name in the serve record: they stored the session's own name, which for a session the desktop has not titled is its process name (`fixture-lab-34`), so the record, `beekeeper sessions`, the hand-over and every row that prints a record named the process, not the agent working the item. A session that is not on the roster keeps its own name ([#1027](https://github.com/giantswarm/beekeeper/issues/1027)).
 
 ## [0.135.1-rc.1] - 2026-10-13
 
@@ -2271,7 +2275,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The gate merges a repository devctl does not serve (`merge.devctlOwners`, default `giantswarm`) with a plain squash merge as the gh login, in the merge's unit as for devctl: it waits for the head's checks, refuses a draft, closed, conflicting or another person's pull request, and squash-merges with the head as the expected one and `<title> (#<n>)` as the subject, then deletes the branch. devctl's GitHub App login reaches the giantswarm organisation and public repositories only, so every merge of a private teemow repository ended in exit 7 and a failed `beekeeper-merge-*` unit, and each retry in another.
+- The gate merges a repository devctl does not serve (`merge.devctlOwners`, default `giantswarm`) with a plain squash merge as the gh login, in the merge's unit as for devctl: it waits for the head's checks, refuses a draft, closed, conflicting or another person's pull request, and squash-merges with the head as the expected one and `<title> (#<n>)` as the subject, then deletes the branch. devctl's GitHub App login reaches the giantswarm organisation and public repositories only, so every merge of a private fixture-person repository ended in exit 7 and a failed `beekeeper-merge-*` unit, and each retry in another.
 - Each gated merge's stderr and document are kept in `<state>/merge-output/<repo>-<n>-<time>.log` for 7 days, named in its `merged`/`merge.failed` event; the run's own files no longer take devctl's reason with them. After exit 7 or 8 the gate says the same command fails the same way until the reason is fixed.
 - `agents reopen`, a started or woken session's `ExecStopPost`, no longer fails its unit when the desktop did not show the session or keep its title: the miss is an `agent.reopen` event.
 

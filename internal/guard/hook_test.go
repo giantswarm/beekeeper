@@ -68,7 +68,7 @@ func TestPassThrough(t *testing.T) {
 	for _, cmd := range []string{
 		"git status --short && ls -la",
 		"tsc --version",
-		"/home/u/klaus-lab/scripts/memcap -- zsh -c 'go test ./...'",
+		"/home/u/fixture-lab/scripts/memcap -- zsh -c 'go test ./...'",
 		self + " run -- zsh -c 'go test ./...'",
 		"beekeeper run --max 4G -- go test ./...",
 		"cd ~/src/x && CGO_ENABLED=0 ~/bin/memcap -- go build ./...",
@@ -109,7 +109,7 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	for _, c := range []string{"make build", "timeout 600 go vet ./...", "x=$(yarn tsc)", "if true; then golangci-lint run; fi", "FOO=1 npx jest",
 		"beekeeper scan sweep --json",
 		// the wrapper mentioned, not invoked: the build still needs a slot
-		"cd ~/d && m=$(ls ~/klaus-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
+		"cd ~/d && m=$(ls ~/fixture-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
 		"which memcap beekeeper && go vet ./...",
 		// invoked through a variable: wrapped again, the inner run takes no slot
 		`go vet ./... && M=/x/scripts/memcap && "$M" go test ./...`,
@@ -205,7 +205,7 @@ func TestHeavyClassification(t *testing.T) {
 		{"git -C /tmp/amp checkout -q --detach e82d26b", false},
 		{"git checkout -q -b fix-make-test origin/main", false},
 		{"git switch -c go-test-flake", false},
-		{"git worktree add -q ~/.local/state/klaus-lab/worktrees/x/make-build -b make-build origin/main", false},
+		{"git worktree add -q ~/.local/state/beekeeper/worktrees/x/make-build -b make-build origin/main", false},
 		{"cd ~/src/x && git fetch -q origin && git checkout -q -B build origin/main", false},
 		{`S=/tmp/amp; git -C "$S" checkout -q -- . && git -C ~/src/x worktree remove "$S"`, false},
 		// builds, tests and lints keep the slot
