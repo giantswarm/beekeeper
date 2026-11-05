@@ -708,8 +708,8 @@ func (g *gateRun) step() (string, error) {
 		// queued handoff behind a live gate only registers its new PID;
 		// its predecessor still owns these checks.
 		g.recordGone(g.ctx)
-		if why := g.checkOutside(); why != "" {
-			return why, nil
+		if why, err := g.checkOutside(); err != nil || why != "" {
+			return why, err
 		}
 	}
 	var q merge.Lane
@@ -969,12 +969,16 @@ const (
 // checkOutside settles or drops the lane's places that wait without their
 // merge and whose pull request merged or closed (checkPlaces). It returns
 // what the merge waits for when GitHub does not answer for a place that
-// heads the lane.
-func (g *gateRun) checkOutside() string {
-	if err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck); err != nil {
-		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err)
+// heads the lane, or a StaleWriterError when a newer release wrote the state.
+func (g *gateRun) checkOutside() (string, error) {
+	err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck)
+	if stale := (*state.StaleWriterError)(nil); errors.As(err, &stale) {
+		return "", stale
 	}
-	return ""
+	if err != nil {
+		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err), nil
+	}
+	return "", nil
 }
 
 // readRelease reads, once per merge, whether a merge into the pull
