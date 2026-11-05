@@ -418,11 +418,77 @@ func TestReviewedMergeQueueIsRead(t *testing.T) {
 		{body: `{"errors":[{"message":"unavailable"}]}`, wantError: true},
 		{body: `invalid`, wantError: true},
 	} {
-		github.RunGH = func(context.Context, ...string) ([]byte, error) { return []byte(reply.body), nil }
+		github.RunGH = func(ctx context.Context, _ ...string) ([]byte, error) {
+			if got := github.Repo(ctx); got != loopMergeRepo {
+				t.Fatalf("github.Repo(ctx) = %q, want %q", got, loopMergeRepo)
+			}
+			return []byte(reply.body), nil
+		}
 		queue, err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
 		if (err != nil) != reply.wantError || queue != reply.queue {
 			t.Fatalf("%s: %v, %v", reply.body, queue, err)
 		}
+	}
+}
+
+func TestReviewedMergeQueueFallsBackToRESTForPrivateUserRepo(t *testing.T) {
+	check := readReviewedMergeQueue
+	prev := github.RunGH
+	t.Cleanup(func() { github.RunGH = prev })
+	unresolved := `{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'o/r'."}]}`
+	for _, tc := range []struct {
+		name      string
+		gqlErr    error
+		rulesBody string
+		rulesErr  error
+		repoBody  string
+		repoErr   error
+		wantQueue bool
+		wantErr   bool
+	}{
+		{
+			name:      "branch rules empty",
+			gqlErr:    errors.New("gh api graphql: Could not resolve to a Repository with the name 'o/r'"),
+			rulesBody: `[]`,
+		},
+		{
+			name:      "branch rules have merge queue",
+			gqlErr:    errors.New("gh api graphql: exit status 1"),
+			rulesBody: `[{"type":"pull_request"},{"type":"merge_queue"}]`,
+			wantQueue: true,
+		},
+		{
+			name:     "user repository when branch rules unavailable",
+			rulesErr: errors.New("HTTP 403"),
+			repoBody: `{"owner":{"type":"User"},"private":true}`,
+		},
+		{
+			name:     "organization repository without readable rules refuses",
+			gqlErr:   errors.New("gh api graphql: exit status 1"),
+			rulesErr: errors.New("HTTP 403"),
+			repoBody: `{"owner":{"type":"Organization"},"private":true}`,
+			wantErr:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			github.RunGH = func(ctx context.Context, args ...string) ([]byte, error) {
+				if got := github.Repo(ctx); got != loopMergeRepo {
+					t.Fatalf("github.Repo(ctx) = %q, want %q", got, loopMergeRepo)
+				}
+				switch {
+				case len(args) >= 2 && strings.HasSuffix(args[1], "graphql"):
+					return []byte(unresolved), tc.gqlErr
+				case len(args) >= 2 && strings.Contains(args[1], "/rules/branches/"):
+					return []byte(tc.rulesBody), tc.rulesErr
+				default:
+					return []byte(tc.repoBody), tc.repoErr
+				}
+			}
+			queue, err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
+			if (err != nil) != tc.wantErr || queue != tc.wantQueue {
+				t.Fatalf("got queue=%v, err=%v; want queue=%v, err=%v", queue, err, tc.wantQueue, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -522,9 +588,11 @@ func TestMergeCheckIgnoresHostLocale(t *testing.T) {
 func TestMergeCheckEnvironmentFailures(t *testing.T) {
 	for name, args := range map[string][]string{
 		"absent executable": {"beekeeper-test-nonexistent-command"},
-		"signal":            {"sh", "-c", "kill -KILL $$"},
+		"signal":            {"sh", "-c", litKillKill},
 		"exhausted disk":    {"sh", "-c", "echo 'write: no space left on device'; exit 1"},
 		"resource":          {"sh", "-c", "echo 'fork: resource temporarily unavailable'; exit 2"},
+		"compiler killed":   {"sh", "-c", "echo 'compile: signal: killed'; exit 1"},
+		"exhausted memory":  {"sh", "-c", "echo 'fork: cannot allocate memory'; exit 1"},
 		"test failure":      {"sh", "-c", "echo '--- FAIL: TestRegression'; exit 1"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -583,6 +651,33 @@ func TestMergeResultGitEnvironmentFailureIsNotAConflict(t *testing.T) {
 	_, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
 	if code != github.SquashTooling || !strings.HasPrefix(reason, reasonMergeValidationUnavailable) {
 		t.Fatalf("checker hook failure blamed on branch: %d: %s", code, reason)
+	}
+}
+
+// A machine that signs commits must not refuse the throwaway merge result.
+func TestMergeResultIgnoresCommitSigning(t *testing.T) {
+	repo := newMergeCheckRepo(t, map[string]string{testGuardPR1File: testGuardSourceA}, map[string]string{testGuardPR2File: testGuardSourceB}, nil)
+	repo.advanceMain(t, repo.head1)
+	tools := t.TempDir()
+	for name, script := range map[string]string{"golangci-lint": "#!/bin/sh\nexit 0\n", "failing-signer": "#!/bin/sh\necho 'No secret key' >&2\nexit 1\n"} {
+		if err := os.WriteFile(filepath.Join(tools, name), []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned directory
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// testenv turns signing off through the environment, which outranks the
+	// repository's config: without this the test passes on an unfixed merge.
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	for key, value := range map[string]string{"commit.gpgsign": "true", "gpg.program": filepath.Join(tools, "failing-signer")} {
+		if _, err := runGit(t.Context(), repo.dir, "config", key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newLoopRig(t)
+	r.a.cfg.Disk.Checkouts = []string{repo.dir}
+	checked, reason, code := checkReviewedMerge(t.Context(), r.a, superloop.Pull{Ref: secondPR, Base: mainBranch}, repo.head2)
+	if !checked || code != 0 || reason != "" {
+		t.Fatalf("signing setup refused the merge result: checked=%v %d: %s", checked, code, reason)
 	}
 }
 

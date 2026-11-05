@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,7 +160,7 @@ func logs(args []string) (state.Event, bool) {
 		return event(loopParty, "agents.wake", "%s: sent by name", args[2]), true
 	case args[0] == agentsName && args[1] == loopRemove:
 		return event(loopParty, "agents.remove", "%s", args[2]), true
-	case args[0] == "note" && args[1] == loopAdd:
+	case args[0] == paramNote && args[1] == loopAdd:
 		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
 	case args[0] == loopBoard && args[1] == loopBoardMove:
 		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
@@ -3573,6 +3574,63 @@ func TestLoopStuckEpisodeSurvivesScheduledBackoff(t *testing.T) {
 	}
 	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(r.a.now) {
 		t.Fatalf("quiet episode continued: %+v", f)
+	}
+}
+
+// The service leaves app.now at startup and advances only loopNow.
+func TestLoopStuckEpisodeUsesRunningClock(t *testing.T) {
+	r := newLoopRig(t)
+	l, err := r.a.newSupervisorLoop(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := r.a.now
+	r.a.loopNow = &atomic.Pointer[time.Time]{}
+	failures, filed := map[string]loopFailure{}, map[string]time.Time{}
+	act := superloop.Action{Kind: superloop.KindReview, Key: "review o/r#1", Ref: refOne}
+	for i, minute := range []int{0, 1, 6, 16, 36, 76} {
+		now := start.Add(time.Duration(minute) * time.Minute)
+		r.a.loopNow.Store(&now)
+		if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+			t.Fatal(err)
+		}
+		f := failures[act.Key]
+		if f.Count != i+1 || !f.Since.Equal(start) || !f.At.Equal(now) {
+			t.Fatalf("episode at minute %d: %+v", minute, f)
+		}
+		if err := l.stuck(failures, filed); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if minute >= 36 {
+			want = 1
+		}
+		if got := len(r.logged(t, loopFileVerb)); got != want {
+			t.Fatalf("running loop filed %d problems after %d minutes, want %d", got, minute, want)
+		}
+		for _, at := range filed {
+			if !at.Equal(start.Add(36 * time.Minute)) {
+				t.Fatalf("filed at %v", at)
+			}
+		}
+	}
+	// Missing the scheduled retry expires the group, even with startup fixed.
+	expired := failures[act.Key].RetryAt.Add(loopStuckRecent)
+	r.a.loopNow.Store(&expired)
+	if group := l.stuckGroup(failures, act.Kind, "unavailable"); len(group) != 0 {
+		t.Fatalf("quiet group did not expire: %+v", group)
+	}
+	if err := l.failed(act, failures, errors.New("unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if f := failures[act.Key]; f.Count != 1 || !f.Since.Equal(expired) || !f.At.Equal(expired) {
+		t.Fatalf("quiet episode continued: %+v", f)
+	}
+	if err := l.stuck(failures, filed); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(r.logged(t, loopFileVerb)); got != 1 {
+		t.Fatalf("new episode filed immediately: %d", got)
 	}
 }
 

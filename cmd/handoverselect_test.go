@@ -145,7 +145,7 @@ func handoverPrompt(t *testing.T, a *app, out *bytes.Buffer) string {
 // one prints no section for it.
 func TestStandingInstructionsReachTheHandover(t *testing.T) {
 	a, out := noteApp(t)
-	a.cfg.Guide.Skill, a.cfg.StateDir = "guide", t.TempDir()
+	a.cfg.Guide.Skill, a.cfg.StateDir = guideName, t.TempDir()
 	if p := handoverPrompt(t, a, out); strings.Contains(p, "Standing instructions") {
 		t.Errorf("a desk without standing.md prints the section:\n%s", p)
 	}
@@ -171,7 +171,7 @@ func TestBroadcastReachesEveryRunningAgentOnce(t *testing.T) {
 		{ID: "s5", Name: agentFive}, {ID: "s6", Name: agentSix},
 	}
 	var sent []string
-	told, missed := broadcast(context.Background(), agents, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
+	told, missed := broadcast(context.Background(), &state.State{Agents: agents}, sessions, []state.Party{{Name: sup.Name}}, func(_ context.Context, name string) error {
 		sent = append(sent, name)
 		if name == agentSix {
 			return errors.New("unreachable")

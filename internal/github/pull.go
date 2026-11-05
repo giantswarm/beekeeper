@@ -17,11 +17,11 @@ const (
 
 // Pull is a pull request's state as the gh CLI reports it.
 type Pull struct {
-	State       string    `json:"state"`
-	MergedAt    time.Time `json:"mergedAt"`
 	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
+	State    string    `json:"state"`
+	MergedAt time.Time `json:"mergedAt"`
 }
 
 // PullState reads repo#n's state with the gh CLI's login (one GraphQL

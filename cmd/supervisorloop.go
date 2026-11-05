@@ -1980,13 +1980,14 @@ func (f loopFailure) recent(now time.Time) bool {
 
 // failed logs act's failure and keeps it in failures, by key.
 func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFailure, cause error) error {
+	now := l.a.timeNow()
 	l.mu.Lock()
 	previous := failures[act.Key]
-	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
+	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: now, At: now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
 	// An episode expires after its retry has been missed for loopStuckRecent.
-	if f.Message == previous.Message && previous.recent(l.a.now) {
+	if f.Message == previous.Message && previous.recent(now) {
 		f.Count = previous.Count + 1
 		f.Since = cmp.Or(previous.Since, f.Since)
 	} else {
@@ -1997,7 +1998,7 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 		}
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.timeNow().Add(loopFailureDelay(f.Count))
+		f.RetryAt = now.Add(loopFailureDelay(f.Count))
 	}
 	failures[act.Key] = f
 	l.mu.Unlock()
@@ -2019,9 +2020,10 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 
 // stuckGroup are the failures of kind with message attempted recently, by key.
 func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, message string) map[string]loopFailure {
+	now := l.a.timeNow()
 	group := map[string]loopFailure{}
 	for key, f := range failures {
-		if f.Kind == kind && f.Message == message && f.recent(l.a.now) {
+		if f.Kind == kind && f.Message == message && f.recent(now) {
 			group[key] = f
 		}
 	}
@@ -2033,6 +2035,7 @@ func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, messa
 // PROBLEM. An episode filed before it began (filed, by step and error) is a
 // new one.
 func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
+	now := l.a.timeNow()
 	keys := slices.Sorted(maps.Keys(failures))
 	done := map[string]bool{}
 	for _, key := range keys {
@@ -2047,7 +2050,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		if len(group) == 0 {
 			continue
 		}
-		since, attempts := l.a.now, 0
+		since, attempts := now, 0
 		var items []string
 		for _, k := range slices.Sorted(maps.Keys(group)) {
 			g := group[k]
@@ -2055,7 +2058,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 			attempts += g.Count
 			items = append(items, cmp.Or(g.Ref, k))
 		}
-		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
+		if len(group) < 2 && now.Sub(since) < loopStuckAfter {
 			continue
 		}
 		if at, ok := filed[step]; ok && !at.Before(since) {
@@ -2066,13 +2069,13 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		text := fmt.Sprintf("The supervisor loop's %s step has failed the same way since %s, %d attempt(s), blocking %s: %s. "+
 			"It retries with backoff from %s up to %s; own the failure to the component its error names.",
 			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff, loopFailureBackoffCap)
-		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 		// Each episode its own key: guide watch says each one once.
 		fileKey := step + " " + since.UTC().Format("20060102T150405Z")
 		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
 			return err
 		}
-		filed[step] = l.a.now
+		filed[step] = now
 	}
 	return nil
 }
@@ -2592,7 +2595,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -2600,7 +2603,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
@@ -2634,10 +2637,33 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		}
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	var place startHost
+	var err error
+	if act.Kind == superloop.KindEnd {
+		// Terminal continuations can need the live desk checkout and host
+		// policy sync. Execution hosts only have prepared workspaces, so
+		// keep this work on the coordinator even under hostsFirst.
+		flags := startFlags(false, false)
+		if model := l.a.ruleModel(name, workerRole); model != "" {
+			flags = append(flags, modelFlag, model)
+		}
+		out, code, readErr := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+		var capacity struct {
+			Room int `json:"room"`
+		}
+		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+			err = errLoopLater
+		}
+	} else {
+		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+	}
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
-			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			where := "on any host"
+			if act.Kind == superloop.KindEnd {
+				where = "on the coordinator"
+			}
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return errLoopLater
 		}
 		return err
@@ -2654,10 +2680,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		merged := l.merged[act.Ref]
 		l.mu.Unlock()
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
-		branch = cmp.Or(place.Ref, merged.Base, head)
-		if place.remote() && place.Ref == "" {
-			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
-		}
+		branch = cmp.Or(merged.Base, head)
 	} else {
 		if p, err := readLoopPull(ctx, act.Ref); err == nil {
 			branch = p.Branch
@@ -2691,6 +2714,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
@@ -2808,6 +2835,10 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -3345,6 +3376,10 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -3373,6 +3408,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 		}
 		if Code(err) == ExitRefused {
+			if strings.Contains(err.Error(), "omp start waits on lease") {
+				l.sayOnce("omp lease "+act.Key, "SUPERVISOR NEXT WAITS %s: %v", next.URL, err)
+			}
 			return "", errLoopLater
 		}
 		return "", err

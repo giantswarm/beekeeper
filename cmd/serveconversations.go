@@ -92,6 +92,9 @@ func toolConverse(c *call, req mcp.CallToolRequest) (any, error) {
 		err = c.store.Update(func(st *state.State) ([]state.Event, error) {
 			for i := range st.Agents {
 				if agentAddress(st.Agents[i]) == address && !st.Agents[i].Done {
+					if !strings.EqualFold(st.Agents[i].Person, c.who.Email) {
+						return nil, refused("%s changed owner while its conversation opened", address)
+					}
 					st.Agents[i].Conversation = id
 					return []state.Event{event(c.me, "agents.converse", "%s opened conversation %s with %s", address, id, c.who.Email)}, nil
 				}

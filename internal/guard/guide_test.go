@@ -8,7 +8,7 @@ import (
 
 const (
 	guideSession = "guide-session"
-	guidePerson  = "Timo"
+	guidePerson  = "Alex"
 	scratch      = "/tmp/x"
 )
 
@@ -21,8 +21,8 @@ func guideHook() Hook {
 
 // guideCalls are calls that do work, by the tool and its input.
 var guideCalls = map[string]map[string]any{
-	"edit":            toolEvent("Edit", map[string]any{filePathKey: scratch, "old_string": "a", "new_string": "b"}),
-	"write":           toolEvent("Write", map[string]any{filePathKey: scratch}),
+	verbEdit:          toolEvent("Edit", map[string]any{filePathKey: scratch, "old_string": "a", "new_string": "b"}),
+	ompWriteTool:      toolEvent("Write", map[string]any{filePathKey: scratch}),
 	"notebook":        toolEvent("NotebookEdit", map[string]any{"notebook_path": "/tmp/x.ipynb"}),
 	"commit":          bashCall("git add -A && git commit -m 'docs: x'"),
 	"commit -C":       bashCall("git -C ~/repo commit -am x"),
@@ -49,14 +49,14 @@ var guideReads = map[string]map[string]any{
 	"grep commit":      bashCall("grep -n 'git commit' notes.md"),
 	"gh pr view":       bashCall("gh pr view 7 --repo o/r && gh pr checks 7 --repo o/r"),
 	"devctl pr list":   bashCall("devctl pr list o/r"),
-	"beekeeper":        bashCall("beekeeper guide next && beekeeper note answer 3 'yes'"),
-	"note add":         bashCall("beekeeper note add --for Timo 'merge?'"),
+	selfCmd:            bashCall("beekeeper guide next && beekeeper note answer 3 'yes'"),
+	"note add":         bashCall("beekeeper note add --for Alex 'merge?'"),
 	"hold lift":        bashCall("beekeeper hold lift o/r"),
-	"hold narrow":      bashCall("beekeeper hold set o/r --reason 'Timo: only 7' --except o/r#7"),
+	"hold narrow":      bashCall("beekeeper hold set o/r --reason 'Alex: only 7' --except o/r#7"),
 	"lanes clear":      bashCall("beekeeper lanes clear app"),
 	"agents resume":    bashCall("beekeeper agents resume 'Agent one'"),
-	"read":             toolEvent("Read", map[string]any{filePathKey: scratch}),
-	"send":             toolEvent(SendMessageTool, map[string]any{"to": "Agent one", "message": "Timo says yes"}),
+	ompReadTool:        toolEvent("Read", map[string]any{filePathKey: scratch}),
+	"send":             toolEvent(SendMessageTool, map[string]any{"to": "Agent one", "message": "Alex says yes"}),
 	"browser navigate": toolEvent(browserTools+"navigate", map[string]any{"url": "https://example.com"}),
 	"browser read":     toolEvent(browserTools+"get_page_text", map[string]any{"tabId": 1}),
 	"browser shot":     computerCall("screenshot"),
@@ -144,7 +144,7 @@ func TestGuideLookupOnlyForWork(t *testing.T) {
 func TestParseQuestionReadsItsParts(t *testing.T) {
 	q := parseQuestion(map[string]any{
 		"question": "Merge https://github.com/o/r/pull/7? Status quo: CI is green. Why: it changes the release. Checked: gh pr checks",
-		"options":  []any{map[string]any{"label": "merge", "description": "it ships today"}, map[string]any{"label": "wait"}},
+		"options":  []any{map[string]any{litLabel: "merge", "description": "it ships today"}, map[string]any{"label": "wait"}},
 	})
 	want := Question{Text: "Merge https://github.com/o/r/pull/7?", StatusQuo: "CI is green.", Why: "it changes the release.", Checked: "gh pr checks",
 		Options: []string{"merge: it ships today", "wait: "}}
@@ -180,7 +180,7 @@ func TestGuidesQuestionsAreChecked(t *testing.T) {
 	}
 	// A worker's question is refused as before, without the check.
 	got = nil
-	if d := ask("worker-session", "Merge it?"); d == nil || !strings.Contains(d.Reason, "beekeeper note add --for Timo") || got != nil {
+	if d := ask("worker-session", "Merge it?"); d == nil || !strings.Contains(d.Reason, "beekeeper note add --for Alex") || got != nil {
 		t.Errorf("a worker's question: want the note refusal unchecked, got %+v (checked %v)", d, got)
 	}
 }

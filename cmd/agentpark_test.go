@@ -23,7 +23,7 @@ const (
 )
 
 // parkingWatch is a running watch over a roster of agentOne with a task and
-// note #3 open for Timo, the calling session agentOne; GitHub answers refs.
+// note #3 open for Alex, the calling session agentOne; GitHub answers refs.
 func parkingWatch(t *testing.T, refs map[string]string) *watcher {
 	t.Helper()
 	w, _ := overtakingWatch(t, refs)
@@ -55,7 +55,7 @@ func agentOf(t *testing.T, w *watcher) state.Agent {
 	return st.Agents[0]
 }
 
-// answer closes note #3 with Timo's answer, as note answer does.
+// answer closes note #3 with Alex's answer, as note answer does.
 func answer(t *testing.T, w *watcher) {
 	t.Helper()
 	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
@@ -88,7 +88,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 	if err := park(t, w, "--on", "#9", "an answer"); err == nil || !strings.Contains(err.Error(), "note #9 is not open") {
 		t.Errorf("park on a closed note: %v", err)
 	}
-	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
+	if err := park(t, w, "--on", "3", "Alex's answer on the rollout"); err != nil {
 		t.Fatal(err)
 	}
 	out := w.out.(*bytes.Buffer).String()
@@ -101,7 +101,7 @@ func TestParkCountsTheAgentParked(t *testing.T) {
 	}
 	st, _ := w.store.Read()
 	c := countAgents(st, nil, relayNow, nil)
-	if len(c.Busy) != 0 || len(c.Parked) != 1 || !strings.Contains(c.Parked[0], "parked on #3: Timo's answer on the rollout") {
+	if len(c.Busy) != 0 || len(c.Parked) != 1 || !strings.Contains(c.Parked[0], "parked on #3: Alex's answer on the rollout") {
 		t.Errorf("count %+v", c)
 	}
 
@@ -126,7 +126,7 @@ func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 	w := parkingWatch(t, nil)
 	w.cfg.Agents.AutoResume = true
 	woke := stubWakes(t)
-	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
 	w.pending(context.Background(), nil)
@@ -141,10 +141,10 @@ func TestAnsweredNoteResumesTheParkedAgentOnce(t *testing.T) {
 	if n := strings.Count(out, `AGENT RESUMABLE "`); n != 1 {
 		t.Errorf("%d AGENT RESUMABLE lines:\n%s", n, out)
 	}
-	if !strings.Contains(out, `AGENT RESUMABLE "Agent one": parked on #3: Timo's answer; resumable since`) {
+	if !strings.Contains(out, `AGENT RESUMABLE "Agent one": parked on #3: Alex's answer; resumable since`) {
 		t.Errorf("line:\n%s", out)
 	}
-	want := watchParty.Name + " → " + agentOne + ": Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer +
+	want := watchParty.Name + " → " + agentOne + ": Your park on #3 (Alex's answer) is over: note #3 answered by Alex: " + parkAnswer +
 		". Re-query the live state of your task and continue it."
 	if !slices.Equal(*woke, []string{want}) {
 		t.Errorf("woke %q\nwant %q", *woke, want)
@@ -201,14 +201,14 @@ func TestAsNamesTheRegisteredAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := park(t, w, "--on", "3", "Timo's answer on the rollout"); err != nil {
+	if err := park(t, w, "--on", "3", "Alex's answer on the rollout"); err != nil {
 		t.Fatalf("park --as %s: %v", agentOne, err)
 	}
 	st, _ := w.store.Read()
 	if ag := st.Agents[0]; ag.Park == nil || ag.Park.On != "#3" || len(st.Parks) != 0 {
 		t.Fatalf("agent %+v park %+v, parks off the roster %+v", ag, ag.Park, st.Parks)
 	}
-	if st.Records[0].Waits != "Timo's answer on the rollout" {
+	if st.Records[0].Waits != "Alex's answer on the rollout" {
 		t.Errorf("the agent's session record waits %q", st.Records[0].Waits)
 	}
 	c := w.agentsCmd()
@@ -267,7 +267,7 @@ func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
 	for _, args := range [][]string{nil, {agentOne}} {
 		w := parkingWatch(t, nil)
 		woke := stubWakes(t)
-		if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+		if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 			t.Fatal(err)
 		}
 		answer(t, w)
@@ -277,7 +277,7 @@ func TestParkedAgentLeavesItsOwnPark(t *testing.T) {
 			t.Fatalf("resume %q: %v", args, err)
 		}
 		out := w.out.(*bytes.Buffer).String()
-		want := agentOne + ": your park ended, nobody is woken. Your park on #3 (Timo's answer) is over: note #3 answered by Timo: " + parkAnswer
+		want := agentOne + ": your park ended, nobody is woken. Your park on #3 (Alex's answer) is over: note #3 answered by Alex: " + parkAnswer
 		if !strings.Contains(out, want) {
 			t.Errorf("resume %q said:\n%s\nwant %q", args, out, want)
 		}
@@ -308,7 +308,7 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_NAME", agentOne)
 	register := func(args ...string) error {
 		c := w.agentsCmd()
-		c.SetArgs(append([]string{"register"}, args...))
+		c.SetArgs(append([]string{registerVerb}, args...))
 		c.SetOut(w.out)
 		c.SetErr(w.out)
 		c.SilenceUsage, c.SilenceErrors = true, true
@@ -323,7 +323,7 @@ func TestResumeOfAnUnroutedHarnessEndsTheParkUnwoken(t *testing.T) {
 	if ag := agentOf(t, w); ag.Harness != omp.Harness || ag.Session != "s-omp-rpc" || ag.Task != parkTask {
 		t.Fatalf("registered %+v", ag)
 	}
-	if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+	if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 		t.Fatal(err)
 	}
 	if out := w.out.(*bytes.Buffer).String(); !strings.Contains(out, unroutedResume) || strings.Contains(out, "the watch resumes it") {
@@ -399,7 +399,7 @@ func TestLiftedHoldMakesTheParkResumable(t *testing.T) {
 	if err := park(t, w, "--on", "hold:merges", "the devctl release window"); err != nil {
 		t.Fatal(err)
 	}
-	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != "hold merges" {
+	if ag := agentOf(t, w); ag.Park == nil || ag.Park.On != litHoldMerges {
 		t.Fatalf("park %+v", ag.Park)
 	}
 	w.out.(*bytes.Buffer).Reset()
@@ -694,7 +694,7 @@ func TestLoopAnsweredLocalNoteResumesUnderHeldGraphQL(t *testing.T) {
 			w.cfg.GitHub.Floor = 2500
 			w.cfg.Agents.AutoResume = true
 			woke := stubWakes(t)
-			if err := park(t, w, "--on", "#3", "Timo's answer"); err != nil {
+			if err := park(t, w, "--on", "#3", "Alex's answer"); err != nil {
 				t.Fatal(err)
 			}
 			if exhausted {
@@ -778,5 +778,75 @@ func TestOverlapParkRequiresTrackedTarget(t *testing.T) {
 	}
 	if err := validateOverlapPark("", "waiting for a manual resume"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParkRefusesMismatchedWaitTarget(t *testing.T) {
+	for _, tc := range []struct{ waits, hint string }{
+		{"waiting for the merge hold to lift", litOnHoldTarget},
+		{"merges are HELD for the release", "--on hold:<target>"},
+		{"the devctl release window", "--on hold:<target>"},
+		{"waiting for gate-run completion", "beekeeper gate runs"},
+		{"the gated run's outcome", "beekeeper gate runs"},
+	} {
+		t.Run(tc.waits, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			for _, direct := range []bool{false, true} {
+				var err error
+				if direct {
+					_, err = w.park(state.Party{Name: agentOne}, refOne, tc.waits)
+				} else {
+					err = park(t, w, "--on", refOne, tc.waits)
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.hint) {
+					t.Fatalf("park: %v; want %s", err, tc.hint)
+				}
+				if agentOf(t, w).Park != nil {
+					t.Fatal("refused park was recorded")
+				}
+			}
+		})
+	}
+	for _, waits := range []string{"desk review", "waiting for this PR to merge", "the shareholder review"} {
+		if err := validateParkWait(refOne, waits); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, on := range []string{"", "#3", "hold merges"} {
+		if err := validateParkWait(on, "waiting for the hold or gate run"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMergedPRDoesNotSettleMismatchedPark(t *testing.T) {
+	for _, waits := range []string{"the merge hold lifting", "gate run completion"} {
+		t.Run(waits, func(t *testing.T) {
+			w := parkingWatch(t, nil)
+			old := refStates
+			t.Cleanup(func() { refStates = old })
+			refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+				out := map[github.PR]github.RefState{}
+				for _, r := range refs {
+					out[r] = github.RefState{Kind: github.RefPullRequest, State: github.Merged}
+				}
+				return out, nil
+			}
+			if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+				// Both roster and off-roster parks may predate validation.
+				st.Agents[0].Park = &state.Park{On: refOne, Waits: waits, At: relayNow}
+				st.Parks = []state.Park{{By: state.Party{Name: "other-worker"}, On: refOne, Waits: waits, At: relayNow}}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w.pending(context.Background(), nil)
+			if out := w.out.(*bytes.Buffer).String(); strings.Contains(out, "AGENT RESUMABLE") {
+				t.Fatalf("PR merge settled an unrelated condition: %s", out)
+			}
+			if !agentOf(t, w).Park.Resumable.IsZero() {
+				t.Fatal("mismatched park marked resumable")
+			}
+		})
 	}
 }
