@@ -784,7 +784,7 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 	if !ok {
 		return 0, fmt.Errorf("invalid pull request")
 	}
-	out, err := github.RunGH(ctx, "api", "repos/"+ref.Repo+"/compare/"+url.PathEscape(p.Base)+"..."+url.PathEscape(p.Head), "--jq", ".behind_by")
+	out, err := github.RunGH(github.ActingOn(ctx, ref.Repo), "api", "repos/"+ref.Repo+"/compare/"+url.PathEscape(p.Base)+"..."+url.PathEscape(p.Head), "--jq", ".behind_by")
 	if err != nil {
 		return 0, err
 	}
@@ -1055,9 +1055,13 @@ var readReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) (bool, 
 	if !ok || p.Base == "" {
 		return false, fmt.Errorf("merge queue: invalid base")
 	}
+	ctx = github.ActingOn(ctx, ref.Repo)
 	owner, name, _ := strings.Cut(ref.Repo, "/")
 	out, err := github.RunGH(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id}}}", "-f", "owner="+owner, "-f", "name="+name, "-f", "branch="+p.Base)
 	if err != nil {
+		if queue, restErr := readReviewedMergeQueueREST(ctx, ref.Repo, p.Base); restErr == nil {
+			return queue, nil
+		}
 		return false, fmt.Errorf("merge queue unavailable: %w", err)
 	}
 	var result struct {
@@ -1070,7 +1074,48 @@ var readReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) (bool, 
 		return false, fmt.Errorf("reading merge queue: %w", err)
 	}
 	if len(result.Errors) != 0 || result.Data.Repository == nil {
+		if strings.Contains(string(out), "Could not resolve to a Repository") {
+			if queue, restErr := readReviewedMergeQueueREST(ctx, ref.Repo, p.Base); restErr == nil {
+				return queue, nil
+			}
+		}
 		return false, fmt.Errorf("reading merge queue of %s: %s", ref.Repo, oneLine(string(out)))
 	}
 	return result.Data.Repository.MergeQueue != nil && result.Data.Repository.MergeQueue.ID != "", nil
+}
+
+// readReviewedMergeQueueREST reads whether branch of repo has a merge queue
+// through the REST API when GraphQL cannot resolve the repository (for
+// example, a private user-owned repository with a token that reaches REST
+// only). Branch rules name a merge_queue rule where one is active; a
+// user-owned repository has no merge queue on GitHub.
+func readReviewedMergeQueueREST(ctx context.Context, repo, branch string) (bool, error) {
+	if out, err := github.RunGH(ctx, "api", "repos/"+repo+"/rules/branches/"+url.PathEscape(branch)); err == nil {
+		var rules []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(out, &rules) == nil {
+			return slices.ContainsFunc(rules, func(r struct {
+				Type string `json:"type"`
+			}) bool {
+				return r.Type == "merge_queue"
+			}), nil
+		}
+	}
+	out, err := github.RunGH(ctx, "api", "repos/"+repo)
+	if err != nil {
+		return false, err
+	}
+	var meta struct {
+		Owner struct {
+			Type string `json:"type"`
+		} `json:"owner"`
+	}
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return false, err
+	}
+	if strings.EqualFold(meta.Owner.Type, "User") {
+		return false, nil
+	}
+	return false, fmt.Errorf("owner type %q may have a merge queue", meta.Owner.Type)
 }

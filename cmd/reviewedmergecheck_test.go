@@ -418,11 +418,77 @@ func TestReviewedMergeQueueIsRead(t *testing.T) {
 		{body: `{"errors":[{"message":"unavailable"}]}`, wantError: true},
 		{body: `invalid`, wantError: true},
 	} {
-		github.RunGH = func(context.Context, ...string) ([]byte, error) { return []byte(reply.body), nil }
+		github.RunGH = func(ctx context.Context, _ ...string) ([]byte, error) {
+			if got := github.Repo(ctx); got != loopMergeRepo {
+				t.Fatalf("github.Repo(ctx) = %q, want %q", got, loopMergeRepo)
+			}
+			return []byte(reply.body), nil
+		}
 		queue, err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
 		if (err != nil) != reply.wantError || queue != reply.queue {
 			t.Fatalf("%s: %v, %v", reply.body, queue, err)
 		}
+	}
+}
+
+func TestReviewedMergeQueueFallsBackToRESTForPrivateUserRepo(t *testing.T) {
+	check := readReviewedMergeQueue
+	prev := github.RunGH
+	t.Cleanup(func() { github.RunGH = prev })
+	unresolved := `{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'o/r'."}]}`
+	for _, tc := range []struct {
+		name      string
+		gqlErr    error
+		rulesBody string
+		rulesErr  error
+		repoBody  string
+		repoErr   error
+		wantQueue bool
+		wantErr   bool
+	}{
+		{
+			name:      "branch rules empty",
+			gqlErr:    errors.New("gh api graphql: Could not resolve to a Repository with the name 'o/r'"),
+			rulesBody: `[]`,
+		},
+		{
+			name:      "branch rules have merge queue",
+			gqlErr:    errors.New("gh api graphql: exit status 1"),
+			rulesBody: `[{"type":"pull_request"},{"type":"merge_queue"}]`,
+			wantQueue: true,
+		},
+		{
+			name:     "user repository when branch rules unavailable",
+			rulesErr: errors.New("HTTP 403"),
+			repoBody: `{"owner":{"type":"User"},"private":true}`,
+		},
+		{
+			name:     "organization repository without readable rules refuses",
+			gqlErr:   errors.New("gh api graphql: exit status 1"),
+			rulesErr: errors.New("HTTP 403"),
+			repoBody: `{"owner":{"type":"Organization"},"private":true}`,
+			wantErr:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			github.RunGH = func(ctx context.Context, args ...string) ([]byte, error) {
+				if got := github.Repo(ctx); got != loopMergeRepo {
+					t.Fatalf("github.Repo(ctx) = %q, want %q", got, loopMergeRepo)
+				}
+				switch {
+				case len(args) >= 2 && strings.HasSuffix(args[1], "graphql"):
+					return []byte(unresolved), tc.gqlErr
+				case len(args) >= 2 && strings.Contains(args[1], "/rules/branches/"):
+					return []byte(tc.rulesBody), tc.rulesErr
+				default:
+					return []byte(tc.repoBody), tc.repoErr
+				}
+			}
+			queue, err := check(t.Context(), superloop.Pull{Ref: secondPR, Base: mainBranch})
+			if (err != nil) != tc.wantErr || queue != tc.wantQueue {
+				t.Fatalf("got queue=%v, err=%v; want queue=%v, err=%v", queue, err, tc.wantQueue, tc.wantErr)
+			}
+		})
 	}
 }
 
