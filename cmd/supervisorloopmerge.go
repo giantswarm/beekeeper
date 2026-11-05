@@ -372,10 +372,8 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; worker woken for remaining open work", nil
 		}
-		if rp.Serves != "" && rp.Serves != act.Ref && l.a.cfg.Board.Owner != "" {
-			if _, err := l.run(ctx, loopBoard, "move", rp.Serves, "Done"); err != nil {
-				return "", err
-			}
+		if err := l.moveServedDone(ctx, rp.Serves, act.Ref); err != nil {
+			return "", err
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
@@ -436,10 +434,8 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		return "merged; worker woken for remaining open work", nil
 	}
-	if serves != "" && serves != act.Ref && l.a.cfg.Board.Owner != "" {
-		if _, err := l.run(ctx, loopBoard, "move", serves, "Done"); err != nil {
-			return "", err
-		}
+	if err := l.moveServedDone(ctx, serves, act.Ref); err != nil {
+		return "", err
 	}
 	err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
@@ -456,6 +452,19 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err
+}
+
+// moveServedDone moves the task ref served to Done. A saved Serves can name a
+// pull request, which the board refuses as no issue: that must not fail the end.
+func (l *supervisorLoop) moveServedDone(ctx context.Context, serves, ref string) error {
+	if serves == "" || serves == ref || l.a.cfg.Board.Owner == "" {
+		return nil
+	}
+	_, err := l.run(ctx, loopBoard, "move", serves, "Done")
+	if err != nil && Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+		return nil
+	}
+	return err
 }
 
 // The reasons a reviewed merge stops for desk policy, before and after a
