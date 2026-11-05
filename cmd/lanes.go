@@ -34,6 +34,7 @@ type laneView struct {
 	// Pairs say, by key, what each of the lane's paired merges lands with
 	// (the gate's --pair): its sibling and where that is.
 	Pairs map[string]string `json:"pairs,omitempty"`
+	Stale string            `json:"stale,omitempty"`
 	// Pace is how long one place has held the lane of late (lanePace), Drain
 	// how long its queue takes at that pace: its waiting places and the
 	// running one.
@@ -492,6 +493,9 @@ func (a *app) laneViews(st *state.State) []laneView {
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		if v.Running != nil {
+			v.Stale = staleMerge(st, *v.Running)
+		}
 		for _, m := range v.Waiting {
 			if h, held := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, a.cfg.LaneOf(m.Repo)); held && h.Tool != "" {
 				if v.ToolWaiting == nil {
@@ -667,6 +671,9 @@ func (a *app) printLanes(views []laneView) {
 		switch {
 		case v.Running != nil:
 			status = fmt.Sprintf("running %s by %s since %s%s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started), v.paired(v.Running.Key()))
+			if v.Stale != "" {
+				status += ", STALE: " + v.Stale
+			}
 		case v.Settling != nil:
 			status = a.settlingText(*v.Settling)
 		}
@@ -726,7 +733,7 @@ func (a *app) printLanes(views []laneView) {
 }
 
 // checkPlaces asks GitHub, at now, about the waiting places of lane (every lane for
-// "") whose merge is not in the gate, other than repo#pr, last checked more
+// ""), including live waiting gates, other than repo#pr, last checked more
 // than every ago: a merged pull request settles its lane as a merge outside
 // the gate, a closed one leaves it, each with an event naming it. It
 // returns GitHub's error for a place settled with lanes settle, which heads
@@ -738,7 +745,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 	}
 	pulls := map[string]github.Pull{}
 	for _, m := range st.Merges {
-		if m.Phase != state.Waiting || m.PR == 0 || proc.Alive(m.PID) || (lane != "" && m.Lane != lane) ||
+		if m.Phase != state.Waiting || m.PR == 0 || (lane != "" && m.Lane != lane) ||
 			(m.Repo == repo && m.PR == pr) || now.Sub(m.Checked) < every {
 			continue
 		}
@@ -758,7 +765,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 		var ev []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 			p, ok := pulls[m.Key()]
-			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) || p.State != github.Closed {
+			if !ok || m.Phase != state.Waiting || p.State != github.Closed {
 				return false
 			}
 			ev = append(ev, event(by, "merge.dropped", "%s: closed without a merge, its place in lane %s is dropped", m.Key(), m.Lane))
@@ -767,7 +774,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 		for i := range st.Merges {
 			m := &st.Merges[i]
 			p, ok := pulls[m.Key()]
-			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) {
+			if !ok || m.Phase != state.Waiting {
 				continue
 			}
 			if p.State != github.Merged {

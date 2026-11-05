@@ -1562,6 +1562,8 @@ type Merge struct {
 	Lane string `json:"lane"`
 	By   Party  `json:"by"`
 	PID  int    `json:"pid"`
+	// Version is the binary that owns this place. Older releases may not record it.
+	Version string `json:"version,omitempty"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
 	Child int `json:"child,omitempty"`

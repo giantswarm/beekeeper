@@ -711,13 +711,16 @@ func (g *gateRun) step() (string, error) {
 		return liveWait, nil
 	}
 	if liveWait == "" {
+		if done, err := g.takeover(); done || err != nil {
+			return "", err
+		}
 		g.pollToolWindow(g.ctx, g.me)
 		// Recover an ended devctl before pruning its place as lost. A
 		// queued handoff behind a live gate only registers its new PID;
 		// its predecessor still owns these checks.
 		g.recordGone(g.ctx)
-		if why := g.checkOutside(); why != "" {
-			return why, nil
+		if why, err := g.checkOutside(); err != nil || why != "" {
+			return why, err
 		}
 	}
 	var q merge.Lane
@@ -757,6 +760,7 @@ func (g *gateRun) step() (string, error) {
 				g.me = m.By
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
+			m.Version = project.Version()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -801,6 +805,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; park until it lifts (beekeeper agents park --on %s%s \"<what>\"), merge then, do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, holdParkFlag, hold.Target)
 	case dup != nil && dup.Phase == state.Waiting:
+		if dup.By.Is(g.me) {
+			gateLine("%s reuses its existing place in lane %s (pid %d); its outcome reaches the owning session", g.key(), g.lane.Name, dup.PID)
+			return "", exitCode(ExitGateQueued)
+		}
 		why := fmt.Sprintf("%s is already queued in lane %s: since %s for %q (pid %d); its outcome reaches %q, do not merge again",
 			g.key(), g.lane.Name, clock(g.now, dup.Joined), dup.By.Name, dup.PID, dup.By.Name)
 		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
@@ -1003,12 +1011,16 @@ const (
 // checkOutside settles or drops the lane's places that wait without their
 // merge and whose pull request merged or closed (checkPlaces). It returns
 // what the merge waits for when GitHub does not answer for a place that
-// heads the lane.
-func (g *gateRun) checkOutside() string {
-	if err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck); err != nil {
-		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err)
+// heads the lane, or a StaleWriterError when a newer release wrote the state.
+func (g *gateRun) checkOutside() (string, error) {
+	err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck)
+	if stale := (*state.StaleWriterError)(nil); errors.As(err, &stale) {
+		return "", stale
 	}
-	return ""
+	if err != nil {
+		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err), nil
+	}
+	return "", nil
 }
 
 // readRelease reads the pull request's release tree once before merging.
@@ -1706,7 +1718,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
-		m.HandCut = g.handCut()
+		m.HandCut, m.Version = g.handCut(), project.Version()
 		m.Finished, m.Exit, m.Reset = time.Time{}, 0, time.Time{}
 		ev := []state.Event{g.startEvent()}
 		if passed != "" {
