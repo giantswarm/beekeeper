@@ -2750,7 +2750,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return l.a.operationOutcome("start", "", act.URL, true)
+				return l.a.operationOutcome(agentStartName, "", act.URL, true)
 			} else if !errors.Is(rerr, errLoopLater) {
 				return rerr
 			}
@@ -2870,7 +2870,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-					if saveErr := l.a.operationOutcome("start", "", act.URL, true); saveErr != nil {
+					if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 						return "", saveErr
 					}
 					return what, nil
@@ -3414,7 +3414,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
-				if saveErr := l.a.operationOutcome("start", "", act.URL, true); saveErr != nil {
+				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
 					return "", saveErr
 				}
 				return what, nil

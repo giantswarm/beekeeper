@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -19,6 +20,10 @@ const throughputHealthVerb = "supervisor.throughput-health"
 const throughputObservationFile = "throughput-observation.json"
 const throughputHealthFile = "throughput-health.json"
 const throughputCadence = time.Minute
+const throughputHealthy = "healthy"
+const throughputStalledMerge = "stalled-merge"
+const throughputStartFailed = "start-command-failed"
+const watchThroughputKey = "throughput"
 
 type throughputOutcome struct {
 	At                                time.Time
@@ -49,7 +54,7 @@ func publicPullURL(raw string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) != 4 || parts[2] != "pull" || parts[3] == "" {
+	if len(parts) != 4 || parts[2] != loopPullStep || parts[3] == "" {
 		return ""
 	}
 	for _, c := range parts[3] {
@@ -76,11 +81,11 @@ func (l *supervisorLoop) runStart(ctx context.Context, act superloop.Action, arg
 	if err != nil && (errors.Is(err, context.Canceled) || Code(err) == ExitRefused || isLoopGitHubHeldOutput(out)) {
 		return out, err
 	}
-	reason := "start-command-failed"
+	reason := throughputStartFailed
 	if err == nil {
 		reason = ""
 	}
-	if saveErr := l.a.operationOutcome("start", reason, act.URL, err == nil); saveErr != nil {
+	if saveErr := l.a.operationOutcome(agentStartName, reason, act.URL, err == nil); saveErr != nil {
 		return out, saveErr
 	}
 	return out, err
@@ -115,7 +120,7 @@ func (l *supervisorLoop) observeThroughput(in superloop.Input, actions []superlo
 				approved = true
 			}
 		}
-		if !approved || p.Draft || strings.EqualFold(p.Mergeable, "CONFLICTING") || strings.EqualFold(p.MergeState, "DIRTY") {
+		if !approved || p.Draft || strings.EqualFold(p.Mergeable, mergeableConflicting) || strings.EqualFold(p.MergeState, github.DirtyState) {
 			continue
 		}
 		wait := eligibleWait{Head: p.Head, URL: publicPullURL(p.URL), Since: now}
@@ -139,7 +144,7 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 	unknown := map[string]bool{}
 	candidate := obs.Candidate
 	if candidate == "" {
-		candidate = "unknown"
+		candidate = unknownState
 	}
 	urls := []string{}
 	for _, o := range outcomes {
@@ -165,12 +170,12 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 		}
 		streaks[o.Operation] = s
 	}
-	status := "healthy"
+	status := throughputHealthy
 	oldest := time.Duration(0)
 	if !held {
-		for _, op := range []string{"merge", "start"} {
+		for _, op := range []string{runMerge, agentStartName} {
 			if s := streaks[op]; s.count >= 3 {
-				if status == "healthy" {
+				if status == throughputHealthy {
 					status = "failed-" + op + "-" + s.reason
 				}
 				urls = append(urls, s.urls...)
@@ -186,12 +191,12 @@ func evaluateThroughput(now time.Time, after time.Duration, obs throughputObserv
 				urls = append(urls, u)
 			}
 		}
-		if status == "healthy" && oldest >= after {
-			status = "stalled-merge"
+		if status == throughputHealthy && oldest >= after {
+			status = throughputStalledMerge
 		}
 	}
-	if unknown["merge"] || unknown["start"] || obs.Unknown || obs.At.IsZero() || now.Sub(obs.At) > 3*throughputCadence || obs.At.After(now) {
-		status = "unknown"
+	if unknown[runMerge] || unknown[agentStartName] || obs.Unknown || obs.At.IsZero() || now.Sub(obs.At) > 3*throughputCadence || obs.At.After(now) {
+		status = unknownState
 	}
 	slices.Sort(urls)
 	return status, fmt.Sprintf("release throughput %s; candidate %s; oldest eligible wait %s; public PRs: %s", status, candidate, oldest.Round(time.Second), strings.Join(urls, ", "))
@@ -223,7 +228,7 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 			return nil, err
 		}
 		if initializing && len(evs) == 0 {
-			return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: "unknown"})
+			return nil, a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: unknownState})
 		}
 		var outcomes []throughputOutcome
 		prev.Status = ""
@@ -238,7 +243,7 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 				continue
 			}
 			var o throughputOutcome
-			if json.Unmarshal([]byte(e.Detail), &o) != nil || o.At.IsZero() || (o.Operation != "merge" && o.Operation != "start") || (!o.Success && !o.Unknown && o.Reason == "") {
+			if json.Unmarshal([]byte(e.Detail), &o) != nil || o.At.IsZero() || (o.Operation != runMerge && o.Operation != agentStartName) || (!o.Success && !o.Unknown && o.Reason == "") {
 				obs.Unknown = true
 				continue
 			}
@@ -252,16 +257,16 @@ func (a *app) checkThroughput(now time.Time, held bool) (string, error) {
 		if err := a.store.WriteFile(throughputHealthFile, throughputHealth{At: now, Status: status}); err != nil {
 			return nil, err
 		}
-		if status == prev.Status || prev.Status == "" && status == "healthy" {
+		if status == prev.Status || prev.Status == "" && status == throughputHealthy {
 			return nil, nil
 		}
 		incident := prev.Incident
-		alert := strings.HasPrefix(status, "failed-") || status == "stalled-merge"
-		report := alert && incident != status || status == "healthy" && incident != ""
+		alert := strings.HasPrefix(status, "failed-") || status == throughputStalledMerge
+		report := alert && incident != status || status == throughputHealthy && incident != ""
 		if alert {
 			incident = status
 		}
-		if status == "healthy" {
+		if status == throughputHealthy {
 			incident = ""
 			detail = "RECOVERED: " + detail
 		}

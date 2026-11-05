@@ -2276,12 +2276,12 @@ const loopRestartEvery = time.Minute
 // DOWN and notifies (no-supervisor) until it runs again. No session is
 // ever started or relayed for it.
 func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
-	if line, err := w.app.checkThroughput(w.now, false); err != nil {
-		w.fail("throughput", "release throughput unknown: cannot read durable health")
+	if line, err := w.checkThroughput(w.now, false); err != nil {
+		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
 	} else {
-		w.clear("throughput")
+		w.clear(watchThroughputKey)
 		if line != "" {
-			w.emitNow("throughput", "%s", line)
+			w.emitNow(watchThroughputKey, "%s", line)
 		}
 	}
 	if w.loopRunning() {

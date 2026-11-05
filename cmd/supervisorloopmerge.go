@@ -143,7 +143,7 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
 	if err != nil && ctx.Err() == nil {
-		if saveErr := a.operationOutcome("merge", "merge-command-unavailable", act.URL, false); saveErr != nil {
+		if saveErr := a.operationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
 			return "", saveErr
 		}
 	}

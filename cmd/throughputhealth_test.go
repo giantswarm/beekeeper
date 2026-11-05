@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/giantswarm/beekeeper/internal/config"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const testMergeExit1Reason = "merge-command-exit-1"
+
 func TestThroughputStreaksAndSuccesses(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	obs := throughputObservation{At: now}
-	failure := throughputOutcome{At: now, Operation: "merge", Reason: "merge-command-exit-1", Candidate: "v1.2.3", URL: loopURL}
+	failure := throughputOutcome{At: now, Operation: runMerge, Reason: testMergeExit1Reason, Candidate: testLoopNewVer, URL: loopURL}
 	outcomes := []throughputOutcome{failure, failure}
 	check := func(want string) {
 		t.Helper()
@@ -25,35 +27,35 @@ func TestThroughputStreaksAndSuccesses(t *testing.T) {
 			t.Fatalf("got %s want %s", got, want)
 		}
 	}
-	check("healthy")
-	outcomes = append(outcomes, throughputOutcome{Operation: "start", Success: true}, failure)
+	check(throughputHealthy)
+	outcomes = append(outcomes, throughputOutcome{Operation: agentStartName, Success: true}, failure)
 	check("failed-merge-merge-command-exit-1")
-	outcomes = append(outcomes, throughputOutcome{Operation: "merge", Success: true}, failure)
-	check("healthy")
-	outcomes = append(outcomes, failure, throughputOutcome{Operation: "merge", Reason: "different"})
-	check("healthy")
+	outcomes = append(outcomes, throughputOutcome{Operation: runMerge, Success: true}, failure)
+	check(throughputHealthy)
+	outcomes = append(outcomes, failure, throughputOutcome{Operation: runMerge, Reason: "different"})
+	check(throughputHealthy)
 	obs.Unknown = true
-	check("unknown")
+	check(unknownState)
 }
 
 func TestThroughputEligibleWaitAndStale(t *testing.T) {
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
 	obs := throughputObservation{At: now, Eligible: map[string]eligibleWait{loopPR: {Head: loopHead, URL: loopURL, Since: now.Add(-2 * time.Hour)}}}
 	status, detail := evaluateThroughput(now, 2*time.Hour, obs, nil, false)
-	if status != "stalled-merge" || !strings.Contains(detail, loopURL) || !strings.Contains(detail, "2h0m0s") {
+	if status != throughputStalledMerge || !strings.Contains(detail, loopURL) || !strings.Contains(detail, "2h0m0s") {
 		t.Fatal(status, detail)
 	}
 	status, _ = evaluateThroughput(now, 3*time.Hour, obs, nil, false)
-	if status != "healthy" {
+	if status != throughputHealthy {
 		t.Fatal(status)
 	}
 	status, _ = evaluateThroughput(now, 2*time.Hour, obs, nil, true)
-	if status != "healthy" {
+	if status != throughputHealthy {
 		t.Fatal(status)
 	}
 	obs.At = now.Add(-4 * time.Minute)
 	status, _ = evaluateThroughput(now, 2*time.Hour, obs, nil, false)
-	if status != "unknown" {
+	if status != unknownState {
 		t.Fatal(status)
 	}
 }
@@ -66,7 +68,7 @@ func TestThroughputRestartDedupRecoveryAndEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if err := r.a.operationOutcome("merge", "merge-command-exit-1", loopURL, false); err != nil {
+		if err := r.a.operationOutcome(runMerge, testMergeExit1Reason, loopURL, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,7 +90,7 @@ func TestThroughputRestartDedupRecoveryAndEscalation(t *testing.T) {
 	obs.At = now
 	_ = r.a.store.WriteFile(throughputObservationFile, obs)
 	check(false)
-	if err := r.a.operationOutcome("merge", "", loopURL, true); err != nil {
+	if err := r.a.operationOutcome(runMerge, "", loopURL, true); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Minute)
@@ -144,7 +146,7 @@ func TestThroughputLoopAliveStillReports(t *testing.T) {
 	w.now = r.a.timeNow()
 	_ = r.a.store.WriteFile(throughputObservationFile, throughputObservation{At: w.now})
 	for i := 0; i < 3; i++ {
-		_ = r.a.operationOutcome("merge", "tooling", loopURL, false)
+		_ = r.a.operationOutcome(runMerge, "tooling", loopURL, false)
 	}
 	if !w.checkLoop(context.Background(), &state.State{}) {
 		t.Fatal("loop should be alive")
@@ -161,14 +163,14 @@ func TestThroughputPublicDiagnostics(t *testing.T) {
 		}
 	}
 	r := newLoopRig(t)
-	if err := r.a.operationOutcome("start", "start-command-failed", loopURL, false); err != nil {
+	if err := r.a.operationOutcome(agentStartName, throughputStartFailed, loopURL, false); err != nil {
 		t.Fatal(err)
 	}
 	var o throughputOutcome
 	if err := json.Unmarshal([]byte(r.logged(t, throughputOutcomeVerb)[0].Detail), &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.At.IsZero() || o.Operation != "start" || o.Reason != "start-command-failed" {
+	if o.At.IsZero() || o.Operation != agentStartName || o.Reason != throughputStartFailed {
 		t.Fatal(o)
 	}
 }
@@ -177,8 +179,8 @@ func TestThroughputDetachedMergeDurableReasons(t *testing.T) {
 	r := newLoopRig(t)
 	now := r.a.timeNow()
 	for i := 0; i < 3; i++ {
-		st := &state.State{Merges: []state.Merge{{Repo: "o/r", PR: i + 1, By: loopParty, Phase: state.Running}}}
-		events := recordRun(st, 0, config.Lane{Name: "o/r"}, loopParty, runOutcome{rc: 7, reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
+		st := &state.State{Merges: []state.Merge{{Repo: devctlRepo, PR: i + 1, By: loopParty, Phase: state.Running}}}
+		events := recordRun(st, 0, config.Lane{Name: devctlRepo}, loopParty, runOutcome{rc: 7, reason: fmt.Sprintf("tool failed with incidental text %d", i)}, now, "")
 		if err := r.a.store.Record(events...); err != nil {
 			t.Fatal(err)
 		}
@@ -201,12 +203,12 @@ func TestThroughputStartChangingTextAndIntentionalRefusals(t *testing.T) {
 	l := &supervisorLoop{a: r.a}
 	for i := 0; i < 3; i++ {
 		r.answer = func([]string) (string, int) { return fmt.Sprintf("start failed, incidental %d", i), 1 }
-		if _, err := l.runStart(context.Background(), superloop.Action{URL: loopURL}, agentsName, agentStartName, "worker", "brief"); err == nil {
+		if _, err := l.runStart(context.Background(), superloop.Action{URL: loopURL}, agentsName, agentStartName, workerRole, "brief"); err == nil {
 			t.Fatal("expected failure")
 		}
 	}
 	r.answer = func([]string) (string, int) { return "capacity held", ExitRefused }
-	_, _ = l.runStart(context.Background(), superloop.Action{}, agentsName, agentStartName, "worker", "brief")
+	_, _ = l.runStart(context.Background(), superloop.Action{}, agentsName, agentStartName, workerRole, "brief")
 	if len(r.logged(t, throughputOutcomeVerb)) != 3 {
 		t.Fatal("intentional refusal counted")
 	}
@@ -237,7 +239,7 @@ func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 	}
 	now = now.Add(2 * time.Hour)
 	obs.At = now
-	if line := check(); !strings.Contains(line, "stalled-merge") {
+	if line := check(); !strings.Contains(line, throughputStalledMerge) {
 		t.Fatal(line)
 	}
 	now = now.Add(time.Minute)
@@ -246,7 +248,7 @@ func TestThroughputStallEscalatesAndRecoversAfterUnknown(t *testing.T) {
 		t.Fatal("duplicate", line)
 	}
 	now = now.Add(4 * time.Minute)
-	if line := check(); !strings.Contains(line, "unknown") {
+	if line := check(); !strings.Contains(line, unknownState) {
 		t.Fatal(line)
 	}
 	now = now.Add(time.Minute)
