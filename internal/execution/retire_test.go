@@ -77,19 +77,26 @@ func retiredRoot(f fixture) string {
 	return filepath.Join(f.s.Config.WorkspaceRoot, retiredWorkspaces, retiredLabel(f.r.Ref))
 }
 
-// recoveredFile reads path of the recovery commit from its bundle alone, in a
+// recoveredClone fetches the recovery commit from its bundle alone, into a
 // fresh repository holding only the bundle's base: what a later recovery has.
-func recoveredFile(t *testing.T, f fixture, x Retirement, path string) string {
+// Its fetch must not leave detached maintenance writing during TempDir cleanup.
+func recoveredClone(t *testing.T, f fixture, x Retirement) string {
 	t.Helper()
 	ctx := context.Background()
 	clone := filepath.Join(t.TempDir(), "clone")
-	if _, err := f.s.git(ctx, "", "clone", "--quiet", "--no-local", "--", f.source, clone); err != nil {
+	if _, err := f.s.git(ctx, "", "clone", "--quiet", "--no-local", "--config", "maintenance.auto=false", "--", f.source, clone); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.s.git(ctx, clone, "fetch", "--quiet", x.Recovery.Bundle, x.Recovery.Ref+":refs/heads/recovered"); err != nil {
 		t.Fatalf("bundle does not recover: %v", err)
 	}
-	out, err := f.s.git(ctx, clone, "show", "refs/heads/recovered:"+path)
+	return clone
+}
+
+// recoveredFile reads path of the recovery commit from its bundle alone.
+func recoveredFile(t *testing.T, f fixture, x Retirement, path string) string {
+	t.Helper()
+	out, err := f.s.git(context.Background(), recoveredClone(t, f, x), "show", "refs/heads/recovered:"+path)
 	if err != nil {
 		t.Fatalf("recovered tree lacks %s: %v", path, err)
 	}
@@ -210,14 +217,7 @@ func TestRetirePreservesCommitsOnlyReflogsReach(t *testing.T) {
 	if err != nil || x.Recovery == nil || x.Recovery.Head != h.Commit {
 		t.Fatalf("retirement = %+v, %v", x, err)
 	}
-	clone := filepath.Join(t.TempDir(), "clone")
-	if _, err := f.s.git(ctx, "", "clone", "--quiet", "--no-local", "--", f.source, clone); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.s.git(ctx, clone, "fetch", "--quiet", x.Recovery.Bundle, x.Recovery.Ref+":refs/heads/recovered"); err != nil {
-		t.Fatal(err)
-	}
-	got, err := f.s.git(ctx, clone, "show", strings.TrimSpace(string(abandoned))+":abandoned.txt")
+	got, err := f.s.git(ctx, recoveredClone(t, f, x), "show", strings.TrimSpace(string(abandoned))+":abandoned.txt")
 	if err != nil || string(got) != "abandoned work\n" {
 		t.Fatalf("abandoned commit not in the bundle: %q, %v", got, err)
 	}
