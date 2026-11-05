@@ -59,7 +59,7 @@ func completeReviewedRelease(ctx context.Context, doc github.SquashDoc, wait boo
 	case out.Unconfirmed || out.Release == "":
 		result.ExitCode = 9
 	default:
-		result.Release.Verdict = "available"
+		result.Release.Verdict = verdictAvailable
 		result.Release.Tag = out.Release
 		result.ExitCode = 0
 	}

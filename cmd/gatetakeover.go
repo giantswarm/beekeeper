@@ -19,7 +19,10 @@ import (
 )
 
 // verdictUnconfirmed is a merge whose release nobody could confirm.
-const verdictUnconfirmed = "unconfirmed"
+const (
+	verdictUnconfirmed = "unconfirmed"
+	verdictAvailable   = "available"
+)
 
 // staleMerge is local evidence that a running place has lost its writer.
 // Unknown versions are not evidence of staleness.
@@ -173,7 +176,7 @@ func (g *gateRun) recordTakenMerge(p github.Pull, handCut string) error {
 		return err
 	}
 	// Keep stdout machine readable, as for a normal gated merge.
-	verdict := "available"
+	verdict := verdictAvailable
 	switch {
 	case out.ReleaseFailed:
 		verdict = "ci_failed"
