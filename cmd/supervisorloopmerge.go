@@ -309,7 +309,7 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 // retain the existing release-containment and retirement behavior.
 func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
-		return ag.Park != nil && strings.EqualFold(loopParkOn(ag.Park), act.Ref) && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
+		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
 	})
 	if i < 0 {
 		rp, ok := st.ReviewParkFor(act.Ref)
@@ -372,13 +372,11 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; worker woken for remaining open work", nil
 		}
-		if rp.Serves != "" && rp.Serves != act.Ref && l.a.cfg.Board.Owner != "" {
-			if _, err := l.run(ctx, loopBoard, "move", rp.Serves, "Done"); err != nil && (Code(err) != ExitRefused || !strings.Contains(err.Error(), " is no issue:")) {
-				return "", err
-			}
+		if err := l.moveServedDone(ctx, rp.Serves, act.Ref); err != nil {
+			return "", err
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-			clearAgentReviewParks(current, rp.Party, rp.Agent)
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
 			// The last completed ref may differ from the worker's current
 			// park when its PRs merge out of order. Finish that parked owner too.
 			for i := range current.Agents {
@@ -436,10 +434,8 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		return "merged; worker woken for remaining open work", nil
 	}
-	if serves != "" && serves != act.Ref && l.a.cfg.Board.Owner != "" {
-		if _, err := l.run(ctx, loopBoard, "move", serves, "Done"); err != nil && (Code(err) != ExitRefused || !strings.Contains(err.Error(), " is no issue:")) {
-			return "", err
-		}
+	if err := l.moveServedDone(ctx, serves, act.Ref); err != nil {
+		return "", err
 	}
 	err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
@@ -450,13 +446,25 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		report := fmt.Sprintf("%s merged at %s; no post-merge work declared; open items: none", act.URL, l.merged[act.Ref].MergeCommit)
 		reportIdle(worker, time.Now())
 		worker.Done = true
-		clearAgentReviewParks(current, worker.Party, worker.Name)
 		endNotes(current, worker.Party, l.a.timeNow())
 		clearRecords(current, worker.Party)
 		current.WorkerReports = append(current.WorkerReports, state.WorkerReport{Finished: true, By: worker.Party, At: l.a.timeNow(), Task: worker.LastTask, Text: report})
 		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err
+}
+
+// moveServedDone moves the task ref served to Done. A saved Serves can name a
+// pull request, which the board refuses as no issue: that must not fail the end.
+func (l *supervisorLoop) moveServedDone(ctx context.Context, serves, ref string) error {
+	if serves == "" || serves == ref || l.a.cfg.Board.Owner == "" {
+		return nil
+	}
+	_, err := l.run(ctx, loopBoard, "move", serves, "Done")
+	if err != nil && Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+		return nil
+	}
+	return err
 }
 
 // The reasons a reviewed merge stops for desk policy, before and after a

@@ -349,7 +349,6 @@ completion is refused under --as.`,
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
 				if finished {
-					clearAgentReviewParks(st, ag.Party, ag.Name)
 					for _, r := range clearRecords(st, ag.Party) {
 						evs = append(evs, event(me, "session.unserve", "%s: %s", r.Session.Name, recordText(r)))
 					}

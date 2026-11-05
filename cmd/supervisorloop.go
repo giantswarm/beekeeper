@@ -1222,13 +1222,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
-	settledParks := false
+	endedParks := false
 	for _, rp := range st.ReviewParks {
 		if rp.On == "" || rp.ReviewHead == "" {
 			continue
 		}
-		if reviewParkSettled(st, in.Taken, in.Events, rp) {
-			settledParks = true
+		if reviewParkEnded(in.Taken, rp) {
+			endedParks = true
 			continue
 		}
 		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
@@ -1248,16 +1248,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			Saved:           true,
 		})
 	}
-	if settledParks && !l.dryRun {
+	if endedParks && !l.dryRun {
+		ended := func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) }
 		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
-			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
-				return reviewParkSettled(current, in.Taken, in.Events, rp)
-			})
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, ended)
 			return nil, nil
 		})
-		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
-			return reviewParkSettled(st, in.Taken, in.Events, rp)
-		})
+		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, ended)
 	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
@@ -1301,21 +1298,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			continue
 		}
-		changed := loopPullChanged(in, ref)
 		if pullHeld {
-			p, ok := l.cachedPull(ref, changed)
-			if !ok {
-				unread[ref] = true
-				continue
-			}
-			if r, ok := parseRef(ref); ok {
-				p.Team = l.teams[strings.ToLower(r.Repo)]
-			}
-			p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
-			in.Pulls[ref] = p
+			unread[ref] = true
 			continue
 		}
-		p, err := l.observePull(ctx, ref, changed)
+		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
 			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
@@ -1965,12 +1952,6 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			return "", false, err
 		}
 	}
-	if act.Kind == superloop.KindEnd {
-		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
-			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
-			return nil, nil
-		})
-	}
 	return fmt.Sprintf("taken before an interruption: %s, as the log shows", c.target), true, nil
 }
 
@@ -2568,28 +2549,12 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	return ""
 }
 
-func reviewParkSettled(st *state.State, taken []superloop.Taken, events []superloop.Event, rp state.ReviewPark) bool {
-	if rp.On == "" || rp.ReviewHead == "" {
-		return true
-	}
-	if slices.ContainsFunc(taken, func(t superloop.Taken) bool {
-		return (t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)) ||
-			(t.Kind == superloop.KindDone && rp.Agent != "" && strings.EqualFold(t.Agent, rp.Agent) && !rp.At.After(t.At))
-	}) {
-		return true
-	}
-	if slices.ContainsFunc(events, func(e superloop.Event) bool {
-		return e.Verb == superloop.VerbDone && strings.EqualFold(e.Agent, rp.Agent) && !rp.At.After(e.At)
-	}) {
-		return true
-	}
-	if slices.ContainsFunc(st.WorkerReports, func(wr state.WorkerReport) bool {
-		return wr.Finished && ((rp.Party.Name != "" && wr.By.Is(rp.Party)) || strings.EqualFold(wr.By.Name, rp.Agent)) && !rp.At.After(wr.At)
-	}) {
-		return true
-	}
-	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-		return ((rp.Party.Name != "" && ag.Is(rp.Party)) || strings.EqualFold(ag.Name, rp.Agent)) && ag.Done && !rp.At.After(ag.IdleSince)
+// reviewParkEnded reports a park whose own pull request the loop already
+// ended. A park is per pull request: nothing about its worker ends it, since a
+// worker finishing one pull request can have others waiting for review.
+func reviewParkEnded(taken []superloop.Taken, rp state.ReviewPark) bool {
+	return slices.ContainsFunc(taken, func(t superloop.Taken) bool {
+		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
 	})
 }
 
