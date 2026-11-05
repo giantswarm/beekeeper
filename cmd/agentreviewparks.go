@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"slices"
 	"strings"
 
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -26,6 +27,12 @@ func recordAgentReviewPark(st *state.State, ag state.Agent) {
 		}
 	}
 	st.UpsertReviewPark(rp)
+}
+
+func clearAgentReviewParks(st *state.State, party state.Party, agent string) {
+	st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+		return (party.Name != "" && rp.Party.Is(party)) || (agent != "" && strings.EqualFold(rp.Agent, agent))
+	})
 }
 
 func (l *supervisorLoop) otherReviewParks(party state.Party, ref string) bool {

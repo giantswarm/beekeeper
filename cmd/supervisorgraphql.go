@@ -265,9 +265,17 @@ func loopPullChanged(in superloop.Input, ref string) time.Time {
 	return changed
 }
 
+func (l *supervisorLoop) cachedPull(ref string, changed time.Time) (superloop.Pull, bool) {
+	seen, ok := l.pulls[ref]
+	if !ok || !seen.changed.Equal(changed) || l.a.timeNow().Sub(seen.at) >= loopPullEvery {
+		return superloop.Pull{}, false
+	}
+	return seen.pull, true
+}
+
 func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed time.Time) (superloop.Pull, error) {
-	if seen, ok := l.pulls[ref]; ok && seen.changed.Equal(changed) && l.a.timeNow().Sub(seen.at) < loopPullEvery {
-		return seen.pull, nil
+	if p, ok := l.cachedPull(ref, changed); ok {
+		return p, nil
 	}
 	var p superloop.Pull
 	err := l.a.loopGitHub(ctx, "pull", func() (err error) {
@@ -280,7 +288,13 @@ func (l *supervisorLoop) observePull(ctx context.Context, ref string, changed ti
 	if l.pulls == nil {
 		l.pulls = map[string]loopPullObservation{}
 	}
-	l.pulls[ref] = loopPullObservation{pull: p, at: l.a.timeNow(), changed: changed}
+	at := l.a.timeNow()
+	if l.a.loopNow != nil {
+		if now := time.Now(); now.After(at) {
+			at = now
+		}
+	}
+	l.pulls[ref] = loopPullObservation{pull: p, at: at, changed: changed}
 	return p, nil
 }
 

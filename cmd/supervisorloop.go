@@ -782,7 +782,7 @@ func loopServes(st *state.State, ag state.Agent) string {
 
 func loopTaskServes(ag state.Agent, parkedOn string) string {
 	for _, task := range []string{ag.Task, ag.LastTask} {
-		if m := refURL.FindString(task); m != "" {
+		if m := refURL.FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
 			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
 				return refName(r)
 			}
@@ -1141,27 +1141,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		in.Workers = append(in.Workers, w)
 	}
-	for _, rp := range st.ReviewParks {
-		if rp.On == "" || rp.ReviewHead == "" {
-			continue
-		}
-		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
-		}) {
-			continue
-		}
-		in.Workers = append(in.Workers, superloop.Worker{
-			Name:            rp.Agent,
-			ParkedOn:        rp.On,
-			ParkedAt:        rp.At,
-			ReviewRequested: true,
-			ParkedHead:      rp.ReviewHead,
-			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
-			Started:         false,
-			Serves:          rp.Serves,
-			Saved:           true,
-		})
-	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
 			by := n.By.Name
@@ -1243,6 +1222,43 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
+	settledParks := false
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if reviewParkSettled(st, in.Taken, in.Events, rp) {
+			settledParks = true
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+			Saved:           true,
+		})
+	}
+	if settledParks && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
+				return reviewParkSettled(current, in.Taken, in.Events, rp)
+			})
+			return nil, nil
+		})
+		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+			return reviewParkSettled(st, in.Taken, in.Events, rp)
+		})
+	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
 	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
@@ -1256,6 +1272,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	sortTrackedPulls(in, tracked)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -1265,6 +1282,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	unread := map[string]bool{}
+	unreviewedEnded := map[string]bool{}
+	pullHeld := false
 	for _, ref := range tracked {
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
@@ -1276,13 +1296,32 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		l.mu.Unlock()
 		if wasMerged {
 			in.Pulls[ref] = mergedPull
+			if !hasLoopRound(in.Taken, ref) {
+				unreviewedEnded[strings.ToLower(ref)] = true
+			}
 			continue
 		}
-		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
+		changed := loopPullChanged(in, ref)
+		if pullHeld {
+			p, ok := l.cachedPull(ref, changed)
+			if !ok {
+				unread[ref] = true
+				continue
+			}
+			if r, ok := parseRef(ref); ok {
+				p.Team = l.teams[strings.ToLower(r.Repo)]
+			}
+			p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
+			in.Pulls[ref] = p
+			continue
+		}
+		p, err := l.observePull(ctx, ref, changed)
 		if err != nil {
+			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-				return nil
+				pullHeld = true
+				continue
 			}
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
@@ -1294,6 +1333,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
+			unreviewedEnded[strings.ToLower(ref)] = true
+		}
 		if p.State == superloop.Merged {
 			l.mu.Lock()
 			if l.merged == nil {
@@ -1302,6 +1344,23 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.merged[ref] = p
 			l.mu.Unlock()
 		}
+	}
+	if len(unreviewedEnded) > 0 && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
+				return unreviewedEnded[strings.ToLower(rp.On)]
+			})
+			return nil, nil
+		})
+		st.ReviewParks = slices.DeleteFunc(st.ReviewParks, func(rp state.ReviewPark) bool {
+			return unreviewedEnded[strings.ToLower(rp.On)]
+		})
+		in.Workers = slices.DeleteFunc(in.Workers, func(w superloop.Worker) bool {
+			return w.Saved && unreviewedEnded[strings.ToLower(w.ParkedOn)]
+		})
+	}
+	if pullHeld && len(in.Pulls) == 0 {
+		return nil
 	}
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
@@ -1372,7 +1431,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if l.pauseForReexec() {
 		return nil
 	}
-	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless); err != nil {
+	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
@@ -1603,7 +1662,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitionOrder := []string{}
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
-		key := "transition:" + cmp.Or(act.Agent, act.Kind)
+		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
@@ -1905,6 +1964,12 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		if err := l.a.assignExecutionReview(ctx, act); err != nil {
 			return "", false, err
 		}
+	}
+	if act.Kind == superloop.KindEnd {
+		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			return nil, nil
+		})
 	}
 	return fmt.Sprintf("taken before an interruption: %s, as the log shows", c.target), true, nil
 }
@@ -2492,8 +2557,8 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
 		return s
 	}
-	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
-		if r, ok := parseRef(ref); ok {
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) && !strings.Contains(strings.ToLower(ref), "/pull/") {
+		if r, ok := parseRef(ref); ok && !strings.EqualFold(refName(r), on) {
 			return refName(r)
 		}
 	}
@@ -2501,6 +2566,71 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 		return rp.Serves
 	}
 	return ""
+}
+
+func reviewParkSettled(st *state.State, taken []superloop.Taken, events []superloop.Event, rp state.ReviewPark) bool {
+	if rp.On == "" || rp.ReviewHead == "" {
+		return true
+	}
+	if slices.ContainsFunc(taken, func(t superloop.Taken) bool {
+		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
+	}) {
+		return true
+	}
+	if slices.ContainsFunc(events, func(e superloop.Event) bool {
+		return e.Verb == superloop.VerbDone && strings.EqualFold(e.Agent, rp.Agent) && !rp.At.After(e.At)
+	}) {
+		return true
+	}
+	if slices.ContainsFunc(st.WorkerReports, func(wr state.WorkerReport) bool {
+		return wr.Finished && ((rp.Party.Name != "" && wr.By.Is(rp.Party)) || strings.EqualFold(wr.By.Name, rp.Agent)) && !rp.At.After(wr.At)
+	}) {
+		return true
+	}
+	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ((rp.Party.Name != "" && ag.Is(rp.Party)) || strings.EqualFold(ag.Name, rp.Agent)) && ag.Done && !rp.At.After(ag.IdleSince)
+	})
+}
+
+func hasLoopRound(taken []superloop.Taken, ref string) bool {
+	for _, t := range taken {
+		if (t.Kind == superloop.KindReview || t.Kind == superloop.KindGo) && strings.EqualFold(t.Ref, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortTrackedPulls(in superloop.Input, tracked []string) {
+	type priority struct {
+		tier    int
+		changed time.Time
+	}
+	pri := make(map[string]priority, len(tracked))
+	for _, ref := range tracked {
+		tier := 3
+		for _, w := range in.Workers {
+			if !strings.EqualFold(w.ParkedOn, ref) || !w.ReviewRequested {
+				continue
+			}
+			if !w.Saved {
+				tier = 0
+				break
+			}
+			tier = min(tier, 1)
+		}
+		if tier > 1 && hasLoopRound(in.Taken, ref) {
+			tier = 2
+		}
+		pri[ref] = priority{tier: tier, changed: loopPullChanged(in, ref)}
+	}
+	slices.SortStableFunc(tracked, func(a, b string) int {
+		pa, pb := pri[a], pri[b]
+		if pa.tier != pb.tier {
+			return cmp.Compare(pa.tier, pb.tier)
+		}
+		return pb.changed.Compare(pa.changed)
+	})
 }
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {

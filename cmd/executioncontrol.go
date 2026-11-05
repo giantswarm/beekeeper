@@ -508,6 +508,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		verb := litAgentsIdle
 		if v.Finished {
 			verb = executionDone
+			clearAgentReviewParks(st, me, ag.Name)
 			clearRecords(st, me)
 		}
 		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}

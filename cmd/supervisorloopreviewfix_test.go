@@ -625,3 +625,66 @@ func TestContinuationWaitsWhenCoordinatorCapacityCannotBeRead(t *testing.T) {
 		})
 	}
 }
+
+func TestLoopPrunesSettledReviewParksAndStartsActiveReviewUnderAllowanceHold(t *testing.T) {
+	r := newLoopRig(t)
+	now := r.a.now
+	const (
+		donePR       = "o/r#1"
+		endedPR      = "o/r#2"
+		unreviewedPR = "o/r#3"
+		otherPR      = "o/r#9"
+	)
+	r.pulls[unreviewedPR] = superloop.Pull{Ref: unreviewedPR, URL: "https://github.com/o/r/pull/3", State: superloop.Merged, Head: loopHead, MergeCommit: loopFixed, Author: loopDesk}
+	r.pulls[otherPR] = superloop.Pull{Ref: otherPR, URL: "https://github.com/o/r/pull/9", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = []state.ReviewPark{
+			{On: donePR, At: now.Add(-30 * time.Minute), ReviewHead: loopHead, Agent: "done-worker", Party: state.Party{Name: "done-worker", Host: "done-id"}},
+			{On: endedPR, At: now.Add(-20 * time.Minute), ReviewHead: loopHead, Agent: "ended-worker", Party: state.Party{Name: "ended-worker", Host: "ended-id"}},
+			{On: unreviewedPR, At: now.Add(-10 * time.Minute), ReviewHead: loopHead, Agent: "merged-worker", Party: state.Party{Name: "merged-worker", Host: "merged-id"}},
+		}
+		st.Agents = append(st.Agents, state.Agent{
+			Party: state.Party{Name: "plain-waiter", Host: "plain-id"},
+			Park:  &state.Park{On: otherPR, At: now.Add(-5 * time.Minute), Waits: "overlap: waiting for o/r#9"},
+		})
+		return []state.Event{
+			{At: now.Add(-25 * time.Minute), By: state.Party{Name: "done-worker", Host: "done-id"}, Verb: superloop.VerbDone, Detail: "done-worker done: finished task"},
+			{At: now.Add(-15 * time.Minute), By: loopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.park(t, loopPR, now)
+	var readOrder []string
+	prevRead := readLoopPull
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		readOrder = append(readOrder, ref)
+		if ref == otherPR {
+			return superloop.Pull{}, errLoopLater
+		}
+		return prevRead(ctx, ref)
+	}
+	r.pass(t)
+	if slices.Contains(readOrder, donePR) || slices.Contains(readOrder, endedPR) {
+		t.Fatalf("settled ReviewParks were read from GitHub: %v", readOrder)
+	}
+	if len(readOrder) == 0 || readOrder[0] != loopPR {
+		t.Fatalf("active live review park was not observed first: %v", readOrder)
+	}
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("reviewer did not start when later PR hit allowance hold: %v\n%s", r.calls, r.out)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{donePR, endedPR, unreviewedPR} {
+		if _, ok := st.ReviewParkFor(stale); ok {
+			t.Fatalf("stale ReviewPark %s remained in state: %+v", stale, st.ReviewParks)
+		}
+	}
+	clearAgentReviewParks(st, state.Party{Name: loopWorker}, loopWorker)
+	if _, ok := st.ReviewParkFor(loopPR); ok {
+		t.Fatalf("clearAgentReviewParks did not remove worker's ReviewPark: %+v", st.ReviewParks)
+	}
+}

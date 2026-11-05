@@ -121,8 +121,12 @@ const (
 // logs it (loopOwnerlessVerb), and it stays so until a pass sees an owner,
 // across restarts. An action of the loop's claimed or in flight on it owns
 // it meanwhile. logged is what the log says so far.
-func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loopClaim, logged map[string]time.Time) (map[string]time.Time, error) {
+func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loopClaim, logged map[string]time.Time, unread ...map[string]bool) (map[string]time.Time, error) {
 	now := l.a.timeNow()
+	var skipped map[string]bool
+	if len(unread) > 0 {
+		skipped = unread[0]
+	}
 	acting := func(ref string) bool {
 		on := func(key string) bool { return strings.Contains(key, " "+ref+"@") || strings.HasSuffix(key, " "+ref) }
 		if slices.ContainsFunc(slices.Collect(maps.Keys(claims)), on) {
@@ -154,6 +158,10 @@ func (l *supervisorLoop) markOwnerless(in superloop.Input, claims map[string]loo
 		}
 	}
 	for _, ref := range slices.Sorted(maps.Keys(logged)) {
+		if skipped[ref] {
+			next[ref] = logged[ref]
+			continue
+		}
 		// A pull request the pass did not read (merged, closed, gone from
 		// the list) ends its stretch as one with an owner does.
 		if _, still := next[ref]; still || l.dryRun {
