@@ -12,9 +12,19 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const (
+	testMCPImage   = "example/mcp-server:latest"
+	testDockerWord = "docker"
+	testDryMode    = "dry"
+	testLiveMode   = "live"
+	testStopError  = "stop error"
+	testInspectErr = "inspect error"
+	testProcessErr = "process error"
+)
+
 func testMCPContainer(now time.Time) mcpContainer {
 	c := mcpContainer{ID: strings.Repeat("a", 64), Name: "/mcp-fixture", Created: now.Add(-time.Hour)}
-	c.Config.Image = "example/mcp-server:latest"
+	c.Config.Image = testMCPImage
 	c.Config.OpenStdin, c.Config.AttachStdin, c.State.Running = true, true, true
 	return c
 }
@@ -30,18 +40,18 @@ func TestOrphanMCP(t *testing.T) {
 		{name: "ended client", want: true},
 		{name: "registry with port", change: func(c *mcpContainer) { c.Config.Image = "registry.example:5000/tools/mcp-server:v1" }, want: true},
 		{name: "MCP namespace", change: func(c *mcpContainer) { c.Config.Image = "mcp/fixture:v1" }, want: true},
-		{name: "running session client", args: []string{"/usr/bin/docker", "run", "--rm", "-i", "example/mcp-server:latest"}},
-		{name: "unrostered client", args: []string{"docker", "--context", "local", "run", "-i", "example/mcp-server:latest"}},
-		{name: "attached by name", args: []string{"docker", "attach", "mcp-fixture"}},
-		{name: "started by short ID", args: []string{"docker", "start", "-ai", strings.Repeat("a", 12)}},
-		{name: "other image client", args: []string{"docker", "run", "-i", "other"}, want: true},
+		{name: "running session client", args: []string{"/usr/bin/docker", testRunWord, "--rm", "-i", testMCPImage}},
+		{name: "unrostered client", args: []string{testDockerWord, "--context", executionLocal, testRunWord, "-i", testMCPImage}},
+		{name: "attached by name", args: []string{testDockerWord, "attach", "mcp-fixture"}},
+		{name: "started by short ID", args: []string{testDockerWord, labStart, "-ai", strings.Repeat("a", 12)}},
+		{name: "different image client", args: []string{testDockerWord, testRunWord, "-i", "example/different-mcp:v1"}, want: true},
 		{name: "detached", change: func(c *mcpContainer) { c.Config.AttachStdin = false }},
 		{name: "closed stdin", change: func(c *mcpContainer) { c.Config.OpenStdin = false }},
 		{name: "terminal", change: func(c *mcpContainer) { c.Config.Tty = true }},
 		{name: "ordinary service", change: func(c *mcpContainer) { c.Config.Image = "example/service:latest" }},
 		{name: "starting", change: func(c *mcpContainer) { c.Created = now }},
 		{name: "unknown age", change: func(c *mcpContainer) { c.Created = time.Time{} }},
-		{name: "stopped", change: func(c *mcpContainer) { c.State.Running = false }},
+		{name: "exited container", change: func(c *mcpContainer) { c.State.Running = false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testMCPContainer(now)
@@ -60,7 +70,7 @@ func TestOrphanMCP(t *testing.T) {
 }
 
 func TestCleanMCP(t *testing.T) {
-	for _, mode := range []string{"stop", "dry", "live", "process error", "stop error", "inspect error"} {
+	for _, mode := range []string{labStop, testDryMode, testLiveMode, testProcessErr, testStopError, testInspectErr} {
 		t.Run(mode, func(t *testing.T) {
 			now := time.Now()
 			c := testMCPContainer(now)
@@ -70,13 +80,13 @@ func TestCleanMCP(t *testing.T) {
 				switch args[0] {
 				case "ps":
 					return []byte(c.ID), nil
-				case "inspect":
-					if mode == "inspect error" {
+				case sshTestInspect:
+					if mode == testInspectErr {
 						return nil, errors.New("unavailable")
 					}
 					return json.Marshal([]mcpContainer{c})
-				case "stop":
-					if mode == "stop error" {
+				case labStop:
+					if mode == testStopError {
 						return nil, errors.New("failed")
 					}
 					return nil, nil
@@ -86,32 +96,32 @@ func TestCleanMCP(t *testing.T) {
 				}
 			}
 			processes := func() (*proc.Table, error) {
-				if mode == "process error" {
+				if mode == testProcessErr {
 					return nil, errors.New("unavailable")
 				}
-				if mode == "live" {
-					return proc.NewTable(&proc.Process{PID: 42, Args: []string{"docker", "run", "-i", c.Config.Image}}), nil
+				if mode == testLiveMode {
+					return proc.NewTable(&proc.Process{PID: 42, Args: []string{testDockerWord, testRunWord, "-i", c.Config.Image}}), nil
 				}
 				return proc.NewTable(), nil
 			}
-			lines := cleanMCP(context.Background(), mode == "dry", now, docker, processes)
-			stopped := mode == "stop" || mode == "stop error"
-			if got := calls[len(calls)-1][0] == "stop"; got != stopped {
+			lines := cleanMCP(context.Background(), mode == testDryMode, now, docker, processes)
+			stopped := mode == labStop || mode == testStopError
+			if got := calls[len(calls)-1][0] == labStop; got != stopped {
 				t.Fatalf("stop called = %v, calls %v", got, calls)
 			}
-			if stopped && !reflect.DeepEqual(calls[len(calls)-1], []string{"stop", "--timeout", "10", c.ID}) {
+			if stopped && !reflect.DeepEqual(calls[len(calls)-1], []string{labStop, "--timeout", "10", c.ID}) {
 				t.Fatalf("stop args: %v", calls)
 			}
 			switch mode {
-			case "live":
+			case testLiveMode:
 				if len(lines) != 0 {
 					t.Fatal(lines)
 				}
-			case "dry":
+			case testDryMode:
 				if len(lines) != 1 || !strings.Contains(lines[0], `would stop MCP container "mcp-fixture"`) {
 					t.Fatal(lines)
 				}
-			case "stop":
+			case labStop:
 				if len(lines) != 1 || !strings.Contains(lines[0], `stopped MCP container "mcp-fixture"`) {
 					t.Fatal(lines)
 				}

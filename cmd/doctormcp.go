@@ -40,7 +40,7 @@ func orphanMCP(c mcpContainer, t *proc.Table, now time.Time) bool {
 		if len(p.Args) < 2 || filepath.Base(p.Args[0]) != "docker" {
 			continue
 		}
-		if !slices.ContainsFunc(p.Args[1:], func(arg string) bool { return arg == "run" || arg == "start" || arg == "attach" }) {
+		if !slices.ContainsFunc(p.Args[1:], func(arg string) bool { return arg == workerGitHubRunGroup || arg == labStart || arg == "attach" }) {
 			continue
 		}
 		for _, arg := range p.Args[1:] {
@@ -64,7 +64,7 @@ func cleanMCP(ctx context.Context, dry bool, now time.Time, docker func(context.
 		return nil
 	}
 	ids := strings.Fields(string(out))
-	out, err = docker(ctx, append([]string{"inspect"}, ids...)...)
+	out, err = docker(ctx, slices.Insert(ids, 0, "inspect")...)
 	if err != nil {
 		return []string{"MCP containers: inspection failed"}
 	}
@@ -87,7 +87,7 @@ func cleanMCP(ctx context.Context, dry bool, now time.Time, docker func(context.
 		}
 		if dry {
 			lines = append(lines, fmt.Sprintf("would stop MCP container %q (its stdio client ended)", name))
-		} else if _, err := docker(ctx, "stop", "--timeout", "10", c.ID); err != nil {
+		} else if _, err := docker(ctx, labStop, "--timeout", "10", c.ID); err != nil {
 			lines = append(lines, fmt.Sprintf("failed to stop MCP container %q", name))
 		} else {
 			lines = append(lines, fmt.Sprintf("stopped MCP container %q (its stdio client ended)", name))
