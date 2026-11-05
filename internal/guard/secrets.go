@@ -821,7 +821,7 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 
 // sourceLeak returns the leak when the simple command exposes secret values.
 func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool, dirs []string, copied map[string]string) *leak {
-	if l := g.transcripts.fileLeak(words, dirs, g.metadata); l != nil {
+	if l := g.transcripts.fileLeak(words, dirs, g.metadata, g.inTest); l != nil {
 		return l
 	}
 	if l := procFileLeak(words); l != nil {

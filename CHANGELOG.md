@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Transcript guard: a repository script's `[[ ]]` patterns and `sed`, `awk`, `grep` and `perl` regexes no longer read as a recursive read of `/`; a glob the shell does not expand is refused only when it can reach a transcript store ([#3288](https://github.com/giantswarm/beekeeper/issues/3288)).
+- Codex hook: `spawn_agent` and the wait, list, interrupt and close tools, bare or under the `collaboration` namespace, pass the shared guard like a Claude subagent start ([#3289](https://github.com/giantswarm/beekeeper/issues/3289)).
 - `beekeeper agents publish` scans only the worker's own commits: after `--sync-base`, commits already on the default branch no longer stop a publication with a finding the worker did not add ([https://github.com/giantswarm/beekeeper/issues/3272](https://github.com/giantswarm/beekeeper/issues/3272)).
 - The merge-result validation commits with signing off, so a machine whose git config signs commits no longer refuses every merge with `merge-result validation unavailable` ([https://github.com/giantswarm/beekeeper/issues/3265](https://github.com/giantswarm/beekeeper/issues/3265)).
 - `beekeeper lease kubeconfig <lab>` prints the bare path for use with `kubectl --kubeconfig`; `--export` prints the shell export line (#690).
