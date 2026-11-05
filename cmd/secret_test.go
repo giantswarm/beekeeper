@@ -1018,3 +1018,30 @@ func TestStoreSourceConsumerArgumentDoesNotRequireBroker(t *testing.T) {
 	}
 	noSecret(t, "consumer response", out)
 }
+
+func TestSecretCopyVaultFieldRepairsPasswordSilently(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
+			a, tools, _ := secretApp(t)
+			a.json = jsonOutput
+			dst := "op://Shared/db/client-secret"
+			if jsonOutput {
+				tools.Vault[dst] = "old-value"
+			}
+			other := "op://Shared/db/other"
+			tools.Vault[other] = "keep-value"
+			out, err := runSecret(a, copyOp, dbRef, dst)
+			if err != nil || out != "" {
+				t.Fatalf("copy output = %q, error = %v", out, err)
+			}
+			if tools.Vault[dst] != secretValue || tools.Vault[dbRef] != secretValue || tools.Vault[other] != "keep-value" {
+				t.Fatal("copy did not repair the labelled field while preserving existing fields")
+			}
+			events, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+			if err != nil || len(events) != 1 {
+				t.Fatalf("copy events: %d, %v", len(events), err)
+			}
+			noSecret(t, "copy logs and command lines", fmt.Sprint(events, tools.Calls))
+		})
+	}
+}

@@ -129,12 +129,24 @@ func (o *Ops) CopyFile(ctx context.Context, src Ref, dst, name, namespace string
 	return doc.keys(), nil
 }
 
-// CopyValue copies one value into a path of a SOPS file, creating the file
-// or the key when absent. The path is checked against the creation rule
-// before the value is read, so a producer's credential is not spent on a
-// write that could not happen. It answers the value's length.
+// CopyValue copies one value into a vault field or a path of a SOPS file,
+// creating the item, field, file or key when absent. The destination vault
+// or SOPS creation rule is checked before the value is read, so a producer's
+// credential is not spent on a write that could not happen. It answers the
+// value's length.
 func (o *Ops) CopyValue(ctx context.Context, src, dst Ref) (int, error) {
-	if dst.Op != "" || dst.IsSource() || dst.Path == "" {
+	if dst.Op != "" {
+		if err := o.Writable(dst); err != nil {
+			return 0, err
+		}
+		v, err := o.encoded(ctx, src)
+		if err != nil {
+			return 0, err
+		}
+		stored, err := o.StoreValue(ctx, dst, v)
+		return stored.Bytes, err
+	}
+	if dst.IsSource() || dst.Path == "" {
 		return 0, fmt.Errorf("%s: one value goes to a SOPS path, file#path", dst)
 	}
 	doc, dst, err := o.target(ctx, dst, nil)
