@@ -110,7 +110,7 @@ func TestIdleDoneKeepsOtherOpenRequest(t *testing.T) {
 	c := w.agentsCmd()
 	c.SetOut(w.out)
 	c.SetErr(w.out)
-	c.SetArgs([]string{stateIdle, "--done", "--report", "https://github.com/giantswarm/beekeeper/issues/86 done", "--problem", noProblems})
+	c.SetArgs([]string{stateIdle, flagDone, flagReport, "first pull request done", flagProblem, noProblems})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -351,16 +351,16 @@ func TestSortTrackedPullsOrdersActiveRequestsFirst(t *testing.T) {
 	now := time.Now()
 	in := superloop.Input{
 		Workers: []superloop.Worker{
-			{Name: "saved old", ParkedOn: "o/r#2", ParkedAt: now.Add(-3 * time.Hour), ReviewRequested: true, Saved: true},
-			{Name: "saved new", ParkedOn: "o/r#3", ParkedAt: now.Add(-time.Hour), ReviewRequested: true, Saved: true},
-			{Name: "live", ParkedOn: "o/r#4", ParkedAt: now.Add(-5 * time.Hour), ReviewRequested: true},
-			{Name: "plain", ParkedOn: "o/r#1", ParkedAt: now},
+			{Name: "saved old", ParkedOn: sweepRef(2), ParkedAt: now.Add(-3 * time.Hour), ReviewRequested: true, Saved: true},
+			{Name: "saved new", ParkedOn: sweepRef(3), ParkedAt: now.Add(-time.Hour), ReviewRequested: true, Saved: true},
+			{Name: "live", ParkedOn: sweepRef(4), ParkedAt: now.Add(-5 * time.Hour), ReviewRequested: true},
+			{Name: "plain", ParkedOn: sweepRef(1), ParkedAt: now},
 		},
-		Taken: []superloop.Taken{{Kind: superloop.KindReview, Ref: "o/r#5", At: now.Add(-6 * time.Hour)}},
+		Taken: []superloop.Taken{{Kind: superloop.KindReview, Ref: sweepRef(5), At: now.Add(-6 * time.Hour)}},
 	}
-	tracked := []string{"o/r#1", "o/r#2", "o/r#3", "o/r#4", "o/r#5"}
+	tracked := []string{sweepRef(1), sweepRef(2), sweepRef(3), sweepRef(4), sweepRef(5)}
 	sortTrackedPulls(in, tracked)
-	if want := []string{"o/r#4", "o/r#3", "o/r#2", "o/r#5", "o/r#1"}; !slices.Equal(tracked, want) {
+	if want := []string{sweepRef(4), sweepRef(3), sweepRef(2), sweepRef(5), sweepRef(1)}; !slices.Equal(tracked, want) {
 		t.Fatalf("order = %v, want %v", tracked, want)
 	}
 }
