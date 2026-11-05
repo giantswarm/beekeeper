@@ -58,6 +58,7 @@ else
   printf '{"type":"thread.started","thread_id":"%s"}\n' 019a0000-0000-7000-8000-000000000001
 fi
 echo '{"type":"turn.started"}'
+if [ -e "$(dirname "$0")/incomplete-turn" ]; then exit 0; fi
 if [ -e "$(dirname "$0")/fail-turn" ]; then exit 1; fi
 if [ -e "$(dirname "$0")/turn-failed" ]; then echo '{"type":"turn.failed","error":{"message":"fixture"}}'; exit 0; fi
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
@@ -164,7 +165,7 @@ func TestCheckAdvertisesOnlyPassingHarnesses(t *testing.T) {
 	f, dir := codexFixture(t)
 	ctx := context.Background()
 	caps, err := f.s.Check(ctx)
-	if err != nil || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
+	if err != nil || !caps.SourcePreparation || caps.Harnesses[HarnessCodex] != fixtureCodexVersion || caps.Harnesses[HarnessClaude] == "" || caps.Unavailable != nil {
 		t.Fatalf("both harnesses should pass: %+v %v", caps, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "logged-out"), nil, 0o600); err != nil {
@@ -248,7 +249,7 @@ func TestCodexRunnerFailsWithoutThread(t *testing.T) {
 }
 
 func TestCodexRunnerWakesResumeTheThread(t *testing.T) {
-	for _, level := range []string{"", "high"} {
+	for _, level := range []string{"", testEffortHigh} {
 		t.Run("effort="+level, func(t *testing.T) { testCodexRunnerWakesWithEffort(t, level) })
 	}
 }
@@ -402,7 +403,7 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
-	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports turn.failed", "turn-failed"}} {
+	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", codexFailTurn}, {"first turn reports turn.failed", litTurnFailed}, {"first turn ends without completion", "incomplete-turn"}} {
 		t.Run(test.name, func(t *testing.T) {
 			f, dir := codexFixture(t)
 			f.r.Messaging = true
@@ -426,44 +427,46 @@ func TestCodexRunnerSurfacesFailedTurns(t *testing.T) {
 			}
 		})
 	}
-	t.Run("wake turn exits nonzero", func(t *testing.T) {
-		f, dir := codexFixture(t)
-		f.r.Messaging = true
-		ctx := startCodex(t, f)
-		done := make(chan error, 1)
-		go func() { done <- f.s.Run(ctx, f.r.Ref) }()
-		for {
-			if j, _ := f.s.Read(f.r.Ref); j.Ready && j.Thread != "" {
-				break
+	for _, marker := range []string{codexFailTurn, "turn-failed", "incomplete-turn"} {
+		t.Run("wake/"+marker, func(t *testing.T) {
+			f, dir := codexFixture(t)
+			f.r.Messaging = true
+			ctx := startCodex(t, f)
+			done := make(chan error, 1)
+			go func() { done <- f.s.Run(ctx, f.r.Ref) }()
+			for {
+				if j, _ := f.s.Read(f.r.Ref); j.Ready && j.Thread != "" && !j.InTurn {
+					break
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("runner ended before its wake: %v", err)
+				case <-ctx.Done():
+					t.Fatal("first turn not accepted")
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, marker), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "follow-up"}
+			if _, err := f.s.Message(ctx, f.r.Ref, m); err != nil {
+				t.Fatal(err)
 			}
 			select {
 			case err := <-done:
-				t.Fatalf("runner ended before its wake: %v", err)
+				if err == nil {
+					t.Fatal("a failed wake turn ended the runner as a success")
+				}
 			case <-ctx.Done():
-				t.Fatal("first turn not accepted")
-			case <-time.After(10 * time.Millisecond):
+				t.Fatal("a failed wake turn left the runner waiting")
 			}
-		}
-		if err := os.WriteFile(filepath.Join(dir, "fail-turn"), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		m := Envelope{ID: newID(), Sequence: 1, From: f.r.Ref, To: f.r.Ref, Kind: MessageWake, Text: "follow-up"}
-		if _, err := f.s.Message(ctx, f.r.Ref, m); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case err := <-done:
-			if err == nil {
-				t.Fatal("a failed wake turn ended the runner as a success")
+			j, _ := f.s.Read(f.r.Ref)
+			if j.Phase != Failed || j.Messages.Entries[m.ID].Stage != Accepted {
+				t.Fatalf("wake turn failure recorded as %s, receipt %s", j.Phase, j.Messages.Entries[m.ID].Stage)
 			}
-		case <-ctx.Done():
-			t.Fatal("a failed wake turn left the runner waiting")
-		}
-		j, _ := f.s.Read(f.r.Ref)
-		if j.Phase != Failed || j.Messages.Entries[m.ID].Stage != Accepted {
-			t.Fatalf("wake turn failure recorded as %s, receipt %s", j.Phase, j.Messages.Entries[m.ID].Stage)
-		}
-	})
+		})
+	}
 }
 
 func TestCodexRunnerCoordinatorMCP(t *testing.T) {
@@ -489,3 +492,5 @@ func TestCodexRunnerCoordinatorMCP(t *testing.T) {
 		}
 	}
 }
+
+const codexFailTurn = "fail-turn"

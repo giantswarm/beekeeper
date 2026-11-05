@@ -590,6 +590,7 @@ func (s *Server) probeAgy(ctx context.Context, h HarnessConfig, readiness *Harne
 		return errors.New("agy login link in the managed home is unavailable")
 	}
 	if err := s.agyHooksLoad(); err != nil {
+		readiness.Guard = probeFailed
 		return err
 	}
 	version, err := s.command(ctx, "", s.agyEnvironment(), h.Executable, "--version")

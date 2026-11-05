@@ -108,6 +108,25 @@ func (s *Server) journalPath(r Ref) (string, error) {
 	return filepath.Join(root, string(r.Execution)+".json"), nil
 }
 
+// journalFiles treats the owned root as a literal path. Expanding it as part
+// of a glob can hide executions or inspect a neighboring state directory.
+func (s *Server) journalFiles() ([]string, error) {
+	entries, err := os.ReadDir(s.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(s.Root, entry.Name()))
+		}
+	}
+	return paths, nil
+}
+
 func (s *Server) lock(ctx context.Context, r Ref) (*flock.Flock, string, error) {
 	p, err := s.journalPath(r)
 	if err != nil {
@@ -190,6 +209,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 		}
 		harnesses[name] = h.Version
 	}
+	c = Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness}
 	if len(harnesses) == 0 {
 		var reasons []string
 		for name, reason := range unavailable {
@@ -218,7 +238,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
+	return Capabilities{CIWait: true, SourcePreparation: true, GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -444,7 +464,7 @@ func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 }
 
 func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	paths, err := s.journalFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +484,10 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
 			continue
 		}
-		if j.Phase == Exited || j.Phase == Failed {
+		// A killed runner or failed service launch may never commit a
+		// terminal journal. Reconcile launched units with the supervisor
+		// before reserving capacity for their last recorded phase.
+		if j.ActivationAttempted || j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
 				return nil, errors.New("cannot establish owned unit state")
@@ -704,7 +727,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 			case missingOperation:
 				value, err = s.Missing(ctx, req.Ref)
-			case "check":
+			case checkOperation:
 				value, err = s.Check(ctx)
 			case "source-chunk":
 				var chunk SourceChunk
@@ -771,6 +794,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
+				}
+				// Readiness diagnostics remain available when no harness passes.
+				// Other failed operations never expose a partial result.
+				if req.Operation == checkOperation {
+					reply.Payload, _ = json.Marshal(value)
 				}
 				reply.Error = err.Error()
 			} else {
