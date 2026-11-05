@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ const (
 	endTestServed = "o/r#15"
 	endTestPullA  = "o/r#21"
 	endTestPullB  = "o/r#22"
+	endWorkerA    = "end worker a"
 )
 
 // A continuation session of a task finishes the post-merge work of one pull
@@ -30,7 +32,7 @@ func TestDoneOfOnePullKeepsOtherReviewRequest(t *testing.T) {
 	r.pulls[multiParkSecondPR] = superloop.Pull{Ref: multiParkSecondPR, URL: secondURL, State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: now.Add(-30 * time.Second), ReviewHead: loopHead, Agent: loopWorker,
-			Party: state.Party{Name: loopWorker, Session: "first"}, PostMerge: &work}}
+			Party: state.Party{Name: loopWorker, Session: "first-session"}, PostMerge: &work}}
 		return []state.Event{{At: now.Add(-10 * time.Second), By: state.Party{Name: loopWorker, Session: "continuation"}, Verb: superloop.VerbDone, Detail: loopWorker + " done: post-merge of the first pull request"}}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -65,7 +67,7 @@ func TestEndMergedKeepsSameNameOtherSessionRequest(t *testing.T) {
 			if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 				st.ReviewParks = []state.ReviewPark{
 					{On: loopPR, At: now, ReviewHead: loopHead, Agent: loopWorker, Party: fixer, PostMerge: &pm},
-					{On: multiParkSecondPR, At: now, ReviewHead: loopHead, Agent: loopWorker, Party: state.Party{Name: loopWorker, Session: "first"}, PostMerge: &pm},
+					{On: multiParkSecondPR, At: now, ReviewHead: loopHead, Agent: loopWorker, Party: state.Party{Name: loopWorker, Session: "first-session"}, PostMerge: &pm},
 				}
 				if live {
 					st.Agents = []state.Agent{{Party: fixer, Task: "fix " + loopURL, Park: &state.Park{On: loopPR, At: now, ReviewHead: loopHead, PostMerge: &pm}}}
@@ -173,7 +175,7 @@ func endRig(t *testing.T) (*loopRig, *supervisorLoop, *state.State) {
 	pm := ""
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for i, ref := range []string{endTestPullA, endTestPullB} {
-			name := []string{"worker a", "worker b"}[i]
+			name := []string{endWorkerA, "end worker b"}[i]
 			st.ReviewParks = append(st.ReviewParks, state.ReviewPark{On: ref, At: time.Now(), ReviewHead: loopHead, Agent: name,
 				Party: state.Party{Name: name, Session: name}, Serves: endTestServed, PostMerge: &pm})
 		}
@@ -244,7 +246,7 @@ func TestEndMergedToleratesServedPullRequest(t *testing.T) {
 		{name: "other refusal", refusal: "beekeeper: board refused the move", fails: true},
 	} {
 		for _, live := range []bool{false, true} {
-			t.Run(tc.name+"/live="+map[bool]string{false: "no", true: "yes"}[live], func(t *testing.T) {
+			t.Run(tc.name+"/live="+strconv.FormatBool(live), func(t *testing.T) {
 				r, l, st := endRig(t)
 				r.answer = func(args []string) (string, int) {
 					if len(args) > 1 && args[0] == loopBoard && args[1] == "move" {
@@ -254,7 +256,7 @@ func TestEndMergedToleratesServedPullRequest(t *testing.T) {
 				}
 				if live {
 					pm := ""
-					party := state.Party{Name: "worker a", Session: "worker a"}
+					party := state.Party{Name: endWorkerA, Session: endWorkerA}
 					if err := r.a.store.Update(func(current *state.State) ([]state.Event, error) {
 						current.ReviewParks = current.ReviewParks[:0]
 						current.Agents = []state.Agent{{Party: party, Task: "fix", Park: &state.Park{On: endTestPullA, At: time.Now(), ReviewHead: loopHead, PostMerge: &pm}}}
@@ -355,7 +357,7 @@ func TestHeldPassWithNothingReadPlansNothing(t *testing.T) {
 	party := state.Party{Name: finished}
 	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = []state.Agent{{Party: party, Task: "done work", Done: true}}
-		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: time.Now(), ReviewHead: loopHead, Agent: "other", Party: state.Party{Name: "other"}}}
+		st.ReviewParks = []state.ReviewPark{{On: multiParkSecondPR, At: time.Now(), ReviewHead: loopHead, Agent: "other owner", Party: state.Party{Name: "other owner"}}}
 		return []state.Event{event(party, superloop.VerbDone, "%s done: done work", finished)}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -406,7 +408,7 @@ func TestSortTrackedPullsOrdersActiveRequestsFirst(t *testing.T) {
 		Workers: []superloop.Worker{
 			{Name: "saved old", ParkedOn: sweepRef(2), ParkedAt: now.Add(-3 * time.Hour), ReviewRequested: true, Saved: true},
 			{Name: "saved new", ParkedOn: sweepRef(3), ParkedAt: now.Add(-time.Hour), ReviewRequested: true, Saved: true},
-			{Name: "live", ParkedOn: sweepRef(4), ParkedAt: now.Add(-5 * time.Hour), ReviewRequested: true},
+			{Name: "live worker", ParkedOn: sweepRef(4), ParkedAt: now.Add(-5 * time.Hour), ReviewRequested: true},
 			{Name: "plain", ParkedOn: sweepRef(1), ParkedAt: now},
 		},
 		Taken: []superloop.Taken{{Kind: superloop.KindReview, Ref: sweepRef(5), At: now.Add(-6 * time.Hour)}},
