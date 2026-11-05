@@ -78,7 +78,7 @@ func placesOf(t *testing.T, a *app) []string {
 func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
-	stubGitHub(t, github.Merged, "")
+	stubGitHub(t, github.Open, "")
 	reset := time.Now().Add(time.Second)
 	asked := stubSpentRead(t, reset, true)
 	a := spentLane(t)
@@ -117,7 +117,7 @@ func TestASpentBudgetKeepsTheMergesPlaceUntilTheReset(t *testing.T) {
 func TestARefusedReadKeepsThePlaceForTheSameCommand(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
-	stubGitHub(t, github.Merged, "")
+	stubGitHub(t, github.Open, "")
 	reset := time.Now().Add(time.Second)
 	stubSpentRead(t, reset, false)
 	a := spentLane(t)
