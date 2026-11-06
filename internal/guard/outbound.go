@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/policycontent"
 )
 
 // The outbound guard refuses a tool call that would send a secret value off
@@ -50,64 +52,24 @@ const mcpPrefix = "mcp__"
 // pushLimit bounds what a push scan reads of the commits it sends.
 const pushLimit = 32 << 20
 
-// tokenRule is a gitleaks rule: its id, the keywords one of which a match
-// contains (a cheap prefilter), and the pattern.
-type tokenRule struct {
-	id       string
-	keywords []string
-	re       *regexp.Regexp
-}
-
-func rule(id, pattern string, keywords ...string) tokenRule {
-	return tokenRule{id, keywords, regexp.MustCompile(pattern)}
-}
-
-var tokenRules = []tokenRule{
-	rule("github-pat", `\bghp_[0-9A-Za-z]{36}\b`, "ghp_"),
-	rule("github-oauth", `\bgho_[0-9A-Za-z]{36}\b`, "gho_"),
-	rule("github-app-token", `\b(?:ghu|ghs)_[0-9A-Za-z]{36}\b`, "ghu_", "ghs_"),
-	rule("github-refresh-token", `\bghr_[0-9A-Za-z]{36}\b`, "ghr_"),
-	rule("github-fine-grained-pat", `\bgithub_pat_[0-9A-Za-z_]{82}\b`, "github_pat_"),
-	rule("gitlab-pat", `\bglpat-[0-9A-Za-z_-]{20}\b`, "glpat-"),
-	rule("aws-access-token", `\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}\b`, "A3T", "AKIA", "ASIA", "ABIA", "ACCA"),
-	rule("gcp-api-key", `\bAIza[0-9A-Za-z_-]{35}\b`, "AIza"),
-	rule("slack-token", `\bxox[abposr]-[0-9A-Za-z-]{10,}`, "xox"),
-	rule("slack-webhook-url", `hooks\.slack\.com/(?:services|workflows|triggers)/[0-9A-Za-z+/_-]{20,}`, "hooks.slack.com"),
-	rule("anthropic-api-key", `\bsk-ant-[a-z]+\d{2}-[0-9A-Za-z_-]{80,}`, "sk-ant-"),
-	rule("openai-api-key", `\bsk-(?:proj|svcacct|admin)-[0-9A-Za-z_-]{20,}`, "sk-proj-", "sk-svcacct-", "sk-admin-"),
-	rule("npm-access-token", `\bnpm_[0-9A-Za-z]{36}\b`, "npm_"),
-	rule("1password-service-account-token", `\bops_eyJ[0-9A-Za-z+/=_-]{50,}`, "ops_eyJ"),
-	rule("age-secret-key", `AGE-SECRET-KEY-1[0-9A-Z]{58}`, "AGE-SECRET-KEY-1"),
-	rule("private-key", `-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----`, "PRIVATE KEY"),
-	rule("jwt", `\beyJ[0-9A-Za-z_-]{10,}\.eyJ[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}`, "eyJ"),
-	// A password in a URL; a placeholder ($VAR, <token>, {x}, %s, ***) is none.
-	rule(urlCredentials, `\b[a-z][a-z0-9+.-]*://[^\s/:@'"]+:[^\s/@'"$<{%*][^\s/@'"]*@[0-9A-Za-z]`, "://"),
-}
+var tokenRules = policycontent.TokenRules
 
 // CredentialShapes are the ids of the token rules text matches, once each:
 // the shapes of a credential (a private key, a token's prefix), none for a
 // public value. A gitleaks:allow marker exempts nothing here.
-func CredentialShapes(text string) []string {
-	var out []string
-	for _, r := range tokenRules {
-		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(text, k) }) && r.re.MatchString(text) {
-			out = append(out, r.id)
-		}
-	}
-	return out
-}
+func CredentialShapes(text string) []string { return policycontent.CredentialShapes(text) }
 
 // hits are the names of what text carries: the rule ids and the numbers of
 // the phrases, in order and once each.
 func (o Outbound) hits(text string) []string {
 	var out []string
 	for _, r := range tokenRules {
-		if !slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(text, k) }) {
+		if !slices.ContainsFunc(r.Keywords, func(k string) bool { return strings.Contains(text, k) }) {
 			continue
 		}
-		for _, m := range r.re.FindAllStringIndex(text, -1) {
+		for _, m := range r.RE.FindAllStringIndex(text, -1) {
 			if !allowed(text, m[0]) {
-				out = append(out, r.id)
+				out = append(out, r.ID)
 				break
 			}
 		}

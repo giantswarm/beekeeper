@@ -272,6 +272,27 @@ func TestSandboxRequiredRefusesUnheldSessions(t *testing.T) {
 	}
 }
 
+func TestHookBrokenConfigRecovery(t *testing.T) {
+	for _, command := range []string{"beekeeper config set watch.interval 1m", "ls", "rm config.yaml"} {
+		t.Run(command, func(t *testing.T) {
+			var out bytes.Buffer
+			a, _ := scopeApp(t, &out)
+			if err := os.WriteFile(a.cfgPath, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ev := fmt.Sprintf(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":%q}}`, command)
+			got := runHook(t, a, &out, "pretooluse", ev)
+			decision := appAllow
+			if command == "rm config.yaml" {
+				decision = "deny"
+			}
+			if !strings.Contains(got, `"permissionDecision":"`+decision+`"`) || !strings.Contains(got, "watch.interval") {
+				t.Fatalf("want %s and key diagnostic, got %s", decision, got)
+			}
+		})
+	}
+}
+
 // Requiring a sandbox must preserve the normal SendMessage checks.
 func TestSandboxRequiredPreservesSendMessageChecks(t *testing.T) {
 	var verdict string

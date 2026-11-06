@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/identity"
 	"github.com/giantswarm/beekeeper/internal/mailbox"
@@ -342,13 +343,19 @@ func (s *server) notesOf(who identity.Caller) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return map[string]any{"person": who.Email, keyNotes: notesConcerning(st.Notes, who, s.cfg.Serve)}, nil
+}
+
+// notesConcerning is the shared note visibility rule for resources and tools.
+func notesConcerning(all []state.Note, who identity.Caller, cfg config.Serve) []state.Note {
 	notes := []state.Note{}
-	for _, n := range st.Notes {
-		if concerns(who, n.For, n.By.Person) {
+	for _, n := range all {
+		email := personEmail(cfg, n.For)
+		if concerns(who, n.For, n.By.Person) || (email != "" && strings.EqualFold(email, who.Email)) {
 			notes = append(notes, n)
 		}
 	}
-	return map[string]any{"person": who.Email, keyNotes: notes}, nil
+	return notes
 }
 
 func (s *server) mailboxOf(ctx context.Context, who identity.Caller) (map[string]any, error) {

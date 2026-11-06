@@ -27,6 +27,9 @@ const (
 	holderUnknown = "unknown" // the platform lists no sessions to tell
 )
 
+// leaseReleaseGoneVerb logs the release of an ended holder's lease.
+const leaseReleaseGoneVerb = "lease.release-gone"
+
 // leaseView is a held lease with whether its holder still runs.
 type leaseView struct {
 	lease.Holder
@@ -75,8 +78,8 @@ A lab lease named under labs in the configuration stands for its kind cluster: t
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
-A free lease is claimed directly: the supervisor is the supervisor loop, and
-no session's grant gates a claim. ` + "`beekeeper lease grant`" + ` queues a session for a
+A free lease with no queued grants is claimed directly. Otherwise only the
+first grantee may claim after the current holder releases. ` + "`beekeeper lease grant`" + ` queues a session for a
 held resource, so its claim can park on it. A claim that is refused exits 3:
 gate the action on it (claim && act), never run the action after a failed
 claim.
@@ -291,6 +294,9 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 	if err != nil {
 		return "", err
 	}
+	if err := a.releaseEndedClaim(res, me, sessions); err != nil {
+		return "", err
+	}
 	lab := a.claimedLab(res)
 	var labCfg *lease.LabConfig
 	var labRaw []byte
@@ -393,18 +399,24 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		if err != nil {
 			return nil, err
 		}
+		proof, err := dir.PreviousProof(res)
+		if err != nil {
+			return nil, err
+		}
 		host, _ := os.Hostname()
 		cur, err := dir.Claim(res, lease.Holder{
-			Env:         res,
-			Holder:      os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
-			Session:     me.Session,
-			HostSession: me.HostSession,
-			Name:        me.Name,
-			Person:      me.Person,
-			Team:        me.Team,
-			Host:        me.Host,
-			Purpose:     purpose,
-			Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
+			Env:              res,
+			Holder:           os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
+			Session:          me.Session,
+			HostSession:      me.HostSession,
+			Name:             me.Name,
+			Person:           me.Person,
+			Team:             me.Team,
+			Host:             me.Host,
+			Purpose:          purpose,
+			DestructiveProof: lease.IsDestructiveProof(purpose),
+			PreviousProof:    proof,
+			Since:            a.now.UTC().Format("2006-01-02T15:04:05Z"),
 
 			UpgradeUnblock: unblock,
 			BudgetGiB:      budget,
@@ -421,6 +433,9 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
 		msg = claimHeldLine(a.now, a.now, "claimed "+res+lab)
+		if proof != nil {
+			msg += fmt.Sprintf("\nprevious destructive proof by %q: %s", proof.By, proof.Purpose)
+		}
 		if labRaw != nil {
 			if err := dir.KeepLabConfig(res, labRaw); err != nil {
 				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)
@@ -1090,6 +1105,66 @@ with ` + "`beekeeper lease release <resource>`" + `. A grantee parked on the lea
 			return err
 		},
 	}
+}
+
+// leaseHolderEnded protects recent claims, successors still starting, remote
+// executions and holders whose liveness cannot be checked on this machine.
+func (a *app) leaseHolderEnded(st *state.State, sessions []*claude.Session, h lease.Holder) bool {
+	// Claims store whole seconds. Protect that entire second so a
+	// claim made after the process snapshot cannot appear older.
+	if a.leaseViewState(st, sessions, h).State != holderGone || h.Host != "" && h.Host != a.cfg.Identity.Host || !h.SinceTime().Before(a.now.Truncate(time.Second)) {
+		return false
+	}
+	// Handover keeps the original claim time, but records the
+	// successor before launching it. Read that start under the lock
+	// and allow the first-reply startup window, including starts
+	// recorded after this doctor's process snapshot.
+	if i := st.StartIndex(h.Party()); i >= 0 {
+		started := st.Starts[i].At
+		if !started.IsZero() && a.now.Sub(started) <= replyWait {
+			return false
+		}
+	}
+	// A registration may have handed this lease over after the process snapshot.
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Is(h.Party()) && !ag.Registered.IsZero() && a.now.Sub(ag.Registered) <= replyWait
+	}) {
+		return false
+	}
+	// A managed remote execution has no local CLI to discover.
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Is(h.Party()) && ag.Execution != nil && executionReserved(st, ag)
+	}) {
+		return false
+	}
+	return true
+}
+
+// releaseEndedClaim checks under the state lock so a registration's handover
+// cannot race a stale release. Keep the event even if the subsequent claim is refused.
+func (a *app) releaseEndedClaim(res string, me state.Party, sessions []*claude.Session) error {
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		dir := lease.Dir(a.cfg.LeaseDir)
+		h, err := dir.Get(res)
+		if err != nil || h == nil {
+			return nil, err
+		}
+		if h.Party().Is(me) || !a.leaseHolderEnded(st, sessions, *h) {
+			return nil, nil
+		}
+		line, err := a.labRelease(dir, *h, me, false, "", true)
+		if err != nil {
+			return nil, err
+		}
+		if err := dir.Release(res); err != nil {
+			return nil, err
+		}
+		if st.Released == nil {
+			st.Released = map[string]time.Time{}
+		}
+		st.Released[res] = a.now.UTC()
+		return []state.Event{event(me, leaseReleaseGoneVerb, "released %s: holder %q's session ended%s", res, h.Name, line)}, nil
+	})
 }
 
 // claimHeldLine formats successful claims for both CLI and MCP.

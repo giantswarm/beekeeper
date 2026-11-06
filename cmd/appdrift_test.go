@@ -47,7 +47,7 @@ func TestAppConsentManifestDrift(t *testing.T) {
 	if !strings.Contains(out.String(), "ENDED") {
 		t.Fatalf("watch did not clear drift: %s", out.String())
 	}
-	apps := a.consentApps(context.Background(), &state.State{Apps: records})
+	apps := a.consentApps(context.Background(), &state.State{Apps: records}, listenerUp)
 	d := guard.Click(apps, guard.Page{URL: recordedConsent, Title: recordedTitle}, "Click Authorize")
 	if d.Decision != guard.Deny || !strings.Contains(d.Reason, line) {
 		t.Fatalf("decision = %+v", d)

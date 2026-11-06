@@ -45,8 +45,8 @@ func (a *app) appDrifts(ctx context.Context, records []state.App) map[string]str
 	return out
 }
 
-func (a *app) consentApps(ctx context.Context, st *state.State) []guard.App {
-	apps := guardAppsOf(st)
+func (a *app) consentApps(ctx context.Context, st *state.State, running func(state.AppRun) bool) []guard.App {
+	apps := guardAppsWithRuns(st, running)
 	drift := a.appDrifts(ctx, st.Apps)
 	for i := range apps {
 		apps[i].Drift = drift[apps[i].Declared]
