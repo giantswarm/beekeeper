@@ -25,7 +25,7 @@ func (c *Client) cachedMeta() *meta {
 	if err != nil || time.Since(info.ModTime()) > time.Hour {
 		return nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil
 	}
@@ -48,7 +48,7 @@ func (c *Client) cacheMeta(m *meta) {
 	if err != nil {
 		return
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	_, err = f.Write(data)
 	closeErr := f.Close()
 	if err == nil && closeErr == nil {

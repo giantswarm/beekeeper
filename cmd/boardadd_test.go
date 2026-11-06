@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// boardAddRef is the issue the board add and show commands act on.
+const boardAddRef = "o/r#5"
+
 func TestBoardAddShowCommands(t *testing.T) {
 	for _, name := range []string{loopAdd, noteShowName} {
 		t.Run(name, func(t *testing.T) {
@@ -34,7 +37,7 @@ func TestBoardAddShowCommands(t *testing.T) {
 				return nil, nil
 			}
 			c := a.boardCmd()
-			args := []string{name, "o/r#5"}
+			args := []string{name, boardAddRef}
 			if name == loopAdd {
 				args = append(args, "--kind", "bug")
 			}

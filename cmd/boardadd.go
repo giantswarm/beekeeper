@@ -10,7 +10,7 @@ import (
 )
 
 func (a *app) boardFieldsCmd(add bool) *cobra.Command {
-	name, short := noteShowName, "Show an issue's board fields without reading the whole board"
+	name, short := "show", "Show an issue's board fields without reading the whole board"
 	if add {
 		name, short = loopAdd, "Add an issue to the board and set Team, Status and optional Kind"
 	}

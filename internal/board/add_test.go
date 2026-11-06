@@ -9,6 +9,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+const (
+	addIssueCall  = "add ISSUE to P"
+	backlogStatus = "backlog"
+	unknownField  = "unknown"
+)
+
 func TestAddAndShowIssueScoped(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "new", true: "existing"}[existing], func(t *testing.T) {
@@ -26,7 +32,7 @@ func TestAddAndShowIssueScoped(t *testing.T) {
 			}
 			want := []string{"I1=s1", "I1=t2", "I1=k1"}
 			if !existing {
-				want = append([]string{"add ISSUE to P"}, want...)
+				want = append([]string{addIssueCall}, want...)
 			}
 			if !slices.Equal(f.mutations, want) {
 				t.Fatalf("mutations: %v, want %v", f.mutations, want)
@@ -56,7 +62,7 @@ func TestAddAndShowIssueScoped(t *testing.T) {
 }
 
 func TestAddValidatesBeforeWriting(t *testing.T) {
-	for _, tc := range []struct{ status, kind, team string }{{"unknown", "", "X"}, {"backlog", "unknown", "X"}, {"backlog", "epic", "unknown"}} {
+	for _, tc := range []struct{ status, kind, team string }{{unknownField, "", "X"}, {backlogStatus, unknownField, "X"}, {backlogStatus, "epic", unknownField}} {
 		f := &fakeGH{t: t, item: onBoard}
 		c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: tc.team}}
 		if _, err := c.Add(context.Background(), issue5, tc.status, tc.kind); err == nil {
