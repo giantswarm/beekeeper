@@ -165,3 +165,34 @@ executable rename can mean the candidate is already installed: inspect/reconcile
 the journal rather than assuming every error left the executable unchanged.
 Use a local filesystem providing atomic rename and file/directory sync; this
 protocol does not claim durable installation on filesystems without them.
+
+## Operator runbook: evidence inspection, quarantine recovery, and proof artifacts
+
+- **Inspecting release canary evidence:** Each release publishes
+  `<binary>.canary.json` and `<binary>.canary.json.bundle`. Inspect the payload
+  with `gh release download <tag> -p '*.canary.json*' -O -` or run a local staged
+  verification with `beekeeper self-update --stage-canary <path> --canary-recorded`.
+- **Inspecting and clearing local quarantine:**
+  - Pre-install canary failures are stored by candidate SHA-256 digest under
+    `${XDG_STATE_HOME:-$HOME/.local/state}/beekeeper/canary-quarantine/<sha256>.json`.
+  - Post-install probation rollbacks record the quarantined digest in
+    `<executable>.update/journal.json` (`quarantine` map) and the skipped version
+    tag in `${XDG_STATE_HOME:-$HOME/.local/state}/beekeeper/skipped-releases.json`.
+  - Prefer publishing a new fixed release tag rather than un-quarantining a bad
+    digest. If a recovery hold (`RELEASE RECOVERY FAILED`) blocked updates and
+    starts, resolve the underlying cause and run
+    `beekeeper self-update --clear-recovery-hold`.
+- **End-to-end containment and recovery proofs (`make test-loop-workflow`):**
+  Running `BEEKEEPER_TEST_LOOP_ARTIFACTS=/tmp/loop-workflow-artifacts make test-loop-workflow`
+  executes the full integration suite and writes sanitized proof artifacts under
+  `/tmp/loop-workflow-artifacts`:
+  - `recovery-proof/containment-proof.json`: staged canary evidence for a good
+    candidate (`status: "success"`, `merge_commit` populated) alongside failed
+    evidence for candidates with a pull-request parser regression and missing
+    merge-worktree validation (`status: "failed"`, `merge_commit` empty).
+  - `recovery-proof/recovery-proof.json`: probation rollback proof showing the
+    retained last-known-good controller detecting consecutive isolated workflow
+    probe failures on the broken candidate, restoring the verified previous
+    binary within the 30-minute probation window, quarantining the broken digest,
+    recording `RELEASE ROLLED BACK`, and passing the post-rollback workflow merge
+    probe.

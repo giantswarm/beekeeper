@@ -21,7 +21,8 @@ const (
 	// controller's minute between evaluations.
 	ProbeTimeout = 25 * time.Second
 
-	gitAdd = "add"
+	gitAdd    = "add"
+	gitRemote = "remote"
 )
 
 // ErrInconclusive marks a probe that says nothing about the candidate: the
@@ -118,28 +119,28 @@ func (p *probe) prepare(server string) (err error) {
 		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid",
 		"HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1", "NO_PROXY=127.0.0.1",
 	}
-	readme := filepath.Join(serverDir, "README.md")
+	readme := filepath.Join(serverDir, readmeFile)
 	write := func(name, text string) error { return os.WriteFile(p.path(name), []byte(text), 0o600) }
-	if err := p.runAll(serverDir, []string{"init", "--bare", p.path("origin.git")}, []string{"init", "-b", mainBranch}, []string{"remote", gitAdd, originRemote, p.path("origin.git")}); err != nil {
+	if err := p.runAll(serverDir, []string{gitInit, "--bare", p.path("origin.git")}, []string{gitInit, "-b", mainBranch}, []string{gitRemote, gitAdd, originRemote, p.path("origin.git")}); err != nil {
 		return err
 	}
 	if err := write(readme, "fixture base\n"); err != nil {
 		return err
 	}
-	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", "fixture base"}, []string{gitPush, originRemote, mainBranch}, []string{"checkout", "-b", changeBranch}); err != nil {
+	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", "fixture base"}, []string{gitPush, originRemote, mainBranch}, []string{gitCheckout, "-b", changeBranch}); err != nil {
 		return err
 	}
-	if err := write(readme, "fixture change\n"); err != nil {
+	if err := write(readme, fixtureChangeMsg+"\n"); err != nil {
 		return err
 	}
-	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", "fixture change"}); err != nil {
+	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", fixtureChangeMsg}); err != nil {
 		return err
 	}
 	head, err := p.run(serverDir, gitRevParse, gitHead)
 	if err != nil {
 		return err
 	}
-	if err := p.runAll(serverDir, []string{gitPush, originRemote, changeBranch}, []string{gitPush, originRemote, head + ":refs/pull/1/head"}, []string{"checkout", mainBranch}); err != nil {
+	if err := p.runAll(serverDir, []string{gitPush, originRemote, changeBranch}, []string{gitPush, originRemote, head + ":refs/pull/1/head"}, []string{gitCheckout, mainBranch}); err != nil {
 		return err
 	}
 	if p.base, err = p.run(serverDir, gitRevParse, gitHead); err != nil {
@@ -149,13 +150,7 @@ func (p *probe) prepare(server string) (err error) {
 	if err := write("config.yaml", fmt.Sprintf("board:\n  owner: fixture\n  project: 1\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 0\nidentity:\n  host: fixture\nstateDir: %s\ndisk:\n  checkouts: [\"\"]\ngithub:\n  floor: -1\n  allowedOrgs: [fixture]\nsupervisor:\n  ownership:\n    authors: [fixture-bot]\n  reviewRounds: 1\n", p.path("state"))); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(map[string]any{
-		"state": "OPEN", "url": "https://github.com/fixture/project/pull/1", "baseRefName": mainBranch, "headRefName": changeBranch, "headRefOid": head,
-		"author": map[string]any{loginField: fixtureBot}, "title": "fixture change", "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
-		"changedFiles": 1, "files": []any{map[string]any{"path": "README.md"}},
-		"statusCheckRollup": []any{map[string]any{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}},
-		"reviews":           []any{map[string]any{"id": "R1", "author": map[string]any{loginField: fixtureBot}, "authorAssociation": "MEMBER", "state": "COMMENTED", "body": "Review: approved\nHead reviewed: `" + head + "`", "commit": map[string]any{"oid": head}, "submittedAt": p.now.Format(time.RFC3339)}},
-	})
+	raw, err := pullPayload(head, []any{map[string]any{"id": "R1", authorField: map[string]any{loginField: fixtureBot}, "authorAssociation": "MEMBER", stateField: "COMMENTED", "body": "Review: approved\nHead reviewed: `" + head + "`", gitCommit: map[string]any{oidField: head}, "submittedAt": p.now.Format(time.RFC3339)}})
 	if err != nil {
 		return err
 	}
@@ -163,6 +158,16 @@ func (p *probe) prepare(server string) (err error) {
 		return err
 	}
 	return p.seed(head)
+}
+
+func pullPayload(head string, reviews []any) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		stateField: openState, "url": "https://github.com/fixture/project/pull/1", "baseRefName": mainBranch, "headRefName": changeBranch, "headRefOid": head,
+		authorField: map[string]any{loginField: fixtureBot}, "title": fixtureChangeMsg, "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": cleanStatus,
+		"changedFiles": 1, "files": []any{map[string]any{"path": readmeFile}},
+		"statusCheckRollup": []any{map[string]any{nameField: "test", "status": completedStatus, "conclusion": "SUCCESS"}},
+		reviewsField:        reviews,
+	})
 }
 
 // seed writes the review park and events a reviewed pull request has.

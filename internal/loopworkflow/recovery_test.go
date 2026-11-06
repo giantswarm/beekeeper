@@ -228,6 +228,106 @@ func TestRecoveryRestoresABrokenCandidate(t *testing.T) {
 	} else {
 		fmt.Fprintln(os.Stderr, "broken candidate:", err)
 	}
+	writeProofArtifact(t, "recovery-proof.json", map[string]any{
+		"good_version":        goodRelease,
+		"good_sha256":         hexSum(good),
+		"broken_version":      nextRelease,
+		"broken_sha256":       hexSum(broken),
+		"rolled_back":         j.RolledBack(),
+		"quarantine_reason":   j.Quarantine[hexSum(broken)],
+		"elapsed":             j.Observed.Elapsed.String(),
+		"notification_logged": evs[0].Detail,
+		"post_rollback_probe": "passed",
+	})
+}
+
+// TestCanaryContainmentBlocksCoordinatorAndHostUpdate proves that a good release
+// candidate passes the full staged canary (worker start, branch push, PR park,
+// independent exact-head review, merge validation, and observed merge commit),
+// while a candidate with a parser or merge-validation regression fails the
+// staged canary and produces failed evidence that blocks update installation.
+func TestCanaryContainmentBlocksCoordinatorAndHostUpdate(t *testing.T) {
+	good, broken := versioned(t, goodRelease, ""), versioned(t, nextRelease, parserOverlay(t))
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
+
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "beekeeper-good")
+	brokenPath := filepath.Join(dir, "beekeeper-broken")
+	if err := os.WriteFile(goodPath, good, 0o700); err != nil { //nolint:gosec // executable candidate fixture
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brokenPath, broken, 0o700); err != nil { //nolint:gosec // executable candidate fixture
+		t.Fatal(err)
+	}
+
+	goodEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: goodPath,
+		Recorded:  true,
+		Run:       "canary-good",
+	})
+	if err != nil {
+		t.Fatalf("StageCanary(good) failed: %v", err)
+	}
+	if goodEv.Status != "success" || goodEv.Version != goodRelease || goodEv.SHA256 != hexSum(good) || goodEv.MergeCommit == "" {
+		t.Fatalf("unexpected good canary evidence: %+v", goodEv)
+	}
+
+	brokenEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: brokenPath,
+		Recorded:  true,
+		Run:       "canary-broken-parser",
+	})
+	if err == nil {
+		t.Fatalf("StageCanary(broken) unexpectedly succeeded: %+v", brokenEv)
+	}
+	if brokenEv.Status != "failed" || brokenEv.MergeCommit != "" || brokenEv.SHA256 != hexSum(broken) || brokenEv.Reason == "" {
+		t.Fatalf("unexpected broken canary evidence: %+v", brokenEv)
+	}
+	rawBroken, err := json.Marshal(brokenEv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, err := update.ValidateEvidence(rawBroken, nextRelease, hexSum(broken))
+	if err != nil || validated.Status != "failed" {
+		t.Fatalf("ValidateEvidence(broken) = %+v, %v", validated, err)
+	}
+
+	noCheckoutEv, err := StageCanary(ctx, CanaryConfig{
+		Candidate: goodPath,
+		Recorded:  true,
+		Run:       "canary-missing-merge-validation",
+		Scenario:  "no-checkout",
+	})
+	if err == nil || noCheckoutEv.Status != "failed" || noCheckoutEv.MergeCommit != "" {
+		t.Fatalf("StageCanary(no-checkout) = %+v, %v; want failed evidence", noCheckoutEv, err)
+	}
+
+	writeProofArtifact(t, "containment-proof.json", map[string]any{
+		"good_evidence":                 goodEv,
+		"broken_parser_evidence":        brokenEv,
+		"unavailable_checkout_evidence": noCheckoutEv,
+	})
+}
+
+func writeProofArtifact(t *testing.T, name string, payload any) {
+	t.Helper()
+	artifactRoot := strings.TrimSpace(os.Getenv("BEEKEEPER_TEST_LOOP_ARTIFACTS"))
+	if artifactRoot == "" {
+		return
+	}
+	outDir := filepath.Join(artifactRoot, "recovery-proof")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	if err := os.WriteFile(filepath.Join(outDir, name), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestRecoveryPromotesAHealthyCandidate: no backlog, one isolated workflow, and

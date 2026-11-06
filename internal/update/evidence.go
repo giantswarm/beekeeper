@@ -21,6 +21,7 @@ import (
 type CanaryEvidence struct {
 	Schema      int    `json:"schema"`
 	Version     string `json:"version"`
+	Commit      string `json:"commit,omitempty"`
 	SHA256      string `json:"sha256"`
 	OS          string `json:"os"`
 	Arch        string `json:"arch"`
@@ -30,11 +31,36 @@ type CanaryEvidence struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
+// VerifyCandidateBundle verifies a staged candidate binary against its cosign
+// bundle using the same release identity policy as self-update.
+func VerifyCandidateBundle(assetName string, binary, bundle []byte) error {
+	return newValidator().Validate(assetName, binary, bundle)
+}
+
+// ValidateEvidence validates raw canary evidence JSON for the current platform
+// against the expected release version tag and candidate binary SHA-256 digest.
+func ValidateEvidence(data []byte, version, digest string) (CanaryEvidence, error) {
+	return ValidateEvidenceFor(data, version, digest, runtime.GOOS, runtime.GOARCH)
+}
+
+// ValidateEvidenceFor validates raw canary evidence JSON for a target OS/Arch
+// against the expected release version tag and candidate binary SHA-256 digest.
+func ValidateEvidenceFor(data []byte, version, digest, goos, goarch string) (CanaryEvidence, error) {
+	return validateEvidenceTarget(data, version, digest, goos, goarch)
+}
+
+// CanaryEvidence status values.
+const (
+	CanaryStatusSuccess = "success"
+	CanaryStatusFailed  = "failed"
+	CanaryStatusPending = "pending"
+)
+
 var evidenceValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 var checkEvidence = requireEvidence
 
 func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupdate.Release, path string) error {
-	binary, err := os.ReadFile(path)
+	binary, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // verified staged binary path
 	if err != nil {
 		return err
 	}
@@ -49,7 +75,7 @@ func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupd
 		stateDir = filepath.Join(home, ".local", "state")
 	}
 	quarantine := filepath.Join(stateDir, "beekeeper", "canary-quarantine", digest+".json")
-	if reason, err := os.ReadFile(quarantine); err == nil {
+	if reason, err := os.ReadFile(filepath.Clean(quarantine)); err == nil { //nolint:gosec // local state quarantine path
 		return fmt.Errorf("candidate quarantined: %s", reason)
 	} else if !os.IsNotExist(err) {
 		return err
@@ -81,7 +107,7 @@ func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupd
 		if err != nil {
 			return nil, err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 		data, err := io.ReadAll(io.LimitReader(r, 1024*1024+1))
 		if len(data) > 1024*1024 {
 			return nil, fmt.Errorf("canary asset exceeds size limit")
@@ -103,24 +129,28 @@ func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupd
 	if err != nil {
 		return err
 	}
-	if evidence.Status == "failed" {
+	if evidence.Status == CanaryStatusFailed {
 		// Only authenticated, matching terminal failure is durable. Service errors,
 		// pending runs and malformed evidence must never poison the retry queue.
-		if err := os.MkdirAll(filepath.Dir(quarantine), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(quarantine), 0o700); err != nil { //nolint:gosec // local state quarantine directory
 			return err
 		}
-		if err := os.WriteFile(quarantine, data, 0o600); err != nil {
+		if err := os.WriteFile(quarantine, data, 0o600); err != nil { //nolint:gosec // local state quarantine file
 			return err
 		}
 		return fmt.Errorf("candidate quarantined: %s", evidence.Reason)
 	}
-	if evidence.Status != "success" {
+	if evidence.Status != CanaryStatusSuccess {
 		return fmt.Errorf("canary pending (retryable)")
 	}
 	return nil
 }
 
 func validateEvidence(data []byte, version, digest string) (CanaryEvidence, error) {
+	return validateEvidenceTarget(data, version, digest, runtime.GOOS, runtime.GOARCH)
+}
+
+func validateEvidenceTarget(data []byte, version, digest, goos, goarch string) (CanaryEvidence, error) {
 	var e CanaryEvidence
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -130,13 +160,13 @@ func validateEvidence(data []byte, version, digest string) (CanaryEvidence, erro
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return e, fmt.Errorf("trailing canary evidence")
 	}
-	if e.Schema != 1 || e.Version != version || e.SHA256 != digest || e.OS != runtime.GOOS || e.Arch != runtime.GOARCH {
+	if e.Schema != 1 || e.Version != version || e.SHA256 != digest || e.OS != goos || e.Arch != goarch {
 		return e, fmt.Errorf("canary evidence schema or candidate identity mismatch")
 	}
-	if e.Run == "" || (e.Status == "success" && e.MergeCommit == "") || (e.Status == "failed" && e.Reason == "") {
+	if e.Run == "" || (e.Status == CanaryStatusSuccess && e.MergeCommit == "") || (e.Status == CanaryStatusFailed && e.Reason == "") {
 		return e, fmt.Errorf("incomplete canary evidence")
 	}
-	if e.Status != "success" && e.Status != "failed" && e.Status != "pending" {
+	if e.Status != CanaryStatusSuccess && e.Status != CanaryStatusFailed && e.Status != CanaryStatusPending {
 		return e, fmt.Errorf("unknown canary status")
 	}
 	return e, nil

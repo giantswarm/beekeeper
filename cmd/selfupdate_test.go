@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -22,6 +23,8 @@ const (
 	selfUpdateRollbackFlag = "--rollback"
 	selfUpdateReasonFlag   = "--rollback-reason"
 	selfUpdateReason       = "candidate unhealthy"
+	selfUpdateStageFlag    = "--stage-canary"
+	selfUpdateVersionArg   = "--" + hostVersionFlag
 )
 
 // An update names the beekeeper processes it leaves on the old binary, pid
@@ -180,6 +183,8 @@ func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 		{selfUpdateCheckFlag, "--complete-probation"},
 		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateStageFlag, "/tmp/candidate"},
+		{selfUpdateVersionArg, "v0.4.0", selfUpdateStageFlag, "/tmp/candidate"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := New()
@@ -232,7 +237,7 @@ func TestSelfUpdateVersionFlag(t *testing.T) {
 		return update.Result{Current: tag, Latest: tag}, nil
 	}
 	root := New()
-	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, "--version", tag})
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, selfUpdateVersionArg, tag})
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -269,5 +274,51 @@ func TestReexecs(t *testing.T) {
 				t.Errorf("reexecs(%q) = %v, want %v", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSelfUpdateStageCanaryFlag(t *testing.T) {
+	prev := runStageCanary
+	t.Cleanup(func() { runStageCanary = prev })
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "candidate.canary.json")
+	var gotCfg loopworkflow.CanaryConfig
+	runStageCanary = func(_ context.Context, cfg loopworkflow.CanaryConfig) (update.CanaryEvidence, error) {
+		gotCfg = cfg
+		return update.CanaryEvidence{
+			Schema:      1,
+			Version:     "v0.99.0-rc.1",
+			Commit:      "0123456789abcdef0123456789abcdef01234567",
+			SHA256:      strings.Repeat("a", 64),
+			OS:          "linux",
+			Arch:        "amd64",
+			Status:      "success",
+			Run:         cfg.Run,
+			MergeCommit: strings.Repeat("b", 40),
+		}, nil
+	}
+	var out bytes.Buffer
+	root := New()
+	root.SetArgs([]string{
+		selfUpdateCmdName,
+		selfUpdateStageFlag, "/staged/beekeeper",
+		"--canary-recorded",
+		"--canary-run", "run-123",
+		"--canary-output", outPath,
+	})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotCfg.Candidate != "/staged/beekeeper" || !gotCfg.Recorded || gotCfg.Run != "run-123" {
+		t.Fatalf("StageCanary config = %+v", gotCfg)
+	}
+	written, err := os.ReadFile(outPath) //nolint:gosec // test output path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `"status": "success"`) || !strings.Contains(out.String(), `"run": "run-123"`) {
+		t.Fatalf("unexpected canary output:\nfile=%s\nstdout=%s", written, out.String())
 	}
 }
