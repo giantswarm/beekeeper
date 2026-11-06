@@ -251,13 +251,13 @@ func TestArchiveFinishedWorkerWithoutConfiguration(t *testing.T) {
 	sent := fakeRelay(t, false)
 	// The fake steward records the archive before acknowledging the request.
 	script := filepath.Join(filepath.Dir(sent), "claude")
-	raw, err := os.ReadFile(script)
+	raw, err := os.ReadFile(filepath.Clean(script))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TEST_ARCHIVE_RECORD", filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", finishedHost+".json"))
 	raw = []byte(strings.Replace(string(raw), "#!/bin/sh\n", "#!/bin/sh\nsed -i 's/\"isArchived\":false/\"isArchived\":true/' \"$TEST_ARCHIVE_RECORD\"\n", 1))
-	if err := os.WriteFile(script, raw, 0o700); err != nil {
+	if err := os.WriteFile(script, raw, 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
 		t.Fatal(err)
 	}
 	st, err := a.store.Read()
