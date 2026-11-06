@@ -610,11 +610,14 @@ func CurrentContext(kubeconfig string) string {
 	return readKubeconfig(kubeconfig).current
 }
 
+// kindCmd is the kind command-line tool.
+const kindCmd = "kind"
+
 // kubeMatchToken identifies the command word responsible for a kube decision.
 func kubeMatchToken(words []string) string {
 	for _, w := range words {
 		switch path.Base(w) {
-		case "kubectl", "kubectx", "kubeswitch", "switcher", "kubie", "helm", "flux", "tsh", "kind":
+		case kubectlCmd, "kubectx", "kubeswitch", "switcher", "kubie", "helm", "flux", "tsh", kindCmd:
 			return w
 		}
 		if pluginBinary.MatchString(path.Base(w)) {

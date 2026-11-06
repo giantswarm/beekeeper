@@ -7,6 +7,9 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// agentsSubcommand is beekeeper's agent command group.
+const agentsSubcommand = "agents"
+
 // commandText masks literal payloads of commands that carry text. Offsets and
 // shell substitutions are preserved: substitutions still execute even in text.
 // If parsing fails, the original command is checked conservatively.
@@ -32,8 +35,8 @@ func commandText(command string) string {
 		args := call.Args[len(words)-len(rest):]
 		words = rest
 		name := path.Base(words[0])
-		all := name == "beekeeper" && len(words) >= 3 && ((words[1] == "timer" || words[1] == "note") && words[2] == "add")
-		report := name == "beekeeper" && len(words) >= 3 && words[1] == "agents" && words[2] == "idle"
+		all := name == selfCmd && len(words) >= 3 && ((words[1] == "timer" || words[1] == "note") && words[2] == "add")
+		report := name == selfCmd && len(words) >= 3 && words[1] == agentsSubcommand && words[2] == "idle"
 		for i := 1; i < len(words); i++ {
 			payload := all && i >= 3
 			if report && (words[i-1] == "--report" || strings.HasPrefix(words[i], "--report=")) {

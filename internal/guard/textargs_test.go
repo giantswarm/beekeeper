@@ -37,8 +37,8 @@ func TestHookTextPayloads(t *testing.T) {
 				t.Fatalf("expected refusal, got %+v", d)
 			}
 			token := "muster"
-			if strings.Contains(command, "kubectl") {
-				token = "kubectl"
+			if strings.Contains(command, kubectlCmd) {
+				token = kubectlCmd
 			}
 			want := fmt.Sprintf("Matched token %q at byte %d", token, strings.Index(command, token))
 			if !strings.Contains(d.Reason, want) {
