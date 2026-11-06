@@ -1025,11 +1025,13 @@ var gitlabProofClient = &http.Client{
 	CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 }
 
+const gitlabGrantTypeField = "grant_type"
+
 func proveGitLabClient(ctx context.Context, host, clientID, clientSecret string) error {
 	if clientSecret == "" {
 		return fmt.Errorf("client secret is empty")
 	}
-	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {clientID}, "client_secret": {clientSecret}}
+	form := url.Values{gitlabGrantTypeField: {"client_credentials"}, "client_id": {clientID}, "client_secret": {clientSecret}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/oauth/token", strings.NewReader(form.Encode()))
 	if err != nil {
 		return fmt.Errorf("cannot create token request")
@@ -1039,7 +1041,7 @@ func proveGitLabClient(ctx context.Context, host, clientID, clientSecret string)
 	if err != nil {
 		return fmt.Errorf("token request failed (transport or timeout)")
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	var token struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`

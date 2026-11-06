@@ -285,7 +285,7 @@ func TestAppGitLabRecord(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		if r.Form.Get("grant_type") != "client_credentials" || r.Form.Get("client_secret") != "planted-client-secret" {
+		if r.Form.Get(gitlabGrantTypeField) != "client_credentials" || r.Form.Get("client_secret") != "planted-client-secret" {
 			t.Error("wrong credentials grant")
 		}
 		code, body := 200, `{"access_token":"planted-access-token"}`
