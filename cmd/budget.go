@@ -143,6 +143,9 @@ unread core budget:
 				if l := loopSpendLine(a, loopSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
+				if l := a.heldLine(loopSpend); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
@@ -283,7 +286,7 @@ func loopSpendLine(a *app, s loopGraphQLSpend) string {
 		steps = append(steps, fmt.Sprintf("%s %d", step, points))
 	}
 	slices.Sort(steps)
-	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, loopGraphQLLimit)
+	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, a.loopGraphQLCap())
 	if len(steps) > 0 {
 		line += " (" + strings.Join(steps, ", ") + ")"
 	}
