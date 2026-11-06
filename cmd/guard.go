@@ -717,12 +717,16 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
+			session := guard.CodexSession(raw)
+			if isAgy {
+				session = guard.AgySession(raw)
+			}
 			h := guard.Hook{Panic: func(check string, stack []byte) { a.recordGuardPanic(check+" tool "+hookPanicTool(raw), stack) }, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
 				Started: a.startedWorker,
-				Apps:    a.allowedApps, Shared: sharedUploads,
+				Apps:    func() []guard.App { return a.allowedAppsForSession(session) }, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
