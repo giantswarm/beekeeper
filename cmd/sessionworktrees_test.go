@@ -19,10 +19,10 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
-		t.Setenv(k, "test")
+	for _, k := range []string{litGitAuthorName, litGitCommitterName} {
+		t.Setenv(k, goTestSubcmd)
 	}
-	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.invalid")
 	}
 	base := t.TempDir()
@@ -31,7 +31,7 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 	writeT(t, filepath.Join(repo, ".gitignore"), ".claude/worktrees/\n")
 	gitT(t, repo, "add", ".")
 	gitT(t, repo, "commit", "-qm", "initial")
-	cfg := config.Config{StateDir: filepath.Join(base, "state"), Projects: config.Projects{Dir: filepath.Join(base, "projects"), Worktrees: filepath.Join(base, "worktrees")}}
+	cfg := config.Config{StateDir: filepath.Join(base, "state"), Projects: config.Projects{Dir: filepath.Join(base, "projects"), Worktrees: []string{filepath.Join(base, "worktrees")}}}
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 func TestFreeNestedWorktrees(t *testing.T) {
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
-	for _, branch := range []string{"merged", "squashed", "dirty", "unpushed"} {
+	for _, branch := range []string{"merged", "squashed", litDirty, "unpushed"} {
 		dir := filepath.Join(root, branch)
 		gitT(t, repo, "worktree", "add", "-qb", branch, dir)
 		writeT(t, filepath.Join(dir, branch), "first\n")
@@ -57,7 +57,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 			gitT(t, repo, "merge", "--squash", branch)
 			gitT(t, repo, "commit", "-qm", "squashed")
 		}
-		if branch == "dirty" {
+		if branch == litDirty {
 			writeT(t, filepath.Join(dir, "notes"), "keep me")
 		}
 	}
@@ -80,8 +80,8 @@ func TestFreeNestedWorktrees(t *testing.T) {
 			t.Fatal("worktree retained", branch, err)
 		}
 	}
-	moved := filepath.Join(a.cfg.Projects.Worktrees, "repo")
-	if b, err := os.ReadFile(filepath.Join(moved, "dirty", "notes")); err != nil || string(b) != "keep me" {
+	moved := filepath.Join(a.cfg.Projects.Worktrees[0], "repo")
+	if b, err := os.ReadFile(filepath.Clean(filepath.Join(moved, litDirty, "notes"))); err != nil || string(b) != "keep me" {
 		t.Fatalf("dirty work lost: %s %v", b, err)
 	}
 	if got := gitT(t, filepath.Join(moved, "unpushed"), "log", "-1", "--format=%s"); got != "change" {
@@ -92,7 +92,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 func TestSessionWorktreeHooks(t *testing.T) {
 	a, repo, base := nestedFixture(t)
 	cfgPath := filepath.Join(base, "config.yaml")
-	writeT(t, cfgPath, "stateDir: "+a.cfg.StateDir+"\nprojects:\n  dir: "+a.cfg.Projects.Dir+"\n  worktrees: "+a.cfg.Projects.Worktrees+"\n")
+	writeT(t, cfgPath, "stateDir: "+a.cfg.StateDir+"\nprojects:\n  dir: "+a.cfg.Projects.Dir+"\n  worktrees: "+a.cfg.Projects.Worktrees[0]+"\n")
 	a.cfgPath = cfgPath
 	invoke := func(remove bool, input map[string]string) error {
 		raw, _ := json.Marshal(input)
@@ -100,10 +100,10 @@ func TestSessionWorktreeHooks(t *testing.T) {
 		c.SetIn(bytes.NewReader(raw))
 		return c.Execute()
 	}
-	if err := invoke(false, map[string]string{"cwd": repo, "name": "test"}); err != nil {
+	if err := invoke(false, map[string]string{executionOmpCwd: repo, "name": goTestSubcmd}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(a.cfg.Projects.Worktrees, "repo", "worktree-test")
+	path := filepath.Join(a.cfg.Projects.Worktrees[0], "repo", "worktree-test")
 	if got := strings.TrimSpace(a.out.(*bytes.Buffer).String()); got != path {
 		t.Fatalf("stdout %q, want %q", got, path)
 	}
@@ -123,7 +123,7 @@ func TestSessionWorktreeHooks(t *testing.T) {
 	if err := invoke(true, map[string]string{"worktree_path": path}); err != nil {
 		t.Fatal(err)
 	}
-	if err := invoke(false, map[string]string{"cwd": repo, "name": "../../escape"}); err == nil {
+	if err := invoke(false, map[string]string{executionOmpCwd: repo, "name": "../../escape"}); err == nil {
 		t.Fatal("accepted traversal")
 	}
 }

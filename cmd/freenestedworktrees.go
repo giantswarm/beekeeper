@@ -30,9 +30,9 @@ func (a *app) freeNestedWorktrees(o free.Options, out io.Writer) error {
 			group = "merged and clean, removable"
 		}
 		if o.Summary {
-			fmt.Fprintf(out, "worktree\t%s\t%s\n", dir, group)
+			_, _ = fmt.Fprintf(out, "worktree\t%s\t%s\n", dir, group)
 		} else {
-			fmt.Fprintf(out, "worktrees: %s: %s\n", group, dir)
+			_, _ = fmt.Fprintf(out, "worktrees: %s: %s\n", group, dir)
 		}
 		if !o.Apply {
 			continue
@@ -59,7 +59,8 @@ func (a *app) freeNestedWorktrees(o free.Options, out io.Writer) error {
 			if e != nil {
 				branch = []byte(filepath.Base(dir))
 			}
-			target, e := worktrees.SessionPath(a.cfg.Projects.Worktrees, repo, strings.TrimSpace(string(branch)))
+			if len(a.cfg.Projects.Worktrees) == 0 { return fmt.Errorf("projects.worktrees must include a session root") }
+			target, e := worktrees.SessionPath(a.cfg.Projects.Worktrees[0], repo, strings.TrimSpace(string(branch)))
 			if e != nil {
 				return e
 			}

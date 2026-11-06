@@ -165,7 +165,7 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 	free.Nice(10)
 	s := free.Shared{
 		Dir:     filepath.Join(a.cfg.StateDir, "free"),
-		Key:     fmt.Sprintf("%+v", o),
+		Key:     fmt.Sprintf("masked-v1:%+v", o),
 		MaxAge:  30 * time.Second,
 		Timeout: timeout,
 	}

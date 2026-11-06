@@ -365,7 +365,7 @@ func TestAgyRunnerSurfacesFailedTurns(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
-	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports error status", "turn-failed"}} {
+	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports error status", litTurnFailed}} {
 		t.Run(test.name, func(t *testing.T) {
 			f, dir := agyFixture(t)
 			f.r.Messaging = true

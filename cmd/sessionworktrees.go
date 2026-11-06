@@ -36,10 +36,11 @@ func (a *app) sessionWorktreeHook(remove bool) *cobra.Command {
 			if err := a.loadConfig(); err != nil {
 				return err
 			}
+			if len(a.cfg.Projects.Worktrees) == 0 { return fmt.Errorf("projects.worktrees must include a session root") }
 			ctx := context.Background()
 			if remove {
 				// Never force removal or delete branches: dirty and unpushed work stays recoverable.
-				root, err := filepath.EvalSymlinks(a.cfg.Projects.Worktrees)
+				root, err := filepath.EvalSymlinks(a.cfg.Projects.Worktrees[0])
 				if err != nil {
 					return err
 				}
@@ -72,7 +73,7 @@ func (a *app) sessionWorktreeHook(remove bool) *cobra.Command {
 			if _, err := runGit(ctx, repo, "check-ref-format", "--branch", branch); err != nil {
 				return err
 			}
-			path, err := worktrees.SessionPath(a.cfg.Projects.Worktrees, repo, branch)
+			path, err := worktrees.SessionPath(a.cfg.Projects.Worktrees[0], repo, branch)
 			if err != nil {
 				return err
 			}
