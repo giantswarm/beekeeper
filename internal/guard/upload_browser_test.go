@@ -31,23 +31,27 @@ func TestUploadTargetBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const (
+		commentsForm = `form[action="/org/repo/comments"]`
+		commentBox   = "#comment-box"
+	)
 	cases := []struct {
 		name, html, scope, setup string
 		marked                   bool
 	}{
-		{name: "issue form", html: `<form action="/org/repo/comments"><input type="file"></form>`, scope: `form[action="/org/repo/comments"]`, marked: true},
+		{name: "issue form", html: `<form action="/org/repo/comments"><input type="file"></form>`, scope: commentsForm, marked: true},
 		{name: "pull request sticky token", html: `<form action="/org/repo/comments?sticky=secret"><input type="file"></form>`, scope: `form[action="/org/repo/comments?sticky=[BLOCKED: Cookie/query string data]"]`, marked: true},
 		{name: "absolute destination", html: `<form action="/org/repo/comments?sticky=x"><input type="file"></form>`, scope: `form[action='https://example.invalid/org/repo/comments?sticky=redacted']`, marked: true},
-		{name: "other scheme", html: `<form action="http://example.invalid/org/repo/comments"><input type="file"></form>`, scope: `form[action="/org/repo/comments"]`},
-		{name: "other host", html: `<form action="https://other.invalid/org/repo/comments?sticky=x"><input type="file"></form>`, scope: `form[action="/org/repo/comments"]`},
-		{name: "other path", html: `<form action="/org/repo/reviews?sticky=x"><input type="file"></form>`, scope: `form[action="/org/repo/comments"]`},
+		{name: "other scheme", html: `<form action="http://example.invalid/org/repo/comments"><input type="file"></form>`, scope: commentsForm},
+		{name: "other host", html: `<form action="https://other.invalid/org/repo/comments?sticky=x"><input type="file"></form>`, scope: commentsForm},
+		{name: "other path", html: `<form action="/org/repo/reviews?sticky=x"><input type="file"></form>`, scope: commentsForm},
 		{name: "ambiguous destination", html: `<form action="/comments?a"><input type="file"></form><form action="/comments?b"><input type="file"></form>`, scope: `form[action="/comments"]`},
-		{name: "boxless comment wrapper", html: string(fixture), scope: "#comment-box", marked: true},
-		{name: "hidden comment ancestor", html: string(fixture), scope: "#comment-box", setup: `document.querySelector('.editor').style.display='none';`},
-		{name: "invisible comment ancestor", html: string(fixture), scope: "#comment-box", setup: `document.querySelector('.editor').style.visibility='hidden';`},
-		{name: "hidden attribute", html: string(fixture), scope: "#comment-box", setup: `document.querySelector('#comment-box').hidden=true;`},
-		{name: "inert ancestor", html: string(fixture), scope: "#comment-box", setup: `document.querySelector('#comment-box').inert=true;`},
-		{name: "disabled input", html: string(fixture), scope: "#comment-box", setup: `document.querySelector('input').disabled=true;`},
+		{name: "boxless comment wrapper", html: string(fixture), scope: commentBox, marked: true},
+		{name: "hidden comment ancestor", html: string(fixture), scope: commentBox, setup: `document.querySelector('.editor').style.display='none';`},
+		{name: "invisible comment ancestor", html: string(fixture), scope: commentBox, setup: `document.querySelector('.editor').style.visibility='hidden';`},
+		{name: "hidden attribute", html: string(fixture), scope: commentBox, setup: `document.querySelector('#comment-box').hidden=true;`},
+		{name: "inert ancestor", html: string(fixture), scope: commentBox, setup: `document.querySelector('#comment-box').inert=true;`},
+		{name: "disabled input", html: string(fixture), scope: commentBox, setup: `document.querySelector('input').disabled=true;`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +66,7 @@ func TestUploadTargetBrowser(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			out, err := exec.CommandContext(ctx, browser, "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", "file://"+path).Output()
+			out, err := exec.CommandContext(ctx, browser, "--headless", "--no-sandbox", "--disable-gpu", "--dump-dom", "file://"+path).Output() //nolint:gosec // the machine's browser and the test's own file
 			if err != nil {
 				t.Fatalf("Chromium: %v", err)
 			}
