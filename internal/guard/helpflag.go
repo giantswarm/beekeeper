@@ -8,7 +8,7 @@ import (
 
 // helpFlags are the arguments that make an invocation print its help or
 // version and do nothing else.
-var helpFlags = []string{"-h", "--help", "help", "-version", "--version"}
+var helpFlags = []string{"-h", litHelp, "help", "-version", "--version"}
 
 // subcommand is a plain word before the help flag (agentlab platform
 // --help): a flag, a path or a package pattern is no subcommand.

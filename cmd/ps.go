@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -46,7 +47,7 @@ and names this command instead.
 
 Arguments narrow the list: a number is a PID, any other word matches the
 masked command line or the process name. The match never sees an unmasked
-value.
+value. A requested PID that cannot be shown produces an error explaining why.
 
 An adopted process tree left in an ended worker's linked worktree is marked
 [orphan: <worktree>], beside its age. Rostered and live sessions protect
@@ -58,6 +59,7 @@ their worktrees. The doctor stops these orphans and records every PID.`,
 				return err
 			}
 			rows := psRows(t, time.Now(), args)
+			pidErr := psPIDError(t, args)
 			st, err := a.store.Read()
 			if err != nil {
 				return err
@@ -72,7 +74,10 @@ their worktrees. The doctor stops these orphans and records every PID.`,
 				}
 			}
 			if a.json {
-				return a.printJSON(rows)
+				if err := a.printJSON(rows); err != nil {
+					return err
+				}
+				return pidErr
 			}
 			w := a.table()
 			_, _ = fmt.Fprintln(w, "PID\tPPID\tAGE\tCPU\tRSS\tCOMMAND")
@@ -86,7 +91,10 @@ their worktrees. The doctor stops these orphans and records every PID.`,
 				}
 				_, _ = fmt.Fprintf(w, "%d\t%d\t%s\t%s\t%dM\t%s\n", r.PID, r.PPID, r.Age, r.CPU, r.RSSMiB, cmd)
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			return pidErr
 		},
 	}
 }
@@ -126,4 +134,22 @@ func psMatch(p *proc.Process, cmd string, filters []string) bool {
 		}
 	}
 	return false
+}
+
+// PID filters are alternatives, so a visible requested PID is never filtered
+// out by another argument. Report each unavailable PID, even in mixed queries.
+func psPIDError(t *proc.Table, filters []string) error {
+	var errs []error
+	seen := map[int]bool{}
+	for _, f := range filters {
+		pid, err := strconv.Atoi(f)
+		if err != nil || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		if t.Process(pid) == nil {
+			errs = append(errs, fmt.Errorf("PID %d: %s", pid, t.MissingReason(pid)))
+		}
+	}
+	return errors.Join(errs...)
 }

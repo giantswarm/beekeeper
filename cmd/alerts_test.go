@@ -205,7 +205,7 @@ func TestAlertSnapshotLabels(t *testing.T) {
 		namespaceA = "snapshot-a"
 		namespaceB = "snapshot-b"
 	)
-	labels := map[string]string{labelAlertname: "ManagementClusterJobFailed", "namespace": namespaceA, labelSeverity: "notify", labelTeam: "snapshot-team", "route": "jobs", "job_name": "failed-job"}
+	labels := map[string]string{labelAlertname: "ManagementClusterJobFailed", litNamespace: namespaceA, labelSeverity: "notify", labelTeam: "snapshot-team", "route": "jobs", "job_name": "failed-job"}
 	other := map[string]string{}
 	for k, v := range labels {
 		other[k] = v

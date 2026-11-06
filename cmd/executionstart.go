@@ -157,6 +157,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
 			return nil, err
 		}
+		// Another coordinator can reserve a different route after our catalog
+		// read. Serialize route pinning with admission, just like capacity.
+		if err := validateRetainedExecutionRoute(current, o.Host, host); err != nil {
+			return nil, err
+		}
 		// Provider observations are read once before admission. Only counts
 		// are recomputed under the store lock; no SSH or paid call holds it.
 		if len(k.Providers) > 0 && !reflect.DeepEqual(k.Providers, a.liveCapacity().Providers) {
@@ -175,7 +180,8 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if executionHostBusy(current, host.Identity) >= host.MaxBusy {
 			return nil, refused("execution host maxBusy reached")
 		}
-		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		endpoint := host.Endpoint
+		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
 		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err

@@ -132,7 +132,7 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 				}
 				stop = e.Setup.Halt
 			}
-			if e.Setup.Started(ctx, svc) {
+			if e.Setup.NeedsStop(ctx, svc) {
 				p.command(ctx, e, stop(svc))
 			}
 		}
@@ -254,6 +254,7 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 	if symlink(f.Path) {
 		delete(m.Files, f.Path)
 		m.Services = slices.DeleteFunc(m.Services, func(s string) bool { return s == f.Path })
+		m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == f.Path })
 		p.add("keep", f.Path, "a symlink to "+resolve(f.Path)+": install never writes through a link; "+
 			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
 		return fileKept
@@ -307,7 +308,20 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 		p.add("skip", s, "", nil)
 	}
 	if written {
-		p.command(ctx, e, e.Setup.Reload())
+		m.ReloadPending = true
+	}
+	if m.ReloadPending {
+		if argv := e.Setup.Reload(); argv != nil {
+			p.add("run", strings.Join(argv, " "), "", func() error {
+				if err := e.Run(ctx, argv); err != nil {
+					return err
+				}
+				m.ReloadPending = false
+				return writeFile(e.manifest(), m.encode())
+			})
+		} else {
+			m.ReloadPending = false
+		}
 	}
 	for _, u := range units {
 		e.planStart(ctx, p, m, u.Path, states[u.Path])
@@ -320,14 +334,16 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 	name := filepath.Base(path)
 	switch {
 	case state == fileKept:
+		m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == path })
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
-		if state == fileUpdated {
+		if state == fileUpdated || slices.Contains(m.RestartsPending, path) {
+			if !slices.Contains(m.RestartsPending, path) {
+				m.RestartsPending = append(m.RestartsPending, path)
+			}
 			prepared, deferred := false, false
-			for _, argv := range e.Setup.Restart(path) {
-				if argv == nil {
-					continue
-				}
+			commands := slices.DeleteFunc(e.Setup.Restart(path), func(argv []string) bool { return argv == nil })
+			for i, argv := range commands {
 				p.add("run", strings.Join(argv, " "), "", func() error {
 					if deferred {
 						return nil
@@ -346,6 +362,9 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 						}
 						return err
 					}
+					if i == len(commands)-1 {
+						return e.finishRestart(m, path)
+					}
 					return nil
 				})
 			}
@@ -356,8 +375,25 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		if !slices.Contains(m.Services, path) {
 			m.Services = append(m.Services, path)
 		}
-		p.command(ctx, e, e.Setup.Start(path))
+		argv := e.Setup.Start(path)
+		if argv != nil && slices.Contains(m.RestartsPending, path) {
+			// A multi-command restart may have stopped the service before
+			// failing to start it. Starting it completes that pending change.
+			p.add("run", strings.Join(argv, " "), "", func() error {
+				if err := e.Run(ctx, argv); err != nil {
+					return err
+				}
+				return e.finishRestart(m, path)
+			})
+		} else {
+			p.command(ctx, e, argv)
+		}
 	}
+}
+
+func (e Env) finishRestart(m *Manifest, path string) error {
+	m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == path })
+	return writeFile(e.manifest(), m.encode())
 }
 
 // plan is the steps install or uninstall takes, printed as they run.
@@ -424,6 +460,10 @@ type Manifest struct {
 	// Services are the definitions of the units install started: the
 	// standby service, the keeper's timer.
 	Services []string `json:"services,omitempty"`
+	// ReloadPending and RestartsPending survive a failed or deferred service
+	// update even when its new definition is already on disk.
+	ReloadPending   bool     `json:"reloadPending,omitempty"`
+	RestartsPending []string `json:"restartsPending,omitempty"`
 	// Service is the standby service's definition as earlier installs
 	// recorded it, read into Services.
 	Service string `json:"service,omitempty"`
