@@ -237,36 +237,60 @@ func TestTimedOutActivationIsReportedAndRetried(t *testing.T) {
 }
 
 // The caller's own deadline can be what failed the activation: once the host
-// answers that the process runs, the start completes all the same.
+// answers that the process runs without a stop request, the start completes;
+// a stop request on either post-activation inspection fails safe.
 func TestActivationReconciledAfterTheCallersDeadline(t *testing.T) {
-	a, brief := sshStartTestApp(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	var handle execution.Handle
-	launched := false
-	fake := &testExecutionTransport{}
-	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
-		handle = fixtureHandle(a, r)
-		if r.RegistrationReceipt == "" {
-			return handle, nil
-		}
-		launched = true
-		cancel()
-		return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
-	}
-	fake.inspect = func(ctx context.Context, _ execution.Ref) (execution.Observation, error) {
-		if err := ctx.Err(); err != nil {
-			return execution.Observation{}, err
-		}
-		if launched {
-			return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true}, nil
-		}
-		return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
-	}
-	a.executionTransport = func(execution.Host) execution.Transport { return fake }
-	options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
-	if err := a.startSSHExecution(ctx, "reconciled-worker", brief, options); err != nil {
-		t.Fatalf("a confirmed start failed on the caller's spent deadline: %v", err)
+	for _, tc := range []struct {
+		name               string
+		stopOnInspectAfter int
+		wantErr            bool
+		wantInspections    int
+	}{
+		{name: "ready running", wantInspections: 2},
+		{name: "stop requested on reconciliation", stopOnInspectAfter: 1, wantErr: true, wantInspections: 1},
+		{name: "stop requested on acceptance", stopOnInspectAfter: 2, wantErr: true, wantInspections: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, brief := sshStartTestApp(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var handle execution.Handle
+			launched, activations, postChecks := false, 0, 0
+			fake := &testExecutionTransport{}
+			fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+				handle = fixtureHandle(a, r)
+				if r.RegistrationReceipt == "" {
+					return handle, nil
+				}
+				activations++
+				launched = true
+				cancel()
+				return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
+			}
+			fake.inspect = func(ctx context.Context, _ execution.Ref) (execution.Observation, error) {
+				if err := ctx.Err(); err != nil {
+					return execution.Observation{}, err
+				}
+				if launched {
+					postChecks++
+					stop := tc.stopOnInspectAfter > 0 && postChecks >= tc.stopOnInspectAfter
+					return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true, StopRequested: stop}, nil
+				}
+				return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
+			}
+			a.executionTransport = func(execution.Host) execution.Transport { return fake }
+			options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
+			err := a.startSSHExecution(ctx, "reconciled-worker", brief, options)
+			if tc.wantErr && Code(err) != ExitRefused {
+				t.Fatalf("stop-requested start did not fail safe: %v", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("a confirmed start failed on the caller's spent deadline: %v", err)
+			}
+			if activations != 1 || postChecks != tc.wantInspections {
+				t.Fatalf("activations=%d postChecks=%d, want 1 and %d", activations, postChecks, tc.wantInspections)
+			}
+		})
 	}
 }
 

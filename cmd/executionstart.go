@@ -456,6 +456,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		if err := a.saveExecutionObservation(ref, observation); err != nil {
 			return err
 		}
+		if observation.ProcessState == execution.Failed || observation.ProcessState == execution.Unknown || observation.StopRequested {
+			return refused("execution has no confirmed first task: %s; inspect/recover it; no replacement was started", observation.ProcessState)
+		}
 		if observation.Ready && (observation.ProcessState == execution.Running || observation.ProcessState == execution.Exited) {
 			if observation, err = a.rebindExecutionPolicy(ctx, host, client, r.Name, ref, observation); err != nil {
 				return err
@@ -465,9 +468,6 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			}
 			_, err := fmt.Fprintf(a.out, "started %s: execution %s on %s, workspace %s, unit %s, conversation %s, process %s%s\n", r.Name, ref.Execution, ref.Host, observation.Handle.Workspace, observation.Handle.Unit, observation.Handle.ConversationID, observation.ProcessState, effortText(r.Effort))
 			return err
-		}
-		if observation.ProcessState == execution.Failed || observation.ProcessState == execution.Unknown || observation.StopRequested {
-			return refused("execution has no confirmed first task: %s; inspect/recover it; no replacement was started", observation.ProcessState)
 		}
 		select {
 		case <-deadline.Done():
@@ -491,6 +491,9 @@ func (a *app) activationOutcome(ctx context.Context, client execution.Transport,
 	}
 	if err := a.saveExecutionObservation(ref, observation); err != nil {
 		return err
+	}
+	if observation.StopRequested {
+		return refused("execution has a remote stop request")
 	}
 	if observation.ProcessState == execution.Prepared {
 		return fmt.Errorf("activation failed: %w; execution %s exists on its host, prepared, and no process runs: the same start or agents recover activates it, and the host sync stops it %s after its start", failure, ref.Execution, unstartedReleaseAfter)
@@ -607,7 +610,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 		var evs []state.Event
 		switch r.Phase {
 		case executionPending, execution.Preparing, execution.Prepared, execution.Activating:
-			if o.Ready {
+			if o.Ready && !o.StopRequested && o.ProcessState != execution.Failed && o.ProcessState != execution.Unknown {
 				// The line every other harness's start leaves: the supervisor
 				// loop reads a claimed next start back from it and takes no
 				// second one after a restart. Logged once, on the first
