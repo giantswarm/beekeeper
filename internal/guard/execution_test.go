@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	executionToolInput  = "tool_input"
-	executionToolName   = "tool_name"
-	executionFixture    = "fixture"
-	executionWorkingDir = "cwd"
+	executionToolInput          = "tool_input"
+	executionToolName           = "tool_name"
+	executionFixture            = "fixture"
+	executionWorkingDir         = "cwd"
+	literalViewerGraphQLCommand = `gh api graphql -f query='{ viewer { login } }'`
 )
 
 func executionEvent(tool string, input map[string]any, cwd string) []byte {
@@ -40,7 +41,7 @@ func TestExecutionGuardAllowsLiteralGraphQLReads(t *testing.T) {
 		"gh api graphql -f " + query + " -F n=3199",
 		"gh api graphql --raw-field " + query + " --field n=3199 --jq .data",
 		"gh api graphql -F " + query + " -F n=3199 --paginate --slurp",
-		"gh api graphql -f query='{ viewer { login } }'",
+		literalViewerGraphQLCommand,
 		"GH_REPO=giantswarm/beekeeper gh api graphql -f query='{ viewer { login } }' -q .data.viewer.login",
 	} {
 		if executionDenied(h.DecideExecution(executionEvent(bashTool, map[string]any{commandKey: cmd}, workspace), executionFixture, workspace, nil)) {
