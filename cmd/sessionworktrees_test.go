@@ -11,6 +11,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/free"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -40,6 +41,10 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 }
 
 func TestFreeNestedWorktrees(t *testing.T) {
+	orig := plat
+	plat = platform.Stub()
+	plat.Machine = tableMachine{plat.Machine}
+	t.Cleanup(func() { plat = orig })
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
 	for _, branch := range []string{testMergedWord, litSquashed, litDirty, litUnpushed} {
@@ -86,6 +91,24 @@ func TestFreeNestedWorktrees(t *testing.T) {
 	}
 	if got := gitT(t, filepath.Join(moved, litUnpushed), "log", "-1", "--format=%s"); got != "change" {
 		t.Fatal(got)
+	}
+}
+
+// Without a process table nothing proves a worktree idle: migration refuses
+// and leaves it in place.
+func TestFreeNestedWorktreesRefusesWithoutProcessTable(t *testing.T) {
+	orig := plat
+	plat = platform.Stub()
+	t.Cleanup(func() { plat = orig })
+	a, repo, _ := nestedFixture(t)
+	dir := filepath.Join(repo, ".claude", "worktrees", litDirty)
+	gitT(t, repo, "worktree", "add", "-q", "-b", litDirty, dir)
+	err := a.freeNestedWorktrees(free.Options{Apply: true, Only: []string{free.Worktrees}}, &bytes.Buffer{})
+	if !platform.Missing(err) {
+		t.Fatalf("migration without a process table = %v, want not available", err)
+	}
+	if dirs := worktrees.NestedSessions(a.cfg.Projects.Dir); len(dirs) != 1 {
+		t.Fatalf("worktree moved: %v", dirs)
 	}
 }
 
