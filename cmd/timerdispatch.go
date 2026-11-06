@@ -97,6 +97,19 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 	}
 	now := batch.now
 	githubHeld := slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == holdGitHub && h.Active(now) })
+	needsGitHub := slices.ContainsFunc(st.Timers, func(t state.Timer) bool {
+		return checkOf(t).github && !t.Due.After(now) && (t.Checked.IsZero() || now.Sub(t.Checked) >= timerEvery)
+	})
+	if needsGitHub && !githubHeld {
+		// A standalone driver must sample its own budget: with no watch or
+		// loop, an unknown cached budget would otherwise defer CI wakes forever.
+		pctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
+		_, probeErr := readBudget(batch, pctx)
+		cancel()
+		if probeErr != nil {
+			githubHeld = true
+		}
+	}
 	found := batch.loopTimerChecks(ctx, st.Timers, now, githubHeld || batch.resetFirst(st))
 	// A GitHub admission refusal is an attempted check, not an absent tick.
 	// Record it so overdue detection distinguishes a stopped scheduler from

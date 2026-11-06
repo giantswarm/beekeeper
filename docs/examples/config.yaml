@@ -21,10 +21,12 @@
 # probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.
 # fatal:
 #   repositories: [giantswarm/beekeeper] # [] disables default-branch CI probes
+#   checkouts: {giantswarm/beekeeper: ~/projects/beekeeper} # default projects.dir/<repo>
 #   checks:
 #     - name: harness-config
 #       probe: [/opt/tools/harness, config, check] # no shell expansion
 #       harness: agy # exclude this harness from repair selection on failure
+#       repository: giantswarm/beekeeper # default repair owner
 # Probes: exit 0 healthy, 1 fatal, 2 deliberately disabled, others unknown.
 # Output is discarded; put no credentials in probe arguments. A malformed
 # main config is still detected with the unit's pinned --state-dir; repairs

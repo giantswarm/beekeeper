@@ -206,7 +206,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 				observe(fatal.Observation{ID: "main:" + repo, Unknown: true})
 				continue
 			}
-			observe(fatalMain(ctx, repo))
+			observe(fatalMain(ctx, repo, path))
 		}
 		seen := map[string]bool{}
 		choices := cfg.Capacity.Choices
@@ -287,13 +287,20 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if x == nil {
 		return q.Save(dir)
 	}
-	if repo, ok := strings.CutPrefix(x.ID, "main:"); ok {
-		if _, held := activeHold(st, a, repo); held {
-			x.Attempts--
-			x.Owner = ""
-			x.Outcome = "repair held by repository or GitHub hold"
-			return q.Save(dir)
+	repo := "giantswarm/beekeeper"
+	if mainRepo, ok := strings.CutPrefix(x.ID, "main:"); ok {
+		repo = mainRepo
+	}
+	for _, check := range cfg.Fatal.Checks {
+		if x.ID == "check:"+check.Name && check.Repository != "" {
+			repo = check.Repository
 		}
+	}
+	if _, held := activeHold(st, a, repo); held {
+		x.Attempts--
+		x.Owner = ""
+		x.Outcome = "repair held by repository or GitHub hold"
+		return q.Save(dir)
 	}
 	// Reserve durably before the subprocess, including ambiguous launches.
 	if err := q.Save(dir); err != nil {
@@ -337,12 +344,17 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			return nil
 		}
 	}
-	brief := fmt.Sprintf("Repair fatal system outage %s. Evidence: %s. You own this outage. Fix the component in its owning repository; a desk rule or note is an antipattern. Respect all holds, stop intent, capacity, secret rules, green CI and independent desk review. Never force-push. Do not re-enable a deliberately disabled component. Prove the failing probe passes before reporting done. Read beekeeper fatal status for the durable incident.\n", x.ID, x.Evidence)
+	brief := fmt.Sprintf("Repair fatal system outage %s in https://github.com/%s. Evidence: %s. You own this outage. Fix the component in its owning repository; a desk rule or note is an antipattern. Respect all holds, stop intent, capacity, secret rules, green CI and independent desk review. Never force-push. Do not re-enable a deliberately disabled component. Prove the failing probe passes before reporting done. Read beekeeper fatal status for the durable incident.\n", x.ID, repo, x.Evidence)
 	briefPath := filepath.Join(dir, "fatal-repair-brief.txt")
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err
 	}
 	args := []string{"--config", path, "--as", "fatal sentinel", "agents", "start", "--name", x.Owner}
+	checkout := cfg.Fatal.Checkouts[repo]
+	if checkout == "" {
+		checkout = filepath.Join(cfg.Projects.Dir, repoName(repo))
+	}
+	args = append(args, "--dir", homePath(checkout), "--branch", fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
 	if len(cfg.Capacity.Choices) == 0 && slices.Contains(broken, config.ClaudeHarness) {
 		x.Attempts--
 		x.Owner = ""
@@ -379,11 +391,16 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 
 // fatalMain checks only completed failing checks on the current default-branch
 // HEAD. Pending CI and unavailable GitHub are never called red or healthy.
-func fatalMain(ctx context.Context, repo string) fatal.Observation {
+func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	o := fatal.Observation{ID: "main:" + repo}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
 	defer cancel()
-	_, _, code, err := fatalRun(ctx, "", []string{"beekeeper", "budget", "--gate"})
+	bin, err := os.Executable()
+	if err != nil {
+		o.Unknown = true
+		return o
+	}
+	_, _, code, err := fatalRun(ctx, "", []string{bin, "--config", path, "--as", "fatal sentinel", "budget", "--gate"})
 	if err != nil || code != 0 {
 		o.Unknown = true
 		return o
@@ -421,7 +438,8 @@ func fatalMain(ctx context.Context, repo string) fatal.Observation {
 	}
 	// Explicit wire fields keep unknown conclusions from becoming healthy.
 	var wire struct {
-		Runs []struct {
+		Total int `json:"total_count"`
+		Runs  []struct {
 			Status     string `json:"status"`
 			Conclusion string `json:"conclusion"`
 			URL        string `json:"html_url"`
@@ -434,6 +452,9 @@ func fatalMain(ctx context.Context, repo string) fatal.Observation {
 		return o
 	}
 	if len(wire.Runs) == 0 && status.Total == 0 {
+		o.Unknown = true
+	}
+	if wire.Total > len(wire.Runs) {
 		o.Unknown = true
 	}
 	for _, r := range wire.Runs {

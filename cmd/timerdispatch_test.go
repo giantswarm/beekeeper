@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -100,6 +102,37 @@ func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	st, err := a.store.Read()
 	if err != nil || len(st.Timers) != 2 {
 		t.Fatal("stop did not retain timers", err)
+	}
+}
+
+func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Budget = nil
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Hour), When: prMerged7, Wake: "worker"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := readBudget
+	reads := 0
+	readBudget = func(*app, context.Context) (github.Budget, error) {
+		reads++
+		return github.Budget{}, errors.New("budget unavailable")
+	}
+	t.Cleanup(func() { readBudget = old })
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 || len(st.Timers) != 1 || !st.Timers[0].Checked.Equal(a.now) || !st.Timers[0].Unreadable {
+		t.Fatalf("budget reads %d, timers %+v", reads, st.Timers)
 	}
 }
 

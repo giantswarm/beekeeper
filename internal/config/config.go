@@ -2076,6 +2076,9 @@ type Fatal struct {
 	Checks []FatalCheck `yaml:"checks"`
 	// Repositories are repositories whose default branch CI is critical.
 	Repositories []string `yaml:"repositories"`
+	// Checkouts maps repair repositories to source checkouts; otherwise the
+	// source is projects.dir/<repository-name>. Repairs use managed worktrees.
+	Checkouts map[string]string `yaml:"checkouts"`
 }
 
 type FatalCheck struct {
@@ -2083,6 +2086,8 @@ type FatalCheck struct {
 	Probe []string `yaml:"probe"`
 	// Harness excludes the broken harness from repair selection.
 	Harness string `yaml:"harness"`
+	// Repository owns this check's repair (default giantswarm/beekeeper).
+	Repository string `yaml:"repository"`
 }
 
 // Doctor configures the known faults the doctor probes and remedies.
@@ -4449,10 +4454,18 @@ func (c *Config) validateEach(report func(error)) {
 			report(fmt.Errorf("fatal.checks[%d]: unknown harness", i))
 		}
 		checks[check.Name] = true
+		if check.Repository != "" && !validFatalRepository(check.Repository) {
+			report(fmt.Errorf("fatal.checks[%d]: invalid repository", i))
+		}
 	}
 	for _, repo := range c.Fatal.Repositories {
-		if len(strings.Split(repo, "/")) != 2 || strings.ContainsAny(repo, " ?#\\\n\r\t") {
+		if !validFatalRepository(repo) {
 			report(fmt.Errorf("fatal.repositories: expected owner/repository"))
+		}
+	}
+	for repo, dir := range c.Fatal.Checkouts {
+		if !validFatalRepository(repo) || dir == "" {
+			report(fmt.Errorf("fatal.checkouts: valid repository and checkout required"))
 		}
 	}
 	faults := map[string]bool{}
@@ -4626,6 +4639,18 @@ func (c *Config) IsLeasable(name string) bool {
 }
 
 // ownerReposEach reports entries of field that are not owner/repo.
+func validFatalRepository(repo string) bool {
+	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(repo) {
+		return false
+	}
+	for _, part := range strings.Split(repo, "/") {
+		if part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func ownerReposEach(field string, repos []string, report func(error)) {
 	for _, r := range repos {
 		if o, name, ok := strings.Cut(r, "/"); !ok || o == "" || name == "" || strings.ContainsAny(name, "/ ") {

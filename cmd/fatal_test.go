@@ -80,6 +80,9 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				if slices.Contains(args, "--force") {
 					t.Fatal("forced start")
 				}
+				if !slices.Contains(args, "--branch") || !slices.Contains(args, "--dir") {
+					t.Fatal("repair must use a managed repository worktree")
+				}
 				q, err := fatal.Read(dir)
 				if err != nil || len(q.Incidents) != 1 || q.Incidents[0].Owner == "" {
 					t.Fatal("launch before durable owner", err)
@@ -189,7 +192,7 @@ func TestFatalMainPinsHeadAndDistinguishesRedPendingUnknown(t *testing.T) {
 				}
 				return tc.checks, 0
 			})
-			o := fatalMain(t.Context(), "example/tool")
+			o := fatalMain(t.Context(), "example/tool", "/config.yaml")
 			if o.Failed != tc.red || o.Unknown != tc.unknown {
 				t.Fatalf("%+v", o)
 			}
