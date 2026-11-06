@@ -1703,10 +1703,10 @@ var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d
 var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
 var (
-	absorbLead       = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original\s+(?:pr|pull\s+request)s?)\b`)
-	absorbHeader     = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original)(?:\s+(?:original|pr|prs|pull\s+requests?))*\s*:?\s*(?:\*\*)?$`)
-	absorbFirstGap   = regexp.MustCompile(`(?i)^[\s:]*(?:(?:from|with|in|original|originals|pr|prs|pull\s+requests?)\b[\s:]*)*$`)
-	absorbNextGap    = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
+	absorbLead        = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original\s+(?:pr|pull\s+request)s?)\b`)
+	absorbHeader      = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original)(?:\s+(?:original|pr|prs|pull\s+requests?))*\s*:?\s*(?:\*\*)?$`)
+	absorbFirstGap    = regexp.MustCompile(`(?i)^[\s:]*(?:(?:from|with|in|original|originals|pr|prs|pull\s+requests?)\b[\s:]*)*$`)
+	absorbNextGap     = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
 	absorbBulletLead  = regexp.MustCompile(`^(?:[-*+]|\d+\.)\s+`)
 	commitPrefixLead  = regexp.MustCompile(`(?i)^[a-z]+(?:\([^)]*\))?!?:\s*`)
 	affirmativeClause = regexp.MustCompile(`(?i)^[\s*]*(?:(?:this(?:\s+(?:pr|pull\s+request|change|commit|batch|work))?|also|and)\s+)*[\s*]*$`)
