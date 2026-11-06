@@ -1489,6 +1489,10 @@ type WorkerReport struct {
 	Task     string    `json:"task,omitempty"`
 	Text     string    `json:"text"`
 	Problems []string  `json:"problems,omitempty"`
+	// TellTo is who started the desk review this report gives the verdict
+	// of: the watch wakes it with the report. GitHub may record the verdict
+	// as a plain comment, which nothing reading the review state sees.
+	TellTo Party `json:"tellTo,omitzero"`
 
 	rest rest
 }
