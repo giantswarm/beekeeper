@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	fixtureAddCommand       = "add"
 	fixtureClaudeExecutable = "/usr/local/bin/claude"
 	fixtureGitHubExecutable = "/srv/tools/bin/gh"
 	fixtureGitHubVersion    = "2.83.0"
@@ -93,7 +94,7 @@ func testFixture(t *testing.T) fixture {
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("original\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "tracked.txt"}, {"commit", "-m", "initial fixture"}, {"remote", "add", "origin", "https://github.com/giantswarm/beekeeper.git"}} {
+	for _, args := range [][]string{{fixtureAddCommand, "tracked.txt"}, {"commit", "-m", "initial fixture"}, {"remote", fixtureAddCommand, "origin", "https://github.com/giantswarm/beekeeper.git"}} {
 		if _, err := hostCommand(ctx, source, os.Environ(), "git", args...); err != nil {
 			t.Fatal("preparing fixture repository", err)
 		}
@@ -408,7 +409,7 @@ func TestCallerUsesServiceIdentityAndCallbackProof(t *testing.T) {
 	}
 }
 
-func TestStopRetiresCleanWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
+func TestStopRetainsWorkspaceAndReviewParkCompletesExecution(t *testing.T) {
 	f := testFixture(t)
 	ctx := context.Background()
 	h, err := f.s.Start(ctx, f.r)
@@ -451,8 +452,8 @@ func TestStopRetiresCleanWorkspaceAndReviewParkCompletesExecution(t *testing.T) 
 		t.Fatalf("stop failed: %+v, %v", ack, err)
 	}
 	for _, p := range []string{h.Workspace, filepath.Dir(h.Workspace), sourceDir} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Fatalf("stop retained disposable path %s: %v", p, err)
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("stop removed retained path %s: %v", p, err)
 		}
 	}
 }

@@ -1,41 +1,52 @@
 # Remote worker resource retirement
 
+A worker ends, and its host should hold only the provisioned sources, the
+installed toolchains and beekeeper's own state. The
+[retirement lifecycle](ssh-execution-hosts-operations.md) preserves the work and
+moves the execution's resources aside; this page says what leaves the host and
+what never does.
+
+## What a worker writes where
+
 Each execution owns the directory named by its execution ID beneath the
-configured workspace root. Its isolated repository and branch refs never
-share writable Git metadata with provisioned sources. Managed harnesses put
-the worker home (including `~/.local/state/go-toolchain`), temporary files, Go module/toolchain downloads, Go build caches, Cargo caches
-and XDG cache/state files in that execution's `runtime` directory. The agy adapter
-uses a separate execution-owned harness home beside its journal. Provisioned
-toolchains and harness authentication remain shared host resources.
+workspace root. Temporary files, Go build and module caches, downloaded Go
+toolchains, `XDG_CACHE_HOME`, `XDG_STATE_HOME` and `CARGO_HOME` all point inside
+it, so they retire with it. An agy worker always runs on a home of its own beside
+its journal, with no MCP server configured unless the request asks for one.
 
-Stop acknowledges process termination separately from cleanup. The journal's
-`cleanup` field records the last cleanup attempt, retryable failure and retained
-recovery work. Repeating stop retries cleanup, including authorization revocation.
-Inspection reconciles terminal runs through the same stop path. Active services
-and parked threads between turns are not retired by inspection.
+`HOME` is not routed: harness logins, Git identity and SSH configuration stay
+where the host provisioned them. A worker that writes to a literal path under
+`~` leaves that behind, and no audit attributes it to an execution.
 
-Retirement removes runtime files, generated GitHub dispatch scripts and disposable
-MCP homes. A workspace is removed only when its working tree has no changes,
-untracked or ignored files (except the designated scratch directory), and no ref
-or reflog contains commits beyond the original pinned commit. Its isolated branch
-copies and source bundle are then removed together. Failed or interrupted
-preparations and any work that cannot be proved disposable remain in place for
-recovery. Recovery work has no automatic expiry; the coordinator/operator owns
-publication or recovery before removal. This deliberately preserves the contract
-that a stopped worker's unpublished work must remain recoverable.
+## What removes a retired resource
 
-Execution logs are beekeeper state retained for seven days after their last
-write. Terminal cleanup removes older logs once the workspace is proved disposable;
-logs accompanying retained work remain recovery evidence. Journals, publication evidence and
-review receipts are not expired by this operation. A failed containment check,
-symlink, revocation failure or unknown ownership prevents destructive cleanup.
-There is no sweep of the home directory or global temporary directories.
+Only a coordinator's `Retire` does. `Stop` ends the owned process and removes the
+disposable MCP home; inspection observes. Neither touches a workspace, a source
+bundle or anything moved aside, retention passed or not.
 
-`beekeeper agents hosts check <host>` includes a read-only `leftovers` inventory
-in its JSON response. It distinguishes active state, retained recovery work,
-overdue terminal resources and unknown managed entries. Findings identify the
-execution and generation where known, explain the reason, and give the next
-action. Checking never invokes retirement or follows unknown symlinks. To retry
-a known execution's retirement, repeat its stop; investigate unknown entries
-before establishing ownership. Legacy files outside managed roots cannot be
-safely attributed to an execution and require operator investigation.
+Retirement proves an execution disposable when it holds nothing a person could
+want:
+
+- no worker ever ran, or
+- the tree is on its starting commit with no recovery to record, and it holds no
+  ignored file beyond the designated scratch directory.
+
+Once `retainUntil` passes, the next retirement on that host removes the moved-aside
+resources of such executions, a few per call. A host that retires nothing further
+keeps them until it does. The journal, log and control receipts stay as evidence.
+
+Everything else stays moved aside without expiry: a retirement with a recovery,
+one with ignored files, one whose tree could not be read, and every retirement
+recorded before this proof existed. Its owner publishes or recovers the work
+before removing it by hand.
+
+A removal that fails its containment checks, or finds a symlink, leaves the
+resource in place and records why in the retirement's `lastError`; the next
+retirement tries again.
+
+## Seeing what is left
+
+`beekeeper agents hosts check <host>` reports what remains in `resourceAudit`,
+and [its retention table](ssh-execution-hosts-operations.md#resource-audit-and-bounded-retention)
+gives each class's owner and rule. Execution logs keep that table's policy,
+including its explicit evidence release.

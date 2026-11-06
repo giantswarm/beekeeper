@@ -2,8 +2,9 @@ package cmd
 
 import (
 	"context"
-	"crypto/subtle"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,7 +93,7 @@ account and no other, "Sign in to <app>"'s Continue, the consent of scopes) for 
 Google's consent pages of a flow for any other host, a third party's. A
 self-hosted GitLab's OAuth application the person owns and asked a consent
 for is recorded with --gitlab <host> --client-id <uid> --callback <host>
---declared <ref>: on that GitLab's authorize page the hook answers the
+--client-secret <ref>: on that GitLab's authorize page the hook answers the
 consent of that application for a recorded callback host and refuses any
 other application's there. A consent to a third party's OAuth client as
 the person's own account there (OpenAI's Codex sign-in with ChatGPT) is
@@ -167,15 +168,15 @@ other grants stay on record:
   chooser. No repository declares such a client: the record is the
   person's word alone, kept in the machine's state. --client-id, when
   given, must match where Google's URL carries it unredacted.
-  --gitlab <host> --client-id <uid> --callback <host> --declared <ref>: a
+  --gitlab <host> --client-id <uid> --callback <host> --client-secret <ref>: a
   consent on a self-hosted GitLab's authorize page (<host>/oauth/authorize,
   "Authorize <name>") for the person's own OAuth application with that
   client id, whose redirect goes to a --callback host (repeatable). GitLab
   names an instance-wide application's owner to its administrators alone:
-  the person's own declaration of the client id (a vault field or a SOPS
-  file's path, as beekeeper secret names one) must carry it, compared in
-  this process, no value in any output. The record is kept in the
-  machine's state.
+  possession of its client secret is proven by a client_credentials token
+  request inside beekeeper. --client-secret names a vault field or SOPS
+  path; the secret and returned token never reach output. --declared is an
+  alias for --client-secret. The proven record is kept in the machine's state.
   --oauth <host> --client-id <id> --account <address>: a consent to a
   third party's OAuth client, one the person neither owns nor declares,
   as their own account <address> there, on the consent page beekeeper
@@ -227,7 +228,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			case rec.Slack == "" && (rec.SlackApp != "" || rec.WebhookChannel != ""):
 				return usageErr("--app-id and --webhook-channel name a Slack app's id and the channel its install keeps, with --slack")
 			case declaredRef != "" && rec.GitLab == "":
-				return usageErr("--declared names the person's own declaration of a GitLab application's client id, with --gitlab")
+				return usageErr("--client-secret (or --declared) names a GitLab application secret reference, with --gitlab")
 			}
 			switch {
 			case rec.Google:
@@ -283,7 +284,7 @@ Any of them, with --word, the person's words that asked for it.`,
 			if len(answers) > 1 {
 				verb = "are"
 			}
-			_, err = fmt.Fprintf(a.out, "App %s on record, declared in %s: %s %s answered by the hook\n", rec.Name, rec.Declared, strings.Join(answers, " and "), verb)
+			_, err = fmt.Fprintf(a.out, "App %s on record, %s: %s %s answered by the hook\n", rec.Name, appSource(rec), strings.Join(answers, " and "), verb)
 			return err
 		},
 	}
@@ -295,8 +296,9 @@ Any of them, with --word, the person's words that asked for it.`,
 	allow.Flags().StringVar(&rec.Word, "word", "", "the person's words that asked for the grant")
 	allow.Flags().BoolVar(&rec.Google, "google", false, "a consent on Google's sign-in: the person's own Google OAuth client, by --callback")
 	allow.Flags().StringArrayVar(&hosts, "callback", nil, "with --google or --gitlab, a callback host (or URL) of the client's redirect (repeatable)")
-	allow.Flags().StringVar(&rec.GitLab, "gitlab", "", "a consent on a self-hosted GitLab's authorize page: the GitLab's host, with --client-id, --callback and --declared")
-	allow.Flags().StringVar(&declaredRef, "declared", "", "with --gitlab, the person's own declaration of the application's client id: op://<vault>/<item>/<field> or <SOPS file>#<path>")
+	allow.Flags().StringVar(&rec.GitLab, "gitlab", "", "a consent on a self-hosted GitLab's authorize page: the GitLab's host, with --client-id, --callback and --client-secret")
+	allow.Flags().StringVar(&declaredRef, "client-secret", "", "with --gitlab, the client secret reference for a client_credentials ownership proof")
+	allow.Flags().StringVar(&declaredRef, "declared", "", "alias for --client-secret: op://<vault>/<item>/<field> or <SOPS file>#<path>")
 	allow.Flags().StringVar(&rec.Account, "account", "", "with --google, the Google account the sign-in chooses on Google's account chooser; with --oauth, the account the consent is given as")
 	allow.Flags().StringVar(&rec.Slack, "slack", "", "a Slack app's install or re-install consent: the workspace's host (<workspace>.slack.com), with --app-id and --client-id")
 	allow.Flags().StringVar(&rec.SlackApp, "app-id", "", "with --slack, the Slack app's id (A…), whose Install App page opens the consent")
@@ -365,7 +367,7 @@ credentials were stored nowhere). check decides from the same.`,
 			if err != nil {
 				return err
 			}
-			apps := guardAppsOf(st)
+			apps := a.consentApps(context.Background(), st, listenerUp)
 			var d guard.Decision
 			if navigate {
 				d = guard.Navigation(apps, args[0])
@@ -594,13 +596,8 @@ func callbackHosts(kind string, hosts []string) ([]string, error) {
 	return out, nil
 }
 
-// gitlabApp fills rec, a self-hosted GitLab OAuth application's record,
-// from its flags: its consent on the GitLab's authorize page, by its client
-// id and the callback hosts named. GitLab's API names an instance-wide
-// application's owner to no one but its administrators, so ownership is the
-// person's own declaration: the value at declared (a vault field, a SOPS
-// file's path) must be the client id, compared in this process, no value in
-// any output.
+// gitlabApp proves possession of the application's secret with a token grant
+// before the caller can persist the consent record.
 func (a *app) gitlabApp(ctx context.Context, rec *state.App, hosts []string, permission, manifest, declared string) error {
 	if permission != "" || rec.CallbackURL != "" || rec.Delete || manifest != "" || rec.Account != "" {
 		return usageErr("--gitlab records a consent on a GitLab's authorize page alone: --permission, --callback-url, --delete, --manifest and --account are a GitHub App's or a Google client's")
@@ -619,11 +616,11 @@ func (a *app) gitlabApp(ctx context.Context, rec *state.App, hosts []string, per
 		return err
 	}
 	if declared == "" {
-		return usageErr("--gitlab needs --declared <ref>: the person's own declaration of the application's client id (op://<vault>/<item>/<field> or <SOPS file>#<path>)")
+		return usageErr("--gitlab needs --client-secret <ref>: the application's client secret reference (op://<vault>/<item>/<field> or <SOPS file>#<path>)")
 	}
 	ref, err := secret.ParseRef(declared)
 	if err != nil {
-		return usageErr("--declared: %v", err)
+		return usageErr("--client-secret: %v", err)
 	}
 	if err := a.sandboxFiles([]secret.Ref{ref}, nil); err != nil {
 		return err
@@ -632,17 +629,12 @@ func (a *app) gitlabApp(ctx context.Context, rec *state.App, hosts []string, per
 	if err != nil {
 		return err
 	}
-	same := false
 	if err := ops.Use(ctx, ref, func(v string) error {
-		same = subtle.ConstantTimeCompare([]byte(strings.TrimSpace(v)), []byte(rec.ClientID)) == 1
-		return nil
+		return proveGitLabClient(ctx, rec.GitLab, rec.ClientID, strings.TrimSpace(v))
 	}); err != nil {
-		return vaultExit(fmt.Errorf("the declaration %s: %w", ref, err))
+		return refused("GitLab application %s ownership not proven: %v", rec.Name, err)
 	}
-	if !same {
-		return refused("GitLab application %s is not declared: %s carries another client id than %s", rec.Name, ref, rec.ClientID)
-	}
-	rec.Declared = ref.String()
+	rec.Declared = "proven by client_credentials using " + ref.String()
 	return nil
 }
 
@@ -750,7 +742,7 @@ func recordParts(x state.App) []string {
 	if x.Delete {
 		parts = append(parts, "delete")
 	}
-	return append(parts, "declared in "+x.Declared)
+	return append(parts, appSource(x))
 }
 
 // declared fills rec's organisation, callback hosts and declaration from
@@ -955,6 +947,18 @@ func (a *app) appList() error {
 // allowedApps are the Apps on record, for the hook's consent decision: nil
 // when the record cannot be read, which decides no consent page.
 func (a *app) allowedApps() []guard.App {
+	return a.loadAllowedApps(listenerUp)
+}
+
+// allowedAppsForSession includes live creations owned by the calling session,
+// even when the hook cannot reach their listener across a sandbox boundary.
+func (a *app) allowedAppsForSession(session string) []guard.App {
+	return a.loadAllowedApps(func(r state.AppRun) bool {
+		return session != "" && r.By.Session == session && proc.Alive(r.PID)
+	})
+}
+
+func (a *app) loadAllowedApps(running func(state.AppRun) bool) []guard.App {
 	if a.loadConfig() != nil {
 		return nil
 	}
@@ -966,7 +970,7 @@ func (a *app) allowedApps() []guard.App {
 	if err != nil {
 		return nil
 	}
-	return guardAppsOf(st)
+	return a.consentApps(context.Background(), st, running)
 }
 
 // guardApps are the Apps on record as the guard reads them.
@@ -1000,6 +1004,10 @@ var listenerUp = func(r state.AppRun) bool {
 // listener answers and beekeeper's latest ledger entry of it; an App that
 // only runs or only the ledger holds is one of its own.
 func guardAppsOf(st *state.State) []guard.App {
+	return guardAppsWithRuns(st, listenerUp)
+}
+
+func guardAppsWithRuns(st *state.State, running func(state.AppRun) bool) []guard.App {
 	out := guardApps(st.Apps)
 	of := func(name, org, declared string) *guard.App {
 		i := slices.IndexFunc(out, func(g guard.App) bool { return strings.EqualFold(g.Name, name) })
@@ -1017,7 +1025,7 @@ func guardAppsOf(st *state.State) []guard.App {
 		return g
 	}
 	for _, r := range st.AppRuns {
-		if listenerUp(r) {
+		if running(r) {
 			of(r.Name, r.Org, r.Declared).Run = &guard.CreateRun{Listener: r.Listener, By: r.By.Name, At: r.At}
 		}
 	}
@@ -1025,4 +1033,54 @@ func guardAppsOf(st *state.State) []guard.App {
 		of(c.Name, c.Org, c.Declared).Created = &guard.Created{Slug: c.Slug, ID: c.ID, Stored: c.Stored, At: c.At}
 	}
 	return out
+}
+
+// gitlabProofClient never follows redirects with credentials or returned tokens.
+var gitlabProofClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+const gitlabGrantTypeField = "grant_type"
+
+func proveGitLabClient(ctx context.Context, host, clientID, clientSecret string) error {
+	if clientSecret == "" {
+		return fmt.Errorf("client secret is empty")
+	}
+	form := url.Values{gitlabGrantTypeField: {"client_credentials"}, "client_id": {clientID}, "client_secret": {clientSecret}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/oauth/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("cannot create token request")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res, err := gitlabProofClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("token request failed (transport or timeout)")
+	}
+	defer func() { _ = res.Body.Close() }()
+	var token struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+	}
+	err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&token)
+	if res.StatusCode != http.StatusOK || token.Error != "" {
+		// Only known protocol codes are safe: arbitrary response text may echo secrets.
+		reason := "token grant rejected"
+		switch token.Error {
+		case "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type", "invalid_request", "invalid_scope", "access_denied", "server_error", "temporarily_unavailable":
+			reason = token.Error
+		}
+		return fmt.Errorf("%s (HTTP %d)", reason, res.StatusCode)
+	}
+	if err != nil || token.AccessToken == "" {
+		return fmt.Errorf("token response contains no valid access token")
+	}
+	return nil
+}
+
+func appSource(rec state.App) string {
+	if rec.GitLab != "" && strings.HasPrefix(rec.Declared, "proven by client_credentials using ") {
+		return rec.Declared
+	}
+	return "declared in " + rec.Declared
 }

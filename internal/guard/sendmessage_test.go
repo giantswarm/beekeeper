@@ -56,6 +56,7 @@ func TestSendMessageRefusedWhenTheNameIsAmbiguous(t *testing.T) {
 }
 
 const guideHost = "local_g"
+const relayGuideFixture = "relay guide fixture"
 
 func TestSendMessageToARoleGoesToItsHolder(t *testing.T) {
 	holders := map[string]string{RoleSupervisor: "Supervisor run 60", RoleGuide: guideHost}
@@ -118,15 +119,15 @@ func TestSendMessageByNameToAnAgentWithoutACLIIsRefused(t *testing.T) {
 func TestSendMessageByAHoldersRunNameGoesToTheHolder(t *testing.T) {
 	absent := false
 	h := Hook{
-		Role:   func(r string) (string, error) { return "klaus-lab-14", nil },
+		Role:   func(r string) (string, error) { return "fixture-lab-14", nil },
 		Holds:  func(name string) string { return map[string]string{"Supervisor run 82": RoleSupervisor}[name] },
 		Absent: func(string) string { absent = true; return "no CLI of it runs" },
 	}
 	d := decideSend(t, h, "Supervisor run 82")
-	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != "klaus-lab-14" || absent {
+	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != "fixture-lab-14" || absent {
 		t.Fatalf("want the holder's CLI, got %+v (absent asked %v)", d, absent)
 	}
-	if !strings.Contains(d.Reason, "the supervisor is klaus-lab-14 now") {
+	if !strings.Contains(d.Reason, "the supervisor is fixture-lab-14 now") {
 		t.Errorf("reason %q", d.Reason)
 	}
 	if d := decideSend(t, h, "worker one"); d == nil || d.PermissionDecision != decisionDeny || !absent {
@@ -192,10 +193,12 @@ func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
 	if d := decideSend(t, gone, codexWorker); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "no longer runs") {
 		t.Fatalf("want the inbox's refusal, got %+v", d)
 	}
-	if d := decideSend(t, Hook{Inbox: func(string, string, string) (string, error) {
-		t.Error("a role's or a desktop id's send is no inbox lookup")
+	if d := decideSend(t, Hook{Inbox: func(_, name, _ string) (string, error) {
+		if name != relayGuideFixture {
+			t.Errorf("role inbox target %q", name)
+		}
 		return "", nil
-	}, Role: func(string) (string, error) { return "guide name", nil }}, "the guide"); d == nil || d.UpdatedInput["to"] != "guide name" {
+	}, Role: func(string) (string, error) { return relayGuideFixture, nil }}, "the guide"); d == nil || d.UpdatedInput["to"] != relayGuideFixture {
 		t.Fatalf("a role still goes to its holder: %+v", d)
 	}
 }
@@ -212,5 +215,15 @@ func TestSendMessageToAGoneSocketNamesTheRosterName(t *testing.T) {
 	}
 	if d := decideSend(t, Hook{}, SocketPrefix+live); d != nil {
 		t.Fatalf("a socket that exists passes: %+v", d)
+	}
+}
+
+func TestSendMessageReportsQueuedInstruction(t *testing.T) {
+	h := Hook{Inbox: func(_, _, _ string) (string, error) {
+		return "queued; instruction reaches the session chat at its next tool or turn boundary", nil
+	}}
+	d := decideSend(t, h, "waiting worker")
+	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "Queued by beekeeper") || strings.Contains(d.Reason, "Delivered") || !strings.Contains(d.Reason, "do not repeat") {
+		t.Fatalf("queued relay result: %+v", d)
 	}
 }

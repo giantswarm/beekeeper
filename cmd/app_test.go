@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,7 +144,7 @@ func TestAppRecord(t *testing.T) {
 		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --callback-url <url> for one callback URL, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several"},
 		{[]string{appAllow, recordedApp, permissionFlag, "Members", wordFlag, "w"}, `--permission names one change as "<scope>: <level>" (e.g. "Members: Read-only"), not "Members"`},
 		{[]string{appAllow, "undeclared", clientIDFlag, recordedClientID, wordFlag, "w"}, "App undeclared is not declared: " + declaringRepo + " declares no App at apps/undeclared/manifest.json"},
-		{[]string{appAllow, "renamed", clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
+		{[]string{appAllow, renamedApp, clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
 		{[]string{appAllow, "no-callback", clientIDFlag, recordedClientID, wordFlag, "w"}, "App no-callback has no consent page to record: " + declaringRepo + "@0123456789ab:apps/no-callback/manifest.json declares no callback URL (an App used through the device flow has none); a change of its permissions is recorded with --permission \"<scope>: <level>\""},
 		{[]string{"revoke", recordedApp}, "no App " + recordedApp + " is on record"},
 	} {
@@ -263,15 +265,7 @@ func TestAppGoogleRecord(t *testing.T) {
 	}
 }
 
-// A self-hosted GitLab's OAuth application is recorded with --gitlab, its
-// client id, its callback hosts and the person's own declaration of the
-// client id, compared in-process: another declared client id is refused, as
-// are a missing flag and a GitHub App's flags. check allows the
-// application's authorize page on that GitLab for a recorded callback host,
-// a redacted client id by the one its consent form carries (--form), never by
-// its title, and refuses another application
-// or callback host there; another host's authorize page stays a consent
-// page elsewhere.
+// GitLab ownership must be proven before any consent record is persisted.
 func TestAppGitLabRecord(t *testing.T) {
 	a, _, repo := secretApp(t)
 	const (
@@ -282,23 +276,42 @@ func TestAppGitLabRecord(t *testing.T) {
 		gitlabFl = "--gitlab"
 		declFl   = "--declared"
 	)
+	oldClient := gitlabProofClient
+	t.Cleanup(func() { gitlabProofClient = oldClient })
+	gitlabProofClient = &http.Client{Transport: gitlabRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Scheme != "https" || r.URL.Host != gitlab || r.URL.Path != "/oauth/token" || r.Method != http.MethodPost {
+			t.Errorf("unexpected token request")
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Form.Get(gitlabGrantTypeField) != "client_credentials" || r.Form.Get("client_secret") != "planted-client-secret" {
+			t.Error("wrong credentials grant")
+		}
+		code, body := 200, `{"access_token":"planted-access-token"}`
+		if r.Form.Get("client_id") != uid {
+			code, body = 401, `{"error":"invalid_client","error_description":"planted-client-secret"}`
+		}
+		return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+
 	file := filepath.Join(repo, "oauth.sops.yaml")
-	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth\n  namespace: team-a\nstringData:\n  client-id: " + uid + "\n"
+	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: oauth\n  namespace: team-a\nstringData:\n  client-secret: planted-client-secret\n"
 	if err := os.WriteFile(file, secrettest.Encrypt(plain), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	declared := file + "#stringData.client-id"
+	declared := file + "#stringData.client-secret"
 	base := []string{appAllow, app, gitlabFl, "https://GitLab.example.org/", callbackFlag, "https://" + callback + "/oauth/proxy/callback", wordFlag, personsWord}
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --declared <ref>"},
+		{append(slices.Clone(base), clientIDFlag, uid), "--gitlab needs --client-secret <ref>"},
 		{append(slices.Clone(base), declFl, declared), "--gitlab needs --client-id <uid>"},
-		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "GitLab application " + app + " is not declared: " + declared + " carries another client id than another-uid"},
+		{append(slices.Clone(base), clientIDFlag, "another-uid", declFl, declared), "ownership not proven: invalid_client (HTTP 401)"},
 		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, googleFlag), "--google, --gitlab, --slack or --oauth"},
 		{append(slices.Clone(base), clientIDFlag, uid, declFl, declared, permissionFlag, deviceChange), "--gitlab records a consent on a GitLab's authorize page alone"},
-		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--declared names the person's own declaration of a GitLab application's client id, with --gitlab"},
+		{[]string{appAllow, app, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--client-secret (or --declared) names a GitLab application secret reference, with --gitlab"},
 		{[]string{appAllow, app, gitlabFl, gitlab, clientIDFlag, uid, declFl, declared, wordFlag, "w"}, "--gitlab needs --callback <host>"},
 	} {
 		out, err := runApp(t, a, tc.args...)
@@ -308,13 +321,27 @@ func TestAppGitLabRecord(t *testing.T) {
 		if strings.Contains(out+fmt.Sprint(err), "planted-gitlab-uid") && !strings.Contains(strings.Join(tc.args, " "), uid) {
 			t.Errorf("app %q answers the declared value: %q %v", tc.args, out, err)
 		}
+		if strings.Contains(out+fmt.Sprint(err), "planted-client-secret") || strings.Contains(out+fmt.Sprint(err), "planted-access-token") {
+			t.Fatal("credential disclosed")
+		}
+		st, readErr := a.store.Read()
+		if readErr != nil || len(st.Apps) != 0 {
+			t.Fatal("failed proof persisted an app")
+		}
 	}
-	out, err := runApp(t, a, append(slices.Clone(base), clientIDFlag, uid, declFl, declared)...)
-	if err != nil || out != "App "+app+" on record, declared in "+declared+": its consent on "+gitlab+"'s authorize page with callback "+callback+" is answered by the hook\n" {
+	out, err := runApp(t, a, append(slices.Clone(base), clientIDFlag, uid, "--client-secret", declared)...)
+	if err != nil || out != "App "+app+" on record, proven by client_credentials using "+declared+": its consent on "+gitlab+"'s authorize page with callback "+callback+" is answered by the hook\n" {
 		t.Fatalf("app allow --gitlab = %q, %v", out, err)
 	}
-	if out, _ := runApp(t, a, "list"); !strings.Contains(out, app+"  GitLab "+gitlab+"  client id "+uid+"  callbacks "+callback+"  declared in "+declared+"  since ") {
+	if out, _ := runApp(t, a, "list"); !strings.Contains(out, app+"  GitLab "+gitlab+"  client id "+uid+"  callbacks "+callback+"  proven by client_credentials using "+declared+"  since ") {
 		t.Errorf("list = %q", out)
+	}
+	events, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == appAllowed })
+	if err != nil || len(events) != 1 || !strings.Contains(events[0].Detail, "proven by client_credentials using "+declared) {
+		t.Fatalf("missing ownership proof in ledger: %v", err)
+	}
+	if strings.Contains(events[0].Detail, "planted-client-secret") || strings.Contains(events[0].Detail, "planted-access-token") {
+		t.Fatal("ledger contains credentials")
 	}
 	authorize := "https://" + gitlab + "/oauth/authorize?client_id=" + uid + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&scope=api"
 	title := "Authorize " + app + " to use your account? · GitLab"
@@ -784,4 +811,80 @@ func TestAppAllowKeepsGrants(t *testing.T) {
 		t.Errorf("app.revoke events = %+v, want one per grant", evs)
 	}
 	check(checkRefuse, permissionsPage, navigateFlag)
+}
+
+type gitlabRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f gitlabRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGitLabProofFailures(t *testing.T) {
+	old := gitlabProofClient
+	t.Cleanup(func() { gitlabProofClient = old })
+	for _, tc := range []struct {
+		name         string
+		status       int
+		body, reason string
+	}{
+		{"invalid secret", 401, `{"error":"invalid_client","error_description":"sensitive-secret"}`, "invalid_client"},
+		{"unsupported grant", 400, `{"error":"unsupported_grant_type"}`, "unsupported_grant_type"},
+		{"echoed error", 400, `{"error":"sensitive-secret"}`, "token grant rejected"},
+		{"missing token", 200, `{}`, "no valid access token"},
+		{"malformed response", 200, `sensitive-secret`, "no valid access token"},
+		{"redirect", 302, `{}`, "HTTP 302"},
+		{"server failure", 500, `sensitive-secret`, "HTTP 500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gitlabProofClient = &http.Client{Transport: gitlabRoundTrip(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+			})}
+			err := proveGitLabClient(context.Background(), "gitlab.example.org", "id", "sensitive-secret")
+			if err == nil || !strings.Contains(err.Error(), tc.reason) || strings.Contains(err.Error(), "sensitive-secret") {
+				t.Fatalf("unsafe or missing refusal: %v", err)
+			}
+		})
+	}
+	gitlabProofClient = &http.Client{Transport: gitlabRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("sensitive-secret") })}
+	if err := proveGitLabClient(context.Background(), "gitlab.example.org", "id", "sensitive-secret"); err == nil || strings.Contains(err.Error(), "sensitive-secret") {
+		t.Fatalf("unsafe transport error: %v", err)
+	}
+	if err := old.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+		t.Fatal("proof client follows redirects")
+	}
+}
+
+func TestAppCreateClickBelongsToCallingSession(t *testing.T) {
+	a, _ := stubApp(t)
+	a.cfgPath = filepath.Join(a.cfg.StateDir, "config.yaml")
+	original := listenerUp
+	t.Cleanup(func() { listenerUp = original })
+	// The hook cannot dial the listener in the command's network namespace.
+	listenerUp = func(state.AppRun) bool { return false }
+	const caller = "session-a"
+	for _, tc := range []struct {
+		name, owner, caller string
+		pid                 int
+		running, allow      bool
+	}{
+		{"own live run", caller, caller, os.Getpid(), true, true},
+		{"other session", "session-b", caller, os.Getpid(), true, false},
+		{"no run", caller, caller, os.Getpid(), false, false},
+		{"dead run", caller, caller, -1, true, false},
+		{"missing session", "", "", os.Getpid(), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.AppRuns = nil
+				if tc.running {
+					st.AppRuns = []state.AppRun{{Name: "example-app", Org: "example-org", PID: tc.pid, By: state.Party{Session: tc.owner}}}
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			d := guard.Click(a.allowedAppsForSession(tc.caller), guard.Page{URL: "https://github.com/organizations/example-org/settings/apps/manifest"}, "Clicks Create GitHub App")
+			if got := d.Decision == guard.Allow; got != tc.allow {
+				t.Fatalf("decision = %+v, want allow %v", d, tc.allow)
+			}
+		})
+	}
 }

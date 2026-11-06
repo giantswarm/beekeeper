@@ -41,7 +41,11 @@ func (a *app) boardClient() *board.Client {
 			return out, err
 		}
 	}
-	return &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	cl := &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	if a.store != nil {
+		cl.CacheDir = a.store.Dir()
+	}
+	return cl
 }
 
 func (a *app) boardCmd() *cobra.Command {
@@ -50,7 +54,9 @@ func (a *app) boardCmd() *cobra.Command {
 		Short: "Pick the next item of work from the project board, move items",
 		Long: `The project board of board.owner and board.project, the items of board.team.
 next applies the configured order (board.order) to the board's open items
-and the roster and prints the first free item with why it is picked; move
+and the roster and prints the first free item with why it is picked; add
+puts an issue on the board with Team, Status and Kind; show reads an issue's
+board fields without reading the whole board; move
 sets an item's Status by the board's canonical names; rank (or order) sets
 an item's position on the board, which is the order next reads the items of
 each step in; block and unblock record and remove a hold on an item, a GitHub
@@ -58,7 +64,7 @@ blocked-by dependency on another issue, which next reads; tidy moves closed
 items to Done and archives them after board.archiveAfter, which the supervisor
 loop runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
+	c.AddCommand(a.boardFieldsCmd(true), a.boardFieldsCmd(false), a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
 }
 
@@ -121,7 +127,8 @@ each of its --ref while it is open (note add --holds), skipped as "held:
 decision #<n> for <person> until it closes"; a priority is a board move or a
 board reorder (board rank / board order). A held item,
 one with an open recorded blocker, is skipped as "held: blocked by
-<owner/repo#n>; 1 of 1 blockers open"; a held epic is never offered through
+<owner/repo#n>; 1 of 1 blockers open". Linked open pull requests are named
+with "(draft)" or "(unmerged)" in the hold reason. A held epic is never offered through
 its sub-issues, and every issue under it is skipped as "held: sub-issue of
 <epic>, blocked by …". A task names
 an issue or pull request by its URL, as owner/repo#n, as repo#n of
@@ -245,6 +252,9 @@ alone, until exit 3 says none is left.`,
 				gone:  func(ag state.Agent) bool { return agyQuotaError(a.cfg, ag) != nil },
 				works: servingWork(st, sessions, a.sessionWorks(sessions), a.now.Add(-a.cfg.Overlaps.ActiveWithin.Duration))}
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
+				return err
+			}
+			if sc.prReferences, err = sessionPRReferences(cmd.Context(), cl.GH, st, sessions, me); err != nil {
 				return err
 			}
 			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
@@ -411,7 +421,8 @@ func servedOpen(ctx context.Context, cl *board.Client, store state.Store, me sta
 	}
 	asked := map[string]bool{}
 	for _, r := range st.Records {
-		if !r.Session.Is(me) || !r.Ended.IsZero() {
+		// A repository or free text has no state to ask about: it stays open.
+		if !r.Session.Is(me) || !r.Ended.IsZero() || !issueRef.MatchString(r.Issue) {
 			continue
 		}
 		if asked[strings.ToLower(r.Issue)], err = cl.Open(ctx, r.Issue); err != nil {
@@ -485,13 +496,14 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 // task or note names belongs to, and what the running sessions work on
 // (servingWork).
 type pickScope struct {
-	me     state.Party
-	alive  func(state.Party) bool
-	gone   func(state.Agent) bool
-	listed time.Time
-	closes map[string][]string
-	owner  string
-	works  []sessionWork
+	me           state.Party
+	alive        func(state.Party) bool
+	gone         func(state.Agent) bool
+	listed       time.Time
+	closes       map[string][]string
+	prReferences map[string]string
+	owner        string
+	works        []sessionWork
 }
 
 // sessionWork is the issues and pull requests a running session works on
@@ -582,7 +594,7 @@ const (
 // turns it away.
 func skipKind(reason string) string {
 	switch {
-	case strings.HasPrefix(reason, "served by "):
+	case strings.HasPrefix(reason, "served by "), strings.HasPrefix(reason, "referenced by open PR "):
 		return kindServed
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
@@ -661,7 +673,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		}
 		c.Skip = cmp.Or(incidentStartReason(st, sc.listed, c.Ref), heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
-			c.Skip = owned(c.Ref)
+			c.Skip = cmp.Or(owned(c.Ref), sc.prReferences[strings.ToLower(c.Ref)])
 		}
 		if c.Skip == "" && c.Epic != "" {
 			if o := owned(c.Epic); o != "" {

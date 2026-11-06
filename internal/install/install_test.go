@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -20,7 +21,13 @@ import (
 )
 
 // reload is the fake service manager's reload command.
-const reload = "reload"
+const (
+	reload  = "reload"
+	start   = "start"
+	stop    = "stop"
+	halt    = "halt"
+	restart = "restart"
+)
 
 const replacementExe = "/new/bin/beekeeper"
 
@@ -28,8 +35,12 @@ const replacementExe = "/new/bin/beekeeper"
 // home's unit directory and a guard file beside it.
 type fakeSetup struct {
 	started bool
+	enabled bool
+	running bool
 	ran     []string
 }
+
+const installBash = "Bash"
 
 func (*fakeSetup) Available() bool { return true }
 
@@ -46,19 +57,26 @@ func (*fakeSetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
 }
 
 func (f *fakeSetup) Started(context.Context, string) bool { return f.started }
-func (*fakeSetup) Reload() []string                       { return []string{reload} }
-func (*fakeSetup) Start(p string) []string                { return []string{"start", filepath.Base(p)} }
-func (*fakeSetup) Stop(p string) []string                 { return []string{"stop", filepath.Base(p)} }
-func (*fakeSetup) Halt(p string) []string                 { return []string{"halt", filepath.Base(p)} }
-func (*fakeSetup) Restart(p string) [][]string            { return [][]string{{"restart", filepath.Base(p)}} }
+func (f *fakeSetup) NeedsStop(context.Context, string) bool {
+	return f.started || f.enabled || f.running
+}
+func (*fakeSetup) Reload() []string            { return []string{reload} }
+func (*fakeSetup) Start(p string) []string     { return []string{start, filepath.Base(p)} }
+func (*fakeSetup) Stop(p string) []string      { return []string{stop, filepath.Base(p)} }
+func (*fakeSetup) Halt(p string) []string      { return []string{halt, filepath.Base(p)} }
+func (*fakeSetup) Restart(p string) [][]string { return [][]string{{restart, filepath.Base(p)}} }
 
 func (f *fakeSetup) run(_ context.Context, argv []string) error {
 	f.ran = append(f.ran, strings.Join(argv, " "))
 	switch argv[0] {
-	case "start":
+	case start:
 		f.started = true
-	case "stop", "halt":
+	case stop, halt:
 		f.started = false
+		f.running = false
+		if argv[0] == stop {
+			f.enabled = false
+		}
 	}
 	return nil
 }
@@ -205,6 +223,67 @@ func TestInstallTwiceThenUninstallRestores(t *testing.T) {
 	}
 	if exists(e.manifest()) {
 		t.Errorf("uninstall left the manifest")
+	}
+}
+
+func TestUninstallPreservesLinkedClaudeSettings(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		name := "absolute"
+		if relative {
+			name = "relative"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(home, "dotfiles", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(e.Settings, target); err != nil {
+				t.Fatal(err)
+			}
+			link := target
+			if relative {
+				var err error
+				link, err = filepath.Rel(filepath.Dir(e.Settings), target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(link, e.Settings); err != nil {
+				t.Fatal(err)
+			}
+			before := tree(t, home)
+			e.DryRun = true
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(before, tree(t, home)) {
+				t.Fatal("dry run changed files")
+			}
+			e.DryRun = false
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := os.Readlink(e.Settings); err != nil || got != link {
+				t.Errorf("settings link = %q, %v; want %q", got, err, link)
+			}
+			raw, err := os.ReadFile(filepath.Clean(target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &settings); err != nil {
+				t.Fatal(err)
+			}
+			if settings == nil || len(settings) != 0 {
+				t.Errorf("target settings = %s; want an empty object", raw)
+			}
+		})
 	}
 }
 
@@ -986,7 +1065,7 @@ func TestAgyHooksUnguarded(t *testing.T) {
 }
 
 func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
-	for _, exe := range []string{"/opt/plain/beekeeper", "/opt/desk tools/beekeeper", "/opt/desk's tools/beekeeper"} {
+	for _, exe := range []string{"/opt/plain/beekeeper", "/opt/desk tools/beekeeper", hookMatchQuotedExe} {
 		t.Run(exe, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "hooks.json")
 			raw := AgyHook(exe)
@@ -997,7 +1076,7 @@ func TestAgyGuardMatcherAndQuotedPaths(t *testing.T) {
 			if got := CheckAgyHooks(path, "", ""); got != "" {
 				t.Fatalf("install-generated hooks refused by doctor: %s", got)
 			}
-			for _, matcher := range []string{"Read", "Bash", ""} {
+			for _, matcher := range []string{"Read", installBash, ""} {
 				restricted := strings.Replace(string(raw), `"matcher":"*"`, `"matcher":"`+matcher+`"`, 1)
 				write(t, path, `{"beekeeper": `+restricted+`}`)
 				if got := AgyHooksUnguarded(path); got == "" {
@@ -1024,6 +1103,68 @@ const priorAgySkills = `{
   ]
 }
 `
+
+// A shared skill name does not identify the collection as Beekeeper's.
+func TestAgyInstallKeepsUnrelatedWorkerRulesEntry(t *testing.T) {
+	for _, filtered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("filtered=%t", filtered), func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.AgySkills = filepath.Join(home, ".gemini", "config", "skills.json")
+			skillPath := filepath.Join(home, "custom-skills", "worker-rules", "SKILL.md")
+			const content = "# Worker rules\nSynthetic custom instructions.\n"
+			write(t, skillPath, content)
+			entry := json.RawMessage(`{"path":"~/custom-skills"}`)
+			if filtered {
+				entry = json.RawMessage(`{"path":"~/custom-skills","exclude":["experimental-.*"]}`)
+			}
+			write(t, e.AgySkills, `{"entries":[`+string(entry)+`]}`)
+			if got := CheckAgySkills(e.AgySkills, e.StateDir, home); !strings.Contains(got, "lacks the beekeeper skills entry") {
+				t.Errorf("before install: CheckAgySkills = %q", got)
+			}
+			var installed []byte
+			for i := 0; i < 2; i++ {
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(e.AgySkills)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					Entries []json.RawMessage `json:"entries"`
+				}
+				if err := json.Unmarshal(raw, &config); err != nil {
+					t.Fatal(err)
+				}
+				if len(config.Entries) != 2 || !sameJSON(config.Entries[0], entry) || !sameJSON(config.Entries[1], AgySkillsEntry(AgySkillsDir(e.StateDir))) {
+					t.Fatalf("install changed unrelated entry or omitted beekeeper collection: %s", raw)
+				}
+				if i > 0 && string(raw) != string(installed) {
+					t.Fatal("second install changed skills.json")
+				}
+				installed = raw
+				if got := CheckAgySkills(e.AgySkills, e.StateDir, home); got != "" {
+					t.Fatalf("after install: CheckAgySkills = %q", got)
+				}
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(e.AgySkills)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameJSON(raw, json.RawMessage(`{"entries":[`+string(entry)+`]}`)) {
+				t.Fatalf("uninstall changed unrelated entry: %s", raw)
+			}
+			if raw, err := os.ReadFile(skillPath); err != nil || string(raw) != content { //nolint:gosec // a path of this test
+				t.Fatalf("custom skill changed: %q, %v", raw, err)
+			}
+		})
+	}
+}
 
 // Install writes the embedded skills and registers their directory in agy's
 // skills.json idempotently without touching other entries or inherits;
@@ -1164,6 +1305,130 @@ const priorCodexHooks = `{
 }
 `
 
+func TestCodexHookUpgradeUpdatesWorker(t *testing.T) {
+	for _, preexisting := range []bool{false, true} {
+		name := "created files"
+		if preexisting {
+			name = "existing files with unrelated hooks"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+			paths := []string{e.CodexHooks, CodexWorkerHooks(e.StateDir)}
+			if preexisting {
+				for _, path := range paths {
+					write(t, path, priorCodexHooks)
+				}
+			}
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			e.Exe, e.Spec.Exe = replacementExe, replacementExe
+			for i := 0; i < 2; i++ {
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range paths {
+					if got := CheckCodexHooks(path, e.Exe, home); got != "" {
+						t.Errorf("install %d: %s: %s", i, path, got)
+					}
+					s, err := readSettings(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					list, err := s.hooks("PreToolUse")
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantLen := 1
+					if preexisting {
+						wantLen = 2
+					}
+					if len(list) != wantLen || !sameJSON(list[len(list)-1], CodexHook(e.Exe)) {
+						t.Errorf("install %d: %s: hooks = %s", i, path, list)
+					}
+				}
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range paths {
+				raw, err := os.ReadFile(path) //nolint:gosec // a path of this test
+				if preexisting {
+					if err != nil || string(raw) != priorCodexHooks {
+						t.Errorf("uninstall: %s = %s (%v), want original hooks", path, raw, err)
+					}
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("uninstall: %s remains (%v): %s", path, err, raw)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexUninstallKeepsRepointedLinks(t *testing.T) {
+	for _, dangling := range []bool{false, true} {
+		t.Run(map[bool]string{false: "existing targets", true: "dangling targets"}[dangling], func(t *testing.T) {
+			home := t.TempDir()
+			f := &fakeSetup{}
+			e, _ := env(t, home, f, f.run)
+			e.CodexSkills = filepath.Join(home, ".codex", "skills")
+			userAgentsMD := filepath.Join(home, ".codex", "AGENTS.md")
+			write(t, userAgentsMD, "# User rules\n")
+			if err := Install(context.Background(), e); err != nil {
+				t.Fatal(err)
+			}
+			unchanged := filepath.Join(e.CodexSkills, "guide")
+			if _, err := os.Readlink(unchanged); err != nil {
+				t.Fatal(err)
+			}
+			links := []string{
+				filepath.Join(e.CodexSkills, "park"),
+				CodexWorkerSkills(e.StateDir),
+				filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"),
+			}
+			targets := make(map[string]string)
+			for i, link := range links {
+				target := filepath.Join(home, "custom", filepath.Base(link))
+				if !dangling {
+					write(t, target, "custom content\n")
+				}
+				if _, err := os.Readlink(link); err != nil {
+					t.Fatalf("installed link %d: %v", i, err)
+				}
+				if err := os.Remove(link); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				targets[link] = target
+			}
+			if err := Uninstall(context.Background(), e, false); err != nil {
+				t.Fatal(err)
+			}
+			for link, target := range targets {
+				if got, err := os.Readlink(link); err != nil || got != target {
+					t.Errorf("changed link %s = %q, %v; want %q", link, got, err, target)
+				}
+				if !dangling {
+					if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != "custom content\n" {
+						t.Errorf("custom target changed: %q, %v", got, err)
+					}
+				}
+			}
+			if _, err := os.Lstat(unchanged); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("unchanged skill link remains: %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Clean(userAgentsMD)); err != nil || string(got) != "# User rules\n" {
+				t.Errorf("user rules changed: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestCodexHooksAndSkills(t *testing.T) {
 	home := t.TempDir()
 	f := &fakeSetup{}
@@ -1252,8 +1517,8 @@ func TestCodexHooksAndSkills(t *testing.T) {
 		t.Errorf("after update: CheckCodexHooks = %q, want empty", got)
 	}
 
-	// Stale "*" matcher or narrowed "Bash" matcher is flagged by CheckCodexHooks and fixed by Install.
-	for _, badMatcher := range []string{"*", "Bash"} {
+	// Stale "*" matcher or narrowed installBash matcher is flagged by CheckCodexHooks and fixed by Install.
+	for _, badMatcher := range []string{"*", installBash} {
 		write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[{"matcher":"`+badMatcher+`","hooks":[{"type":"command","command":"`+updatedExe+` hook pretooluse --format codex","timeout":30}]}]}}`)
 		if got := CheckCodexHooks(e.CodexHooks, e.Exe, home); !strings.Contains(got, "differs from what install writes") {
 			t.Errorf("matcher %q: CheckCodexHooks = %q, want differs from what install writes", badMatcher, got)
@@ -1359,6 +1624,21 @@ func TestInstallDefersOnlyRefusedRestart(t *testing.T) {
 	if !strings.Contains(out.String(), "restart deferred") {
 		t.Fatal("refusal was not reported")
 	}
+	e.BeforeRestart, f.ran = nil, nil
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"restart beekeeper-sandbox.service"}
+	if !slices.Equal(f.ran, want) {
+		t.Fatalf("retry commands = %v, want only the refused service: %v", f.ran, want)
+	}
+	f.ran = nil
+	if err := Install(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.ran) != 0 {
+		t.Fatalf("completed refusal recovery repeated commands: %v", f.ran)
+	}
 }
 
 func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
@@ -1382,5 +1662,251 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 	}
 	if !prepared || !revoked {
 		t.Fatal("failed restart left its prepared state")
+	}
+}
+
+// timerOnlySetup models a supervised service becoming a timer-triggered oneshot.
+type timerOnlySetup struct{ *fakeSetup }
+
+func (f timerOnlySetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
+	return []platform.File{{Path: filepath.Join(s.ConfigDir, "units", "bot.service"), Content: []byte("oneshot")}}, nil
+}
+
+func TestTeleportServiceBecomesTimerTriggered(t *testing.T) {
+	f := &fakeSetup{started: true}
+	e, _ := env(t, t.TempDir(), f, f.run)
+	e.Setup = timerOnlySetup{f}
+	path := filepath.Join(e.Spec.ConfigDir, "units", "bot.service")
+	write(t, path, "bot service")
+	m := Manifest{Services: []string{path}, Files: map[string]string{path: sum([]byte("bot service"))}}
+	p := &plan{}
+	e.planSetup(context.Background(), p, &m)
+	if err := p.run(e.Out, false); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.ran, []string{"stop bot.service", reload}) {
+		t.Fatalf("commands: %v", f.ran)
+	}
+	if slices.Contains(m.Services, path) {
+		t.Fatal("oneshot remains enabled as a standalone service")
+	}
+}
+
+func TestUninstallStopsPartiallyStartedServices(t *testing.T) {
+	for _, state := range []struct {
+		name             string
+		enabled, running bool
+	}{
+		{"enabled inactive", true, false},
+		{"disabled running", false, true},
+		{"disabled inactive", false, false},
+	} {
+		for _, linked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/linked=%v", state.name, linked), func(t *testing.T) {
+				f := &fakeSetup{}
+				e, _ := env(t, t.TempDir(), f, f.run)
+				if err := Install(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+				unit := filepath.Join(e.Spec.ConfigDir, "units", "notify.service")
+				target := filepath.Join(e.Spec.Home, "linked.service")
+				if linked {
+					if err := os.Rename(unit, target); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, unit); err != nil {
+						t.Fatal(err)
+					}
+				}
+				f.started, f.enabled, f.running = false, state.enabled, state.running
+				f.ran = nil
+				e.DryRun = true
+				if err := Uninstall(context.Background(), e, false); err != nil {
+					t.Fatal(err)
+				}
+				if len(f.ran) != 0 || !exists(unit) || !exists(e.manifest()) {
+					t.Fatal("dry run changed installation")
+				}
+				e.DryRun = false
+				if err := Uninstall(context.Background(), e, false); err != nil {
+					t.Fatal(err)
+				}
+				want := []string{reload}
+				if state.enabled || state.running {
+					verb := stop
+					if linked {
+						verb = halt
+					}
+					want = append([]string{verb + " notify.service"}, want...)
+				}
+				if !slices.Equal(f.ran, want) {
+					t.Errorf("commands = %v, want %v", f.ran, want)
+				}
+				if f.running || (!linked && f.enabled) {
+					t.Error("service state left behind")
+				}
+				if exists(e.manifest()) {
+					t.Error("manifest left behind")
+				}
+				if linked {
+					if _, err := os.Readlink(unit); err != nil {
+						t.Errorf("link removed: %v", err)
+					}
+					if exists(target) {
+						t.Error("owned target left behind")
+					}
+				} else if exists(unit) {
+					t.Error("owned unit left behind")
+				}
+			})
+		}
+	}
+}
+
+func TestCodexRepairsQuotedHook(t *testing.T) {
+	for _, exe := range []string{"/opt/desk tools/beekeeper", hookMatchQuotedExe} {
+		for _, format := range []string{"--format codex", "--format=codex"} {
+			t.Run(exe+"/"+format, func(t *testing.T) {
+				home := t.TempDir()
+				f := &fakeSetup{}
+				e, _ := env(t, home, f, f.run)
+				e.Exe = exe
+				e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+				var entry hookEntry
+				if err := json.Unmarshal(CodexHook(exe), &entry); err != nil {
+					t.Fatal(err)
+				}
+				entry.Matcher = installBash
+				entry.Hooks[0].Command = shellQuote(exe) + " hook pretooluse " + format
+				raw, err := json.Marshal(entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(t, e.CodexHooks, `{"hooks":{"PreToolUse":[`+string(raw)+`]}}`)
+				if got := CheckCodexHooks(e.CodexHooks, "", home); !strings.Contains(got, "differs from what install writes") {
+					t.Fatalf("before repair: %q", got)
+				}
+				for range 2 {
+					if err := Install(context.Background(), e); err != nil {
+						t.Fatal(err)
+					}
+					s, err := readSettings(e.CodexHooks)
+					if err != nil {
+						t.Fatal(err)
+					}
+					list, err := s.hooks("PreToolUse")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(list) != 1 || !sameJSON(list[0], CodexHook(exe)) {
+						t.Fatalf("repair produced %s, want one generated hook", list)
+					}
+					for _, diagnosticExe := range []string{"", exe} {
+						if got := CheckCodexHooks(e.CodexHooks, diagnosticExe, home); got != "" {
+							t.Errorf("after repair: %s", got)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCodexHookBinaryRejectsShellExpressions(t *testing.T) {
+	for _, command := range []string{
+		"$HOME/beekeeper hook pretooluse --format codex",
+		"$(echo beekeeper) hook pretooluse --format codex",
+		"/opt/bin/beekeeper; other hook pretooluse --format codex",
+		"'unterminated hook pretooluse --format codex",
+		"/opt/bin/beekeeper hook pretooluse --format codex; other",
+	} {
+		raw, err := json.Marshal(hookEntry{Matcher: ".*", Hooks: []hookCommand{{Type: hookTypeCommand, Command: command, Timeout: 30}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bin, _, _ := codexHookBinary(raw); bin != "" {
+			t.Errorf("recognized shell expression %q as %q", command, bin)
+		}
+	}
+}
+
+// A failed replacement must retain both the old and proposed ownership,
+// including when some earlier replacements have already succeeded.
+func TestInstallRetainsOwnershipAfterFailedWrite(t *testing.T) {
+	for _, failure := range []string{"settings", "unit"} {
+		for _, recovery := range []string{"retry", "uninstall"} {
+			t.Run(failure+"/"+recovery, func(t *testing.T) {
+				home := t.TempDir()
+				setup := &fakeSetup{}
+				e, _ := env(t, home, setup, setup.run)
+				e.AgyHooks = filepath.Join(home, ".gemini", "config", "hooks.json")
+				e.CodexHooks = filepath.Join(home, ".codex", "hooks.json")
+				ctx := context.Background()
+				if err := Install(ctx, e); err != nil {
+					t.Fatal(err)
+				}
+				unit := filepath.Join(e.Spec.ConfigDir, "units", "notify.service")
+				blocked := filepath.Dir(e.Settings)
+				if failure == "unit" {
+					blocked = filepath.Dir(unit)
+				}
+				if err := os.Chmod(blocked, 0o500); err != nil { //nolint:gosec // read-only on purpose
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(blocked, 0o750) }) //nolint:gosec // the test's own directory
+				probe, err := os.CreateTemp(blocked, "permission-probe")
+				if err == nil {
+					_ = probe.Close()
+					_ = os.Remove(probe.Name())
+					t.Skip("directory permissions do not prevent writes")
+				}
+				for _, exe := range []string{replacementExe, "/next/bin/beekeeper"} {
+					e.Exe, e.Spec.Exe = exe, exe
+					if err := Install(ctx, e); err == nil {
+						t.Fatal("upgrade unexpectedly succeeded")
+					}
+				}
+				m, err := readManifest(e.manifest())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(m.Previous) == 0 {
+					t.Fatal("failed install discarded previous ownership")
+				}
+				if err := os.Chmod(blocked, 0o750); err != nil { //nolint:gosec // the test's own directory
+					t.Fatal(err)
+				}
+				paths := []string{e.Settings, e.AgyHooks, e.CodexHooks, CodexWorkerHooks(e.StateDir), unit}
+				if recovery == "retry" {
+					if err := Install(ctx, e); err != nil {
+						t.Fatal(err)
+					}
+					for _, path := range paths {
+						raw, err := os.ReadFile(filepath.Clean(path))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !bytes.Contains(raw, []byte(e.Exe)) || bytes.Contains(raw, []byte("/opt/bin/beekeeper")) || bytes.Contains(raw, []byte(replacementExe)) {
+							t.Errorf("%s did not replace previous hooks or unit: %s", path, raw)
+						}
+					}
+					m, err = readManifest(e.manifest())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(m.Previous) != 0 {
+						t.Fatal("successful install retained previous ownership")
+					}
+				}
+				if err := Uninstall(ctx, e, false); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range append(paths, e.manifest()) {
+					if exists(path) {
+						t.Errorf("uninstall left %s behind", path)
+					}
+				}
+			})
+		}
 	}
 }

@@ -17,15 +17,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/envtestassets"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -72,13 +75,15 @@ func (a *app) slotView() (dir string, n int) {
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag, classFlag, timeoutFlag string
-	var localFlag bool
+	var localFlag, coreFlag bool
 	c := &cobra.Command{
 		Use:   "run [--local] [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
 transient systemd user scope in the slot's slice under memcap.slice, both
 with MemoryMax=SIZE and MemorySwapMax=0, the scope with OOMPolicy=continue.
+Local commands disable both core dump limits before starting, including through
+the sandbox broker. --core preserves the session limits and runs locally.
 With run.remote.enabled, eligible Go and Cargo builds first try a reusable
 builder Job in the configured cluster. --local keeps worktree-writing commands
 local; formatters and compound shell commands stay local automatically. Setup
@@ -106,7 +111,9 @@ A launcher whose scope becomes empty is stopped and releases its slot;
 when the scope never starts, a 30s startup grace applies. A memory-short waiter yields its queue
 position only when its turn reaches a free slot. While builds occupy the
 slots, waiters keep FIFO order. The host watch also recovers expired, empty
-slot holders after checking their lifecycle and process identity. The run exits 1
+slot holders after checking their lifecycle and process identity. Once cache setup
+finishes, holder recovery uses the 30s startup grace independently of --wait
+and does not require a run.start event. The run exits 1
 and reports the empty scope. Queue diagnostics also name an empty holder
 scope. Scope read errors leave the command running.
 Bound the command's parallelism rather than raising --max.
@@ -133,8 +140,16 @@ out exits 75, states the wait it applied and names each slot's holder (its
 session, its process, since when and for how long, its command): run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
-exports MEMCAP_BACKGROUND=1 into every background call, so a run reached
-directly, after a cd or export chain or through a script gets the 60m.
+exports MEMCAP_BACKGROUND=1 only for a detected beekeeper run, directly,
+after a cd or export chain, or in a readable shell wrapper. A wrapper
+that cannot be detected needs an explicit --wait 60m.
+
+A shell command containing recognized builds and output commands runs
+without a slot: each build acquires its own slot only when it starts and
+releases it when it ends, even if the shell keeps waiting or tailing.
+Gate-owned devctl waits and merges run through beekeeper gate without a
+build slot. Unknown shell programs retain the whole-command cap; an explicit
+--class also retains the declared cap.
 
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
@@ -164,6 +179,11 @@ after the command: the go command's work directories (go-build*) and a
 test's files stay out of the tmpfs /tmp, whose files take RAM. A caller's
 GOTMPDIR or TMPDIR off tmpfs wins, so a nested run keeps its outer run's
 directory. The disk step reclaims unused leftovers unchanged for an hour (disk.prune).
+
+A run gives the command a scratch KUBECONFIG and removes it afterward, so
+builds and tests using client-go's default loading rules cannot rewrite the
+machine kubeconfig. A nonempty inherited KUBECONFIG or an assignment in the
+command wins. Commands needing a cluster must name its kubeconfig explicitly.
 
 Every capped run leaves a run.start and a run.end event in beekeeper log,
 naming the scope, the session and the command, so that a cap kill found
@@ -210,7 +230,7 @@ machine's files stay untouched.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
-				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
+				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight, Core: coreFlag,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
 				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache"),
 				Tail: a.runTail(), TailDir: a.runTailsDir(), Redact: a.redactOutput}
@@ -252,6 +272,21 @@ machine's files stay untouched.`,
 				return usageErr("%v", err)
 			}
 			if !f.Changed("class") {
+				// The shell stays slotless; only the nested heavy processes queue.
+				// Forward explicit flags so splitting retains resource overrides.
+				exe, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				runPrefix := []string{exe, workerGitHubRunGroup}
+				f.Visit(func(flag *pflag.Flag) {
+					runPrefix = append(runPrefix, "--"+flag.Name+"="+flag.Value.String())
+				})
+				runPrefix = append(runPrefix, "--")
+				if planned, reason := guard.ProcessRun(args, runPrefix, []string{exe, "gate", "--"}); planned != nil {
+					fmt.Fprintln(os.Stderr, guard.LogPrefix+reason)
+					return &exitError{code: guard.Exec(planned, os.Stderr)}
+				}
 				if guard.BuildsNothing(args) {
 					return &exitError{code: guard.Exec(args, os.Stderr)}
 				}
@@ -261,7 +296,7 @@ machine's files stay untouched.`,
 			o.Repo, o.Head = repo, commit
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
-			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && !f.Changed("timeout") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+			if !localFlag && !coreFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && !f.Changed("timeout") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
 				head := guard.CommandHead(args)
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
 					Record: a.runRecorder(), Name: head, Repo: repo, Head: commit,
@@ -273,6 +308,13 @@ machine's files stay untouched.`,
 					return nil
 				}
 			}
+			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
+			if err != nil {
+				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
+			}
+			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				return err
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -282,6 +324,7 @@ machine's files stay untouched.`,
 	}
 	c.Flags().SetInterspersed(false)
 	c.Flags().StringVar(&timeoutFlag, "timeout", "", "execution deadline after queueing (default 5m for lint, 30m for builds; lab and benchmark have none)")
+	c.Flags().BoolVar(&coreFlag, "core", false, "preserve the session core dump limits (disabled by default)")
 	c.Flags().BoolVar(&localFlag, "local", false, "run in the local slot even when run.remote is enabled")
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
@@ -374,6 +417,49 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(a.relayHookCmd())
+	c.AddCommand(&cobra.Command{
+		Use:   "check-scope",
+		Short: "Verify a proof event has a session ID and is in the hook's scope",
+		Long: `Read the proof's hook event from stdin, using the same configuration,
+state and environment as the hook invocation. Use a real session ID from
+beekeeper sessions (or the current harness session), never an invented ID.
+An out-of-scope event fails instead of silently passing through the hook.
+This checks scope, not whether the session is currently alive.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return err
+			}
+			var ev struct {
+				Session string `json:"session_id"`
+			}
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				return fmt.Errorf("invalid proof event: %w", err)
+			}
+			if strings.TrimSpace(ev.Session) == "" && strings.TrimSpace(guard.AgySession(raw)) == "" && strings.TrimSpace(guard.CodexSession(raw)) == "" {
+				return fmt.Errorf("proof requires a real in-scope session ID; obtain one from beekeeper sessions or the current harness session")
+			}
+			// Proofs must not mistake the hook's fail-open scope fallback
+			// for evidence that a session belongs to the configured scope.
+			if err := a.loadConfig(); err != nil {
+				return err
+			}
+			store, err := state.Open(a.cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			if _, err := store.Peek(); err != nil {
+				return err
+			}
+			if !a.inScope(raw) {
+				return fmt.Errorf("proof event is out of scope: use a real in-scope session ID and its working directory with the same configuration and state as the hook")
+			}
+			_, err = fmt.Fprintln(a.out, "proof event is in scope")
+			return err
+		},
+	})
 	var formatFlag string
 	preCmd := &cobra.Command{
 		Use:   "pretooluse",
@@ -385,8 +471,10 @@ raised to 10 minutes; a background run gets a 60-minute wait instead. A
 command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
-machine kubeconfig. A configuration that does not load refuses every Bash
-call, naming the error.
+machine kubeconfig. A configuration that does not load enables recovery mode:
+literal read-only inspection and beekeeper commands (including config set and
+self-update) still run, with the configuration error named; other Bash calls
+are refused until the file is repaired.
 A merge of a merge.devctlOwners repository is the gate's devctl pr merge
 alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
 naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
@@ -468,6 +556,11 @@ comment, or gh issue create, edit or comment, whose --body or --body-file
 names a bare #n or owner/repo#n without its full GitHub URL is refused
 naming the full URL.
 
+Admitted GraphQL shell invocations are recorded locally as github.call events,
+with the session, command class and a heavy flag for project item-list or
+--paginate. Recording makes no GitHub request; beekeeper budget and the watch
+use the records to name callers after their processes exit.
+
 A board-wide project read is refused: gh project item-list without
 --query, and a gh api graphql query over a projectV2's items without a
 narrowing query: argument. Such a read pages the whole board with its field
@@ -545,12 +638,11 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if cmd.OutOrStdout() != os.Stdout {
 				w = cmd.OutOrStdout()
 			}
+			var raw []byte
 			defer func() {
-				if recover() != nil {
+				if value := recover(); value != nil {
 					reason := "Refused: internal panic in PreToolUse check setup; failing closed. See beekeeper log (hook.panic)."
-					if a.cfg != nil {
-						a.recordGuardPanic("setup", debug.Stack())
-					}
+					a.recordGuardPanic("setup tool "+hookPanicTool(raw), panicStack(value))
 					switch {
 					case isCodex:
 						_, _ = w.Write(guard.DenyCodex(reason))
@@ -578,10 +670,18 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					_, _ = w.Write(guard.DenyCodex(reason))
 					return nil
 				}
-				if cfgErr != nil {
-					_, _ = w.Write(guard.DenyCodex("Refused: cannot load beekeeper configuration (" + cfgErr.Error() + "); failing closed."))
-					return nil
+			}
+			if cfgErr != nil {
+				h := guard.Hook{ConfigErr: cfgErr}
+				switch {
+				case isCodex:
+					_, _ = w.Write(h.DecideCodex(raw))
+				case isAgy:
+					_, _ = w.Write(h.DecideAgy(raw))
+				default:
+					_, _ = w.Write(h.Decide(raw))
 				}
+				return nil
 			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
@@ -596,8 +696,10 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				}
 				if out := guard.DecideUnsandboxed(raw); out != nil {
 					_, _ = w.Write(out)
+					return nil
 				}
-				return nil
+				// SendMessage is exempt from the sandbox requirement, but
+				// still needs the normal scope and tool checks below.
 			}
 			if !a.inScope(raw) {
 				// the sandbox holds every session, the desk's or not
@@ -615,22 +717,29 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
-			h := guard.Hook{Panic: a.recordGuardPanic, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
+			session := guard.CodexSession(raw)
+			if isAgy {
+				session = guard.AgySession(raw)
+			}
+			h := guard.Hook{Panic: func(check string, stack []byte) { a.recordGuardPanic(check+" tool "+hookPanicTool(raw), stack) }, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
 				Started: a.startedWorker,
-				Apps:    a.allowedApps, Shared: sharedUploads,
+				Apps:    func() []guard.App { return a.allowedAppsForSession(session) }, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
+				h.ReadOnlyExecQueries = a.cfg.Kube.ReadOnlyExecQueries
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
+				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
 				h.Refused = a.recordRefusal
 				h.Labs = a.heldLabs
 				h.LiveDirs = a.hookLiveDirs
+				h.WorktreeOwner = a.hookWorktreeOwner
 				if !inSandbox() {
 					h.FreshLabs = a.freshLabKubeconfigs
 				}
@@ -639,17 +748,31 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				if len(a.cfg.Projects.Worktrees) > 0 {
+					h.WorktreePlace = a.cfg.Projects.Worktrees[0]
+				}
+				h.GuardPersonalSearch = a.cfg.Hooks.GuardPersonalSearch
+				h.ProjectsDir, h.WorktreePlaces, h.HomePlaces = a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
-				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), h.DecideCodex(raw)))
+				out := h.DecideCodex(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(codex.WithInboxContext(a.cfg.StateDir, guard.CodexSession(raw), out))
 				return nil
 			}
 			if isAgy {
-				_, _ = w.Write(h.DecideAgy(raw))
+				out := h.DecideAgy(raw)
+				a.recordGitHubCalls(raw, formatFlag, out)
+				_, _ = w.Write(out)
 				return nil
 			}
-			if out := h.Decide(raw); out != nil {
+			out := h.Decide(raw)
+			if a.cfg != nil {
+				out = peer.WithInstructionContext(a.cfg.StateDir, raw, out)
+			}
+			a.recordGitHubCalls(raw, formatFlag, out)
+			if out != nil {
 				_, _ = w.Write(out)
 			}
 			return nil
@@ -657,6 +780,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 	}
 	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude, agy, or codex")
 	c.AddCommand(preCmd)
+	c.AddCommand(a.sessionWorktreeHook(false), a.sessionWorktreeHook(true))
 	c.AddCommand(&cobra.Command{
 		Use:   "posttooluse",
 		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",
@@ -680,7 +804,8 @@ patterns). beekeeper install registers it in ~/.claude/settings.json:
     "command": "~/.go/bin/beekeeper hook posttooluse", "timeout": 10}]}]`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			defer func() { _ = recover() }() // a broken hook must not break the tool's result
+			var raw []byte
+			defer a.recoverHookPanic("posttooluse", &raw)
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil || !a.inScope(raw) {
 				return nil
@@ -840,7 +965,8 @@ The timeout is above the 290 s a held request waits, so the hook, not
 Claude Code, ends the wait.`,
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			defer func() { _ = recover() }() // a broken hook gives no answer: the person's card
+			var raw []byte
+			defer a.recoverHookPanic("permissionrequest", &raw)
 			raw, err := io.ReadAll(os.Stdin)
 			if err != nil || !a.inScope(raw) {
 				return nil
@@ -1214,11 +1340,54 @@ func outboundGuard(o config.Outbound) guard.Outbound {
 	return g
 }
 
+// openPanicLog opens the event log a recovered panic goes to; a seam for the
+// tests.
+var openPanicLog = state.Open
+
 // recordGuardPanic keeps stack traces in the event log, never tool responses.
 func (a *app) recordGuardPanic(check string, stack []byte) {
-	store, err := state.Open(a.cfg.StateDir)
+	// Recording runs inside a recover: a panic here must not skip the deny.
+	defer func() { _ = recover() }()
+	if a.cfg == nil {
+		_ = a.loadConfig()
+	}
+	if a.cfg == nil {
+		return
+	}
+	store, err := openPanicLog(a.cfg.StateDir)
 	if err != nil {
 		return
 	}
+	if len(stack) > 8192 {
+		stack = stack[:8192]
+	}
 	_ = store.Log(event(state.Party{Name: "hook"}, "hook.panic", "check %s\n%s", check, stack))
+}
+
+// recoverHookPanic leaves annotation hooks without a response on failure.
+func (a *app) recoverHookPanic(hook string, raw *[]byte) {
+	if value := recover(); value != nil {
+		a.recordGuardPanic(hook+" tool "+hookPanicTool(*raw), panicStack(value))
+	}
+}
+
+func hookPanicTool(raw []byte) string {
+	var ev struct {
+		Tool     string `json:"tool_name"`
+		ToolCall struct {
+			Name string `json:"name"`
+		} `json:"toolCall"`
+	}
+	_ = json.Unmarshal(raw, &ev)
+	if ev.Tool == "" {
+		ev.Tool = ev.ToolCall.Name
+	}
+	if ev.Tool == "" {
+		return kindUnknown
+	}
+	return ev.Tool
+}
+
+func panicStack(value any) []byte {
+	return append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 }

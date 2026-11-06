@@ -128,6 +128,58 @@ func TestTheWatchDispatchesTheSinksWorkflowOnTheSelectedEvents(t *testing.T) {
 	}
 }
 
+// Cancellation releases every failed claim for a replacement watch to retry.
+func TestTheSinkReleasesFailedClaimsAfterCancellation(t *testing.T) {
+	a, _ := sinkApp(t, "sink:\n  repo: o/site\n  workflow: refresh.yaml\n  verbs: [session.serve, merged]\n")
+	w := a.newWatcher(false, true)
+	sinkPoll(w)
+	evs := []state.Event{
+		about(event(sinkParty, verbServe, "serves o/r#7"), decisionRef),
+		about(event(sinkParty, verbMerged, "merged o/r#8"), mergedRef),
+	}
+	if err := a.store.Log(evs...); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	previous := sinkGH
+	t.Cleanup(func() { sinkGH = previous })
+	var failed []string
+	sinkGH = func(ctx context.Context, args ...string) ([]byte, error) {
+		failed = append(failed, strings.Join(args, " "))
+		cancel() // shutdown interrupts the first dispatch and the rest of its batch
+		return nil, ctx.Err()
+	}
+	w.sink(ctx)
+	w.bg.Wait()
+	if len(failed) != len(evs) {
+		t.Fatalf("failed dispatches: %q, want both events", failed)
+	}
+
+	// A replacement watch reads only persisted state, with a fresh ledger.
+	other := *a
+	var err error
+	other.store, err = state.Open(a.cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := other.newWatcher(false, true)
+	var retried []string
+	sinkGH = func(_ context.Context, args ...string) ([]byte, error) {
+		retried = append(retried, strings.Join(args, " "))
+		return nil, nil
+	}
+	sinkPoll(replacement)
+	if !slices.Equal(retried, failed) {
+		t.Fatalf("replacement retried %q, want %q", retried, failed)
+	}
+	sinkPoll(replacement)
+	sinkPoll(w)
+	if !slices.Equal(retried, failed) {
+		t.Fatalf("successful retries were replayed: %q", retried)
+	}
+}
+
 // Without a sink nothing is followed, claimed or dispatched.
 func TestTheWatchDispatchesNothingWithoutASink(t *testing.T) {
 	fail := false
