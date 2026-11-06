@@ -15,14 +15,11 @@ MODULE         := $(shell go list -m)
 MAIN_SOURCE    := $(shell if test -e cmd/main.go; then echo cmd/main.go; else echo main.go; fi)
 OS             := $(shell go env GOOS)
 SOURCES        := $(shell find . -name '*.go')
-# Envtests do not stamp a version. Older gitsemver releases cannot open a
-# worktree's .git file. Fall back to local version tags; without one, leave
-# VERSION empty so shipping targets fail.
-ifneq ($(MAKECMDGOALS),test-envtest)
+# Older gitsemver releases cannot open a worktree's .git file. Fall back to
+# local version tags; without one, leave VERSION empty so shipping targets fail.
 VERSION        := $(shell if version=$$(gitsemver get 2>/dev/null) && [ -n "$$version" ]; then \
   printf '%s\n' "$$version"; \
   else git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null | sed 's/^v//'; fi)
-endif
 # Expanded first in every recipe that stamps VERSION into its output, so failed
 # lookups fail the build instead of producing an unversioned binary.
 # Targets that do not ship a version (test, lint, ...) never expand it.

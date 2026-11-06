@@ -54,6 +54,16 @@ tools-doc: ## Regenerate docs/tools.md, every tool's description and input schem
 test-loop-workflow: ## Exercise the real supervisor/parser/gate workflow with local Git and GitHub fixtures.
 	env -u BEEKEEPER_TEST_LOOP_BINARY LANG=C.UTF-8 go test -tags=integration ./internal/loopworkflow -count=1 -timeout=12m
 
+.PHONY: install-cosign-retry
+install-cosign-retry: ## Retry Rekor's conflict lookup race in the later steps of this CircleCI job.
+	bash .circleci/install-cosign-retry.sh
+
+# The generated go-build job runs make test before it signs the binaries, and
+# align owns that job: this is where the repository can reach its later steps.
+ifeq ($(CIRCLE_JOB),go-build)
+test: install-cosign-retry
+endif
+
 # The generated go-build release prerequisite invokes make test. Keep the same
 # uncached regression mandatory there, so publication cannot bypass this suite.
 test: test-loop-workflow
