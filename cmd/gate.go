@@ -386,6 +386,9 @@ func (a *app) gate(ctx context.Context, argv []string, wait, limit time.Duration
 		}
 		return exitCode(runChild(argv, os.Stdout))
 	}
+	if pr != 0 && a.cfg.Merge.Methods[repo] == mergeMethodRebase {
+		argv = merge.RequireRebase(argv)
+	}
 	me := a.gateCaller(repo, pr, argv, queued)
 	g := &gateRun{app: a, ctx: ctx, argv: argv, repo: repo, pr: pr, lane: a.cfg.LaneOf(repo), me: me, pid: os.Getpid(), cli: callerCLI(), queued: queued,
 		bin: runningBinary(), output: gateOutput()}
@@ -693,6 +696,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
 func (g *gateRun) step() (string, error) {
+	if err := g.reloadQueueConfig(); err != nil {
+		return "", err
+	}
 	g.passive = false
 	liveWait, claimed := g.waitBehindLive()
 	if liveWait != "" && claimed {
@@ -705,13 +711,16 @@ func (g *gateRun) step() (string, error) {
 		return liveWait, nil
 	}
 	if liveWait == "" {
+		if done, err := g.takeover(); done || err != nil {
+			return "", err
+		}
 		g.pollToolWindow(g.ctx, g.me)
 		// Recover an ended devctl before pruning its place as lost. A
 		// queued handoff behind a live gate only registers its new PID;
 		// its predecessor still owns these checks.
 		g.recordGone(g.ctx)
-		if why := g.checkOutside(); why != "" {
-			return why, nil
+		if why, err := g.checkOutside(); err != nil || why != "" {
+			return why, err
 		}
 	}
 	var q merge.Lane
@@ -751,6 +760,7 @@ func (g *gateRun) step() (string, error) {
 				g.me = m.By
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
+			m.Version = project.Version()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -795,6 +805,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; park until it lifts (beekeeper agents park --on %s%s \"<what>\"), merge then, do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, holdParkFlag, hold.Target)
 	case dup != nil && dup.Phase == state.Waiting:
+		if dup.By.Is(g.me) {
+			gateLine("%s reuses its existing place in lane %s (pid %d); its outcome reaches the owning session", g.key(), g.lane.Name, dup.PID)
+			return "", exitCode(ExitGateQueued)
+		}
 		why := fmt.Sprintf("%s is already queued in lane %s: since %s for %q (pid %d); its outcome reaches %q, do not merge again",
 			g.key(), g.lane.Name, clock(g.now, dup.Joined), dup.By.Name, dup.PID, dup.By.Name)
 		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
@@ -876,6 +890,37 @@ func (g *gateRun) step() (string, error) {
 		g.settleUrgent(urgent, b)
 	}
 	return why, err
+}
+
+// reloadQueueConfig lets waiting gates observe edits without replacing the
+// binary. An incomplete edit keeps the last valid settings until the next poll.
+func (g *gateRun) reloadQueueConfig() error {
+	path := cmp.Or(g.cfgPath, g.loadedCfg)
+	if path == "" {
+		return nil
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		gateLine("queue configuration could not be reloaded; keeping the last valid settings")
+		return nil
+	}
+	lane := c.LaneOf(g.repo)
+	if lane.Name != g.lane.Name {
+		if err := g.store.Update(func(st *state.State) ([]state.Event, error) {
+			if i := g.mine(st, state.Waiting); i >= 0 {
+				st.Merges[i].Lane = lane.Name
+			}
+			return nil, nil
+		}); err != nil {
+			return err
+		}
+	}
+	next := *g.cfg
+	next.Merge.Cap, next.Lanes = c.Merge.Cap, c.Lanes
+	g.cfg = &next
+	g.lane = lane
+	g.central = g.pr != 0 && g.cfg.CentralLane(lane)
+	return nil
 }
 
 // checkCandidate refuses a promotion whose turn came, its place running,
@@ -966,12 +1011,16 @@ const (
 // checkOutside settles or drops the lane's places that wait without their
 // merge and whose pull request merged or closed (checkPlaces). It returns
 // what the merge waits for when GitHub does not answer for a place that
-// heads the lane.
-func (g *gateRun) checkOutside() string {
-	if err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck); err != nil {
-		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err)
+// heads the lane, or a StaleWriterError when a newer release wrote the state.
+func (g *gateRun) checkOutside() (string, error) {
+	err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck)
+	if stale := (*state.StaleWriterError)(nil); errors.As(err, &stale) {
+		return "", stale
 	}
-	return ""
+	if err != nil {
+		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err), nil
+	}
+	return "", nil
 }
 
 // readRelease reads the pull request's release tree once before merging.
@@ -1615,8 +1664,18 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		_ = g.installTool(g.ctx, g.me, "merge.update", "before "+g.key())
 	}
 	toolFrom := ""
+	openToolWindow := g.toolMerge()
 	if g.toolMerge() {
 		toolFrom = devctlVersion(g.ctx)
+		// A merged pull request cannot publish a new release on a rerun.
+		// Keep an existing window intact, but do not open another one on
+		// the installed release. Promotions (PR zero) still need a window.
+		// If GitHub cannot answer, retain the conservative window behavior.
+		if g.pr != 0 {
+			if p, err := pullState(g.ctx, g.repo, g.pr); err == nil && p.State == github.Merged {
+				openToolWindow = false
+			}
+		}
 	}
 	why := ""
 	var settled []state.Merge
@@ -1660,13 +1719,13 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
-		m.HandCut = g.handCut()
+		m.HandCut, m.Version = g.handCut(), project.Version()
 		m.Finished, m.Exit, m.Reset = time.Time{}, 0, time.Time{}
 		ev := []state.Event{g.startEvent()}
 		if passed != "" {
 			ev[0].Detail += ", ahead of " + passed + " (not arrived)"
 		}
-		if g.toolMerge() {
+		if openToolWindow {
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == merge.AllMerges })
 			h := state.Hold{Target: merge.AllMerges, Except: merge.ToolRepo, By: g.me, At: g.now.UTC(), Tool: merge.Tool, ToolFrom: toolFrom,
 				ToolPR: g.pr, Reason: fmt.Sprintf("the devctl release window: %s runs and every new devctl run refuses from its release on until updated, so the other merges are held once its release is coming (its pull request merged, a promotion's at once); the gate runs `devctl version update` once it merged, until the release's binary verifies, and lifts this once `devctl version` reports the release, or at a release candidate, which no update installs", g.key())}
@@ -1875,7 +1934,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 		argv = squashArgv(self, g.repo, g.pr, g.argv)
 	}
 	if g.pr != 0 && g.runsDevctl() {
-		argv = merge.CITimeout(argv, g.cfg.Merge.CITimeout.Duration)
+		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
@@ -2205,7 +2264,7 @@ func (g *gateRun) record(base string, run childRun) error {
 		if confirm = confirm && settles; confirm {
 			st.Merges[j].Releasing, st.Merges[j].PID = true, os.Getpid()
 		}
-		return ev, nil
+		return g.mergeEvents(ev)
 	})
 	if confirm && err == nil {
 		releaseLine, rc = g.confirmRelease(&r.out, rc)
@@ -2214,6 +2273,8 @@ func (g *gateRun) record(base string, run childRun) error {
 	if errors.As(err, &stale) {
 		gateLine("%s's outcome is not recorded by this call, which runs beekeeper %s, older than the %s that wrote the state: its document and exit code stay in %s for the watch of the installed %s, which records the run at its next poll",
 			g.key(), stale.Version, stale.Newer, filepath.Dir(base), project.Name)
+	} else if err != nil {
+		return err
 	} else {
 		removeMergeFiles(base)
 	}
@@ -2867,6 +2928,7 @@ func kubectlList(ctx context.Context, kctx, resource string) ([]byte, error) {
 // runChild runs the command with this process's stdin and stderr, its
 // stdout into out, forwarding signals, and returns its exit code.
 func runChild(argv []string, out io.Writer) int {
+	started := time.Now()
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		gateLine("%v", err)
@@ -2887,10 +2949,17 @@ func runChild(argv []string, out io.Writer) int {
 		}
 	}()
 	_ = c.Wait()
-	if ws, ok := c.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+	return childExit(c.ProcessState, os.Stderr, started)
+}
+
+// childExit preserves signal deaths as shell exit codes and reports how long
+// the command ran, including when a caller or the watch stopped it.
+func childExit(ps *os.ProcessState, errs io.Writer, started time.Time) int {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		_, _ = fmt.Fprintf(errs, "%sended by %s after %s\n", GatePrefix, signalName(ws.Signal()), time.Since(started).Round(time.Millisecond))
 		return 128 + int(ws.Signal())
 	}
-	return c.ProcessState.ExitCode()
+	return ps.ExitCode()
 }
 
 func exitCode(rc int) error {

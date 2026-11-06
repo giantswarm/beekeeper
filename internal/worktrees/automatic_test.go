@@ -11,6 +11,7 @@ import (
 
 const (
 	automaticFeature      = "feature"
+	automaticDefault      = "main"
 	advertisedDefaultHead = "base refs/heads/main\n"
 )
 
@@ -65,7 +66,7 @@ func TestRemoteStatusUsesCurrentPublicationAndRequiresBranchHistory(t *testing.T
 		err                              error
 	}{
 		{name: "never pushed", out: advertisedDefaultHead},
-		{name: "cut from remote default", tracked: "main", out: advertisedDefaultHead},
+		{name: "cut from remote default", tracked: automaticDefault, out: advertisedDefaultHead},
 		{name: "deleted unmerged branch", tracked: automaticFeature, out: advertisedDefaultHead, wantGone: true},
 		{name: "closed unmerged pull", hadPull: true, out: advertisedDefaultHead, wantGone: true},
 		{name: "published current head", tracked: automaticFeature, out: "work refs/heads/feature\n", wantPublished: true},

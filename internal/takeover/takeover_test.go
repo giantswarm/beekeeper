@@ -3,6 +3,7 @@ package takeover
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,5 +181,64 @@ func TestHoldIgnoresAGarbledAnswer(t *testing.T) {
 	}
 	if got := <-done; got[1].(bool) {
 		t.Fatalf("a garbled answer decided: %v", got)
+	}
+}
+
+func TestReleaseOwnedPreservesReplacement(t *testing.T) {
+	for _, samePID := range []bool{false, true} {
+		t.Run(fmt.Sprint("samePID=", samePID), func(t *testing.T) {
+			dir := t.TempDir()
+			first := Flag{PID: tScreen, By: "screen", Since: time.Now().UTC()}
+			next := first
+			next.Since = first.Since.Add(time.Nanosecond)
+			if !samePID {
+				next.PID++
+			}
+			for _, f := range []Flag{first, next} {
+				if err := Take(dir, tSession, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ReleaseOwned(dir, tSession, first); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := Taken(dir, tSession, func(int) bool { return true }); !ok || got != next {
+				t.Fatalf("replacement lost: %+v, %v", got, ok)
+			}
+			if err := ReleaseOwned(dir, tSession, next); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := Taken(dir, tSession, func(int) bool { return true }); ok {
+				t.Fatal("owner could not release")
+			}
+			if err := ReleaseOwned(dir, tSession, next); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestConcurrentReplacementAndOwnedRelease(t *testing.T) {
+	dir := t.TempDir()
+	first := Flag{PID: tScreen, Since: time.Now().UTC()}
+	next := first
+	next.Since = next.Since.Add(time.Nanosecond)
+	for range 100 {
+		if err := Take(dir, tSession, first); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		done := make(chan error, 2)
+		go func() { <-start; done <- ReleaseOwned(dir, tSession, first) }()
+		go func() { <-start; done <- Take(dir, tSession, next) }()
+		close(start)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, ok := Taken(dir, tSession, alive); !ok || got != next {
+			t.Fatalf("replacement lost: %+v, %v", got, ok)
+		}
 	}
 }

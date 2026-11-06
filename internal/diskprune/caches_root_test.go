@@ -17,7 +17,7 @@ func TestCacheKeepsRootReplacedDuringScan(t *testing.T) {
 	for _, files := range []bool{false, true} {
 		name := "entries"
 		if files {
-			name = "files"
+			name = cacheModeFiles
 		}
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()

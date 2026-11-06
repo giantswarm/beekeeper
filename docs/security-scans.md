@@ -35,6 +35,36 @@ can mean missing repository access or an unavailable alert. Neither means
 the alert is fixed. The command returns an error for these and for malformed
 or unknown states; report the access barrier and continue independent work.
 
+## Recorded App permission and live proof
+
+The devctl App manifest is maintained in
+`giantswarm/github`, at `apps/giantswarm-devctl/manifest.json`.
+[Permission PR #7098](https://github.com/giantswarm/github/pull/7098)
+adds `"vulnerability_alerts": "read"` to `default_permissions`.
+As checked on 2026-11-04, that PR remains open, so the default branch
+does not yet declare the permission.
+
+The PR and the [proof on issue #1618](https://github.com/giantswarm/beekeeper/issues/1618#issuecomment-6579829238)
+record the live grant and successful reads on 2026-11-02 at 14:35:22 UTC:
+
+- App identity: `giantswarm-devctl`, client ID `Iv23liWio5REm4MfY2Mw`,
+  through `devctl auth exec` with devctl v8.161.17 and beekeeper v0.174.4.
+- Dependabot alerts read-only was applied to the App and accepted on
+  organization installation `163608675`.
+- `beekeeper security alert giantswarm/agent-manager 7 --json` exited 0
+  with state `fixed` and URL
+  <https://github.com/giantswarm/agent-manager/security/dependabot/7>.
+- `beekeeper security alert giantswarm/github 77` exited 0 with state
+  `dismissed` and URL <https://github.com/giantswarm/github/security/dependabot/77>.
+- No personal token scope was added.
+
+These are historical observations from the linked proof, not a fresh read
+or a guarantee of the alerts' current states. Repeat the read under the App
+identity when assessing a remediation. Track the remaining declaration
+change in [issue #1875](https://github.com/giantswarm/beekeeper/issues/1875).
+Keep #1618 open until its documented-path, live-read and authentication
+criteria are met and the manifest change has merged.
+
 ## Security-scans rule
 
 Read the alert through `beekeeper security alert <owner/repo> <number>` before
