@@ -258,17 +258,18 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 	o.ProbedAt = o.Elapsed
 	switch {
 	case err == nil:
-		o.ProbePassed, o.ProbeFailures = true, 0
+		o.ProbePassed, o.ProbeFailures, o.LastPassAt = true, 0, o.Elapsed
 	case errors.Is(err, loopworkflow.ErrInconclusive):
+		o.ProbePassed = false
 		_, _ = fmt.Fprintf(c.w, "probe of %s: %v\n", j.Candidate.Version, err)
 	default:
+		o.ProbePassed = false
 		// The control: what the last known good cannot do either says nothing
 		// about the candidate, whose rollback would fix nothing.
 		if cerr := recoveryProbe(ctx, c.server, c.server, c.scratch); cerr != nil {
 			_, _ = fmt.Fprintf(c.w, "probe of %s failed, and so did its control: %v\n", j.Candidate.Version, cerr)
 			return
 		}
-		o.ProbePassed = false
 		o.ProbeFailures++
 		_, _ = fmt.Fprintf(c.w, "probe of %s failed: %v\n", j.Candidate.Version, err)
 	}
@@ -287,7 +288,16 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 	version := normalizeLoopVersion(j.Candidate.Version)
 	now := c.now()
 	var obs throughputObservation
-	if found, err := c.store.ReadFile(throughputObservationFile, &obs); err == nil && found {
+	found, err := c.store.ReadFile(throughputObservationFile, &obs)
+	if err != nil {
+		s.Unproven = "heartbeat unreadable"
+		return s
+	}
+	if found {
+		if obs.At.IsZero() {
+			s.Unproven = "heartbeat unreadable"
+			return s
+		}
 		// A machine whose loop ran lately owes a heartbeat; an execution host,
 		// which runs none, has only its probe.
 		s.HeartbeatRequired = j.InstalledAt.Sub(obs.At) < recoveryLoopRecent
@@ -301,7 +311,11 @@ func (c *recoveryController) signals(ctx context.Context, j *update.Journal) upd
 	var outcomes []throughputOutcome
 	for _, e := range evs {
 		var o throughputOutcome
-		if json.Unmarshal([]byte(e.Detail), &o) == nil && o.Candidate == version {
+		if err := json.Unmarshal([]byte(e.Detail), &o); err != nil {
+			s.Unproven = "events unreadable"
+			return s
+		}
+		if o.Candidate == version {
 			outcomes = append(outcomes, o)
 		}
 	}

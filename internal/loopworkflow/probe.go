@@ -16,9 +16,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// ProbeTimeout bounds one probe: a candidate's and its control's fit a
-// controller's minute between evaluations.
-const ProbeTimeout = 25 * time.Second
+const (
+	// ProbeTimeout bounds one probe: a candidate's and its control's fit a
+	// controller's minute between evaluations.
+	ProbeTimeout = 25 * time.Second
+
+	gitAdd = "add"
+)
 
 // ErrInconclusive marks a probe that says nothing about the candidate: the
 // fixture could not be built here (no git, a full disk). A failed candidate is
@@ -31,8 +35,8 @@ var ErrInconclusive = errors.New("probe inconclusive")
 // binary that calls Serve first; the candidate's own bytes never judge
 // themselves. It needs no backlog, account or network, and leaves nothing
 // behind in scratch. Nil means the merge is proven in the origin.
-func Probe(ctx context.Context, binary, server, scratch string) error {
-	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
+func Probe(parentCtx context.Context, binary, server, scratch string) error {
+	ctx, cancel := context.WithTimeout(parentCtx, ProbeTimeout)
 	defer cancel()
 	dir, err := os.MkdirTemp(scratch, "probe-*")
 	if err != nil {
@@ -50,9 +54,10 @@ func Probe(ctx context.Context, binary, server, scratch string) error {
 		c := exec.CommandContext(ctx, binary, "supervisor", "loop", "--once") //nolint:gosec // the installed candidate under probation
 		c.Env, c.Dir = p.env, dir
 		if out, err := c.CombinedOutput(); err != nil {
-			// A loaded machine can run out of time; a heartbeat names a hung loop.
-			if ctx.Err() != nil {
-				return fmt.Errorf("%w: %w", ErrInconclusive, ctx.Err())
+			// A canceled caller says nothing about the candidate; a candidate
+			// that timed out is tested against the control release by the caller.
+			if parentCtx.Err() != nil {
+				return fmt.Errorf("%w: %w", ErrInconclusive, parentCtx.Err())
 			}
 			return fmt.Errorf("supervisor loop --once: %w: %s", err, tail(out))
 		}
@@ -92,15 +97,15 @@ func (p *probe) runAll(cwd string, steps ...[]string) error {
 // prepare builds the origin, one reviewed change, the configuration and the
 // state, as the integration test's no-checkout scenario does.
 func (p *probe) prepare(server string) (err error) {
-	if p.git, err = exec.LookPath("git"); err != nil {
+	if p.git, err = exec.LookPath(gitCmd); err != nil {
 		return err
 	}
-	for _, d := range []string{"bin", "server"} {
+	for _, d := range []string{"bin", serverDir} {
 		if err := os.MkdirAll(p.path(d), 0o700); err != nil {
 			return err
 		}
 	}
-	for _, name := range []string{"gh", "git"} {
+	for _, name := range []string{ghCmd, gitCmd} {
 		if err := os.Symlink(server, filepath.Join(p.path("bin"), name)); err != nil {
 			return err
 		}
@@ -113,31 +118,31 @@ func (p *probe) prepare(server string) (err error) {
 		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid",
 		"HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1", "NO_PROXY=127.0.0.1",
 	}
-	readme := filepath.Join("server", "README.md")
+	readme := filepath.Join(serverDir, "README.md")
 	write := func(name, text string) error { return os.WriteFile(p.path(name), []byte(text), 0o600) }
-	if err := p.runAll("server", []string{"init", "--bare", p.path("origin.git")}, []string{"init", "-b", "main"}, []string{"remote", "add", "origin", p.path("origin.git")}); err != nil {
+	if err := p.runAll(serverDir, []string{"init", "--bare", p.path("origin.git")}, []string{"init", "-b", mainBranch}, []string{"remote", gitAdd, originRemote, p.path("origin.git")}); err != nil {
 		return err
 	}
 	if err := write(readme, "fixture base\n"); err != nil {
 		return err
 	}
-	if err := p.runAll("server", []string{"add", "."}, []string{"commit", "-m", "fixture base"}, []string{"push", "origin", "main"}, []string{"checkout", "-b", "change"}); err != nil {
+	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", "fixture base"}, []string{gitPush, originRemote, mainBranch}, []string{"checkout", "-b", changeBranch}); err != nil {
 		return err
 	}
 	if err := write(readme, "fixture change\n"); err != nil {
 		return err
 	}
-	if err := p.runAll("server", []string{"add", "."}, []string{"commit", "-m", "fixture change"}); err != nil {
+	if err := p.runAll(serverDir, []string{gitAdd, "."}, []string{gitCommit, "-m", "fixture change"}); err != nil {
 		return err
 	}
-	head, err := p.run("server", "rev-parse", "HEAD")
+	head, err := p.run(serverDir, gitRevParse, gitHead)
 	if err != nil {
 		return err
 	}
-	if err := p.runAll("server", []string{"push", "origin", "change"}, []string{"push", "origin", head + ":refs/pull/1/head"}, []string{"checkout", "main"}); err != nil {
+	if err := p.runAll(serverDir, []string{gitPush, originRemote, changeBranch}, []string{gitPush, originRemote, head + ":refs/pull/1/head"}, []string{"checkout", mainBranch}); err != nil {
 		return err
 	}
-	if p.base, err = p.run("server", "rev-parse", "HEAD"); err != nil {
+	if p.base, err = p.run(serverDir, gitRevParse, gitHead); err != nil {
 		return err
 	}
 	p.now = time.Now().UTC()
@@ -145,16 +150,16 @@ func (p *probe) prepare(server string) (err error) {
 		return err
 	}
 	raw, err := json.Marshal(map[string]any{
-		"state": "OPEN", "url": "https://github.com/fixture/project/pull/1", "baseRefName": "main", "headRefName": "change", "headRefOid": head,
-		"author": map[string]any{"login": "fixture-bot"}, "title": "fixture change", "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+		"state": "OPEN", "url": "https://github.com/fixture/project/pull/1", "baseRefName": mainBranch, "headRefName": changeBranch, "headRefOid": head,
+		"author": map[string]any{loginField: fixtureBot}, "title": "fixture change", "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
 		"changedFiles": 1, "files": []any{map[string]any{"path": "README.md"}},
 		"statusCheckRollup": []any{map[string]any{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}},
-		"reviews":           []any{map[string]any{"id": "R1", "author": map[string]any{"login": "fixture-bot"}, "authorAssociation": "MEMBER", "state": "COMMENTED", "body": "Review: approved\nHead reviewed: `" + head + "`", "commit": map[string]any{"oid": head}, "submittedAt": p.now.Format(time.RFC3339)}},
+		"reviews":           []any{map[string]any{"id": "R1", "author": map[string]any{loginField: fixtureBot}, "authorAssociation": "MEMBER", "state": "COMMENTED", "body": "Review: approved\nHead reviewed: `" + head + "`", "commit": map[string]any{"oid": head}, "submittedAt": p.now.Format(time.RFC3339)}},
 	})
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(p.path("pull.json"), raw, 0o600); err != nil {
+	if err := os.WriteFile(p.path(pullJSONFile), raw, 0o600); err != nil {
 		return err
 	}
 	return p.seed(head)
@@ -216,11 +221,11 @@ func (p *probe) proven() error {
 	if n := strings.Count(string(trace), `"gh","pr","merge"`); n != 1 {
 		return fmt.Errorf("the reviewed pull request saw %d merges", n)
 	}
-	after, err := p.run("server", "--git-dir="+p.path("origin.git"), "rev-parse", "refs/heads/main")
+	after, err := p.run(serverDir, "--git-dir="+p.path("origin.git"), gitRevParse, "refs/heads/"+mainBranch)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInconclusive, err)
 	}
-	raw, err := os.ReadFile(p.path("pull.json"))
+	raw, err := os.ReadFile(p.path(pullJSONFile))
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInconclusive, err)
 	}

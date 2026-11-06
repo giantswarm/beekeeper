@@ -38,8 +38,10 @@ type Observed struct {
 	Elapsed       time.Duration `json:"elapsed"`
 	ProbePassed   bool          `json:"probePassed,omitempty"`
 	ProbeFailures int           `json:"probeFailures,omitempty"`
-	// ProbedAt is the Elapsed of the last probe.
-	ProbedAt time.Duration `json:"probedAt,omitempty"`
+	// ProbedAt is the Elapsed of the last probe; LastPassAt is the Elapsed of
+	// the last passed probe, kept as history when a later probe is inconclusive.
+	ProbedAt   time.Duration `json:"probedAt,omitempty"`
+	LastPassAt time.Duration `json:"lastPassAt,omitempty"`
 	// Held is why recovery itself failed: updates and starts stay held.
 	Held string `json:"held,omitempty"`
 	// Reason is why the candidate was rolled back.
@@ -216,7 +218,17 @@ func (j *Journal) Held() string {
 // journal that cannot be read answers false: the update itself refuses it.
 func WatchedProbation(path string) bool {
 	j, err := Inspect(path)
-	return err == nil && j.Pending() && j.Watched
+	if err != nil || j == nil || !j.Watched {
+		return false
+	}
+	if j.Pending() {
+		return true
+	}
+	if j.Probation == probationPrepared {
+		d, err := Digest(path)
+		return err == nil && d == j.Candidate.Digest
+	}
+	return false
 }
 
 // Quarantined is why the version is quarantined on the installation at path,

@@ -49,14 +49,16 @@ wall-clock time: a machine that slept proves nothing and fails nothing meanwhile
 | Three consecutive failed isolated workflow probes | Roll back at once |
 | A machine whose loop ran lately, no heartbeat from the candidate's loop after 10 minutes | Roll back |
 | A stop | Nothing counts |
-| GitHub unavailable, or an outcome or the state unreadable | Stays unproven: no rollback, no promotion |
-| 30 observed minutes, a passed probe, the heartbeat where one is owed | Promote to last known good |
+| GitHub unavailable, or heartbeat, outcome or state evidence unreadable | Stays unproven: no rollback, no promotion |
+| 30 observed minutes, a current passed probe, the heartbeat where one is owed | Promote to last known good |
 
 The probe needs no backlog, account or network, so an idle desk is judged too. It
 drives the candidate through real `supervisor loop --once` passes against a scratch
 origin and a fixture GitHub played by the controller's bytes, and proves the merge
-in the origin. It repeats every five minutes, at once after a failure. A probe that
-cannot be built or runs out of time is inconclusive. A failed probe is repeated on
+in the origin. It repeats every five minutes after a pass, and at once after a
+failure or inconclusive run. A probe that cannot be built is inconclusive and
+clears the current pass while retaining prior pass history, so a candidate cannot
+promote on a stale probe pass. A failed or timed-out candidate probe is repeated on
 the last known good as a control: what that cannot do either is the machine's fault,
 and counts against no candidate.
 

@@ -58,7 +58,7 @@ func recoveryRig(t *testing.T) (*recoveryController, *time.Time) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	j := update.Journal{
 		Schema: 1, Displaced: update.Binary{Version: recoveryGoodVersion, Digest: recoverySum(recoveryGoodBytes)}, Previous: &update.Binary{Version: recoveryGoodVersion, Digest: recoverySum(recoveryGoodBytes)},
-		Candidate: update.Binary{Version: recoveryBadVersion, Digest: recoverySum(recoveryBadBytes)}, InstalledAt: now, Probation: "pending", Watched: true,
+		Candidate: update.Binary{Version: recoveryBadVersion, Digest: recoverySum(recoveryBadBytes)}, InstalledAt: now, Probation: executionPending, Watched: true,
 	}
 	raw, err := json.Marshal(j)
 	if err != nil {
@@ -315,7 +315,7 @@ func TestRecoveryHoldsOnIncompatibleState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stable.Update(func(st *state.State) ([]state.Event, error) {
-		st.Notes = append(st.Notes, state.Note{ID: 1, Text: "kept"})
+		st.Notes = append(st.Notes, state.Note{ID: 1, Text: "preserved"})
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -379,5 +379,61 @@ func TestLaunchRecoveryNeedsTheUpdatersOwnBytes(t *testing.T) {
 	a := &app{}
 	if err := a.launchRecovery(t.Context(), update.Binary{Version: recoveryGoodVersion, Digest: recoverySum("another binary")}, "unused", "unused"); err == nil {
 		t.Fatal("an older recovery target would die on the controller's flags")
+	}
+}
+
+func TestRecoveryKeepsCandidateUnprovenOnCorruptHeartbeat(t *testing.T) {
+	c, _ := recoveryRig(t)
+	if err := os.WriteFile(filepath.Join(c.a.cfg.StateDir, throughputObservationFile), []byte("{corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 40 {
+		if c.mustTick(t) {
+			t.Fatal("corrupt heartbeat evidence settled probation")
+		}
+	}
+	if j := journal(t, c); !j.Pending() {
+		t.Fatalf("expected pending probation, got %+v", j)
+	}
+	if got := installed(t, c); got != recoveryBadBytes {
+		t.Fatalf("unexpected rollback on unreadable heartbeat: %q", got)
+	}
+}
+
+func TestRecoveryInconclusiveProbeDoesNotPromoteWithStalePass(t *testing.T) {
+	for _, controlFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inconclusive", true: "control failure"}[controlFails], func(t *testing.T) {
+			c, _ := recoveryRig(t)
+			c.server = c.target + ".control"
+			calls := 0
+			recoveryProbe = func(context.Context, string, string, string) error {
+				calls++
+				if calls == 1 {
+					return nil
+				}
+				if controlFails {
+					return errors.New("environment failure")
+				}
+				return loopworkflow.ErrInconclusive
+			}
+			for range 40 {
+				if c.mustTick(t) {
+					t.Fatal("promoted using a stale passed probe after inconclusive probes")
+				}
+			}
+			j := journal(t, c)
+			if !j.Pending() || j.Observed == nil || j.Observed.ProbePassed || j.Observed.LastPassAt != time.Minute {
+				t.Fatalf("unexpected observed state: %+v", j.Observed)
+			}
+			// After the first pass at tick 1, tick 6 probes and is inconclusive,
+			// so ticks 7..40 re-probe every tick rather than skipping five minutes.
+			if calls < 35 {
+				t.Fatalf("expected re-probe after inconclusive tick, got %d calls", calls)
+			}
+			recoveryProbe = func(context.Context, string, string, string) error { return nil }
+			if !c.mustTick(t) {
+				t.Fatal("fresh passing probe after window did not promote")
+			}
+		})
 	}
 }

@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	recoveryRelease  = "v1.0.0"
-	recoveryDevBuild = "dev"
-	recoveryNewer    = "v2.0.0"
-	recoveryFailed   = "v3.0.0"
+	recoveryRelease   = "v1.0.0"
+	recoveryDevBuild  = "dev"
+	recoveryNewer     = "v2.0.0"
+	recoveryCandidate = "v2.0.0-rc.1"
+	recoveryFailed    = "v3.0.0"
 )
 
 func TestRecoverVersionFencesLiveStateAndPreservesEveryByte(t *testing.T) {
@@ -24,8 +25,8 @@ func TestRecoverVersionFencesLiveStateAndPreservesEveryByte(t *testing.T) {
 		{"downgrade after candidate writes", recoveryNewer, recoveryRelease, false},
 		{"downgrade before candidate writes", recoveryRelease, recoveryRelease, true},
 		{"unknown target", recoveryRelease, recoveryDevBuild, false},
-		{"prerelease target past the writer", recoveryRelease, "v2.0.0-rc.1", true},
-		{"prerelease target behind the writer", recoveryNewer, "v2.0.0-rc.1", false},
+		{"prerelease target past the writer", recoveryRelease, recoveryCandidate, true},
+		{"prerelease target behind the writer", recoveryNewer, recoveryCandidate, false},
 		{"unknown writer", recoveryDevBuild, recoveryRelease, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,7 +80,7 @@ func TestRecoveredWriterCeilingSurvivesRestart(t *testing.T) {
 	if err := candidate.RecoverVersion(recoveryRelease, recoveryNewer, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []string{recoveryNewer, "v2.0.0-rc.1", recoveryDevBuild} {
+	for _, v := range []string{recoveryNewer, recoveryCandidate, recoveryDevBuild} {
 		restarted, _ := OpenVersion(dir, v)
 		if err := restarted.Update(noop); err == nil {
 			t.Fatalf("%s advanced recovered state", v)
@@ -139,13 +140,13 @@ func TestRecoveryOfAPrereleaseFromUnversionedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	if err := s.RecoverVersion("v2.0.0-rc.1", "v2.0.0-rc.2", func() error { called = true; return nil }); err != nil || !called {
+	if err := s.RecoverVersion(recoveryCandidate, "v2.0.0-rc.2", func() error { called = true; return nil }); err != nil || !called {
 		t.Fatalf("called %v: %v", called, err)
 	}
 	if err := s.Update(noop); err == nil {
 		t.Fatal("the failed candidate wrote past the fence")
 	}
-	restored, _ := OpenVersion(dir, "v2.0.0-rc.1")
+	restored, _ := OpenVersion(dir, recoveryCandidate)
 	if err := restored.Update(noop); err != nil {
 		t.Fatal(err)
 	}

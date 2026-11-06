@@ -54,17 +54,19 @@ func TestInspectCreatesNothing(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("%v, %v", entries, err)
 	}
-	if WatchedProbation(target) || Quarantined(target, "v1.0.0") != "" {
+	if WatchedProbation(target) || Quarantined(target, stable) != "" {
 		t.Fatal("an installation without a journal has no probation")
 	}
 }
+
+const watchedCandidate = "v1.1.0-rc.2"
 
 // watchedFixture has a supervised candidate, as a launched controller leaves it.
 func watchedFixture(t *testing.T) (*installation, *Journal) {
 	t.Helper()
 	i, dir := recoveryFixture(t)
 	old := stageRecovery(t, dir, "old")
-	if err := i.replace(old, "v1.0.0"); err != nil {
+	if err := i.replace(old, stable); err != nil {
 		t.Fatal(err)
 	}
 	j, err := i.read()
@@ -85,13 +87,13 @@ func watchedFixture(t *testing.T) (*installation, *Journal) {
 		}
 		return nil
 	}})
-	if err := i.replace(stageRecovery(t, dir, "candidate"), "v1.1.0-rc.2"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "candidate"), watchedCandidate); err != nil {
 		t.Fatal(err)
 	}
 	if j, err = i.read(); err != nil {
 		t.Fatal(err)
 	}
-	if !j.Watched || launched.Version != "v1.0.0" {
+	if !j.Watched || launched.Version != stable {
 		t.Fatalf("watched %v, launched %+v", j.Watched, launched)
 	}
 	return i, j
@@ -110,9 +112,58 @@ func TestWatchedCandidateWaitsForItsVerdict(t *testing.T) {
 	}
 }
 
+func TestWatchedSupervisionIsDurableBeforeReplacement(t *testing.T) {
+	i, dir := recoveryFixture(t)
+	if err := i.replace(stageRecovery(t, dir, "old"), stable); err != nil {
+		t.Fatal(err)
+	}
+	j, err := i.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := i.promote(j); err != nil {
+		t.Fatal(err)
+	}
+	i.ctx = WithOptions(i.ctx, Options{Recovery: func(context.Context, Binary, string, string) error { return nil }})
+	original := journalRename
+	swapped := false
+	journalRename = func(from, to string) error {
+		if swapped {
+			return errors.New("crash after swap")
+		}
+		if to == i.target {
+			swapped = true
+		}
+		return original(from, to)
+	}
+	t.Cleanup(func() { journalRename = original })
+	if err := i.replace(stageRecovery(t, dir, "candidate"), watchedCandidate); err == nil {
+		t.Fatal("expected post-swap journal write failure")
+	}
+	journalRename = original
+	assertRecoveryBytes(t, i.target, "candidate")
+	j = readRecovery(t, i)
+	if j.Probation != probationPrepared || !j.Watched {
+		t.Fatalf("supervision lost before replacement: %+v", j)
+	}
+	if !WatchedProbation(i.target) {
+		t.Fatal("rearmRecovery would refuse to launch controller before reconciliation")
+	}
+	prev := currentVersion
+	t.Cleanup(func() { currentVersion = prev })
+	currentVersion = func() string { return j.Candidate.Version }
+	if err := i.settleProbation(context.Background(), nil); !errors.Is(err, ErrProbationWatched) {
+		t.Fatalf("unsupervised promotion allowed after post-swap crash: %v", err)
+	}
+	j = readRecovery(t, i)
+	if j.Probation != probationPending || !j.Watched {
+		t.Fatalf("reconciled journal lost supervision: %+v", j)
+	}
+}
+
 func TestUnlaunchedControllerLeavesTheCandidateUnwatched(t *testing.T) {
 	i, dir := recoveryFixture(t)
-	if err := i.replace(stageRecovery(t, dir, "old"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "old"), stable); err != nil {
 		t.Fatal(err)
 	}
 	j, _ := i.read()
@@ -133,7 +184,7 @@ func TestPrereleaseCandidateRollsBack(t *testing.T) {
 	i, j := watchedFixture(t)
 	i.close()
 	guard := func(previous, failed string, restore func() error) error {
-		if previous != "v1.0.0" || failed != "v1.1.0-rc.2" {
+		if previous != stable || failed != watchedCandidate {
 			t.Fatalf("%s, %s", previous, failed)
 		}
 		return restore()

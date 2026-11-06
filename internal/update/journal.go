@@ -464,11 +464,16 @@ func (i *installation) replace(staged, version string) error {
 	if movingPast {
 		displacedVersion = j.Candidate.Version
 	}
-	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine}
+	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine, Watched: previous != nil && optionsFrom(i.ctx).Recovery != nil}
 	if err := i.write(j); err != nil {
 		return err
 	}
-	j.Watched = i.launchController(previous)
+	if j.Watched && !i.launchController(previous) {
+		j.Watched = false
+		if err := i.write(j); err != nil {
+			return err
+		}
+	}
 	f, err := os.Open(filepath.Clean(staged))
 	if err != nil {
 		return err

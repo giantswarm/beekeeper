@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const stable = "v1.0.0"
+
 func recoveryFixture(t *testing.T) (*installation, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -60,11 +62,11 @@ func assertRecoveryBytes(t *testing.T, path, want string) {
 }
 func passedRecovery(t *testing.T, i *installation, dir string) {
 	t.Helper()
-	if err := i.replace(stageRecovery(t, dir, "good"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "good"), stable); err != nil {
 		t.Fatal(err)
 	}
 	i.close()
-	if err := CompleteProbation(context.Background(), i.target, "v1.0.0"); err != nil {
+	if err := CompleteProbation(context.Background(), i.target, stable); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := i.lock.TryLock()
@@ -83,7 +85,7 @@ func TestJournalBootstrapPromotionAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	j = readRecovery(t, i)
-	if j.Previous == nil || j.Previous.Version != "v1.0.0" || j.Probation != probationPending {
+	if j.Previous == nil || j.Previous.Version != stable || j.Probation != probationPending {
 		t.Fatalf("journal %+v", j)
 	}
 	if err := i.replace(stageRecovery(t, dir, "third"), "v3.0.0"); err == nil {
@@ -91,7 +93,7 @@ func TestJournalBootstrapPromotionAndRollback(t *testing.T) {
 	}
 	i.close()
 	guard := func(version, _ string, restore func() error) error {
-		if version != "v1.0.0" {
+		if version != stable {
 			t.Fatal(version)
 		}
 		return restore()
@@ -147,7 +149,7 @@ func TestJournalCrashBoundaries(t *testing.T) {
 				return original(from, to)
 			}
 			t.Cleanup(func() { journalRename = original })
-			if err := i.replace(staged, "v1.0.0"); err == nil {
+			if err := i.replace(staged, stable); err == nil {
 				t.Fatal("missing interruption")
 			}
 			journalRename = original
@@ -164,7 +166,7 @@ func TestJournalCrashBoundaries(t *testing.T) {
 				}
 			} else {
 				assertRecoveryBytes(t, i.target, "bootstrap")
-				if err := i.replace(staged, "v1.0.0"); err != nil {
+				if err := i.replace(staged, stable); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -215,7 +217,7 @@ func TestJournalDiskFullAndConcurrentExclusion(t *testing.T) {
 	original := journalWrite
 	t.Cleanup(func() { journalWrite = original })
 	journalWrite = func(*os.File, []byte) error { return syscall.ENOSPC }
-	if err := i.replace(stageRecovery(t, dir, "new"), "v1.0.0"); !errors.Is(err, syscall.ENOSPC) {
+	if err := i.replace(stageRecovery(t, dir, "new"), stable); !errors.Is(err, syscall.ENOSPC) {
 		t.Fatal(err)
 	}
 	assertRecoveryBytes(t, i.target, "bootstrap")
@@ -272,7 +274,7 @@ func TestJournalRejectsSymlinkRecoveryFiles(t *testing.T) {
 }
 func TestBootstrapHasNoRollbackAndFutureJournalIsFenced(t *testing.T) {
 	i, dir := recoveryFixture(t)
-	if err := i.replace(stageRecovery(t, dir, "new"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "new"), stable); err != nil {
 		t.Fatal(err)
 	}
 	i.close()
@@ -284,7 +286,7 @@ func TestBootstrapHasNoRollbackAndFutureJournalIsFenced(t *testing.T) {
 	if err := i.write(j); err != nil {
 		t.Fatal(err)
 	}
-	if err := CompleteProbation(context.Background(), i.target, "v1.0.0"); err == nil {
+	if err := CompleteProbation(context.Background(), i.target, stable); err == nil {
 		t.Fatal("future journal accepted")
 	}
 	assertRecoveryBytes(t, i.target, "new")
@@ -331,7 +333,7 @@ func TestDiskFullAtEveryJournalWrite(t *testing.T) {
 				return original(f, raw)
 			}
 			t.Cleanup(func() { journalWrite = original })
-			if err := i.replace(staged, "v1.0.0"); !errors.Is(err, syscall.ENOSPC) {
+			if err := i.replace(staged, stable); !errors.Is(err, syscall.ENOSPC) {
 				t.Fatal(err)
 			}
 			journalWrite = original
@@ -352,14 +354,14 @@ func TestDiskFullAtEveryJournalWrite(t *testing.T) {
 }
 func TestQuarantineIsDurableAndCannotBePromoted(t *testing.T) {
 	i, dir := recoveryFixture(t)
-	if err := i.replace(stageRecovery(t, dir, "failed"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "failed"), stable); err != nil {
 		t.Fatal(err)
 	}
 	i.close()
 	if err := Quarantine(context.Background(), i.target, "failed health"); err != nil {
 		t.Fatal(err)
 	}
-	if err := CompleteProbation(context.Background(), i.target, "v1.0.0"); err == nil {
+	if err := CompleteProbation(context.Background(), i.target, stable); err == nil {
 		t.Fatal("promoted quarantined candidate")
 	}
 	j := readRecovery(t, i)
@@ -371,7 +373,7 @@ func TestQuarantineIsDurableAndCannotBePromoted(t *testing.T) {
 
 func TestJournalRecoveryRejectsUnexpectedInstalledBytes(t *testing.T) {
 	i, dir := recoveryFixture(t)
-	if err := i.replace(stageRecovery(t, dir, "new"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "new"), stable); err != nil {
 		t.Fatal(err)
 	}
 	j := readRecovery(t, i)
@@ -389,14 +391,14 @@ func TestJournalRecoveryRejectsUnexpectedInstalledBytes(t *testing.T) {
 }
 func TestProbationPromotionInterruptionIsIdempotent(t *testing.T) {
 	i, dir := recoveryFixture(t)
-	if err := i.replace(stageRecovery(t, dir, "new"), "v1.0.0"); err != nil {
+	if err := i.replace(stageRecovery(t, dir, "new"), stable); err != nil {
 		t.Fatal(err)
 	}
 	i.close()
 	original := journalRename
 	journalRename = func(string, string) error { return syscall.ENOSPC }
 	t.Cleanup(func() { journalRename = original })
-	if err := CompleteProbation(context.Background(), i.target, "v1.0.0"); !errors.Is(err, syscall.ENOSPC) {
+	if err := CompleteProbation(context.Background(), i.target, stable); !errors.Is(err, syscall.ENOSPC) {
 		t.Fatal(err)
 	}
 	if j := readRecovery(t, i); j.Probation != probationPending {
@@ -404,7 +406,7 @@ func TestProbationPromotionInterruptionIsIdempotent(t *testing.T) {
 	}
 	journalRename = original
 	for range 2 {
-		if err := CompleteProbation(context.Background(), i.target, "v1.0.0"); err != nil {
+		if err := CompleteProbation(context.Background(), i.target, stable); err != nil {
 			t.Fatal(err)
 		}
 	}
