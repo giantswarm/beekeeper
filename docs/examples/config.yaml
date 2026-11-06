@@ -249,6 +249,8 @@ supervisor:                 # the supervisor loop, which beekeeper install alway
 guide:                      # the guide's role: what guide handover --prompt tells its successor, and its relay
   model: ""                 # guide successors: overrides the previous holder's model
   person: Ada               # guide queue and guide watch show only the notes for this person (any case); unset, every --for note
+  # personNames: [Pat]      # other names the person goes by: note add --for one of them files the note for guide.person
+  # desk: ~/projects/desk   # the guide's memory: its session writes files here and the desk commits them; a refused write to a harness's own memory names it
   waitingTTL: 2h            # a session that waits on the person and stopped longer ago folds into one line (guide queue --full lists it); 0: never
   skill: beekeeper:guide    # the skill its successor runs; or instructions: ~/guide.md; unset, it opens without them
   relayAt: 200k             # guide watch says GUIDE RELAY DUE once the guide's context reaches this

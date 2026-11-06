@@ -2302,6 +2302,14 @@ type Guide struct {
 	// WaitingTTL is how long a stopped session that waits on the person
 	// stays in the queue and the feed; older ones fold into one line.
 	WaitingTTL Duration `yaml:"waitingTTL"`
+	// PersonNames are other names the person goes by: note add --for one of
+	// them files the note for Person, where the guide sees it.
+	PersonNames []string `yaml:"personNames"`
+	// Desk is the folder (~/ allowed) the guide keeps its memory in, a desk
+	// checkout: the guide's session writes files there and the desk commits
+	// them. A refused write to a harness's own memory names it. Empty: the
+	// guide edits nothing.
+	Desk string `yaml:"desk"`
 }
 
 // DefaultLoopGraphQLLimit is supervisor.graphQLLimit when unset.

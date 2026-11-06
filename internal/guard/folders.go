@@ -83,11 +83,7 @@ func (h Hook) folderRefusal(ev event) string {
 	var targets []string
 	switch ev.ToolName {
 	case writeTool, editTool, multiEditTool, notebookTool:
-		file, _ := ev.ToolInput[filePathKey].(string)
-		if file == "" {
-			file, _ = ev.ToolInput[notebookPathKey].(string)
-		}
-		if file != "" {
+		if file := toolFile(ev); file != "" {
 			targets = []string{absIn(cwd, file)}
 		}
 	case bashTool:
@@ -95,7 +91,7 @@ func (h Hook) folderRefusal(ev event) string {
 		targets = writeTargets(cmd, cwd, 0)
 	}
 	for _, t := range targets {
-		if what := h.personFile(t); what != "" {
+		if what := h.personFile(t); what != "" && !h.guideDeskFile(ev.Session, t) {
 			return "Refused: `" + t + "` is " + what + ", where no session creates or overwrites a file unasked " +
 				"(the person's folders, hooks.personFolders). Scratch files go in this session's scratchpad, " +
 				h.scratchpad(ev) + ", or in ~/.local/state/<program>/; a change to a checkout is made in a worktree of its own. " +
