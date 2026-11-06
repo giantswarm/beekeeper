@@ -60,7 +60,7 @@ func TestExecutionAgyGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", filepath.Join(protected, "execution", "agy-home"))
-	t.Setenv("BEEKEEPER_EXECUTION_HOME", realHome)
+	t.Setenv(executionHomeEnv, realHome)
 	if ExecutionRulesAllowed(filepath.Join(realHome, ".ssh", "id_ed25519"), nil) {
 		t.Fatal("ExecutionRulesAllowed accepted host user's .ssh key under agy HOME override")
 	}

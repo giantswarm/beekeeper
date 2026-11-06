@@ -132,15 +132,18 @@ func TestNoteAddresseeResolvesThePersonOrRefuses(t *testing.T) {
 		"guide":         notePerson,
 		claimSupervisor: claimSupervisor,
 	} {
-		if got, err := a.noteAddressee(who); err != nil || got != want {
+		if got, err := a.noteAddressee(who, false); err != nil || got != want {
 			t.Errorf("noteAddressee(%q) = %q, %v, want %q", who, got, err, want)
 		}
 	}
-	if _, err := a.noteAddressee("Nobody"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "guide.personNames") {
+	if got, err := a.noteAddressee(unknownName, true); err != nil || got != unknownName {
+		t.Fatalf("a name the central instance judges: %q, %v", got, err)
+	}
+	if _, err := a.noteAddressee(unknownName, false); Code(err) != ExitUsage || !strings.Contains(err.Error(), "guide.personNames") {
 		t.Fatalf("an unknown name: %v", err)
 	}
 	a.cfg.Guide.Person = ""
-	if got, err := a.noteAddressee("Nobody"); err != nil || got != "Nobody" {
+	if got, err := a.noteAddressee(unknownName, false); err != nil || got != unknownName {
 		t.Fatalf("with guide.person unset every note is the guide's: %q, %v", got, err)
 	}
 }

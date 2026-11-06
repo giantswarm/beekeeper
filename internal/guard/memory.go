@@ -84,11 +84,71 @@ func (h Hook) memoryRefusal(ev event) string {
 // memoryTargets is memoryRefusal for absolute write targets.
 func (h Hook) memoryTargets(targets []string) string {
 	for _, t := range targets {
-		if harness := harnessMemory(t); harness != "" {
+		if harness := memoryWrite(t); harness != "" {
 			return h.memoryReason(t, harness)
 		}
 	}
 	return ""
+}
+
+// memoryWrite names the harness whose memory a write to p lands in: by the path
+// as written, by where its links lead, and by a harness's folder that is itself
+// a link (kept in a dotfiles checkout). A link the same command creates does
+// not exist yet and goes unseen.
+func memoryWrite(p string) string {
+	if harness := harnessMemory(p); harness != "" {
+		return harness
+	}
+	real, ok := resolved(p)
+	if !ok {
+		return ""
+	}
+	if harness := harnessMemory(real); harness != "" {
+		return harness
+	}
+	for _, root := range memoryRoots() {
+		target, err := filepath.EvalSymlinks(root)
+		if err != nil || target == root || !below(target, real) {
+			continue
+		}
+		rel, _ := filepath.Rel(target, real)
+		if harness := harnessMemory(filepath.Join(root, rel)); harness != "" {
+			return harness
+		}
+	}
+	return ""
+}
+
+// memoryRoots are the folders the harnesses keep their memory under.
+func memoryRoots() []string {
+	var roots []string
+	if home, err := guardHomeDir(); err == nil {
+		for _, dir := range []string{".claude", ".codex", ".gemini", ".omp"} {
+			roots = append(roots, filepath.Join(home, dir))
+		}
+	}
+	if home := os.Getenv(codexHomeEnv); home != "" {
+		roots = append(roots, home)
+	}
+	return roots
+}
+
+// resolved is the absolute path p with its links resolved, its last parts kept
+// as they are where they do not exist yet.
+func resolved(p string) (string, bool) {
+	p = filepath.Clean(p)
+	rest := ""
+	for {
+		real, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			return filepath.Join(real, rest), true
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(p) == p {
+			return "", false
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = filepath.Dir(p)
+	}
 }
 
 // memoryReason is the refusal of a write to path in harness's memory.
@@ -132,19 +192,9 @@ func withinResolved(root, p string) bool {
 	if err != nil {
 		return false
 	}
-	p = filepath.Clean(p)
-	rest := ""
-	for {
-		resolved, err := filepath.EvalSymlinks(p)
-		if err == nil {
-			p = filepath.Join(resolved, rest)
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(p) == p {
-			return false
-		}
-		rest = filepath.Join(filepath.Base(p), rest)
-		p = filepath.Dir(p)
+	p, ok := resolved(p)
+	if !ok {
+		return false
 	}
 	rel, err := filepath.Rel(real, p)
 	if err != nil || rel == "." || !below(real, p) {

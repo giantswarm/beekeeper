@@ -82,7 +82,9 @@ recorded on that thread (beekeeper answer). With guide.person set, a --for
 that is one of guide.personNames, "guide", or carries the person's
 serve.people email, is filed for guide.person, so the guide sees it; one nobody
 on this desk goes by (not guide.person, serve.people, board.people, an email,
-team:<name> or supervisor) is refused, naming them. A central instance judges the names it is sent itself. A note for a person whose
+team:<name> or supervisor) is refused, naming them. A central instance judges the names it is sent itself;
+one it is not sent, by --holds or by filing on the machine when it cannot be
+reached, is judged here. A note for a person whose
 --ref an answer of that person was recorded on within the last 72 hours
 (answer.recorded) is filed with a warning that quotes the answer.
 
@@ -202,7 +204,7 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 			}
 			n.Kind, draft.Due = draft.Kind, due
 			if a.managedExecutionID() == "" {
-				if forWho, err = a.noteAddressee(forWho); err != nil {
+				if forWho, err = a.noteAddressee(forWho, into.Central || a.centralNote(&n, holds, foldInto)); err != nil {
 					return err
 				}
 				n.For = forWho

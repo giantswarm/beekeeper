@@ -149,8 +149,9 @@ func guides(person string, n *state.Note) bool {
 // another name of theirs or the guide, who itself when the desk knows it (the
 // supervisor is a role, read by the loop). A name nobody
 // here goes by is refused: its note would reach no guide. With guide.person
-// unset every note is the guide's; a central instance judges its own names.
-func (a *app) noteAddressee(who string) (string, error) {
+// unset every note is the guide's. central says the note goes to the central
+// instance, which judges its own names; a note kept on this machine does not.
+func (a *app) noteAddressee(who string, central bool) (string, error) {
 	person := a.cfg.Guide.Person
 	if person == "" || strings.HasPrefix(who, teamPrefix) || strings.EqualFold(who, supervisorCommand) {
 		return who, nil
@@ -159,7 +160,7 @@ func (a *app) noteAddressee(who string) (string, error) {
 	if strings.EqualFold(who, person) || strings.EqualFold(who, guideName) || board.ContainsFold(a.cfg.Guide.PersonNames, who) || email != "" && strings.EqualFold(email, personEmail(a.cfg.Serve, person)) {
 		return person, nil
 	}
-	if email != "" || a.centralNotesOn() || board.ContainsFold(a.cfg.Board.People, who) {
+	if email != "" || central || board.ContainsFold(a.cfg.Board.People, who) {
 		return who, nil
 	}
 	return "", usageErr("--for %q names nobody on this desk, so no guide would see the note: the guide's person is %q (guide.person; guide.personNames adds other names of theirs), others are in serve.people, board.people, an email or team:<name>", who, person)

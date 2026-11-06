@@ -358,7 +358,7 @@ func executionWithin(root, p string) bool {
 
 func executionLiteral(w *syntax.Word) (string, error) {
 	env := os.Environ()
-	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+	if h := os.Getenv(executionHomeEnv); filepath.IsAbs(h) {
 		env = append(env, "HOME="+filepath.Clean(h))
 	}
 	return expand.Literal(&expand.Config{Env: expand.ListEnviron(env...)}, w)

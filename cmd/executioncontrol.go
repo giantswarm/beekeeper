@@ -352,7 +352,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		// Revalidate against coordinator policy, never the host's guide policy.
 		var err error
-		if n.For, err = a.noteAddressee(n.For); err != nil {
+		if n.For, err = a.noteAddressee(n.For, false); err != nil {
 			return "", nil, err
 		}
 		d.Question = n.Question

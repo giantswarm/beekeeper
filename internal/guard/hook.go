@@ -1231,8 +1231,11 @@ func LabCluster(dir string) (string, bool) {
 	return "agentlab", true
 }
 
+// executionHomeEnv is the managed home of a session on an execution host.
+const executionHomeEnv = "BEEKEEPER_EXECUTION_HOME"
+
 func guardHomeDir() (string, error) {
-	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+	if h := os.Getenv(executionHomeEnv); filepath.IsAbs(h) {
 		return filepath.Clean(h), nil
 	}
 	return os.UserHomeDir()
