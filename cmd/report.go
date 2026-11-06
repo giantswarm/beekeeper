@@ -20,7 +20,7 @@ import (
 )
 
 // reportFacts are what a status report says, read from beekeeper's state,
-// its event log, the machine and one GitHub request.
+// its event log, the machine and GitHub reads (draft pages when needed).
 type reportFacts struct {
 	From, To time.Time
 	Zone     *time.Location

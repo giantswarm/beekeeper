@@ -180,3 +180,73 @@ func TestLogAddRefusesUnlinkedRefs(t *testing.T) {
 		t.Fatalf("events = %+v, %v", evs, err)
 	}
 }
+
+func TestLogDetailOutput(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	details := []string{
+		strings.Repeat("report detail 界 ", 40) + "\nnext\tline\nfinal report detail",
+		"second report\nwith another line",
+	}
+	for _, detail := range details {
+		if err := store.Record(state.Event{At: now, Verb: "agents.report", By: state.Party{Name: workerRole}, Detail: detail}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Record(state.Event{At: now, Verb: "agents.problem", Detail: "excluded problem"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{litPlain, "short", "json", "json-short"} {
+		t.Run(mode, func(t *testing.T) {
+			var out bytes.Buffer
+			a := &app{store: store, out: &out, now: now, json: strings.Contains(mode, "json")}
+			c := a.logCmd()
+			args := []string{"--verb", "agents.report"}
+			if strings.Contains(mode, "short") {
+				args = append(args, "--short")
+			}
+			c.SetArgs(args)
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if a.json {
+				var events []state.Event
+				if err := json.Unmarshal(out.Bytes(), &events); err != nil {
+					t.Fatal(err)
+				}
+				if len(events) != len(details) {
+					t.Fatalf("got %d events, want %d", len(events), len(details))
+				}
+				for i, e := range events {
+					if e.Detail != details[i] {
+						t.Errorf("event %d detail = %q, want %q", i, e.Detail, details[i])
+					}
+				}
+				return
+			}
+			if strings.Contains(out.String(), "excluded problem") {
+				t.Fatal("verb filter included a problem")
+			}
+			if mode == "short" {
+				lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+				if len(lines) != len(details) {
+					t.Fatalf("got %d lines, want %d: %q", len(lines), len(details), out.String())
+				}
+				for i, line := range lines {
+					if !strings.Contains(line, "agents.report") || !strings.HasSuffix(line, truncate(details[i], 100)) {
+						t.Errorf("short entry %d = %q", i, line)
+					}
+				}
+				return
+			}
+			for _, detail := range details {
+				if !strings.Contains(out.String(), "  "+strings.ReplaceAll(detail, "\n", "\n  ")+"\n") {
+					t.Errorf("plain output lost detail: %q", out.String())
+				}
+			}
+		})
+	}
+}

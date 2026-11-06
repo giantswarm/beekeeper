@@ -214,6 +214,33 @@ func TestCopyToRemoteRefusesBeforeSSH(t *testing.T) {
 	}
 }
 
+func TestCopyToRemoteRejectsBlankBeforeEncoding(t *testing.T) {
+	f, err := secret.ParseRemoteFile(remoteSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, enc := range []secret.Encoding{{Base64: true}, {Base64: true, User: "example"}} {
+		for _, blank := range []string{"", " \n", "\t"} {
+			var calls []sshCall
+			o := remoteOps(t, &calls, nil)
+			o.Encode = enc
+			run := o.Run
+			o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+				if name == "op" {
+					return []byte(blank), nil
+				}
+				return run(ctx, dir, env, in, name, args...)
+			}
+			if _, err := o.CopyToRemote(context.Background(), secret.Ref{Op: vaultRef}, f); !errors.Is(err, secret.ErrEmptyValue) {
+				t.Errorf("blank source in %s: %v, want ErrEmptyValue", enc, err)
+			}
+			if len(calls) != 0 {
+				t.Errorf("blank source in %s reached ssh", enc)
+			}
+		}
+	}
+}
+
 // TestCopyToRemoteFailureRedacted: ssh failing answers an error without
 // the value, naming the target as kept.
 func TestCopyToRemoteFailureRedacted(t *testing.T) {

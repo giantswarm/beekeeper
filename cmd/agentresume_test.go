@@ -127,7 +127,7 @@ func TestReopenLeavesAloneWhatNeedsNoResume(t *testing.T) {
 		transcript, waits string
 		done              bool
 	}{
-		"parked on the person":   {backgroundTurn("sleep 600"), "Timo's answer on the rollout", false},
+		"parked on the person":   {backgroundTurn("sleep 600"), "Alex's answer on the rollout", false},
 		"parked on a note":       {backgroundTurn("sleep 600"), "note #12", false},
 		"finished":               {backgroundTurn("sleep 600"), "", true},
 		"no wait":                {"{}\n", "CI", false},
@@ -163,11 +163,11 @@ func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 	again.ResumedWait, again.ResumedOn = w.now.Add(-10*time.Minute), `"Wait for CI"`
 	st := &state.State{
 		Agents:  []state.Agent{parked, again},
-		Records: []state.Record{{Session: parked.Party, Waits: "Timo's go for the rollout"}},
+		Records: []state.Record{{Session: parked.Party, Waits: "Alex's go for the rollout"}},
 	}
 	w.stoppedAgents(st, nil)
 	s := out.String()
-	if !strings.Contains(s, `"Parked" (parked on a person: Timo's go for the rollout`) ||
+	if !strings.Contains(s, `"Parked" (parked on a person: Alex's go for the rollout`) ||
 		!strings.Contains(s, `"Again" (ended on a wait again after its resume at `) || !strings.Contains(s, `on "Wait for CI"`) {
 		t.Errorf("stopped line:\n%s", s)
 	}
@@ -175,7 +175,7 @@ func TestStoppedAgentsTellParkedFromEndedOnAWait(t *testing.T) {
 
 func TestParkedOn(t *testing.T) {
 	for waits, want := range map[string]bool{
-		"Timo's answer":           true,
+		"Alex's answer":           true,
 		"note #4 for the person":  true,
 		"the supervisor's go":     true,
 		"CI of PR 12":             false,

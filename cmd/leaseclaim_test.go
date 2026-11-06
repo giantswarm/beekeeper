@@ -340,3 +340,83 @@ func TestNewGrantFirst(t *testing.T) {
 		t.Errorf("queue %+v", q)
 	}
 }
+
+// Timer commands must not acquire (or queue) a lease for the watching session.
+func TestLeaseClaimRefusesTimerCommands(t *testing.T) {
+	for _, kind := range []string{"probe", "run"} {
+		t.Run(kind, func(t *testing.T) {
+			a := claimApp(t)
+			t.Setenv(envTimerCommand, kind)
+			_, err := runLease(a, "claim", labOne, "-p", "timer work")
+			if Code(err) != ExitRefused || !strings.Contains(err.Error(), "watch session, not the timer setter") {
+				t.Fatalf("claim: %v; want refusal explaining the inherited session", err)
+			}
+			if h, err := lease.Dir(a.cfg.LeaseDir).Get(labOne); err != nil || h != nil {
+				t.Fatalf("refused claim changed lease: %+v, %v", h, err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Grants) != 0 {
+				t.Fatalf("refused claim queued grants: %+v", st.Grants)
+			}
+		})
+	}
+}
+
+func TestLeaseConfiguredInstallation(t *testing.T) {
+	const installation = "customer"
+	a := claimApp(t)
+	a.cfg.Alerts.Installations = []config.Installation{{Name: installation}}
+	out, err := runLease(a, "claim", installation, "-p", "cut-over")
+	if err != nil || !strings.HasPrefix(out, "held by you since ") {
+		t.Fatalf("claim: %q, %v", out, err)
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(installation)
+	if err != nil || h == nil || !h.Party().Is(claimMe) || h.Purpose != "cut-over" {
+		t.Fatalf("holder = %+v, %v", h, err)
+	}
+	out, err = runLease(a, "status", installation)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), claimMe.Name) || !strings.Contains(err.Error(), "cut-over") {
+		t.Fatalf("status: %q, %v", out, err)
+	}
+	out, err = runLease(a, "list")
+	if err != nil || !strings.Contains(out, installation) || !strings.Contains(out, "cut-over") || !strings.Contains(out, claimMe.Name) {
+		t.Fatalf("list: %q, %v", out, err)
+	}
+	if out, err = runLease(a, leaseReleaseVerb, installation); err != nil {
+		t.Fatalf("release: %q, %v", out, err)
+	}
+	if out, err = runLease(a, "status", installation); err != nil || out != "free\n" {
+		t.Fatalf("released status: %q, %v", out, err)
+	}
+	for _, args := range [][]string{{leaseClaimVerb, kindUnknown, "-p", "cut-over"}, {leaseReleaseVerb, kindUnknown}} {
+		if _, err := runLease(a, args...); Code(err) != ExitUsage || !strings.Contains(err.Error(), "unknown resource") {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestLeaseConfiguredInstallationQueued(t *testing.T) {
+	const installation = "customer"
+	a := claimApp(t, claimGrant(installation, claimMe, time.Minute))
+	a.cfg.Alerts.Installations = []config.Installation{{Name: installation}}
+	holdLease(t, a, installation, claimOther)
+	out, err := runLease(a, "claim", installation, "-p", "cut-over")
+	if Code(err) != ExitRefused || !strings.HasPrefix(out, "queued: number 1 behind ") {
+		t.Fatalf("queued claim: %q, %v", out, err)
+	}
+	if err := lease.Dir(a.cfg.LeaseDir).Release(installation); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runLease(a, "claim", installation, "-p", "cut-over")
+	if err != nil || !strings.HasPrefix(out, "held by you since ") {
+		t.Fatalf("claim after release: %q, %v", out, err)
+	}
+}
+
+const (
+	leaseClaimVerb   = "claim"
+	leaseReleaseVerb = "release"
+)

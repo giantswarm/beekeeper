@@ -234,6 +234,9 @@ type SetupSpec struct {
 	// TeleportEvery is how often the Teleport login's keeper reads the
 	// expiry (teleport.every); zero writes no keeper.
 	TeleportEvery time.Duration
+	// TeleportLoginTimeout is each login attempt's configured timeout;
+	// the keeper's unit allows both attempts and cleanup.
+	TeleportLoginTimeout time.Duration
 	// Notify runs the standby watch with --notify (watch.notify).
 	Notify bool
 	// ConfigPath is the explicit configuration the loop service reads.
@@ -256,6 +259,9 @@ type Setup interface {
 	// Started reports whether the unit defined by the file at path is
 	// enabled and running.
 	Started(ctx context.Context, path string) bool
+	// NeedsStop reports whether the unit is enabled or running and needs
+	// cleanup before uninstall removes its definition.
+	NeedsStop(ctx context.Context, path string) bool
 	// Reload makes the service manager read changed files, nil when it
 	// needs no command for that.
 	Reload() []string
