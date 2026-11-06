@@ -132,7 +132,7 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 }
 
 func TestExecutionCIParkRejectsInvalidTargets(t *testing.T) {
-	for _, on := range []string{"", "#1", "hold merges", "other/repo#7"} {
+	for _, on := range []string{"", "#1", litHoldMerges, "other/repo#7"} {
 		t.Run(on, func(t *testing.T) {
 			a, _ := executionTestApp(t)
 			st, err := a.store.Read()

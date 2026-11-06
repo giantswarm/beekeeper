@@ -9,7 +9,7 @@ import (
 
 const runtimeLintCommand = "golangci-lint"
 
-var lintCommand = regexp.MustCompile(`(?m)` + pos + `(golangci-lint)\b`)
+var lintCommand = regexp.MustCompile(`(?m)` + pos + `((?:[^\s;&|()'"<>]*/)?golangci-lint)\b`)
 
 // RunTimeout bounds local slot occupancy, independently of the queue wait.
 // Slotless lab proofs and benchmarks retain their unbounded runtime unless

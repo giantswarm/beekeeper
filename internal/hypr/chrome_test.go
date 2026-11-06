@@ -30,6 +30,16 @@ type fake struct {
 	redirect bool
 }
 
+const hyprClients = "clients"
+
+const hyprDispatch = "dispatch"
+
+const hyprCreate = "create"
+
+const hyprMove = "move"
+
+const hyprOutput = "output"
+
 // open maps a window Chrome opens: on the output's workspace while the
 // redirect is on, else on the workspace the person's focused monitor shows.
 func (f *fake) open(w Window) {
@@ -44,7 +54,7 @@ var moveRE = regexp.MustCompile(`(?:workspace = "|movetoworkspacesilent )(?:name
 
 func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 	switch {
-	case slices.Equal(args, []string{"-j", "clients"}):
+	case slices.Equal(args, []string{"-j", hyprClients}):
 		return json.Marshal(f.windows)
 	case slices.Equal(args, []string{"-j", "monitors"}):
 		return json.Marshal(f.monitors)
@@ -59,7 +69,7 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		}
 	}
 	lua := args[0] == evalCmd || strings.HasPrefix(call, "dispatch hl.dsp.")
-	if slices.Contains([]string{evalCmd, "keyword", "dispatch"}, args[0]) && lua == f.classic {
+	if slices.Contains([]string{evalCmd, "keyword", hyprDispatch}, args[0]) && lua == f.classic {
 		return []byte("error: not this syntax"), nil
 	}
 	switch {
@@ -67,15 +77,15 @@ func (f *fake) ctl(_ context.Context, args ...string) ([]byte, error) {
 		f.redirect = true
 	case args[0] == evalCmd && strings.HasPrefix(args[1], redirectOff):
 		f.redirect = false
-	case slices.Equal(args, []string{"output", "create", "headless", Output}):
+	case slices.Equal(args, []string{hyprOutput, hyprCreate, "headless", Output}):
 		out := Monitor{ID: 1, Name: Output, X: -30000, Y: -30000, Width: Size[0], Height: Size[1], ActiveWorkspace: surface}
 		if f.onCreate != nil {
 			f.onCreate(f, &out)
 		}
 		f.monitors = append(f.monitors, out)
-	case slices.Equal(args, []string{"output", "remove", Output}):
+	case slices.Equal(args, []string{hyprOutput, "remove", Output}):
 		f.monitors = slices.DeleteFunc(f.monitors, func(m Monitor) bool { return m.Name == Output })
-	case args[0] == "dispatch":
+	case args[0] == hyprDispatch:
 		m := moveRE.FindStringSubmatch(args[1])
 		if m == nil {
 			return nil, errors.New("unexpected dispatch " + args[1])
@@ -259,7 +269,7 @@ func TestShowClassicSyntax(t *testing.T) {
 func TestRedirect(t *testing.T) {
 	on := redirectOn(hold)
 	for _, want := range []string{
-		`match = { class = "^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
+		`match = { class = "(?i)^(google-chrome|google-chrome-beta|google-chrome-unstable|chromium|chromium-browser)$" }`,
 		`workspace = "name:beekeeper-browse silent"`,
 		"no_initial_focus = true",
 		`suppress_event = "activate activatefocus fullscreen maximize"`,
@@ -275,6 +285,55 @@ func TestRedirect(t *testing.T) {
 	}
 	if re := regexp.MustCompile(browserPattern()); re.MatchString("chrome-tidal.com__-Default") || !re.MatchString(chromeClass) {
 		t.Errorf("browserPattern %q matches an app window or misses Chrome", browserPattern())
+	}
+}
+
+// Selection and redirection must agree on whole browser classes, including
+// XWayland capitalization, without admitting installed web apps.
+func TestBrowserPatternMatchesSelection(t *testing.T) {
+	re := regexp.MustCompile(browserPattern())
+	for _, class := range browserClasses {
+		for _, variant := range []string{class, strings.ToUpper(class), strings.ToUpper(class[:1]) + class[1:]} {
+			t.Run(variant, func(t *testing.T) {
+				if !isBrowser(Window{Class: variant}) || !re.MatchString(variant) {
+					t.Errorf("class %q: selected %v, redirected %v", variant, isBrowser(Window{Class: variant}), re.MatchString(variant))
+				}
+			})
+		}
+	}
+	for _, class := range []string{"chrome-tidal.com__-Default", "Chrome-tidal.com__-Default", "Google-chrome-app", "Chromium-app", "prefix-google-chrome", "firefox", "terminal", ""} {
+		if isBrowser(Window{Class: class}) || re.MatchString(class) {
+			t.Errorf("non-browser class %q selected or redirected", class)
+		}
+	}
+}
+
+func TestMixedCaseBrowserPopupLifecycle(t *testing.T) {
+	for _, class := range []string{"Google-chrome", "Chromium", "GOOGLE-CHROME-BETA", "Google-chrome-unstable", "Chromium-browser"} {
+		t.Run(class, func(t *testing.T) {
+			start := with(chrome, func(w *Window) { w.Class, w.Workspace = class, music })
+			f := &fake{windows: []Window{start}, monitors: []Monitor{laptop}}
+			s, err := Show(t.Context(), f.ctl, hold)
+			if err != nil || s == nil || !s.Moved || f.windows[0].Workspace != surface {
+				t.Fatalf("Show = %+v, %v; windows %+v", s, err, f.windows)
+			}
+			f.open(Window{Address: "0xe", Class: class, Floating: true})
+			f.open(Window{Address: "0xf", Class: "Chrome-tidal.com__-Default"})
+			f.open(Window{Address: "0xa", Class: "terminal"})
+			if f.windows[1].Workspace != surface || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 || f.monitors[0] != laptop {
+				t.Fatalf("during redirect: windows %+v, monitors %+v", f.windows, f.monitors)
+			}
+			if err := s.Restore(t.Context(), f.ctl); err != nil || s.Opened != 1 || s.Left != "" || f.redirect || len(f.monitors) != 2 {
+				t.Fatalf("Restore = %v, %+v, redirect %v, monitors %+v", err, s, f.redirect, f.monitors)
+			}
+			if f.windows[0] != start || f.windows[1].Workspace != music || f.windows[2].Workspace != ws2 || f.windows[3].Workspace != ws2 {
+				t.Fatalf("after Restore: windows %+v", f.windows)
+			}
+			f.open(Window{Address: "0xb", Class: class})
+			if f.windows[4].Workspace != ws2 {
+				t.Errorf("after redirect: popup on %+v", f.windows[4].Workspace)
+			}
+		})
 	}
 }
 
@@ -390,6 +449,70 @@ func TestBrowserIsTheLastFocused(t *testing.T) {
 	l := layout{windows: []Window{older, claudeW, chrome}}
 	if b := l.browser(); b == nil || b.Address != "0xc" {
 		t.Errorf("browser = %+v", b)
+	}
+}
+
+// Missing focus history must lose to every recorded focus ID, in either
+// client order. With no recorded history, keep the first browser.
+func TestBrowserMissingFocusHistory(t *testing.T) {
+	popup := with(chrome, func(w *Window) { w.Address, w.FocusHistoryID = "0xe", -1 })
+	for name, tc := range map[string]struct {
+		windows []Window
+		want    string
+	}{
+		"missing first":        {[]Window{popup, chrome}, chrome.Address},
+		"missing last":         {[]Window{chrome, popup}, chrome.Address},
+		"zero after missing":   {[]Window{popup, with(chrome, func(w *Window) { w.FocusHistoryID = 0 })}, chrome.Address},
+		"zero before missing":  {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = 0 }), popup}, chrome.Address},
+		"all missing":          {[]Window{claudeW, popup, with(chrome, func(w *Window) { w.FocusHistoryID = -1 })}, popup.Address},
+		"all missing reversed": {[]Window{with(chrome, func(w *Window) { w.FocusHistoryID = -1 }), popup}, chrome.Address},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := (layout{windows: tc.windows}).browser()
+			if b == nil || b.Address != tc.want {
+				t.Fatalf("browser = %+v, want %s", b, tc.want)
+			}
+		})
+	}
+}
+
+func TestShowIgnoresBrowserMissingFocusHistory(t *testing.T) {
+	main := with(chrome, func(w *Window) { w.Workspace = music })
+	popup := with(chrome, func(w *Window) { w.Address, w.FocusHistoryID = "0xe", -1 })
+	for _, popupFirst := range []bool{false, true} {
+		name := "main first"
+		windows := []Window{main, popup}
+		if popupFirst {
+			name, windows = "popup first", []Window{popup, main}
+		}
+		t.Run(name, func(t *testing.T) {
+			f := &fake{windows: windows, monitors: []Monitor{laptop}}
+			s, err := Show(t.Context(), f.ctl, hold)
+			if err != nil || s == nil || !s.Moved || s.Before != main {
+				t.Fatalf("Show = %+v, %v", s, err)
+			}
+			for _, w := range f.windows {
+				if w.Address == main.Address && w.Workspace != surface {
+					t.Errorf("main window workspace = %+v, want surface", w.Workspace)
+				}
+				if w.Address == popup.Address && w != popup {
+					t.Errorf("popup changed: %+v", w)
+				}
+			}
+			f.open(Window{Address: "0xf", Class: chromeClass})
+			if err := s.Restore(t.Context(), f.ctl); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range f.windows {
+				want := music
+				if w.Address == popup.Address {
+					want = popup.Workspace
+				}
+				if w.Workspace != want {
+					t.Errorf("window %s workspace = %+v, want %+v", w.Address, w.Workspace, want)
+				}
+			}
+		})
 	}
 }
 
@@ -607,5 +730,114 @@ func TestConsecutiveTurnsReuseOutput(t *testing.T) {
 	}
 	if creates != 1 {
 		t.Errorf("created output %d times", creates)
+	}
+}
+
+// Cancellation may arrive after the compositor applied a command but before
+// its response reached Show. Cleanup must use a live, bounded context and
+// return both the shared window and any redirected pop-up before removal.
+func TestShowRollsBackCancelledSetup(t *testing.T) {
+	for _, boundary := range []string{hyprCreate, "redirect", hyprMove} {
+		t.Run(boundary, func(t *testing.T) {
+			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			cancelled := false
+			ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+				if err := callCtx.Err(); err != nil {
+					return nil, err
+				}
+				if cancelled {
+					if _, ok := callCtx.Deadline(); !ok {
+						t.Error("cleanup context has no deadline")
+					}
+				}
+				out, err := f.ctl(callCtx, args...)
+				hit := boundary == hyprCreate && args[0] == hyprOutput && args[1] == hyprCreate ||
+					boundary == "redirect" && args[0] == evalCmd && strings.Contains(args[1], "set_enabled(true)") ||
+					boundary == hyprMove && args[0] == hyprDispatch
+				if !cancelled && hit {
+					if f.redirect {
+						f.open(Window{Address: "0xe", Class: chromeClass})
+					}
+					cancelled = true
+					cancel()
+					return nil, callCtx.Err()
+				}
+				return out, err
+			}
+			s, err := Show(ctx, ctl, hold)
+			if s != nil || err == nil || !cancelled {
+				t.Fatalf("Show = %+v, %v; cancellation reached: %v", s, err, cancelled)
+			}
+			if f.redirect || len(f.monitors) != 1 {
+				t.Errorf("after rollback: redirect %v, monitors %+v", f.redirect, f.monitors)
+			}
+			for _, w := range f.windows {
+				if w.Workspace != chrome.Workspace {
+					t.Errorf("window %s left on %+v", w.Address, w.Workspace)
+				}
+			}
+		})
+	}
+}
+
+// A failed setup may use an output retained by an earlier turn. Return its
+// redirected windows, but leave that output in place.
+func TestShowRollbackPreservesExistingOutput(t *testing.T) {
+	f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic(), {ID: 1, Name: Output, ActiveWorkspace: surface}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+		if err := callCtx.Err(); err != nil {
+			return nil, err
+		}
+		out, err := f.ctl(callCtx, args...)
+		if args[0] == evalCmd && strings.Contains(args[1], "set_enabled(true)") {
+			f.open(Window{Address: "0xe", Class: chromeClass})
+			cancel()
+			return nil, callCtx.Err()
+		}
+		return out, err
+	}
+	if s, err := Show(ctx, ctl, hold); s != nil || err == nil {
+		t.Fatalf("Show = %+v, %v", s, err)
+	}
+	if f.redirect || len(f.monitors) != 2 || slices.Contains(f.calls, remove) || f.windows[1].Workspace != chrome.Workspace {
+		t.Fatalf("after rollback: redirect %v, monitors %+v, windows %+v", f.redirect, f.monitors, f.windows)
+	}
+}
+
+func TestShowRollbackRetainsOutputWhenCleanupFails(t *testing.T) {
+	for _, failure := range []string{"redirect off", hyprClients, hyprMove} {
+		t.Run(failure, func(t *testing.T) {
+			f := &fake{windows: []Window{chrome}, monitors: []Monitor{underMagic()}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failed := false
+			ctl := func(callCtx context.Context, args ...string) ([]byte, error) {
+				if err := callCtx.Err(); err != nil {
+					return nil, err
+				}
+				if failed && (failure == "redirect off" && args[0] == evalCmd ||
+					failure == hyprClients && slices.Equal(args, []string{"-j", hyprClients}) ||
+					failure == hyprMove && args[0] == hyprDispatch) {
+					return nil, errors.New("cleanup refused")
+				}
+				out, err := f.ctl(callCtx, args...)
+				if !failed && args[0] == hyprDispatch {
+					failed = true
+					cancel()
+					return nil, callCtx.Err()
+				}
+				return out, err
+			}
+			if s, err := Show(ctx, ctl, hold); s != nil || err == nil || !strings.Contains(err.Error(), "cleanup refused") {
+				t.Fatalf("Show = %+v, %v", s, err)
+			}
+			if len(f.monitors) != 2 || slices.Contains(f.calls, remove) {
+				t.Fatalf("occupied output removed: %+v, commands %q", f.monitors, f.commands())
+			}
+		})
 	}
 }

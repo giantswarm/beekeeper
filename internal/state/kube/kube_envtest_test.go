@@ -230,7 +230,7 @@ func TestEnvtestRecords(t *testing.T) {
 		},
 		func(st *state.State) {
 			st.NextNote++
-			st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: "Timo", Text: "go?", By: ana, At: now, Kind: "decision", Refs: []string{"giantswarm/beekeeper#152"}})
+			st.Notes = append(st.Notes, state.Note{ID: st.NextNote, For: "Alex", Text: "go?", By: ana, At: now, Kind: "decision", Refs: []string{"giantswarm/beekeeper#152"}})
 		},
 		func(st *state.State) {
 			st.Merges = append(st.Merges, state.Merge{Repo: muster, PR: 7, Lane: graveler, By: ana, Phase: state.Running, Joined: now, Started: now})
