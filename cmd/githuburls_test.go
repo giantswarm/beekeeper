@@ -18,9 +18,9 @@ func TestGitHubURL(t *testing.T) {
 		t.Setenv("BEEKEEPER_TEST_URL", value)
 		want := strings.TrimRight(value, "/")
 		if want == "" {
-			want = "default"
+			want = paramDefault
 		}
-		if got := githubURL("BEEKEEPER_TEST_URL", "default"); got != want {
+		if got := githubURL("BEEKEEPER_TEST_URL", paramDefault); got != want {
 			t.Fatalf("got %q, want %q", got, want)
 		}
 	}
@@ -36,7 +36,7 @@ func TestGitHubURLsFromEnvironment(t *testing.T) {
 			}
 			return
 		}
-		flow, err := serveManifest(appOwner{login: "example"}, "example", "manifest.json", map[string]any{"name": "example"})
+		flow, err := serveManifest(appOwner{login: fixtureOrg}, fixtureOrg, "manifest.json", map[string]any{"name": fixtureOrg})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +59,7 @@ func TestGitHubURLsFromEnvironment(t *testing.T) {
 				requests <- r.Method + " " + r.URL.Path
 				if r.URL.Path == "/app-manifests/example-code/conversions" {
 					w.WriteHeader(http.StatusCreated)
-					_, _ = w.Write([]byte(`{"id":42,"slug":"example","client_id":"example-client","client_secret":"fake-secret","pem":"fake-key"}`))
+					_, _ = w.Write([]byte(`{"id":42,"slug":fixtureOrg,"client_id":"example-client","client_secret":"fake-secret","pem":"fake-key"}`))
 					return
 				}
 				w.WriteHeader(http.StatusForbidden)
