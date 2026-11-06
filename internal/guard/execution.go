@@ -12,6 +12,7 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/policycontent"
 )
 
@@ -523,7 +524,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-			if len(args) > 0 && args[0] == "api" {
+			if len(args) > 0 && args[0] == "api" && !github.GraphQLRead(args[1:]) {
 				for _, arg := range args[1:] {
 					lower := strings.ToLower(arg)
 					if strings.Contains(lower, "/merge") || lower == executionGraphQL || lower == "-f" || lower == "--field" || lower == "--raw-field" || strings.HasPrefix(lower, "--field=") || strings.HasPrefix(lower, "--raw-field=") || strings.HasPrefix(lower, "query=") && strings.Contains(lower, "mutation") || lower == "post" || lower == "put" || lower == executionPatch || lower == "delete" || lower == "--input" || strings.HasPrefix(lower, "--input=") {

@@ -87,13 +87,13 @@ relays one: while the loop is down the standby watch restarts its systemd
 service (Linux; on macOS launchd restarts a failed loop itself), and says
 SUPERVISOR LOOP DOWN and notifies until it runs again.
 
-Without a subcommand, shows whether the loop runs (exit 3 when it does not).`,
+Without a subcommand, shows whether the loop runs. A stopped loop is a valid status.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error { return a.supervisorStatus(cmd.Context()) },
 	}
 	status := &cobra.Command{
 		Use:   "status",
-		Short: "Show whether the supervisor loop runs (exit 3 when it does not)",
+		Short: "Show whether the supervisor loop runs",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return a.supervisorStatus(cmd.Context()) },
 	}
@@ -134,26 +134,30 @@ type supervisorView struct {
 	Pulls string `json:"pulls,omitempty"`
 }
 
-// supervisorStatus says whether the supervisor loop runs: exit 3 when not.
+// supervisorStatus reports the loop state; a stopped loop is a valid status.
 func (a *app) supervisorStatus(ctx ...context.Context) error {
 	c := context.Background()
 	if len(ctx) > 0 && ctx[0] != nil {
 		c = ctx[0]
 	}
-	pid := a.loopPID()
+	var pid int
+	if _, err := a.store.ReadFile(loopPIDFile, &pid); err != nil {
+		return fmt.Errorf("reading supervisor loop PID: %w", err)
+	}
+	if pid <= 0 || !proc.Alive(pid) {
+		pid = 0
+	}
 	var ver string
 	if pid > 0 {
 		ver = a.loopVersion(c, pid)
 	}
 	held, pulls := a.loopWaitLines()
 	if a.json {
-		_ = a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
+		return a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	if pid == 0 {
-		return refused("the supervisor loop does not run (%s)", loopServiceHint())
-	}
-	if a.json {
-		return nil
+		_, err := fmt.Fprintf(a.out, "the supervisor loop does not run (%s)\n", loopServiceHint())
+		return err
 	}
 	line := fmt.Sprintf("the supervisor loop runs (PID %d)", pid)
 	if ver != "" {
