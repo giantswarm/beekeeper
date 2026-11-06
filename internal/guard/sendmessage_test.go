@@ -56,6 +56,7 @@ func TestSendMessageRefusedWhenTheNameIsAmbiguous(t *testing.T) {
 }
 
 const guideHost = "local_g"
+const relayGuideFixture = "relay guide fixture"
 
 func TestSendMessageToARoleGoesToItsHolder(t *testing.T) {
 	holders := map[string]string{RoleSupervisor: "Supervisor run 60", RoleGuide: guideHost}
@@ -193,11 +194,11 @@ func TestSendMessageToAnInboxAgentIsDeliveredThere(t *testing.T) {
 		t.Fatalf("want the inbox's refusal, got %+v", d)
 	}
 	if d := decideSend(t, Hook{Inbox: func(_, name, _ string) (string, error) {
-		if name != "guide name" {
+		if name != relayGuideFixture {
 			t.Errorf("role inbox target %q", name)
 		}
 		return "", nil
-	}, Role: func(string) (string, error) { return "guide name", nil }}, "the guide"); d == nil || d.UpdatedInput["to"] != "guide name" {
+	}, Role: func(string) (string, error) { return relayGuideFixture, nil }}, "the guide"); d == nil || d.UpdatedInput["to"] != relayGuideFixture {
 		t.Fatalf("a role still goes to its holder: %+v", d)
 	}
 }

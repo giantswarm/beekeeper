@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/peer"
 )
+
+const relayInstructionDelivered = "delivered"
 
 // relayInstruction queues the payload before notifying the CLI. The peer
 // notification contains no copy of the payload, so a later peer delivery cannot
@@ -23,13 +26,18 @@ func (a *app) relayInstruction(ctx context.Context, session, address, msg string
 	_, err = (peer.Sender{Dir: a.cfg.StateDir}).Send(ctx, address,
 		"beekeeper has queued a relayed instruction for this session. It is delivered by the next beekeeper hook. If you are idle, make a tool call to receive it; do not repeat an instruction already delivered by a hook.")
 	status := peer.InstructionStatus(path)
-	if err != nil && status != "delivered" {
+	if err != nil && status != relayInstructionDelivered {
 		// No notification was accepted. Withdraw the pending instruction so callers
 		// can retry without leaving a duplicate behind.
-		if removeErr := os.Remove(path); errors.Is(removeErr, os.ErrNotExist) {
-			return "delivered", nil
+		root, openErr := os.OpenRoot(filepath.Dir(path))
+		if openErr != nil {
+			return reviewedMergeQueued, fmt.Errorf("instruction queued, but cannot open inbox: %w", openErr)
+		}
+		defer func() { _ = root.Close() }()
+		if removeErr := root.Remove(filepath.Base(path)); errors.Is(removeErr, os.ErrNotExist) {
+			return relayInstructionDelivered, nil
 		} else if removeErr != nil {
-			return "queued", fmt.Errorf("instruction queued, but notification failed: %w", err)
+			return reviewedMergeQueued, fmt.Errorf("instruction queued, but notification failed: %w", err)
 		}
 		return "", err
 	}

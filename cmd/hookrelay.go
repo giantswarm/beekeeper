@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/spf13/cobra"
+
+	"github.com/giantswarm/beekeeper/internal/peer"
 )
 
 func (a *app) relayHookCmd() *cobra.Command {

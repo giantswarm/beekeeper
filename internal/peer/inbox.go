@@ -75,6 +75,11 @@ func InstructionHook(stateDir, session, event string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = lock.Unlock() }()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -84,8 +89,8 @@ func InstructionHook(stateDir, session, event string) ([]byte, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".msg") {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		text, err := os.ReadFile(path)
+		path := entry.Name()
+		text, err := root.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
@@ -105,7 +110,7 @@ func InstructionHook(stateDir, session, event string) ([]byte, error) {
 		return nil, err
 	}
 	for _, path := range paths {
-		if err := os.Remove(path); err != nil {
+		if err := root.Remove(path); err != nil {
 			return nil, err
 		}
 	}

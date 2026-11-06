@@ -16,7 +16,7 @@ func TestRelayInstructionQueuesPayloadSeparately(t *testing.T) {
 	a.cfg.StateDir = t.TempDir()
 	sent := fakeRelay(t, false)
 	status, err := a.relayInstruction(context.Background(), "waiting", "recipient", "Click the OAuth consent")
-	if err != nil || status != "queued" {
+	if err != nil || status != reviewedMergeQueued {
 		t.Fatalf("relay: %s, %v", status, err)
 	}
 	if got := relayed(t, sent); len(got) != 1 || got[0] != "recipient" {
@@ -76,14 +76,18 @@ func TestRelayReportsDelivered(t *testing.T) {
 "$BEEKEEPER_TEST_RELAY_BINARY" -test.run '^TestRelayReportsDelivered$' >/dev/null || exit 1
 echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'
 `
-	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700); err != nil {
+	path := filepath.Join(dir, "claude")
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("BEEKEEPER_TEST_RELAY_HOOK", a.cfg.StateDir)
 	t.Setenv("BEEKEEPER_TEST_RELAY_BINARY", os.Args[0])
 	status, err := a.relayInstruction(context.Background(), "waiting", "recipient", "Click consent")
-	if err != nil || status != "delivered" {
+	if err != nil || status != relayInstructionDelivered {
 		t.Fatalf("relay: %s, %v", status, err)
 	}
 }
