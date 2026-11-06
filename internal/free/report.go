@@ -289,7 +289,7 @@ func (r *Run) heavy() {
 		case "Hyprland", "waybar", "kitty", "zenity":
 			continue
 		}
-		detail := p.Cmdline()
+		detail := processCommand(p)
 		if leaf := path.Base(cg); strings.HasSuffix(leaf, ".service") && strings.Contains(cg, "/user@"+strconv.Itoa(r.UID)+".service/") {
 			if units[leaf] {
 				continue
@@ -297,15 +297,15 @@ func (r *Run) heavy() {
 			units[leaf] = true
 			anon = r.cgroupAnonKiB(cg)
 			detail = "unit:" + leaf
-		} else if rs := []rune(detail); len(rs) > 120 {
-			detail = string(rs[:120])
+		} else {
+			detail = truncateProcessCommand(detail, 120)
 		}
 		rows = append(rows, row{anon, p.PID, uptime(p.Elapsed(r.Now)), p.Comm, oneLine(detail), why})
 	}
 	slices.SortStableFunc(rows, func(a, b row) int { return b.anon - a.anon })
 	for _, w := range rows {
 		r.emit("proc", w.pid, w.anon/1024, w.up, w.comm, w.detail, w.why)
-		r.say("  pid %-8d %5d MiB  up %-9s %-18s %-15s %s", w.pid, w.anon/1024, w.up, w.why, w.comm, truncate(w.detail, 70))
+		r.say("  pid %-8d %5d MiB  up %-9s %-18s %-15s %s", w.pid, w.anon/1024, w.up, w.why, w.comm, truncateProcessCommand(w.detail, 70))
 	}
 	if len(rows) == 0 {
 		r.say("  none above %d MiB or %d %% CPU for %d min", r.HeavyMiB, r.RunawayCPU, int(r.Runaway.Minutes()))
@@ -385,4 +385,21 @@ func truncate(s string, n int) string {
 		return string(rs[:n])
 	}
 	return s
+}
+
+func processCommand(p *proc.Process) string {
+	command, cut := proc.MaskedCommand(p.Args)
+	if cut {
+		command += " (masked)"
+	}
+	return command
+}
+
+// truncateProcessCommand keeps the omission marker visible at every output limit.
+func truncateProcessCommand(command string, n int) string {
+	const marker = " (masked)"
+	if strings.HasSuffix(command, marker) {
+		return truncate(strings.TrimSuffix(command, marker), n-len(marker)) + marker
+	}
+	return truncate(command, n)
 }

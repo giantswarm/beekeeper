@@ -22,6 +22,23 @@ confirms no execution exists, the coordinator releases the reservation: no
 worker remains registered and no host or desk slot is held. Start anew after
 resolving the host's refusal.
 
+## Retained execution routes
+
+New reservations persist the approved SSH destination, executable and configuration
+path with the execution. While that record is retained, catalog operations refuse
+a different endpoint or host identity for its selector (or a different endpoint
+under another selector for the same physical host). Restore the original catalog
+route to inspect, stop, reconcile or recover those executions. Policy updates do
+not change this route pin. Exited records retain the protection because their
+journals and transcripts can still be needed. Capacity remains counted by physical
+host identity, independent of selectors and endpoints.
+
+Records created before endpoint pins existed have no reconstructible original
+route and retain their previous catalog behavior. Keep their original catalog
+routes until they have been reconciled. The pin identifies the configuration
+path, not its contents: do not repoint an existing host configuration path to a
+new execution-state directory while its journals are retained.
+
 ## Provision the components independently
 
 Install the same beekeeper version on the coordinator and execution host. The
@@ -381,6 +398,49 @@ Claude. Codex usage stays on the coordinator: the remote worker counts against
 the configured `codex` provider's ceiling, and the coordinator's own usage
 reading covers the shared subscription; a host adds machine room only.
 
+### Codex lifecycle proof (#2281)
+
+Track the first live lifecycle at
+https://github.com/giantswarm/beekeeper/issues/2281. A passing fixture test is
+not a live proof. Before starting, verify the trust and reviewer-placement
+fixes integrated through PR #2291, the code-mode route in PR #2268, the
+coordinator CI wait in issue #2242, and parked publication/review retention
+from PR #2244 are merged, released and installed. Do not reproduce those
+changes in the proof branch.
+
+Use the existing supervisor-granted host lease procedure. If no execution-host
+resource is available to claim, stop the live phase and record the blocker;
+do not select a host outside that procedure. Use the existing subscription
+login and installed tools without changing accounts, logins or spending settings.
+
+On the leased host, record these observations in order:
+
+1. Record the installed beekeeper and Codex versions and subscription login
+   mode, then run host checks including forbidden push/merge probes. Start a
+   worker twice and verify the installed policy remains valid after each start.
+2. Verify the isolated worktree and execution identity, and that the coordinator
+   counts the worker once against the shared Codex ceiling. Have the worker
+   execute a shell command through its supported tool route, read the task issue
+   with `gh`, and run the repository's focused checks.
+3. Publish only its owned branch and open the proof PR. Record its commit and
+   PR URL. Request independent review, park on the coordinator's CI condition,
+   and wake through the coordinator. Verify the recorded thread, publication
+   and review request survive the wake, with one accepted wake receipt.
+4. Have the coordinator obtain independent review and explicit go for the exact
+   head before merging. Record the observed merge commit and URL. A proof run
+   subject to a no-merge instruction stops before this step and remains incomplete.
+
+Record a stable host alias, execution identity, thread metadata, versions,
+commit, PR URL and observed result. Keep the alias-to-hostname mapping private;
+public evidence must contain no hostnames, personal details, secret values or
+login files. Inventory residual artifacts under
+https://github.com/giantswarm/beekeeper/issues/2113. Keep #2281 open until the
+linked proof PR is merged and the complete live lifecycle has been observed.
+
+The runner requires `turn.completed` after acceptance before treating a turn
+as successful. A clean exit without that event fails the execution while
+preserving an already accepted wake receipt for coordinator recovery.
+
 ## Antigravity (agy) on an execution host
 
 A host may also run Antigravity (`agy` / Gemini) workers. Install a pinned `agy`
@@ -550,8 +610,55 @@ a process does not mark its task complete or remove its workspace.
 Inspection, including acknowledgement of a lease-expired unit, also preserves
 the workspace, its execution-owned Git repository and source bundle. Recover
 unpublished commits and local edits at the workspace path printed by `inspect`;
-stopping and repeating a stop do not authorize deletion. These retained files
-continue to consume disk until separately preserved and deliberately removed.
+stopping and repeating a stop do not authorize deletion.
+
+### Retirement
+
+The coordinator ends what an execution left through one resumable retirement.
+A final report, a stop, a failed start and a crash all enter it; the watch
+advances it, each execution on its own backoff, and records it under the
+execution's `retirement`. A parked worker, an open desk review or a finished
+round of an unfinished task does not enter it: the worktree and thread stay.
+
+The execution's inventory is in its host journal under `resources`, recorded
+before the resources exist: the worktree, its repository and branch, scratch,
+temporary files, caches, Go module and toolchain downloads, source bundle and
+credential dispatch directory. Workers run with `TMPDIR`, `XDG_CACHE_HOME`,
+`GOCACHE`, `GOPATH` and `GOMODCACHE` inside `<workspaceRoot>/<execution>`, so
+each build starts from a cold cache and leaves nothing in the host's home. Shared
+provisioned sources and toolchains are never part of an inventory, and an
+inventory naming anything but its own execution's paths refuses.
+
+1. **Revocation** runs first and on its own: neither an unreachable host nor a
+   GitHub outage blocks the other, and only a success records `revokedAt`. A
+   failure keeps `revokeError` and retries with `nextAttempt`.
+2. **Preservation** waits until the owned unit is confirmed ended, the log reached
+   the transcript store and no publication needs the execution. Commits, including
+   those only reflogs still reach, edits and untracked files that the starting
+   commit does not hold become one recovery commit, recorded as `refs/beekeeper/recovery/<execution>/<generation>` and
+   written as a verified bundle to `<state>/recovery/<execution>-<generation>.bundle`.
+   Work that cannot be read fails the step and everything stays in place.
+3. **Moving aside** renames `<workspaceRoot>/<execution>` to
+   `<workspaceRoot>/.retired/<execution>-<generation>`, and the source and
+   credential directories to `retired/<execution>-<generation>` beside the
+   journal. Nothing is deleted. A symlinked resource or parent, or one
+   overlapping a provisioned path, refuses and stays in place.
+
+The journal, log and control receipts stay as evidence, and so does the published
+branch. `retention` under `agents.execution` (a Go duration, default `168h`)
+sets `retainUntil` on the retired resources; nothing removes them yet.
+
+To recover preserved work, fetch the bundle into a clone holding its base commit:
+
+```bash
+git fetch <state>/recovery/<execution>-<generation>.bundle \
+  refs/beekeeper/recovery/<execution>/<generation>:refs/heads/recovered
+```
+
+Files ignored by Git are not in the bundle; they stay in the moved-aside tree. Its
+worktree link is stale after the move: run `git worktree repair` from the moved
+repository before using it. A desk stop holds the host's part until it is lifted
+and never holds revocation.
 
 Capped runs verify their worker identity, installed policy and live coordinator
 authority before taking a slot. Their scopes stop with the verified owned
@@ -996,6 +1103,11 @@ stay there; the worker receives devctl's output, diagnostics and exit code
 reruns without waiting for completion. Read the failure first and use this for
 transient CI failures; code failures still need a fix. A lost callback reply is
 not proof that no rerun started: inspect CI before trying again.
+
+The coordinator records `execution.ci-rerun-requested` before invoking devctl
+and `execution.ci-rerun-result` when it returns. These audit events name the
+repository and PR, with the result's exit code and whether the command errored;
+command output and credentials are excluded.
 
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,

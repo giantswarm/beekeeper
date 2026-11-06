@@ -356,10 +356,6 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		runningTag = "v0.171.0-rc.120"
 		runningSHA = "0dbeb8f"
 	)
-	oldCommit := currentCommit
-	t.Cleanup(func() { currentCommit = oldCommit })
-	currentCommit = func() string { return runningSHA }
-
 	refs := refsWithSHAJSON([][2]string{
 		{runningTag, runningSHA},
 		{"v0.171.0", "deadbeef"},
@@ -374,9 +370,69 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
 	})
+	currentCommit = func() string { return runningSHA }
 	res, err := Run(context.Background(), io.Discard, true)
 	if err != nil || res.Newer || res.Latest != runningTag {
 		t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, runningTag)
+	}
+}
+
+// The binary stamp must take precedence even when refs cannot identify the
+// running commit. Reject a newer version at an older commit before fetching its
+// release, then continue to a release whose commit is ahead of the stamp.
+func TestGitHubLookupUsesStampedRunningCommit(t *testing.T) {
+	const (
+		runningTag = "v0.170.0"
+		runningSHA = "1111111"
+		olderTag   = "v0.172.0"
+		olderSHA   = "2222222"
+		newerTag   = "v0.171.0"
+		newerSHA   = "3333333"
+	)
+	for _, tc := range []struct {
+		name   string
+		tagSHA string
+	}{
+		{name: "running tag absent"},
+		{name: "running tag points elsewhere", tagSHA: "4444444"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs := [][2]string{{olderTag, olderSHA}, {newerTag, newerSHA}}
+			if tc.tagSHA != "" {
+				refs = append(refs, [2]string{runningTag, tc.tagSHA})
+			}
+			var comparisons, releases []string
+			stubGitHub(t, runningTag, func(r *http.Request) (int, string, http.Header) {
+				switch r.URL.Path {
+				case "/repos/giantswarm/beekeeper/git/matching-refs/tags/v":
+					return 200, refsWithSHAJSON(refs), nil
+				case "/repos/giantswarm/beekeeper/compare/" + runningSHA + "..." + olderSHA:
+					comparisons = append(comparisons, olderSHA)
+					return 200, behindCompare, nil
+				case "/repos/giantswarm/beekeeper/compare/" + runningSHA + "..." + newerSHA:
+					comparisons = append(comparisons, newerSHA)
+					return 200, `{"status":"ahead"}`, nil
+				case "/repos/giantswarm/beekeeper/releases/tags/" + newerTag:
+					releases = append(releases, newerTag)
+					return 200, releaseJSON(newerTag, true, true), nil
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					return 500, `{}`, nil
+				}
+			})
+			currentCommit = func() string { return runningSHA }
+
+			res, err := Run(context.Background(), io.Discard, true)
+			if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != newerTag {
+				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, newerTag)
+			}
+			if got := strings.Join(comparisons, ","); got != olderSHA+","+newerSHA {
+				t.Errorf("compared commits %q; want older then newer against the stamp", got)
+			}
+			if got := strings.Join(releases, ","); got != newerTag {
+				t.Errorf("fetched releases %q; want only %s", got, newerTag)
+			}
+		})
 	}
 }
 

@@ -146,7 +146,7 @@ func TestSeedArchivesAgainOnlyWhatReseedTakes(t *testing.T) {
 	st := handOverState()
 	done := state.Party{Session: "w-done", HostSession: "local_w-done", Name: "reported done"}
 	back := state.Party{Session: "w-back", HostSession: "local_w-back", Name: "brought back"}
-	stale := state.Party{Session: "stale", HostSession: "local_stale", Name: "left stale"}
+	stale := state.Party{Session: kindStale, HostSession: "local_stale", Name: "left stale"}
 	st.Starts = []state.Start{{Party: supA}, {Party: supB}, {Party: done}, {Party: back}, {Party: stale}}
 	if _, _, err := guideRole.relay(st, supA, supB, relayNow, 15*time.Minute); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestHandoverChainOwesEachOldSession(t *testing.T) {
 		}
 	}
 	oweArchive(st, state.Party{Session: "chain-2", Name: name}, "handed over", archiveNow)
-	if host := oweArchive(st, state.Party{Session: "person", Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
+	if host := oweArchive(st, state.Party{Session: holderPerson, Name: name}, "handed over", archiveNow); host != "" || len(st.Archives) != 2 {
 		t.Fatalf("owed %q, archives %+v", host, st.Archives)
 	}
 	archived := map[string]bool{}

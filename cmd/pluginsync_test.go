@@ -255,7 +255,7 @@ func TestFirstRunSyncReportsOnlyChangedPlugin(t *testing.T) {
 		version string
 		changed bool
 	}{
-		{name: "unchanged", version: newPlugin},
+		{name: litUnchanged, version: newPlugin},
 		{name: "changed", version: oldPlugin, changed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -436,7 +436,7 @@ func TestPluginSyncPinsReleaseTag(t *testing.T) {
 					t.Fatal(err)
 				}
 				got := entries["beekeeper"]
-				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != "unchanged" || entries["other"].Source.Ref != mainBranch {
+				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != litUnchanged || entries["other"].Source.Ref != mainBranch {
 					t.Fatalf("registry at sync: %s", raw)
 				}
 				return run(ctx, args...)

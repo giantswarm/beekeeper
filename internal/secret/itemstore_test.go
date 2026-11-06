@@ -19,6 +19,8 @@ const (
 	plainType     = "STRING"
 )
 
+const itemstoreNotes = "notesPlain"
+
 // A store into an item writes every field in one op call, the
 // configuration as strings and the secrets concealed, creating the item
 // and keeping its other fields, and answers each field's length and
@@ -96,7 +98,7 @@ func TestStoreFirstSecretAfterText(t *testing.T) {
 	const next = "fixture-new-secret"
 	const existingPassword = "fixture-existing-password"
 	for _, api := range []string{"StoreValue", "StoreFields"} {
-		for _, label := range []string{"username", "notesPlain", appIDKey, storePasswordAttribute} {
+		for _, label := range []string{"username", itemstoreNotes, appIDKey, storePasswordAttribute} {
 			if api == "StoreValue" && label == appIDKey {
 				continue // StoreValue has no plain custom field option.
 			}

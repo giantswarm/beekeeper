@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const cacheModeFiles = "files"
+
 // cacheFile writes size bytes at root/rel, last written age ago, and moves
 // every directory between back as well.
 func cacheFile(t *testing.T, root, rel string, size int, age time.Duration) string {
@@ -89,10 +91,10 @@ func TestCacheEntriesBudgetTrimsOldestFirstButNotTheHour(t *testing.T) {
 }
 
 func TestCacheBudgetAccountsForEntriesRemovedDuringScan(t *testing.T) {
-	for _, mode := range []string{"entries", "files"} {
+	for _, mode := range []string{"entries", cacheModeFiles} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
-			files := mode == "files"
+			files := mode == cacheModeFiles
 			for i, name := range []string{"a", "b", "c"} {
 				rel := name
 				if !files {

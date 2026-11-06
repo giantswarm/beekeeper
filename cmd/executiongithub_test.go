@@ -143,7 +143,7 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
 	sopsDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sopsFile := filepath.Join(sopsDir, "worker-github.sops.yaml")
@@ -167,7 +167,7 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 				"user_code":        "ABCD-1234",
 				"verification_uri": "https://github.com/login/device",
 				testExpiresIn:      900,
-				"interval":         1,
+				intervalKey:        1,
 			})
 		case workerGitHubOAuthTokenPath:
 			_ = req.ParseForm()

@@ -208,6 +208,7 @@ func kubeconfigStamp(files []string) string {
 // the answers in the targets' order. Unless the Reader keeps its forwards,
 // every port-forward has ended when it returns.
 func (r *Reader) Read(ctx context.Context, targets []Target) []Answer {
+	r.retire(targets)
 	out := make([]Answer, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
@@ -215,6 +216,27 @@ func (r *Reader) Read(ctx context.Context, targets []Target) []Answer {
 	}
 	wg.Wait()
 	return out
+}
+
+// retire ends cached forwards no target uses any more, as leases end and
+// discoveries change. Active contexts keep their forwards across readings.
+func (r *Reader) retire(targets []Target) {
+	active := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		active[t.Context] = true
+	}
+	var retired []*portForward
+	r.mu.Lock()
+	for kubeContext, f := range r.held {
+		if !active[kubeContext] {
+			delete(r.held, kubeContext)
+			retired = append(retired, f)
+		}
+	}
+	r.mu.Unlock()
+	for _, f := range retired {
+		f.close()
+	}
 }
 
 // Close ends every port-forward the Reader keeps.
