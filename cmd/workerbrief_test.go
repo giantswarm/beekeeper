@@ -51,7 +51,7 @@ func TestWorkerPromptNamesTheScratchpad(t *testing.T) {
 	t.Setenv("TMPDIR", "/tmp")
 	p := fillScratchpad(workerPrompt(taskPrompt("BK 1 thing")), "/home/u/projects/notebook", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a")
 	pad := filepath.Join("/tmp", "claude-"+strconv.Itoa(os.Getuid()), "-home-u-projects-notebook", "8bf5cba8-50ec-4608-b1bc-a266c56e1e6a", "scratchpad")
-	if !strings.Contains(p, "Scratch goes in `"+pad+"`") || strings.Contains(p, scratchpadMark) {
+	if !strings.Contains(p, "Artifacts: `"+pad+"`") || strings.Contains(p, scratchpadMark) {
 		t.Errorf("the prompt does not name the scratchpad %s:\n%s", pad, p)
 	}
 	if !strings.Contains(p, `cd "${dir:?}"`) {

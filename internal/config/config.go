@@ -974,12 +974,6 @@ type Agents struct {
 	// unkept task holder is retired after this age; gone task holders free
 	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
-	// ArchiveAgreement says where the person agreed that the desktop
-	// sessions of finished workers beekeeper started are archived without
-	// asking, never a session the person started (their standing
-	// instruction, quoted to a steward). Empty: beekeeper asks no steward to
-	// archive, since a peer's message is not the person's agreement.
-	ArchiveAgreement string `yaml:"archiveAgreement"`
 	// AutoResume has the watch resume a parked agent (agents park) with
 	// what settled its wait, once the note it parked on is closed or the
 	// pull request merged or closed; off, the watch only says AGENT

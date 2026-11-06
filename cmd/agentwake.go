@@ -41,6 +41,13 @@ the outcome of a gated wait or a settled park reaches a waiter that never
 registered. A session that no longer exists (no transcript to resume, no
 harness process reading its inbox) is refused as gone.
 
+A worker taken off the roster is reached by its exact name too: it comes
+back on the roster with its last task, in its own conversation. Claude Code
+continues one whose CLI ended; an omp, agy or codex worker whose process
+ended is refused, and the refusal names its stored transcript. Only this
+command and agents resume do that: a timer or a settled wait for a finished
+worker wakes nobody.
+
 A message from a roster agent or a role's holder is headed with the name
 it is answered by ([from "<name>": reply by SendMessage to "<name>", …]):
 the relay turn that delivers it ends, and with it the peer socket its
@@ -95,6 +102,11 @@ desktop send to its local_ id by name to it, so no second copy starts.`,
 			by, err := a.caller()
 			if err != nil {
 				return err
+			}
+			if st, err := a.store.Read(); err == nil {
+				if s, ok := a.endedWorker(st, args[0]); ok {
+					return a.wakeEnded(cmd.Context(), by, s, msg, mode)
+				}
 			}
 			return a.wakeAgent(cmd.Context(), by, args[0], msg, mode)
 		},
