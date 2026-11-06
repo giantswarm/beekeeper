@@ -38,8 +38,10 @@ func codexArgs(model, workspace, thread string, effort ...string) []string {
 	}
 	// Supply trust in memory so Codex does not persist it in the policy-bound
 	// config.toml. Resumed turns need the same override as the first turn.
+	// Override the table: the CLI splits override keys on dots without TOML
+	// quoted-key parsing, so a quoted workspace in a dotted key fails strict mode.
 	project, _ := json.Marshal(workspace)
-	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects."+string(project)+".trust_level=\"trusted\"")
+	args = append(args, "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "-m", model, "-c", "projects={"+string(project)+"={trust_level=\"trusted\"}}")
 	if len(effort) > 0 && effort[0] != "" {
 		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(effort[0]))
 	}
@@ -87,7 +89,11 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 		}()
 	}
 	env := append(s.toolPath(s.codexEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
-	env, envErr := s.GitHubEnvironment(j, env)
+	env, envErr := s.ownedEnvironment(j, env)
+	if envErr != nil {
+		return envErr
+	}
+	env, envErr = s.GitHubEnvironment(j, env)
 	if envErr != nil {
 		return envErr
 	}
@@ -294,7 +300,7 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 		_ = wait()
 		return thread, false, err
 	}
-	accepted, failed := false, false
+	accepted, failed, completed := false, false, false
 	scan := bufio.NewScanner(stdout)
 	scan.Buffer(make([]byte, 64<<10), MaxWire)
 	for scan.Scan() {
@@ -327,6 +333,8 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 				}
 				thread = id
 			}
+		case codexTurnCompleted:
+			completed = accepted
 		case codexTurnFailed:
 			failed = true
 		case codexTurnStarted:
@@ -350,6 +358,12 @@ func (s *Server) codexTurn(ctx context.Context, ref Ref, h HarnessConfig, env []
 	}
 	if err == nil && failed {
 		err = errors.New("codex reported a failed turn")
+	}
+	// A clean process exit alone is not evidence that the accepted turn
+	// finished. Keep its delivery receipt, but surface the lifecycle failure
+	// instead of parking an interrupted worker as though it completed.
+	if err == nil && accepted && !completed {
+		err = errors.New("codex ended without completing its turn")
 	}
 	return thread, accepted, err
 }

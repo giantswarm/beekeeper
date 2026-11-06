@@ -31,7 +31,7 @@ type fakeBinary struct {
 	execs    [][]string
 }
 
-func (f *fakeBinary) Path() string   { return "/opt/beekeeper" }
+func (f *fakeBinary) Path() string   { return optBeekeeper }
 func (f *fakeBinary) Replaced() bool { return f.replaced }
 func (f *fakeBinary) Exec(env ...string) error {
 	f.execs = append(f.execs, env)
