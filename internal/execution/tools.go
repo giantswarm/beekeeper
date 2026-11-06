@@ -127,6 +127,21 @@ func (s *Server) probeTool(ctx context.Context, name string, t ToolConfig) error
 	return nil
 }
 
+// GitHubLoggedIn and GitHubLoggedOut are the host's own gh login.
+const (
+	GitHubLoggedIn  = "logged-in"
+	GitHubLoggedOut = "logged-out"
+)
+
+// gitHubLogin reads whether the host's gh has a login. gh auth token needs no
+// network; what it prints is dropped unread.
+func (s *Server) gitHubLogin(ctx context.Context) string {
+	if _, err := s.command(ctx, "", cleanEnvironment("", ""), s.Config.Tools[ToolGitHub].Executable, "auth", "token"); err != nil {
+		return GitHubLoggedOut
+	}
+	return GitHubLoggedIn
+}
+
 func toolsError(missing map[string]string) error {
 	var reasons []string
 	for name, reason := range missing {

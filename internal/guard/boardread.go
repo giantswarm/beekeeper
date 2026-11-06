@@ -71,7 +71,7 @@ func boardReadRefusal(cmd string, budget func() string) string {
 		"- add an issue with Team, Status and Kind: `beekeeper board add <owner/repo#n> --kind <kind>` (default Status: Backlog)\n" +
 		"- inspect an issue's board fields: `beekeeper board show <owner/repo#n>` (reads the issue's own `projectItems`)\n" +
 		"- for a personal-account repository, name it on every gh call with `GH_REPO=<owner/repo>` or `-R <owner/repo>` where supported, so the worker uses the person's login\n" +
-		"- set a field by a known item id: `GH_REPO=<owner/repo> gh project item-edit --id <item-id> --project-id <project-id> --field-id <field-id> ...`; an issue's `projectItems` can omit another owner's board\n" +
+		"- set a field by a known item id: `GH_REPO=<owner/repo> gh project item-edit --id <item-id> --project-id <project-id> --field-id <field-id> ...`; an issue's `projectItems` can omit another owner's board, so an empty answer is no proof it is off that board\n" +
 		"- move an item's Status, adding the issue to the board when it is missing: `beekeeper board move <owner/repo#n> <status>`; issues from any accessible repository use the configured board, subject to GitHub permissions; to prove access, move an existing item to its current status\n" +
 		"- find items: `gh project item-list <board> --owner <org> --query \"<filter>\"`, or `projectV2.items(query: \"<filter>\")`"
 }

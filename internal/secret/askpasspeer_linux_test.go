@@ -12,7 +12,12 @@ import (
 // A process that does not descend from git gets no answer on the socket,
 // though it runs as the same user and found the path.
 func TestAskpassAnswersGitsProcessesOnly(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "s")
+	dir, err := askpassDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, askpassSocket)
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -44,4 +49,34 @@ func TestAskpassAnswersGitsProcessesOnly(t *testing.T) {
 	}
 	_ = l.Close()
 	<-done
+}
+
+// A TMPDIR too deep for a Unix socket, as a build slot's can be, still leaves
+// the helper a directory that binds, private to this user.
+func TestAskpassDirBindsUnderADeepTMPDIR(t *testing.T) {
+	deep := filepath.Join(t.TempDir(), strings.Repeat("d", 60), strings.Repeat("e", 60))
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", deep)
+	dir, err := askpassDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if strings.HasPrefix(dir, deep) {
+		t.Fatalf("askpass directory stayed under the deep TMPDIR: %s", dir)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("askpass directory = %v, %v, want 0700", info, err)
+	}
+	l, err := net.Listen("unix", filepath.Join(dir, askpassSocket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = l.Close()
+	if entries, err := os.ReadDir(deep); err != nil || len(entries) != 0 {
+		t.Fatalf("the deep TMPDIR keeps %v, %v", entries, err)
+	}
 }

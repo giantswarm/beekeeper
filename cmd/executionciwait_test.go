@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -128,6 +129,35 @@ func TestExecutionCIParkSurvivesLostReplyAndWakesOnResult(t *testing.T) {
 				t.Fatalf("accepted CI wake did not end park: %v", err)
 			}
 		})
+	}
+}
+
+// CI that never settles wakes the worker too, at the wait a merge gives it.
+func TestExecutionCIParkWakesAtItsDeadline(t *testing.T) {
+	a, r := executionTestApp(t)
+	a.cfg.Merge.CITimeout = config.Duration{Duration: time.Hour}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.Request.Messaging = true
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	control := execution.ControlRequest{Ref: r.Ref, ID: "ci-deadline", Sequence: 1, Operation: execution.ControlPark,
+		Data: mustExecutionJSON(t, executionPark{On: sshTestRepository + "#7", Waits: "CI before desk review", Checks: true})}
+	var receipt execution.ControlResult
+	if err := coordinatorTestCall(t, a, r, "control", control, &receipt, false); err != nil || receipt.Error != "" {
+		t.Fatalf("park: %+v %v", receipt, err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Timers) != 1 || st.Timers[0].Until.IsZero() {
+		t.Fatalf("CI wait has no deadline: %+v", st.Timers)
+	}
+	_, _, fires, _ := settleTimers(st, map[int]checkResult{}, st.Timers[0].Until.Add(time.Minute))
+	if len(fires) != 1 || fires[0].t.Wake != r.Name || !fires[0].timedOut {
+		t.Fatalf("deadline did not wake the worker: %+v", fires)
 	}
 }
 
