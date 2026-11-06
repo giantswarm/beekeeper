@@ -81,6 +81,34 @@ func ReadRoster(ctx context.Context, client *http.Client, token, org string, now
 	return r, nil
 }
 
+// ReadTeam reads the logins of org's team slug with token, lower case and
+// sorted. GitHub answers 403 and 404 alike for a team the token may not read,
+// so both are ErrPermission, never an empty team.
+func ReadTeam(ctx context.Context, client *http.Client, token, org, slug string) ([]string, error) {
+	logins := []string{}
+	next := APIURL() + "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members?per_page=100"
+	for next != "" {
+		var page []struct {
+			Login string `json:"login"`
+		}
+		status, link, err := get(ctx, client, token, next, &page)
+		switch {
+		case err != nil:
+			return nil, err
+		case status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusNotFound:
+			return nil, fmt.Errorf("%w: the token may not read team %s of %s (GitHub answered %d %s)", ErrPermission, slug, org, status, http.StatusText(status))
+		case status != http.StatusOK:
+			return nil, fmt.Errorf("GitHub answered %d %s for team %s of %s", status, http.StatusText(status), slug, org)
+		}
+		for _, m := range page {
+			logins = append(logins, strings.ToLower(m.Login))
+		}
+		next = nextLink(link)
+	}
+	slices.Sort(logins)
+	return logins, nil
+}
+
 // get reads u with token into v when GitHub answers 200, and returns the
 // status and the Link header.
 func get(ctx context.Context, client *http.Client, token, u string, v any) (int, string, error) {

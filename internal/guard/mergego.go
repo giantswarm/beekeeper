@@ -165,7 +165,7 @@ func (h Hook) hiddenDeskMerge(text, where string, kind textKind) string {
 			return why + " (in " + where + ")"
 		}
 		return ""
-	} else if kind == textCode {
+	} else if kind == textCode || kind == textInline {
 		found := false
 		literals := stringLiterals(text)
 		for _, match := range looseDeskMerge.FindAllStringIndex(text, -1) {

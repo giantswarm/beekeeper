@@ -397,7 +397,8 @@ func ghAPIMethod(args []string) string {
 		case strings.HasPrefix(a, "-X") && len(a) > 2:
 			method = strings.ToUpper(a[2:])
 		case a == "-f" || a == "-F" || a == flagField || a == flagRawField || a == flagInput,
-			strings.HasPrefix(a, flagField+"="), strings.HasPrefix(a, flagRawField+"="), strings.HasPrefix(a, flagInput+"="):
+			strings.HasPrefix(a, flagField+"="), strings.HasPrefix(a, flagRawField+"="), strings.HasPrefix(a, flagInput+"="),
+			strings.HasPrefix(a, "-f") && len(a) > 2, strings.HasPrefix(a, "-F") && len(a) > 2:
 			fields = true
 		case ghAPIValued[a]:
 			i++

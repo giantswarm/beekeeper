@@ -78,7 +78,7 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 	return state.Party{}, false
 }
 
-// endedWorker is the latest local worker named q exactly that a wake cannot
+// endedWorker is the latest worker named q exactly that a wake cannot
 // reach otherwise: off the roster, parked nowhere, its session no role's. Only
 // a command naming it on purpose (agents wake, agents resume) looks here: a
 // timer or a settled wait for a finished worker must not bring it back.
@@ -88,7 +88,7 @@ func (a *app) endedWorker(st *state.State, q string) (state.Start, bool) {
 	}
 	var found state.Start
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
-		if s.Execution == nil && strings.EqualFold(s.Name, strings.TrimSpace(q)) && !s.At.Before(found.At) {
+		if strings.EqualFold(s.Name, strings.TrimSpace(q)) && !s.At.Before(found.At) {
 			task, conv := cmp.Or(s.Task, found.Task), cmp.Or(s.Conversation, found.Conversation)
 			found = s
 			found.Task, found.Conversation = task, conv
@@ -110,6 +110,9 @@ func endedMessage(task, msg string) string {
 // last task, in its own conversation. A session that cannot continue leaves
 // the roster as it was, and the refusal names its transcript.
 func (a *app) wakeEnded(ctx context.Context, by state.Party, s state.Start, msg, mode string) error {
+	if s.Execution != nil {
+		return a.wakeEndedExecution(ctx, by, s, msg)
+	}
 	var task string
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		if h := startsHold(st, a.now); h != nil {
