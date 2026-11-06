@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -141,6 +142,32 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
+	}
+}
+
+func TestSelfUpdateWarnsConfigCompatibility(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runUpdate
+	t.Cleanup(func() { runUpdate = previous })
+	var out bytes.Buffer
+	stopped := errors.New("stop before installation")
+	called := false
+	runUpdate = func(_ context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		called = true
+		if !strings.Contains(out.String(), "installed binary cannot read") || !strings.Contains(out.String(), "watch.interval") {
+			t.Fatalf("missing warning before update: %s", out.String())
+		}
+		return update.Result{}, stopped
+	}
+	root := New()
+	root.SetArgs([]string{"--" + configFlag, cfg, selfUpdateCmdName})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); !errors.Is(err, stopped) || !called {
+		t.Fatalf("update callback not reached: %v", err)
 	}
 }
 

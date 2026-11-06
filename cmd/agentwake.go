@@ -21,7 +21,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
-	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -207,11 +206,12 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		if err != nil {
 			return err
 		}
-		if _, err := (peer.Sender{Dir: a.cfg.StateDir}).Send(ctx, name, msg); err != nil {
+		status, err := a.relayInstruction(ctx, s.ID, name, msg)
+		if err != nil {
 			return fmt.Errorf("waking %s: %w", ag.Name, err)
 		}
 		_ = a.store.Record(event(by, "agents.wake", "%s: sent by name to its running CLI %d", ag.Name, s.PID))
-		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): sent by name, it runs the message at its next tool call or as its next turn\n", ag.Name, s.PID)
+		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): %s; instruction reaches its chat at the next tool or turn boundary\n", ag.Name, s.PID, status)
 		return err
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
@@ -264,6 +264,10 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 		}
 		_ = a.store.Record(event(by, "agents.wake", "%s: sent to its desktop CLI %d, which started meanwhile, instead of resuming it headless", w.name, pid))
 		_, err = fmt.Fprintf(a.out, "wake: %s: its desktop CLI %d runs: sent the message to it instead of resuming the session headless beside it\n", w.name, pid)
+		return err
+	}
+
+	if err := a.requireClaudeLogin(); err != nil {
 		return err
 	}
 	unit := wakeUnit(w.id)

@@ -359,15 +359,15 @@ func (ix *Index) redactText(s string) (string, []Finding) {
 	spans := disjoint(ix.matches(s), nil)
 	var patterns []span
 	for _, r := range tokenRules {
-		if !slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(s, k) }) {
+		if !slices.ContainsFunc(r.Keywords, func(k string) bool { return strings.Contains(s, k) }) {
 			continue
 		}
-		for _, m := range r.re.FindAllStringIndex(s, -1) {
-			if r.id == urlCredentials {
+		for _, m := range r.RE.FindAllStringIndex(s, -1) {
+			if r.ID == urlCredentials {
 				m[1]-- // the pattern ends on the host's first character
 			}
 			if !allowed(s, m[0]) {
-				patterns = append(patterns, span{m[0], m[1], r.id, false})
+				patterns = append(patterns, span{m[0], m[1], r.ID, false})
 			}
 		}
 	}

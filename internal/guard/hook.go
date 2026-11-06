@@ -136,8 +136,7 @@ type Hook struct {
 	SecretFiles []string
 	// Transcripts protects private conversation stores and explicit session grants.
 	Transcripts TranscriptAccess
-	// ConfigErr is why the configuration did not load: every Bash call is
-	// refused with it, since the guards it configures cannot run.
+	// ConfigErr enables restricted recovery commands when configuration cannot load.
 	ConfigErr error
 	// Shell is the shell a rewritten command runs in (sh -c semantics).
 	Shell string
@@ -424,13 +423,18 @@ func (h Hook) decide(ev event) []byte {
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)
+	if h.ConfigErr != nil {
+		decision := decisionDeny
+		if recoveryCommand(cmd) {
+			decision = decisionAllow
+		}
+		return answer(hookOutput{PermissionDecision: decision, Reason: h.recoveryReason()})
+	}
+
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
 	}
-	if h.ConfigErr != nil {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: beekeeper's configuration does not load, so its guards cannot run: " +
-			h.ConfigErr.Error() + ". Fix the file (the Edit tool still works), then rerun."})
-	}
+
 	cwd := ev.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()

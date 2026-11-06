@@ -1,23 +1,20 @@
 package alerts
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/giantswarm/beekeeper/internal/proc"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // query keeps the active, unsilenced alerts, the inhibited ones included:
@@ -29,8 +26,6 @@ const (
 	forwardWithin = 15 * time.Second
 	// requestTimeout bounds one Alertmanager request.
 	requestTimeout = 15 * time.Second
-	// stopGrace is how long a port-forward has after SIGTERM before it is killed.
-	stopGrace = 3 * time.Second
 )
 
 // retryPause is the pause before another attempt at a failed reading.
@@ -57,8 +52,6 @@ func (r *Reader) endpoints() []endpoint {
 	mimir := endpoint{"mimir", "mimir-alertmanager", 8080, "/alertmanager/api/v2/alerts", map[string]string{"X-Scope-OrgID": r.Tenant}}
 	return []endpoint{mimir, plain}
 }
-
-var forwarding = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
 
 // Target is an installation to read, the kube context that reaches it and
 // why it is read.
@@ -128,12 +121,9 @@ func ResolveContext(name, explicit string, template func(string) string, context
 	return ""
 }
 
-// Reader reads Alertmanagers through kubectl port-forwards. A Reader that
-// keeps its forwards holds each installation's open across reads, until
-// Close: a read is then an HTTP request, no kubectl or Teleport credential
-// plugin run (kubectl caches the credential until it expires).
+// Reader reads Alertmanagers through in-process client-go port-forwards.
 type Reader struct {
-	// Kubectl is the kubectl binary.
+	// Kubectl is retained for configuration compatibility; reads do not run it.
 	Kubectl string
 	// Kubeconfig are the kubeconfig files kubectl reads, as KUBECONFIG;
 	// empty, the environment's.
@@ -147,7 +137,9 @@ type Reader struct {
 	// and the kubeconfig's contexts until it changes; Close ends them.
 	Keep bool
 
-	mu sync.Mutex
+	// startForward allows tests to supply in-process forwards.
+	startForward func(context.Context, string, endpoint) (*portForward, string)
+	mu           sync.Mutex
 	// held is the open port-forward of each kube context, kept.
 	held map[string]*portForward
 	// contexts are the kubeconfig's contexts, read when its files were
@@ -157,8 +149,8 @@ type Reader struct {
 }
 
 // Contexts are the kubeconfig's context names; a Reader that keeps its
-// forwards asks kubectl again only once the kubeconfig changed.
-func (r *Reader) Contexts(ctx context.Context) []string {
+// forwards reloads them only once the kubeconfig changes.
+func (r *Reader) Contexts(_ context.Context) []string {
 	stamp := kubeconfigStamp(r.Kubeconfig)
 	if r.Keep {
 		r.mu.Lock()
@@ -168,10 +160,15 @@ func (r *Reader) Contexts(ctx context.Context) []string {
 		}
 		r.mu.Unlock()
 	}
-	contexts := kubeContexts(ctx, r.Kubectl, r.Kubeconfig)
-	if contexts == nil {
+	cfg, err := r.loadingRules().Load()
+	if err != nil {
 		return nil
 	}
+	contexts := make([]string, 0, len(cfg.Contexts))
+	for name := range cfg.Contexts {
+		contexts = append(contexts, name)
+	}
+	slices.Sort(contexts)
 	if r.Keep {
 		r.mu.Lock()
 		r.contexts, r.stamp = contexts, stamp
@@ -391,95 +388,14 @@ func get(ctx context.Context, port int, ep endpoint) Answer {
 	return Answer{OK: true, Alerts: raw}
 }
 
-// portForward is a running `kubectl port-forward` to an endpoint on a local
-// port, in its own process group so that its end takes everything it
-// started.
+// portForward owns a local listener and SPDY connection, with no child process.
 type portForward struct {
-	cmd    *exec.Cmd
 	cancel context.CancelFunc
-	out    *os.File
 	port   int
 	ep     endpoint
-	// exited is closed once the process has ended.
 	exited chan struct{}
 }
 
-// forward starts a port-forward to the endpoint and waits for its local port;
-// on failure it returns nil and the last line kubectl printed. A Reader that
-// keeps its forwards starts it beyond ctx, which bounds only the wait.
-func (r *Reader) forward(ctx context.Context, kubeContext string, ep endpoint) (*portForward, string) {
-	life := ctx
-	if r.Keep {
-		life = context.WithoutCancel(ctx)
-	}
-	fctx, cancel := context.WithCancel(life)
-	cmd := proc.Command(fctx, r.Kubectl, "--context", kubeContext, "-n", ep.namespace, //nolint:gosec // kubectl from the configuration
-		"port-forward", "svc/"+ep.service, fmt.Sprintf(":%d", ep.port))
-	proc.Kubeconfig(cmd, r.Kubeconfig)
-	ownGroup(cmd)
-	cmd.WaitDelay = stopGrace
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		cancel()
-		return nil, err.Error()
-	}
-	cmd.Stdout, cmd.Stderr = pw, pw
-	err = cmd.Start()
-	_ = pw.Close()
-	if err != nil {
-		cancel()
-		_ = pr.Close()
-		return nil, err.Error()
-	}
-	f := &portForward{cmd: cmd, cancel: cancel, out: pr, ep: ep, exited: make(chan struct{})}
-	go func() {
-		_ = cmd.Wait()
-		close(f.exited)
-	}()
-	// The lines kubectl prints until its port, then drained: a kept
-	// forward says every connection it handles, and a full pipe would
-	// stall it.
-	lines := make(chan string)
-	go func() {
-		defer close(lines)
-		sc := bufio.NewScanner(pr)
-		for sc.Scan() {
-			select {
-			case lines <- sc.Text():
-			case <-fctx.Done():
-			}
-		}
-	}()
-	timer := time.NewTimer(forwardWithin)
-	defer timer.Stop()
-	last := ""
-	for {
-		select {
-		case l, ok := <-lines:
-			if !ok {
-				f.close()
-				return nil, cmp.Or(last, fmt.Sprintf("no port-forward within %s", forwardWithin))
-			}
-			if m := forwarding.FindStringSubmatch(l); m != nil {
-				f.port, _ = strconv.Atoi(m[1])
-				go func() {
-					for range lines {
-					}
-				}()
-				return f, ""
-			}
-			last = strings.TrimSpace(l)
-		case <-timer.C:
-			f.close()
-			return nil, cmp.Or(last, fmt.Sprintf("no port-forward within %s", forwardWithin))
-		case <-ctx.Done():
-			f.close()
-			return nil, "timed out"
-		}
-	}
-}
-
-// running reports whether the forward's process still runs.
 func (f *portForward) running() bool {
 	select {
 	case <-f.exited:
@@ -489,9 +405,15 @@ func (f *portForward) running() bool {
 	}
 }
 
-// close ends the forward's process group and waits for it.
 func (f *portForward) close() {
 	f.cancel()
 	<-f.exited
-	_ = f.out.Close()
+}
+
+func (r *Reader) loadingRules() *clientcmd.ClientConfigLoadingRules {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if len(r.Kubeconfig) > 0 {
+		rules.Precedence = r.Kubeconfig
+	}
+	return rules
 }

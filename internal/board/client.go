@@ -21,9 +21,11 @@ import (
 // GraphQL API; Plans are the plans repositories (owner/repo) an epic's
 // plan is found in.
 type Client struct {
-	GH    github.GH
-	Board config.Board
-	Plans []string
+	// CacheDir optionally caches project metadata in the local state directory.
+	CacheDir string
+	GH       github.GH
+	Board    config.Board
+	Plans    []string
 }
 
 // field is a field of the board: a single-select one with its options, or
@@ -273,6 +275,17 @@ func (c *Client) owner() (string, error) {
 }
 
 func (c *Client) meta(ctx context.Context) (*meta, error) {
+	if m := c.cachedMeta(); m != nil {
+		return m, nil
+	}
+	m, err := c.readMeta(ctx)
+	if err == nil {
+		c.cacheMeta(m)
+	}
+	return m, err
+}
+
+func (c *Client) readMeta(ctx context.Context) (*meta, error) {
 	owner, err := c.owner()
 	if err != nil {
 		return nil, err

@@ -172,6 +172,9 @@ func logs(args []string) (state.Event, bool) {
 
 func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
+	oldParents := reviewParents
+	t.Cleanup(func() { reviewParents = oldParents })
+	reviewParents = func(context.Context, []string) ([]string, error) { return nil, nil }
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -943,15 +946,15 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	}
 }
 
-// Reviews need the coordinator's GitHub read and public review path, even
-// when hostsFirst prefers a host and the host has room.
-func TestLoopReviewersStayOnCoordinator(t *testing.T) {
+// Without supervisor host placement configured, reviewers use local capacity.
+func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 	for _, first := range []bool{false, true} {
 		for _, room := range []bool{false, true} {
 			for _, selfHosted := range []bool{false, true} {
 				t.Run(fmt.Sprintf("first=%t/room=%t/selfHosted=%t", first, room, selfHosted), func(t *testing.T) {
 					r := newLoopRig(t)
 					r.sshLoopHost(t, true)
+					r.a.cfg.Supervisor.Hosts = nil
 					r.a.cfg.Supervisor.HostsFirst = first
 					r.answer = func(args []string) (string, int) {
 						if args[0] == loopCapacity {
@@ -972,6 +975,9 @@ func TestLoopReviewersStayOnCoordinator(t *testing.T) {
 						return "", 0
 					}
 					act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "local-review", SelfHosted: selfHosted}
+					p := r.pull
+					p.Ref, p.URL = act.Ref, act.URL
+					r.pulls[act.Ref] = p
 					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
 					if !room {
 						if !errors.Is(err, errLoopLater) {
@@ -3000,9 +3006,8 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// Reviewers of a mixed queue retain every eligible local choice; hostsFirst
-// must not reserve the host-supported choices for remote reviews.
-func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
+// Reviewers of a mixed queue use local choices unsupported by the full host.
+func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -3029,8 +3034,8 @@ func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
-		t.Errorf("the reviewer start = %v, want local without exclusions", start)
+	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local with host choices excluded", start)
 	}
 }
 
@@ -3676,9 +3681,9 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	}
 }
 
-// GitHub-enabled reviewers follow the same placement preferences as workers,
+// Reviewers without a worker GitHub App follow the placement preferences of workers,
 // including Codex, and retain review and self-hosted capacity accounting.
-func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
+func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 	branch := ghDefaultBranch
 	t.Cleanup(func() { ghDefaultBranch = branch })
 	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
@@ -3689,7 +3694,7 @@ func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/first=%t/local=%t/selfHosted=%t", harness, first, localRoom, selfHosted), func(t *testing.T) {
 						r := newLoopRig(t)
 						r.sshLoopHost(t, true)
-						r.a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{}
+						r.a.cfg.GitHub.WorkerApp = nil
 						r.a.cfg.Supervisor.HostsFirst = first
 						r.a.cfg.Capacity.Choices[0].Harness = harness
 						h := r.a.cfg.Agents.Hosts[sshTestSelector]
@@ -3708,6 +3713,9 @@ func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
 							return "", 0
 						}
 						act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "remote-review", SelfHosted: selfHosted}
+						p := r.pull
+						p.Ref, p.URL = act.Ref, act.URL
+						r.pulls[act.Ref] = p
 						if _, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act); err != nil {
 							t.Fatal(err)
 						}

@@ -3,11 +3,15 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -28,6 +32,7 @@ func (c *stepClock) Timer(time.Duration) (<-chan time.Time, func()) { return nil
 // file, they are unknown.
 func upgradeKubectl(t *testing.T, dir, upgrading string) (kubectl, log string) {
 	t.Helper()
+	upgradeContexts(t, dir, strings.Join([]string{upgrading, "b", "c", "d", "e"}, "\n"))
 	kubectl, log = filepath.Join(dir, "kubectl"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
 if [ "$1" = config ]; then exec cat "` + dir + `/contexts"; fi
@@ -43,6 +48,21 @@ echo '{"items":[]}'
 		t.Fatal(err)
 	}
 	return kubectl, log
+}
+
+// Context discovery reads a kubeconfig directly; kubectl still supplies objects.
+func upgradeContexts(t *testing.T, dir, names string) {
+	t.Helper()
+	var data strings.Builder
+	data.WriteString("apiVersion: v1\nkind: Config\ncontexts:\n")
+	for _, name := range strings.Fields(names) {
+		fmt.Fprintf(&data, "- name: %q\n  context: {}\n", name)
+	}
+	path := filepath.Join(dir, "contexts.yaml")
+	if err := os.WriteFile(path, []byte(data.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
 }
 
 // phase makes the upgrading installation answer with the objects of the
@@ -272,9 +292,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
 	kubectl, log := upgradeKubectl(t, dir, "upgrading")
-	if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte("prod\nbroken\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	upgradeContexts(t, dir, snapshotInstallation+"\nbroken\n")
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
 		{Name: snapshotInstallation, Context: snapshotInstallation}, {Name: "broken", Context: "broken"},
@@ -322,9 +340,7 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 	kubectl, log := upgradeKubectl(t, dir, "upgrading")
 	contexts := func(names string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte(names), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		upgradeContexts(t, dir, names)
 	}
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
@@ -397,6 +413,7 @@ func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 
 func TestUpgradeRetryDoesNotReportUnreadable(t *testing.T) {
 	a, out := stubApp(t)
+	upgradeContexts(t, t.TempDir(), snapshotInstallation)
 	exe := filepath.Join(t.TempDir(), "kubectl")
 	script := `#!/bin/sh
 if [ "$1" = config ]; then echo prod; exit; fi
@@ -448,3 +465,116 @@ func TestSnapshotUpgradeFromHold(t *testing.T) {
 }
 
 const snapshotInstallation = "prod"
+
+// signalUpdateStore exposes when a competing watch reaches its transaction.
+type signalUpdateStore struct {
+	state.Store
+	attempted chan struct{}
+}
+
+func (s signalUpdateStore) Update(fn func(*state.State) ([]state.Event, error)) error {
+	close(s.attempted)
+	return s.Store.Update(fn)
+}
+
+func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
+	for _, firstRunning := range []bool{false, true} {
+		t.Run(fmt.Sprintf("first-running-%t", firstRunning), func(t *testing.T) {
+			a, _ := stubApp(t)
+			first := a.newWatcher(false, false)
+			// Separate stores model separate watch processes sharing a directory.
+			other, err := state.OpenVersion(a.store.Dir(), "dev")
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempted := make(chan struct{})
+			copyApp := *a
+			copyApp.store = signalUpdateStore{Store: other, attempted: attempted}
+			// Each watch gets its own output to avoid concurrent buffer writes.
+			copyApp.out = io.Discard
+			second := copyApp.newWatcher(false, false)
+			observed, release := make(chan struct{}), make(chan struct{})
+			doneFirst, doneSecond := make(chan struct{}), make(chan struct{})
+			status := func(running bool) []upgrade.Status {
+				s := upgrade.Status{Installation: snapshotInstallation}
+				if running {
+					s.Upgrades = []upgrade.Upgrade{{Cluster: "mc", To: "2"}}
+				}
+				return []upgrade.Status{s}
+			}
+			go func() {
+				defer close(doneFirst)
+				first.upgradeCycleRead(context.Background(), func(_ context.Context, _ *state.State, _ time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
+					close(observed)
+					<-release
+					return status(firstRunning)
+				})
+			}()
+			<-observed
+			seen := make(chan bool, 1)
+			go func() {
+				defer close(doneSecond)
+				second.upgradeCycleRead(context.Background(), func(_ context.Context, st *state.State, now time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
+					_, held := upgrade.Held(st, snapshotInstallation, now)
+					seen <- held
+					return status(!firstRunning)
+				})
+			}()
+			<-attempted
+			// The first observation still owns the state transaction.
+			lock := flock.New(filepath.Join(a.store.Dir(), "state.lock"))
+			acquired, err := lock.TryLock()
+			if acquired {
+				_ = lock.Unlock()
+			}
+			close(release)
+			<-doneFirst
+			<-doneSecond
+			if err != nil || acquired {
+				t.Fatalf("observation did not retain the state lock: acquired=%t err=%v", acquired, err)
+			}
+			if held := <-seen; held != firstRunning {
+				t.Errorf("second observation saw held=%t, want %t", held, firstRunning)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, held := upgrade.Held(st, snapshotInstallation, time.Now())
+			if held != !firstRunning {
+				t.Errorf("final held=%t, want %t", held, !firstRunning)
+			}
+		})
+	}
+}
+
+func TestDelayedUpgradeCachePublicationMergesLatest(t *testing.T) {
+	a, _ := stubApp(t)
+	other, err := state.OpenVersion(a.store.Dir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := *a
+	b.store = other
+	now := time.Now()
+	older := upgrade.Readings{}
+	older.Keep([]upgrade.Status{{Installation: snapshotInstallation}, {Installation: "old-only"}}, now)
+	newer := upgrade.Readings{}
+	newer.Keep([]upgrade.Status{{Installation: snapshotInstallation, Upgrades: []upgrade.Upgrade{{Cluster: "mc"}}}, {Installation: "new-only"}}, now.Add(time.Minute))
+	if err := b.publishUpgrades(context.Background(), newer); err != nil {
+		t.Fatal(err)
+	}
+	// The older reader finishes after the newer reader has published.
+	if err := a.publishUpgrades(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	var disk upgrade.Readings
+	if _, err := other.ReadFile(upgrade.ReadingsFile, &disk); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]upgrade.Readings{"caller": older, loopDiskKind: disk} {
+		if len(got) != 3 || !got[snapshotInstallation].At.Equal(now.Add(time.Minute)) || !got.Running(snapshotInstallation) {
+			t.Errorf("%s lost newer or disjoint readings: %+v", name, got)
+		}
+	}
+}
