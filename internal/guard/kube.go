@@ -114,7 +114,15 @@ func KubeGuardOff(production string, protectedContexts ...string) string {
 
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
-	return h.scanKube(commandText(cmd), kubeEnv{kubeconfig: h.Kubeconfig}, 0)
+	if r := h.scanKube(commandText(cmd), kubeEnv{kubeconfig: h.Kubeconfig}, 0); r != "" {
+		return r
+	}
+	for _, later := range laterCommands(cmd) {
+		if r := h.kubeRefusal(later); r != "" {
+			return r
+		}
+	}
+	return ""
 }
 
 func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
 func TestHookTextPayloads(t *testing.T) {
@@ -45,6 +47,61 @@ func TestHookTextPayloads(t *testing.T) {
 				t.Errorf("reason lacks %q: %s", want, d.Reason)
 			}
 		})
+	}
+}
+
+// Only text is exempt: what a timer or a login note runs later stays checked.
+func TestHookExecutedArgumentsStayChecked(t *testing.T) {
+	h := kubeHook(machineKC)
+	h.Production = "fixtureprod"
+	h.Leases = func() []lease.Holder { return nil }
+	for _, payload := range []string{"kubectl --context fixtureprod apply -f manifest.yaml", "muster auth login", "xdg-open https://example.com"} {
+		for _, command := range []string{
+			`beekeeper timer add 1m "check" --probe '` + payload + `'`,
+			`beekeeper timer add 1m "check" --run '` + payload + `'`,
+			`beekeeper timer add 1m "check" --probe='` + payload + `'`,
+			`beekeeper timer add 1m "check" --run="` + payload + `"`,
+			`beekeeper timer add --run '` + payload + `' 1m "check"`,
+			`beekeeper timer add 1m '--run=` + payload + `' "check"`,
+			`beekeeper timer add 1m "check" --unknown 'x' --run '` + payload + `'`,
+			`F=--run; beekeeper timer add $F '` + payload + `' 1m "check"`,
+			`beekeeper timer add 1m -- '` + payload + `'`,
+			`beekeeper note add "sign in" --kind login --until '` + payload + `'`,
+			`beekeeper note add "sign in" --default '` + payload + `'`,
+		} {
+			t.Run(command, func(t *testing.T) {
+				if d := decide(t, h, "/", command, nil); d == nil || d.PermissionDecision != decisionDeny {
+					t.Fatalf("expected refusal, got %+v", d)
+				}
+			})
+		}
+	}
+}
+
+func TestHookLaterCommandsMayRead(t *testing.T) {
+	h := kubeHook(machineKC)
+	h.Production = "fixtureprod"
+	for _, command := range []string{
+		`beekeeper timer add 1m "check" --probe 'kubectl --context fixtureprod get pods'`,
+		`beekeeper timer add 1m "check" --run 'beekeeper agents wake x done' --when 'pr-merged o/r#1'`,
+		`beekeeper note add "sign in" --kind login --until 'muster auth login --no-browser'`,
+	} {
+		t.Run(command, func(t *testing.T) { wantPassed(t, h, command) })
+	}
+}
+
+func TestAddTextArguments(t *testing.T) {
+	for _, tc := range []struct{ command, kept string }{
+		{`beekeeper timer add 1m 'muster auth login' --wake x`, "1m"},
+		{`beekeeper timer add --wake x 1m 'muster auth login'`, "--wake x 1m"},
+		{`beekeeper note add 'muster auth login' --why 'muster auth login' --for x`, "--for x"},
+		{`beekeeper note add 'muster auth login' --status-quo='muster auth login'`, ""},
+		{`beekeeper note add q --option 'muster auth login'`, "--option"},
+	} {
+		got := commandText(tc.command)
+		if strings.Contains(got, "muster") || !strings.Contains(got, tc.kept) {
+			t.Errorf("%s: masked to %s", tc.command, got)
+		}
 	}
 }
 

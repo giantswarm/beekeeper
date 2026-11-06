@@ -40,6 +40,11 @@ const musterNoBrowserEnv = "MUSTER_NO_BROWSER"
 // command that opens the person's browser runs only in the session holding the
 // browser lease.
 func (h Hook) browserRefusal(cmd, session string) string {
+	for _, later := range laterCommands(cmd) {
+		if r := h.browserRefusal(later, session); r != "" {
+			return r
+		}
+	}
 	if r := musterLoginRefusal(cmd); r != "" {
 		return r
 	}
