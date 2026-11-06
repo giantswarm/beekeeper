@@ -328,6 +328,9 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	switch path {
 	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents review", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
+	case logName:
+		cmd.RunE = a.remoteExecutionLog
+		return nil
 	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
 	case agentsName, "agents list":
@@ -644,6 +647,16 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	}
 	if !c.CIWait {
 		return c, refused("execution host lacks coordinator CI wait support; upgrade and prepare the host before starting workers")
+	}
+	// A worker reads GitHub with a scoped credential of the worker App, which
+	// takes the host's adapter (c.GitHub as the host reports it, and agents
+	// start refuses a host without it), or with the host's own gh login. An
+	// older host does not say whether it has one.
+	if a.cfg.GitHub.WorkerApp == nil {
+		c.GitHub = c.GitHubLogin != execution.GitHubLoggedOut
+	}
+	if a.cfg.GitHub.WorkerApp == nil && !c.GitHub {
+		return c, refused("execution host gives its workers no GitHub reads: github.workerApp is not configured on the coordinator and gh is not logged in on the host; configure the App, or log gh in there, before starting workers")
 	}
 	if !c.SourcePreparation {
 		return c, refused("execution host lacks source preparation protocol support (source upload and typed not-found); upgrade and prepare the host before starting workers")

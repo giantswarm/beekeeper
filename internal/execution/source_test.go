@@ -330,3 +330,35 @@ func TestWorkspaceProvisionsThirdRepository(t *testing.T) {
 		})
 	}
 }
+
+// A host nobody configured still gives its worker a commit identity; one the
+// execution user configured stays theirs.
+func TestPreparedWorkspaceCarriesCommitIdentity(t *testing.T) {
+	for name, tc := range map[string]struct{ config, want string }{
+		"unconfigured host": {"", WorkerGitName + " <" + WorkerGitEmail + ">"},
+		"configured host":   {"[user]\n\tname = Execution User\n\temail = execution@example.invalid\n", "Execution User <execution@example.invalid>"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := testFixture(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			if tc.config != "" {
+				if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(tc.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			handle, err := f.s.Start(t.Context(), f.r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := hostCommand(t.Context(), handle.Workspace, append(cleanEnvironment("", ""), "GIT_CONFIG_NOSYSTEM=1"), "git", "var", "GIT_AUTHOR_IDENT")
+			if err != nil {
+				t.Fatalf("a worker's commit identity does not resolve: %v", err)
+			}
+			if !strings.HasPrefix(string(out), tc.want+" ") {
+				t.Fatalf("identity = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}

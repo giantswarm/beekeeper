@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/github"
 )
 
 const (
@@ -239,8 +241,12 @@ func GitHubWrite(args []string) (bool, error) {
 // ValidateGitHubAPIRead parses the arguments after `gh api` the way gh does, so
 // that only GET and HEAD reach the shared token. A field makes gh default to
 // POST and stays a query parameter only under an explicit read method; a flag
-// not listed here, --input and --hostname among them, is refused.
+// not listed here, --input and --hostname among them, is refused. GraphQL's POST
+// passes only as a read that is literal in full (github.GraphQLRead).
 func ValidateGitHubAPIRead(args []string) error {
+	if github.GraphQLRead(args) {
+		return nil
+	}
 	unsupported := errors.New("worker gh api supports reads only")
 	endpoints, fields, method := 0, false, false
 	check := func(name, value string) error {
