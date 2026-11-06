@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -71,19 +70,10 @@ func TestRelayReportsDelivered(t *testing.T) {
 	}
 	a, _ := noteApp(t)
 	a.cfg.StateDir = t.TempDir()
-	dir := t.TempDir()
-	script := `#!/bin/sh
-"$BEEKEEPER_TEST_RELAY_BINARY" -test.run '^TestRelayReportsDelivered$' >/dev/null || exit 1
+	script := `"$BEEKEEPER_TEST_RELAY_BINARY" -test.run '^TestRelayReportsDelivered$' >/dev/null || exit 1
 echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'
 `
-	path := filepath.Join(dir, "claude")
-	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fakeRelayTurn(t, script)
 	t.Setenv("BEEKEEPER_TEST_RELAY_HOOK", a.cfg.StateDir)
 	t.Setenv("BEEKEEPER_TEST_RELAY_BINARY", os.Args[0])
 	status, err := a.relayInstruction(context.Background(), "waiting", "recipient", "Click consent")
