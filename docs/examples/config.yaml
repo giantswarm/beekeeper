@@ -68,6 +68,9 @@ kube:
   production: production
   # Additional production-class contexts, including full test installations.
   protectedContexts: [full-test, full-test-operations]
+  # Off by default. On, a recorded answer authorises one literal production
+  # kubectl delete, and an agent able to record an answer can forge that.
+  # productionNoteDeletes: false
   # Exact queries allowed on protected clusters via:
   # kubectl --context production exec pod/db -- psql -X -d app -c 'select * from conversations limit 5'
   # Only SELECT *, column lists or count(*) FROM a named relation, optionally
