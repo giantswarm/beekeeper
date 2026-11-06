@@ -50,6 +50,16 @@ Transcript access is enforced both in `beekeeper transcripts` (local and coordin
     beekeeper transcripts grant <worker> --session <session-or-ref> --ttl 1h
     ```
   - Grants are stored in `state.json` (`transcriptGrants`) and expire automatically at `expires`, or immediately when revoked with `beekeeper transcripts revoke <worker>`.
+  - A grant covers the stored transcript, not the files that session wrote: a file under a harness store needs `hooks.transcriptGrants`. The grant's output says so, and says when no stored transcript matches it yet.
+
+### What a Read Cannot Return
+
+`beekeeper transcripts read` opens with what the turns it returns do not hold, and with `--json` the same counts are in `loss`. A worker that continues from a predecessor learns from these lines what it does not have, and whether it can get it.
+
+- `# lost for good:` text the harness cut before the store read it (a `<truncated N bytes>` marker in its own transcript). No read brings it back.
+- `# not in the index:` tool results the store clipped to 4 KiB, each ending in `… <N bytes not stored>`, and tool calls of an ended session stored with no result. The source transcript may still hold them, which reading needs a `hooks.transcriptGrants` grant for; the line says so, or says the source is gone and they are lost too. A running session's calls without a result are counted apart: they may not have finished. A call answered with empty output is not counted.
+
+An agy transcript indexed before tool results were stored is read again once at the next sync, while its source exists. A remote execution's transcript is read again at its next log page.
 
 ## CLI Reference
 

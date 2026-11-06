@@ -3,7 +3,6 @@ package execution
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -16,14 +15,19 @@ import (
 
 const BundleSchema = 1
 const bundleRulesKind = "rules"
-const maxBundleBytes = 2 << 20
+const bundleSkillsKind = "skills"
+const bundlePluginsKind = "plugins"
+
+// maxBundleBytes leaves a bundle room inside the one wire request that carries it.
+const maxBundleBytes = MaxWire - 64<<10
 const maxArtifactBytes = 256 << 10
 
 // BundleSource explicitly approves one file. Directories are never harvested.
-// Rules use rules/<name>/AGENTS.md or CLAUDE.md; skills use skills/<name>/... .
+// Rules use rules/<name>/AGENTS.md or CLAUDE.md; skills use skills/<name>/... ;
+// plugins use plugins/<name>/skills/<skill>/... and plugins/<name>/commands/<file>.md.
 type BundleSource struct {
-	Source   string `json:"source"`
-	Artifact string `json:"artifact"`
+	Source   string `yaml:"source" json:"source"`
+	Artifact string `yaml:"artifact" json:"artifact"`
 }
 type BundleArtifact struct {
 	BundleSource
@@ -33,8 +37,8 @@ type BundleArtifact struct {
 
 // BundleCapability declares a dependency, never connector configuration or credentials.
 type BundleCapability struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required"`
+	Name     string `yaml:"name" json:"name"`
+	Required bool   `yaml:"required" json:"required"`
 }
 type CoordinatorBundle struct {
 	Schema       int                `json:"schema"`
@@ -88,11 +92,17 @@ func (b CoordinatorBundle) Validate() error {
 	}
 	previous := ""
 	rulesBytes := 0
-	skills := map[string]bool{}
+	skills, plugins := map[string]bool{}, map[string]bool{}
 	for _, a := range b.Artifacts {
 		parts := strings.Split(a.Artifact, "/")
-		if !safeRelative(a.Source) || !safeRelative(a.Artifact) || (a.Artifact <= previous || previous != "" && strings.HasPrefix(a.Artifact, previous+"/")) || len(parts) < 3 || (parts[0] != bundleRulesKind && parts[0] != "skills") {
+		if !safeRelative(a.Source) || !safeRelative(a.Artifact) || (a.Artifact <= previous || previous != "" && strings.HasPrefix(a.Artifact, previous+"/")) || len(parts) < 3 || (parts[0] != bundleRulesKind && parts[0] != bundleSkillsKind && parts[0] != bundlePluginsKind) {
 			return errors.New("invalid or duplicate bundle artifact path")
+		}
+		if parts[0] == bundlePluginsKind {
+			if !pluginDocument(parts) {
+				return fmt.Errorf("unsupported plugin artifact %s: a plugin travels as its skills and commands only", a.Artifact)
+			}
+			plugins[parts[1]] = true
 		}
 		if parts[0] == bundleRulesKind && (len(parts) != 3 || (parts[2] != "AGENTS.md" && parts[2] != claudeRulesFile)) {
 			return errors.New("unsupported rules artifact")
@@ -100,13 +110,8 @@ func (b CoordinatorBundle) Validate() error {
 		if !policycontent.RulesAllowed("/bundle/"+a.Source, nil) || !policycontent.RulesAllowed("/bundle/"+a.Artifact, nil) || len(a.Content) == 0 || len(a.Content) > maxArtifactBytes || !utf8.Valid(a.Content) || strings.IndexByte(string(a.Content), 0) >= 0 || len(policycontent.CredentialShapes(string(a.Content))) > 0 || Digest(a.Content) != a.Digest {
 			return fmt.Errorf("invalid or credential-shaped bundle artifact %s", a.Artifact)
 		}
-		if parts[0] == "skills" {
-			if _, ok := skills[parts[1]]; !ok {
-				skills[parts[1]] = false
-			}
-			if len(parts) == 3 && parts[2] == "SKILL.md" {
-				skills[parts[1]] = true
-			}
+		if skill, entry, ok := bundleSkill(parts); ok {
+			skills[skill] = skills[skill] || entry
 		}
 		if parts[0] == bundleRulesKind {
 			rulesBytes += len(a.Content)
@@ -132,51 +137,50 @@ func (b CoordinatorBundle) Validate() error {
 			return errors.New("invalid or duplicate capability declaration")
 		}
 		previous = c.Name
-		if c.Required {
-			return fmt.Errorf("unsupported required Codex capability %s", c.Name)
+		if plugin, ok := strings.CutPrefix(c.Name, "plugin:"); c.Required && (!ok || !plugins[plugin]) {
+			return fmt.Errorf("unsupported required capability %s", c.Name)
 		}
 	}
 	return nil
 }
 
-// SetCoordinatorBundle snapshots the validated bundle; callers cannot mutate it.
-// Installation still requires Prepare with the resulting operator-pinned Policy.
-func (s *Server) SetCoordinatorBundle(b CoordinatorBundle) error {
-	if err := b.Validate(); err != nil {
-		return err
+// pluginDocument admits the parts of a plugin that are documents: its skills and
+// its commands. Hooks, MCP servers and anything else that would execute on a host
+// have no representation, so the host's guards stay the only ones.
+func pluginDocument(parts []string) bool {
+	switch {
+	case len(parts) >= 5 && parts[2] == bundleSkillsKind:
+		return true
+	case len(parts) == 4 && parts[2] == "commands":
+		return strings.HasSuffix(parts[3], ".md")
 	}
-	if _, ok := s.Config.Harnesses[HarnessCodex]; !ok {
-		return errors.New("coordinator bundle requires Codex")
-	}
-	totalRules := len(s.Rules)
-	for _, a := range b.Artifacts {
-		if strings.HasPrefix(a.Artifact, "rules/") {
-			totalRules += len("\n\nCoordinator rules:\n") + len(a.Content)
-		}
-	}
-	if totalRules > maxArtifactBytes {
-		return errors.New("combined host and coordinator rules exceed Codex document limit")
-	}
-	var snapshot CoordinatorBundle
-	if err := Decode(mustJSON(b), &snapshot); err != nil {
-		return err
-	}
-	s.coordinatorBundle = &snapshot
-	return nil
+	return false
 }
 
-// LoadCoordinatorBundle restores the prepared snapshot for host guard invocations.
-func (s *Server) LoadCoordinatorBundle() error {
-	data, err := readRegular(filepath.Join(s.Root, "coordinator-bundle.json"), maxBundleBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// bundleSkill names the skill an artifact belongs to and says whether it is that
+// skill's entry point; ok is false for what is no skill.
+func bundleSkill(parts []string) (skill string, entry, ok bool) {
+	switch {
+	case parts[0] == bundleSkillsKind:
+		return parts[1], len(parts) == 3 && parts[2] == "SKILL.md", true
+	case parts[0] == bundlePluginsKind && parts[2] == bundleSkillsKind:
+		return parts[1] + "-" + parts[3], len(parts) == 5 && parts[4] == "SKILL.md", true
 	}
-	if err != nil {
-		return err
+	return "", false, false
+}
+
+// codexSkillFile is where codex reads a skill artifact from in its home, a
+// plugin's under skills/<plugin>-<skill>; ok is false for anything else, which
+// goes into its rules.
+func codexSkillFile(artifact string) (string, bool) {
+	parts := strings.Split(artifact, "/")
+	skill, _, ok := bundleSkill(parts)
+	if !ok {
+		return "", false
 	}
-	var b CoordinatorBundle
-	if err := Decode(data, &b); err != nil {
-		return err
+	depth := 2
+	if parts[0] == bundlePluginsKind {
+		depth = 4
 	}
-	return s.SetCoordinatorBundle(b)
+	return path.Join(append([]string{bundleSkillsKind, skill}, parts[depth:]...)...), true
 }

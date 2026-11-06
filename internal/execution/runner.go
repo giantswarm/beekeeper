@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,12 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	p, err := s.InstalledPolicy()
 	if err != nil || p.Digest() != j.BoundPolicy() {
 		return errors.New("execution rules or guards changed before launch")
+	}
+	// Everything below runs on the bundle this execution was admitted under,
+	// whichever one the coordinator has moved on to since.
+	s, err = s.boundTo(j.Request.BundleDigest)
+	if err != nil {
+		return err
 	}
 	co, ok := s.Config.Coordinators[j.Request.Coordinator]
 	if !ok {
@@ -131,7 +138,11 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 		return err
 	}
 	tools := "Bash,Read,Write,Edit,Grep,Glob"
-	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", streamJSONMode, "--verbose", "--append-system-prompt-file", filepath.Join(s.Root, "CLAUDE.md")}
+	args := []string{"--restricted", "--print", "--session-id", j.Handle.ConversationID, "--model", j.Request.Model, "--name", j.Request.Name, "--permission-mode", "acceptEdits", "--tools", tools, "--allowedTools", tools, "--settings", filepath.Join(s.Root, "settings.json"), "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--output-format", streamJSONMode, "--verbose", "--append-system-prompt-file", s.rulesFile()}
+	if j.continuing() {
+		// --session-id refuses a conversation that already exists.
+		args[slices.Index(args, "--session-id")] = "--resume"
+	}
 	if j.Request.Effort != "" {
 		args = append(args, "--effort", j.Request.Effort)
 	}
@@ -162,6 +173,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 			return err
 		}
 		defer stream.Close()
+		stream.continued = j.continuing()
 		c.Stdin = stream.reader
 	}
 	log, err := s.openLog(ref)
@@ -185,7 +197,7 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	if stream != nil {
 		stream.Start(j.Request)
 	}
-	ready := false
+	ready := j.continuing()
 	scan := bufio.NewScanner(stdout)
 	scan.Buffer(make([]byte, 64<<10), MaxWire)
 	for scan.Scan() {

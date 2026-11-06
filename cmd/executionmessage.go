@@ -25,6 +25,12 @@ func (a *app) enqueueExecutionWake(ctx context.Context, by state.Party, ag state
 	if text == "" || len(guard.CredentialShapes(text)) > 0 {
 		return refused("message is empty or credential-shaped")
 	}
+	// A settled wait goes on whatever became of the process that parked.
+	if ag.Park != nil || resume != nil {
+		if err := a.continueExecution(ctx, by, ag); err != nil {
+			return err
+		}
+	}
 	sender := execution.Sender{Session: by.Session, Name: by.Name, Host: by.Host}
 	key := a.executionRequestID
 	if key == "" {

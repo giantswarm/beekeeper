@@ -27,6 +27,8 @@ type transcriptAccess struct {
 	failed        bool
 	session       string
 	own           []transcriptOwnRoot
+	// job is the session's own job directory, "" for none.
+	job string
 }
 
 type transcriptOwnRoot struct {
@@ -52,7 +54,7 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 	}
 	agyRoots := append([]string{"~/.gemini/antigravity-cli/brain"}, h.Transcripts.AgyBrains...)
 	if home := os.Getenv(transcriptGeminiHome); home != "" {
-		agyRoots = append(agyRoots, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+		agyRoots = append(agyRoots, filepath.Join(home, geminiDir, "antigravity-cli", "brain"))
 	}
 	roots := []string{
 		"~/.claude/projects", "~/.claude/history.jsonl",
@@ -66,7 +68,7 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 	}{
 		{"CODEX_HOME", []string{transcriptSessions, "archived_sessions", "history.jsonl"}},
 		{transcriptClaudeConfig, []string{"projects", "history.jsonl"}},
-		{transcriptGeminiHome, []string{".gemini"}},
+		{transcriptGeminiHome, []string{geminiDir}},
 		{"PI_CODING_AGENT_DIR", []string{transcriptSessions, "agent.db"}},
 		{"OMP_CONFIG_DIR", []string{transcriptSessions, "agent.db"}},
 	} {
@@ -99,6 +101,14 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 					a.own = append(a.own, transcriptOwnRoot{p, layout.depth})
 				}
 			}
+		}
+	}
+	// The harness sets this for the hook and the session cannot change it. A
+	// directory holding a whole store is no session's own scratch.
+	if job := os.Getenv(transcriptJobDir); filepath.IsAbs(job) {
+		job = filepath.Clean(job)
+		if !slices.ContainsFunc(a.roots, func(root string) bool { return hasDirPrefix(root, job) }) {
+			a.job = job
 		}
 	}
 	if session != "" {
@@ -167,6 +177,9 @@ func (a transcriptAccess) denied(p string, recursive bool) bool {
 		return false
 	}
 	if glob < 0 {
+		if a.job != "" && hasDirPrefix(p, a.job) && hasDirPrefix(real, transcriptReal(a.job)) {
+			return false
+		}
 		for _, own := range a.own {
 			if a.owns(own.path, p, own.depth) && a.owns(transcriptReal(own.path), real, own.depth) {
 				return false
@@ -196,6 +209,7 @@ func (a transcriptAccess) owns(root, p string, depth int) bool {
 const (
 	transcriptClaudeConfig = "CLAUDE_CONFIG_DIR"
 	transcriptGeminiHome   = "GEMINI_CLI_HOME"
+	transcriptJobDir       = "CLAUDE_JOB_DIR"
 	transcriptTouch        = "touch"
 	transcriptChmod        = "chmod"
 	transcriptReadlink     = "readlink"
@@ -256,7 +270,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 	}
 	text := k < len(words) && isBeekeeperTextSubcommand(name, words[k+1:])
 	// Exempt only content-free utilities whose names are not shadowed.
-	metadata := name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
+	metadata := name == "du" || name == "df" || name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
 	// A test compares its operands or stats them; a pattern in [[ ]] is not
 	// even expanded. Substitutions inside it have their own segments.
 	metadata = metadata || inTest || name == "[[" || name == "[" || name == testCommand
@@ -309,7 +323,13 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 				return &leak{never: true, transcript: true}
 			}
 		}
-		for _, literal := range transcriptLiteralPath.FindAllString(word, -1) {
+		for _, match := range transcriptLiteralPath.FindAllStringIndex(word, -1) {
+			// A slash inside a relative path is not an absolute-path start.
+			// Keep quoted literals and assignment values in interpreter code.
+			if match[0] > 0 && !strings.ContainsRune(" \t\r\n\"'`(=,:+", rune(word[match[0]-1])) {
+				continue
+			}
+			literal := word[match[0]:match[1]]
 			// A slash in a jq operator or a shell parameter is not an absolute path.
 			if strings.Trim(literal, "/") != "" && !strings.Contains(word, "${") && a.candidateDenied(literal, dirs, recursive, true) {
 				return &leak{never: true, transcript: true}
@@ -322,13 +342,13 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 // candidateDenied checks one path a word may name, from every directory the
 // command may run in. embedded marks text the shell does not expand itself.
 func (a transcriptAccess) candidateDenied(candidate string, dirs []string, recursive, embedded bool) bool {
-	for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
+	for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, transcriptJobDir, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
 		if home := os.Getenv(env); home != "" {
 			candidate = strings.ReplaceAll(candidate, "${"+env+"}", home)
 			candidate = strings.ReplaceAll(candidate, "$"+env, home)
 		}
 	}
-	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, ".gemini") || strings.HasPrefix(candidate, ".omp")
+	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, geminiDir) || strings.HasPrefix(candidate, ".omp")
 	recurse := recursive || explicitHome && !strings.ContainsAny(candidate, "*?[")
 	for _, dir := range dirs {
 		p := wordPath(candidate, dir)

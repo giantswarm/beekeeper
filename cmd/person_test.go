@@ -160,3 +160,29 @@ func TestBrokeredPersonArgv(t *testing.T) {
 		}
 	}
 }
+
+// A team's logins come from the person's own login, one per line, and a team
+// that login may not read is permission missing, never an empty team.
+func TestPersonTeam(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer persontok" && r.URL.Path == "/orgs/acme/teams/platform/members" {
+			_, _ = w.Write([]byte(`[{"login":"Second"},{"login":"first"}]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("BEEKEEPER_GITHUB_API", srv.URL)
+	a := personApp(t, "persontok")
+	if out, err := askPerson(t, a, "--team", "platform"); err != nil || out != "first\nsecond\n" {
+		t.Errorf("person --team = %q, %v", out, err)
+	}
+	out, err := askPerson(t, a, "--team", "hidden")
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != ExitRefused || !strings.HasPrefix(out, github.ErrPermission.Error()) {
+		t.Errorf("person --team hidden = %q, %v, want permission missing and exit 3", out, err)
+	}
+	if _, err := askPerson(t, a, "--team", "platform", "login"); err == nil {
+		t.Error("person --team with a login passed")
+	}
+}

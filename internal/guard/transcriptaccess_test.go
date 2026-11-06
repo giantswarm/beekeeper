@@ -532,3 +532,81 @@ func TestTranscriptRuntimeProgramInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestTranscriptOwnJobDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	projects := filepath.Join(home, ".claude", "projects", "project")
+	job := filepath.Join(projects, "jobs", "own")
+	script := filepath.Join(job, "tmp", "run.sh")
+	foreign := filepath.Join(projects, "other.jsonl")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{script, foreign} {
+		if err := os.WriteFile(p, []byte("echo ok\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(job, "tmp", "link.jsonl")
+	if err := os.Symlink(foreign, link); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(command string) bool {
+		d := decide(t, h, home, command, nil)
+		return d != nil && d.PermissionDecision == decisionDeny
+	}
+	if !refused("bash " + script) {
+		t.Fatal("a store path passed with no job directory: the test proves nothing")
+	}
+	t.Setenv(transcriptJobDir, job)
+	for _, command := range []string{"bash " + script, "python3 " + script, "cat " + script, `bash "$CLAUDE_JOB_DIR/tmp/run.sh"`} {
+		if refused(command) {
+			t.Errorf("own job directory refused: %s", command)
+		}
+	}
+	for _, command := range []string{"cat " + foreign, "cat " + link, `cat "$CLAUDE_JOB_DIR/../../other.jsonl"`} {
+		if !refused(command) {
+			t.Errorf("transcript reachable from the job directory: %s", command)
+		}
+	}
+	t.Setenv(transcriptJobDir, filepath.Join(home, ".claude"))
+	if !refused("cat " + foreign) {
+		t.Error("a job directory holding a store exempted it")
+	}
+}
+
+func TestTranscriptOrdinaryWorktreeCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "worktrees", "task")
+	sessions := filepath.Join(home, ".codex", "sessions")
+	projects := filepath.Join(home, ".claude", "projects")
+	foreign := filepath.Join(sessions, "other.jsonl")
+	for _, command := range []string{
+		`grep -n 'TestTranscript' cmd/*_test.go`,
+		"grep token fixture" + filepath.Join(sessions, "synthetic.jsonl"),
+		"python3 <<'PY'\nfrom pathlib import Path\nPath('cmd/example_test.go').write_text('package cmd\\n')\nPY",
+		"du -sh " + filepath.Join(home, "cache") + " " + filepath.Join(home, "state", "worktrees"),
+		`ssh "$REMOTE" 'sed -n 1,20p projects/example/config/config.yaml'`,
+		"du -sh " + projects + " " + sessions,
+		"df " + sessions,
+		"stat " + foreign,
+	} {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("ordinary command refused: %s: %+v", command, d)
+		}
+	}
+	for _, command := range []string{
+		"cat " + foreign,
+		"grep token " + filepath.Join(projects, "project", "other.jsonl"),
+		"du -sh < " + foreign,
+		`du(){ cat "$1"; }; du ` + foreign,
+	} {
+		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("transcript reader passed: %s: %+v", command, d)
+		}
+	}
+}

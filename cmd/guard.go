@@ -467,7 +467,10 @@ This checks scope, not whether the session is currently alive.`,
 		Long: `pretooluse reads a PreToolUse event on stdin. A build, test, lint or lab
 command is rewritten to run through "beekeeper run -- <shell> -c '<command>'"
 (the absolute path of this binary, the configured shell), the tool timeout
-raised to 10 minutes; a background run gets a 60-minute wait instead. A
+raised to 10 minutes; a background run gets a 60-minute wait instead. In a
+flat list of simple commands only the builds go through it, so a clone or an
+edit beside a build runs at once; a line that leans on its own shell stays
+whole. A
 command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
@@ -731,6 +734,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if h.ConfigErr == nil {
 				h.ProductionNote = a.productionNoteAuthority()
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
+				h.GuideDesk = a.cfg.Guide.Desk
 				h.ReadOnlyExecQueries = a.cfg.Kube.ReadOnlyExecQueries
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts

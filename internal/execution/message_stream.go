@@ -23,6 +23,9 @@ type messageStream struct {
 	done      chan struct{}
 	listening chan struct{}
 	started   bool
+	// continued skips the brief: the conversation holds it already, and the
+	// next stored message is the turn.
+	continued bool
 	encode    func(Envelope, string) []byte
 }
 
@@ -68,9 +71,11 @@ func (m *messageStream) Start(r StartRequest) {
 	go func() {
 		defer close(m.done)
 		defer func() { _ = m.writer.Close() }()
-		initial := Envelope{ID: r.RequestID, Text: r.Prompt}
-		if _, err := m.writer.Write(m.encode(initial, r.ConversationID)); err != nil {
-			return
+		if !m.continued {
+			initial := Envelope{ID: r.RequestID, Text: r.Prompt}
+			if _, err := m.writer.Write(m.encode(initial, r.ConversationID)); err != nil {
+				return
+			}
 		}
 		m.signal()
 		for {

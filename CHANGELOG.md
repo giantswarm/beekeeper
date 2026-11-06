@@ -17,9 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A fix after a stable release is tagged as the next patch's release candidate; only the promotion tags it stable.
+- `guide.desk`: the guide's session writes files in this folder, its memory; commits stay the desk's ([#3296](https://github.com/giantswarm/beekeeper/issues/3296))
+- `beekeeper install` turns Claude Code's own memory off, on execution hosts too, and the hook refuses writes to Claude Code's, Codex's, agy's and omp's memory folders, naming the desk ([#3298](https://github.com/giantswarm/beekeeper/issues/3298))
+- `guide.personNames`: other names of the guide's person ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
 
 ### Fixed
 
+- `agents wake` and `agents resume` continue an SSH worker whose process exited, on or off the roster, and a settled wait continues a parked one: its host runs the same unit in the same workspace and conversation. A stopped or retired execution, or one on omp, is refused and the refusal names its transcript ([#3283](https://github.com/giantswarm/beekeeper/issues/3283)).
+- `beekeeper disk prune`, `disk holders` and the worktree trim resolve live process references once per scan instead of once per candidate, and each measured disk root and directory has its own read budget, so a large state directory cannot hide the user cache (https://github.com/giantswarm/beekeeper/issues/3244).
+- `note add --for` files a note for another name of the guide's person for that person, and refuses a name nobody on the desk goes by, so a decision never lands where no guide sees it ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
+- A central instance that answers "tool not found" is named as a version mismatch, not as unreachable ([#3205](https://github.com/giantswarm/beekeeper/issues/3205))
+- The merge skill reads branch protection through the GitHub API, which needs no muster login ([#3208](https://github.com/giantswarm/beekeeper/issues/3208))
 - The supervisor loop's sweep lists up to GitHub's 1000 open pull requests, reads at most 50 anew in a pass, least recently read first, and counts the pull requests without a live owner in `supervisor status` (https://github.com/giantswarm/beekeeper/issues/3210).
 - The verdict of a desk review reaches the session that started it, and `beekeeper agents review <ref> --verdict` prints the desk verdicts, a commented one included (https://github.com/giantswarm/beekeeper/issues/3286).
 - A review start holds to half of the worker's disk floor, so a disk just under the floor no longer stops every review (https://github.com/giantswarm/beekeeper/issues/3206).
@@ -34,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper disk usage` lists what holds the disk by owner: beekeeper's state by subdirectory, the user cache by program and every worktree, harness worktrees included (https://github.com/giantswarm/beekeeper/issues/3244).
+- An opt-in fleet watch in `beekeeper serve` reads each installation through central muster into the feed (https://github.com/giantswarm/beekeeper/issues/159).
+- `agents.policyBundle` carries the coordinator's approved rules and skills to a remote worker on every start: each start binds the bundle's digest, only a host that lacks it receives it, a failed transfer starts no worker, and `agents hosts check` reports a host whose bundle differs. An active or parked worker keeps the bundle it was admitted under (https://github.com/giantswarm/beekeeper/issues/2283, https://github.com/giantswarm/beekeeper/issues/2110).
+- `agents hosts check` accounts for retired, recovery and bundle resources and reports what a worker left in the account's state directory; `agents hosts reconcile` enters the shared retirement, and retirements proved disposable are removed after retention (https://github.com/giantswarm/beekeeper/issues/2285, https://github.com/giantswarm/beekeeper/issues/2113).
 - `beekeeper board add` adds an issue idempotently with Team, Status (default Backlog) and optional Kind; `beekeeper board show` prints its board fields using issue-scoped reads (https://github.com/giantswarm/beekeeper/issues/486).
 
 - SSH execution hosts inventory what each execution owns before creating it and retire it through one resumable lifecycle: a final report, stop, failed start or crash revokes the worker's GitHub authorization with durable retry, preserves unpublished commits, edits and untracked files as a verified recovery bundle, and moves the owned worktree, repository, scratch, caches, toolchain downloads, source bundle and credential directory aside without deleting them. Parked workers and open desk reviews keep theirs. Workers' temporary files and caches now live in their owned root, so each build starts from a cold cache; `agents.execution.retention` sets how long moved-aside resources are kept (https://github.com/giantswarm/beekeeper/issues/2284).
@@ -63,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Serialize Teleport renewals from the same desk, preserving browser ownership and keeper results during contention (https://github.com/giantswarm/beekeeper/issues/3028).
 - Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
@@ -296,7 +309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secret capture` and a `cmd://` source run their producer from the path beekeeper resolves itself, never the caller's `PATH`: the first of `/usr/bin`, `/bin` and `/usr/local/bin` that holds it, refused before it runs unless root owns it and every directory above it, none writable by a group or other users. It runs in `/` with a clean environment, `PATH=/usr/bin:/bin`, `HOME` from the user database and of the caller's variables only the locale and `TZ`: a session's wrapper first on `PATH`, `LD_PRELOAD`, `PYTHONPATH`, `BASH_ENV`, a proxy or a module in its working directory no longer reaches the generated value ([#1639](https://github.com/giantswarm/beekeeper/issues/1639)).
 - `beekeeper app allow` keeps several grants of one App: a second permission recorded for it keeps the first, instead of replacing the App's record. A grant recorded again (the App's consent, a permission's scope, a callback URL, its deletion) replaces that grant alone, so a Slack app's install consent and a GitHub App's grants under one name both hold. The hook decides an App's permissions and settings pages from every change and callback URL on record, and `app revoke` takes every grant of the App off the record. The stored records keep their format ([#1592](https://github.com/giantswarm/beekeeper/issues/1592)).
 - An answer to a note on the Kubernetes store (a central instance's `beekeeper serve`) is recorded whole: the API server caps a dated Event's message at 1024 bytes, and `answer.recorded` carries the note's question beside the words, so a ~470-character answer was refused and the note stayed open. An event detail over the limit is kept whole in the Event's annotation `beekeeper.giantswarm.io/detail`, the message clipped at a character boundary with `…`, and `beekeeper log`, the hand-over and the feed read the whole detail. An answer's words are at most 3000 characters, as `note answer`, `answer` and the `note_answer` tool say ([#1622](https://github.com/giantswarm/beekeeper/issues/1622)).
-- The doctor's archive of a relieved supervisor or guide run no longer waits for another idle steward forever: the run's own desktop CLI is asked, warmed when it does not run, as a finished worker's is. The request names the relieved run among the sessions the person's agreement covers, and says a standing archive rule in the session's own instructions says the same and that a role's consent boundary yields to it; the supervise skill's consent boundary names that request as the person's ask ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
+- The doctor's archive of a relieved supervisor or guide run no longer waits for another idle steward forever: the run's own desktop CLI is asked, warmed when it does not run, as a finished worker's is. The steward confirms eligible finished workers before archiving ([#1527](https://github.com/giantswarm/beekeeper/issues/1527)).
 - `beekeeper serve` records who answered a decision as the caller's verified email: the `answer.recorded` Event it keeps after the answered Note is deleted says `answered by "<email>"`, and the `NOTE ANSWERED #<n> by <email>` line the filer's machine watch delivers names it too, instead of the `serve.people` name the note was for ([giantswarm/giantswarm#37985](https://github.com/giantswarm/giantswarm/issues/37985)).
 
 - A relieved role run's or a hand-over predecessor's CLI no longer comes back after every start, reopen, wake or doctor's archive request: the show that imports or warms a session sends the desktop's window back to the session it showed before only when that session's work has not ended. The desktop warms the CLI of the session its window shows, so a window left on "Guide run 38" was sent back there after each show, the desktop warmed its CLI again, and the watch stopped it as REVIVED, several times a minute while sessions started ([#1611](https://github.com/giantswarm/beekeeper/issues/1611)).
@@ -1658,13 +1671,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The watch's doctor says an unchanged chore line once per watch instead of on every pass, and the finished workers waiting on an unset `agents.archiveAgreement` as one summary line (the count and the key to set), ended once none waits, instead of one line and event per agent every 30 s.
+- The watch's doctor says an unchanged chore line once per watch instead of on every pass.
 
 ## [0.91.1] - 2026-10-05
 
 ### Changed
 
-- The desktop sessions of finished workers are archived only under the person's agreement: `agents.archiveAgreement` says where they agreed (never for a session they started), the steward's request quotes it, and the steward runs the new `beekeeper agents archivable <local_id>…` first, which confirms each session is a finished worker beekeeper started and exits 3 for any other. Without it no steward is asked. The doctor reads each asked steward's turn: the line names the steward whose `archive_session` call archived a session, reports a decline with the first line of the reply, and asks a declining steward for no archive for 24 hours instead of again on every run ([README](README.md#agents-started-without-a-click)).
+- The steward runs `beekeeper agents archivable <local_id>…` before archiving and archives only confirmed finished workers beekeeper started. The doctor reports archive results and declines, waiting 24 hours before asking a declining steward again ([README](README.md#agents-started-without-a-click)).
 - The doctor owes, once, the archive of every finished worker beekeeper started whose desktop record stayed unarchived, its CLI running or not, and asks for at most 20 owed archives per run.
 - A reopen never warms a desktop CLI beside a headless turn: it looks for the session's wake right before it shows the session, after its wait for the person, and the standby watch does not resume a role's holder whose reopen runs while it asked for a desktop turn (`agents desktop`), since that reopen shows it at once.
 

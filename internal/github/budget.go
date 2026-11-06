@@ -25,9 +25,9 @@ import (
 	"time"
 )
 
-// apiURL is GitHub's API; BEEKEEPER_GITHUB_API points the probes at
+// APIURL is GitHub's API; BEEKEEPER_GITHUB_API points the probes at
 // another (a test's own server).
-func apiURL() string {
+func APIURL() string {
 	return cmp.Or(strings.TrimSuffix(os.Getenv("BEEKEEPER_GITHUB_API"), "/"), "https://api.github.com")
 }
 
@@ -141,7 +141,7 @@ func Token(ctx context.Context) (string, error) {
 // Probe reads the budget with a conditional GET of repo ("owner/name") and
 // returns it with the ETag to send next time.
 func Probe(ctx context.Context, client *http.Client, token, repo, etag string) (Budget, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL()+"/repos/"+repo, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, APIURL()+"/repos/"+repo, nil)
 	if err != nil {
 		return Budget{}, etag, err
 	}
@@ -200,7 +200,7 @@ const rateLimitQuery = `{"query":"{ viewer { login } rateLimit { limit remaining
 // even while the counter looks healthy: a secondary limit refuses with
 // headroom left.
 func ProbeGraphQL(ctx context.Context, client *http.Client, token string, now time.Time) GraphQL {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL()+"/graphql", strings.NewReader(rateLimitQuery))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, APIURL()+"/graphql", strings.NewReader(rateLimitQuery))
 	if err != nil {
 		return GraphQL{Err: err.Error()}
 	}
@@ -270,7 +270,7 @@ func ProbeGraphQL(ctx context.Context, client *http.Client, token string, now ti
 // ProbeSearch reads the search and code-search limits from /rate_limit,
 // which costs no request of any limit.
 func ProbeSearch(ctx context.Context, client *http.Client, token string) Searches {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL()+"/rate_limit", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, APIURL()+"/rate_limit", nil)
 	if err != nil {
 		return Searches{Err: err.Error()}
 	}

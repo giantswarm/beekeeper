@@ -2,11 +2,13 @@ package worktrees
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/github"
@@ -110,6 +112,33 @@ func Automatic(t Tree, pull *github.HeadPull, gone, harness, live, pushed bool, 
 // Linked reports whether a directory is a linked checkout, including a
 // dangling one; a main checkout is not eligible for automatic removal.
 func Linked(dir string) bool { return linked(dir) }
+
+// Containing returns the linked worktree dir lies in, at or above it: the
+// nearest .git decides, so a checkout inside a worktree is not that worktree.
+// It is "" for none; an error says that could not be told, and a caller
+// protecting work treats that as a worktree.
+func Containing(dir string) (string, error) {
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		fi, err := os.Lstat(filepath.Join(p, ".git"))
+		switch {
+		case err == nil && fi.Mode().IsRegular():
+			if _, err := os.ReadFile(filepath.Join(p, ".git")); err != nil { //nolint:gosec // a session's own folder
+				return "", err
+			}
+			if linked(p) {
+				return p, nil
+			}
+			return "", nil
+		case err == nil:
+			return "", nil
+		case !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+			return "", err
+		}
+		if p == filepath.Dir(p) {
+			return "", nil
+		}
+	}
+}
 
 // NestedCheckout protects checkouts inside a worktree, including harness
 // worktrees and repositories under ignored build directories.

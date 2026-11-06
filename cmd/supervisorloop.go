@@ -36,6 +36,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 // loopParty is the party the supervisor loop acts and logs as.
@@ -540,7 +541,7 @@ its key first in the detail):
             the host acknowledged its termination. Each pass also runs the
             doctor's roster and archive step (removing finished, relieved
             and stale entries with no CLI, archiving owed desktop sessions
-            under agents.archiveAgreement and stopping finished or relieved
+            and stopping finished or relieved
             background sessions). A session its person started is never
             retired
   next      after a done, and every pass below capacity.ceiling while capacity
@@ -2721,7 +2722,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
-	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
+	_, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
 	return err
 }
 
@@ -3625,7 +3626,7 @@ func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (s
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
-	if l.holdingStarts() {
+	if l.holdingStarts() || l.a.recoveryHeld() != "" {
 		return "", errLoopLater
 	}
 	k := l.a.cfg.Supervisor
@@ -3865,6 +3866,14 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 		return "", err
 	}
 	if st.AutoInstallPaused {
+		return "", errLoopLater
+	}
+	if why := l.a.recoveryHeld(); why != "" {
+		l.sayOnce("recovery-hold", "%s", why)
+		return "", errLoopLater
+	}
+	// A candidate under supervision gets its verdict before the next one.
+	if exe, err := os.Executable(); err == nil && update.WatchedProbation(exe) {
 		return "", errLoopLater
 	}
 

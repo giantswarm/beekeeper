@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/diskprune"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -60,7 +61,7 @@ func holdersFixture(t *testing.T) (*app, string, holderMachine) {
 	recent := a.now.Add(-time.Hour)
 	_ = os.Chtimes(filepath.Join(root, "aside/fresh/file"), recent, recent)
 	m := holderMachine{
-		refs: []string{filepath.Join(root, "inuse-holder", "data")},
+		live: diskprune.NewRefs([]string{filepath.Join(root, "inuse-holder", "data")}),
 		st: &state.State{
 			Agents: []state.Agent{
 				{Party: state.Party{Name: "BK 807 open"}, Task: "Work https://github.com/giantswarm/klaus/issues/807"},

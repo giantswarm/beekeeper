@@ -19,7 +19,7 @@ Stricter wins.
 - **Secrets.** Never read, print or compare a value, even hashed, but by `beekeeper secret compare|fingerprint`: keys/metadata only. Cluster: name context/kubeconfig; never write `kube.production`.
 - **Tests.** Focused checks; 1 push/round; read failures, rerun (`-run`); `set -o pipefail`. Review proofs; CI checks all.
 - **Git.** No force push (even `--force-with-lease`). Before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. Own worktree; commit, no stash.
-- **Files.** Scratch goes in `<scratchpad>` or `~/.local/state/<program>/`, never `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
+- **Files.** Artifacts: `<scratchpad>`; scratch also `~/.local/state/<program>/`, not `~`, `~/projects`, main checkouts; `cd "${dir:?}"`, `>|`.
 - **No polling**: no `--watch`/sleep loops; `devctl pr wait|merge` block, never under `timeout`.
 - **Stop**: kill by PID; gated: `beekeeper gate stop`. Move aside; no hard-delete.
 - **Near `agents.relayAt`**, handover (`agents note`), stop.
