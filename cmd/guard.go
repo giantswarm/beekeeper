@@ -747,6 +747,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				if len(a.cfg.Projects.Worktrees) > 0 {
+					h.WorktreePlace = a.cfg.Projects.Worktrees[0]
+				}
 				h.GuardPersonalSearch = a.cfg.Hooks.GuardPersonalSearch
 				h.ProjectsDir, h.WorktreePlaces, h.HomePlaces = a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places
 				h.Transcripts = a.transcriptPolicy()
@@ -776,6 +779,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 	}
 	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude, agy, or codex")
 	c.AddCommand(preCmd)
+	c.AddCommand(a.sessionWorktreeHook(false), a.sessionWorktreeHook(true))
 	c.AddCommand(&cobra.Command{
 		Use:   "posttooluse",
 		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",

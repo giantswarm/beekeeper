@@ -141,7 +141,7 @@ readable parent read-only over a writable child.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), a.sandboxScratchCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
+	c.AddCommand(a.sandboxProtectionCmd(), a.sandboxBrokerCmd(), a.sandboxScratchCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
 	return c
 }
 
@@ -301,6 +301,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
+					sandbox.OpProtection: a.brokeredProtection(),
 					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
 					// an omp start on a vault provider gets the vault session, as a secret call does
 					sandbox.OpAgents: a.brokeredVault(keeper, func(vault []string) sandbox.Handler {

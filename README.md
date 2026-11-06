@@ -311,6 +311,9 @@ top-level members and drops the nested ones.
 The session and machine views need Linux (`/proc`, cgroup v2, the journal). Leases, holds and
 the budget work on any system.
 
+Sessions can [read classic branch protection through the broker](docs/branch-protection.md)
+with `beekeeper sandbox protection <owner/repo> <branch>`.
+
 ### The role plugin
 
 The commands are half of a desk; the roles that drive them are the other half. The repository is
