@@ -284,3 +284,13 @@ func TestCodexNativeKeepsCommentary(t *testing.T) {
 		t.Fatalf("final turn = %+v", f)
 	}
 }
+
+func TestDefaultAccessRequiresWorkerRole(t *testing.T) {
+	caller := Caller{Party: state.Party{Session: testRosterWorker}, Repo: testBeekeeperRepo}
+	for _, role := range []string{"", "operator", testGuide, testWorker} {
+		meta := Meta{ID: "other", Repo: testBeekeeperRepo, Role: role}
+		if got := Allowed(caller, meta, nil, time.Now()); got != (role == testWorker) {
+			t.Errorf("role %q: allowed = %v", role, got)
+		}
+	}
+}

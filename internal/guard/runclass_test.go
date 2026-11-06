@@ -13,8 +13,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
+const runAllPackages = "./..."
+
 func TestParseClass(t *testing.T) {
-	for in, want := range map[string]string{"": ClassBuild, "build": ClassBuild, "benchmark": ClassBenchmark, "lab": ClassLab} {
+	for in, want := range map[string]string{"": ClassBuild, ClassBuild: ClassBuild, "benchmark": ClassBenchmark, "lab": ClassLab} {
 		if got, err := ParseClass(in); err != nil || got != want {
 			t.Errorf("ParseClass(%q) = %q, %v; want %q", in, got, err, want)
 		}
@@ -35,7 +37,7 @@ func TestDefaultClass(t *testing.T) {
 		{[]string{testShell, "-c", "agentlab --help"}, ClassBuild},
 		{[]string{testShell, "-c", "python3 benchmark_preset.py"}, ClassBuild},
 		{[]string{testShell, "-c", "grep agentlab README.md"}, ClassBuild},
-		{[]string{"go", "build", "./..."}, ClassBuild},
+		{[]string{"go", ClassBuild, runAllPackages}, ClassBuild},
 	} {
 		if got := DefaultClass(c.argv); got != c.want {
 			t.Errorf("DefaultClass(%q) = %q, want %q", c.argv, got, c.want)
@@ -48,19 +50,19 @@ func TestBuildsNothing(t *testing.T) {
 		argv []string
 		want bool
 	}{
-		{[]string{"true"}, true},
+		{[]string{flagOn}, true},
 		{[]string{"/usr/bin/false"}, true},
 		{[]string{"echo", "done"}, true},
 		{[]string{testShell, "-c", "printf '%s' x"}, true},
 		{[]string{"go", "version"}, true},
 		{[]string{testShell, "-c", "make help"}, true},
 		{[]string{"kubectl", "--help"}, true},
-		{[]string{"go", "test", "./..."}, false},
+		{[]string{"go", testCommand, runAllPackages}, false},
 		{[]string{testShell, "-c", "make"}, false},
 		{[]string{testShell, "-c", "true && go test ./..."}, false},
 		{[]string{testShell, "-c", "echo $(go build ./...)"}, false},
 		{[]string{testShell, "-c", "echo x > out"}, false},
-		{[]string{"./build.sh"}, false},
+		{[]string{litBuildSh}, false},
 		{[]string{testShell, "-c", "  "}, false},
 	} {
 		if got := BuildsNothing(c.argv); got != c.want {

@@ -72,7 +72,7 @@ func TestWatchNotifiesEachDueOnceAcrossWatches(t *testing.T) {
 	if s := db.sent[0].Summary + "|" + db.sent[1].Summary; s != "beekeeper: timer #1 due: "+rollout+"|beekeeper: note #1 defaulted" {
 		t.Errorf("summaries: %s", s)
 	}
-	if b := db.sent[1].Body; !strings.Contains(b, "for Timo: pick a threshold") || !strings.HasSuffix(b, "applied: the alert stays as is") {
+	if b := db.sent[1].Body; !strings.Contains(b, "for Alex: pick a threshold") || !strings.HasSuffix(b, "applied: the alert stays as is") {
 		t.Errorf("note body: %q", b)
 	}
 	// A session ending with its record prints a line but needs no person.

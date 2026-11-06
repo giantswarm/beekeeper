@@ -64,7 +64,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, refused("execution rules are empty, oversized or credential-shaped")
 	}
 	var rules strings.Builder
-	rules.WriteString(plugin.WorkerRules())
+	rules.WriteString(strings.Replace(plugin.WorkerRules(), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1))
 	for _, topic := range plugin.Topics {
 		rules.WriteString("\n\n" + plugin.Skill(topic))
 	}
@@ -170,7 +170,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, ProtectedContexts: a.cfg.Kube.ProtectedContexts, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), ProjectsDir: a.cfg.Projects.Dir, WorktreePlaces: a.cfg.Projects.Worktrees, HomePlaces: a.cfg.Home.Places, PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
 // executionGuardDecision picks the guard for the hook's format. A hook in
@@ -326,9 +326,9 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
-	case "supervisor", "supervisor status":
+	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
 	case agentsName, "agents list":
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -570,7 +570,30 @@ func (a *app) catalogHost(selector string) (execution.Host, error) {
 	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
 	}
-	return h, h.ValidateCatalog()
+	if err := h.ValidateCatalog(); err != nil {
+		return h, err
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return h, err
+	}
+	return h, validateRetainedExecutionRoute(st, selector, h)
+}
+
+func validateRetainedExecutionRoute(st *state.State, selector string, h execution.Host) error {
+	// Retained journals can still be inspected, stopped or reconciled after
+	// exit. Keep their route until their records are retired, including when
+	// another selector names the same physical host.
+	for _, start := range st.Starts {
+		r := start.Execution
+		if r == nil || r.Endpoint == nil || (r.Selector != selector && r.Handle.Ref.Host != h.Identity) {
+			continue
+		}
+		if r.Handle.Ref.Host != h.Identity || *r.Endpoint != h.Endpoint {
+			return refused("execution host %s route changed while retained execution %s depends on its approved endpoint; restore the original host identity and SSH executable/config route before continuing", selector, r.Handle.Ref.Execution)
+		}
+	}
+	return nil
 }
 
 // executionHost is the agents.hosts entry selector names, pinned to the
@@ -615,6 +638,12 @@ func (a *app) probeExecution(ctx context.Context, h execution.Host) (execution.C
 	// not invalidate that independently prepared policy.
 	if !c.Publication {
 		return c, refused("execution host lacks coordinator publication support; upgrade and prepare the host before starting workers")
+	}
+	if !c.CIWait {
+		return c, refused("execution host lacks coordinator CI wait support; upgrade and prepare the host before starting workers")
+	}
+	if !c.SourcePreparation {
+		return c, refused("execution host lacks source preparation protocol support (source upload and typed not-found); upgrade and prepare the host before starting workers")
 	}
 	offered := false
 	for _, name := range h.Harnesses {

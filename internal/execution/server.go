@@ -47,6 +47,11 @@ type Journal struct {
 	// Policy is the host policy a coordinator-approved rebind moved this
 	// execution onto; empty, it is the signed request's own policy.
 	Policy string `json:"policy,omitempty"`
+	// Resources is the inventory of what this execution owns on its host,
+	// durable before any of it is created; Retirement is the one retirement
+	// that ends them, nil until a terminal path enters it.
+	Resources  []Resource  `json:"resources,omitempty"`
+	Retirement *Retirement `json:"retirement,omitempty"`
 }
 
 // BoundPolicy is the policy digest the execution's host-side commands require
@@ -103,6 +108,25 @@ func (s *Server) journalPath(r Ref) (string, error) {
 		return "", errors.New("execution journal root must not be a symlink")
 	}
 	return filepath.Join(root, string(r.Execution)+".json"), nil
+}
+
+// journalFiles treats the owned root as a literal path. Expanding it as part
+// of a glob can hide executions or inspect a neighboring state directory.
+func (s *Server) journalFiles() ([]string, error) {
+	entries, err := os.ReadDir(s.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(s.Root, entry.Name()))
+		}
+	}
+	return paths, nil
 }
 
 func (s *Server) lock(ctx context.Context, r Ref) (*flock.Flock, string, error) {
@@ -187,6 +211,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 		}
 		harnesses[name] = h.Version
 	}
+	c = Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness}
 	if len(harnesses) == 0 {
 		var reasons []string
 		for name, reason := range unavailable {
@@ -215,7 +240,7 @@ func (s *Server) Check(ctx context.Context) (Capabilities, error) {
 	if err := resources.Validate(s.now()); err != nil {
 		return c, err
 	}
-	return Capabilities{GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
+	return Capabilities{CIWait: true, SourcePreparation: true, GitHub: true, Publication: true, Protocol: Protocol, Identity: s.Config.Identity, Version: s.Version, PolicyDigest: p.Digest(), Harnesses: harnesses, Unavailable: unavailable, Readiness: readiness, Tools: tools, Resources: resources}, nil
 }
 
 func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
@@ -242,6 +267,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 		}
 		if j.StopRequest != nil {
 			return Handle{}, errors.New("execution has a durable stop request")
+		}
+		if j.Retirement != nil {
+			return Handle{}, errors.New("execution is retired or retiring")
 		}
 		switch j.Phase {
 		case Running, Exited:
@@ -282,7 +310,7 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 		return Handle{}, err
 	}
 	if fresh {
-		j = Journal{Request: r, Digest: r.Digest(), Phase: Preparing, Handle: Handle{Ref: r.Ref, Repository: r.Repository, Unit: UnitName(r.Ref), ConversationID: r.ConversationID}}
+		j = Journal{Request: r, Digest: r.Digest(), Phase: Preparing, Handle: Handle{Ref: r.Ref, Repository: r.Repository, Unit: UnitName(r.Ref), ConversationID: r.ConversationID}, Resources: s.ownedResources(r.Ref)}
 		j.Request.RegistrationReceipt = ""
 		if err := atomicFile(p, mustJSON(j)); err != nil {
 			return Handle{}, err
@@ -438,7 +466,7 @@ func (s *Server) BusyExecutions(ctx context.Context, own Ref) ([]Ref, error) {
 }
 
 func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Root, "*.json"))
+	paths, err := s.journalFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +486,10 @@ func (s *Server) busyExecutions(ctx context.Context, own Ref, idle bool) ([]Ref,
 		if j.Handle.Ref == own || j.StopAcknowledged || !idle && j.betweenTurns() {
 			continue
 		}
-		if j.Phase == Exited || j.Phase == Failed {
+		// A killed runner or failed service launch may never commit a
+		// terminal journal. Reconcile launched units with the supervisor
+		// before reserving capacity for their last recorded phase.
+		if j.ActivationAttempted || j.Phase == Exited || j.Phase == Failed {
 			o, err := s.Inspect(ctx, j.Handle.Ref)
 			if err != nil {
 				return nil, errors.New("cannot establish owned unit state")
@@ -530,6 +561,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 // Stop terminates only the owned process. Its workspace and source artifacts
 // remain at the journal's recorded paths: even a clean tree can contain
 // unpublished commits, and an acknowledged stop is not proof of task completion.
+// Only Retire, once the coordinator asks for it, moves them.
 func (s *Server) Stop(ctx context.Context, r Ref, q StopRequest) (Ack, error) {
 	return s.stop(ctx, r, q, false)
 }
@@ -723,7 +755,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 			case missingOperation:
 				value, err = s.Missing(ctx, req.Ref)
-			case "check":
+			case checkOperation:
 				value, err = s.Check(ctx)
 			case "source-chunk":
 				var chunk SourceChunk
@@ -750,6 +782,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				err = Decode(req.Payload, &q)
 				if err == nil {
 					value, err = s.Stop(ctx, req.Ref, q)
+				}
+			case retireOperation:
+				var q RetireRequest
+				err = Decode(req.Payload, &q)
+				if err == nil {
+					value, err = s.Retire(ctx, req.Ref, q)
 				}
 			case rebindOperation:
 				var q PolicyRebind
@@ -784,6 +822,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				}
 				if errors.Is(err, ErrUnsupported) {
 					reply.Code = "unsupported"
+				}
+				// Readiness diagnostics remain available when no harness passes.
+				// Other failed operations never expose a partial result.
+				if req.Operation == checkOperation {
+					reply.Payload, _ = json.Marshal(value)
 				}
 				reply.Error = err.Error()
 			} else {

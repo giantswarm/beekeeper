@@ -24,7 +24,7 @@ func RepositoryIdentity(raw string) string {
 	if err != nil || u.Host != "github.com" || u.RawQuery != "" || u.Fragment != "" {
 		return ""
 	}
-	if u.Scheme == "https" && u.User != nil || u.Scheme != "https" && u.Scheme != sshCommand {
+	if u.Scheme == httpsScheme && u.User != nil || u.Scheme != httpsScheme && u.Scheme != sshCommand {
 		return ""
 	}
 	if u.Scheme == sshCommand && (u.User == nil || u.User.Username() != "git") {
@@ -43,11 +43,15 @@ func RepositoryIdentity(raw string) string {
 }
 
 func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return s.gitEnv(ctx, dir, nil, args...)
+}
+
+func (s *Server) gitEnv(ctx context.Context, dir string, extra []string, args ...string) ([]byte, error) {
 	// Provisioning operates only on host-local sources. Global filters and
 	// checkout hooks must not execute before registration or inherit the
 	// operator's unrelated Git settings.
 	args = append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}, args...)
-	return s.command(ctx, dir, append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), "git", args...)
+	return s.command(ctx, dir, append(append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), extra...), "git", args...)
 }
 
 func (s *Server) unshallowWorkspaceRepository(ctx context.Context, repository, commit string) {
@@ -116,7 +120,7 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 	}
 	workspace := filepath.Join(parent, "workspace")
 	repository := filepath.Join(parent, "repository.git")
-	branch := "beekeeper-worker/" + string(j.Request.Ref.Execution)
+	branch := workerBranch + string(j.Request.Ref.Execution)
 	if j.Handle.Workspace != "" && j.Handle.Workspace != workspace {
 		return errors.New("workspace identity mismatch")
 	}
