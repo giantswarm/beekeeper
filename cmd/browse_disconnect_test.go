@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
 // Exercise the CLI boundary, including Main's exit code, with transcript
@@ -49,16 +51,20 @@ func TestBrowseDisconnectCLI(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(bin, "claude"), host, 0o700); err != nil { //nolint:gosec // executable replay host in this test's private directory
 				t.Fatal(err)
 			}
+			leases := filepath.Join(root, "leases")
+			if _, err := lease.Dir(leases).Claim(browserResource, lease.Holder{Name: "Browser replay"}); err != nil {
+				t.Fatal(err)
+			}
 			projects := filepath.Join(root, "projects")
 			cfg := filepath.Join(root, "config.yaml")
 			// Quote paths as YAML strings, including on systems with spaces in temp paths.
-			config := "stateDir: '" + strings.ReplaceAll(filepath.Join(root, "state"), "'", "''") + "'\nclaude:\n  projectsDir: '" + strings.ReplaceAll(projects, "'", "''") + "'\n"
+			config := "leaseDir: '" + strings.ReplaceAll(leases, "'", "''") + "'\nstateDir: '" + strings.ReplaceAll(filepath.Join(root, "state"), "'", "''") + "'\nclaude:\n  projectsDir: '" + strings.ReplaceAll(projects, "'", "''") + "'\n"
 			if err := os.WriteFile(cfg, []byte(config), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
-			c := exec.CommandContext(ctx, self, "--config", cfg, "browse", "--dir", root, "--timeout", "5s", "Open https://example.test/. Read the heading. Report it.") //nolint:gosec // this test executable, isolated configuration
+			c := exec.CommandContext(ctx, self, "--config", cfg, "--as", "Browser replay", "browse", "--dir", root, "--timeout", "5s", "Open https://example.test/. Read the heading. Report it.") //nolint:gosec // this test executable, isolated configuration
 			c.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"BROWSE_REPLAY_ROOT="+root, "BROWSE_REPLAY_FIXTURE="+fixture, "BROWSE_REPLAY_PROJECT="+projects, "BROWSE_REPLAY_OUTCOME="+tc.name)
 			var out, stderr bytes.Buffer

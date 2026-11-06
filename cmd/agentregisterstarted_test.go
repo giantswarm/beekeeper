@@ -41,7 +41,7 @@ func TestStartedWorkerRegistersWithoutChangingItsEntry(t *testing.T) {
 			var out bytes.Buffer
 			a := &app{cfg: &config.Config{StateDir: dir}, store: store, now: now, out: &out}
 			c := a.agentsCmd()
-			c.SetArgs([]string{"register"})
+			c.SetArgs([]string{registerVerb})
 			c.SetOut(&out)
 			c.SetErr(&out)
 			if err := c.Execute(); err != nil {

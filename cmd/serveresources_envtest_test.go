@@ -349,7 +349,7 @@ func TestEnvtestServeMessages(t *testing.T) {
 	e.expect(t, bo, "receive_messages", map[string]any{}, false, "no message waits")
 	notices := e.expect(t, ana, "receive_messages", map[string]any{}, false, "expired from beekeeper")
 	for _, m := range notices["messages"].([]any) {
-		if k := m.(map[string]any)["kind"]; k != "expired" {
+		if k := m.(map[string]any)["kind"]; k != handoverExpiredMode {
 			t.Errorf("after the expiry ana's mailbox holds a %v", k)
 		}
 	}

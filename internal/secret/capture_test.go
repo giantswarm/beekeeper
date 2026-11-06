@@ -120,6 +120,47 @@ func TestCaptureEncodes(t *testing.T) {
 	}
 }
 
+func TestCaptureUsesThePathCheckedByTheCreationRule(t *testing.T) {
+	for _, tc := range []struct{ path, key string }{
+		{`"stringData".password`, storePasswordAttribute},
+		{`stringData."credentials.json"`, "credentials.json"},
+		{`stringData.credentials\.json`, "credentials.json"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			tools := secrettest.New(nil)
+			dir, _ := scratch(t)
+			if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte(secretRules), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "captured.sops.yaml")
+			if _, err := ops(tools).Capture(context.Background(), secret.Ref{File: file, Path: tc.path}, secret.CaptureOptions{Producer: producer(t, password, 0)}); err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				StringData map[string]string `yaml:"stringData"`
+			}
+			if err := yaml.Unmarshal([]byte(decrypted(t, tools, file)), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc.StringData) != 1 || doc.StringData[tc.key] != password {
+				t.Fatal("capture wrote different keys from those checked for encryption")
+			}
+		})
+	}
+}
+
+func TestCaptureSetsAKeyInsideALeafDocument(t *testing.T) {
+	tools := secrettest.New(nil)
+	patch := dexOperatorScratch(t)
+	if _, err := ops(tools).Capture(context.Background(), secret.Ref{File: patch, Path: teamsPath}, secret.CaptureOptions{Producer: producer(t, newTeams, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(dexCredentials, "teams: giantswarm-admins,employees # who logs in", "teams: "+newTeams+" # who logs in", 1)
+	if got := credentialsOf(t, tools, patch); got != want {
+		t.Fatal("capture changed more than the selected key inside the leaf")
+	}
+}
+
 func TestCaptureWritesADockerConfigJSONSecret(t *testing.T) {
 	tools := secrettest.New(nil)
 	dir, _ := scratch(t)

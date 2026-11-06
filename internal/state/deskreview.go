@@ -74,7 +74,7 @@ func (st *State) UpsertReviewPark(rp ReviewPark) {
 		if rp.Serves == "" {
 			rp.Serves = cur.Serves
 		}
-		if (rp.PostMerge == nil || *rp.PostMerge == "") && cur.PostMerge != nil && *cur.PostMerge != "" {
+		if rp.PostMerge == nil {
 			rp.PostMerge = cur.PostMerge
 		}
 		if rp.Selector == "" {

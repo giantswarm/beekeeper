@@ -15,9 +15,11 @@ type PR struct {
 	N    int    `json:"n"`
 }
 
-// Lookup reads in one GraphQL request per repository owner (ByOwner) the
+// Lookup reads in GraphQL requests per repository owner (ByOwner) the
 // titles of pulls and the open draft pull requests of the repositories
-// drafts (owner/repo), oldest first within each owner.
+// drafts (owner/repo), oldest first within each owner. Further draft pages
+// are read without asking for the titles again; an incomplete search is an
+// error, never a partial list reported as complete.
 func Lookup(ctx context.Context, run GH, pulls []PR, drafts []string) (map[PR]string, []PR, error) {
 	if len(pulls) == 0 && len(drafts) == 0 {
 		return nil, nil, nil
@@ -49,15 +51,60 @@ func Lookup(ctx context.Context, run GH, pulls []PR, drafts []string) (map[PR]st
 	return titles, open, nil
 }
 
-// lookup is one request of Lookup, of pulls and drafts of one owner: the
-// titles go into titles, the open drafts are returned.
+// draftSearch is one page of the draft search and its continuation.
+type draftSearch struct {
+	Count int `json:"issueCount"`
+	Nodes []struct {
+		Number     int `json:"number"`
+		Repository struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"repository"`
+	} `json:"nodes"`
+	PageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	} `json:"pageInfo"`
+}
+
+// lookup reads titles and every draft page of one owner.
 func lookup(ctx context.Context, run GH, pulls []PR, drafts []string, titles map[PR]string) ([]PR, error) {
+	var open []PR
+	after := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := lookupPage(ctx, run, pulls, drafts, titles, after)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range page.Nodes {
+			open = append(open, PR{Repo: n.Repository.NameWithOwner, N: n.Number})
+		}
+		if !page.PageInfo.HasNextPage {
+			if page.Count > len(open) {
+				return nil, fmt.Errorf("draft search returned %d of %d pull requests: incomplete results", len(open), page.Count)
+			}
+			return open, nil
+		}
+		if cursor := page.PageInfo.EndCursor; cursor == "" || cursor == after {
+			return nil, fmt.Errorf("draft search: next page has no advancing cursor")
+		} else {
+			after = cursor
+		}
+		pulls = nil
+	}
+}
+
+// lookupPage is one request of Lookup, of pulls and drafts of one owner:
+// the titles go into titles, the draft search page is returned.
+func lookupPage(ctx context.Context, run GH, pulls []PR, drafts []string, titles map[PR]string, after string) (draftSearch, error) {
 	var q strings.Builder
 	q.WriteString("query{")
 	for i, p := range pulls {
 		owner, name, ok := strings.Cut(p.Repo, "/")
 		if !ok {
-			return nil, fmt.Errorf("%s is not owner/repo", p.Repo)
+			return draftSearch{}, fmt.Errorf("%s is not owner/repo", p.Repo)
 		}
 		fmt.Fprintf(&q, "p%d:repository(owner:%s,name:%s){pullRequest(number:%d){title}}", i, quote(owner), quote(name), p.N)
 	}
@@ -66,7 +113,11 @@ func lookup(ctx context.Context, run GH, pulls []PR, drafts []string, titles map
 		for _, r := range drafts {
 			search += " repo:" + r
 		}
-		fmt.Fprintf(&q, "d:search(query:%s,type:ISSUE,first:50){nodes{...on PullRequest{number repository{nameWithOwner}}}}", quote(search))
+		cursor := ""
+		if after != "" {
+			cursor = ",after:" + quote(after)
+		}
+		fmt.Fprintf(&q, "d:search(query:%s,type:ISSUE,first:50%s){issueCount nodes{...on PullRequest{number repository{nameWithOwner}}}pageInfo{hasNextPage endCursor}}", quote(search), cursor)
 	}
 	q.WriteString("}")
 	// A pull request GitHub does not answer fails the request but keeps the
@@ -76,7 +127,12 @@ func lookup(ctx context.Context, run GH, pulls []PR, drafts []string, titles map
 		Data map[string]json.RawMessage `json:"data"`
 	}
 	if jerr := json.Unmarshal(out, &doc); doc.Data == nil {
-		return nil, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
+		return draftSearch{}, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no data"))
+	}
+	// Only a title may fail with the rest kept: a request without titles (a
+	// draft continuation) that fails is an error, whatever data it carries.
+	if err != nil && len(pulls) == 0 {
+		return draftSearch{}, err
 	}
 	for i, p := range pulls {
 		var r struct {
@@ -88,24 +144,14 @@ func lookup(ctx context.Context, run GH, pulls []PR, drafts []string, titles map
 			titles[p] = r.PullRequest.Title
 		}
 	}
-	var open []PR
-	if raw, ok := doc.Data["d"]; ok {
-		var s struct {
-			Nodes []struct {
-				Number     int `json:"number"`
-				Repository struct {
-					NameWithOwner string `json:"nameWithOwner"`
-				} `json:"repository"`
-			} `json:"nodes"`
-		}
-		if err := json.Unmarshal(raw, &s); err != nil {
-			return nil, fmt.Errorf("gh api graphql: %w", err)
-		}
-		for _, n := range s.Nodes {
-			open = append(open, PR{Repo: n.Repository.NameWithOwner, N: n.Number})
-		}
+	if len(drafts) == 0 {
+		return draftSearch{}, nil
 	}
-	return open, nil
+	var page *draftSearch
+	if jerr := json.Unmarshal(doc.Data["d"], &page); jerr != nil || page == nil {
+		return draftSearch{}, cmp.Or(err, jerr, fmt.Errorf("gh api graphql: no draft search data"))
+	}
+	return *page, nil
 }
 
 // quote is s as a GraphQL string literal, whose escapes are JSON's.

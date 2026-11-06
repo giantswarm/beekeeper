@@ -253,7 +253,7 @@ func TestNoteAddHoldsRefusals(t *testing.T) {
 	}{
 		{"no ref", append(noRef, "--holds", "approve "+prURL+"?"), "--holds needs --ref"},
 		{"off the board", []string{flagRef, offBoardRef, flagFor, notePerson, flagStatusQuo, sqNow, flagWhy, whyNow, flagDefault, dfltOK, flagDue, "3h", "--holds", "approve " + prURL + "?"}, offBoardRef + " is not on the board"},
-		{"a login", []string{"--kind=" + noteLogin, flagFor, notePerson, "--until", probeHolds, flagRef, decisionRef, "--holds", signIn}, "--holds is a decision's"},
+		{"a login", []string{"--kind=" + noteLogin, flagFor, notePerson, untilFlag, probeHolds, flagRef, decisionRef, "--holds", signIn}, "--holds is a decision's"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := noteApp(t)
@@ -352,7 +352,7 @@ func TestWatchReleasesTheHoldOfADefaultedOrOvertakenDecision(t *testing.T) {
 		name, ref, how string
 		due            time.Duration
 	}{
-		{"default", github.Open, closedDefaulted, -time.Minute},
+		{paramDefault, github.Open, closedDefaulted, -time.Minute},
 		{"overtaken", github.Merged, closedOvertaken, time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
