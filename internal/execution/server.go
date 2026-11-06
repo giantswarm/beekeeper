@@ -66,6 +66,7 @@ func (j Journal) BoundPolicy() string {
 // Server operates only on journals it created. It never discovers or adopts
 // another conversation, process or unit by name.
 type Server struct {
+	coordinatorBundle                                     *CoordinatorBundle
 	Config                                                HostConfig
 	Root, Executable, ConfigPath, Version, SecurityDigest string
 	Rules                                                 []byte

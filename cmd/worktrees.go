@@ -615,6 +615,17 @@ func (a *app) cleanRemovedWorktree(ctx context.Context, dir, publishedHead strin
 	if t.Unpushed > 0 && (publishedHead == "" || t.Head != publishedHead) {
 		return
 	}
+	// Re-read all live users after the Git checks, immediately before removal.
+	// Missing liveness data must keep the checkout, just as the trim does.
+	live, err := a.liveFolders(time.Now())
+	if err != nil || diskprune.InUse(t.Dir, live) {
+		return
+	}
+	for _, path := range live {
+		if diskprune.InUse(path, []string{t.Dir}) {
+			return
+		}
+	}
 	_ = removeWorktree(ctx, runGit, t.Dir)
 }
 

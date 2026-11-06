@@ -71,11 +71,26 @@ const (
 
 // The GitHub hosts the flow talks to: the web site that takes the manifest
 // and shows the installation page, the API that converts the code and
-// lists the installations. Tests point both at a fake.
-var (
-	githubWeb = "https://github.com"
-	githubAPI = "https://api.github.com"
+// lists the installations. Environment overrides allow a built binary to
+// use a fake GitHub too.
+const (
+	githubWebEnv = "BEEKEEPER_GITHUB_WEB_URL"
+	githubAPIEnv = "BEEKEEPER_GITHUB_API_URL"
 )
+
+var (
+	githubWeb = githubURL(githubWebEnv, "https://github.com")
+	githubAPI = githubURL(githubAPIEnv, "https://api.github.com")
+)
+
+// githubURL reads an optional base URL once at startup. Ignore trailing slashes
+// because callers append paths beginning with a slash.
+func githubURL(key, fallback string) string {
+	if value := strings.TrimRight(os.Getenv(key), "/"); value != "" {
+		return value
+	}
+	return fallback
+}
 
 // appInstallPoll is how often the installation is looked for after the
 // Install click.
