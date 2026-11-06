@@ -228,3 +228,55 @@ func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 		t.Fatalf("%+v", q)
 	}
 }
+
+func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := a.store.Dir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("stateDir: %q\nfatal: {repositories: []}\n", dir)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfgPath = path
+	restarts := 0
+	starts := 0
+	fakeFatalRun(t, func(args []string) (string, int) {
+		if slices.Contains(args, "enable") {
+			t.Fatal("re-enabled a component")
+		}
+		if args[0] != "systemctl" {
+			return "", 0
+		}
+		if slices.Contains(args, "is-enabled") {
+			return "enabled", 0
+		}
+		if slices.Contains(args, "start") {
+			restarts++
+			return "", 1
+		}
+		return "", 3
+	})
+	old := beekeeperRun
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		starts++
+		i := slices.Index(args, "--name")
+		if i < 0 {
+			t.Fatal("owner missing")
+		}
+		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: args[i+1]}, Task: "repair"})
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return "", 0, nil
+	}
+	t.Cleanup(func() { beekeeperRun = old })
+	for range 2 {
+		if err := a.fatalScan(t.Context(), dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if restarts != 1 || starts != 1 {
+		t.Fatalf("%d restarts %d workers", restarts, starts)
+	}
+}
