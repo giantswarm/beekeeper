@@ -46,6 +46,7 @@ type Muster struct {
 // stream is one subscriptions/listen stream: its session, the request id
 // its notifications carry, and the URIs it subscribed.
 type stream struct {
+	ctx     context.Context
 	session mcpserver.ClientSession
 	id      any
 	uris    []string
@@ -56,7 +57,7 @@ func New(t *testing.T, backend, server string) *Muster {
 	t.Helper()
 	m := &Muster{}
 	m.srv = httptest.NewServer(m.handler(backend, server))
-	t.Cleanup(m.srv.Close)
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m
 }
@@ -93,7 +94,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 		return context.WithValue(ctx, connKey{}, conns.Add(1))
 	}
 	m.srv.StartTLS()
-	t.Cleanup(m.srv.Close)
+	t.Cleanup(m.Close)
 	m.URL = m.srv.URL + "/mcp"
 	return m, m.srv.Client().Transport.(*http.Transport)
 }
@@ -102,7 +103,7 @@ func NewStalling(t *testing.T, backend, server, method string) (*Muster, *http.T
 func (m *Muster) handler(backend, server string) http.Handler {
 	hooks := &mcpserver.Hooks{}
 	hooks.AddBeforeSubscriptionsListen(func(ctx context.Context, id any, req *mcp.SubscriptionsListenRequest) {
-		st := &stream{session: mcpserver.ClientSessionFromContext(ctx), id: id, uris: req.Params.Notifications.ResourceSubscriptions}
+		st := &stream{ctx: ctx, session: mcpserver.ClientSessionFromContext(ctx), id: id, uris: req.Params.Notifications.ResourceSubscriptions}
 		m.mu.Lock()
 		if m.streams == nil {
 			m.streams = map[*stream]struct{}{}
@@ -147,17 +148,24 @@ func (m *Muster) handler(backend, server string) http.Handler {
 // reached.
 func (m *Muster) Updated(uri string) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
+	streams := make([]*stream, 0, len(m.streams))
 	for st := range m.streams {
-		if !slices.Contains(st.uris, uri) {
+		streams = append(streams, st)
+	}
+	m.mu.Unlock()
+	n := 0
+	for _, st := range streams {
+		if !slices.Contains(st.uris, uri) || st.ctx.Err() != nil {
 			continue
 		}
-		st.session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
+		select {
+		case st.session.NotificationChannel() <- mcp.JSONRPCNotification{JSONRPC: mcp.JSONRPC_VERSION, Notification: mcp.Notification{
 			Method: mcp.MethodNotificationResourceUpdated,
 			Params: mcp.NotificationParams{Meta: map[string]any{mcp.MetaKeySubscriptionID: st.id}, AdditionalFields: map[string]any{"uri": uri}},
-		}}
-		n++
+		}}:
+			n++
+		case <-st.ctx.Done():
+		}
 	}
 	return n
 }
@@ -166,7 +174,13 @@ func (m *Muster) Updated(uri string) int {
 func (m *Muster) Down(down bool) { m.down.Store(down) }
 
 // Close stops muster itself.
-func (m *Muster) Close() { m.srv.Close() }
+func (m *Muster) Close() {
+	// Server.Close waits for active handlers, including subscriptions and
+	// deliberately stalled requests. Stop accepting and disconnect clients
+	// before waiting, including clients reconnecting during shutdown.
+	_ = m.srv.Config.Close()
+	m.srv.Close()
+}
 
 // dial is an initialized client of the backend at url as token's person.
 func dial(ctx context.Context, url, token string) (*client.Client, error) {
@@ -210,15 +224,22 @@ func Binary(t *testing.T, endpoint, token string) (bin, tokenFile string) {
 		t.Fatal(err)
 	}
 	bin = filepath.Join(dir, "muster")
+	endpointJSON, err := json.Marshal(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
-context) printf '{"name":"%%s","endpoint":"%s"}' "$3" ;;
-auth) cat '%s' ;;
+context) printf '{"name":"%%s","endpoint":%%s}' "$3" %s ;;
+auth) cat %s ;;
 *) echo "unknown command $1" >&2; exit 1 ;;
 esac
-`, endpoint, tokenFile)
+`, shellQuote(string(endpointJSON)), shellQuote(tokenFile))
 	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil { //nolint:gosec // an executable under the test's temporary folder
 		t.Fatal(err)
 	}
 	return bin, tokenFile
 }
+
+// shellQuote keeps a value literal in a POSIX shell command.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

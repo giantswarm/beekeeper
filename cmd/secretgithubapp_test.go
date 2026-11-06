@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,16 +66,40 @@ func fakeConversion(t *testing.T, webhook string) *int {
 }
 
 // githubAppConfig names the installation example's Secret in repo.
-func githubAppConfig(a *app, repo string) string {
+func githubAppConfig(t *testing.T, a *app, repo string) string {
 	file := filepath.Join(repo, "installations", fixtureOrg, "secrets", "github-app-secret.yaml")
 	_ = os.MkdirAll(filepath.Dir(file), 0o750)
 	a.cfg.Apps.Secrets = map[string]config.AppSecret{fixtureOrg: {File: file, Name: githubAppOp, Namespace: "team-agents"}}
+	appGit(t, repo, "init", "-b", "main")
+	appGit(t, repo, "config", "user.name", "Test")
+	appGit(t, repo, "config", "user.email", "test")
+	appCommit(t, repo)
+	remote := filepath.Join(t.TempDir(), "origin.git")
+	appGit(t, repo, "init", "--bare", remote)
+	appGit(t, repo, "remote", "add", "origin", remote)
+	appGit(t, repo, "push", "-u", "origin", "main")
 	return file
+}
+
+func appGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	c := exec.Command("git", append([]string{"-C", repo}, args...)...) //nolint:gosec // test-owned local repositories
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func appCommit(t *testing.T, repo string) {
+	t.Helper()
+	appGit(t, repo, "add", ".")
+	appGit(t, repo, "commit", "--allow-empty", "-m", "fixture")
 }
 
 func TestSecretGitHubAppWritesTheSecretAndPrintsOnlyIDs(t *testing.T) {
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	calls := fakeConversion(t, "")
 	var stderr bytes.Buffer
 	c := a.secretCmd()
@@ -126,7 +151,7 @@ func TestSecretGitHubAppWritesTheSecretAndPrintsOnlyIDs(t *testing.T) {
 
 func TestSecretGitHubAppWebhookSecretAndJSON(t *testing.T) {
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	fakeConversion(t, secretValue+"-hook")
 	a.json = true
 	out, err := runSecret(a, githubAppOp, fixtureOrg, codeFlag, conversionCode)
@@ -145,11 +170,12 @@ func TestSecretGitHubAppWebhookSecretAndJSON(t *testing.T) {
 
 func TestSecretGitHubAppRefusesBeforeSpendingTheCode(t *testing.T) {
 	a, _, repo := secretApp(t)
-	githubAppConfig(a, repo)
+	githubAppConfig(t, a, repo)
 	calls := fakeConversion(t, "")
 	if _, err := runSecret(a, githubAppOp, fixtureOrg, codeFlag, conversionCode); err != nil {
 		t.Fatal(err)
 	}
+	appCommit(t, repo)
 	for _, c := range []struct {
 		args  []string
 		code  int
@@ -184,6 +210,7 @@ func TestSecretGitHubAppRefusesBeforeSpendingTheCode(t *testing.T) {
 func TestSecretGitHubAppRefusesAFileThatIsNoSecret(t *testing.T) {
 	a, _, repo := secretApp(t)
 	calls := fakeConversion(t, "")
+	githubAppConfig(t, a, repo)
 	a.cfg.Apps.Secrets = map[string]config.AppSecret{"absent": {File: filepath.Join(repo, "absent-secret.yaml")}}
 	if _, err := runSecret(a, githubAppOp, "absent", codeFlag, conversionCode); Code(err) != ExitRefused || !strings.Contains(err.Error(), "is absent") {
 		t.Errorf("an absent file without a Secret's name = %v", err)
@@ -241,7 +268,7 @@ func TestSecretGitHubAppDryRun(t *testing.T) {
 	for _, jsonOutput := range []bool{false, true} {
 		t.Run(fmt.Sprint(jsonOutput), func(t *testing.T) {
 			a, tools, repo := secretApp(t)
-			file := githubAppConfig(a, repo)
+			file := githubAppConfig(t, a, repo)
 			id, err := age.GenerateX25519Identity()
 			if err != nil {
 				t.Fatal(err)
@@ -310,11 +337,11 @@ func TestSecretGitHubAppDryRunMissingParts(t *testing.T) {
 		{name: "recipient", body: dryAppSkeleton, rules: "creation_rules:\n  - age: invalid\n", want: "no valid age recipient"},
 		{name: "wrong-kind", body: "kind: ConfigMap\n", want: "no Kubernetes Secret"},
 		{name: "missing-name", body: "kind: Secret\n", want: "no metadata.name"},
-		{name: "malformed", body: "[" + secretValue, want: "no YAML mapping"},
+		{name: handoverMalformedMode, body: "[" + secretValue, want: "no YAML mapping"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, tools, repo := secretApp(t)
-			file := githubAppConfig(a, repo)
+			file := githubAppConfig(t, a, repo)
 			if tc.name == "missing-installation" {
 				a.cfg.Apps.Secrets = nil
 			}
@@ -373,7 +400,7 @@ func TestGitHubAppDryRunVaultRouting(t *testing.T) {
 
 func TestSecretGitHubAppDryRunEncryptionAndReplace(t *testing.T) {
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -422,7 +449,7 @@ func TestSecretGitHubAppDryRunEncryptionAndReplace(t *testing.T) {
 
 func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -451,5 +478,75 @@ func TestSecretGitHubAppDryRunCreatesNoStateDirectory(t *testing.T) {
 	}
 	if len(tools.Calls) != 0 {
 		t.Fatalf("dry run invoked tools: %v", tools.Calls)
+	}
+}
+
+func TestSecretGitHubAppCheckoutRefusals(t *testing.T) {
+	for _, kind := range []string{"behind", litDiverged, "tracked", litStaged, "untracked", "fetch-failure", "missing-main", "not-a-clone"} {
+		t.Run(kind, func(t *testing.T) {
+			a, tools, repo := secretApp(t)
+			file := githubAppConfig(t, a, repo)
+			calls := fakeConversion(t, "")
+			want := "local changes"
+			switch kind {
+			case "behind", "diverged":
+				peer := filepath.Join(t.TempDir(), "peer")
+				remote := appGit(t, repo, "remote", "get-url", "origin")
+				appGit(t, repo, "clone", "-b", "main", remote, peer)
+				appGit(t, peer, "config", "user.name", "Test")
+				appGit(t, peer, "config", "user.email", "test")
+				appCommit(t, peer)
+				appGit(t, peer, "push", "origin", "main")
+				if kind == "diverged" {
+					if err := os.WriteFile(filepath.Join(repo, "local"), []byte("local"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					appCommit(t, repo)
+				}
+				want = "behind or diverged"
+			case "tracked", "staged":
+				if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "staged" {
+					appGit(t, repo, "add", ".sops.yaml")
+				}
+			case "untracked":
+				if err := os.WriteFile(filepath.Join(repo, "untracked"), []byte("local"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "fetch-failure":
+				appGit(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+				want = "fetch failed"
+			case "not-a-clone":
+				if err := os.RemoveAll(filepath.Join(repo, ".git")); err != nil {
+					t.Fatal(err)
+				}
+				want = "not in a Git clone"
+			case "missing-main":
+				appGit(t, repo, "push", "origin", ":main")
+				want = "fetch failed"
+			}
+			_, err := runSecret(a, githubAppOp, fixtureOrg, codeFlag, conversionCode)
+			if Code(err) != ExitRefused || !strings.Contains(fmt.Sprint(err), want) || !strings.Contains(fmt.Sprint(err), repo) || !(strings.Contains(fmt.Sprint(err), "git -C") || strings.Contains(fmt.Sprint(err), "configure apps.secrets")) { //nolint:staticcheck // reads as the condition it checks
+				t.Fatalf("got %v; want refusal naming clone, remedy and %q", err, want)
+			}
+			if *calls != 0 || len(tools.Calls) != 0 {
+				t.Fatalf("refusal accessed credentials or converted code: %d, %v", *calls, tools.Calls)
+			}
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				t.Fatalf("refusal created target: %v", err)
+			}
+		})
+	}
+}
+
+func TestGitHubAppCheckoutAllowsAhead(t *testing.T) {
+	a, _, repo := secretApp(t)
+	githubAppConfig(t, a, repo)
+	appCommit(t, repo)
+	fakeConversion(t, "")
+	if _, err := runSecret(a, githubAppOp, fixtureOrg, codeFlag, conversionCode); err != nil {
+		t.Fatal(err)
 	}
 }

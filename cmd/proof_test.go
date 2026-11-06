@@ -78,3 +78,13 @@ func TestUploadBrowseProofs(t *testing.T) {
 		t.Fatalf("failed report: %v %v", lines, err)
 	}
 }
+
+// The command line enters through browseWithProof: the permanent deletion
+// preflight holds there, before any upload or turn.
+func TestBrowseWithProofKeepsDeletionPreflight(t *testing.T) {
+	a := &app{}
+	err := a.browseWithProof(context.Background(), "Delete my comment.", "", "", 0, "", nil, nil, "o/r")
+	if err == nil || !strings.Contains(err.Error(), permanentDeletionRule) {
+		t.Fatalf("browseWithProof = %v, want permanent deletion rule", err)
+	}
+}

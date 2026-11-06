@@ -13,6 +13,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ type fakeGH struct {
 }
 
 func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, error) {
-	method, path := "GET", ""
+	method, path := http.MethodGet, ""
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "-X":
@@ -60,16 +61,16 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 	switch {
 	case strings.HasSuffix(path, "/o/r") || path == "repos/o/r":
 		return []byte(f.visibility + "\n"), nil
-	case method == "GET" && strings.Contains(path, "/git/ref/heads/"):
+	case method == http.MethodGet && strings.Contains(path, "/git/ref/heads/"):
 		if f.head == "" {
 			return []byte(`{"message":"Not Found"}`), errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)")
 		}
 		return []byte(f.head + "\n"), nil
-	case method == "PATCH" && f.conflicts > 0:
+	case method == http.MethodPatch && f.conflicts > 0:
 		f.conflicts--
 		f.head = "moved"
 		return nil, errors.New("gh api: exit status 1: gh: Update is not a fast forward (HTTP 422)")
-	case method == "POST" && strings.HasSuffix(path, "/git/refs"), method == "PATCH":
+	case method == http.MethodPost && strings.HasSuffix(path, "/git/refs"), method == http.MethodPatch:
 		f.head = f.bodies[call]["sha"].(string)
 		return []byte(fmt.Sprintf(`{"object":{"sha":%q}}`, f.head)), nil
 	}
@@ -359,7 +360,7 @@ func TestUploadRefused(t *testing.T) {
 			t.Errorf("%s %s: err = %v, want %q", c.repo, c.vis, err, c.want)
 		}
 		for _, call := range f.calls {
-			if !strings.HasPrefix(call, "GET") {
+			if !strings.HasPrefix(call, http.MethodGet) {
 				t.Errorf("%s %s: wrote %s", c.repo, c.vis, call)
 			}
 		}

@@ -624,8 +624,8 @@ settled (GUIDE PROBLEM, the full report to file in its owning repository), and t
 relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again; only a standing
-GUIDE RELAY DUE is said once more, by each feed and after a change of
-guide.relayAt. Runs until killed; --once polls once.
+GUIDE RELAY DUE is said by each feed and repeats every five minutes until
+a relay opens, and after a change of guide.relayAt. Runs until killed; --once polls once.
 
 The feed never re-executes itself. Once self-update replaced its binary it
 says GUIDE WATCH STALE, once, with the version it runs, the one installed

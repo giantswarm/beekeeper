@@ -196,7 +196,7 @@ func TestNoVaultItemFailsInOneLineNamingTheRecipient(t *testing.T) {
 	id := isolateAge(t)
 	r := id.Recipient().String()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	file := sopsFileAt(t, filepath.Join(dir, "management-clusters", "graveler", "secrets", "app.sops.yaml"), "", r)

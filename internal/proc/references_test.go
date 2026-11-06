@@ -201,7 +201,7 @@ func TestUserReferencesSkipsOnlyConfirmedZombies(t *testing.T) {
 			files.readFile = func(path string) ([]byte, error) {
 				if filepath.Base(path) == fixtureEnvironment {
 					inspected = true
-					return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+					return nil, &os.PathError{Op: readOp, Path: path, Err: os.ErrPermission}
 				}
 				return os.ReadFile(filepath.Clean(path))
 			}
@@ -412,7 +412,7 @@ func TestUserReferencesToleratesExitingProcesses(t *testing.T) {
 				files := referenceFiles()
 				files.readFile = func(path string) ([]byte, error) {
 					if filepath.Base(path) == target {
-						return nil, &os.PathError{Op: "read", Path: path, Err: failure}
+						return nil, &os.PathError{Op: readOp, Path: path, Err: failure}
 					}
 					return os.ReadFile(filepath.Clean(path))
 				}

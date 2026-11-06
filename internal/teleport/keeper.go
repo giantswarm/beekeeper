@@ -21,6 +21,9 @@ type Record struct {
 	// tries that login once more at its next run, since the network may
 	// not have been back from the suspend yet.
 	AfterMiss bool `json:"afterMiss,omitempty"`
+	// PendingMiss preserves a missed run while renewal waits for the browser.
+	// It is consumed by a renewal, whose failure sets AfterMiss instead.
+	PendingMiss bool `json:"pendingMiss,omitempty"`
 	// Waiting is why the keeper's last run that was due did not renew (the
 	// browser lease is held), WaitingAt when.
 	Waiting   string    `json:"waiting,omitempty"`
