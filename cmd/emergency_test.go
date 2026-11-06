@@ -387,7 +387,7 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 }
 
 func TestEmergencyAdminMergeNeedsTheNamedDecisionAtTheExactHead(t *testing.T) {
-	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: "main", Green: true,
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: mainBranch, Green: true,
 		ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: emergencyBlocked}
 	named := "Admin merge o/r#7 now."
 	calls, err := adminMergeCall(t, named, green, 0, true)
