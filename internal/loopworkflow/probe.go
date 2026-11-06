@@ -16,8 +16,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// ProbeTimeout bounds one probe, under a controller's minute between evaluations.
-const ProbeTimeout = 45 * time.Second
+// ProbeTimeout bounds one probe: a candidate's and its control's fit a
+// controller's minute between evaluations.
+const ProbeTimeout = 25 * time.Second
 
 // ErrInconclusive marks a probe that says nothing about the candidate: the
 // fixture could not be built here (no git, a full disk). A failed candidate is

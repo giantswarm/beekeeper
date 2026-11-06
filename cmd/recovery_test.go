@@ -155,7 +155,11 @@ func TestRecoveryRollsBackAFailureStreak(t *testing.T) {
 
 func TestRecoveryRollsBackAFailedProbeOnAnIdleDesk(t *testing.T) {
 	c, _ := recoveryRig(t)
-	recoveryProbe = func(context.Context, string, string, string) error {
+	c.server = c.target + ".control"
+	recoveryProbe = func(_ context.Context, binary, _, _ string) error {
+		if binary == c.server {
+			return nil
+		}
 		return errors.New("the origin does not show the reviewed merge")
 	}
 	for range update.ProbeFailures - 1 {
@@ -167,6 +171,31 @@ func TestRecoveryRollsBackAFailedProbeOnAnIdleDesk(t *testing.T) {
 	c.mustTick(t)
 	if got := installed(t, c); got != recoveryGoodBytes {
 		t.Fatalf("installed %q", got)
+	}
+}
+
+// What the last known good cannot do either is this machine's fault: a rollback
+// would fix nothing and take a healthy release away.
+func TestRecoveryBlamesNoCandidateItsControlFailsToo(t *testing.T) {
+	c, _ := recoveryRig(t)
+	c.server = c.target + ".control"
+	var probed []string
+	recoveryProbe = func(_ context.Context, binary, _, _ string) error {
+		probed = append(probed, binary)
+		return errors.New("this machine refuses the loop")
+	}
+	for range 3 * update.ProbeFailures {
+		c.mustTick(t)
+	}
+	if got := installed(t, c); got != recoveryBadBytes {
+		t.Fatal("an environment's refusal rolled the candidate back")
+	}
+	j := journal(t, c)
+	if !j.Pending() || j.Observed.ProbeFailures != 0 || j.Observed.ProbePassed {
+		t.Fatalf("%+v", j.Observed)
+	}
+	if len(probed) < 2 || probed[0] != c.target || probed[1] != c.server {
+		t.Fatalf("no control ran: %q", probed)
 	}
 }
 

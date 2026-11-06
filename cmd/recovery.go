@@ -262,6 +262,12 @@ func (c *recoveryController) probe(ctx context.Context, j *update.Journal, o *up
 	case errors.Is(err, loopworkflow.ErrInconclusive):
 		_, _ = fmt.Fprintf(c.w, "probe of %s: %v\n", j.Candidate.Version, err)
 	default:
+		// The control: what the last known good cannot do either says nothing
+		// about the candidate, whose rollback would fix nothing.
+		if cerr := recoveryProbe(ctx, c.server, c.server, c.scratch); cerr != nil {
+			_, _ = fmt.Fprintf(c.w, "probe of %s failed, and so did its control: %v\n", j.Candidate.Version, cerr)
+			return
+		}
 		o.ProbePassed = false
 		o.ProbeFailures++
 		_, _ = fmt.Fprintf(c.w, "probe of %s failed: %v\n", j.Candidate.Version, err)
@@ -393,13 +399,10 @@ func (c *recoveryController) restart(ctx context.Context, attempt int) bool {
 	if !plat.Launcher.Available() {
 		return len(stale) == 0 || attempt >= recoveryRestartTicks
 	}
-	switch plat.Launcher.State(ctx, loopUnit) {
-	case unitActive, "activating", "reloading":
-		if attempt >= recoveryRestartTicks && len(stale) > 0 {
-			_ = plat.Launcher.Stop(ctx, loopUnit)
-			_ = plat.Launcher.Resume(ctx, loopUnit)
-		}
-	default:
+	if !unitComingUp(plat.Launcher.State(ctx, loopUnit)) {
+		_ = plat.Launcher.Resume(ctx, loopUnit)
+	} else if attempt >= recoveryRestartTicks && len(stale) > 0 {
+		_ = plat.Launcher.Stop(ctx, loopUnit)
 		_ = plat.Launcher.Resume(ctx, loopUnit)
 	}
 	return len(stale) == 0 || attempt >= recoveryRestartTicks
