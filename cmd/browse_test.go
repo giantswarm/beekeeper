@@ -568,6 +568,19 @@ func TestBrowseRunsTheTurn(t *testing.T) {
 	if i := slices.Index(argv, permissionModeFlag); i < 0 || argv[i+1] != modeDontAsk {
 		t.Errorf("the flag changed the turn's mode: %q", argv)
 	}
+	const deletion = "My own throwaway agent is delete-after. I asked for this one click: Delete agent in its confirmation dialog."
+	out.Reset()
+	if err := a.browse(t.Context(), deletion, bin, "", time.Minute, "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	argv = argvOf()
+	if got := argv[slices.Index(argv, settingsFlag)+1]; got != selfSettings(t, []string{productActionRule(deletion)}) {
+		t.Fatalf("deletion context did not reach classifier settings: %s", got)
+	}
+	if !strings.Contains(argv[len(argv)-1], deletion) {
+		t.Fatal("deletion context missing from prompt")
+	}
+
 }
 
 // Callback records use their provider's consent prompt on the first turn.

@@ -695,6 +695,8 @@ type Kube struct {
 	// ProtectedContexts lists additional production-class contexts (including
 	// full test installations) whose clusters agents must not change directly.
 	ProtectedContexts []string `yaml:"protectedContexts"`
+	// ReadOnlyExecQueries lists exact SELECT queries allowed through psql -X -c.
+	ReadOnlyExecQueries []string `yaml:"readOnlyExecQueries"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
@@ -2529,7 +2531,7 @@ type Merge struct {
 	// call without an exit code. Negative: no limit.
 	ToolLimit Duration `yaml:"toolLimit"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
-	// (its GitHub App login reaches its own organisation only); a
+	// with its configured GitHub authentication; a
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`

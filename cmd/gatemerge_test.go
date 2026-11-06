@@ -687,6 +687,39 @@ func TestAnUnservedRepositoryTakesThePlainSquashMerge(t *testing.T) {
 	}
 }
 
+// The example configuration routes the additional owner through devctl,
+// retaining its release wait and recording the confirmed release.
+func TestExampleOwnerMergeUsesDevctlAndConfirmsRelease(t *testing.T) {
+	was := userSystemd
+	userSystemd = func() bool { return false }
+	t.Cleanup(func() { userSystemd = was })
+	cfg, err := config.Load(filepath.Join("..", "docs", "examples", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeDevctl(t, `case "$*" in *--no-release-wait*) exit 7;; esac
+case "$*" in *"teemow/lab 7"*) ;; *) echo "unexpected arguments: $*" >&2; exit 7;; esac
+echo '`+mergedDoc+`'`)
+	stubGitHub(t, "", "")
+	g := runningMerge(t, labRepo, config.Lane{Name: labRepo, Installation: "staging"})
+	g.cfg.Merge.DevctlOwners = cfg.Merge.DevctlOwners
+	if !g.runsDevctl() {
+		t.Fatal("example owner takes the plain merge route")
+	}
+	output := capture(t, &os.Stderr)
+	err = g.runMerge()
+	got := output()
+	if err != nil {
+		t.Fatalf("devctl merge: %v; output: %s", err, got)
+	}
+	if strings.Contains(got, "no release wait") || strings.Contains(got, github.SquashRoute) {
+		t.Errorf("plain route output: %s", got)
+	}
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "teemow/lab#7 exit 0, release v1.2.4") || strings.Contains(d, github.SquashRoute) {
+		t.Errorf("merged event: %q", d)
+	}
+}
+
 // unansweredDoc is a merge refused for a reviewer's unanswered COMMENTED
 // review, as either route's document says it.
 const unansweredDoc = `{"exitCode":5,"verdict":"refused","reason":"unanswered review: 1 item(s) newer than the head wait for an answer: review COMMENTED by pat https://github.com/o/r/pull/7#r; a reply from fixture-person on the pull request, a new commit or the reviewer's approval clears them","unansweredReviews":[{"kind":"review","login":"pat","state":"COMMENTED","at":"2026-10-11T11:00:00Z","url":"https://github.com/o/r/pull/7#r"}]}`

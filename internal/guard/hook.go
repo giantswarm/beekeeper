@@ -152,6 +152,8 @@ type Hook struct {
 	Production string
 	// ProtectedContexts lists additional contexts protected by the write gate.
 	ProtectedContexts []string
+	// ReadOnlyExecQueries is the exact restricted SELECT allowlist for psql exec.
+	ReadOnlyExecQueries []string
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string
