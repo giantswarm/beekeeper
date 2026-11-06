@@ -3,10 +3,12 @@ package cmd
 import (
 	"errors"
 	"io"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
@@ -25,10 +27,11 @@ const testScoper = "scoper"
 // for; a move fails with err.
 type scopeLauncher struct {
 	platform.Launcher
-	scoped []string
-	moved  [][]int
-	scopes []string
-	err    error
+	scoped    []string
+	moved     [][]int
+	scopes    []string
+	err       error
+	afterMove func([]int, string)
 }
 
 func (l *scopeLauncher) Scoped(name string, argv []string) []string {
@@ -39,7 +42,11 @@ func (l *scopeLauncher) Scoped(name string, argv []string) []string {
 func (l *scopeLauncher) Move(pids []int, name string) error {
 	l.moved = append(l.moved, pids)
 	l.scopes = append(l.scopes, name)
-	return l.err
+	err := l.err
+	if err == nil && l.afterMove != nil {
+		l.afterMove(pids, name)
+	}
+	return err
 }
 
 // Every claude --bg beekeeper runs (a start, a resume) runs in a scope of
@@ -148,7 +155,15 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 	cgroups := map[int]string{10: daemonNotifyCgroup, 11: daemonNotifyCgroup, 12: daemonNotifyCgroup}
 	cgroupOf := func(pid int) string { return cgroups[pid] }
 
-	l := &scopeLauncher{}
+	table, _ := daemonTable()
+	oldMachine := plat.Machine
+	t.Cleanup(func() { plat.Machine = oldMachine })
+	plat.Machine = daemonSnapshotMachine{Machine: oldMachine, snapshot: func() (*proc.Table, error) { return table, nil }}
+	l := &scopeLauncher{afterMove: func(pids []int, _ string) {
+		for _, pid := range pids {
+			cgroups[pid] = daemonOwnScope
+		}
+	}}
 	useLauncher(t, l)
 	dry := a.daemonsOutOfUnits(found, cgroupOf, true, watchParty, relayNow)
 	if len(dry) != 1 || !strings.HasPrefix(dry[0], "would move the claude daemon (pid 10) and the 2 processes under it in beekeeper-notify.service (MemoryMax 256M)") || len(l.moved) != 0 {
@@ -156,7 +171,7 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 	}
 
 	lines := a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
-	if len(l.moved) != 1 || !slices.Equal(l.moved[0], []int{10, 11, 12}) || !strings.HasPrefix(l.scopes[0], daemonScope) || !strings.HasSuffix(l.scopes[0], "-10") {
+	if len(l.moved) != 1 || !slices.Equal(l.moved[0], []int{10, 11, 12}) || !strings.HasPrefix(l.scopes[0], daemonScope) || !strings.HasSuffix(l.scopes[0], "-10-beekeeper-notify.service-0") {
 		t.Fatalf("moved %v into %q, want 10, 11 and 12 into a %s*-10 scope", l.moved, l.scopes, daemonScope)
 	}
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved the claude daemon (pid 10)") || !strings.Contains(lines[0], l.scopes[0]+".scope") {
@@ -166,6 +181,7 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 		t.Errorf("%s events = %+v (%v), want one", daemonEvent, evs, err)
 	}
 
+	cgroups[10], cgroups[11] = daemonNotifyCgroup, daemonNotifyCgroup
 	cgroups[12] = daemonOwnScope // ended, its PID reused elsewhere
 	a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
 	if len(l.moved) != 2 || !slices.Equal(l.moved[1], []int{10, 11}) {
@@ -181,5 +197,107 @@ func TestDoctorMovesADaemonOutOfItsUnit(t *testing.T) {
 	failed := a.daemonsOutOfUnits(found, cgroupOf, false, watchParty, relayNow)
 	if len(failed) != 1 || !strings.Contains(failed[0], "stay there: access denied") {
 		t.Errorf("failed move = %q, want the daemon staying with why", failed)
+	}
+}
+
+// daemonSnapshotMachine lets a regression fork children between snapshots.
+type daemonSnapshotMachine struct {
+	platform.Machine
+	snapshot func() (*proc.Table, error)
+}
+
+func (m daemonSnapshotMachine) Processes() (*proc.Table, error) { return m.snapshot() }
+
+func TestDoctorRecoversChildrenBornDuringMigration(t *testing.T) {
+	for _, failRecovery := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same tick", true: "subsequent tick"}[failRecovery], func(t *testing.T) {
+			table, cgroups := daemonTable()
+			cg := func(pid int) string { return cgroups[pid] }
+			found := daemonsInUnits(table, cg, func(string) []string { return nil })
+			// This child was absent from the doctor's initial snapshot.
+			processes := slices.Collect(maps.Values(table.ByPID))
+			processes = append(processes, &proc.Process{PID: 14, PPID: 12})
+			table = proc.NewTable(processes...)
+			cgroups[14] = daemonNotifyCgroup
+			old := plat.Machine
+			t.Cleanup(func() { plat.Machine = old })
+			plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) { return table, nil }}
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := &app{store: store}
+			l := &scopeLauncher{}
+			l.afterMove = func(pids []int, _ string) {
+				for _, pid := range pids {
+					cgroups[pid] = daemonOwnScope
+				}
+				if len(l.moved) == 1 {
+					// This child was forked while its parents were moving.
+					processes = append(processes, &proc.Process{PID: 15, PPID: 14})
+					table = proc.NewTable(processes...)
+					cgroups[15] = daemonNotifyCgroup
+					if failRecovery {
+						l.err = errors.New("recovery refused")
+					}
+				}
+			}
+			useLauncher(t, l)
+			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			if len(l.moved) != 2 || !slices.Equal(l.moved[0], []int{10, 11, 12, 14}) || !slices.Equal(l.moved[1], []int{15}) {
+				t.Fatalf("moves = %v, want late children discovered and recovered", l.moved)
+			}
+			if cgroups[13] != daemonRunScope || cgroups[20] != daemonNotifyCgroup || cgroups[30] != daemonNotifyCgroup {
+				t.Fatal("moved capped or unrelated processes")
+			}
+			if failRecovery {
+				if len(lines) != 1 || !strings.Contains(lines[0], "recovery refused") {
+					t.Fatalf("failure = %v", lines)
+				}
+				if evs, err := store.Events(0, func(e state.Event) bool { return e.Verb == daemonEvent }); err != nil || len(evs) != 0 {
+					t.Fatalf("unverified success recorded: %v (%v)", evs, err)
+				}
+				// Next tick still finds the child although its daemon moved.
+				l.err = nil
+				found = daemonsInUnits(table, cg, func(string) []string { return nil })
+				if len(found) != 1 || !slices.Equal(found[0].pids, []int{15}) {
+					t.Fatalf("next tick = %+v", found)
+				}
+				lines = a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow.Add(time.Second))
+			}
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], "moved ") || len(daemonsInUnits(table, cg, func(string) []string { return nil })) != 0 {
+				t.Fatalf("migration incomplete: %v, cgroups %v", lines, cgroups)
+			}
+		})
+	}
+}
+
+// Incomplete or unreadable verification never records a successful migration.
+func TestDoctorRequiresVerifiedDaemonMigration(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "bounded retries", true: "unreadable snapshot"}[unreadable], func(t *testing.T) {
+			table, cgroups := daemonTable()
+			old := plat.Machine
+			t.Cleanup(func() { plat.Machine = old })
+			plat.Machine = daemonSnapshotMachine{Machine: old, snapshot: func() (*proc.Table, error) {
+				if unreadable {
+					return nil, errors.New("process table unreadable")
+				}
+				return table, nil
+			}}
+			l := &scopeLauncher{} // claims a move succeeded but leaves processes behind
+			useLauncher(t, l)
+			cg := func(pid int) string { return cgroups[pid] }
+			found := daemonsInUnits(table, cg, func(string) []string { return nil })
+			a := &app{} // no store: only verified successes may record an event
+			lines := a.daemonsOutOfUnits(found, cg, false, watchParty, relayNow)
+			want, moves := "will retry next tick", 3
+			if unreadable {
+				want, moves = "process table unreadable", 0
+			}
+			if len(lines) != 1 || !strings.Contains(lines[0], want) || len(l.moved) != moves {
+				t.Fatalf("lines %v, moves %v; want %q and %d moves", lines, l.moved, want, moves)
+			}
+		})
 	}
 }

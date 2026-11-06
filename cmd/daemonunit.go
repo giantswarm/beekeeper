@@ -16,10 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// daemonUnit is a claude daemon that runs in the cgroup of a beekeeper unit:
-// a claude --bg that unit ran started it there. Every background session
-// then shares that unit's limits, and a stop or restart of the unit ends
-// them all.
+// daemonUnit is a claude daemon with processes still in a beekeeper unit.
+// The daemon may already have moved while descendants stayed behind.
 type daemonUnit struct {
 	pid int
 	// cgroup is the unit's cgroup path, unit its last element; limits are
@@ -27,8 +25,8 @@ type daemonUnit struct {
 	cgroup string
 	unit   string
 	limits []string
-	// pids are the daemon and the processes under it in the unit's cgroup,
-	// the daemon first.
+	// pids are processes under the daemon in this unit, including the
+	// daemon first when it still runs there.
 	pids []int
 }
 
@@ -38,7 +36,11 @@ func (d daemonUnit) String() string {
 	if len(d.limits) > 0 {
 		unit += " (" + strings.Join(d.limits, ", ") + ")"
 	}
-	return fmt.Sprintf("the claude daemon (pid %d) and the %d processes under it in %s", d.pid, len(d.pids)-1, unit)
+	children := len(d.pids)
+	if slices.Contains(d.pids, d.pid) {
+		children--
+	}
+	return fmt.Sprintf("the claude daemon (pid %d) and the %d processes under it in %s", d.pid, children, unit)
 }
 
 // risk is what the unit means to the daemon's background sessions while it
@@ -55,9 +57,8 @@ func (d daemonUnit) risk(gone bool) string {
 	return "a stop or restart of the unit ends all its background sessions"
 }
 
-// daemonsInUnits are the claude daemons of t that run in a beekeeper unit's
-// cgroup; cgroupOf reads a process's cgroup path, limitsOf a cgroup's
-// limits.
+// daemonsInUnits finds daemons and their descendants left in beekeeper
+// units, even when a prior migration already moved the daemon itself.
 func daemonsInUnits(t *proc.Table, cgroupOf func(pid int) string, limitsOf func(cgroup string) []string) []daemonUnit {
 	var out []daemonUnit
 	for _, pid := range slices.Sorted(maps.Keys(t.ByPID)) {
@@ -65,16 +66,21 @@ func daemonsInUnits(t *proc.Table, cgroupOf func(pid int) string, limitsOf func(
 			continue
 		}
 		cg := cgroupOf(pid)
-		if !beekeeperUnit(cg) {
-			continue
+		if !beekeeperUnit(cg) && !strings.HasPrefix(path.Base(cg), daemonScope) {
+			continue // separately capped daemons keep their cap
 		}
-		d := daemonUnit{pid: pid, cgroup: cg, unit: path.Base(cg), limits: limitsOf(cg), pids: []int{pid}}
+		groups := map[string][]int{}
+		if beekeeperUnit(cg) {
+			groups[cg] = []int{pid}
+		}
 		for _, p := range t.Descendants(pid) {
-			if cgroupOf(p.PID) == cg {
-				d.pids = append(d.pids, p.PID)
+			if childCG := cgroupOf(p.PID); beekeeperUnit(childCG) {
+				groups[childCG] = append(groups[childCG], p.PID)
 			}
 		}
-		out = append(out, d)
+		for _, group := range slices.Sorted(maps.Keys(groups)) {
+			out = append(out, daemonUnit{pid: pid, cgroup: group, unit: path.Base(group), limits: limitsOf(group), pids: groups[group]})
+		}
 	}
 	return out
 }
@@ -98,14 +104,10 @@ var liveDaemonsInUnits = func(t *proc.Table) []daemonUnit {
 // daemonEvent is the event of a claude daemon the doctor moved.
 const daemonEvent = "daemon.move"
 
-// daemonsOutOfUnits moves each claude daemon found in a beekeeper unit, with
-// the processes under it there, into a transient scope of its own under
-// app.slice, where no unit's limits or stop reach its background sessions,
-// and says each in one line; with dryRun it only says it. Moving a process
-// to another cgroup leaves it running: no session is stopped. Right before
-// the move cgroupOf reads each process's cgroup again: one that left the
-// unit's (an ended process, its PID reused elsewhere) stays where it is, and
-// a daemon no longer there is not moved.
+// daemonsOutOfUnits rescans before every move and verifies with a fresh
+// process table afterwards. Children forked while parents move are recovered
+// in another scope. A bounded retry leaves a warning; discovery on the next
+// doctor tick also finds stranded children whose daemon already left the unit.
 func (a *app) daemonsOutOfUnits(found []daemonUnit, cgroupOf func(pid int) string, dryRun bool, by state.Party, now time.Time) []string {
 	var out []string
 	for _, d := range found {
@@ -113,18 +115,54 @@ func (a *app) daemonsOutOfUnits(found []daemonUnit, cgroupOf func(pid int) strin
 			out = append(out, fmt.Sprintf("would move %s into a scope of its own: %s", d, d.risk(false)))
 			continue
 		}
-		d.pids = slices.DeleteFunc(slices.Clone(d.pids), func(pid int) bool { return cgroupOf(pid) != d.cgroup })
-		if len(d.pids) == 0 || d.pids[0] != d.pid {
-			continue // the daemon ended or left the unit meanwhile
+		if line := a.moveDaemonUnit(d, cgroupOf, by, now); line != "" {
+			out = append(out, line)
 		}
-		scope := daemonScopeName(now) + "-" + strconv.Itoa(d.pid)
-		if err := plat.Launcher.Move(d.pids, scope); err != nil {
-			out = append(out, fmt.Sprintf("%s stay there: %v; %s", d, err, d.risk(false)))
-			continue
-		}
-		line := fmt.Sprintf("moved %s into %s.scope: %s", d, scope, d.risk(true))
-		_ = a.store.Record(event(by, daemonEvent, "%s", line))
-		out = append(out, line)
 	}
 	return out
+}
+
+// remainingDaemonUnit deliberately discovers descendants even after the root
+// daemon has moved. Reading only the old PID list can never find new children.
+func remainingDaemonUnit(d daemonUnit, cgroupOf func(int) string) ([]int, error) {
+	table, err := plat.Machine.Processes()
+	if err != nil {
+		return nil, err
+	}
+	for _, current := range daemonsInUnits(table, cgroupOf, func(string) []string { return nil }) {
+		if current.pid == d.pid && current.cgroup == d.cgroup {
+			return current.pids, nil
+		}
+	}
+	return nil, nil
+}
+
+func (a *app) moveDaemonUnit(d daemonUnit, cgroupOf func(int) string, by state.Party, now time.Time) string {
+	var scopes []string
+	for attempt := range 4 {
+		pids, err := remainingDaemonUnit(d, cgroupOf)
+		if err != nil {
+			return fmt.Sprintf("cannot verify %s: %v; %s", d, err, d.risk(false))
+		}
+		// Recheck immediately before the move: ended processes, reused PIDs
+		// elsewhere and separately capped runs stay where they are.
+		pids = slices.DeleteFunc(pids, func(pid int) bool { return cgroupOf(pid) != d.cgroup })
+		if len(pids) == 0 {
+			if len(scopes) == 0 {
+				return ""
+			}
+			line := fmt.Sprintf("moved %s into %s: %s", d, strings.Join(scopes, ", "), d.risk(true))
+			_ = a.store.Record(event(by, daemonEvent, "%s", line))
+			return line
+		}
+		if attempt == 3 {
+			return fmt.Sprintf("%s still has processes %v in its unit after migration; will retry next tick; %s", d, pids, d.risk(false))
+		}
+		scope := daemonScopeName(now) + "-" + strconv.Itoa(d.pid) + "-" + d.unit + "-" + strconv.Itoa(attempt)
+		if err := plat.Launcher.Move(pids, scope); err != nil {
+			return fmt.Sprintf("%s stay there: %v; %s", d, err, d.risk(false))
+		}
+		scopes = append(scopes, scope+".scope")
+	}
+	return ""
 }
