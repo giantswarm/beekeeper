@@ -47,7 +47,7 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	const marker = "assets-" + version
 	if f, err := root.Open(marker); err == nil {
 		data, readErr := io.ReadAll(f)
@@ -84,7 +84,7 @@ func valid(dir string) bool {
 	if err != nil {
 		return false
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	for _, name := range []string{"etcd", "kube-apiserver"} {
 		info, err := root.Stat(name)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {

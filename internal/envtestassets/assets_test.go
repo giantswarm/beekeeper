@@ -48,7 +48,12 @@ printf '%s/binaries\n' "$PWD"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(bin, "go"), 0700); err != nil {
+	binRoot, err := os.OpenRoot(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = binRoot.Close() }()
+	if err := binRoot.Chmod("go", 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -67,12 +72,12 @@ printf '%s/binaries\n' "$PWD"
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer root.Close()
+		defer func() { _ = root.Close() }()
 		f, err := root.Open("downloads")
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		data, err := io.ReadAll(f)
 		if err != nil || string(data) != want {
 			t.Fatalf("downloads %q, %v", data, err)
