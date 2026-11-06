@@ -1175,9 +1175,11 @@ type Handover struct {
 
 // State is the whole document.
 type State struct {
-	Handovers         []Handover `json:"handovers,omitempty"`
-	Emergency         *Emergency `json:"emergency,omitempty"`
-	AutoInstallPaused bool       `json:"autoInstallPaused,omitempty"`
+	// ProductionNotes are consumed authorities, retained across hook processes.
+	ProductionNotes   map[int]time.Time `json:"productionNotes,omitempty"`
+	Handovers         []Handover        `json:"handovers,omitempty"`
+	Emergency         *Emergency        `json:"emergency,omitempty"`
+	AutoInstallPaused bool              `json:"autoInstallPaused,omitempty"`
 	// LabIdle records when a configured kind lab was first seen unleased.
 	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is

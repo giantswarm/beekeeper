@@ -616,6 +616,27 @@ session's scratchpad in the worker rules.
 
 ## Kube contexts and production writes
 
+`kube.productionNoteDeletes` (off by default) lets an answered decision note authorise one production
+object deletion. **Switching it on trusts every recorded answer: nothing proves a person gave it, so an
+agent able to record an answer can forge the authority for its own deletion.** Off, a command carrying
+the marker below meets the ordinary production refusal.
+
+With it on, put the complete literal command in backticks in the note's question, for example
+`kubectl --context production delete job stale --namespace monitoring`, and record the answer `yes`,
+`approve`, `approved` or `delete it`. Carry the note's id as:
+
+```sh
+BEEKEEPER_PROD_NOTE=42 kubectl --context production delete job stale --namespace monitoring
+```
+
+The hook requires that exact command, in that order, with literal context, kind, name and
+namespace. Additional flags, shell syntax, selectors and multiple objects are refused, and so is
+any context `kube.protectedContexts` lists. An execution host's hook never takes a note. Answers
+expire after 24 hours.
+The local state consumes the note atomically before execution and records `production.write`
+with the note id and command in `beekeeper log`. A failed execution still consumes its authority;
+a retry needs a new decision. Stores unable to persist the consumption refuse the write.
+
 With `kube.production` or `kube.protectedContexts` set, the machine kubeconfig (`~/.kube/config`) keeps no current context: a
 `kubectl`, `helm` or `flux` command without an explicit target fails instead of reaching production.
 The PreToolUse hook keeps it that way and refuses, with the reason and the explicit form (unset, the
@@ -647,7 +668,7 @@ kube guard is off and `beekeeper snapshot` says so):
   install/uninstall. The target is the `--context`/`--kube-context`/`--cluster` given, else the current
   context of the kubeconfig the command uses (`--kubeconfig`, `KUBECONFIG` in the command or the
   session). Changes to production go through GitOps pull requests and platformctl; there is no
-  break-glass. The one exec that passes is a read: a query listed exactly in
+  break-glass, except the single-object deletion `kube.productionNoteDeletes` switches on (above). The one exec that passes is a read: a query listed exactly in
   `kube.readOnlyExecQueries`, run as `kubectl exec <pod> -- psql -X [-U <user>] [-d <database>] -c
   '<query>'`, without `-i` or `-t`; every other exec is refused with the reason named. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
   `helm list|status|get|template`; `flux get|logs`) and writes to any other cluster pass.

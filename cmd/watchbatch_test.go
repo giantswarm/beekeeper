@@ -27,6 +27,7 @@ func TestWatchBatchKeepsActionsImmediate(t *testing.T) {
 	w, out, _ := batchWatcher(t)
 	w.emitNow("doctor", "DOCTOR archived a finished worker")
 	w.emitNow("sessions", "SESSIONS started: transient")
+	w.emitNow("central-feed", "CENTRAL agents.register (worker): registered [person on host]")
 	if out.Len() != 0 {
 		t.Fatal(out.String())
 	}
@@ -52,14 +53,14 @@ func TestWatchBatchKeepsActionsImmediate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) < len(actions)+2 {
+	if len(evs) < len(actions)+3 {
 		t.Fatal("routine events were not durable before the tick")
 	}
 	w.flushBatch()
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	_, raw, ok := strings.Cut(lines[len(lines)-1], " BATCH: ")
 	var items []string
-	if !ok || json.Unmarshal([]byte(raw), &items) != nil || len(items) != 2 {
+	if !ok || json.Unmarshal([]byte(raw), &items) != nil || len(items) != 3 {
 		t.Fatalf("batch = %s", raw)
 	}
 }

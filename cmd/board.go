@@ -23,6 +23,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 // boardGH is the gh CLI the board commands read and write through; a seam
@@ -243,6 +244,7 @@ alone, until exit 3 says none is left.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
+			skipUnread(cands, a.cfg.Supervisor.Ownership.Never)
 			skipAsked(cands, skip)
 			st, err := a.store.Read()
 			if err != nil {
@@ -477,6 +479,19 @@ func skipAsked(cands []board.Candidate, skip []string) {
 	for i := range cands {
 		if cands[i].Skip == "" && slices.ContainsFunc(skip, func(r string) bool { return strings.EqualFold(r, cands[i].Ref) }) {
 			cands[i].Skip = skipAskedReason
+		}
+	}
+}
+
+// skipUnread marks candidates in supervisor.ownership.never skipped before
+// board next offers or claims them.
+func skipUnread(cands []board.Candidate, never []string) {
+	desk := superloop.Desk{Never: never}
+	for i := range cands {
+		if cands[i].Skip == "" {
+			if _, why := desk.Unread(cands[i].Ref); why != "" {
+				cands[i].Skip = why
+			}
 		}
 	}
 }
