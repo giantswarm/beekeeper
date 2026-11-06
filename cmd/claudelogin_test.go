@@ -47,7 +47,7 @@ func TestClaudeLoginStatesAndRefusal(t *testing.T) {
 		state   string
 		refuse  bool
 	}{
-		{"valid", 2 * time.Hour, false, "logged in", false},
+		{"valid login", 2 * time.Hour, false, "logged in", false},
 		{"warning boundary", time.Hour, false, claudeLoginExpiring, false},
 		{claudeLoginExpiring, time.Minute, false, claudeLoginExpiring, false},
 		{"expired boundary", 0, false, claudeLoginExpired, true},
