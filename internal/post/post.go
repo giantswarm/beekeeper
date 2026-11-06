@@ -312,12 +312,24 @@ func stripCode(text string) string {
 // EOF when unclosed). Inline code spans open with a backtick run and close at
 // the next backtick run of the exact same length before the next fenced block.
 func codeRanges(text string) [][2]int {
+	return markdownCodeRanges(text, true)
+}
+
+// InlineCodeRanges returns byte ranges of matched inline Markdown code spans,
+// including their delimiters. Spans may cross lines; fenced blocks are excluded.
+func InlineCodeRanges(text string) [][2]int {
+	return markdownCodeRanges(text, false)
+}
+
+func markdownCodeRanges(text string, includeFences bool) [][2]int {
 	var out [][2]int
 	for i := 0; i < len(text); {
 		if i == 0 || text[i-1] == '\n' {
 			if ch, fenceLen, afterLine, ok := opensFenceAt(text, i); ok {
 				end, next := closeFenceAt(text, afterLine, ch, fenceLen)
-				out = append(out, [2]int{i, end})
+				if includeFences {
+					out = append(out, [2]int{i, end})
+				}
 				i = next
 				continue
 			}

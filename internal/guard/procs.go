@@ -239,6 +239,13 @@ func shortFlag(args []string, letter byte, value string) bool {
 // or environments: inspect without a narrow --format, ps --no-trunc
 // without a format that leaves the command out. "" when it prints none.
 func containerLeak(name string, args []string) string {
+	// These Docker subcommands read registry metadata, not a container's
+	// command line or environment. Match the command prefix so an argument
+	// or a global option's value cannot exempt a container inspection.
+	if name == dockerCmd && (len(args) >= 2 && slices.Equal(args[:2], []string{"manifest", "inspect"}) ||
+		len(args) >= 3 && slices.Equal(args[:3], []string{"buildx", "imagetools", "inspect"})) {
+		return ""
+	}
 	sub := nonFlags(args)
 	inspect := slices.Contains(sub, "inspect")
 	format, hasFormat := "", false

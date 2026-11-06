@@ -66,7 +66,7 @@ func (systemdSetup) Files(s SetupSpec) ([]File, []string) {
 	if s.TeleportEvery > 0 {
 		every := "OnCalendar=" + calendar(s.TeleportEvery)
 		files = append(files,
-			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportService)},
+			File{Path: filepath.Join(dir, teleportServiceUnit), Content: exe(systemd.TeleportServiceForLoginTimeout(s.TeleportLoginTimeout))},
 			File{Path: filepath.Join(dir, teleportTimerUnit), Content: []byte(strings.Replace(systemd.TeleportTimer, systemd.TeleportTimerEvery, every, 1)), Service: true})
 	}
 	if s.RAMMiB <= 0 {
@@ -127,14 +127,41 @@ func share(mib int, fraction float64) string {
 }
 
 func (systemdSetup) Started(ctx context.Context, path string) bool {
-	unit := filepath.Base(path)
-	return systemctlIs(ctx, "is-enabled", unit, "enabled") && systemctlIs(ctx, "is-active", unit, "active")
+	u := unitStateOf(ctx, filepath.Base(path))
+	return u.enabled && u.active == "active"
 }
 
-// systemctlIs reports whether systemctl --user verb says want of unit.
-func systemctlIs(ctx context.Context, verb, unit, want string) bool {
+func (systemdSetup) NeedsStop(ctx context.Context, path string) bool {
+	u := unitStateOf(ctx, filepath.Base(path))
+	return u.enabled || u.live()
+}
+
+// unitState is what systemctl --user says of a unit: whether it is enabled,
+// and its is-active answer.
+type unitState struct {
+	enabled bool
+	active  string
+}
+
+// live reports whether the unit still has live or pending processes: every
+// is-active answer but inactive, failed or none. activating covers a unit
+// starting or waiting out RestartSec after a crash, deactivating one stopping.
+func (u unitState) live() bool {
+	switch u.active {
+	case "inactive", "failed", "unknown", "":
+		return false
+	}
+	return true
+}
+
+func unitStateOf(ctx context.Context, unit string) unitState {
+	return unitState{enabled: systemctl1(ctx, "is-enabled", unit) == "enabled", active: systemctl1(ctx, "is-active", unit)}
+}
+
+// systemctl1 is systemctl --user verb's one-word answer for unit.
+func systemctl1(ctx context.Context, verb, unit string) string {
 	out, _ := exec.CommandContext(ctx, systemctl, userManager, verb, unit).Output() //nolint:gosec // a fixed verb and the unit install writes
-	return strings.TrimSpace(string(out)) == want
+	return strings.TrimSpace(string(out))
 }
 
 func (systemdSetup) Reload() []string { return []string{systemctl, userManager, "daemon-reload"} }
