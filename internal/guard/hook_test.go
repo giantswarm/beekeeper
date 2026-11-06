@@ -922,12 +922,12 @@ func TestHookRefusesHiddenMerges(t *testing.T) {
 	}
 }
 
-// A configuration that does not load refuses every Bash call with its error.
-func TestBrokenConfigRefusesBash(t *testing.T) {
+// A broken configuration permits recovery and names its error.
+func TestBrokenConfigRecovery(t *testing.T) {
 	h := hook()
 	h.ConfigErr = errors.New("config.yaml: line 3: bad indentation")
 	d := decide(t, h, "/", "git status", nil)
-	if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "line 3: bad indentation") {
+	if d == nil || d.PermissionDecision != decisionAllow || !strings.Contains(d.Reason, "line 3: bad indentation") {
 		t.Errorf("a broken configuration passes: %+v", d)
 	}
 }

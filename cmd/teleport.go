@@ -41,6 +41,7 @@ var teleportKeys = []string{teleportWarn, teleportExpired, teleportFailed, telep
 // teleportView is the Teleport login as teleport, watch and snapshot show
 // it: metadata and the keeper's record, never key material.
 type teleportView struct {
+	Bot        bool      `json:"bot,omitempty"`
 	Cluster    string    `json:"cluster,omitempty"`
 	Username   string    `json:"username,omitempty"`
 	ValidUntil time.Time `json:"validUntil,omitzero"`
@@ -77,6 +78,23 @@ func newTeleportView(p teleport.Profile, perr error, rec teleport.Record, now ti
 // line is the login in one line: the watch's condition line while there is
 // one, else its expiry.
 func (v teleportView) line(now time.Time) string {
+	if v.Bot {
+		if v.Error != "" {
+			line := "TELEPORT BOT: " + v.Error
+			if !v.ValidUntil.IsZero() {
+				line += "; identity expires " + clock(now, v.ValidUntil)
+			}
+			return line
+		}
+		state := "expires"
+		if v.Key == teleportExpired {
+			state = "EXPIRED"
+		}
+		if v.Key == teleportWarn {
+			state = "EXPIRING"
+		}
+		return fmt.Sprintf("TELEPORT BOT: %s %s (%s left)", state, clock(now, v.ValidUntil), dur(v.ValidUntil.Sub(now)))
+	}
 	until := "expires " + clock(now, v.ValidUntil)
 	if v.ValidUntil.IsZero() {
 		until = "has no active profile"
@@ -118,6 +136,16 @@ func (a *app) readTeleport(ctx context.Context) *teleportView {
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
+	if t.Bot.Enabled() {
+		p, err := teleport.BotStatus(t.Bot.Certificate)
+		v := newTeleportView(p, err, teleport.Record{}, time.Now(), t.WarnBefore.Duration)
+		v.Bot = true
+		if health := teleport.BotRunning(ctx); health != nil {
+			v.Error = errors.Join(err, health).Error()
+			v.Key = teleportFailed
+		}
+		return &v
+	}
 	p, perr := teleport.Status(ctx, t.Tsh, t.Home)
 	rec, err := a.teleportRecord()
 	if err != nil && perr == nil {
@@ -146,14 +174,18 @@ func (a *app) teleportCause(ctx context.Context) string {
 func (a *app) teleportCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "teleport",
-		Short: "The Teleport login: its expiry and its keeper (exit 3 when it needs a renewal)",
+		Short: "The Teleport identity: its expiry and its keeper (exit 3 when it needs attention)",
 		Long: `Print the Teleport login the kube contexts reach the installations through:
 user, cluster and expiry from tsh status (metadata, never key material), and
 what its keeper last did. Exit 3 while it needs a person: expired, under
 teleport.warnBefore, or its keeper's renewal failed; that makes it the probe
 of the sign-in note a failed renewal leaves.
 
-The keeper (beekeeper install writes beekeeper-teleport.timer when
+With teleport.bot.config set, read the bot public certificate and report
+the tbot user service health instead. Machine ID renews without a browser;
+beekeeper install supervises tbot using the supplied configuration.
+
+The SSO keeper (beekeeper install writes beekeeper-teleport.timer when
 teleport.proxy is set) runs ` + "`teleport renew --keeper`" + ` every teleport.every.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -216,6 +248,9 @@ Doctor names installations it could not write and why.`,
 			t := a.cfg.Teleport
 			if !t.Enabled() {
 				return usageErr("teleport.proxy is not configured")
+			}
+			if t.Bot.Enabled() {
+				return usageErr("Machine ID renews automatically through beekeeper-teleport.service; no SSO renewal is used")
 			}
 			me, err := a.caller()
 			if err != nil {
