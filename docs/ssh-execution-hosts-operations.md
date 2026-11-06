@@ -641,12 +641,15 @@ inventory naming anything but its own execution's paths refuses.
 3. **Moving aside** renames `<workspaceRoot>/<execution>` to
    `<workspaceRoot>/.retired/<execution>-<generation>`, and the source and
    credential directories to `retired/<execution>-<generation>` beside the
-   journal. Nothing is deleted. A symlinked resource or parent, or one
-   overlapping a provisioned path, refuses and stays in place.
+   journal. Nothing is deleted at this step. A symlinked resource or parent, or
+   one overlapping a provisioned path, refuses and stays in place.
 
 The journal, log and control receipts stay as evidence, and so does the published
 branch. `retention` under `agents.execution` (a Go duration, default `168h`)
-sets `retainUntil` on the retired resources; nothing removes them yet.
+sets `retainUntil` on the retired resources. A later coordinator retirement on
+the host removes those of a retirement proved disposable, a few per call; see
+[remote worker resource retirement](remote-worker-cleanup.md). Stopping and
+inspecting never remove them.
 
 To recover preserved work, fetch the bundle into a clone holding its base commit:
 

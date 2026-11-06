@@ -283,7 +283,7 @@ func (l *supervisorLoop) replaceAlertWorker(ctx context.Context, r alertReplacem
 			if !st.Agents[i].Is(r.Original) {
 				return fmt.Errorf("replacement %s waits: its roster name now belongs to another session", r.Name)
 			}
-			if _, err := l.run(ctx, agentsName, loopRemove, r.Name); err != nil {
+			if err := l.remove(ctx, r.Name, "supervisor loop: unresumable parked worker replaced on its original task"); err != nil {
 				return err
 			}
 		}

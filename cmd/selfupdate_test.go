@@ -17,7 +17,12 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-const selfUpdateCheckFlag = "--check"
+const (
+	selfUpdateCheckFlag    = "--check"
+	selfUpdateRollbackFlag = "--rollback"
+	selfUpdateReasonFlag   = "--rollback-reason"
+	selfUpdateReason       = "candidate unhealthy"
+)
 
 // An update names the beekeeper processes it leaves on the old binary, pid
 // and command each, every watch with the command that re-arms it, and says
@@ -142,6 +147,49 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
+	}
+}
+
+// The update hands the health check to the install, and a failed one is not a
+// skipped release: the installed candidate is judged, not the one on offer.
+func TestSelfUpdateChecksTheInstalledCandidate(t *testing.T) {
+	prev, prevCheck := runUpdate, runCanaryCheck
+	t.Cleanup(func() { runUpdate, runCanaryCheck = prev, prevCheck })
+	runCanaryCheck = func(context.Context, string, ...string) (string, error) { return "no answer", errors.New("exit 1") }
+	var health error
+	runUpdate = func(ctx context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		health = update.OptionsFrom(ctx).Health(ctx, "/installed", "v1.2.3")
+		return update.Result{}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if health == nil || !strings.Contains(health.Error(), "no answer") {
+		t.Fatalf("health = %v", health)
+	}
+}
+
+func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
+	for _, args := range [][]string{
+		{selfUpdateRollbackFlag},
+		{selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, "--complete-probation"},
+		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			root := New()
+			root.SetArgs(append([]string{selfUpdateCmdName}, args...))
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			if err := root.Execute(); err == nil {
+				t.Fatal("accepted unsafe flag combination")
+			}
+		})
 	}
 }
 
