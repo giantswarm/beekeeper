@@ -99,7 +99,7 @@ func splitTeamRecord(record string) (string, string, bool) {
 	return strings.Join(parts[:2], "/"), parts[2], true
 }
 func postIssueTriage(ctx context.Context, webhook, message string) error {
-	raw, _ := json.Marshal(map[string]any{"text": message, "mrkdwn": false, "unfurl_links": false, "unfurl_media": false})
+	raw, _ := json.Marshal(map[string]any{paramText: message, "mrkdwn": false, "unfurl_links": false, "unfurl_media": false})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(raw))
 	if err != nil {
 		return errors.New("invalid triage webhook")
@@ -138,7 +138,7 @@ func (a *app) nextMonitoredIssue(ctx context.Context) (*loopBoardItem, error) {
 				return err
 			}
 			org, _, _ := strings.Cut(r.Repo, "/")
-			if i.State != "OPEN" || issuemonitor.Classify(ctx, issueMonitorGH, org, i.Author.Login) != issuemonitor.Employee {
+			if i.State != emergencyOpenState || issuemonitor.Classify(ctx, issueMonitorGH, org, i.Author.Login) != issuemonitor.Employee {
 				s.Queue = s.Queue[1:]
 				rec := s.Issues[p.Ref]
 				rec.State = "reported-for-cleanup"
@@ -191,7 +191,7 @@ func (a *app) allowMonitoredIssue(ctx context.Context, ref string) error {
 		}
 		org, _, _ := strings.Cut(r.Repo, "/")
 		class := issuemonitor.Classify(ctx, issueMonitorGH, org, i.Author.Login)
-		if class == issuemonitor.Employee && i.State == "OPEN" {
+		if class == issuemonitor.Employee && i.State == emergencyOpenState {
 			return nil
 		}
 		denied = true
