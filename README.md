@@ -113,8 +113,9 @@ On the person's explicit emergency authorization, the current guide can run
 and matches the observed head; it bypasses desk review and the merge lane while
 GitHub branch protection still applies. `emergency merge owner/repo 123 --admin
 --head <sha>` is the person's exception for a pull request GitHub keeps at
-REVIEW_REQUIRED: their quoted words name it, and it must be green at that exact
-head with an approved desk review or the loop's go. `emergency hold set/lift`, `emergency
+REVIEW_REQUIRED: their quoted words name it, and it must be green, mergeable and
+up to date with its base at that exact head, with an approved desk review or the
+loop's go. `emergency hold set/lift`, `emergency
 start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
 `beekeeper emergency off` ends it early; a successor guide needs a new grant.
@@ -123,10 +124,7 @@ Direct merge commands and other guide work remain guarded.
 A green bot pull request the desk did not open is left alone until its login
 is in `supervisor.ownership.bots`; a worker's park on it then requests the
 loop's review and go, and the gated merge follows as for the desk's own. The
-sweep never lists one. `beekeeper queue add <issue> "<row>"` adds a numbered
-row to a shared issue body; GitHub has no conditional write of a body, so calls
-take turns under a lock, read again right before writing and prove the row
-landed afterwards.
+sweep never lists one.
 
 Independently, `beekeeper emergency auto-install pause --reason "<their words>"`
 pauses the loop's release installation without stopping reviews, merges or

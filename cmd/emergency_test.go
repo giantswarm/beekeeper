@@ -361,15 +361,16 @@ const emergencyAdminHead = "abc1234"
 
 // adminMergeCall runs an admin merge of o/r#7 at the head under the person's
 // words, the pull request as given, and returns gh's merge calls.
-func adminMergeCall(t *testing.T, words string, p superloop.Pull, authority bool) ([][]string, error) {
+func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, authority bool) ([][]string, error) {
 	t.Helper()
 	a := emergencyApp(t)
 	if err := emergencyCall(a, "on", emergencyReasonFlag, words, untilFlag, "10m"); err != nil {
 		t.Fatal(err)
 	}
 	p.Ref = emergencyTestRepo + "#7"
-	oldRead, oldGH := readLoopPull, github.RunGH
-	t.Cleanup(func() { readLoopPull, github.RunGH = oldRead, oldGH })
+	oldRead, oldBehind, oldGH := readLoopPull, readReviewedBehind, github.RunGH
+	t.Cleanup(func() { readLoopPull, readReviewedBehind, github.RunGH = oldRead, oldBehind, oldGH })
+	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return behind, nil }
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
 	var calls [][]string
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
@@ -386,32 +387,41 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, authority bool
 }
 
 func TestEmergencyAdminMergeNeedsTheNamedDecisionAtTheExactHead(t *testing.T) {
-	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: true, ReviewDecision: "REVIEW_REQUIRED"}
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Base: "main", Green: true,
+		ReviewDecision: emergencyReviewRequired, Mergeable: emergencyMergeable, MergeState: emergencyBlocked}
 	named := "Admin merge o/r#7 now."
-	calls, err := adminMergeCall(t, named, green, true)
+	calls, err := adminMergeCall(t, named, green, 0, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--squash", "--admin", "--match-head-commit", emergencyAdminHead}
-	if len(calls) != 1 || !slices.Equal(calls[0], want) {
+	if len(calls) != 1 || calls[0][1] != gitMerge || !slices.Contains(calls[0], "--admin") || calls[0][len(calls[0])-1] != emergencyAdminHead {
 		t.Fatalf("merge: %v", calls)
 	}
-	moved, red, draft := green, green, green
-	moved.Head, red.Green, draft.Draft = "def4567", false, true
+	with := func(change func(*superloop.Pull)) superloop.Pull {
+		p := green
+		change(&p)
+		return p
+	}
 	for name, tc := range map[string]struct {
 		words     string
 		pull      superloop.Pull
+		behind    int
 		authority bool
 	}{
-		"words name another": {"Admin merge o/r#77 now.", green, true},
-		"words name nothing": {"Merge them all.", green, true},
-		"head moved":         {named, moved, true},
-		"red":                {named, red, true},
-		"draft":              {named, draft, true},
-		"no go":              {named, green, false},
+		"words name another": {words: "Admin merge o/r#77 now.", pull: green, authority: true},
+		"words name nothing": {words: "Merge them all.", pull: green, authority: true},
+		"head moved":         {words: named, pull: with(func(p *superloop.Pull) { p.Head = "def4567" }), authority: true},
+		"checks failing":     {words: named, pull: with(func(p *superloop.Pull) { p.Green = false }), authority: true},
+		"draft":              {words: named, pull: with(func(p *superloop.Pull) { p.Draft = true }), authority: true},
+		"no go":              {words: named, pull: green},
+		"behind state":       {words: named, pull: with(func(p *superloop.Pull) { p.MergeState = mergeStateBehind }), authority: true},
+		"blocked and behind": {words: named, pull: green, behind: 2, authority: true},
+		"conflicting":        {words: named, pull: with(func(p *superloop.Pull) { p.Mergeable = mergeableConflicting }), authority: true},
+		"review refused":     {words: named, pull: with(func(p *superloop.Pull) { p.ReviewDecision = "CHANGES_REQUESTED" }), authority: true},
+		"no base":            {words: named, pull: with(func(p *superloop.Pull) { p.Base = "" }), authority: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			calls, err := adminMergeCall(t, tc.words, tc.pull, tc.authority)
+			calls, err := adminMergeCall(t, tc.words, tc.pull, tc.behind, tc.authority)
 			if Code(err) != ExitRefused || len(calls) != 0 {
 				t.Fatalf("err %v, calls %v", err, calls)
 			}

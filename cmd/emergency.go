@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,12 @@ const (
 	emergencySetCommand   = "set"
 	emergencyPauseCommand = "pause"
 	emergencyViewCommand  = "view"
+
+	emergencyApproved       = "APPROVED"
+	emergencyReviewRequired = "REVIEW_REQUIRED"
+	emergencyMergeable      = "MERGEABLE"
+	emergencyBlocked        = "BLOCKED"
+	emergencyClean          = "CLEAN"
 )
 
 // emergencyNow is read at each authorization boundary, including after slow reads.
@@ -80,8 +87,9 @@ action and its result is logged with the person's words.
 With --admin --head <sha> it is the person's exception for one pull request
 GitHub keeps at REVIEW_REQUIRED, as when the author and the desk review share
 an account: the grant's quoted words must name it (owner/repo#n or its URL),
-and it must be open and green at exactly that head, with an approved desk
-review or the loop's go for it. Only then does the squash merge send --admin.
+and it must be open, green, mergeable and up to date with its base at exactly
+that head, with an approved desk review or the loop's go for it. Only then does
+the squash merge send --admin, which waives nothing but the review requirement.
 
 Other controls are
 emergency hold set/lift, emergency start (capacity --force), and emergency
@@ -171,7 +179,7 @@ The pause persists until the guide resumes it.`, Args: cobra.NoArgs, RunE: func(
 			if err = json.Unmarshal(raw, &pr); err != nil {
 				return err
 			}
-			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != "APPROVED" || pr.HeadRefOid == "" {
+			if pr.State != emergencyOpenState || pr.IsDraft || pr.ReviewDecision != emergencyApproved || pr.HeadRefOid == "" {
 				return refused("emergency merge requires an approved, open, non-draft pull request")
 			}
 			if err := a.emergencyMergePolicy(args[0], n); err != nil {
@@ -301,6 +309,18 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if p.State != superloop.Open || p.Draft || !strings.EqualFold(p.Head, head) || !p.Green {
 		return refused("admin merge requires %s open, non-draft and green at %s; it is %s at %s, green %v", ref, shortSHA(head), p.State, shortSHA(p.Head), p.Green)
 	}
+	if why := adminMergeBlock(p); why != "" {
+		return refused("admin merge of %s: %s", ref, why)
+	}
+	// GitHub reports BLOCKED, not BEHIND, while a review is also missing, so
+	// only the comparison says whether the head has its base.
+	behind, err := readReviewedBehind(ctx, p)
+	if err != nil {
+		return err
+	}
+	if behind != 0 {
+		return refused("admin merge of %s: %s is %d commits behind its base; update the branch, then have the new head reviewed", ref, shortSHA(p.Head), behind)
+	}
 	why, _, err := a.checkMergeHeadAuthority(ctx, st, p, p.Head)
 	if err != nil {
 		return err
@@ -316,6 +336,22 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	}
 	_, err = github.RunGH(ctx, "pr", gitMerge, strconv.Itoa(number), "--repo", repo, "--squash", "--admin", "--match-head-commit", p.Head)
 	return err
+}
+
+// adminMergeBlock is what, beside a missing review, keeps p from its merge:
+// the admin exception waives the review requirement and nothing else.
+func adminMergeBlock(p superloop.Pull) string {
+	switch {
+	case p.Base == "":
+		return "its base branch is unknown"
+	case p.ReviewDecision != emergencyReviewRequired && p.ReviewDecision != emergencyApproved:
+		return "its review decision is " + cmp.Or(p.ReviewDecision, "unset")
+	case p.Mergeable != emergencyMergeable:
+		return "it is not mergeable: " + cmp.Or(p.Mergeable, "unknown")
+	case p.MergeState != emergencyBlocked && p.MergeState != emergencyClean:
+		return "its merge state is " + cmp.Or(p.MergeState, "unknown")
+	}
+	return ""
 }
 
 // namesPull says whether words name a pull request by ref or url as a whole
