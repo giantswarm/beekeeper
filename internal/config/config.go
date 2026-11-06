@@ -969,6 +969,9 @@ type Agents struct {
 	// agents handover, a role's successor): the desk's checkout, whose
 	// project instructions every session loads. Empty: the caller's.
 	Dir string `yaml:"dir"`
+	// WorktreesDir is the place for worktrees created by agents start.
+	// Empty uses <stateDir>/worktrees.
+	WorktreesDir string `yaml:"worktreesDir"`
 	// Roots are the folders under which an agent may run instead, with
 	// --dir: the worktrees of the desk's repositories. Any other folder is
 	// refused while Dir is set.
