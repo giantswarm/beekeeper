@@ -93,7 +93,8 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 		return devctlToken(ctx, devctl)
 	}, say)
 	e := &sandbox.Egress{
-		Allow: a.sandboxPolicy().Domains, Inject: config.GitHubHosts, Token: tok.Get, CA: ca,
+		AllowedOrgs: a.cfg.GitHub.AllowedOrgs,
+		Allow:       a.sandboxPolicy().Domains, Inject: config.GitHubHosts, Token: tok.Get, CA: ca,
 		Peer: sandbox.SameUser("/proc"), Say: say,
 	}
 	ready = true

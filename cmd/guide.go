@@ -721,10 +721,11 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
 	}
-	if _, _, changed := fire(st); !changed {
+	// Preserve the read-only preview when the writer fence refuses the callback.
+	lines, _, changed := fire(st)
+	if !changed {
 		return nil, ctx.Err()
 	}
-	var lines []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, _ = fire(st)
