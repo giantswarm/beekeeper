@@ -1120,7 +1120,7 @@ not an edit to Beekeeper's generated workflow files.
 
 `beekeeper agents hosts check <host>` prints capabilities with the read-only
 resource inventory in `resourceAudit`. Each entry has an execution ref and coordinator
-when ownership can be verified, a state (`active`, `parked`, `terminal`,
+when ownership can be verified, a state (`active`, `parked`, `terminal`, `retired`,
 `unknown`, or `shared`), reason and retry action. The desk joins this with its registered execution inventory
 to flag owned orphan resources without changing their observed state. Managed
 worker refs in private execution repositories are listed as metadata; orphan
@@ -1129,7 +1129,16 @@ check; it is unknown, never evidence that its resources are safe to remove.
 The audit reads journal metadata and directory entries, never credential values
 or log/workspace contents. Symlinks and malformed or unregistered ownership
 records remain unknown. Immediate children of the managed workspace, source,
-control and dispatch containers are included; execution contents are not swept.
+control, dispatch, retired, recovery and bundle containers are included; execution
+contents are not swept. A retirement that stopped halfway is `terminal` with its
+recorded error; a finished one is `retired`, with `eligibleAt` when it can go.
+The audit also names, up to 256, the immediate children of the account's
+`~/.local/state` other than beekeeper's own: a worker runs on a `HOME` in its
+execution root, but one on the account's home or writing by absolute path leaves
+them there, no execution owns them, and they stay `unknown` for the host owner.
+More entries than that, or a directory that cannot be read, is an `unknown` row
+naming the state directory, so an incomplete listing never reads as clean. Nothing
+else under home is read.
 The inventory refuses more than 4096 entries rather than silently truncating.
 
 An operator can reconcile **one established execution owner** with:
@@ -1139,16 +1148,20 @@ beekeeper agents hosts reconcile <host> <execution-uuid> <generation>
 ```
 
 This rechecks terminal supervisor state under the execution lock, reuses stop
-cleanup, retries GitHub revocation and assigns the log to managed retention in
-the journal (`retainedAt`). It does not relocate paths used for recovery. Repeat
-calls preserve the original retention deadline. Unknown or live units refuse
+cleanup, enters the same retirement a coordinator's report or stop does, retries
+GitHub revocation and assigns the log to managed retention in the journal
+(`retainedAt`). Retirement preserves unpublished work before anything moves aside,
+and each call also removes a few earlier retirements proved disposable and past
+their retention. Repeat calls preserve the original deadlines. Unknown or live units refuse
 reconciliation. Failed revocation is recorded for the next audit and retry;
 retention does not advance on that failure. Partial cleanup is retryable.
 
 | Retained class | Duration | Accountable owner / release rule |
 | --- | --- | --- |
 | Execution log | At least 30 days after successful reconciliation | Owning coordinator's desk; review/recovery evidence remains held until explicit release |
-| Workspace, private repository and execution refs, source bundle | Until publication and recovery review establishes a separate disposition | Owning coordinator's desk; this command never deletes them, even if the tree is clean |
+| Workspace, private repository and execution refs, source bundle of a retirement proved disposable | Host `retention`, 7 days by default, after retirement | Owning coordinator's desk; removed by a later retirement or reconciliation, see [remote worker resource retirement](remote-worker-cleanup.md) |
+| The same with recovery work, ignored files or no proof, and recovery bundles | No expiry | Owning coordinator's desk; publish or recover the work, then remove it by hand |
+| Coordinator policy bundle | Host `retention` once no unretired execution is bound to it | Execution host owner; removed by a later bundle sync |
 | Journal, control receipts, accepted-message evidence | Held for review/recovery | Owning coordinator's desk; never deleted by retention |
 | Disposable MCP proxy home | Removed by acknowledged lifecycle stop | Execution host owner; existing lifecycle cleanup |
 | Shared sources, policy, toolchains and authentication homes | Host policy lifetime | Execution host owner; no automatic deletion |
@@ -1163,14 +1176,16 @@ beekeeper agents hosts reconcile <host> <execution-uuid> <generation> --release-
 
 Only a regular log older than its retention deadline is then eligible for
 removal. The flag does not release workspace or source evidence. Reconciliation
-is bounded to one execution and one log, with no home or global `/tmp` search.
+is bounded to one execution, its log and a small purge batch, and removes nothing
+from home or a global `/tmp`.
 Recovery holds deliberately override disk reclamation; owners must resolve
 holds rather than rely on automatic expiration to erase unpublished work.
 
 For the end-to-end proof on an explicitly leased host, save `hosts check`
 output before reconciliation, reconcile a terminal execution, and save the
-after inventory showing `managed log retention` and its journal timestamp.
-After 30 days, verify `log past retention`, review evidence, release it, and
+after inventory showing `managed retention` for what moved aside and `managed log
+retention` with its journal timestamp for the log. Past `eligibleAt`, verify a
+disposable retirement is removed. After 30 days, verify `log past retention`, review evidence, release it, and
 capture the final inventory. Also verify active, parked, unknown, shared and
 recovery resources remain. Epic completion requires all three execution hosts
 to pass this audit after that proof. This procedure does **not** authorize fleet

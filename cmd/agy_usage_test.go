@@ -12,6 +12,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
@@ -325,6 +326,15 @@ func (f quotaFixture) loop(t *testing.T, out *bytes.Buffer, run func(args []stri
 	origRun := beekeeperRun
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) { return run(slices.Clone(args)) }
 	t.Cleanup(func() { beekeeperRun = origRun })
+	origRefs := refStates
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		states := map[github.PR]github.RefState{}
+		for _, r := range refs {
+			states[r] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+		}
+		return states, nil
+	}
+	t.Cleanup(func() { refStates = origRefs })
 	return &supervisorLoop{a: a, said: map[string]bool{}}
 }
 

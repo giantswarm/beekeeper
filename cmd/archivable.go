@@ -17,8 +17,8 @@ func (a *app) agentArchivableCmd() *cobra.Command {
 finished worker beekeeper started: one of beekeeper's starts, off the
 roster, holding or having held no role a relay did not relieve, its desktop
 record unarchived, its task reported done with agents idle --done, and its
-CLI in no turn. Those are the sessions agents.archiveAgreement covers, and a steward
-asked to archive runs this first and archives only what it confirms.
+CLI in no turn. A steward asked to archive runs this first and archives only
+what it confirms.
 
 A session the person started is never confirmed. Exits 3 when any named
 session is not confirmed, with why.`,

@@ -12,7 +12,7 @@ import (
 // must not inherit the policy of a routine line emitted by the same source.
 func (w *watcher) routineLine(line string) bool {
 	switch {
-	case strings.HasPrefix(line, "SESSIONS "):
+	case strings.HasPrefix(line, "SESSIONS "), strings.HasPrefix(line, "CENTRAL agents.register "):
 		return true
 	// These unresolved failures share the doctor source with its chores.
 	// In particular, a failed reset uses lowercase "failed"; a successful

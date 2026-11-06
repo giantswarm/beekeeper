@@ -29,6 +29,10 @@ import (
 // may still prove the merge from it.
 const Grace = 6 * time.Hour
 
+// SessionIdle is how long an unarchived desktop session with no process in
+// its worktree keeps that worktree live after its last activity.
+const SessionIdle = 7 * 24 * time.Hour
+
 // DetachedIdle is how long a worktree on a detached HEAD (a release's or a
 // pull request's proof checkout) must be untouched before it counts as
 // finished: no pull request says when its work ended.

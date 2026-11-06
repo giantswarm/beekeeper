@@ -206,7 +206,7 @@ func TestHandoverPromptPassesOnTheBrief(t *testing.T) {
 		agent:   state.Agent{Party: state.Party{Session: oldID, Name: countName}, Task: countTask},
 		context: 25_400,
 		record:  &state.Record{Issue: issue61, Waits: "CI"},
-		merges:  []state.Merge{{Repo: scratchRepo, PR: 7, Lane: "main", Phase: state.Waiting}},
+		merges:  []state.Merge{{Repo: scratchRepo, PR: 7, Lane: mainBranch, Phase: state.Waiting}},
 		events:  []state.Event{{At: at, Verb: "lease.claim", Detail: "lab-a"}},
 		note:    noteAB,
 		brief:   "# Count\n\n## Steps\ncount a, b, c",
