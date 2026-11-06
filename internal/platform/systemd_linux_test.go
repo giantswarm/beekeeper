@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -46,12 +47,23 @@ func TestOpenerRunning(t *testing.T) {
 	}
 }
 
+// A scoped command runs in a collected scope of its own under app.slice,
+// never in the caller's cgroup, with its arguments verbatim.
+func TestScopedArgs(t *testing.T) {
+	got := scopedArgs("claude-daemon-1", []string{"/bin/claude", "--bg", "--", "brief with ${HOME} and $$"})
+	want := []string{"systemd-run", userManager, scopeRun, quietRun, collectRun, "--expand-environment=no",
+		"--slice=app.slice", "--unit=claude-daemon-1", "--", "/bin/claude", "--bg", "--", "brief with ${HOME} and $$"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scopedArgs = %q, want %q", got, want)
+	}
+}
+
 // The app runs in a collected scope of its own under app.slice, named so
 // the desktop scope's drop-ins apply, never in the caller's cgroup.
 func TestOpenArgs(t *testing.T) {
 	now := time.Unix(1760805743, 123)
 	got := openArgs("claude-desktop", "claude://resume?session=local_1", now)
-	want := []string{"--user", "--scope", quietRun, "--collect", "--slice=app.slice",
+	want := []string{"--user", scopeRun, quietRun, collectRun, "--slice=app.slice",
 		"--unit=app-com.anthropic.Claude-beekeeper-1760805743000000123", "claude-desktop", "claude://resume?session=local_1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("openArgs = %q, want %q", got, want)
@@ -91,7 +103,7 @@ func TestCapProperties(t *testing.T) {
 	}
 
 	args := scopeArgs("memcap-42-000001", c, []string{"zsh", "-c", "go build ./..."})
-	wantArgs := []string{"--user", "--scope", quietRun, "--expand-environment=no", "--unit=memcap-42-000001",
+	wantArgs := []string{"--user", scopeRun, quietRun, "--expand-environment=no", "--unit=memcap-42-000001",
 		"--slice=" + slot, "--nice=10", "-p", "MemoryMax=12G", "-p", noSwap, "-p", "OOMPolicy=continue",
 		"--", "zsh", "-c", "go build ./..."}
 	if !reflect.DeepEqual(args, wantArgs) {
@@ -163,7 +175,7 @@ func TestRunArgsQuiet(t *testing.T) {
 	argv := []string{"/bin/bk", "merge-child", "/state/merges/x"}
 	merge := Unit{Name: "beekeeper-merge-x", Argv: argv, TermIsSuccess: true}
 	want := func(success string) []string {
-		head := []string{userManager, "--collect", quietRun, "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--setenv=SSH_AUTH_SOCK=", "--"}
+		head := []string{userManager, collectRun, quietRun, "--unit=beekeeper-merge-x", "-p", "KillMode=mixed", "-p", "SuccessExitStatus=" + success, "--setenv=SSH_AUTH_SOCK=", "--"}
 		return append(head, argv...)
 	}
 	if got := runArgs(merge, true); !slices.Equal(got, want(quietSuccess)) {
@@ -223,6 +235,105 @@ func TestReapStopsWhatTheCommandLeftInItsScope(t *testing.T) {
 	if left, err := c.Reap(name); left != nil || err != nil {
 		t.Errorf("a second Reap = %v, %v; want nothing", left, err)
 	}
+}
+
+// cgroupOf is process pid's cgroup v2 path ("/user.slice/…").
+func cgroupOf(t *testing.T, pid int) string {
+	t.Helper()
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		t.Fatalf("process %d: %v", pid, err)
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(raw)), "0::")
+}
+
+// A child a scoped command leaves running (the claude daemon a claude --bg
+// starts) stays in the command's own scope, not in the caller's cgroup.
+func TestScopedLeavesItsChildInItsOwnScope(t *testing.T) {
+	if !userSystemd() {
+		t.Skip("no user service manager")
+	}
+	name := fmt.Sprintf("claude-daemon-test-%d-%d", os.Getpid(), time.Now().UnixNano())
+	argv := systemdLauncher{}.Scoped(name, []string{"sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!"})
+	out, err := exec.Command(argv[0], argv[1:]...).Output() //nolint:gosec // the test's own command
+	if err != nil {
+		t.Fatalf("%q: %v", argv, err)
+	}
+	child, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("the command's output %q: %v", out, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(child, syscall.SIGKILL) })
+	if cg, own := cgroupOf(t, child), cgroupOf(t, os.Getpid()); !strings.HasSuffix(cg, "/app.slice/"+name+".scope") || cg == own {
+		t.Errorf("the child runs in %q, want %s.scope under app.slice, not the caller's %q", cg, name, own)
+	}
+}
+
+// Move takes running processes out of a capped unit into a scope of their
+// own without limits, so the unit's stop no longer ends them. The moved ones
+// are the main process's children, as the claude daemon is never a unit's
+// main process: a service's stop signals its main process wherever it runs.
+func TestMoveTakesProcessesOutOfTheirUnit(t *testing.T) {
+	if !userSystemd() {
+		t.Skip("no user service manager")
+	}
+	stamp := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	unit, scope := "beekeeper-movetest-"+stamp, "claude-daemon-movetest-"+stamp
+	if out, err := exec.Command("systemd-run", userManager, quietRun, collectRun, "--unit="+unit, //nolint:gosec // the test's own unit
+		"-p", "MemoryMax=64M", "-p", "CPUQuota=50%", "sh", "-c", "sleep 300 & sleep 301 & wait").CombinedOutput(); err != nil {
+		t.Fatalf("systemd-run: %v: %s", err, out)
+	}
+	main := unitMain(t, unit)
+	t.Cleanup(func() {
+		// One unit each: systemctl stops none when one of them is gone.
+		for _, u := range []string{unit + ".service", scope + ".scope"} {
+			_ = exec.Command("systemctl", userManager, "stop", u).Run() //nolint:gosec // the test's own units
+		}
+	})
+	var pids []int
+	for range 250 {
+		pids = slices.DeleteFunc(pidsIn(filepath.Join(cgroupRoot, cgroupOf(t, main))), func(pid int) bool { return pid == main })
+		if len(pids) == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(pids) != 2 {
+		t.Fatalf("%s runs %v beside its main process %d, want its two sleeps", unit, pids, main)
+	}
+	if err := (systemdLauncher{}).Move(pids, scope); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	for _, pid := range pids {
+		if cg := cgroupOf(t, pid); !strings.HasSuffix(cg, "/app.slice/"+scope+".scope") {
+			t.Errorf("process %d runs in %q after the move, want %s.scope", pid, cg, scope)
+		}
+	}
+	if got := machine.Limits(filepath.Join(cgroupRoot, cgroupOf(t, pids[0]))); len(got) != 0 {
+		t.Errorf("the scope sets %q, want none of the unit's limits", got)
+	}
+	if err := exec.Command("systemctl", userManager, "stop", unit+".service").Run(); err != nil { //nolint:gosec // the test's own unit
+		t.Fatalf("stopping %s: %v", unit, err)
+	}
+	for _, pid := range pids {
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Errorf("process %d ended with %s's stop: %v", pid, unit, err)
+		}
+	}
+}
+
+// unitMain is the service unit's main process.
+func unitMain(t *testing.T, unit string) int {
+	t.Helper()
+	out, err := exec.Command("systemctl", userManager, "show", "-p", "MainPID", "--value", unit+".service").Output() //nolint:gosec // the test's own unit
+	if err != nil {
+		t.Fatalf("systemctl show %s: %v", unit, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid == 0 {
+		t.Fatalf("%s has no main process (%q)", unit, out)
+	}
+	return pid
 }
 
 func TestScopePopulated(t *testing.T) {

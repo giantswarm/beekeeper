@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,10 +180,35 @@ func bgResumeArgv(bin, id, msg string) []string {
 // bgWait bounds a claude --bg call and the daemon's listing of its session.
 const bgWait = time.Minute
 
+// daemonScope starts the name of a claude daemon's transient scope: the
+// scope of the claude --bg call that started it, or the one the doctor moved
+// it into.
+const daemonScope = "claude-daemon-"
+
+// daemonScopeName is a new daemonScope name.
+func daemonScopeName(now time.Time) string {
+	return daemonScope + strconv.FormatInt(now.UnixNano(), 10)
+}
+
+// bgCommand is the command line bgRun runs for argv. A claude --bg call, the
+// one claude command that starts the claude daemon when none runs, runs in a
+// transient scope of its own: the daemon starts as the call's child and stays
+// in its cgroup, which would otherwise be the caller's unit (the standby
+// watch's beekeeper-notify.service, a wake's unit), every background session
+// then sharing that unit's limits and ending with its stop. Every other
+// claude command runs as it is.
+func bgCommand(argv []string, now time.Time) []string {
+	if len(argv) < 2 || argv[1] != bgFlag {
+		return argv
+	}
+	return plat.Launcher.Scoped(daemonScopeName(now), argv)
+}
+
 // bgRun runs argv in dir with env and returns its output; tests replace it.
 var bgRun = func(ctx context.Context, dir string, env, argv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, bgWait)
 	defer cancel()
+	argv = bgCommand(argv, time.Now())
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // claude's own command line
 	cmd.Dir, cmd.Env = dir, env
 	// the daemon it hands the session to may keep the output open

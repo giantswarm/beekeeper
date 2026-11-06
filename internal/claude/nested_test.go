@@ -25,7 +25,7 @@ func chain(argvs ...[]string) *proc.Table {
 func TestNested(t *testing.T) {
 	var (
 		desktop  = []string{desktopEntrypoint}
-		daemon   = []string{cliComm, "daemon"}
+		daemon   = []string{cliComm, daemonCmd}
 		ptyHost  = []string{cliComm + " bg-pty-host"}
 		spare    = []string{cliComm + " bg-spare"}
 		cli      = []string{cliComm}
