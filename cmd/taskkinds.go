@@ -148,6 +148,10 @@ func (a *app) withKindAdmission(ctx context.Context, name string, start func() e
 	if err := a.kindGate(name); err != nil {
 		return err
 	}
+	// An outage may have opened while this start waited for its kind lock.
+	if err := a.fatalAdmission(name, a.selectionKind == taskKindReview); err != nil {
+		return err
+	}
 	return start()
 }
 

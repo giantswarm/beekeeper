@@ -92,3 +92,23 @@ func TestFatalCorruptJournalFailsClosed(t *testing.T) {
 		t.Fatal("corrupt journal read as empty")
 	}
 }
+
+func TestFatalFlappingProbeKeepsItsRepairOwner(t *testing.T) {
+	now := time.Now().UTC()
+	q := Queue{}
+	o := Observation{ID: "flapping-startup", Failed: true}
+	q.Observe(o, now)
+	x := q.Reserve(now, func(string) bool { return false })
+	owner := x.Owner
+	q.Observe(Observation{ID: o.ID}, now.Add(time.Minute))
+	q.Observe(o, now.Add(2*time.Minute))
+	if q.Incidents[0].Owner != owner {
+		t.Fatal("reopened outage orphaned its live repair")
+	}
+	if q.Reserve(now.Add(time.Hour), func(name string) bool { return name == owner }) != nil {
+		t.Fatal("flap spawned a second owner")
+	}
+	if next := q.Reserve(now.Add(time.Hour), func(string) bool { return false }); next == nil || next.Attempts != 1 {
+		t.Fatal("later episode inherited exhausted budget")
+	}
+}

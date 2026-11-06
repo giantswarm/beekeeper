@@ -115,7 +115,9 @@ func (q *Queue) Observe(o Observation, now time.Time) string {
 			x.Evidence = o.Evidence
 			return ""
 		}
-		*x = Incident{ID: o.ID, Evidence: o.Evidence, Opened: now}
+		// A flapping probe must not orphan a repair still in review/proof.
+		// New episodes get a new budget, retaining the owner and rate limit.
+		*x = Incident{ID: o.ID, Evidence: o.Evidence, Opened: now, Owner: x.Owner, LastAttempt: x.LastAttempt}
 		return "fatal detected: " + o.ID
 	}
 	if o.Unknown || o.Disabled || !o.Failed {
