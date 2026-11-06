@@ -262,6 +262,25 @@ func (r diskRun) listing() string {
 	return b.String()
 }
 
+// cachePolicy names the policy p falls under: the path itself, a parent or
+// one of its children is a policy's.
+func cachePolicy(p string, entries []config.DiskCache) (string, bool) {
+	for _, e := range entries {
+		if e.Path == "" {
+			continue
+		}
+		for q := p; q != filepath.Dir(q); q = filepath.Dir(q) {
+			if ok, _ := filepath.Match(e.Path, q); ok {
+				return e.Name, true
+			}
+		}
+		if strings.HasPrefix(e.Path, p+string(filepath.Separator)) {
+			return e.Name, true
+		}
+	}
+	return "", false
+}
+
 // uncoveredCaches lists the largest direct children of the user cache
 // directory that no cache policy covers, at least minBytes, largest first.
 func uncoveredCaches(base string, entries []config.DiskCache, minBytes int64, n int) []cacheReport {
@@ -269,30 +288,10 @@ func uncoveredCaches(base string, entries []config.DiskCache, minBytes int64, n 
 	if err != nil {
 		return nil
 	}
-	var patterns []string
-	for _, e := range entries {
-		if e.Path != "" {
-			patterns = append(patterns, e.Path)
-		}
-	}
-	covered := func(p string) bool {
-		for _, pat := range patterns {
-			// The path itself, a parent or one of its children is a policy's.
-			for q := p; q != filepath.Dir(q); q = filepath.Dir(q) {
-				if ok, _ := filepath.Match(pat, q); ok {
-					return true
-				}
-			}
-			if strings.HasPrefix(pat, p+string(filepath.Separator)) {
-				return true
-			}
-		}
-		return false
-	}
 	var out []cacheReport
 	for _, it := range items {
 		p := filepath.Join(base, it.Name())
-		if !it.IsDir() || covered(p) {
+		if _, covered := cachePolicy(p, entries); !it.IsDir() || covered {
 			continue
 		}
 		size, newest := diskprune.Measure(p)

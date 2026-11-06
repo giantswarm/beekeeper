@@ -2345,6 +2345,9 @@ const loopRestartEvery = time.Minute
 // DOWN and notifies (no-supervisor) until it runs again. No session is
 // ever started or relayed for it.
 func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
+	if w.standby {
+		w.rearmRecovery()
+	}
 	if line, err := w.checkThroughput(w.now, false); err != nil {
 		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
 	} else {
@@ -2386,6 +2389,11 @@ func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
 	return false
 }
 
+// unitComingUp says a unit in this state runs or is on its way there.
+func unitComingUp(unitState string) bool {
+	return unitState == unitActive || unitState == "activating" || unitState == "reloading"
+}
+
 // restartLoop starts the supervisor loop's service again (standby watch),
 // at most every loopRestartEvery and only while the service is not
 // starting already. It returns what the DOWN line adds.
@@ -2394,8 +2402,7 @@ func (w *watcher) restartLoop(ctx context.Context) string {
 	if unit == nil {
 		return "; this watch restarts no service here (only the standby, on Linux with systemd)"
 	}
-	switch unit.state(ctx) {
-	case unitActive, "activating", "reloading":
+	if unitComingUp(unit.state(ctx)) {
 		return "; its service is starting"
 	}
 	if !w.stand.loopRestart.IsZero() && w.now.Sub(w.stand.loopRestart) < loopRestartEvery {
