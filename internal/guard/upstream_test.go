@@ -71,7 +71,7 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 
 func upstreamHook(record func(session, command, repo string)) Hook {
 	h := hook()
-	h.Upstream = Upstream{Orgs: []string{"giantswarm", "teemow"}, Review: reviewList, Git: fakeGit, Getenv: func(string) string { return "" }}
+	h.Upstream = Upstream{Orgs: []string{"giantswarm", "fixture-person"}, Review: reviewList, Git: fakeGit, Getenv: func(string) string { return "" }}
 	h.Refused = record
 	return h
 }
@@ -163,7 +163,7 @@ func TestUpstreamPassesReadsAndOurWrites(t *testing.T) {
 		// writes to the orgs, any case, our fork's upstream/<slug> branch
 		{oursDir, prFill},
 		{oursDir, "gh pr create -R giantswarm/kagent --body 'from https://github.com/kagent-dev/kagent/issues/1'"},
-		{oursDir, "gh issue create -R teemow/notes -t t -b b"},
+		{oursDir, "gh issue create -R fixture-person/notes -t t -b b"},
 		{oursDir, "gh issue comment 3 -R GiantSwarm/beekeeper -b x"},
 		{oursDir, "gh api -X POST repos/giantswarm/beekeeper/issues -f title=x"},
 		{oursDir, `gh api graphql -f query='mutation { addComment(input:{}) { clientMutationId } }' -f owner=giantswarm`},

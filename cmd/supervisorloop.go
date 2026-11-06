@@ -782,7 +782,7 @@ func loopServes(st *state.State, ag state.Agent) string {
 
 func loopTaskServes(ag state.Agent, parkedOn string) string {
 	for _, task := range []string{ag.Task, ag.LastTask} {
-		if m := refURL.FindString(task); m != "" {
+		if m := refURL.FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
 			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
 				return refName(r)
 			}
@@ -1141,27 +1141,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		in.Workers = append(in.Workers, w)
 	}
-	for _, rp := range st.ReviewParks {
-		if rp.On == "" || rp.ReviewHead == "" {
-			continue
-		}
-		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
-		}) {
-			continue
-		}
-		in.Workers = append(in.Workers, superloop.Worker{
-			Name:            rp.Agent,
-			ParkedOn:        rp.On,
-			ParkedAt:        rp.At,
-			ReviewRequested: true,
-			ParkedHead:      rp.ReviewHead,
-			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
-			Started:         false,
-			Serves:          rp.Serves,
-			Saved:           true,
-		})
-	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
 			by := n.By.Name
@@ -1243,6 +1222,38 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
+	endedParks := false
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if reviewParkEnded(in.Taken, rp) {
+			endedParks = true
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+			Saved:           true,
+		})
+	}
+	if endedParks && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) })
+			return nil, nil
+		})
+	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
 	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
@@ -1256,6 +1267,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	sortTrackedPulls(in, tracked)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -1265,6 +1277,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	unread := map[string]bool{}
+	unreviewedEnded := map[string]bool{}
+	pullHeld := false
 	for _, ref := range tracked {
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
@@ -1278,11 +1293,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = mergedPull
 			continue
 		}
+		if pullHeld {
+			unread[ref] = true
+			continue
+		}
 		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
+			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-				return nil
+				pullHeld = true
+				continue
 			}
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
@@ -1294,6 +1315,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
+			unreviewedEnded[strings.ToLower(ref)] = true
+		}
 		if p.State == superloop.Merged {
 			l.mu.Lock()
 			if l.merged == nil {
@@ -1302,6 +1326,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.merged[ref] = p
 			l.mu.Unlock()
 		}
+	}
+	if len(unreviewedEnded) > 0 && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
+				return unreviewedEnded[strings.ToLower(rp.On)]
+			})
+			return nil, nil
+		})
+	}
+	if pullHeld && len(in.Pulls) == 0 {
+		return nil
 	}
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
@@ -1372,7 +1407,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if l.pauseForReexec() {
 		return nil
 	}
-	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless); err != nil {
+	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
@@ -1603,7 +1638,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitionOrder := []string{}
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
-		key := "transition:" + cmp.Or(act.Agent, act.Kind)
+		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
@@ -2492,8 +2527,8 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
 		return s
 	}
-	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
-		if r, ok := parseRef(ref); ok {
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) && !strings.Contains(strings.ToLower(ref), "/pull/") {
+		if r, ok := parseRef(ref); ok && !strings.EqualFold(refName(r), on) {
 			return refName(r)
 		}
 	}
@@ -2501,6 +2536,56 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 		return rp.Serves
 	}
 	return ""
+}
+
+// reviewParkEnded reports a park whose own pull request the loop already
+// ended. A park is per pull request: nothing about its worker ends it, since a
+// worker finishing one pull request can have others waiting for review.
+func reviewParkEnded(taken []superloop.Taken, rp state.ReviewPark) bool {
+	return slices.ContainsFunc(taken, func(t superloop.Taken) bool {
+		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
+	})
+}
+
+func hasLoopRound(taken []superloop.Taken, ref string) bool {
+	for _, t := range taken {
+		if (t.Kind == superloop.KindReview || t.Kind == superloop.KindGo) && strings.EqualFold(t.Ref, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortTrackedPulls(in superloop.Input, tracked []string) {
+	type priority struct {
+		tier    int
+		changed time.Time
+	}
+	pri := make(map[string]priority, len(tracked))
+	for _, ref := range tracked {
+		tier := 3
+		for _, w := range in.Workers {
+			if !strings.EqualFold(w.ParkedOn, ref) || !w.ReviewRequested {
+				continue
+			}
+			if !w.Saved {
+				tier = 0
+				break
+			}
+			tier = min(tier, 1)
+		}
+		if tier > 1 && hasLoopRound(in.Taken, ref) {
+			tier = 2
+		}
+		pri[ref] = priority{tier: tier, changed: loopPullChanged(in, ref)}
+	}
+	slices.SortStableFunc(tracked, func(a, b string) int {
+		pa, pb := pri[a], pri[b]
+		if pa.tier != pb.tier {
+			return cmp.Compare(pa.tier, pb.tier)
+		}
+		return pb.changed.Compare(pa.changed)
+	})
 }
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
@@ -2595,7 +2680,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -2603,7 +2688,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
@@ -2637,10 +2722,33 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		}
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	var place startHost
+	var err error
+	if act.Kind == superloop.KindEnd {
+		// Terminal continuations can need the live desk checkout and host
+		// policy sync. Execution hosts only have prepared workspaces, so
+		// keep this work on the coordinator even under hostsFirst.
+		flags := startFlags(false, false)
+		if model := l.a.ruleModel(name, workerRole); model != "" {
+			flags = append(flags, modelFlag, model)
+		}
+		out, code, readErr := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+		var capacity struct {
+			Room int `json:"room"`
+		}
+		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+			err = errLoopLater
+		}
+	} else {
+		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+	}
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
-			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			where := "on any host"
+			if act.Kind == superloop.KindEnd {
+				where = "on the coordinator"
+			}
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return errLoopLater
 		}
 		return err
@@ -2657,10 +2765,7 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		merged := l.merged[act.Ref]
 		l.mu.Unlock()
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
-		branch = cmp.Or(place.Ref, merged.Base, head)
-		if place.remote() && place.Ref == "" {
-			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
-		}
+		branch = cmp.Or(merged.Base, head)
 	} else {
 		if p, err := readLoopPull(ctx, act.Ref); err == nil {
 			branch = p.Branch
@@ -2694,6 +2799,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
@@ -2811,6 +2920,10 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -3348,6 +3461,10 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
@@ -3376,6 +3493,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 		}
 		if Code(err) == ExitRefused {
+			if strings.Contains(err.Error(), "omp start waits on lease") {
+				l.sayOnce("omp lease "+act.Key, "SUPERVISOR NEXT WAITS %s: %v", next.URL, err)
+			}
 			return "", errLoopLater
 		}
 		return "", err
