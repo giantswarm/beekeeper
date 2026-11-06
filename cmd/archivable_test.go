@@ -290,7 +290,7 @@ func TestArchivableLiveTurnDirtyWorktree(t *testing.T) {
 		t.Fatal("expected dirty worktree")
 	}
 	plat.Machine = headlessMachine{Machine: plat.Machine, id: "s42"}
-	p := state.Party{Session: "s42", HostSession: "local_worker", Name: "Worker"}
+	p := state.Party{Session: "s42", HostSession: "local_worker", Name: litWorker}
 	desktopRecord(t, a.cfg.Claude.DesktopDir, p.HostSession, p.Session, false)
 	// A headless turn remains live independently of the old last report.
 	ss, table, err := a.sessions()
@@ -320,7 +320,7 @@ func TestArchivableLiveTurnDirtyWorktree(t *testing.T) {
 }
 
 func TestArchivableCompletionAuditHistory(t *testing.T) {
-	p := state.Party{Session: "worker", HostSession: "local_worker", Name: "Worker"}
+	p := state.Party{Session: "worker", HostSession: "local_worker", Name: litWorker}
 	a, _ := archiveApp(t, func(st *state.State) { st.Starts = append(st.Starts, state.Start{Party: p}) })
 	desktopRecord(t, a.cfg.Claude.DesktopDir, p.HostSession, p.Session, false)
 	st, err := a.store.Read()
