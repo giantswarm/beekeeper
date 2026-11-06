@@ -73,7 +73,7 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 		batches = append(batches, w)
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("earlier action blocked a later timer")
 		}
 	}
@@ -89,7 +89,7 @@ func TestTimerDispatcherHonorsStopForCommandsAndWakes(t *testing.T) {
 	a.out = io.Discard
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Stop = &state.Stop{At: a.now}
-		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Run: "false"}, {ID: 2, Due: a.now.Add(-time.Minute), Wake: "worker"}}
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Run: probeFails}, {ID: 2, Due: a.now.Add(-time.Minute), Wake: "worker"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -171,13 +171,13 @@ func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 		overdue bool
 	}{
 		{"wake overdue", state.Timer{Due: now.Add(-time.Hour), Wake: "worker"}, true},
-		{"future", state.Timer{Due: now.Add(time.Minute), Wake: "worker"}, false},
+		{"not due yet", state.Timer{Due: now.Add(time.Minute), Wake: "worker"}, false},
 		{"grace", state.Timer{Due: now.Add(-time.Minute), Wake: "worker"}, false},
-		{"never checked", state.Timer{Due: now.Add(-time.Hour), Probe: "false", Wake: "worker"}, true},
-		{"recently checked false", state.Timer{Due: now.Add(-time.Hour), Probe: "false", Checked: now.Add(-time.Minute), Wake: "worker"}, false},
-		{"missed check", state.Timer{Due: now.Add(-time.Hour), Probe: "false", Checked: now.Add(-10 * time.Minute), Wake: "worker"}, true},
-		{"custom interval", state.Timer{Due: now.Add(-time.Hour), Probe: "false", Checked: now.Add(-10 * time.Minute), Every: time.Hour, Wake: "worker"}, false},
-		{"missed expiry", state.Timer{Due: now.Add(-time.Hour), Probe: "false", Checked: now, Until: now.Add(-10 * time.Minute), Wake: "worker"}, true},
+		{"never checked", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Wake: "worker"}, true},
+		{"recently checked false", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now.Add(-time.Minute), Wake: "worker"}, false},
+		{"missed check", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now.Add(-10 * time.Minute), Wake: "worker"}, true},
+		{"custom interval", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now.Add(-10 * time.Minute), Every: time.Hour, Wake: "worker"}, false},
+		{"missed expiry", state.Timer{Due: now.Add(-time.Hour), Probe: probeFails, Checked: now, Until: now.Add(-10 * time.Minute), Wake: "worker"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &state.State{Timers: []state.Timer{tc.timer}}

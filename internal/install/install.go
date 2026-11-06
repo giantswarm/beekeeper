@@ -53,6 +53,9 @@ type Env struct {
 	Out           io.Writer
 	// DryRun prints every step and takes none.
 	DryRun bool
+	// RecoveryOnly installs the independent fatal sentinel and timer driver,
+	// without restoring hooks, watch, loop or other deliberately disabled parts.
+	RecoveryOnly bool
 }
 
 // Install writes the hooks, the standby service, the memory guard and a
@@ -68,21 +71,24 @@ func Install(ctx context.Context, e Env) error {
 	// Detach the snapshot before planning mutates maps and slices.
 	_ = json.Unmarshal(before, &prior)
 	p := &plan{home: e.Spec.Home}
-	if err := e.planHooks(p, &m); err != nil {
-		return err
-	}
-	agyRejected, err := e.planAgyHooks(p, &m)
-	if err != nil {
-		return err
-	}
-	if err := e.planAgySkills(p, &m); err != nil {
-		return err
-	}
-	if err := e.planCodexHooks(p, &m); err != nil {
-		return err
-	}
-	if err := e.planCodexSkills(p, &m); err != nil {
-		return err
+	var agyRejected string
+	if !e.RecoveryOnly {
+		if err := e.planHooks(p, &m); err != nil {
+			return err
+		}
+		agyRejected, err = e.planAgyHooks(p, &m)
+		if err != nil {
+			return err
+		}
+		if err := e.planAgySkills(p, &m); err != nil {
+			return err
+		}
+		if err := e.planCodexHooks(p, &m); err != nil {
+			return err
+		}
+		if err := e.planCodexSkills(p, &m); err != nil {
+			return err
+		}
 	}
 	e.planConfig(p, &m)
 	e.planSetup(ctx, p, &m)
@@ -299,6 +305,9 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	var units []platform.File
 	states := map[string]fileState{}
 	for _, f := range files {
+		if e.RecoveryOnly && !slices.Contains([]string{"beekeeper-fatal.service", "beekeeper-fatal.timer", "beekeeper-timers.service"}, filepath.Base(f.Path)) {
+			continue
+		}
 		s := e.planFile(p, m, f)
 		// A long-running service can become a timer-triggered oneshot (for
 		// example when switching Teleport from Machine ID back to SSO).

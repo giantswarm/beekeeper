@@ -20,7 +20,15 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const fatalProbeTimeout = 20 * time.Second
+const (
+	fatalProbeTimeout      = 20 * time.Second
+	fatalSentinelName      = "fatal sentinel"
+	fatalAsFlag            = "--as"
+	fatalBudgetCommand     = "budget"
+	fatalStatusError       = "error"
+	fatalInstallationGuard = "guard:installation"
+	fatalDisabledState     = "disabled"
+)
 
 var fatalRun = runArgv
 
@@ -47,7 +55,7 @@ func (a *app) fatalCmd() *cobra.Command {
 		dir = a.cfg.StateDir
 		return nil
 	}
-	c.AddCommand(&cobra.Command{Use: "status", Short: "Show outages, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
+	c.AddCommand(&cobra.Command{Use: executionStatus, Short: "Show outages, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := resolve(); err != nil {
 				return err
@@ -100,13 +108,13 @@ func fatalService(ctx context.Context, unit string) fatal.Observation {
 	o := fatal.Observation{ID: "service:" + unit}
 	ctx, cancel := context.WithTimeout(ctx, fatalProbeTimeout)
 	defer cancel()
-	out, _, code, err := fatalRun(ctx, "", []string{"systemctl", "--user", "is-enabled", unit})
+	out, _, _, err := fatalRun(ctx, "", []string{"systemctl", "--user", "is-enabled", unit})
 	if err != nil {
 		o.Unknown = true
 		return o
 	}
 	switch strings.TrimSpace(out) {
-	case "disabled", "masked", "not-found":
+	case fatalDisabledState, "masked", "not-found":
 		o.Disabled = true
 		return o
 	case "enabled", "enabled-runtime":
@@ -119,7 +127,7 @@ func fatalService(ctx context.Context, unit string) fatal.Observation {
 		o.Unknown = true
 		return o
 	}
-	code, err = fatalProbe(ctx, "systemctl", "--user", "is-active", "--quiet", unit)
+	code, err := fatalProbe(ctx, "systemctl", "--user", "is-active", "--quiet", unit)
 	o.Unknown = err != nil
 	o.Failed = err == nil && code != 0
 	o.Evidence = "enabled managed service is not active"
@@ -252,7 +260,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	}
 	a.now = now
 	for _, msg := range transitions {
-		if err := store.Record(state.Event{At: now, By: state.Party{Name: "fatal sentinel"}, Verb: "fatal.transition", Detail: msg}); err != nil {
+		if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.transition", Detail: msg}); err != nil {
 			return err
 		}
 		// Notification is best effort; the durable status and event survive a
@@ -329,7 +337,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 		observe(o)
 		for _, msg := range transitions {
-			if err := store.Record(state.Event{At: now, By: state.Party{Name: "fatal sentinel"}, Verb: "fatal.transition", Detail: msg}); err != nil {
+			if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.transition", Detail: msg}); err != nil {
 				return err
 			}
 			_, _ = fatalProbe(ctx, "notify-send", "beekeeper system health", msg)
@@ -349,7 +357,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err
 	}
-	args := []string{"--config", path, "--as", "fatal sentinel", "agents", "start", "--name", x.Owner}
+	args := []string{"--config", path, fatalAsFlag, fatalSentinelName, "agents", "start", "--name", x.Owner}
 	checkout := cfg.Fatal.Checkouts[repo]
 	if checkout == "" {
 		checkout = filepath.Join(cfg.Projects.Dir, repoName(repo))
@@ -382,7 +390,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		x.Outcome = "repair launch uncertain; reserved owner retained"
 	}
 	_, _ = fmt.Fprintf(a.out, "%s: owner %q; attempt %d/3; %s\n", x.ID, x.Owner, x.Attempts, x.Outcome)
-	if err := store.Record(state.Event{At: now, By: state.Party{Name: "fatal sentinel"}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}); err != nil {
+	if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}); err != nil {
 		return err
 	}
 	_, _ = fatalProbe(ctx, "notify-send", "beekeeper system repair", x.ID+": "+x.Outcome)
@@ -400,12 +408,12 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = true
 		return o
 	}
-	_, _, code, err := fatalRun(ctx, "", []string{bin, "--config", path, "--as", "fatal sentinel", "budget", "--gate"})
+	_, _, code, err := fatalRun(ctx, "", []string{bin, "--config", path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, "--gate"})
 	if err != nil || code != 0 {
 		o.Unknown = true
 		return o
 	}
-	out, _, code, err := fatalRun(ctx, "", []string{"gh", "api", "repos/" + repo + "/commits/HEAD/status?per_page=100"})
+	out, _, code, err := fatalRun(ctx, "", []string{"gh", workerGitHubAPIGroup, "repos/" + repo + "/commits/HEAD/status?per_page=100"})
 	if err != nil || code != 0 {
 		o.Unknown = true
 		return o
@@ -421,7 +429,7 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 	}
 	if status.Total > 0 {
 		switch status.State {
-		case "failure", "error":
+		case "failure", fatalStatusError:
 			o.Failed = true
 			o.Evidence = "https://github.com/" + repo + "/commit/" + status.SHA
 		case "success":
@@ -429,7 +437,7 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 			o.Unknown = true
 		}
 	}
-	out, _, code, err = fatalRun(ctx, "", []string{"gh", "api", "repos/" + repo + "/commits/" + status.SHA + "/check-runs?per_page=100"})
+	out, _, code, err = fatalRun(ctx, "", []string{"gh", workerGitHubAPIGroup, "repos/" + repo + "/commits/" + status.SHA + "/check-runs?per_page=100"})
 	if err != nil || code != 0 {
 		if !o.Failed {
 			o.Unknown = true
@@ -476,21 +484,21 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 // Installation ownership, rather than executable presence, determines whether
 // hooks are desired. Uninstall withdraws that intent in install.json.
 func fatalGuards(dir string, cfg *config.Config) []fatal.Observation {
-	b, err := os.ReadFile(filepath.Join(dir, "install.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "install.json")) //nolint:gosec // fixed manifest basename in the pinned state directory
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	var m install.Manifest
 	if err != nil || json.Unmarshal(b, &m) != nil {
-		return []fatal.Observation{{ID: "guard:installation", Unknown: true}}
+		return []fatal.Observation{{ID: fatalInstallationGuard, Unknown: true}}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return []fatal.Observation{{ID: "guard:installation", Unknown: true}}
+		return []fatal.Observation{{ID: fatalInstallationGuard, Unknown: true}}
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return []fatal.Observation{{ID: "guard:installation", Unknown: true}}
+		return []fatal.Observation{{ID: fatalInstallationGuard, Unknown: true}}
 	}
 	var out []fatal.Observation
 	claudeDir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -503,7 +511,7 @@ func fatalGuards(dir string, cfg *config.Config) []fatal.Observation {
 		check      func(string, string, string) string
 	}{
 		{"claude", filepath.Join(claudeDir, "settings.json"), len(m.Hooks) > 0, install.CheckClaudeHooks},
-		{"agy", filepath.Join(home, ".gemini", "config", "hooks.json"), len(m.AgyHook) > 0, install.CheckAgyHooks},
+		{config.AgyHarness, filepath.Join(home, ".gemini", "config", "hooks.json"), len(m.AgyHook) > 0, install.CheckAgyHooks},
 		{"codex", codexHooksPath(home, true, cfg.Codex), len(m.CodexHook) > 0, func(_ string, exe, home string) string { return checkCodexHooks(home, dir, exe, true, cfg.Codex) }},
 	} {
 		o := fatal.Observation{ID: "guard:" + c.name, Disabled: !c.desired}

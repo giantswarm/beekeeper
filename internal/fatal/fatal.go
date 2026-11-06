@@ -38,7 +38,7 @@ type Queue struct {
 }
 
 func Read(dir string) (Queue, error) {
-	b, err := os.ReadFile(filepath.Join(dir, File))
+	b, err := os.ReadFile(filepath.Join(dir, File)) //nolint:gosec // fixed journal basename in the configured private state directory
 	if errors.Is(err, os.ErrNotExist) {
 		return Queue{}, nil
 	}
@@ -64,7 +64,7 @@ func (q Queue) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	if err = f.Chmod(0600); err == nil {
 		_, err = f.Write(b)
 	}
@@ -78,7 +78,15 @@ func (q Queue) Save(dir string) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(f.Name(), filepath.Join(dir, File))
+	if err := os.Rename(f.Name(), filepath.Join(dir, File)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir) //nolint:gosec // configured private state directory; sync the rename before launching a repair
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 
 // Observe returns a transition message, empty for a repeated observation.

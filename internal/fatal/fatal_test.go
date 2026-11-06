@@ -8,10 +8,11 @@ import (
 )
 
 func TestFatalRestartDedupAndVerification(t *testing.T) {
+	const harnessID = "harness"
 	dir := t.TempDir()
 	now := time.Now().UTC()
 	q := Queue{}
-	failed := Observation{ID: "harness", Failed: true, Evidence: "cannot start"}
+	failed := Observation{ID: harnessID, Failed: true, Evidence: "cannot start"}
 	if q.Observe(failed, now) == "" {
 		t.Fatal("no detection")
 	}
@@ -32,13 +33,13 @@ func TestFatalRestartDedupAndVerification(t *testing.T) {
 	if q.Reserve(now.Add(time.Hour), func(string) bool { return true }) != nil {
 		t.Fatal("live owner duplicated")
 	}
-	if q.Observe(Observation{ID: "harness", Unknown: true}, now) != "" || q.Barrier("ordinary") == nil {
+	if q.Observe(Observation{ID: harnessID, Unknown: true}, now) != "" || q.Barrier("ordinary") == nil {
 		t.Fatal("unknown cleared outage")
 	}
 	if q.Barrier(x.Owner) != nil {
 		t.Fatal("repair blocked")
 	}
-	if q.Observe(Observation{ID: "harness"}, now.Add(time.Minute)) == "" || q.Barrier("ordinary") != nil {
+	if q.Observe(Observation{ID: harnessID}, now.Add(time.Minute)) == "" || q.Barrier("ordinary") != nil {
 		t.Fatal("verified recovery did not release barrier")
 	}
 }

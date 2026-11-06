@@ -16,6 +16,8 @@
 # guards and the core repository's default-branch CI. Disabled components
 # stay disabled. A separate timer dispatcher fires timers without watch or
 # supervisor; missed timer firing/check deadlines are fatal after 2m grace.
+# `beekeeper install --recovery-only` installs these independent services
+# without restoring hooks, watch or loop that were deliberately uninstalled.
 # Stop/holds/capacity still govern repairs; three attempts,
 # ten minutes apart, with only one repair owner at a time. Only a passing
 # probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.

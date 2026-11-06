@@ -26,7 +26,7 @@ func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 }
 
 func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
-	for _, status := range []string{"disabled", "masked", "not-found", "enabled", "unavailable"} {
+	for _, status := range []string{fatalDisabledState, "masked", "not-found", "enabled", "unavailable"} {
 		t.Run(status, func(t *testing.T) {
 			fakeFatalRun(t, func(args []string) (string, int) {
 				if slices.Contains(args, "is-enabled") {
@@ -35,7 +35,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 				return "", 3
 			})
 			o := fatalService(t.Context(), "beekeeper-supervisor-loop.service")
-			if o.Disabled != (status == "disabled" || status == "masked" || status == "not-found") || o.Failed != (status == "enabled") || o.Unknown != (status == "unavailable") {
+			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == "enabled") || o.Unknown != (status == "unavailable") {
 				t.Fatalf("%+v", o)
 			}
 		})
@@ -43,7 +43,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 }
 
 func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
-	for _, hold := range []string{"none", "stop", "starts"} {
+	for _, hold := range []string{ghNone, "stop", "starts"} {
 		t.Run(hold, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
@@ -66,7 +66,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 			failed := true
 			fakeFatalRun(t, func(args []string) (string, int) {
 				if slices.Contains(args, "is-enabled") {
-					return "disabled", 1
+					return fatalDisabledState, 1
 				}
 				if args[0] == "critical-probe" && failed {
 					return "discard sensitive output", 1
@@ -96,7 +96,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				}
 			}
 			want := 0
-			if hold == "none" {
+			if hold == ghNone {
 				want = 1
 			}
 			if starts != want {
@@ -126,7 +126,7 @@ func TestFatalMalformedConfigStillDetectsWithoutSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.cfgPath = path
-	fakeFatalRun(t, func(args []string) (string, int) { return "disabled", 0 })
+	fakeFatalRun(t, func(args []string) (string, int) { return fatalDisabledState, 0 })
 	if err := a.fatalScan(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestFatalMalformedConfigStillDetectsWithoutSupervisor(t *testing.T) {
 	var out bytes.Buffer
 	c := New()
 	c.SetOut(&out)
-	c.SetArgs([]string{"--config", path, "fatal", "--state-dir", dir, "status"})
+	c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", "--state-dir", dir, executionStatus})
 	if err := c.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestFatalMalformedConfigStillDetectsWithoutSupervisor(t *testing.T) {
 func TestFatalAdmissionBlocksWorkersButAllowsRepairAndReview(t *testing.T) {
 	a, _ := stubApp(t)
 	q := fatal.Queue{}
-	q.Observe(fatal.Observation{ID: "guard", Failed: true}, a.now)
+	q.Observe(fatal.Observation{ID: "installed-guard-check", Failed: true}, a.now)
 	x := q.Reserve(a.now, func(string) bool { return false })
 	if err := q.Save(a.store.Dir()); err != nil {
 		t.Fatal(err)
@@ -173,11 +173,11 @@ func TestFatalMainPinsHeadAndDistinguishesRedPendingUnknown(t *testing.T) {
 		name, status, checks string
 		red, unknown         bool
 	}{
-		{"green", `{"sha":"abc","state":"success","total_count":1}`, `{"check_runs":[{"conclusion":"success"}]}`, false, false},
+		{"all checks succeeded", `{"sha":"abc","state":"success","total_count":1}`, `{"check_runs":[{"conclusion":"success"}]}`, false, false},
 		{"legacy red", `{"sha":"abc","state":"failure","total_count":1}`, `{"check_runs":[]}`, true, false},
 		{"check red", `{"sha":"abc","state":"success","total_count":1}`, `{"check_runs":[{"conclusion":"failure","html_url":"https://example.test/run"}]}`, true, false},
-		{"pending", `{"sha":"abc","state":"pending","total_count":1}`, `{"check_runs":[{"status":"in_progress"}]}`, false, true},
-		{"unreadable", `{}`, `{}`, false, true},
+		{executionPending, `{"sha":"abc","state":"pending","total_count":1}`, `{"check_runs":[{executionStatus:"in_progress"}]}`, false, true},
+		{"missing commit metadata", `{}`, `{}`, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeFatalRun(t, func(args []string) (string, int) {
@@ -210,7 +210,7 @@ func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 	a.cfgPath = path
 	fakeFatalRun(t, func(args []string) (string, int) {
 		if slices.Contains(args, "is-enabled") {
-			return "disabled", 1
+			return fatalDisabledState, 1
 		}
 		if args[0] == "critical-probe" {
 			return "", 1
