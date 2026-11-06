@@ -223,6 +223,9 @@ func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	now := relayNow
 	after := w.cfg.Merge.HungAfter.Duration
 	started := now.Add(-3 * after)
+	// Model continuous watch observations, without a suspend grace reset.
+	w.hungGrace = started
+	w.lastHungCheck = now.Add(-time.Second)
 	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: started}})
 	child := hungChild(t, w.store.Dir(), hungRepo, 1)
 	base := mergeBase(w.store.Dir(), hungRepo, 1)
@@ -241,6 +244,7 @@ func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
 	}
 	// Once devctl has been silent for its release timeout, the same watch
 	// still recovers a stuck child.
+	w.lastHungCheck = now.Add(30*time.Minute - time.Second)
 	w.hungMerges(context.Background(), now.Add(30*time.Minute))
 	if !strings.Contains(out.String(), "MERGE HUNG") {
 		t.Fatalf("silent release not ended: %s", out.String())
