@@ -3505,6 +3505,9 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 // 3 after printing its document with no pick: that is the board's answer,
 // nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
+	if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
+		return next, err
+	}
 	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
 	if err != nil {
 		return nil, err
@@ -3555,6 +3558,9 @@ type loopBoardItem struct {
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if err := l.a.allowMonitoredIssue(ctx, next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
@@ -3626,6 +3632,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 			return "", errLoopLater
 		}
+		return "", err
+	}
+	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	if place.remote() {

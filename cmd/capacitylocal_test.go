@@ -195,10 +195,10 @@ func TestLocalCeilingRefusesAHandStart(t *testing.T) {
 		t.Fatalf("capacity at the local ceiling = %q, %v", out.String(), err)
 	}
 	brief := filepath.Join(dir, "brief.md")
-	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+	if err := os.WriteFile(brief, []byte("Work the task.\nhttps://github.com/example/repo/pull/1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	startArgs := []string{busyOne, brief, "--dir", dir}
+	startArgs := testCheckoutArgs(t, dir, []string{busyOne, brief, usageDirFlag, dir})
 	start := a.agentStartCmd()
 	start.SilenceErrors, start.SilenceUsage = true, true
 	start.SetArgs(startArgs)
@@ -228,6 +228,7 @@ func TestLocalCeilingRefusesAHandStart(t *testing.T) {
 		t.Errorf("agents start --review with the local review headroom used = exit %d (%v), want a refusal naming it", Code(err), err)
 	}
 	stubBackground(t, "backgrounded · "+bgShortID+" · "+busyOne+"\n", bgSession{ID: bgShortID, SessionID: bgID, Name: busyOne})
+	keepTestGit(t)
 	force := a.agentStartCmd()
 	force.SilenceErrors, force.SilenceUsage = true, true
 	force.SetArgs(append(slices.Clone(startArgs), modeFlag, config.ModeBackground, "--force"))
