@@ -732,6 +732,10 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 }
 
 func (a *app) browseWithProof(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn, proofRepo string) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	if permanentDeletionSteps.MatchString(steps) {
 		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
 	}
