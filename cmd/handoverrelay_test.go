@@ -70,6 +70,8 @@ func relayGH(_ context.Context, args ...string) ([]byte, error) {
 			nodes = append(nodes, is.node())
 		}
 		return []byte(`{"data":{"repositoryOwner":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[` + strings.Join(nodes, ",") + `]}}}}}`), nil
+	case strings.Contains(q, "closedByPullRequestsReferences"):
+		return []byte(`{"data":{}}`), nil
 	}
 	return nil, fmt.Errorf("unexpected request %q", q)
 }
@@ -183,7 +185,7 @@ func TestARelayKeepsTheBoardHoldsWithoutANote(t *testing.T) {
 
 	held := promptSection(t, after, "Board holds")
 	for _, want := range []string{
-		"- o/r#7 (" + holdBlocked + "): decision #1 for Pat: ship o/r#7 now? (back to " + holdUpNext + " once it closes)",
+		"- o/r#7 Task seven (" + holdBlocked + "): decision #1 for Pat: ship o/r#7 now? (back to " + holdUpNext + " once it closes)",
 		"- o/r#2 Epic two (" + holdWorking + "): held: blocked by o/r#9; 1 of 1 blockers open",
 	} {
 		if !strings.Contains(held, want) {
