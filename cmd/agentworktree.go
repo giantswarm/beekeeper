@@ -27,10 +27,11 @@ func (a *app) startCheckout(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err = filepath.EvalSymlinks(dir)
+	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return "", err
+		return "", usageErr("--dir %s: %v", dir, err)
 	}
+	dir = resolved
 	if checkoutDir(dir) {
 		return dir, nil
 	}
@@ -126,7 +127,7 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+			if len(fields) == 3 && fields[0] == "ref:" && fields[2] == workerGitHubHead {
 				ref = "origin/" + strings.TrimPrefix(fields[1], "refs/heads/")
 				break
 			}
@@ -151,9 +152,9 @@ func (a *app) prepareStartWorktree(ctx context.Context, checkout, branch, brief 
 	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 		return "", err
 	}
-	args := []string{"worktree", "add", "-b", branch, target, ref}
+	args := []string{"worktree", loopAdd, "-b", branch, target, ref}
 	if review {
-		args = []string{"worktree", "add", "--detach", target, ref}
+		args = []string{"worktree", loopAdd, "--detach", target, ref}
 	}
 	if _, err := runGit(ctx, checkout, args...); err != nil {
 		return "", err

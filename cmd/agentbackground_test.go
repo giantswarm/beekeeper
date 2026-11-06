@@ -394,7 +394,8 @@ func TestDesktopModeOverridesConfiguredBackground(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Agents.Mode = config.ModeBackground
 	c := a.agentStartCmd()
-	c.SetArgs([]string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop})
+	checkout := t.TempDir()
+	c.SetArgs(testCheckoutArgs(t, checkout, []string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop, usageDirFlag, checkout}))
 	c.SetContext(t.Context())
 	// Reaching the brief read proves the explicit desktop mode passed
 	// validation without launching a session or consulting capacity.

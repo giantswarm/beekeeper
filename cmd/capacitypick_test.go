@@ -353,7 +353,7 @@ func TestAgentsStartWithoutAHarnessTakesThePick(t *testing.T) {
 	a, out := r.app(false)
 	c := a.agentStartCmd()
 	c.SilenceErrors, c.SilenceUsage = true, true
-	c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, "--branch", "test-task", testDryRunFlag})
+	c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag})
 	if err := c.Execute(); err != nil {
 		t.Fatalf("agents start --dry-run: %v", err)
 	}

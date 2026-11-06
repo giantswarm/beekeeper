@@ -2409,7 +2409,9 @@ an advanced clock and no paid model calls.
 
 ### Agents started without a click
 
-Local worker starts require `--dir <checkout> --branch <new-branch>`.
+Local worker starts by hand require `--dir <checkout> --branch <new-branch>`.
+The supervisor loop's starts are outside this rule: it knows a repository, not a
+checkout, so they run in `agents.dir` and their briefs say where to work.
 The directory must be exactly one main repository checkout; parent folders,
 organisation folders and linked worktrees are refused with accepted checkout
 paths. The session launches in the checkout to load its repository instructions,

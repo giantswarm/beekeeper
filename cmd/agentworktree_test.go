@@ -2,13 +2,58 @@ package cmd
 
 import (
 	"context"
-	"github.com/giantswarm/beekeeper/internal/config"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/config"
 )
+
+const testBranchFlag = "--branch"
+
+var testStartBranches atomic.Int64
+
+// testGitPath is git as found before a test narrows PATH to its stubs.
+var testGitPath, _ = exec.LookPath("git")
+
+// keepTestGit adds git alone to a PATH of stubs that lacks it.
+func keepTestGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err == nil {
+		return
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(testGitPath, filepath.Join(dir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+dir)
+}
+
+// testCheckoutArgs makes dir a repository checkout with an origin and adds a
+// branch of its own to the arguments of a hand start there.
+func testCheckoutArgs(t *testing.T, dir string, args []string) []string {
+	t.Helper()
+	keepTestGit(t)
+	if !checkoutDir(dir) {
+		origin := t.TempDir()
+		git := func(in string, args ...string) {
+			t.Helper()
+			if _, err := runGit(context.Background(), in, append([]string{"-c", "user.name=Test", "-c", "user.email=test@example.invalid"}, args...)...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		git(origin, "init", "--bare", "-b", "main")
+		git(dir, "init", "-b", "main")
+		git(dir, "commit", "--allow-empty", "-m", "initial")
+		git(dir, "remote", "add", "origin", origin)
+		git(dir, "push", "origin", "main", "main:refs/pull/1/head")
+	}
+	return append(args, testBranchFlag, fmt.Sprintf("test-start-%d", testStartBranches.Add(1)))
+}
 
 func TestStartCheckoutRequiresOneMainCheckout(t *testing.T) {
 	root := t.TempDir()
@@ -19,8 +64,8 @@ func TestStartCheckoutRequiresOneMainCheckout(t *testing.T) {
 	}
 	git := func(args ...string) {
 		t.Helper()
-		if out, err := exec.Command("git", append([]string{"-C", checkout}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git: %s: %v", out, err)
+		if _, err := runGit(context.Background(), checkout, args...); err != nil {
+			t.Fatal(err)
 		}
 	}
 	git("init", "-b", "main")
@@ -44,6 +89,41 @@ func TestStartCheckoutRequiresOneMainCheckout(t *testing.T) {
 	}
 }
 
+// The supervisor loop knows a repository, not a checkout: its starts must pass
+// where the same start by hand is refused, and name no worktree.
+func TestLoopStartKeepsAgentsDir(t *testing.T) {
+	r := newPickRig(t, `    - {harness: claude, model: opus-x}
+`)
+	parent := filepath.Join(r.dir, "projects")
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	brief := filepath.Join(r.dir, "brief.md")
+	if err := os.WriteFile(brief, []byte("https://github.com/example/one/issues/1 https://github.com/example/two/issues/2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := func(as string) (string, error) {
+		a, out := r.app(false)
+		a.cfg.Agents.Dir = parent
+		a.as = as
+		c := a.agentStartCmd()
+		c.SilenceErrors, c.SilenceUsage = true, true
+		c.SetArgs([]string{"Picked", brief, testDryRunFlag})
+		err := c.Execute()
+		return out.String(), err
+	}
+	if _, err := start(""); err == nil || !strings.Contains(err.Error(), "exactly one repository checkout") {
+		t.Fatalf("hand start: %v", err)
+	}
+	out, err := start(loopParty.Name)
+	if err != nil {
+		t.Fatalf("loop start: %v", err)
+	}
+	if strings.Contains(out, "Work only in the worktree") {
+		t.Fatalf("loop start names a worktree:\n%s", out)
+	}
+}
+
 func TestPrepareStartWorktree(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -51,9 +131,9 @@ func TestPrepareStartWorktree(t *testing.T) {
 	checkout := filepath.Join(root, "repo")
 	git := func(dir string, args ...string) string {
 		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		out, err := runGit(ctx, dir, args...)
 		if err != nil {
-			t.Fatalf("git: %s: %v", out, err)
+			t.Fatal(err)
 		}
 		return strings.TrimSpace(string(out))
 	}
@@ -122,7 +202,7 @@ func TestPrepareStartWorktree(t *testing.T) {
 }
 
 func TestSingleTaskRepository(t *testing.T) {
-	for _, brief := range []string{"task", "https://github.com/example/repo/issues/1 https://github.com/example/repo/pull/2"} {
+	for _, brief := range []string{paramTask, "https://github.com/example/repo/issues/1 https://github.com/example/repo/pull/2"} {
 		if err := singleTaskRepository(brief); err != nil {
 			t.Fatal(err)
 		}
