@@ -550,21 +550,26 @@ an adapter for, starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs, and
 waits instead when that exclusion alone would make a self-hosted choice the pick
 while a subscription is eligible. A desk
-without `capacity.choices` never places remotely. With `github.workerApp`
-configured, reviewers (including Codex) follow the same host preferences and
-retain review capacity accounting. The per-worker GitHub adapter reads the PR
-and gives `gh pr review` write access to the task repository; the coordinator
-authenticates the reviewer session, exact head and reported review before a
-merge. Without that adapter, reviewers stay on the coordinator and wait when
-coordinator review capacity is full.
+without `capacity.choices` never places remotely. Reviewers (including Codex)
+follow the same host preferences and retain review capacity accounting, even
+without `github.workerApp`. On the execution host, `beekeeper agents review`
+reads the assigned PR and its closing issues, `beekeeper agents review --diff`
+reads its diff, and `beekeeper agents review --body-file <file>` posts a comment
+review through the coordinator. The body must begin with `Review: approved` or
+`Review: changes requested` and include `Head reviewed: <full SHA>` for the
+assigned head. Report the returned review URL in the authenticated completion
+report. If the supervisor has not recorded the assignment yet, retry the read.
+The relay requires a live execution lease and refuses a moved or closed PR;
+retrying an identical review reconciles a lost response. No host GitHub
+credential is needed. The coordinator authenticates the reviewer session,
+exact head and reported review before a merge.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
 Every local start, the loop's and one by hand, is refused at it; a review may
-use `capacity.reviewHeadroom` above it, since reviews run only on the
-coordinator. A retired remote worker is
+use `capacity.reviewHeadroom` above it. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
@@ -1107,6 +1112,66 @@ command output and credentials are excluded.
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
+
+### Resource audit and bounded retention
+
+`beekeeper agents hosts check <host>` prints capabilities with the read-only
+resource inventory in `resourceAudit`. Each entry has an execution ref and coordinator
+when ownership can be verified, a state (`active`, `parked`, `terminal`,
+`unknown`, or `shared`), reason and retry action. The desk joins this with its registered execution inventory
+to flag owned orphan resources without changing their observed state. Managed
+worker refs in private execution repositories are listed as metadata; orphan
+refs retain an ownership hold. An unreachable host fails the
+check; it is unknown, never evidence that its resources are safe to remove.
+The audit reads journal metadata and directory entries, never credential values
+or log/workspace contents. Symlinks and malformed or unregistered ownership
+records remain unknown. Immediate children of the managed workspace, source,
+control and dispatch containers are included; execution contents are not swept.
+The inventory refuses more than 4096 entries rather than silently truncating.
+
+An operator can reconcile **one established execution owner** with:
+
+```
+beekeeper agents hosts reconcile <host> <execution-uuid> <generation>
+```
+
+This rechecks terminal supervisor state under the execution lock, reuses stop
+cleanup, retries GitHub revocation and assigns the log to managed retention in
+the journal (`retainedAt`). It does not relocate paths used for recovery. Repeat
+calls preserve the original retention deadline. Unknown or live units refuse
+reconciliation. Failed revocation is recorded for the next audit and retry;
+retention does not advance on that failure. Partial cleanup is retryable.
+
+| Retained class | Duration | Accountable owner / release rule |
+| --- | --- | --- |
+| Execution log | At least 30 days after successful reconciliation | Owning coordinator's desk; review/recovery evidence remains held until explicit release |
+| Workspace, private repository and execution refs, source bundle | Until publication and recovery review establishes a separate disposition | Owning coordinator's desk; this command never deletes them, even if the tree is clean |
+| Journal, control receipts, accepted-message evidence | Held for review/recovery | Owning coordinator's desk; never deleted by retention |
+| Disposable MCP proxy home | Removed by acknowledged lifecycle stop | Execution host owner; existing lifecycle cleanup |
+| Shared sources, policy, toolchains and authentication homes | Host policy lifetime | Execution host owner; no automatic deletion |
+| Unknown ownership, symlinks and unrelated files | Indefinite ownership hold | Execution host owner must establish provenance before any cleanup |
+
+After the desk verifies a log is no longer needed for review, unpublished work
+or recovery, it may explicitly attest that fact:
+
+```
+beekeeper agents hosts reconcile <host> <execution-uuid> <generation> --release-evidence
+```
+
+Only a regular log older than its retention deadline is then eligible for
+removal. The flag does not release workspace or source evidence. Reconciliation
+is bounded to one execution and one log, with no home or global `/tmp` search.
+Recovery holds deliberately override disk reclamation; owners must resolve
+holds rather than rely on automatic expiration to erase unpublished work.
+
+For the end-to-end proof on an explicitly leased host, save `hosts check`
+output before reconciliation, reconcile a terminal execution, and save the
+after inventory showing `managed log retention` and its journal timestamp.
+After 30 days, verify `log past retention`, review evidence, release it, and
+capture the final inventory. Also verify active, parked, unknown, shared and
+recovery resources remain. Epic completion requires all three execution hosts
+to pass this audit after that proof. This procedure does **not** authorize fleet
+cleanup; ownership must be established first.
 
 ## Remote harness acceptance evidence
 

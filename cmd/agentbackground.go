@@ -304,7 +304,7 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		if reg, err = recordStart(st, s, sp.task, sp.serves, live); err != nil {
+		if reg, err = a.recordStart(st, s, sp.task, sp.serves, live); err != nil {
 			return nil, err
 		}
 		evs := []state.Event{event(by, verbStart, "%s: background session %s in %s, model %s, effort %s, bypassPermissions, busy with %q", sp.name, id, dir, cmp.Or(sp.model, harnessDefaultModel), cmp.Or(sp.effort, harnessDefaultModel), reg.task)}
@@ -331,6 +331,10 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 // variables. A running session is sent its messages by name instead:
 // claude --bg --resume would start a copy of it beside it.
 func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err
