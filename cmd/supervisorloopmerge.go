@@ -864,12 +864,25 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 			latest = r
 		}
 	}
+	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
+		first := ""
+		if latest != nil {
+			first, _, _ = strings.Cut(strings.TrimSpace(latest.Body), "\n")
+		}
+		if first != deskReviewApproved {
+			return "merge.requireReview requires an approved Desk review (opus) comment on the head", false, nil
+		}
+	}
 	approvedHead := ""
 	if latest != nil && latest.Verdict == superloop.Approved {
 		approvedHead = cmp.Or(latest.Head, latest.Commit)
-		if sameCommit(approvedHead, head) {
+		if sameCommit(approvedHead, head) || st.ReviewNitsChecked(p.Ref, head, approvedHead) {
 			return "", false, nil
 		}
+	}
+
+	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
+		return fmt.Sprintf("head %s requires an approved independent review; an exact-head go alone is insufficient", shortSHA(head)), false, nil
 	}
 
 	type goRecord struct {

@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -65,7 +67,7 @@ func holdLease(t *testing.T, a *app, res string, p state.Party) {
 // waits behind, exits 3 and prints no export line: it holds nothing.
 func TestLeaseClaimQueued(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute), claimGrant(labTwo, claimFirst, 5*time.Minute), claimGrant(labTwo, claimMe, 4*time.Minute))
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	for res, want := range map[string]string{
 		labOne: `queued: number 1 behind "Agent other", who holds agentlab-1 since 01:50: a proof;`,
 	} {
@@ -88,7 +90,7 @@ func TestLeaseClaimQueued(t *testing.T) {
 // A claim without a grant says refused first, with the reason, and exits 3.
 func TestLeaseClaimRefused(t *testing.T) {
 	a := claimApp(t)
-	holdLease(t, a, graveler, claimOther)
+	holdStartingLease(t, a, graveler, claimOther)
 	for res, want := range map[string]string{
 		graveler: `refused: graveler is held by "Agent other" since 01:50: a proof`,
 	} {
@@ -125,7 +127,7 @@ func TestLeaseClaimHeld(t *testing.T) {
 // lets the queued claim through.
 func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
@@ -146,7 +148,7 @@ func TestLeaseClaimWaitsUntilHeld(t *testing.T) {
 // long it waited, and exits 3.
 func TestLeaseClaimWaitRunsOut(t *testing.T) {
 	a := claimApp(t)
-	holdLease(t, a, graveler, claimOther)
+	holdStartingLease(t, a, graveler, claimOther)
 	var pauses []time.Duration
 	was := claimPause
 	t.Cleanup(func() { claimPause = was })
@@ -200,7 +202,7 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)
 	woke := stubWakes(t)
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	out, err := runLease(a, "claim", labOne, "-p", "my proof", "--park")
 	first, park, _ := strings.Cut(out, "\n")
 	if Code(err) != ExitRefused || !strings.HasPrefix(first, `queued: number 1 behind "Agent other"`) {
@@ -235,7 +237,7 @@ func TestLeaseClaimParkWakesOnGrant(t *testing.T) {
 func TestLeaseClaimParkRefusedParksNothing(t *testing.T) {
 	a := claimApp(t)
 	claimAgent(t, a)
-	holdLease(t, a, graveler, claimOther)
+	holdStartingLease(t, a, graveler, claimOther)
 	out, err := runLease(a, "claim", graveler, "-p", "my proof", "--park")
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, "refused: graveler is held") || !strings.Contains(out, "\nnot parked: no grant of graveler to you waits") {
 		t.Errorf("a refused claim with --park: %q, exit %d", out, Code(err))
@@ -320,7 +322,7 @@ func TestGrantFirstMovesTheGrantToTheHead(t *testing.T) {
 // The supervisor loop's new grant --first goes ahead of the earlier grants.
 func TestNewGrantFirst(t *testing.T) {
 	a := claimApp(t, claimGrant(labTwo, claimFirst, 5*time.Minute))
-	holdLease(t, a, labTwo, claimOther)
+	holdStartingLease(t, a, labTwo, claimOther)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
 		return nil, nil
@@ -338,6 +340,119 @@ func TestNewGrantFirst(t *testing.T) {
 	}
 	if q := lease.Pending(st, labTwo, true, a.now, a.cfg.GrantTTL.Duration); len(q) != 2 || !q[0].To.Is(claimMe) || !q[1].To.Is(claimFirst) {
 		t.Errorf("queue %+v", q)
+	}
+}
+
+func TestLeaseClaimEndedPredecessor(t *testing.T) {
+	a := claimApp(t)
+	predecessor := state.Party{Session: "old-session", Name: claimMe.Name}
+	holdLease(t, a, graveler, predecessor)
+	out, err := runLease(a, "claim", graveler, "-p", "successor work")
+	if err != nil || !strings.HasPrefix(out, "held by you") {
+		t.Fatalf("claim: %q, %v", out, err)
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(graveler)
+	if err != nil || h == nil || !h.Party().Is(claimMe) {
+		t.Fatalf("holder: %+v, %v", h, err)
+	}
+	evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == leaseReleaseGoneVerb })
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("stale release log: %+v, %v", evs, err)
+	}
+}
+
+func TestRegisterSuccessorInheritsClaims(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(fmt.Sprint("managed=", started), func(t *testing.T) {
+			a := claimApp(t)
+			old := state.Party{Session: "predecessor", Name: claimMe.Name}
+			holdLease(t, a, graveler, old)
+			before, _ := lease.Dir(a.cfg.LeaseDir).Get(graveler)
+			err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Agents = []state.Agent{{Party: old}}
+				st.Grants = []state.Grant{claimGrant(labOne, old, time.Minute)}
+				live := func(state.Party) bool { return false }
+				if started {
+					_, err := a.recordStart(st, state.Start{Party: claimMe, At: a.now}, "", "", live)
+					return nil, err
+				}
+				_, err := a.registerAgent(st, claimMe, live, a.now)
+				return nil, err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := lease.Dir(a.cfg.LeaseDir).Get(graveler)
+			if err != nil || h == nil || !h.Party().Is(claimMe) || h.Since != before.Since || h.Purpose != before.Purpose {
+				t.Fatalf("inherited holder: %+v, %v", h, err)
+			}
+			st, _ := a.store.Read()
+			if len(st.Grants) != 1 || !st.Grants[0].To.Is(claimMe) {
+				t.Fatalf("grants: %+v", st.Grants)
+			}
+			out, err := runLease(a, "claim", graveler, "-p", "successor work")
+			if err != nil || !strings.Contains(out, "was yours already") {
+				t.Fatalf("inherited claim: %q, %v", out, err)
+			}
+		})
+	}
+}
+
+func TestLeaseQueueAndProofHandoff(t *testing.T) {
+	a := claimApp(t, claimGrant(graveler, claimOther, 2*time.Minute), claimGrant(graveler, claimMe, time.Minute))
+	out, err := runLease(a, "claim", graveler, "-p", "inspect")
+	if Code(err) != ExitRefused || !strings.Contains(out, "number 2") || !strings.Contains(out, claimOther.Name) {
+		t.Fatalf("second bypasses free queue: %q, %v", out, err)
+	}
+	// The head claims a destructive proof and holds the resource.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimOther.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimOther.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "node-restart proof")
+	if err != nil {
+		t.Fatalf("head claim: %q, %v", out, err)
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(graveler)
+	if err != nil || h == nil || !h.DestructiveProof {
+		t.Fatalf("proof not recorded: %+v, %v", h, err)
+	}
+	// The holder is alive: a competing claim must queue, not release it.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: claimOther, At: a.now})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimMe.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimMe.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "inspect")
+	if Code(err) != ExitRefused || !strings.Contains(out, claimOther.Name) || !strings.Contains(out, "number 1") {
+		t.Fatalf("live lease bypassed: %q, %v", out, err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimOther.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimOther.Name)
+	if out, err = runLease(a, "release", graveler); err != nil {
+		t.Fatalf("release: %q, %v", out, err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimMe.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimMe.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "inspect")
+	if err != nil || !strings.Contains(out, "previous destructive proof") || !strings.Contains(out, "node-restart proof") {
+		t.Fatalf("handoff: %q, %v", out, err)
+	}
+}
+
+func TestLeaseGrantHeldQueuePosition(t *testing.T) {
+	a := claimApp(t, claimGrant(graveler, claimFirst, time.Minute))
+	holdLease(t, a, graveler, claimOther)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runLease(a, "grant", graveler, claimMe.Name)
+	if err != nil || !strings.Contains(out, "number 2 in its queue") || !strings.Contains(out, claimOther.Name) {
+		t.Fatalf("held grant: %q, %v", out, err)
 	}
 }
 
@@ -360,6 +475,96 @@ func TestLeaseClaimRefusesTimerCommands(t *testing.T) {
 			}
 			if len(st.Grants) != 0 {
 				t.Fatalf("refused claim queued grants: %+v", st.Grants)
+			}
+		})
+	}
+}
+
+// A holder still in its startup window must keep competing claims queued.
+func holdStartingLease(t *testing.T, a *app, res string, p state.Party) {
+	t.Helper()
+	holdLease(t, a, res, p)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: p, At: a.now})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRoleRelayTransfersBrowserLease(t *testing.T) {
+	a := claimApp(t)
+	a.cfg.Resources = append(a.cfg.Resources, browser)
+	old := state.Party{Session: "previous-role", Name: "Guide run 1"}
+	holdLease(t, a, browser, old)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts = append(st.Starts, state.Start{Party: claimMe, Role: guideName, Mode: state.ModeBypass, At: a.now})
+		st.Guide = &state.Role{
+			Holder: &state.Supervisor{Party: old, Since: a.now.Add(-time.Hour)},
+			Relay:  &state.Relay{From: old, To: claimMe, At: a.now.Add(-time.Minute), Expires: a.now.Add(time.Minute)},
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.runStart(context.Background(), guideRole, false); err != nil {
+		t.Fatal(err)
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(browser)
+	if err != nil || h == nil || !h.Party().Is(claimMe) {
+		t.Fatalf("relayed browser: %+v, %v", h, err)
+	}
+	out, err := runLease(a, "claim", browser, "-p", "continued role work")
+	if err != nil || !strings.Contains(out, "was yours already") {
+		t.Fatalf("relayed claim: %q, %v", out, err)
+	}
+}
+
+// holderStartingKind is a holder still in its startup window.
+const holderStartingKind = "starting"
+
+func TestClaimKeepsLiveAndStartingHolders(t *testing.T) {
+	for _, kind := range []string{testLiveMode, holderStartingKind, "registered after snapshot", "person", "remote host", "new claim"} {
+		t.Run(kind, func(t *testing.T) {
+			a := claimApp(t)
+			holdLease(t, a, graveler, claimOther)
+			dir := lease.Dir(a.cfg.LeaseDir)
+			h, _ := dir.Get(graveler)
+			var sessions []*claude.Session
+			switch kind {
+			case testLiveMode:
+				sessions = []*claude.Session{{ID: claimOther.Session, Name: claimOther.Name}}
+			case holderStartingKind, "registered after snapshot":
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					if kind == holderStartingKind {
+						st.Starts = []state.Start{{Party: claimOther, At: a.now}}
+					} else {
+						st.Agents = []state.Agent{{Party: claimOther, Registered: a.now.Add(time.Second)}}
+					}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			case "person":
+				h.Session = ""
+			case "remote host":
+				h.Host = "remote-fixture"
+			case "new claim":
+				h.Since = a.now.Format(time.RFC3339)
+			}
+			if err := dir.Hand(*h); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.releaseEndedClaim(graveler, claimMe, sessions); err != nil {
+				t.Fatal(err)
+			}
+			after, err := dir.Get(graveler)
+			if err != nil || after == nil || after.Session != h.Session {
+				t.Fatalf("protected holder released: %+v, %v", after, err)
+			}
+			evs, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == leaseReleaseGoneVerb })
+			if err != nil || len(evs) != 0 {
+				t.Fatalf("unexpected release event: %+v, %v", evs, err)
 			}
 		})
 	}
@@ -402,7 +607,7 @@ func TestLeaseConfiguredInstallationQueued(t *testing.T) {
 	const installation = "customer"
 	a := claimApp(t, claimGrant(installation, claimMe, time.Minute))
 	a.cfg.Alerts.Installations = []config.Installation{{Name: installation}}
-	holdLease(t, a, installation, claimOther)
+	holdStartingLease(t, a, installation, claimOther)
 	out, err := runLease(a, "claim", installation, "-p", "cut-over")
 	if Code(err) != ExitRefused || !strings.HasPrefix(out, "queued: number 1 behind ") {
 		t.Fatalf("queued claim: %q, %v", out, err)

@@ -1066,3 +1066,14 @@ func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
 		t.Fatalf("incomplete blockers: %+v", it)
 	}
 }
+
+func TestFollowUpNeverBecomesBoardCandidate(t *testing.T) {
+	snap := snapshot(t)
+	snap.Items = []Item{{Ref: ref1, OnBoard: true, Status: backlog, Labels: []string{"FOLLOW-UP"}, Updated: days(1)}}
+	snap.Search = nil
+	snap.Order = []config.BoardStep{{Name: "all"}}
+	candidates := Rank(snap, config.Board{}, now)
+	if len(candidates) != 1 || !strings.Contains(candidates[0].Skip, "follow-up") {
+		t.Fatalf("follow-up not skipped: %+v", candidates)
+	}
+}

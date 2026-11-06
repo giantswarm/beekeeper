@@ -146,6 +146,7 @@ func publicKey(s string) (ed25519.PublicKey, error) {
 }
 
 type Policy struct {
+	CoordinatorDigest   string `json:"coordinatorDigest,omitempty"`
 	Protocol            int    `json:"protocol"`
 	Version             string `json:"version"`
 	ConfigurationDigest string `json:"configurationDigest"`
@@ -170,6 +171,9 @@ func (s *Server) Policy() Policy {
 		Security string
 	}{s.Config, s.SecurityDigest})
 	p := Policy{Protocol: Protocol, Version: s.Version, ConfigurationDigest: Digest(b), RulesDigest: Digest(s.Rules), SettingsDigest: Digest(s.settings())}
+	if s.coordinatorBundle != nil {
+		p.CoordinatorDigest = s.coordinatorBundle.Digest()
+	}
 	if _, ok := s.Config.Harnesses[HarnessCodex]; ok {
 		p.CodexDigest = Digest(mustJSON(s.codexFiles()))
 	}
@@ -184,7 +188,12 @@ func (s *Server) Policy() Policy {
 
 // codexHomeDir is the managed CODEX_HOME of every remote codex worker on
 // this host: policy-owned config, hooks and rules, never the person's own.
-func (s *Server) codexHomeDir() string { return filepath.Join(s.Root, "codex-home") }
+func (s *Server) codexHomeDir() string {
+	if s.coordinatorBundle != nil {
+		return filepath.Join(s.Root, "codex-home", s.coordinatorBundle.Digest())
+	}
+	return filepath.Join(s.Root, "codex-home")
+}
 
 // codexConfig is the managed home's config.toml, the local worker's settings
 // without any person's project trust. Code-mode provides the worker's tools;
@@ -218,7 +227,20 @@ skill_mcp_dependency_install = false
 func (s *Server) codexFiles() map[string][]byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format codex"
 	hooks := mustJSON(map[string]any{hooksKey: preToolUse(cmd)})
-	return map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": s.Rules}
+	files := map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": append([]byte(nil), s.Rules...)}
+	if b := s.coordinatorBundle; b != nil {
+		for _, a := range b.Artifacts {
+			if strings.HasPrefix(a.Artifact, "rules/") {
+				files["AGENTS.md"] = append(files["AGENTS.md"], append([]byte("\n\nCoordinator rules:\n"), a.Content...)...)
+			} else {
+				files[a.Artifact] = a.Content
+			}
+		}
+		if value, ok := b.Settings["model_reasoning_effort"]; ok {
+			files["config.toml"] = []byte("model_reasoning_effort = \"" + value + "\"\n" + codexConfig)
+		}
+	}
+	return files
 }
 
 // linkCodexLogin links the person's own host login into the managed home. A
@@ -344,6 +366,11 @@ func (s *Server) Prepare(p Policy) (string, error) {
 	if err := s.Config.Validate(); err != nil {
 		return "", err
 	}
+	if s.coordinatorBundle != nil {
+		if err := s.coordinatorBundle.Validate(); err != nil {
+			return "", err
+		}
+	}
 	if p != s.Policy() {
 		return "", errors.New("policy bundle differs from this binary, embedded rules or host guard configuration")
 	}
@@ -371,6 +398,9 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 		for name, b := range s.codexFiles() {
+			if err := ownedDirectory(filepath.Dir(filepath.Join(s.codexHomeDir(), name))); err != nil {
+				return "", err
+			}
 			if err := atomicFile(filepath.Join(s.codexHomeDir(), name), b); err != nil {
 				return "", err
 			}
@@ -406,6 +436,11 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if s.coordinatorBundle != nil {
+		if err := atomicFile(filepath.Join(s.Root, "coordinator-bundle.json"), mustJSON(s.coordinatorBundle)); err != nil {
+			return "", err
+		}
+	}
 	// The manifest comes last: a host is prepared only once every file is.
 	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
 		return "", err
@@ -423,6 +458,12 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 	}
 	if p != s.Policy() {
 		return p, errors.New("installed execution policy is stale; prepare the matching bundle")
+	}
+	if s.coordinatorBundle != nil {
+		data, err := readRegular(filepath.Join(s.Root, "coordinator-bundle.json"), maxBundleBytes)
+		if err != nil || Digest(data) != Digest(mustJSON(s.coordinatorBundle)) {
+			return p, errors.New("installed coordinator bundle does not match policy")
+		}
 	}
 	for name, digest := range map[string]string{claudeSettingsFile: p.SettingsDigest, claudeRulesFile: p.RulesDigest} {
 		b, err := readRegular(filepath.Join(s.Root, name), MaxWire)

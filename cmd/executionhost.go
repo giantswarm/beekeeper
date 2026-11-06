@@ -110,6 +110,9 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	if err := s.LoadCoordinatorBundle(); err != nil {
+		return nil, err
+	}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()

@@ -3,10 +3,8 @@
 // (mkdir is atomic) holding the holder's record; the record's fields are the
 // ones the lab's earlier shell lock wrote, so both read the same directory.
 //
-// While a supervisor is recorded, a free lease is not permission: a session
-// claims only what the supervisor granted it, in the order the grants were
-// given, from the supervisor's start to a deliberate stop, whether its
-// session runs or has crashed. Grants live in the state document.
+// Grants live in the state document and queue claims in grant order.
+// A resource with no pending grants can be claimed directly.
 package lease
 
 import (
@@ -32,11 +30,13 @@ type Holder struct {
 	HostSession string `json:"hostSession,omitempty"`
 	Name        string `json:"name,omitempty"`
 	// Person, Team and Host are the holder party's.
-	Person  string `json:"person,omitempty"`
-	Team    string `json:"team,omitempty"`
-	Host    string `json:"host,omitempty"`
-	Purpose string `json:"purpose"`
-	Since   string `json:"since"`
+	Person           string `json:"person,omitempty"`
+	Team             string `json:"team,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Purpose          string `json:"purpose"`
+	DestructiveProof bool   `json:"destructiveProof,omitempty"`
+	PreviousProof    *Proof `json:"previousProof,omitempty"`
+	Since            string `json:"since"`
 	// UpgradeUnblock is the reason of the upgrade-unblock grant the claim
 	// was admitted by during an upgrade, empty for any other claim.
 	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
@@ -167,6 +167,23 @@ func (d Dir) write(res string, h Holder) error {
 
 // Release frees res.
 func (d Dir) Release(res string) error {
+	h, err := d.Get(res)
+	if err != nil {
+		return err
+	}
+	if h != nil {
+		var proof *Proof
+		if h.DestructiveProof || IsDestructiveProof(h.Purpose) {
+			proof = &Proof{Purpose: h.Purpose, By: h.Name}
+		}
+		raw, err := json.Marshal(proof)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(d.proofPath(res), raw, 0o600); err != nil {
+			return err
+		}
+	}
 	return os.RemoveAll(d.path(res))
 }
 
@@ -269,24 +286,25 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 	return now.Sub(from) > ttl
 }
 
-// Check decides whether the caller may claim and, when a grant carries the
-// claim, returns its index in st.Grants (-1 when none is needed). While an
-// upgrade runs on the installation of the resource's name only an
-// upgrade-unblock grant admits a claim, in grant order; otherwise a free
-// lease is the caller's, consuming its own grant if one is queued: no
-// supervisor session gates claims.
+// Check admits the head grant only; an empty queue permits a direct claim.
+// Upgrade holds require an upgrade-unblock grant.
 func Check(st *state.State, g Gate) (int, error) {
 	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
 		return checkUnblock(st, g, h)
 	}
-	// The caller's own pending grant, wherever it is in the queue, is the
-	// one its claim consumes.
-	for _, p := range Pending(st, g.Resource, g.Held, g.Now, g.TTL) {
+	pending := Pending(st, g.Resource, g.Held, g.Now, g.TTL)
+	for pos, p := range pending {
 		if p.To.Is(g.Caller) {
+			if pos > 0 {
+				return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; you are number %d", g.Resource, pending[0].To.Name, pos+1), Position: pos + 1, Ahead: pending[0].To.Name}
+			}
 			return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
 				return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
 			}), nil
 		}
+	}
+	if len(pending) > 0 {
+		return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; request a grant to join its queue", g.Resource, pending[0].To.Name), Ahead: pending[0].To.Name}
 	}
 	return -1, nil
 }

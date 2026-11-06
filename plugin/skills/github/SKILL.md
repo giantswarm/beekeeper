@@ -9,6 +9,7 @@ description: Load before GitHub scans, builds, browser or waits.
   `--bucket code_search`.
 - **Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`.
 - **Membership:** `beekeeper person <login>`, not `gh api` members endpoints: they misread private members.
+- **Board:** `beekeeper board add <owner/repo#n> --kind <kind>`; fields: `board show <owner/repo#n>`.
 - **Issue/PR scans:** list each repo (`gh issue list --repo <owner/repo>`, `gh pr list` likewise),
   never multi-repo `gh search`: it drops private repos. Unreadable is never "no match".
 - **Code search:** 10 requests per minute. Across more than a few
