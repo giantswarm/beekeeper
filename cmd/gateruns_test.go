@@ -27,7 +27,10 @@ const releaseWaitCmd = "devctl release wait giantswarm/kagent-upstream v1.11.6"
 // returns its base and the merge-child's pid.
 func detachedWait(t *testing.T, dir string, owner state.Party) (string, int) {
 	t.Helper()
-	c := exec.Command("sleep", "60")
+	was := plat.Machine
+	plat.Machine = orphanProcMachine{Machine: was}
+	t.Cleanup(func() { plat.Machine = was })
+	c := exec.Command(sleepComm, "60")
 	if err := c.Start(); err != nil {
 		t.Skip("no sleep:", err)
 	}
@@ -213,7 +216,7 @@ func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
 	}{
 		{"gone", 48 * time.Hour, false},
 		{"reused", 48 * time.Hour, true},
-		{"recent", time.Hour, false},
+		{"young", time.Hour, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base, pid := detachedWait(t, dir, four)
@@ -284,10 +287,10 @@ func TestRunProcessAliveLegacy(t *testing.T) {
 		args  []string
 		want  bool
 	}{
-		{"original", now.Add(-time.Second), []string{"beekeeper", mergeChildCmd, base}, true},
-		{"reused", now.Add(time.Second), []string{"beekeeper", mergeChildCmd, base}, false},
-		{"unrelated", now.Add(-time.Second), []string{"sleep", "60"}, false},
-		{"other run", now.Add(-time.Second), []string{"beekeeper", mergeChildCmd, base + "-other"}, false},
+		{"original", now.Add(-time.Second), []string{pluginName, mergeChildCmd, base}, true},
+		{"reused", now.Add(time.Second), []string{pluginName, mergeChildCmd, base}, false},
+		{"unrelated", now.Add(-time.Second), []string{sleepComm, "60"}, false},
+		{"other run", now.Add(-time.Second), []string{pluginName, mergeChildCmd, base + "-other"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tab := proc.NewTable(&proc.Process{PID: 123, Start: tc.start, Args: tc.args})
