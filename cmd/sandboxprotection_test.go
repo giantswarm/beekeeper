@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"context"
-	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
+
+const protectionTestBranch = "release/v1"
 
 type protectionTransport func(*http.Request) (*http.Response, error)
 
@@ -15,16 +18,16 @@ func (f protectionTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 
 func TestProtectionArgsRefuseWritesAndOtherOwners(t *testing.T) {
 	for _, args := range [][]string{
-		nil, {"acme/repo"}, {"other/repo", "main"}, {"acme/repo", "main", "DELETE"},
+		nil, {"acme/repo"}, {"other/repo", "main"}, {"acme/repo", "main", http.MethodDelete},
 		{"acme/repo", "main", "--method=PUT"}, {"acme/repo?x=y", "main"},
 		{"acme/..", "main"}, {"acme/repo", ".."}, {"acme/repo", ""},
 	} {
-		if _, _, err := protectionArgs(args, []string{"acme"}); err == nil {
+		if _, _, err := protectionArgs(args, []string{testOrg}); err == nil {
 			t.Errorf("accepted %q", args)
 		}
 	}
-	repo, branch, err := protectionArgs([]string{"ACME/repo", "release/v1"}, []string{"acme"})
-	if err != nil || repo != "ACME/repo" || branch != "release/v1" {
+	repo, branch, err := protectionArgs([]string{"ACME/repo", protectionTestBranch}, []string{testOrg})
+	if err != nil || repo != "ACME/repo" || branch != protectionTestBranch {
 		t.Fatalf("%q %q %v", repo, branch, err)
 	}
 }
@@ -43,7 +46,7 @@ func TestProtectionReadOnlyGET(t *testing.T) {
 			}
 			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"required_status_checks":{"strict":true}}`)), Header: make(http.Header)}, nil
 		})}
-		out, err := readProtection(context.Background(), client, "test-token", "acme/repo", "release/v1")
+		out, err := readProtection(context.Background(), client, "test-token", "acme/repo", protectionTestBranch)
 		if status == 200 {
 			if err != nil || !strings.Contains(out, `"strict":true`) {
 				t.Fatalf("lost protection: %q %v", out, err)
@@ -56,7 +59,7 @@ func TestProtectionReadOnlyGET(t *testing.T) {
 
 func TestProtectionBrokerRejectsWriteBeforeCredentials(t *testing.T) {
 	a, _, _ := secretApp(t)
-	for _, args := range [][]string{{"giantswarm/example", "main", "DELETE"}, {"other/example", "main"}} {
+	for _, args := range [][]string{{dependabotTestRepo, "main", http.MethodDelete}, {"other/example", "main"}} {
 		if _, err := a.brokeredProtection()(context.Background(), 0, sandbox.Request{Args: args}); err == nil {
 			t.Fatalf("broker accepted %q", args)
 		}

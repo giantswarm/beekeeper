@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -370,7 +371,7 @@ func TestProtectionInTheSandboxGoesThroughTheBroker(t *testing.T) {
 		return sandbox.Reply{Out: `{"enforce_admins":{"enabled":true}}`}, nil
 	})
 	c := a.sandboxProtectionCmd()
-	c.SetArgs([]string{"giantswarm/example", "release/v1"})
+	c.SetArgs([]string{dependabotTestRepo, protectionTestBranch})
 	err := c.Execute()
 	out := a.out.(interface{ String() string }).String()
 	if err != nil || !strings.Contains(out, `"enabled":true`) {
@@ -380,7 +381,7 @@ func TestProtectionInTheSandboxGoesThroughTheBroker(t *testing.T) {
 		t.Fatalf("broker received %+v", got)
 	}
 	c = a.sandboxProtectionCmd()
-	c.SetArgs([]string{"giantswarm/example", "main", "DELETE"})
+	c.SetArgs([]string{dependabotTestRepo, "main", http.MethodDelete})
 	if err := c.Execute(); err == nil {
 		t.Fatal("accepted a write argument")
 	}

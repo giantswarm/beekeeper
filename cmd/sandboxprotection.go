@@ -74,7 +74,7 @@ func readProtection(ctx context.Context, client *http.Client, token, repo, branc
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("branch protection read: HTTP %d", resp.StatusCode)
 	}
