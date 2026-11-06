@@ -273,10 +273,10 @@ func supervisorApp(t *testing.T) (*app, *bytes.Buffer) {
 }
 
 // The supervisor is the supervisor loop: status reads the loop's PID marker,
-// exit 3 while no loop runs, and the command has no session subcommands.
+// a stopped loop is valid, and the command has no session subcommands.
 func TestSupervisorStatusReadsTheLoop(t *testing.T) {
 	a, out := supervisorApp(t)
-	if err := a.supervisorStatus(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "the supervisor loop does not run") {
+	if err := a.supervisorStatus(); err != nil || !strings.Contains(out.String(), "the supervisor loop does not run") {
 		t.Fatalf("no loop: %v", err)
 	}
 	if err := a.store.WriteFile(loopPIDFile, os.Getpid()); err != nil {
@@ -288,7 +288,7 @@ func TestSupervisorStatusReadsTheLoop(t *testing.T) {
 	if err := a.store.WriteFile(loopPIDFile, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.supervisorStatus(); Code(err) != ExitRefused {
+	if err := a.supervisorStatus(); err != nil {
 		t.Fatalf("a stopped loop: %v", err)
 	}
 	for _, c := range a.supervisorCmd().Commands() {
@@ -442,5 +442,23 @@ func TestSupervisorStatusPrintsLoopVersion(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"version": "`+testLoopNewVer+`"`) {
 		t.Fatalf("supervisor status --json = %q, want version %s", out.String(), testLoopNewVer)
+	}
+}
+
+func TestSupervisorStatusFailsWhenOutputCannotBeWritten(t *testing.T) {
+	a, _ := supervisorApp(t)
+	out, err := os.CreateTemp(t.TempDir(), "status-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.out = out
+	for _, json := range []bool{false, true} {
+		a.json = json
+		if err := a.supervisorStatus(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("status (json=%v) ignored output failure: %v", json, err)
+		}
 	}
 }

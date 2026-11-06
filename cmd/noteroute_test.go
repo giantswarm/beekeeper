@@ -211,6 +211,22 @@ func TestMergeOfItNeedsAPullRequestRef(t *testing.T) {
 	}
 }
 
+// A review's words in a request for log output ask for no review: the note
+// passes, while a real ask for a reviewer stays refused.
+func TestLogRequestNamingAReviewerIsNoReviewAsk(t *testing.T) {
+	for q, want := range map[string]bool{
+		"Please send the coordinator log output of the reviewer start":   false,
+		"What does the journal say about the reviewer's failed publish?": false,
+		"Who is the reviewer of this change?":                            true,
+		"Can you get a desk review for it?":                              true,
+	} {
+		c, ok := operational(noteDraft{Question: q}, config.Plans{})
+		if got := ok && c.name == taskKindReview; got != want {
+			t.Errorf("%q: review ask = %v (class %q), want %v", q, got, c.name, want)
+		}
+	}
+}
+
 // What is live, public or costly stays the person's: a worker's decision
 // on an open thread of an open epic is filed, and so is an operational
 // question from a session that is no worker.

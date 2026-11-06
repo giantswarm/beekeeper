@@ -199,6 +199,29 @@ func (a *app) releaseStaleReservation(ctx context.Context, client execution.Tran
 	return a.releaseUnstarted(ref, rec.StartSentAt, fmt.Sprintf("unacknowledged for %s: %s", unstartedReleaseAfter, why))
 }
 
+// stopUnactivated stops an execution whose host holds it prepared past
+// unstartedReleaseAfter since its start was sent: a start that timed out and
+// that nobody retried. No process runs, so nothing is lost, its workspace
+// stays, and it holds no host slot or update from then on. Only the host's own
+// answer counts, and a start still inside its window stays the starter's.
+func (a *app) stopUnactivated(ctx context.Context, client execution.Transport, rec *state.ExecutionRecord, now time.Time) (bool, error) {
+	if !unactivated(rec) || rec.StartUnsent || now.Sub(rec.StartSentAt) < unstartedReleaseAfter {
+		return false, nil
+	}
+	ref := rec.Handle.Ref
+	observation, err := client.Inspect(ctx, ref)
+	if err != nil {
+		if errors.Is(err, execution.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if observation.ProcessState != execution.Prepared {
+		return false, nil
+	}
+	return true, a.stopExecution(ctx, ref, fmt.Sprintf("start never activated within %s", unstartedReleaseAfter))
+}
+
 // releaseStoppedReservation settles the stop of a reservation its host
 // never acknowledged, done once it is decided: released when no start left
 // the coordinator, or when the host holds no journal of a start sent past

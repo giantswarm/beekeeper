@@ -322,3 +322,42 @@ func TestSelfUpdateStageCanaryFlag(t *testing.T) {
 		t.Fatalf("unexpected canary output:\nfile=%s\nstdout=%s", written, out.String())
 	}
 }
+
+// An older updater invokes the candidate's unchanged supervisor status command.
+// A stopped loop must let the remaining checks run; broken state must not.
+func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
+	a, out := supervisorApp(t)
+	prev := runCanaryCheck
+	t.Cleanup(func() { runCanaryCheck = prev })
+	for _, json := range []bool{false, true} {
+		a.json = json
+		out.Reset()
+		capacityRan := false
+		runCanaryCheck = func(ctx context.Context, _ string, args ...string) (string, error) {
+			if slices.Equal(args, []string{supervisorName, executionStatus}) {
+				err := a.supervisorStatus(ctx)
+				return out.String(), err
+			}
+			if slices.Equal(args, []string{loopCapacity}) {
+				capacityRan = true
+			}
+			return "ok", nil
+		}
+		if why := canaryFailure(context.Background(), "", "candidate"); why != "" || !capacityRan {
+			t.Fatalf("stopped loop (json=%v): failure=%q capacity ran=%v", json, why, capacityRan)
+		}
+		want := "the supervisor loop does not run"
+		if json {
+			want = `"loop": false`
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("status output = %q, want %q", out.String(), want)
+		}
+	}
+	if err := a.store.WriteFile(loopPIDFile, "invalid PID"); err != nil {
+		t.Fatal(err)
+	}
+	if why := canaryFailure(context.Background(), "", "candidate"); !strings.Contains(why, "canary supervisor status failed") {
+		t.Fatalf("broken supervisor status passed canary: %q", why)
+	}
+}
