@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -23,7 +25,18 @@ import (
 // issuesQueueName is the subcommand listing queued issue pointers.
 const issuesQueueName = "queue"
 
-var issueMonitorGH = github.RunGH
+// issueTriageEndpoint is the one place triage messages go. Scheme and host are
+// fixed here so that a webhook read from the environment selects only a path.
+const issueTriageEndpoint = "https://hooks.slack.com/"
+
+var (
+	issueMonitorGH = github.RunGH
+
+	// issueTriageTransport carries triage messages; tests replace it.
+	issueTriageTransport http.RoundTripper = http.DefaultTransport
+
+	issueTriageWebhookPath = regexp.MustCompile(`^/services/[A-Za-z0-9]+/[A-Za-z0-9]+/[A-Za-z0-9]+$`)
+)
 
 func (a *app) issueMonitorDir() string { return filepath.Join(a.cfg.StateDir, "issue-monitor") }
 func (a *app) issuesCmd() *cobra.Command {
@@ -103,14 +116,36 @@ func splitTeamRecord(record string) (string, string, bool) {
 	return strings.Join(parts[:2], "/"), parts[2], true
 }
 
-func postIssueTriage(ctx context.Context, webhook, message string) error {
-	raw, _ := json.Marshal(map[string]any{paramText: message, "mrkdwn": false, "unfurl_links": false, "unfurl_media": false})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(raw))
+// issueTriageWebhookTarget returns the path of a Slack incoming webhook. Any
+// other destination is refused, and the refusal never repeats the webhook.
+func issueTriageWebhookTarget(webhook string) (string, error) {
+	u, err := url.Parse(webhook)
 	if err != nil {
-		return errors.New("invalid triage webhook")
+		return "", errors.New("invalid triage webhook")
 	}
+	endpoint, err := url.Parse(issueTriageEndpoint)
+	if err != nil {
+		return "", errors.New("invalid triage endpoint")
+	}
+	if u.Scheme != endpoint.Scheme || u.Host != endpoint.Host || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !issueTriageWebhookPath.MatchString(u.Path) {
+		return "", errors.New("triage webhook is not a Slack incoming webhook")
+	}
+	return u.Path, nil
+}
+
+func postIssueTriage(ctx context.Context, webhook, message string) error {
+	path, err := issueTriageWebhookTarget(webhook)
+	if err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(map[string]any{paramText: message, "mrkdwn": false, "unfurl_links": false, "unfurl_media": false})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issueTriageEndpoint, bytes.NewReader(raw))
+	if err != nil {
+		return errors.New("invalid triage endpoint")
+	}
+	req.URL.Path = path
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: issueTriageTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
 		return errors.New("triage delivery failed")

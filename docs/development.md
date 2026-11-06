@@ -994,7 +994,9 @@ repository allowlist. Run the command periodically from a trusted service with
 GitHub issue-write and team-membership-read permissions. Configure the two team
 Slack incoming webhooks in `BEEKEEPER_BUMBLEBEE_WEBHOOK` and
 `BEEKEEPER_PLANETEERS_WEBHOOK`; `--channels` maps team names to different environment
-variable names. Webhooks and Slack responses are never printed.
+variable names. Webhooks and Slack responses are never printed. Delivery goes only
+to `https://hooks.slack.com/`: the environment variable selects the webhook's
+`/services/...` path, and any other destination is refused.
 
 The monitor requests metadata only, never issue bodies or comments. Every poll
 checks active membership of the employees team live, including when an author

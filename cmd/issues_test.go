@@ -6,15 +6,33 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/giantswarm/beekeeper/internal/issuemonitor"
 )
 
+// testIssueTriageWebhook has the shape of a Slack incoming webhook.
+const testIssueTriageWebhook = "https://hooks.slack.com/services/T000/B000/XXXX"
+
+type issueTriageRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f issueTriageRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func stubIssueTriageTransport(t *testing.T, f issueTriageRoundTrip) {
+	t.Helper()
+	old := issueTriageTransport
+	t.Cleanup(func() { issueTriageTransport = old })
+	issueTriageTransport = f
+}
+
 func TestIssueMonitorSlackIsPlainAndDoesNotLeakErrors(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	calls := 0
+	stubIssueTriageTransport(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if got := r.URL.String(); got != testIssueTriageWebhook {
+			t.Fatal(got)
+		}
 		raw, _ := io.ReadAll(r.Body)
 		var v map[string]any
 		if err := json.Unmarshal(raw, &v); err != nil {
@@ -26,13 +44,53 @@ func TestIssueMonitorSlackIsPlainAndDoesNotLeakErrors(t *testing.T) {
 		if v["text"] != "title <@everyone>" {
 			t.Fatal(v)
 		}
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("private response"))
-	}))
-	defer server.Close()
-	err := postIssueTriage(context.Background(), server.URL, "title <@everyone>")
-	if err == nil || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "private response") {
+		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("private response")), Request: r}, nil
+	})
+	err := postIssueTriage(context.Background(), testIssueTriageWebhook, "title <@everyone>")
+	if err == nil || strings.Contains(err.Error(), testIssueTriageWebhook) || strings.Contains(err.Error(), "private response") {
 		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestIssueMonitorSlackAcceptsDelivery(t *testing.T) {
+	stubIssueTriageTransport(t, func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: r}, nil
+	})
+	if err := postIssueTriage(context.Background(), testIssueTriageWebhook, "title"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIssueMonitorSlackRefusesOtherDestinations(t *testing.T) {
+	stubIssueTriageTransport(t, func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("request sent to %s", r.URL)
+		return nil, nil
+	})
+	for name, webhook := range map[string]string{
+		"empty":      "",
+		"unparsable": "https://hooks.slack.com:port/services/T000/B000/XXXX",
+		"plain http": "http://hooks.slack.com/services/T000/B000/XXXX",
+		"other host": "https://hooks.example.invalid/services/T000/B000/XXXX",
+		"subdomain":  "https://hooks.slack.com.example.invalid/services/T000/B000/XXXX",
+		"port":       "https://hooks.slack.com:8443/services/T000/B000/XXXX",
+		"userinfo":   "https://user@hooks.slack.com/services/T000/B000/XXXX",
+		"query":      "https://hooks.slack.com/services/T000/B000/XXXX?next=1",
+		"fragment":   "https://hooks.slack.com/services/T000/B000/XXXX#next",
+		"other path": "https://hooks.slack.com/api/chat.postMessage",
+		"traversal":  "https://hooks.slack.com/services/T000/../../api/XXXX",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := postIssueTriage(context.Background(), webhook, "title")
+			if err == nil {
+				t.Fatal("missing error")
+			}
+			if webhook != "" && strings.Contains(err.Error(), webhook) {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
