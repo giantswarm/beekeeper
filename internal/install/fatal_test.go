@@ -3,11 +3,13 @@ package install
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
@@ -71,5 +73,45 @@ func TestFatalRecoveryOnlyInstallLeavesDisabledComponentsAlone(t *testing.T) {
 	}
 	if len(f.ran) != 3 {
 		t.Fatalf("expected reload and two recovery starts: %v", f.ran)
+	}
+}
+
+func TestRecoveryAdmissionPrecedesServices(t *testing.T) {
+	const admissionFailure = "failure"
+	for _, mode := range []string{"success", admissionFailure, "dry-run"} {
+		t.Run(mode, func(t *testing.T) {
+			f := &fakeSetup{}
+			e, _ := env(t, t.TempDir(), fatalOnlySetup{f}, f.run)
+			e.RecoveryOnly = true
+			e.DryRun = mode == "dry-run"
+			t.Setenv("HOME", e.Spec.Home)
+			t.Setenv("XDG_STATE_HOME", filepath.Dir(e.StateDir))
+			t.Setenv("BEEKEEPER_CONFIG", "")
+			called := false
+			e.BeforeServices = func() error {
+				called = true
+				if _, err := os.Stat(e.Config); err != nil {
+					t.Fatal("starter config not materialized", err)
+				}
+				if len(f.ran) != 0 {
+					t.Fatal("service work preceded recovery admission", f.ran)
+				}
+				if mode == admissionFailure {
+					return fmt.Errorf("admission rejected")
+				}
+				return config.SaveRecovery(e.StateDir, e.Config)
+			}
+			err := Install(t.Context(), e)
+			if mode == admissionFailure {
+				if err == nil || len(f.ran) != 0 {
+					t.Fatal("failed admission allowed service work", err, f.ran)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if called == e.DryRun {
+				t.Fatal("unexpected admission callback execution")
+			}
+		})
 	}
 }

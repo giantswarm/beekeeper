@@ -71,3 +71,32 @@ func TestRecoverySnapshotBindsOriginalSource(t *testing.T) {
 		t.Fatal("snapshot admitted another source")
 	}
 }
+
+func TestRecoveryMissingSourceCannotOverwriteSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("BEEKEEPER_CONFIG", "")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := cfg.StateDir
+	source := filepath.Join(t.TempDir(), "main.yaml")
+	raw := fmt.Sprintf("stateDir: %q\nwatch: {interval: 13s}\n", dir)
+	if err := os.WriteFile(source, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRecovery(dir, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(source, source+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRecovery(dir, source); err == nil {
+		t.Fatal("missing source replaced trusted snapshot")
+	}
+	cfg, err = LoadRecovery(dir)
+	if err != nil || cfg.Watch.Interval.String() != "13s" {
+		t.Fatal("snapshot overwritten", err)
+	}
+}

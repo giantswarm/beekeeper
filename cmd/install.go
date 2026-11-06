@@ -83,11 +83,7 @@ the config and says the service is not available.`,
 			if err := a.installEnv(&e, binary); err != nil {
 				return err
 			}
-			if !e.DryRun {
-				if err := config.SaveRecovery(e.StateDir, e.Config); err != nil {
-					return err
-				}
-			}
+			e.BeforeServices = func() error { return config.SaveRecovery(e.StateDir, e.Config) }
 			if err := install.Install(cmd.Context(), e); err != nil {
 				return err
 			}

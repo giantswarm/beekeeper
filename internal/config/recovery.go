@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +20,7 @@ func SaveRecovery(dir, source string) error {
 		return err
 	}
 	b, err := os.ReadFile(filepath.Clean(source))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil {
 		return err
 	}
 	cfg, err := parse(source, b)

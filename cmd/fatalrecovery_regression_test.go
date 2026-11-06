@@ -63,10 +63,29 @@ func TestFatalHarnessHealthPrecedesSlowOptionalProbes(t *testing.T) {
 }
 
 func TestRemoteReviewMissingEnvConfigurationRetainsRepairTarget(t *testing.T) {
+	for _, defaultState := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default-state-%t", defaultState), func(t *testing.T) {
+			testMissingEnvConfiguration(t, defaultState)
+		})
+	}
+}
+
+func testMissingEnvConfiguration(t *testing.T, defaultState bool) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("BEEKEEPER_CONFIG", "")
 	a, _ := stubApp(t)
 	dir := a.store.Dir()
+	if defaultState {
+		cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir = cfg.StateDir
+	}
 	source := filepath.Join(t.TempDir(), "main.yaml")
-	raw := fmt.Sprintf("stateDir: %q\nfatal: {repositories: []}\n", dir)
+	raw := fmt.Sprintf("stateDir: %q\nwatch: {interval: 13s}\nfatal: {repositories: []}\n", dir)
 	if err := os.WriteFile(source, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -106,13 +125,18 @@ func TestRemoteReviewMissingEnvConfigurationRetainsRepairTarget(t *testing.T) {
 	}
 	// A repair inherits the snapshot path. Scanning it must still observe
 	// the broken original, rather than resolve the incident from the fallback.
-	a.cfgPath = config.RecoveryPath(dir)
+	a.cfgPath = ""
+	t.Setenv("BEEKEEPER_CONFIG", config.RecoveryPath(dir))
 	if err := a.fatalScan(t.Context(), dir); err != nil {
 		t.Fatal(err)
 	}
 	q, err := fatal.Read(dir)
 	if err != nil || q.Barrier("ordinary") == nil || starts != 1 {
 		t.Fatal("snapshot scan resolved the original outage or duplicated its owner", err)
+	}
+	trusted, err := config.LoadRecovery(dir)
+	if err != nil || trusted.Watch.Interval.String() != "13s" {
+		t.Fatal("missing source overwrote trusted admission", err)
 	}
 	if err := os.WriteFile(source, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
@@ -127,11 +151,24 @@ func TestRemoteReviewMissingEnvConfigurationRetainsRepairTarget(t *testing.T) {
 }
 
 func TestFatalUnknownHarnessDefersWithoutRepairAttempt(t *testing.T) {
+	testFatalConfiguredHarnessAdmission(t, true, false)
+}
+
+func TestFatalFailedConfiguredHarnessesDeferWithoutRepairAttempt(t *testing.T) {
+	testFatalConfiguredHarnessAdmission(t, false, false)
+}
+
+func TestFatalHealthyAlternateConfiguredHarnessReceivesRepair(t *testing.T) {
+	testFatalConfiguredHarnessAdmission(t, false, true)
+}
+
+func testFatalConfiguredHarnessAdmission(t *testing.T, unknown bool, healthyAlternate bool) {
+	t.Helper()
 	a, _ := stubApp(t)
 	dir := a.store.Dir()
 	source := filepath.Join(t.TempDir(), "config.yaml")
 	a.cfgPath = source
-	if err := os.WriteFile(source, []byte(fmt.Sprintf("stateDir: %q\nfatal:\n  repositories: []\n  checks: [{name: failed, probe: [unavailable-probe]}]\n", dir)), 0600); err != nil {
+	if err := os.WriteFile(source, []byte(fmt.Sprintf("stateDir: %q\ncapacity:\n  providers: {claude: {}, agy: {}}\n  choices: [{harness: claude, model: test}, {harness: agy, model: test}]\nfatal:\n  repositories: []\n  checks: [{name: failed, probe: [unavailable-probe]}]\n", dir)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	q := fatal.Queue{}
@@ -146,6 +183,12 @@ func TestFatalUnknownHarnessDefersWithoutRepairAttempt(t *testing.T) {
 		if slices.Contains(args, "is-enabled") {
 			return fatalDisabledState, "", 1, nil
 		}
+		if healthyAlternate && slices.Contains(args, "agy") {
+			return "", "", 0, nil
+		}
+		if !unknown {
+			return "", "", 1, nil
+		}
 		<-ctx.Done()
 		return "", "", -1, ctx.Err()
 	}
@@ -155,7 +198,11 @@ func TestFatalUnknownHarnessDefersWithoutRepairAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	q, err := fatal.Read(dir)
-	if err != nil || starts != 0 || q.Incidents[0].Attempts != 0 {
+	wantStarts := 0
+	if healthyAlternate {
+		wantStarts = 1
+	}
+	if err != nil || starts != wantStarts || (!healthyAlternate && (q.Incidents[0].Attempts != 0 || q.Incidents[0].Owner != "")) {
 		t.Fatalf("unknown harness consumed a repair attempt: starts=%d queue=%+v error=%v", starts, q, err)
 	}
 }

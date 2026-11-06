@@ -211,6 +211,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	}
 	observationCtx, cancelObservation := context.WithTimeout(ctx, fatalObservationTimeout)
 	defer cancelObservation()
+	requireSource := a.cfgPath != "" || os.Getenv("BEEKEEPER_CONFIG") != ""
 	path, pathErr := config.Path(a.cfgPath)
 	if pathErr != nil && path == "" {
 		path = os.Getenv("BEEKEEPER_CONFIG")
@@ -223,15 +224,16 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 	}
 	if pathErr == nil && path == config.RecoveryPath(dir) {
+		requireSource = true
 		path, pathErr = config.RecoverySource(dir)
 	}
 	mainPath := path
 	var cfg *config.Config
+	if pathErr == nil && requireSource {
+		_, pathErr = filepath.EvalSymlinks(path)
+	}
 	if pathErr == nil {
 		cfg, pathErr = config.Load(path)
-	}
-	if pathErr == nil && a.cfgPath != "" {
-		_, pathErr = filepath.EvalSymlinks(path)
 	}
 	if pathErr != nil {
 		cfg = nil
@@ -454,6 +456,16 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			return nil
 		}
 	}
+	choices := cfg.Capacity.Choices
+	if len(choices) == 0 {
+		choices = []config.Choice{{Harness: config.ClaudeHarness}}
+	}
+	if !slices.ContainsFunc(choices, func(choice config.Choice) bool { return !slices.Contains(broken, choice.Harness) }) {
+		x.Attempts--
+		x.Owner = ""
+		x.Outcome = "blocked: no healthy configured repair harness"
+		return q.Save(dir)
+	}
 	brief := fmt.Sprintf("Repair fatal system outage %s in https://github.com/%s. Evidence: %s. You own this outage. Fix the component in its owning repository; a desk rule or note is an antipattern. Respect all holds, stop intent, capacity, secret rules, green CI and independent desk review. Never force-push. Do not re-enable a deliberately disabled component. Prove the failing probe passes before reporting done. Read beekeeper fatal status for the durable incident.\n", x.ID, repo, x.Evidence)
 	if pathErr != nil {
 		brief += fmt.Sprintf("The main configuration %q cannot load. Restore it using the validated admission snapshot %q as reference, then verify the original path loads. Do not change the snapshot.\n", mainPath, path)
@@ -473,12 +485,6 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		checkout = filepath.Join(cfg.Projects.Dir, repoName(repo))
 	}
 	args = append(args, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
-	if len(cfg.Capacity.Choices) == 0 && slices.Contains(broken, config.ClaudeHarness) {
-		x.Attempts--
-		x.Owner = ""
-		x.Outcome = "blocked: no healthy configured repair harness"
-		return q.Save(dir)
-	}
 	if len(cfg.Capacity.Choices) > 0 {
 		args = append(args, fatalHarnessOption, "auto")
 		for _, harness := range slices.Compact(broken) {

@@ -50,7 +50,10 @@ type Env struct {
 	BeforeRestart func(context.Context, string) error
 	// RestartFailed revokes any prepared state when a restart command fails.
 	RestartFailed func(context.Context, string) error
-	Out           io.Writer
+	// BeforeServices runs after the config is materialized and before any
+	// service work, so recovery can pin validated admission before starting.
+	BeforeServices func() error
+	Out            io.Writer
 	// DryRun prints every step and takes none.
 	DryRun bool
 	// RecoveryOnly installs the independent fatal sentinel and timer driver,
@@ -91,6 +94,9 @@ func Install(ctx context.Context, e Env) error {
 		}
 	}
 	e.planConfig(p, &m)
+	if e.BeforeServices != nil {
+		p.add("record", e.StateDir, "validated recovery admission", e.BeforeServices)
+	}
 	e.planSetup(ctx, p, &m)
 	m.addDirs(e.StateDir)
 	failAgyHooks(p, e.AgyHooks, agyRejected)
