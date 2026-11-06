@@ -36,7 +36,7 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{StateDir: dir}, store: store, out: &out}
 	ag := state.Agent{Party: state.Party{HostSession: codex.HostPrefix + id, Name: "test: codex"}}
-	by := state.Party{Name: "test"}
+	by := state.Party{Name: goTestSubcmd}
 	inbox := codex.InboxPath(dir, id)
 	if err := codex.MakeInbox(inbox); err != nil {
 		t.Fatal(err)
