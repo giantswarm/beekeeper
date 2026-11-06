@@ -36,11 +36,11 @@ func scanDiskPaths(ctx context.Context, roots []string, depth, limit int) []disk
 			return 0, true
 		}
 		remaining--
-		f, err := os.Open(path)
+		f, err := os.OpenInRoot(path, ".")
 		if err != nil {
 			return 0, true
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		var total int64
 		partial := false
 		for {
@@ -85,14 +85,11 @@ func scanDiskPaths(ctx context.Context, roots []string, depth, limit int) []disk
 		if ctx.Err() != nil || remaining <= 0 {
 			break
 		}
-		f, err := os.Open(root)
+		f, err := os.OpenInRoot(root, ".")
 		if err != nil {
 			continue
 		}
-		for {
-			if ctx.Err() != nil || remaining <= 0 {
-				break
-			}
+		for ctx.Err() == nil && remaining > 0 {
 			entries, err := f.ReadDir(128)
 			for _, e := range entries {
 				if ctx.Err() != nil || remaining <= 0 {

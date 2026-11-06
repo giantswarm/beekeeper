@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const diskGrowthTestPath = "/cache/b"
+
 func TestScanDiskPaths(t *testing.T) {
 	root := t.TempDir()
 	for name, data := range map[string]string{"a/file": "1234", "a/deep/file": "123456", "b/file": "12"} {
@@ -44,11 +46,11 @@ func TestScanDiskPaths(t *testing.T) {
 }
 
 func TestDiskPathGrowthAndReports(t *testing.T) {
-	prev := []diskPath{{Path: "/cache/a", Bytes: 100}, {Path: "/cache/b", Bytes: 5}, {Path: "/cache/partial", Bytes: 1, Partial: true}}
-	cur := []diskPath{{Path: "/cache/a", Bytes: 90}, {Path: "/cache/b", Bytes: 15}, {Path: "/cache/new", Bytes: 1000}, {Path: "/cache/partial", Bytes: 20}}
+	prev := []diskPath{{Path: "/cache/a", Bytes: 100}, {Path: diskGrowthTestPath, Bytes: 5}, {Path: "/cache/partial", Bytes: 1, Partial: true}}
+	cur := []diskPath{{Path: "/cache/a", Bytes: 90}, {Path: diskGrowthTestPath, Bytes: 15}, {Path: "/cache/new", Bytes: 1000}, {Path: "/cache/partial", Bytes: 20}}
 	diskPathGrowth(cur, prev)
 	top := topDiskPaths(cur, true, 3)
-	if len(top) != 1 || top[0].Path != "/cache/b" || *top[0].Growth != 10 {
+	if len(top) != 1 || top[0].Path != diskGrowthTestPath || *top[0].Growth != 10 {
 		t.Fatalf("growth: %+v", top)
 	}
 	lines := strings.Join(diskPathLines(cur), "\n")
