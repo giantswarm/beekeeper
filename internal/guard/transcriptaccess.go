@@ -290,11 +290,6 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 		if ((name == echoCommand || name == printfCommand || name == "cd") && !shadow || k == len(words)) && !input {
 			continue
 		}
-		// A program that constructs a harness home from a quoted component
-		// has no statically provable transcript target: fail closed.
-		if ip, ok := interpreters[name]; ok && ip.code != nil && unresolvedTranscriptPath(word) {
-			return &leak{never: true, transcript: true, unresolvedTranscript: true}
-		}
 		word = strings.TrimPrefix(strings.TrimPrefix(word, "0<"), "<>")
 		if _, value, ok := strings.Cut(word, "="); ok {
 			word = value

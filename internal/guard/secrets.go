@@ -220,6 +220,8 @@ type secretGuard struct {
 	// feeds: the simple command's output is piped on or substituted, so a
 	// path a metadata command prints is read by the command consuming it.
 	feeds bool
+	// runtimeProgram marks text consumed as interpreter code rather than shell.
+	runtimeProgram bool
 	// inTest: the simple command is the rest of a [[ … ]] expression that
 	// its && or || split off, operands of the test.
 	inTest bool
@@ -249,12 +251,11 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return nil
 	}
 	sc := scanShell(cmd)
-	// Check executable script text before shell segmentation discards path
-	// construction context. Here-document data is masked in plain; interpreter
-	// input is checked when inputLeak recursively scans its body.
-	if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(sc.plain) {
+	// Only interpreter program text has runtime environment lookup semantics.
+	if g.runtimeProgram && len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(cmd) {
 		return &leak{never: true, transcript: true, unresolvedTranscript: true}
 	}
+	g.runtimeProgram = false
 	if len(g.transcripts.roots) > 0 {
 		for _, doc := range sc.heredocs {
 			if doc.quoted {
@@ -588,13 +589,9 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			}
 		case interpreters[name].code != nil || len(interpreters[name].file) > 0:
 			ip := interpreters[name]
+			g.runtimeProgram = true
 			switch p := readProgram(args, ip); p.kind {
 			case programCode:
-				// Classify unresolved interpreter paths before the shell scanner
-				// splits assignments and loses their construction context.
-				if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(p.arg) {
-					return &leak{never: true, transcript: true, unresolvedTranscript: true}
-				}
 				if l := g.scan(p.arg, depth+1); l != nil {
 					return l
 				}
@@ -802,6 +799,13 @@ func (g secretGuard) script(p string, depth int) *leak {
 	raw, err := os.ReadFile(p) //nolint:gosec // a script the command line runs, read to scan it
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
 		return nil
+	}
+	if first, _, _ := strings.Cut(string(raw), "\n"); strings.HasPrefix(first, "#!") {
+		for _, word := range strings.Fields(strings.TrimPrefix(first, "#!")) {
+			if _, ok := interpreters[filepath.Base(word)]; ok {
+				g.runtimeProgram = true
+			}
+		}
 	}
 	if l := g.scan(string(raw), depth+1); l != nil {
 		l.what += ", run from " + filepath.Base(p)

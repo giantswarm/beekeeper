@@ -331,6 +331,29 @@ type span struct {
 // values. A base64 run whose decoding carries either is replaced whole. An
 // Index without a key matches patterns only.
 func (ix *Index) Redact(s string) (string, []Finding) {
+	// Keep image payloads out of both fingerprint and token pattern scans.
+	var b strings.Builder
+	var findings []Finding
+	at := 0
+	for _, run := range base64Runs(s) {
+		if !imageBase64(s, run) {
+			continue
+		}
+		out, fs := ix.redactText(s[at:run[0]])
+		b.WriteString(out)
+		b.WriteString(s[run[0]:run[1]])
+		findings = mergeFindings(findings, fs)
+		at = run[1]
+	}
+	if at == 0 {
+		return ix.redactText(s)
+	}
+	out, fs := ix.redactText(s[at:])
+	b.WriteString(out)
+	return b.String(), mergeFindings(findings, fs)
+}
+
+func (ix *Index) redactText(s string) (string, []Finding) {
 	// An indexed value wins over a pattern match it overlaps, since it names
 	// what to rotate; among either, the widest span starting first wins.
 	spans := disjoint(ix.matches(s), nil)

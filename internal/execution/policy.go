@@ -388,7 +388,7 @@ func (s *Server) Prepare(p Policy) (string, error) {
 	if err := ownedDirectory(s.Config.WorkspaceRoot); err != nil {
 		return "", err
 	}
-	for name, b := range map[string][]byte{"settings.json": s.settings(), bundleClaudeRulesFile: s.Rules} {
+	for name, b := range map[string][]byte{claudeSettingsFile: s.settings(), claudeRulesFile: s.Rules} {
 		if err := atomicFile(filepath.Join(s.Root, name), b); err != nil {
 			return "", err
 		}
@@ -465,7 +465,7 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 			return p, errors.New("installed coordinator bundle does not match policy")
 		}
 	}
-	for name, digest := range map[string]string{"settings.json": p.SettingsDigest, bundleClaudeRulesFile: p.RulesDigest} {
+	for name, digest := range map[string]string{claudeSettingsFile: p.SettingsDigest, claudeRulesFile: p.RulesDigest} {
 		b, err := readRegular(filepath.Join(s.Root, name), MaxWire)
 		if err != nil || Digest(b) != digest {
 			return p, errors.New("installed execution rules or hooks do not match the policy")
@@ -533,7 +533,7 @@ func (s *Server) probe(ctx context.Context, name string, h HarnessConfig, readin
 	if name == HarnessOmp {
 		return s.probeOmp(ctx, h, readiness)
 	}
-	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
+	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, claudeSettingsFile), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
 		readiness.VersionCheck = probeFailed

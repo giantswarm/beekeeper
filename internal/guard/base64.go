@@ -64,7 +64,11 @@ func base64Runs(s string) [][2]int {
 // b64Span is the end of the base64 characters from i on, up to two
 // padding characters included.
 func b64Span(s string, i int, url bool) int {
-	for i < len(s) && b64Char(s[i], url) {
+	mask := byte(1)
+	if url {
+		mask = 3
+	}
+	for i < len(s) && b64Alphabet[s[i]]&mask != 0 {
 		i++
 	}
 	for n := 0; n < 2 && i < len(s) && s[i] == '='; n++ {
@@ -73,9 +77,19 @@ func b64Span(s string, i int, url bool) int {
 	return i
 }
 
+// Use a lookup table so large, high-entropy images need only one byte lookup
+// per encoded character, rather than several alphabet range branches.
+var b64Alphabet = func() [256]byte {
+	var table [256]byte
+	for _, c := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" {
+		table[c] = 1
+	}
+	table['-'], table['_'] = 2, 2
+	return table
+}()
+
 func b64Char(c byte, url bool) bool {
-	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '+' || c == '/' ||
-		url && (c == '-' || c == '_')
+	return b64Alphabet[c] == 1 || url && b64Alphabet[c] == 2
 }
 
 // encodedSpans are the spans of s whose base64 decoding carries a token
@@ -87,6 +101,9 @@ func (ix *Index) encodedSpans(s string, depth int, patterns bool) []span {
 	}
 	var out []span
 	for _, m := range base64Runs(s) {
+		if imageBase64(s, m) {
+			continue
+		}
 		for _, run := range runs(s, m[0], m[1]) {
 			d, ok := decodeBase64(s[run[0]:run[1]])
 			if !ok {
@@ -158,4 +175,38 @@ func (ix *Index) carries(d string, depth int, patterns bool) (name string, ref, 
 		return inner[0].name, inner[0].ref, true
 	}
 	return "", false, false
+}
+
+// imageBase64 examines only a bounded prefix of a run. Image data URLs also
+// identify formats beyond PNG and JPEG without decoding their payloads.
+func imageBase64(s string, run [2]int) bool {
+	start := run[0]
+	if start > 0 && s[start-1] == ',' {
+		header := s[max(0, start-128):start]
+		if prefix := strings.LastIndex(header, "data:image/"); prefix >= 0 &&
+			!strings.ContainsAny(header[prefix:], "\n\r\"' ") && strings.HasSuffix(header, ";base64,") {
+			return true
+		}
+	}
+	var prefix [12]byte
+	n := 0
+	for i := start; i < run[1] && n < len(prefix); i++ {
+		if b64Char(s[i], true) {
+			prefix[n] = s[i]
+			n++
+		}
+	}
+	if n < len(prefix) {
+		return false
+	}
+	var decoded [9]byte
+	enc := base64.RawStdEncoding
+	if strings.ContainsAny(string(prefix[:]), "-_") {
+		enc = base64.RawURLEncoding
+	}
+	if _, err := enc.Decode(decoded[:], prefix[:]); err != nil {
+		return false
+	}
+	return string(decoded[:8]) == "\x89PNG\r\n\x1a\n" ||
+		decoded[0] == 0xff && decoded[1] == 0xd8 && decoded[2] == 0xff
 }

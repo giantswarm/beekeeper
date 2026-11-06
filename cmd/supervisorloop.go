@@ -431,7 +431,10 @@ its key first in the detail):
             supervisor.hostsFirst, which prefers hosts for what a host
             can run, as for a worker. No host with room and no room
             locally: the start waits. A desk with
-            no capacity.choices never places remotely
+            no capacity.choices never places remotely. Execution reviewers use
+            agents review to read their assigned PR and linked issues and post
+            their exact-head review through the coordinator, without a host
+            GitHub credential
   red       an agent parked from its pull request's worktree at its
             published HEAD (a review request, local or on an execution
             host) whose head has a check that concluded red (failed,
@@ -1069,12 +1072,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		if !l.dryRun {
+			if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+				return err
+			}
+		}
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
 	l.clearSaid("graphql budget")
 	if !l.dryRun {
 		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			if saveErr := l.observeThroughput(superloop.Input{}, nil, false); saveErr != nil {
+				return saveErr
+			}
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 			return nil
 		}
@@ -1112,6 +1123,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
+	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
@@ -1305,6 +1317,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 				pullHeld = true
 				continue
 			}
+			observationUnknown = true
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
@@ -1411,6 +1424,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
+			return err
+		}
+	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
@@ -2806,10 +2824,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return nil
+				return l.a.operationOutcome(agentStartName, "", act.URL, true)
 			} else if !errors.Is(rerr, errLoopLater) {
 				return rerr
 			}
@@ -2927,12 +2945,15 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused {
 			if place.remote() {
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+						return "", saveErr
+					}
 					return what, nil
 				} else if !errors.Is(rerr, errLoopLater) {
 					return "", rerr
@@ -3100,7 +3121,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement applies host preferences to workers and GitHub-enabled
+// startPlacement applies host preferences to workers and coordinator-relayed
 // reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
@@ -3112,7 +3133,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
 // passed quietly) and skipped; a host's check weighs only the choices it
-// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// can run. With supervisor.hostsFirst and no host with room
 // a start a host could run waits, as it does on a full machine; a start no
 // host can run starts locally within the local room (capacity.local.
 // ceiling among its guards): one whose repository no host maps, or the
@@ -3130,21 +3151,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// A remote reviewer needs the per-worker GitHub adapter to read the PR
-	// and post its review. Publication-only hosts cannot perform reviews.
-	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
-		if !l.capacityRoom(ctx, flags...) {
-			return startHost{}, errLoopLater
-		}
-		return startHost{}, nil
-	}
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
 		// room. When agents.models selects a model, check its room before
 		// claiming the action.
-		if model != "" && !l.capacityRoom(ctx, flags...) {
+		if (review || model != "") && !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -3468,7 +3481,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
@@ -3478,6 +3491,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
+				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+					return "", saveErr
+				}
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {

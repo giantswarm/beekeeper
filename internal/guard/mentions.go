@@ -36,7 +36,16 @@ var mention = regexp.MustCompile(`(?:^|[\s(\[{>,;:!?"'*_~])@([A-Za-z0-9][A-Za-z0
 func mentions(text string) []string {
 	var out []string
 	for _, m := range mention.FindAllStringSubmatchIndex(text, -1) {
+		login := text[m[2]:m[3]]
 		rest := text[m[1]:]
+		// Schema annotations and call-style decorators do not ping a login.
+		if login == "schema" || login == "default" || strings.HasPrefix(rest, "(") {
+			continue
+		}
+		// Do not accept a prefix of an invalid or overlong login.
+		if strings.HasSuffix(login, "-") || strings.Contains(login, "--") || len(rest) > 0 && (isWord(rest[0]) || rest[0] == '-') {
+			continue
+		}
 		if len(rest) > 1 && rest[0] == '.' && isWord(rest[1]) {
 			continue
 		}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -328,7 +329,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents review", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
 	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
@@ -435,7 +436,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionReviewCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -484,19 +485,56 @@ func (a *app) executionHostsCmd() *cobra.Command {
 			return err
 		}
 		caps, probeErr := a.probeExecution(cmd.Context(), h)
-		// Show per-harness diagnostics even when every configured harness is
-		// unavailable. The failed probe still refuses admission and exits nonzero.
-		if probeErr != nil && len(caps.Readiness) == 0 {
-			return probeErr
+		// Audit independently of readiness so a policy/tool failure does not
+		// hide leftovers. An unreachable audit is explicitly unknown.
+		var audit []execution.ResourceFinding
+		auditErr := (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-audit", execution.Ref{}, nil, &audit)
+		if auditErr != nil {
+			audit = []execution.ResourceFinding{{Ref: execution.Ref{Host: h.Identity}, State: execution.Unknown, Reason: "resource inventory unreachable or unavailable", Retry: "restore host access and retry hosts check; do not clean unknown resources"}}
 		}
+		if auditErr == nil {
+			st, err := a.store.Peek()
+			if err != nil {
+				return err
+			}
+			var registered []execution.Ref
+			for _, start := range st.Starts {
+				if start.Execution != nil {
+					registered = append(registered, start.Execution.Handle.Ref)
+				}
+			}
+			execution.ReportOrphans(audit, a.cfg.Identity.Host, registered)
+		}
+		caps.ResourceAudit = audit
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}
-		if probeErr != nil {
-			return probeErr
+		if probeErr != nil || auditErr != nil {
+			return errors.Join(probeErr, auditErr)
 		}
 		return checkHostRelease(caps.Version)
 	}})
+	var releaseEvidence bool
+	reconcile := &cobra.Command{Use: "reconcile <host> <execution> <generation>", Short: "Reconcile one terminal execution; retain recovery work", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot reconcile host resources")
+		}
+		h, err := a.executionHost(args[0])
+		if err != nil {
+			return err
+		}
+		generation, err := strconv.ParseUint(args[2], 10, 64)
+		if err != nil {
+			return err
+		}
+		ref := execution.Ref{Host: h.Identity, Execution: execution.ExecutionID(args[1]), Generation: generation}
+		if err := ref.Validate(); err != nil {
+			return err
+		}
+		return (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-reconcile", ref, releaseEvidence, &struct{}{})
+	}}
+	reconcile.Flags().BoolVar(&releaseEvidence, "release-evidence", false, "Attest this execution log is no longer needed for review or recovery; allow removal after 30 days")
+	c.AddCommand(reconcile)
 	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.managedExecutionID() != "" {
 			return refused("managed workers cannot provision host tools")

@@ -16,7 +16,6 @@ import (
 
 const BundleSchema = 1
 const bundleRulesKind = "rules"
-const bundleClaudeRulesFile = "CLAUDE.md"
 const maxBundleBytes = 2 << 20
 const maxArtifactBytes = 256 << 10
 
@@ -95,7 +94,7 @@ func (b CoordinatorBundle) Validate() error {
 		if !safeRelative(a.Source) || !safeRelative(a.Artifact) || (a.Artifact <= previous || previous != "" && strings.HasPrefix(a.Artifact, previous+"/")) || len(parts) < 3 || (parts[0] != bundleRulesKind && parts[0] != "skills") {
 			return errors.New("invalid or duplicate bundle artifact path")
 		}
-		if parts[0] == bundleRulesKind && (len(parts) != 3 || (parts[2] != "AGENTS.md" && parts[2] != bundleClaudeRulesFile)) {
+		if parts[0] == bundleRulesKind && (len(parts) != 3 || (parts[2] != "AGENTS.md" && parts[2] != claudeRulesFile)) {
 			return errors.New("unsupported rules artifact")
 		}
 		if !policycontent.RulesAllowed("/bundle/"+a.Source, nil) || !policycontent.RulesAllowed("/bundle/"+a.Artifact, nil) || len(a.Content) == 0 || len(a.Content) > maxArtifactBytes || !utf8.Valid(a.Content) || strings.IndexByte(string(a.Content), 0) >= 0 || len(policycontent.CredentialShapes(string(a.Content))) > 0 || Digest(a.Content) != a.Digest {
