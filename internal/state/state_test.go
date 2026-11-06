@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -522,6 +523,69 @@ func TestAnOlderReleasesSaveIsRefused(t *testing.T) {
 	}
 }
 
+// Refusal must precede callbacks that change files outside state.json.
+func TestStaleWriterDoesNotInvokeUpdateCallback(t *testing.T) {
+	for _, within := range []bool{false, true} {
+		t.Run(strconv.FormatBool(within), func(t *testing.T) {
+			dir := t.TempDir()
+			newer, err := OpenVersion(dir, "v2.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := newer.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			older, err := OpenVersion(dir, "v1.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			holder := filepath.Join(dir, "synthetic-holder")
+			called := false
+			update := older.Update
+			if within {
+				update = func(fn func(*State) ([]Event, error)) error {
+					return older.UpdateWithin(time.Second, fn)
+				}
+			}
+			for range 2 {
+				err := update(func(*State) ([]Event, error) {
+					called = true
+					err := os.WriteFile(holder, []byte("holder"), 0o600)
+					return []Event{{Verb: "lease.granted"}}, err
+				})
+				var stale *StaleWriterError
+				if !errors.As(err, &stale) || stale.Version != "v1.0.0" || stale.Newer != "v2.0.0" {
+					t.Fatalf("update error = %v, want stale writer", err)
+				}
+			}
+			if called {
+				t.Error("stale writer invoked the callback")
+			}
+			if _, err := os.Stat(holder); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("holder stat = %v, want no side file", err)
+			}
+			after, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Error("state bytes changed")
+			}
+			events, err := older.Events(0, func(Event) bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || events[0].Verb != VerbStaleWriter {
+				t.Errorf("events = %+v, want only one refusal diagnostic", events)
+			}
+		})
+	}
+}
+
 // A branch build's stamp judges no release: the next release overwrites it,
 // and drops the record of stale saves that releases before the refusal kept.
 func TestABranchBuildsStampJudgesNoRelease(t *testing.T) {
@@ -711,5 +775,83 @@ func TestAStateANewerReleaseWroteLoadsOrNamesTheSkew(t *testing.T) {
 	write(`{"writer":{"version":"v0.81.0"},"nextNote":"three"}`)
 	if _, err := s.Read(); err == nil || errors.As(err, &stale) {
 		t.Errorf("err = %v, want a plain decode error", err)
+	}
+}
+
+// An event-log open failure must leave a note available for a later answer.
+func TestUpdateEventLogOpenFailureKeepsNoteAnswerable(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.Notes = []Note{{ID: 1, Text: "Proceed?"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.path("state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory fails the append open even when the test runs as root.
+	if err := os.Mkdir(s.path("events.jsonl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	answer := func(st *State) ([]Event, error) {
+		if len(st.Notes) != 1 || st.Notes[0].ID != 1 {
+			return nil, errors.New("note is no longer answerable")
+		}
+		st.Notes = nil
+		return []Event{{Verb: "answer.recorded", Detail: "#1: proceed"}}, nil
+	}
+	if err := s.Update(answer); err == nil {
+		t.Fatal("expected event-log open failure")
+	}
+	after, err := os.ReadFile(s.path("state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed update changed state.json")
+	}
+	// Reopen to verify the persisted note, rather than callback-local state.
+	s, err = Open(filepath.Dir(s.path("state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].ID != 1 {
+		t.Fatalf("note unavailable after failure: %+v", st.Notes)
+	}
+	if err := os.Remove(s.path("events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("failed update retained events: %+v", events)
+	}
+	if err := s.Update(answer); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Fatalf("answered note still open: %+v", st.Notes)
+	}
+	events, err = s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Verb != "answer.recorded" || events[0].Detail != "#1: proceed" {
+		t.Fatalf("retained answers = %+v", events)
 	}
 }

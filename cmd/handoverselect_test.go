@@ -145,7 +145,7 @@ func handoverPrompt(t *testing.T, a *app, out *bytes.Buffer) string {
 // one prints no section for it.
 func TestStandingInstructionsReachTheHandover(t *testing.T) {
 	a, out := noteApp(t)
-	a.cfg.Guide.Skill, a.cfg.StateDir = "guide", t.TempDir()
+	a.cfg.Guide.Skill, a.cfg.StateDir = guideName, t.TempDir()
 	if p := handoverPrompt(t, a, out); strings.Contains(p, "Standing instructions") {
 		t.Errorf("a desk without standing.md prints the section:\n%s", p)
 	}

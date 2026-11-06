@@ -4,6 +4,7 @@ package envtestassets
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,11 +43,20 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 		return "", ctx.Err()
 	}
 	defer func() { _ = lock.Unlock() }()
-	marker := filepath.Join(dir, "assets-"+version)
-	if data, err := os.ReadFile(marker); err == nil && valid(string(data)) {
-		return string(data), nil
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", dir, "-p", "path", version)
+	defer root.Close()
+	const marker = "assets-" + version
+	if f, err := root.Open(marker); err == nil {
+		data, readErr := io.ReadAll(f)
+		_ = f.Close()
+		if readErr == nil && valid(string(data)) {
+			return string(data), nil
+		}
+	}
+	cmd := exec.CommandContext(ctx, "go", "run", tool, "use", "--bin-dir", ".", "-p", "path", version)
 	// Provision independently of the target repository's module/workspace settings.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
@@ -60,7 +70,7 @@ func Ensure(ctx context.Context, stateDir string) (string, error) {
 	if !valid(assets) {
 		return "", fmt.Errorf("setup-envtest returned an incomplete assets directory")
 	}
-	if err := os.WriteFile(marker, []byte(assets), 0600); err != nil {
+	if err := root.WriteFile(marker, []byte(assets), 0600); err != nil {
 		return "", err
 	}
 	return assets, nil
@@ -70,8 +80,13 @@ func valid(dir string) bool {
 	if !filepath.IsAbs(dir) {
 		return false
 	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false
+	}
+	defer root.Close()
 	for _, name := range []string{"etcd", "kube-apiserver"} {
-		info, err := os.Stat(filepath.Join(dir, name))
+		info, err := root.Stat(name)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
 			return false
 		}

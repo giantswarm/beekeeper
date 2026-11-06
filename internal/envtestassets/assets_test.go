@@ -2,6 +2,7 @@ package envtestassets
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,9 +43,12 @@ for name in etcd kube-apiserver; do
  chmod +x "$5/binaries/$name"
 done
 printf x >> "$5/downloads"
-printf '%s\n' "$5/binaries"
+printf '%s/binaries\n' "$PWD"
 `
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(bin, "go"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -59,7 +63,17 @@ printf '%s\n' "$5/binaries"
 	}
 	count := func(want string) {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(state, "envtest", "downloads"))
+		root, err := os.OpenRoot(filepath.Join(state, "envtest"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		f, err := root.Open("downloads")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		data, err := io.ReadAll(f)
 		if err != nil || string(data) != want {
 			t.Fatalf("downloads %q, %v", data, err)
 		}
