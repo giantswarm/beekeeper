@@ -1504,3 +1504,102 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
 	}
 }
+
+func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
+	const (
+		origA    = "o/r#401"
+		origB    = "o/r#402"
+		combined = "o/r#400"
+	)
+	got := ParseAbsorbedPulls(
+		combined,
+		"fix: combine #401 and #402",
+		"Supersedes https://github.com/o/r/pull/401 and o/r#402.\nCloses https://github.com/o/r/issues/50\nFixes #51\n",
+	)
+	if want := []string{origA, origB}; !slices.Equal(got, want) {
+		t.Fatalf("ParseAbsorbedPulls = %v, want %v", got, want)
+	}
+	for _, tc := range []struct {
+		name  string
+		title string
+		body  string
+		want  []string
+	}{
+		{
+			name:  "generic batch keyword in title does not absorb related PR",
+			title: "fix: batch scheduler",
+			body:  "Related: https://github.com/o/r/pull/401\nSee also o/r#402",
+			want:  nil,
+		},
+		{
+			name:  "combine keyword in title without PRs does not leak to body",
+			title: "fix: combine metrics",
+			body:  "Related: https://github.com/o/r/pull/401\nReplaces old handler from https://github.com/o/r/pull/402",
+			want:  nil,
+		},
+		{
+			name:  "combine clause stops before related clause on same line",
+			title: "fix: cleanup",
+			body:  "Combines https://github.com/o/r/pull/401 and #402. Related: https://github.com/o/r/pull/403",
+			want:  []string{origA, origB},
+		},
+		{
+			name:  "explicit bullet list under Combines heading",
+			title: "fix: rollup",
+			body:  "Combines:\n- https://github.com/o/r/pull/401\n- o/r#402\n\nRelated:\n- https://github.com/o/r/pull/403",
+			want:  []string{origA, origB},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := ParseAbsorbedPulls(combined, tc.title, tc.body); !slices.Equal(actual, tc.want) {
+				t.Fatalf("ParseAbsorbedPulls(%q, %q) = %v, want %v", tc.title, tc.body, actual, tc.want)
+			}
+		})
+	}
+
+	t0 := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC)
+	in := Input{
+		Now:  t0.Add(OrphanWait + time.Minute),
+		Desk: Desk{Authors: []string{deskAuthor}},
+		Workers: []Worker{
+			{Name: PullWorkerName(origA), Started: true},
+			{Name: ReviewerName(origB, 1), Started: true},
+			{Name: "saved fixer", ParkedOn: origB, ParkedAt: t0, ParkedHead: head1, ReviewRequested: true, Saved: true},
+		},
+		Taken: []Taken{
+			{Key: "review " + origB + "@" + head1, Kind: KindReview, Ref: origB, Agent: PullWorkerName(origB), At: t0},
+		},
+		Ownerless: map[string]time.Time{
+			origA: t0,
+			origB: t0,
+		},
+		Pulls: map[string]Pull{
+			origA:    {Ref: origA, URL: "https://github.com/o/r/pull/401", Author: deskAuthor, State: Open, Head: head1, Red: []Check{{Name: "test"}}},
+			origB:    {Ref: origB, URL: "https://github.com/o/r/pull/402", Author: deskAuthor, State: Open, Head: head1, Green: true},
+			combined: {Ref: combined, URL: "https://github.com/o/r/pull/400", Author: deskAuthor, State: Merged, Head: head2, Absorbs: []string{origA, origB}},
+		},
+	}
+	if gotOwnerless := Ownerless(in); len(gotOwnerless) != 0 {
+		t.Fatalf("Ownerless kept absorbed PRs: %v", gotOwnerless)
+	}
+	acts := Plan(in)
+	var doneAgents []string
+	var endedRefs []string
+	for _, a := range acts {
+		switch a.Kind {
+		case KindDone:
+			doneAgents = append(doneAgents, a.Agent)
+		case KindEnd:
+			endedRefs = append(endedRefs, a.Ref)
+		case KindRework, KindReview, KindForward, KindRed, KindOwner:
+			t.Fatalf("planned %s for absorbed PR: %+v", a.Kind, a)
+		}
+	}
+	slices.Sort(doneAgents)
+	if want := []string{ReviewerName(origB, 1), PullWorkerName(origA)}; !slices.Equal(doneAgents, want) {
+		t.Fatalf("retired agents = %v, want %v (actions: %+v)", doneAgents, want, acts)
+	}
+	if !slices.Equal(endedRefs, []string{origB}) {
+		t.Fatalf("ended refs = %v, want [%s]", endedRefs, origB)
+	}
+}
