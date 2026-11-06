@@ -62,6 +62,8 @@ type Config struct {
 	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
+	// Fatal adds machine-specific outage probes to the independent sentinel.
+	Fatal Fatal `yaml:"fatal"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
 	LeaseDir string `yaml:"leaseDir"`
 	// LeaseRound is the default round when a lease purpose names no duration (1h).
@@ -2059,6 +2061,22 @@ func opRef(s string) bool {
 	return strings.HasPrefix(s, "op://") && len(parts) >= 3 && !slices.Contains(parts, "")
 }
 
+// Fatal configures additional probes for critical machine components.
+type Fatal struct {
+	// Checks are fatal health checks, never arbitrary worker reports. Exit 0
+	// is healthy, 1 is failed, 2 is deliberately disabled, others unknown.
+	Checks []FatalCheck `yaml:"checks"`
+	// Repositories are repositories whose default branch CI is critical.
+	Repositories []string `yaml:"repositories"`
+}
+
+type FatalCheck struct {
+	Name  string   `yaml:"name"`
+	Probe []string `yaml:"probe"`
+	// Harness excludes the broken harness from repair selection.
+	Harness string `yaml:"harness"`
+}
+
 // Doctor configures the known faults the doctor probes and remedies.
 type Doctor struct {
 	Faults []Fault `yaml:"faults"`
@@ -3436,6 +3454,9 @@ func (c *Config) defaults() error {
 		state = filepath.Join(home, ".local", "state")
 	}
 	setStr(&c.StateDir, filepath.Join(state, "beekeeper"))
+	if c.Fatal.Repositories == nil {
+		c.Fatal.Repositories = []string{"giantswarm/beekeeper"}
+	}
 	setStr(&c.Disk.Prune, DiskPruneAuto)
 	if c.Disk.TrashDirs == nil {
 		c.Disk.TrashDirs = []string{filepath.Join(c.StateDir, "trash"), filepath.Join(state, "trash")}
@@ -4394,6 +4415,24 @@ func (c *Config) validateEach(report func(error)) {
 	c.validateLabsEach(report)
 	if o := c.Ollama; (o.URL != "" || c.Lemonade.URL != "") && (o.BudgetGiB < 1 || o.BudgetGiB > o.MaxBudgetGiB) {
 		report(fmt.Errorf("ollama.budgetGiB: %d is not between 1 and maxBudgetGiB %d", o.BudgetGiB, o.MaxBudgetGiB))
+	}
+	checks := map[string]bool{}
+	if len(c.Fatal.Checks) > 16 || len(c.Fatal.Repositories) > 16 {
+		report(fmt.Errorf("fatal: at most 16 checks and 16 repositories"))
+	}
+	for i, check := range c.Fatal.Checks {
+		if check.Name == "" || len(check.Probe) == 0 || check.Probe[0] == "" || checks[check.Name] {
+			report(fmt.Errorf("fatal.checks[%d]: unique name and probe required", i))
+		}
+		if check.Harness != "" && !slices.Contains([]string{ClaudeHarness, OmpHarness, AgyHarness, CodexHarness}, check.Harness) {
+			report(fmt.Errorf("fatal.checks[%d]: unknown harness", i))
+		}
+		checks[check.Name] = true
+	}
+	for _, repo := range c.Fatal.Repositories {
+		if len(strings.Split(repo, "/")) != 2 || strings.ContainsAny(repo, " ?#\\\n\r\t") {
+			report(fmt.Errorf("fatal.repositories: expected owner/repository"))
+		}
 	}
 	faults := map[string]bool{}
 	for i, f := range c.Doctor.Faults {

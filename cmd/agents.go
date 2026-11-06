@@ -260,6 +260,9 @@ leaves its own park with agents resume, no agent named.`,
 				if ag.Task != "" {
 					return nil, refused("%q is busy with %q since %s", ag.Name, ag.Task, clock(a.now, ag.AssignedAt))
 				}
+				if err := a.fatalAdmission(ag.Name, false); err != nil {
+					return nil, err
+				}
 				ag.Task, ag.AssignedAt, ag.Done = task, a.now.UTC(), false
 				who = ag.Name
 				return []state.Event{event(me, "agents.assign", "%s: %s", who, task)}, nil

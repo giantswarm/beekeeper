@@ -3529,6 +3529,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	k := l.a.cfg.Supervisor
 	r, _ := parseRef(next.Ref)
 	name := fmt.Sprintf("%s %d", repoName(r.Repo), r.N)
+	if err := l.a.fatalAdmission(name, false); err != nil {
+		return "", errLoopLater
+	}
 	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {

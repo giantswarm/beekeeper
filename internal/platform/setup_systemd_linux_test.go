@@ -14,6 +14,33 @@ import (
 // testExe is the binary the tested units run.
 const testExe = "/b/beekeeper"
 
+func TestFatalSentinelIsIndependentAndPinsState(t *testing.T) {
+	files, _ := (systemdSetup{}).Files(SetupSpec{ConfigDir: "/config", Exe: testExe, ConfigPath: "/config/main.yaml", StateDir: "/state with spaces"})
+	var service, timer string
+	for _, f := range files {
+		switch filepath.Base(f.Path) {
+		case "beekeeper-fatal.service":
+			service = string(f.Content)
+			if f.Service {
+				t.Fatal("oneshot must be timer-owned")
+			}
+		case "beekeeper-fatal.timer":
+			timer = string(f.Content)
+			if !f.Service {
+				t.Fatal("timer not installed")
+			}
+		}
+	}
+	for _, want := range []string{`--config "/config/main.yaml" fatal --state-dir "/state with spaces" scan`, "TimeoutStartSec=5min", "Type=oneshot"} {
+		if !strings.Contains(service, want) {
+			t.Fatalf("missing %q: %s", want, service)
+		}
+	}
+	if !strings.Contains(timer, "OnUnitInactiveSec=1min") || strings.Contains(service, "Requires=") || strings.Contains(service, "After=") {
+		t.Fatal("sentinel depends on monitored services")
+	}
+}
+
 func TestSystemdSetupFiles(t *testing.T) {
 	files, skipped := systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, RAMMiB: 100 << 10, SwapMiB: 16 << 10,
 		CPUQuota: "1200%", CPUWeight: 50, DesktopScope: "app-Hyprland-com.anthropic.Claude-5776.scope"})

@@ -246,7 +246,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		c.GroupID = "sharing"
 		root.AddCommand(c)
 	}
-	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.emergencyCmd(), a.agentsCmd(), a.stopCmd(), a.resumeCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
+	for _, c := range []*cobra.Command{a.supervisorCmd(), a.guideCmd(), a.emergencyCmd(), a.fatalCmd(), a.agentsCmd(), a.stopCmd(), a.resumeCmd(), a.doctorCmd(), a.worktreesCmd(), a.noteCmd(), a.answerCmd(), a.converseCmd(), a.timerCmd(), a.reporterCmd(), a.reportCmd(), a.handoverCmd(), a.logCmd(), a.lintCmd()} {
 		c.GroupID = "supervising"
 		root.AddCommand(c)
 	}

@@ -166,6 +166,7 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	e.CodexHooks = codexHooksPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.CodexSkills = codexSkillsPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.StateDir = a.cfg.StateDir
+	e.Spec.StateDir = e.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
 		e.Spec.RAMMiB, e.Spec.SwapMiB = m.TotalMiB, m.SwapTotalMiB
