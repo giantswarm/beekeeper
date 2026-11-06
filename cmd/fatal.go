@@ -29,6 +29,12 @@ const (
 	fatalInstallationGuard = "guard:installation"
 	fatalDisabledState     = "disabled"
 	fatalEnabledState      = "enabled"
+	fatalNameOption        = "--name"
+	fatalDirOption         = "--dir"
+	fatalBranchOption      = "--branch"
+	fatalHarnessOption     = "--harness"
+	fatalExcludeOption     = "--exclude"
+	fatalGateOption        = "--gate"
 )
 
 var fatalRun = runArgv
@@ -329,7 +335,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 		o := fatalService(ctx, unit)
 		if o.Failed && !o.Unknown && !o.Disabled {
-			code, runErr := fatalProbe(ctx, "systemctl", "--user", "start", unit)
+			code, runErr := fatalProbe(ctx, "systemctl", "--user", agentStartName, unit)
 			x.Outcome = fmt.Sprintf("service start exited %d", code)
 			if runErr != nil {
 				x.Outcome = "service start unavailable"
@@ -358,12 +364,12 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err
 	}
-	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, "agents", "start", "--name", x.Owner}
+	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, agentsName, agentStartName, fatalNameOption, x.Owner}
 	checkout := cfg.Fatal.Checkouts[repo]
 	if checkout == "" {
 		checkout = filepath.Join(cfg.Projects.Dir, repoName(repo))
 	}
-	args = append(args, "--dir", homePath(checkout), "--branch", fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
+	args = append(args, fatalDirOption, homePath(checkout), fatalBranchOption, fmt.Sprintf("fatal/%d-%d", x.Opened.UnixNano(), x.Attempts))
 	if len(cfg.Capacity.Choices) == 0 && slices.Contains(broken, config.ClaudeHarness) {
 		x.Attempts--
 		x.Owner = ""
@@ -371,9 +377,9 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		return q.Save(dir)
 	}
 	if len(cfg.Capacity.Choices) > 0 {
-		args = append(args, "--harness", "auto")
+		args = append(args, fatalHarnessOption, "auto")
 		for _, harness := range slices.Compact(broken) {
-			args = append(args, "--exclude", harness)
+			args = append(args, fatalExcludeOption, harness)
 		}
 	}
 	args = append(args, briefPath)
@@ -409,7 +415,7 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = true
 		return o
 	}
-	_, _, code, err := fatalRun(ctx, "", []string{bin, workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, "--gate"})
+	_, _, code, err := fatalRun(ctx, "", []string{bin, workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, fatalGateOption})
 	if err != nil || code != 0 {
 		o.Unknown = true
 		return o

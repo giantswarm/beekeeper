@@ -15,6 +15,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const fatalUnavailable = "unavailable"
+
 func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 	t.Helper()
 	old := fatalRun
@@ -26,7 +28,7 @@ func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 }
 
 func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
-	for _, status := range []string{fatalDisabledState, "masked", "not-found", fatalEnabledState, "unavailable"} {
+	for _, status := range []string{fatalDisabledState, "masked", "not-found", fatalEnabledState, fatalUnavailable} {
 		t.Run(status, func(t *testing.T) {
 			fakeFatalRun(t, func(args []string) (string, int) {
 				if slices.Contains(args, "is-enabled") {
@@ -35,7 +37,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 				return "", 3
 			})
 			o := fatalService(t.Context(), "beekeeper-supervisor-loop.service")
-			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == fatalEnabledState) || o.Unknown != (status == "unavailable") {
+			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == fatalEnabledState) || o.Unknown != (status == fatalUnavailable) {
 				t.Fatalf("%+v", o)
 			}
 		})
@@ -43,7 +45,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 }
 
 func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
-	for _, hold := range []string{ghNone, "stop", holdStarts} {
+	for _, hold := range []string{ghNone, bgStopCmd, holdStarts} {
 		t.Run(hold, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
@@ -53,7 +55,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 			}
 			a.cfgPath = path
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-				if hold == "stop" {
+				if hold == bgStopCmd {
 					st.Stop = &state.Stop{Reason: "person stopped", At: time.Now()}
 				}
 				if hold == holdStarts {
@@ -80,7 +82,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				if slices.Contains(args, "--force") {
 					t.Fatal("forced start")
 				}
-				if !slices.Contains(args, "--branch") || !slices.Contains(args, "--dir") {
+				if !slices.Contains(args, fatalBranchOption) || !slices.Contains(args, fatalDirOption) {
 					t.Fatal("repair must use a managed repository worktree")
 				}
 				q, err := fatal.Read(dir)
@@ -261,7 +263,7 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 	old := beekeeperRun
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		starts++
-		i := slices.Index(args, "--name")
+		i := slices.Index(args, fatalNameOption)
 		if i < 0 {
 			t.Fatal("owner missing")
 		}

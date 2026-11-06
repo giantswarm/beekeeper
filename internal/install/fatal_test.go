@@ -3,11 +3,12 @@ package install
 import (
 	"context"
 	"encoding/json"
-	"github.com/giantswarm/beekeeper/internal/platform"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/giantswarm/beekeeper/internal/platform"
 )
 
 func TestFatalClaudeGuardCheck(t *testing.T) {
