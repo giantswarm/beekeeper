@@ -36,6 +36,7 @@ const (
 	fatalHarnessOption     = "--harness"
 	fatalExcludeOption     = "--exclude"
 	fatalGateOption        = "--gate"
+	fatalRepairBriefFile   = "fatal-repair-brief.txt"
 )
 
 var fatalRun = runArgv
@@ -230,7 +231,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		cfg, pathErr = config.Load(path)
 	}
 	if pathErr == nil && a.cfgPath != "" {
-		_, pathErr = os.Stat(filepath.Clean(path))
+		_, pathErr = filepath.EvalSymlinks(path)
 	}
 	if pathErr != nil {
 		cfg = nil
@@ -457,8 +458,13 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if pathErr != nil {
 		brief += fmt.Sprintf("The main configuration %q cannot load. Restore it using the validated admission snapshot %q as reference, then verify the original path loads. Do not change the snapshot.\n", mainPath, path)
 	}
-	briefPath := filepath.Join(dir, "fatal-repair-brief.txt")
-	if err := os.WriteFile(filepath.Clean(briefPath), []byte(brief), 0600); err != nil {
+	briefPath := filepath.Join(dir, fatalRepairBriefFile)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	writeErr := root.WriteFile(fatalRepairBriefFile, []byte(brief), 0600)
+	if err := errors.Join(writeErr, root.Close()); err != nil {
 		return err
 	}
 	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, agentsName, agentStartName, fatalNameOption, x.Owner}

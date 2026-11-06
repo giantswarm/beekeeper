@@ -286,7 +286,13 @@ func codexConfigPath(home, name string, codexInstalled bool, cfg ...config.Codex
 		return ""
 	}
 	p := filepath.Join(dir, name)
-	if _, err := os.Lstat(filepath.Clean(p)); err == nil || codexInstalled {
+	exists := codexInstalled
+	if root, err := os.OpenRoot(dir); err == nil {
+		_, statErr := root.Lstat(name)
+		exists = exists || statErr == nil
+		_ = root.Close()
+	}
+	if exists {
 		return p
 	}
 	return ""

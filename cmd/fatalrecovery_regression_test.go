@@ -89,7 +89,7 @@ func TestRemoteReviewMissingEnvConfigurationRetainsRepairTarget(t *testing.T) {
 	starts := 0
 	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
 		starts++
-		brief, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "fatal-repair-brief.txt")))
+		brief, err := readStateFixture(dir, filepath.Join(dir, fatalRepairBriefFile))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,7 +44,7 @@ func TestLoopRecoversEndedSettledPark(t *testing.T) {
 					if args[2] != ag.Name || !strings.Contains(strings.Join(args, " "), "--harness auto") {
 						t.Fatalf("start: %v", args)
 					}
-					b, err := os.ReadFile(filepath.Clean(args[3]))
+					b, err := readStateFixture(r.a.store.Dir(), args[3])
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -212,7 +211,7 @@ func TestRestartPullParkKeepsTaskAndPostMergeWork(t *testing.T) {
 					if len(args) < 4 || args[0] != agentsName || args[1] != agentStartName {
 						t.Fatalf("unexpected command: %v", args)
 					}
-					b, err := os.ReadFile(filepath.Clean(args[3]))
+					b, err := readStateFixture(r.a.store.Dir(), args[3])
 					if err != nil {
 						t.Fatal(err)
 					}
