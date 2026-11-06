@@ -59,7 +59,9 @@ func (a *app) freeNestedWorktrees(o free.Options, out io.Writer) error {
 			if e != nil {
 				branch = []byte(filepath.Base(dir))
 			}
-			if len(a.cfg.Projects.Worktrees) == 0 { return fmt.Errorf("projects.worktrees must include a session root") }
+			if len(a.cfg.Projects.Worktrees) == 0 {
+				return fmt.Errorf("projects.worktrees must include a session root")
+			}
 			target, e := worktrees.SessionPath(a.cfg.Projects.Worktrees[0], repo, strings.TrimSpace(string(branch)))
 			if e != nil {
 				return e

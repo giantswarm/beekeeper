@@ -1330,3 +1330,32 @@ const (
 	leasableShared   = "shared"
 	leasableCustomer = "customer"
 )
+
+func TestProjectsPaths(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("BEEKEEPER_EXECUTION_HOME", base)
+	p := filepath.Join(base, "config.yaml")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != filepath.Join(base, "projects") || !slices.Equal(c.Projects.Worktrees, []string{filepath.Join(base, "projects", "worktrees")}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects:\n  dir: /projects\n  worktrees: [/worktrees]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != "/projects" || !slices.Equal(c.Projects.Worktrees, []string{"/worktrees"}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects: {worktrees: [relative]}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("accepted relative worktree root")
+	}
+}

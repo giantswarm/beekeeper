@@ -36,7 +36,9 @@ func (a *app) sessionWorktreeHook(remove bool) *cobra.Command {
 			if err := a.loadConfig(); err != nil {
 				return err
 			}
-			if len(a.cfg.Projects.Worktrees) == 0 { return fmt.Errorf("projects.worktrees must include a session root") }
+			if len(a.cfg.Projects.Worktrees) == 0 {
+				return fmt.Errorf("projects.worktrees must include a session root")
+			}
 			ctx := context.Background()
 			if remove {
 				// Never force removal or delete branches: dirty and unpushed work stays recoverable.

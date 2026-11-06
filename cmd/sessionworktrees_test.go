@@ -42,20 +42,20 @@ func nestedFixture(t *testing.T) (*app, string, string) {
 func TestFreeNestedWorktrees(t *testing.T) {
 	a, repo, _ := nestedFixture(t)
 	root := filepath.Join(repo, ".claude", "worktrees")
-	for _, branch := range []string{"merged", "squashed", litDirty, "unpushed"} {
+	for _, branch := range []string{testMergedWord, litSquashed, litDirty, litUnpushed} {
 		dir := filepath.Join(root, branch)
 		gitT(t, repo, "worktree", "add", "-qb", branch, dir)
 		writeT(t, filepath.Join(dir, branch), "first\n")
 		gitT(t, dir, "add", ".")
 		gitT(t, dir, "commit", "-qm", "change")
-		if branch == "merged" {
+		if branch == testMergedWord {
 			gitT(t, repo, "merge", "--no-edit", branch)
 		}
-		if branch == "squashed" {
+		if branch == litSquashed {
 			writeT(t, filepath.Join(dir, branch), "second\n")
 			gitT(t, dir, "commit", "-qam", "second change")
 			gitT(t, repo, "merge", "--squash", branch)
-			gitT(t, repo, "commit", "-qm", "squashed")
+			gitT(t, repo, "commit", "-qm", litSquashed)
 		}
 		if branch == litDirty {
 			writeT(t, filepath.Join(dir, "notes"), "keep me")
@@ -74,7 +74,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 	if dirs := worktrees.NestedSessions(a.cfg.Projects.Dir); len(dirs) != 0 {
 		t.Fatalf("remaining: %v", dirs)
 	}
-	for _, branch := range []string{"merged", "squashed"} {
+	for _, branch := range []string{testMergedWord, litSquashed} {
 		gitT(t, repo, "rev-parse", "--verify", branch) // retained even for squash
 		if _, err := os.Stat(filepath.Join(root, branch)); !os.IsNotExist(err) {
 			t.Fatal("worktree retained", branch, err)
@@ -84,7 +84,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Clean(filepath.Join(moved, litDirty, "notes"))); err != nil || string(b) != "keep me" {
 		t.Fatalf("dirty work lost: %s %v", b, err)
 	}
-	if got := gitT(t, filepath.Join(moved, "unpushed"), "log", "-1", "--format=%s"); got != "change" {
+	if got := gitT(t, filepath.Join(moved, litUnpushed), "log", "-1", "--format=%s"); got != "change" {
 		t.Fatal(got)
 	}
 }
@@ -100,7 +100,7 @@ func TestSessionWorktreeHooks(t *testing.T) {
 		c.SetIn(bytes.NewReader(raw))
 		return c.Execute()
 	}
-	if err := invoke(false, map[string]string{executionOmpCwd: repo, "name": goTestSubcmd}); err != nil {
+	if err := invoke(false, map[string]string{executionOmpCwd: repo, remoteMCPNameKey: goTestSubcmd}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(a.cfg.Projects.Worktrees[0], "repo", "worktree-test")
@@ -123,7 +123,7 @@ func TestSessionWorktreeHooks(t *testing.T) {
 	if err := invoke(true, map[string]string{"worktree_path": path}); err != nil {
 		t.Fatal(err)
 	}
-	if err := invoke(false, map[string]string{executionOmpCwd: repo, "name": "../../escape"}); err == nil {
+	if err := invoke(false, map[string]string{executionOmpCwd: repo, remoteMCPNameKey: "../../escape"}); err == nil {
 		t.Fatal("accepted traversal")
 	}
 }
