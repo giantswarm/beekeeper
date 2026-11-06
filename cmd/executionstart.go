@@ -535,6 +535,7 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 			o.ProcessState = execution.Exited
 		}
 		o.Reachability, o.ReachabilityAt = execution.Reachable, time.Now().UTC()
+		confirmed := r.Observation.Ready
 		r.Observation = o
 		if o.LastActive.After(r.LastActive) {
 			r.LastActive = o.LastActive
@@ -547,7 +548,9 @@ func (a *app) saveExecutionObservation(ref execution.Ref, o execution.Observatio
 				// loop reads a claimed next start back from it and takes no
 				// second one after a restart. Logged once, on the first
 				// observation that confirms the run, start or recovery alike.
-				evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s%s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState, effortText(st.Starts[i].Effort)))
+				if !confirmed {
+					evs = append(evs, event(st.Starts[i].By, "agents.start", "%s: SSH execution %s on %s, workspace %s, %s%s", st.Starts[i].Name, ref.Execution, ref.Host, o.Handle.Workspace, o.ProcessState, effortText(st.Starts[i].Effort)))
+				}
 				r.Phase = execution.Running
 			}
 		}

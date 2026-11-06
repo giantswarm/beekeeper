@@ -157,12 +157,14 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		return envErr
 	}
 	var transcriptOff int64
+	agyTranscript := func(threadID string) string {
+		return filepath.Clean(filepath.Join(s.agyAppDir(), "brain", threadID, ".system_generated", "logs", "transcript.jsonl"))
+	}
 	mirrorAgyTranscript := func(threadID string) {
 		if threadID == "" || !ValidIdentity(threadID) {
 			return
 		}
-		tp := filepath.Join(s.agyAppDir(), "brain", threadID, ".system_generated", "logs", "transcript.jsonl")
-		f, err := os.Open(filepath.Clean(tp))
+		f, err := os.Open(agyTranscript(threadID))
 		if err != nil {
 			return
 		}
@@ -180,19 +182,29 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 			return nil
 		})
 	}
-	thread, accepted, turnErr := s.agyTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
-	mirrorAgyTranscript(thread)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if !accepted || thread == "" {
-		return s.codexEnd(ctx, ref, Failed, "harness failed or ended before first-task acceptance")
-	}
-	if turnErr != nil {
-		return s.codexEnd(ctx, ref, Failed, agyTurnFailure)
-	}
-	if !j.Request.Messaging {
-		return s.codexEnd(ctx, ref, Exited, "")
+	thread := j.Thread
+	if j.continuing() {
+		// The log holds what the last runner mirrored; only new lines follow.
+		if fi, err := os.Stat(agyTranscript(thread)); err == nil {
+			transcriptOff = fi.Size()
+		}
+	} else {
+		var accepted bool
+		var turnErr error
+		thread, accepted, turnErr = s.agyTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
+		mirrorAgyTranscript(thread)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !accepted || thread == "" {
+			return s.codexEnd(ctx, ref, Failed, "harness failed or ended before first-task acceptance")
+		}
+		if turnErr != nil {
+			return s.codexEnd(ctx, ref, Failed, agyTurnFailure)
+		}
+		if !j.Request.Messaging {
+			return s.codexEnd(ctx, ref, Exited, "")
+		}
 	}
 	if err := s.update(ctx, ref, func(j *Journal) error {
 		j.InTurn, j.LastActive = false, s.now()
