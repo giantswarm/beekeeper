@@ -173,6 +173,7 @@ func (a *app) hostSelfUpdate(ctx context.Context, protocol int, version string, 
 	if !releaseVersion(version) {
 		return fail(fmt.Errorf("%q is no release version", version))
 	}
+	ctx = update.WithOptions(ctx, update.Options{Recovery: a.launchRecovery})
 	install := func(ctx context.Context) (update.Result, error) { return installVersion(ctx, io.Discard, version) }
 	if len(given) > 0 {
 		// Not strict: the host runs the older release while it updates,
@@ -259,6 +260,11 @@ func (a *app) updateExecutionHost(ctx context.Context, selector string) (string,
 	version := coordinatorVersion()
 	if !releaseVersion(version) {
 		return "", refused("this coordinator runs %s, no release: a development build pins no execution host release", version)
+	}
+	if exe, err := os.Executable(); err == nil {
+		if why := update.Quarantined(exe, version); why != "" {
+			return "", refused("%s is quarantined here (%s): no execution host follows it", version, why)
+		}
 	}
 	st, err := a.store.Read()
 	if err != nil {

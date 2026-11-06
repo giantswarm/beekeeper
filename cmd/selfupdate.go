@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -69,8 +70,9 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 }
 
 func (a *app) selfUpdateCmd() *cobra.Command {
-	var check, pluginsOnly, completeProbation, rollback bool
-	var rollbackReason, version string
+	var check, pluginsOnly, completeProbation, rollback, controller, clearHold bool
+	var rollbackReason, version, recoveryTarget string
+	var every, step time.Duration
 	c := &cobra.Command{
 		Use:   selfUpdateCmdName,
 		Short: "Replace this binary with the latest signed release (--check only asks)",
@@ -103,6 +105,13 @@ verified binary only when the live state writer is compatible; it never
 restores a state snapshot. Recovery fences newer writers, including processes
 still running the candidate. State already advanced by a newer release needs
 an explicit lossless migration or a compatible signed release instead.
+An update launches a recovery controller from the retained last-known-good
+bytes before it replaces the binary. It evaluates the candidate every minute:
+a failure streak, a failed isolated workflow probe or a missing loop heartbeat
+restores the recovery target and quarantines the candidate within 30 minutes,
+and a healthy probation promotes it. An update waits for that verdict. A
+recovery that cannot complete holds updates and worker starts and reports why;
+--clear-recovery-hold lifts the hold once that is dealt with.
 An executable directory this account cannot write takes sudo -n for the final
 replacement alone: the journal is written first, and nothing else runs with
 privilege.
@@ -148,6 +157,16 @@ reset. A development build (version dev) is refused.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if controller {
+				return a.runRecoveryController(cmd.Context(), a.out, recoveryTarget, every, cmp.Or(step, every))
+			}
+			if clearHold {
+				path, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				return a.clearRecoveryHold(cmd.Context(), path)
+			}
 			if completeProbation || rollback {
 				path, err := os.Executable()
 				if err != nil {
@@ -209,7 +228,8 @@ reset. A development build (version dev) is refused.`,
 					_, _ = fmt.Fprintf(w, "The installed candidate failed its health check (%s); quarantining it.\n", why)
 					return errors.New(why)
 				},
-				Skip: a.isSkippedRelease,
+				Skip:     a.isSkippedRelease,
+				Recovery: a.launchRecovery,
 			})
 			res, err := runUpdate(ctx, w, check)
 			if a.json && res.Latest != "" {
@@ -258,6 +278,15 @@ reset. A development build (version dev) is refused.`,
 	c.Flags().StringVar(&rollbackReason, "rollback-reason", "", "durable quarantine reason for the failed candidate")
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
+	c.Flags().BoolVar(&clearHold, "clear-recovery-hold", false, "lift the hold of a failed recovery once its cause is dealt with")
+	c.Flags().BoolVar(&controller, recoveryControllerFlag, false, "run the recovery controller of a candidate in probation")
+	c.Flags().StringVar(&recoveryTarget, recoveryTargetFlag, "", "the installed executable the recovery controller supervises")
+	c.Flags().DurationVar(&every, recoveryEveryFlag, recoveryEvery, "time between two recovery evaluations")
+	c.Flags().DurationVar(&step, recoveryStepFlag, 0, "probation time one evaluation counts, by default that time")
+	for _, hidden := range []string{recoveryControllerFlag, recoveryTargetFlag, recoveryEveryFlag, recoveryStepFlag} {
+		_ = c.Flags().MarkHidden(hidden)
+	}
+	c.MarkFlagsRequiredTogether(recoveryControllerFlag, recoveryTargetFlag)
 	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag)
 	c.MarkFlagsMutuallyExclusive("version", "complete-probation", "rollback", syncPluginsFlag)
 	c.MarkFlagsRequiredTogether("rollback", "rollback-reason")

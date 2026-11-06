@@ -8,8 +8,12 @@ import (
 	"os"
 
 	"github.com/giantswarm/beekeeper/cmd"
+	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 )
 
 func main() {
+	if code, served := loopworkflow.Serve(); served {
+		os.Exit(code)
+	}
 	os.Exit(cmd.Main())
 }

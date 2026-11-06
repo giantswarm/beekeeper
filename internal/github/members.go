@@ -48,7 +48,7 @@ func ReadRoster(ctx context.Context, client *http.Client, token, org string, now
 	var own struct {
 		State string `json:"state"`
 	}
-	status, _, err := get(ctx, client, token, apiURL()+"/user/memberships/orgs/"+url.PathEscape(org), &own)
+	status, _, err := get(ctx, client, token, APIURL()+"/user/memberships/orgs/"+url.PathEscape(org), &own)
 	switch {
 	case err != nil:
 		return Roster{}, err
@@ -60,7 +60,7 @@ func ReadRoster(ctx context.Context, client *http.Client, token, org string, now
 		return Roster{}, fmt.Errorf("%w: the token's own membership in %s is %q, not active", ErrPermission, org, own.State)
 	}
 	r := Roster{Org: org, At: now}
-	next := apiURL() + "/orgs/" + url.PathEscape(org) + "/members?per_page=100"
+	next := APIURL() + "/orgs/" + url.PathEscape(org) + "/members?per_page=100"
 	for next != "" {
 		var page []struct {
 			Login string `json:"login"`

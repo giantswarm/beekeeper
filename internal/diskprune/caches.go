@@ -110,6 +110,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				return r
 			}
 		}
+		live := NewRefs(refs)
 		for _, e := range entries {
 			path := filepath.Join(p.Root, e.Name())
 			if nestedIn(path, p.Nested) || InUse(path, p.Nested) {
@@ -117,7 +118,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 				continue
 			}
 			u := inspectFS(root.FS(), e.Name(), path)
-			if u.why == "" && InUse(u.path, refs) {
+			if u.why == "" && live.Holds(u.path) {
 				u.why = "in use"
 			}
 			units = append(units, u)
@@ -165,6 +166,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 	}
 	left := r.Held
 	emptied := map[string]bool{}
+	live := NewRefs(refs)
 	for _, u := range units {
 		if u.why != "" {
 			r.Keep(u.why)
@@ -183,7 +185,7 @@ func Cache(p Policy, now time.Time, pressure bool, refs, protect []string, dry b
 			if p.Files {
 				err = removeFile(root, p.Root, u)
 			} else {
-				err = removeEntry(root, u, refs)
+				err = removeEntry(root, u, live)
 			}
 			if errors.Is(err, errChanged) {
 				r.Keep("written during the prune")
@@ -226,8 +228,8 @@ func nestedIn(path string, roots []string) bool {
 // removeEntry removes one entry whole once it still qualifies: inspected
 // again right before, it must be unreferenced, hold no checkout and have no
 // write newer than the scan saw. A writer that started meanwhile keeps it.
-func removeEntry(root *os.Root, u unit, refs []string) error {
-	if InUse(u.path, refs) {
+func removeEntry(root *os.Root, u unit, refs Refs) error {
+	if refs.Holds(u.path) {
 		return errInUse
 	}
 	name := filepath.Base(u.path)

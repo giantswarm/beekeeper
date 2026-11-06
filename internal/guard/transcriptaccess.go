@@ -54,7 +54,7 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 	}
 	agyRoots := append([]string{"~/.gemini/antigravity-cli/brain"}, h.Transcripts.AgyBrains...)
 	if home := os.Getenv(transcriptGeminiHome); home != "" {
-		agyRoots = append(agyRoots, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+		agyRoots = append(agyRoots, filepath.Join(home, geminiDir, "antigravity-cli", "brain"))
 	}
 	roots := []string{
 		"~/.claude/projects", "~/.claude/history.jsonl",
@@ -68,7 +68,7 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 	}{
 		{"CODEX_HOME", []string{transcriptSessions, "archived_sessions", "history.jsonl"}},
 		{transcriptClaudeConfig, []string{"projects", "history.jsonl"}},
-		{transcriptGeminiHome, []string{".gemini"}},
+		{transcriptGeminiHome, []string{geminiDir}},
 		{"PI_CODING_AGENT_DIR", []string{transcriptSessions, "agent.db"}},
 		{"OMP_CONFIG_DIR", []string{transcriptSessions, "agent.db"}},
 	} {
@@ -348,7 +348,7 @@ func (a transcriptAccess) candidateDenied(candidate string, dirs []string, recur
 			candidate = strings.ReplaceAll(candidate, "$"+env, home)
 		}
 	}
-	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, ".gemini") || strings.HasPrefix(candidate, ".omp")
+	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, geminiDir) || strings.HasPrefix(candidate, ".omp")
 	recurse := recursive || explicitHome && !strings.ContainsAny(candidate, "*?[")
 	for _, dir := range dirs {
 		p := wordPath(candidate, dir)
