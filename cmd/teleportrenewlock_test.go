@@ -108,7 +108,8 @@ func TestTeleportRenewLockReleased(t *testing.T) {
 			a.cfg.StateDir = a.store.Dir()
 			a.cfg.Teleport.Proxy = "login.example.invalid"
 			a.cfg.Teleport.Home = filepath.Join(t.TempDir(), "home")
-			a.cfg.Teleport.LoginTimeout.Duration = time.Second
+			// The probe starts this test binary, seconds on a loaded runner.
+			a.cfg.Teleport.LoginTimeout.Duration = time.Minute
 			a.cfg.Teleport.Tsh = filepath.Join(t.TempDir(), "tsh")
 			status := `{"active":{"valid_until":"` + a.now.Add(12*time.Hour).Format(time.RFC3339) + `"}}`
 			// The login itself asks a separate process for the lock: an unlock
