@@ -226,6 +226,53 @@ func mustRecord(t *testing.T, a *app) teleport.Record {
 // teleportKeeper is the name the keeper's unit runs as.
 const teleportKeeper = "teleport keeper"
 
+func TestTeleportBotDoesNotRenewSSO(t *testing.T) {
+	a := teleportApp(t)
+	a.cfg.Teleport.Bot.Config = "/bot.yaml"
+	cmd := a.teleportRenewCmd()
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "Machine ID renews automatically") {
+		t.Fatalf("renew: %v", err)
+	}
+	if h, err := lease.Dir(a.cfg.LeaseDir).Get(config.Browser); err != nil || h != nil {
+		t.Fatalf("browser lease: %v %v", h, err)
+	}
+}
+
+func TestTeleportBotView(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		left      time.Duration
+		key, line string
+	}{
+		{2 * time.Hour, "", "expires"},
+		{time.Minute, teleportWarn, "EXPIRING"},
+		{-time.Minute, teleportExpired, "EXPIRED"},
+	} {
+		v := newTeleportView(teleport.Profile{ValidUntil: now.Add(tc.left)}, nil, teleport.Record{}, now, time.Hour)
+		v.Bot = true
+		if v.Key != tc.key || !strings.Contains(v.line(now), tc.line) || strings.Contains(v.line(now), "browser") {
+			t.Fatalf("view: %+v %s", v, v.line(now))
+		}
+	}
+}
+
+func TestTeleportBotTrouble(t *testing.T) {
+	a := teleportApp(t)
+	a.cfg.Teleport.Bot = config.TeleportBot{Config: "/unused", Certificate: "/missing-certificate"}
+	v := a.readTeleport(context.Background())
+	if v == nil || !v.Bot || v.Key == "" || !strings.Contains(v.Error, "bot certificate unavailable") {
+		t.Fatalf("bot trouble: %+v", v)
+	}
+	if strings.Contains(v.line(a.now), "browser") {
+		t.Fatal("bot trouble suggests a browser")
+	}
+	prev := &snapshot{At: a.now}
+	cur := &snapshot{At: a.now, Teleport: v}
+	if d := diffSnapshots(prev, cur); len(d) != 1 || !strings.Contains(d[0], "TELEPORT BOT") {
+		t.Fatalf("snapshot: %v", d)
+	}
+}
+
 func TestTeleportKeeperEnsuresContextsWithoutRenewal(t *testing.T) {
 	a := teleportApp(t)
 	a.as = teleportKeeper

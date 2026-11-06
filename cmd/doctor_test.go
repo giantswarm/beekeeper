@@ -438,25 +438,26 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
 		Agents: []state.Agent{
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-			{Party: state.Party{Name: "on Alex"}, Task: "t", Park: &state.Park{Waits: "Alex's go"}},
-			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
+			{Party: state.Party{Name: "on operator"}, Task: "t", Park: &state.Park{On: parkedIssueRef, Waits: "operator's go"}},
+			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{On: "example/tool#13", Waits: "a colleague's reply on the timer setting"}},
 			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: parkedIssueRef, Waits: deskReviewWait}},
+			{Party: state.Party{Name: "on a queued gate"}, Task: "t", Park: &state.Park{On: "gate place 12", Waits: "queued merge waits for the person's go"}},
 			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
 			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
 			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},
 			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
 		},
 	}
-	lines, evs := parkedNews(st, "Alex", now)
+	lines, evs := parkedNews(st, "operator", now)
 	if len(lines) != 4 || len(evs) != 4 ||
 		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
-		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Alex"`) || !strings.Contains(lines[1], "tells Alex") ||
+		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on operator"`) || !strings.Contains(lines[1], "tells operator") ||
 		!strings.HasPrefix(lines[2], `PARKED ON A PERSON: "on a reply"`) ||
 		!strings.HasPrefix(lines[3], `PARKED ON A LEASE: "on a lease" parked on lease agentlab-1`) ||
 		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedNews(st, "Alex", now); len(lines) != 0 {
+	if lines, _ := parkedNews(st, "operator", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }
@@ -467,20 +468,26 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		on, waits string
 		want      bool
 	}{
-		"supervisor ready": {"", "rollout ready; waiting for the supervisor", false},
-		"supervisor go":    {"", "awaiting the supervisor's go", false},
-		"guide handoff":    {"", "the guide handoff ready", false},
-		"gate":             {"", "the supervisor's gate", false},
-		"install chain":    {"", "the supervisor's install chain", false},
-		"local note":       {"#787", "install chain ready", true},
-		"central note":     {"central#12", "gate ready", true},
-		"named person":     {"", "operator's go on the install chain", true},
-		"answer":           {"", "awaiting the person's answer", true},
-		"colleague review": {"example/tool#12", "a colleague's review", true},
+		"supervisor ready":       {"", "rollout ready; waiting for the supervisor", false},
+		"supervisor go":          {"", "awaiting the supervisor's go", false},
+		"guide handoff":          {"", "the guide handoff ready", false},
+		"gate":                   {"", "the supervisor's gate", false},
+		"install chain":          {"", "the supervisor's install chain", false},
+		"local note":             {"#787", "install chain ready", true},
+		"central note":           {"central#12", "gate ready", true},
+		"named person":           {parkedIssueRef, "operator's go on the install chain", true},
+		"answer":                 {parkedIssueRef, "awaiting the person's answer", true},
+		"colleague review":       {parkedIssueRef, "a colleague's review", true},
+		"untargeted answer":      {"", "awaiting the person's answer", false},
+		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
+		loopTimer:                {"timer 12", "timer for the person's answer", false},
+		workerGitHubReleaseGroup: {"release v1.2.0", "release after the operator's go", false},
+		kindLease:                {leaseParkOn(labOne), litThePersonSAnswer, false},
+		verbHold:                 {holdParkOn("merges"), litThePersonSAnswer, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
-			if got := parkOnPerson(p, "operator"); got != tc.want {
+			if got := watchParkOnPerson(p, "operator"); got != tc.want {
 				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
 			}
 		})
