@@ -59,7 +59,7 @@ func TestGitHubURLsFromEnvironment(t *testing.T) {
 				requests <- r.Method + " " + r.URL.Path
 				if r.URL.Path == "/app-manifests/example-code/conversions" {
 					w.WriteHeader(http.StatusCreated)
-					_, _ = w.Write([]byte(`{"id":42,"slug":fixtureOrg,"client_id":"example-client","client_secret":"fake-secret","pem":"fake-key"}`))
+					_, _ = w.Write([]byte(`{"id":42,"slug":"example","client_id":"example-client","client_secret":"fake-secret","pem":"fake-key"}`))
 					return
 				}
 				w.WriteHeader(http.StatusForbidden)
