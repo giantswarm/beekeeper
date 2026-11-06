@@ -63,7 +63,7 @@ func yields(t *testing.T, a *app, d time.Duration) bool {
 func TestAMergeQueuedUnderTheFloorRunsFirstAtTheReset(t *testing.T) {
 	noSystemd(t)
 	fakeDevctl(t, `echo '`+mergedDoc+`'`)
-	stubGitHub(t, github.Merged, "")
+	stubGitHub(t, github.Open, "")
 	stubBaseRelease(t, github.BaseRelease{Base: mainBranch, Auto: true}, nil)
 	a, reset := resetApp(t)
 	g := &gateRun{app: a, ctx: context.Background(), argv: mergeArgv(scratchRepo), repo: scratchRepo, pr: 7, lane: a.cfg.LaneOf(scratchRepo),

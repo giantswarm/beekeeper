@@ -128,7 +128,7 @@ func TestKeepTailReplacesAndTrimsTheDirectory(t *testing.T) {
 func runTailOptions(t *testing.T, dir string) Options {
 	t.Helper()
 	ix := plantedIndex(t)
-	return Options{Max: "64M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Wait: time.Second,
+	return Options{Max: guardTestMax, Swap: "0", SlotDir: t.TempDir(), Slots: 1, Wait: time.Second,
 		Tail: NewTail(1024), TailDir: dir, Redact: func(s string) string { out, _ := ix.Redact(s); return out }}
 }
 
@@ -253,3 +253,5 @@ func TestKeepTailWithoutAnIndexMasksTokens(t *testing.T) {
 		t.Errorf("masked tail kept the token: %q", masked)
 	}
 }
+
+const guardTestMax = "64M"

@@ -205,7 +205,11 @@ func (c *Client) load() map[string]cached {
 		return out
 	}
 	if raw, err := os.ReadFile(c.Cache); err == nil {
-		_ = json.Unmarshal(raw, &out) // a broken cache is an empty one
+		// A failed decode may leave an ETag without its comments. Never
+		// use that partial answer, or a null map, as a cache.
+		if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+			return map[string]cached{}
+		}
 	}
 	return out
 }
@@ -226,7 +230,9 @@ func (c *Client) store(key string, v cached) {
 	if err != nil {
 		return
 	}
-	if _, err := tmp.Write(raw); err != nil || tmp.Close() != nil {
+	_, writeErr := tmp.Write(raw)
+	closeErr := tmp.Close()
+	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(tmp.Name())
 		return
 	}

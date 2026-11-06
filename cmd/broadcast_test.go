@@ -11,8 +11,8 @@ import (
 )
 
 func TestBroadcastSkipsRelievedRosterRun(t *testing.T) {
-	from := state.Party{Session: "relieved-run", Name: "Guide run 1"}
-	to := state.Party{Session: "current-run", Name: "Guide run 2"}
+	from := state.Party{Session: "relieved-run", Name: firstRun}
+	to := state.Party{Session: "current-run", Name: litGuideRun2}
 	now := time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC)
 	st := &state.State{Guide: &state.Role{Holder: &state.Supervisor{Party: from}}}
 	st.Agents = []state.Agent{{Party: from}, {Party: to}}
