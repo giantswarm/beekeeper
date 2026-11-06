@@ -345,7 +345,7 @@ func TestNewGrantFirst(t *testing.T) {
 
 func TestLeaseClaimEndedPredecessor(t *testing.T) {
 	a := claimApp(t)
-	predecessor := state.Party{Session: "ended", Name: claimMe.Name}
+	predecessor := state.Party{Session: "old-session", Name: claimMe.Name}
 	holdLease(t, a, graveler, predecessor)
 	out, err := runLease(a, "claim", graveler, "-p", "successor work")
 	if err != nil || !strings.HasPrefix(out, "held by you") {
