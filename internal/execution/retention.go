@@ -14,6 +14,10 @@ import (
 
 const LogRetention = 30 * 24 * time.Hour
 
+const claudeSettingsFile = "settings.json"
+const claudeRulesFile = "CLAUDE.md"
+const unitReloading = "reloading"
+
 // ResourceFinding contains metadata only, never journal secrets or file contents.
 type ResourceFinding struct {
 	Orphan      bool      `json:"orphan,omitempty"`
@@ -157,7 +161,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 			row.State, row.Reason, row.Retry = Unknown, "supervisor state unavailable", "retry hosts check when host supervisor is reachable"
 			if s.Launcher != nil {
 				switch states[id] {
-				case unitActive, Activating, "reloading", "deactivating": //nolint:goconst // Mirror supervisor lifecycle states in the read-only audit.
+				case unitActive, Activating, unitReloading, "deactivating": //nolint:goconst // Mirror supervisor lifecycle states in the read-only audit.
 					row.State, row.Reason, row.Retry = "active", "owned execution in progress", "leave active execution in place"
 					if !j.InTurn {
 						row.State = "parked"
@@ -183,7 +187,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 		// These are shared policy/runtime roots, never per-execution garbage.
 		if filepath.Dir(path) == s.Root {
 			switch name {
-			case "policy.json", "CLAUDE.md", "settings.json", "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock: //nolint:goconst // Explicit inventory of shared on-disk names.
+			case "policy.json", claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock: //nolint:goconst // Explicit inventory of shared on-disk names.
 				if e.Type()&os.ModeSymlink == 0 {
 					row.State = "shared"
 					row.Reason = "shared policy, toolchain or retained recovery container"

@@ -530,7 +530,7 @@ func (s *Server) Inspect(ctx context.Context, r Ref) (Observation, error) {
 		return o, nil
 	}
 	switch s.Launcher.State(ctx, j.Handle.Unit) {
-	case unitActive, Activating, "reloading", "deactivating":
+	case unitActive, Activating, unitReloading, "deactivating":
 		o.ProcessState = Running
 		o.InTurn = j.InTurn
 	case unitInactive, Failed:
@@ -654,7 +654,7 @@ func (s *Server) RebindPolicy(ctx context.Context, r Ref, q PolicyRebind) (Obser
 			return errors.New("only a running execution is rebound; this one is not launched, or it stopped, completed, exited or failed")
 		}
 		switch s.Launcher.State(ctx, j.Handle.Unit) {
-		case unitActive, Activating, "reloading":
+		case unitActive, Activating, unitReloading:
 		default:
 			return errors.New("only a running execution is rebound; its owned unit is not active")
 		}
