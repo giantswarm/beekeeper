@@ -3,10 +3,8 @@
 // (mkdir is atomic) holding the holder's record; the record's fields are the
 // ones the lab's earlier shell lock wrote, so both read the same directory.
 //
-// While a supervisor is recorded, a free lease is not permission: a session
-// claims only what the supervisor granted it, in the order the grants were
-// given, from the supervisor's start to a deliberate stop, whether its
-// session runs or has crashed. Grants live in the state document.
+// Grants live in the state document and queue claims in grant order.
+// A resource with no pending grants can be claimed directly.
 package lease
 
 import (
@@ -32,11 +30,13 @@ type Holder struct {
 	HostSession string `json:"hostSession,omitempty"`
 	Name        string `json:"name,omitempty"`
 	// Person, Team and Host are the holder party's.
-	Person  string `json:"person,omitempty"`
-	Team    string `json:"team,omitempty"`
-	Host    string `json:"host,omitempty"`
-	Purpose string `json:"purpose"`
-	Since   string `json:"since"`
+	Person           string `json:"person,omitempty"`
+	Team             string `json:"team,omitempty"`
+	Host             string `json:"host,omitempty"`
+	Purpose          string `json:"purpose"`
+	DestructiveProof bool   `json:"destructiveProof,omitempty"`
+	PreviousProof    *Proof `json:"previousProof,omitempty"`
+	Since            string `json:"since"`
 	// UpgradeUnblock is the reason of the upgrade-unblock grant the claim
 	// was admitted by during an upgrade, empty for any other claim.
 	UpgradeUnblock string `json:"upgradeUnblock,omitempty"`
@@ -49,6 +49,10 @@ type Holder struct {
 	// LabChange is the change the lab's previous release left, shown to
 	// this holder at its claim.
 	LabChange *LabChange `json:"labChange,omitempty"`
+	// Damaged is why the resource's record could not be read, empty for a
+	// readable one. A damaged lease stays held: only a forced release frees
+	// it.
+	Damaged string `json:"-"`
 }
 
 // Label is the resource with the budget its claim carries.
@@ -75,7 +79,9 @@ type Dir string
 
 func (d Dir) path(res string) string { return filepath.Join(string(d), res) }
 
-// Get returns the holder of res, or nil when it is free.
+// Get returns the holder of res, or nil when it is free. A record that
+// cannot be read or decoded is a damaged holder: the resource stays held,
+// named, and the error is the caller's only for the lease directory itself.
 func (d Dir) Get(res string) (*Holder, error) {
 	raw, err := os.ReadFile(filepath.Join(d.path(res), "holder.json"))
 	switch {
@@ -86,13 +92,23 @@ func (d Dir) Get(res string) (*Holder, error) {
 		}
 		return nil, nil
 	case err != nil:
-		return nil, err
+		return damaged(res, err), nil
 	}
 	h := &Holder{}
 	if err := json.Unmarshal(raw, h); err != nil {
-		return nil, fmt.Errorf("%s: %w", res, err)
+		return damaged(res, err), nil
 	}
 	return h, nil
+}
+
+// damaged is the holder of res whose record failed with err.
+func damaged(res string, err error) *Holder {
+	return &Holder{
+		Env:     res,
+		Holder:  "?",
+		Purpose: fmt.Sprintf("(unreadable holder record: beekeeper lease release %s --force frees it)", res),
+		Damaged: err.Error(),
+	}
 }
 
 // Claim takes res for h. It returns the current holder instead when res is
@@ -111,11 +127,7 @@ func (d Dir) Claim(res string, h Holder) (*Holder, error) {
 		}
 		return nil, err
 	}
-	raw, err := json.Marshal(h)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(d.path(res), "holder.json"), append(raw, '\n'), 0o600); err != nil {
+	if err := d.write(res, h); err != nil {
 		_ = os.RemoveAll(d.path(res))
 		return nil, err
 	}
@@ -125,11 +137,17 @@ func (d Dir) Claim(res string, h Holder) (*Holder, error) {
 // Hand gives the lease h.Env, held, to h: its record is replaced in one
 // rename, so a reader sees the old holder or the new one, never none.
 func (d Dir) Hand(h Holder) error {
+	return d.write(h.Env, h)
+}
+
+// write puts h as the record of res in one rename, so a reader or a crash
+// never leaves a partly written record.
+func (d Dir) write(res string, h Holder) error {
 	raw, err := json.Marshal(h)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(d.path(h.Env), ".holder-*.json")
+	f, err := os.CreateTemp(d.path(res), ".holder-*.json")
 	if err != nil {
 		return err
 	}
@@ -139,7 +157,7 @@ func (d Dir) Hand(h Holder) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp, filepath.Join(d.path(h.Env), "holder.json"))
+		err = os.Rename(tmp, filepath.Join(d.path(res), "holder.json"))
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -149,10 +167,28 @@ func (d Dir) Hand(h Holder) error {
 
 // Release frees res.
 func (d Dir) Release(res string) error {
+	h, err := d.Get(res)
+	if err != nil {
+		return err
+	}
+	if h != nil {
+		var proof *Proof
+		if h.DestructiveProof || IsDestructiveProof(h.Purpose) {
+			proof = &Proof{Purpose: h.Purpose, By: h.Name}
+		}
+		raw, err := json.Marshal(proof)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(d.proofPath(res), raw, 0o600); err != nil {
+			return err
+		}
+	}
 	return os.RemoveAll(d.path(res))
 }
 
-// List returns every held lease, oldest first.
+// List returns every held lease, oldest first; a damaged record is listed as
+// its damaged holder, so a listing never calls an occupied resource free.
 func (d Dir) List() ([]Holder, error) {
 	entries, err := os.ReadDir(string(d))
 	if errors.Is(err, os.ErrNotExist) {
@@ -167,7 +203,10 @@ func (d Dir) List() ([]Holder, error) {
 			continue
 		}
 		h, err := d.Get(e.Name())
-		if err != nil || h == nil {
+		if err != nil {
+			return nil, err
+		}
+		if h == nil {
 			continue
 		}
 		if h.Env == "" {
@@ -175,7 +214,7 @@ func (d Dir) List() ([]Holder, error) {
 		}
 		out = append(out, *h)
 	}
-	slices.SortFunc(out, func(a, b Holder) int { return strings.Compare(a.Since, b.Since) })
+	slices.SortStableFunc(out, func(a, b Holder) int { return strings.Compare(a.Since, b.Since) })
 	return out, nil
 }
 
@@ -247,24 +286,25 @@ func expired(st *state.State, g state.Grant, held bool, now time.Time, ttl time.
 	return now.Sub(from) > ttl
 }
 
-// Check decides whether the caller may claim and, when a grant carries the
-// claim, returns its index in st.Grants (-1 when none is needed). While an
-// upgrade runs on the installation of the resource's name only an
-// upgrade-unblock grant admits a claim, in grant order; otherwise a free
-// lease is the caller's, consuming its own grant if one is queued: no
-// supervisor session gates claims.
+// Check admits the head grant only; an empty queue permits a direct claim.
+// Upgrade holds require an upgrade-unblock grant.
 func Check(st *state.State, g Gate) (int, error) {
 	if h, ok := upgrade.Held(st, g.Resource, g.Now); ok {
 		return checkUnblock(st, g, h)
 	}
-	// The caller's own pending grant, wherever it is in the queue, is the
-	// one its claim consumes.
-	for _, p := range Pending(st, g.Resource, g.Held, g.Now, g.TTL) {
+	pending := Pending(st, g.Resource, g.Held, g.Now, g.TTL)
+	for pos, p := range pending {
 		if p.To.Is(g.Caller) {
+			if pos > 0 {
+				return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; you are number %d", g.Resource, pending[0].To.Name, pos+1), Position: pos + 1, Ahead: pending[0].To.Name}
+			}
 			return slices.IndexFunc(st.Grants, func(x state.Grant) bool {
 				return x.Resource == p.Resource && x.To.Is(p.To) && x.At.Equal(p.At)
 			}), nil
 		}
+	}
+	if len(pending) > 0 {
+		return -1, &Refusal{Reason: fmt.Sprintf("%s is granted to %q first; request a grant to join its queue", g.Resource, pending[0].To.Name), Ahead: pending[0].To.Name}
 	}
 	return -1, nil
 }

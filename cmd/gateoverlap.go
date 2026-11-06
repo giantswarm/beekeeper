@@ -185,7 +185,7 @@ func (g *gateRun) stopWaiting(s os.Signal) error {
 // head current and judged, and merges at once. Its outcome is devctl's to
 // judge, never the warm-up's.
 func (g *gateRun) warmUp(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.CITimeout.Duration)
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.Merge.TimeoutFor(g.repo))
 	defer cancel()
 	if merge.UpdatesBranch(g.argv) {
 		update := updateBranch
@@ -201,8 +201,9 @@ func (g *gateRun) warmUp(ctx context.Context) {
 
 // confirmRelease confirms the release of the merge devctl ended at the
 // merge (overlaps), its lane place releasing meanwhile, within
-// releasePRWait: a known release (available, failed, none warranted) frees
-// the place, an unconfirmed one settles the lane by the settle rule from
+// releasePRWait: an available release or none warranted frees the place;
+// a failed release keeps its verdict for settling without a roll, and an
+// unconfirmed one settles the lane by the settle rule from
 // now. It records the release in out and returns the gate's line and the
 // exit devctl pr merge would have ended with.
 func (g *gateRun) confirmRelease(out *merge.Outcome, rc int) (string, int) {
@@ -239,6 +240,12 @@ func (g *gateRun) confirmRelease(out *merge.Outcome, rc int) (string, int) {
 		})
 		if i < 0 {
 			return nil, nil
+		}
+		if out.ReleaseFailed {
+			m := &st.Merges[i]
+			m.Releasing, m.PID, m.Finished = false, 0, now
+			m.Release, m.ReleaseFailed, m.Exit = out.Release, true, rc
+			return []state.Event{event(g.me, "merge.release", "%s: release %s, lane %s settles without a roll", g.key(), release, g.lane.Name)}, nil
 		}
 		if out.Unconfirmed {
 			st.Merges[i].Releasing, st.Merges[i].Finished = false, now

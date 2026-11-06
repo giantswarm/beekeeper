@@ -10,8 +10,10 @@ import (
 	"hash/crc32"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +32,7 @@ type fakeGH struct {
 }
 
 func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, error) {
-	method, path := "GET", ""
+	method, path := http.MethodGet, ""
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "-X":
@@ -59,16 +61,16 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 	switch {
 	case strings.HasSuffix(path, "/o/r") || path == "repos/o/r":
 		return []byte(f.visibility + "\n"), nil
-	case method == "GET" && strings.Contains(path, "/git/ref/heads/"):
+	case method == http.MethodGet && strings.Contains(path, "/git/ref/heads/"):
 		if f.head == "" {
 			return []byte(`{"message":"Not Found"}`), errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)")
 		}
 		return []byte(f.head + "\n"), nil
-	case method == "PATCH" && f.conflicts > 0:
+	case method == http.MethodPatch && f.conflicts > 0:
 		f.conflicts--
 		f.head = "moved"
 		return nil, errors.New("gh api: exit status 1: gh: Update is not a fast forward (HTTP 422)")
-	case method == "POST" && strings.HasSuffix(path, "/git/refs"), method == "PATCH":
+	case method == http.MethodPost && strings.HasSuffix(path, "/git/refs"), method == http.MethodPatch:
 		f.head = f.bodies[call]["sha"].(string)
 		return []byte(fmt.Sprintf(`{"object":{"sha":%q}}`, f.head)), nil
 	}
@@ -79,6 +81,13 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 const (
 	public = "public"
 	repo   = "o/r"
+)
+
+// The screenshot formats Normalize accepts, as image.DecodeConfig names them.
+const (
+	formatPNG  = "png"
+	formatJPEG = "jpeg"
+	formatGIF  = "gif"
 )
 
 var at = time.Date(2026, 10, 9, 7, 30, 5, 0, time.UTC)
@@ -141,6 +150,121 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+// A highly compressed valid image must still obey the decoded pixel budget.
+func TestNormalizeCompressedOversized(t *testing.T) {
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, 8192, 4097))); err != nil {
+		t.Fatal(err)
+	}
+	if b.Len() >= MaxBytes {
+		t.Fatalf("fixture is not compressed below the byte limit: %d", b.Len())
+	}
+	out, err := Normalize(b.Bytes())
+	if err == nil || !strings.Contains(err.Error(), "pixels") || out != nil {
+		t.Fatalf("Normalize(compressed oversized PNG) = %d bytes, %v", len(out), err)
+	}
+}
+
+// A PNG signature and IHDR suffice to inspect dimensions, without any pixel
+// data. Rejection must happen before decoding even for enormous dimensions.
+func TestNormalizePixelHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		width, height uint32
+		oversized     bool
+	}{
+		{"at limit", MaxPixels, 1, false},
+		{"over limit", MaxPixels + 1, 1, true},
+		{"over limit tall", 1, MaxPixels + 1, true},
+		{"over limit square", 8192, 4097, true},
+		{"huge dimensions", 1 << 29, 1 << 29, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := bytes.Clone(testPNG(t)[:33])
+			binary.BigEndian.PutUint32(header[16:20], tc.width)
+			binary.BigEndian.PutUint32(header[20:24], tc.height)
+			binary.BigEndian.PutUint32(header[29:33], crc32.ChecksumIEEE(header[12:29]))
+			config, _, err := image.DecodeConfig(bytes.NewReader(header))
+			if err != nil || config.Width != int(tc.width) || config.Height != int(tc.height) {
+				t.Fatalf("invalid header fixture: %+v, %v", config, err)
+			}
+			out, err := Normalize(header)
+			if err == nil || out != nil {
+				t.Fatalf("Normalize(header) = %d bytes, %v", len(out), err)
+			}
+			if got := strings.Contains(err.Error(), "pixels"); got != tc.oversized {
+				t.Errorf("pixel limit rejection = %v, want %v: %v", got, tc.oversized, err)
+			}
+		})
+	}
+}
+
+// The same budget applies to JPEG and GIF headers before pixel data is read.
+func TestNormalizeOversizedFormatHeaders(t *testing.T) {
+	var j bytes.Buffer
+	if err := jpeg.Encode(&j, image.NewGray(image.Rect(0, 0, 8, 6)), nil); err != nil {
+		t.Fatal(err)
+	}
+	jpegHeader := j.Bytes()
+	sof := bytes.Index(jpegHeader, []byte{0xff, 0xc0})
+	if sof < 0 {
+		t.Fatal("JPEG fixture has no baseline frame header")
+	}
+	binary.BigEndian.PutUint16(jpegHeader[sof+5:sof+7], 65535)
+	binary.BigEndian.PutUint16(jpegHeader[sof+7:sof+9], 65535)
+	sos := bytes.Index(jpegHeader, []byte{0xff, 0xda})
+	if sos < 0 {
+		t.Fatal("JPEG fixture has no scan header")
+	}
+	jpegHeader = jpegHeader[:sos+2+int(binary.BigEndian.Uint16(jpegHeader[sos+2:sos+4]))]
+
+	gifHeader := append([]byte("GIF89a"), 0xff, 0xff, 0xff, 0xff, 0, 0, 0)
+	for name, header := range map[string][]byte{formatJPEG: jpegHeader, formatGIF: gifHeader} {
+		t.Run(name, func(t *testing.T) {
+			config, _, err := image.DecodeConfig(bytes.NewReader(header))
+			if err != nil || config.Width != 65535 || config.Height != 65535 {
+				t.Fatalf("invalid header fixture: %+v, %v", config, err)
+			}
+			out, err := Normalize(header)
+			if err == nil || !strings.Contains(err.Error(), "pixels") || out != nil {
+				t.Fatalf("Normalize(oversized header) = %d bytes, %v", len(out), err)
+			}
+		})
+	}
+}
+
+func TestNormalizeScreenshotFormats(t *testing.T) {
+	for _, format := range []string{formatPNG, formatJPEG, formatGIF} {
+		t.Run(format, func(t *testing.T) {
+			img := image.NewGray(image.Rect(0, 0, 8, 6))
+			var b bytes.Buffer
+			var err error
+			switch format {
+			case formatPNG:
+				err = png.Encode(&b, img)
+			case formatJPEG:
+				err = jpeg.Encode(&b, img, nil)
+			case formatGIF:
+				err = gif.Encode(&b, img, nil)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := Normalize(b.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := png.Decode(bytes.NewReader(out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Bounds() != img.Bounds() {
+				t.Errorf("bounds = %v, want %v", decoded.Bounds(), img.Bounds())
+			}
+		})
+	}
+}
+
 // The path names the time and the digest, nothing else.
 func TestPath(t *testing.T) {
 	p := Path([]byte("x"), at.In(time.FixedZone("CEST", 2*3600)))
@@ -173,6 +297,35 @@ func TestUploadNewBranch(t *testing.T) {
 	}
 }
 
+// Alt text cannot escape the image delimiter or introduce line endings.
+func TestUploadAltText(t *testing.T) {
+	const paragraphs = "shot  next"
+	for _, tt := range []struct{ name, alt, want string }{
+		{"empty", "", ""},
+		{"odd trailing backslashes", `shot\`, `shot\\`},
+		{"even trailing backslashes", `shot\\`, `shot\\\\`},
+		{"three trailing backslashes", `shot\\\`, `shot\\\\\\`},
+		{"backslashes beside brackets", `\[shot\]\`, `\\shot\\\\`},
+		{"brackets between backslashes", `shot\[]\`, `shot\\\\`},
+		{"CR paragraphs", "shot\r\rnext", paragraphs},
+		{"LF paragraphs", "shot\n\nnext", paragraphs},
+		{"CRLF paragraphs", "shot\r\n\r\nnext", paragraphs},
+		{"mixed line endings", "a\rb\nc\r\nd", "a b c d"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeGH{visibility: public}
+			res, err := (Upload{GH: f.run, Repo: repo, Alt: tt.alt, Now: at}).Run(context.Background(), []byte("img"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			url := "https://raw.githubusercontent.com/o/r/" + res.Commit + "/" + res.Path
+			if want := "![" + tt.want + "](" + url + ")"; res.Markdown != want {
+				t.Errorf("Markdown = %q, want %q", res.Markdown, want)
+			}
+		})
+	}
+}
+
 // An upload onto the branch builds on its head and moves it without force;
 // a branch that moved meanwhile is retried on its new head.
 func TestUploadExistingBranchRetries(t *testing.T) {
@@ -193,12 +346,11 @@ func TestUploadExistingBranchRetries(t *testing.T) {
 	}
 }
 
-// A repository that is not public, or a name that is not owner/repo, gets
-// nothing written.
+// An unknown visibility, or a name that is not owner/repo, gets nothing written.
 func TestUploadRefused(t *testing.T) {
 	for _, c := range []struct{ repo, vis, want string }{
-		{repo, "private", "not public"},
-		{repo, "internal", "not public"},
+		{repo, "", "unknown visibility"},
+		{repo, "unexpected", "unknown visibility"},
 		{"o/r/x", public, "not owner/repo"},
 		{"o", public, "not owner/repo"},
 	} {
@@ -208,9 +360,34 @@ func TestUploadRefused(t *testing.T) {
 			t.Errorf("%s %s: err = %v, want %q", c.repo, c.vis, err, c.want)
 		}
 		for _, call := range f.calls {
-			if !strings.HasPrefix(call, "GET") {
+			if !strings.HasPrefix(call, http.MethodGet) {
 				t.Errorf("%s %s: wrote %s", c.repo, c.vis, call)
 			}
+		}
+	}
+}
+
+// Private and internal images stay in the target repository. The returned
+// link uses the authenticated repository route, never a raw access token.
+func TestUploadRestrictedRepository(t *testing.T) {
+	for _, visibility := range []string{"private", "internal"} {
+		for _, head := range []string{"", "existing"} {
+			t.Run(visibility+"/"+head, func(t *testing.T) {
+				f := &fakeGH{visibility: visibility, head: head}
+				res, err := (Upload{GH: f.run, Repo: repo, Alt: "proof", Now: at}).Run(context.Background(), testPNG(t))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "https://github.com/o/r/blob/" + res.Commit + "/" + res.Path + "?raw=true"
+				if res.URL != want || res.Markdown != "![proof](../../../o/r/blob/"+res.Commit+"/"+res.Path+"?raw=true)" {
+					t.Fatalf("result = %+v, want %s", res, want)
+				}
+				for _, call := range f.calls {
+					if !strings.Contains(call, "repos/o/r") {
+						t.Errorf("call escaped repository: %s", call)
+					}
+				}
+			})
 		}
 	}
 }

@@ -37,6 +37,23 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 		if err != nil {
 			return err
 		}
+		// Sweep each request family once, including orphaned sidecars. Busy
+		// handlers may still be writing output or publishing their answer.
+		seen := map[string]bool{}
+		for _, e := range entries {
+			base := spoolBase(e.Name())
+			if base == "" || seen[base] {
+				continue
+			}
+			seen[base] = true
+			base = filepath.Join(dir, base)
+			mu.Lock()
+			skip := busy[base+reqSuffix]
+			mu.Unlock()
+			if !skip {
+				sweep(base, procDir, 3*tick)
+			}
+		}
 		for _, e := range entries {
 			path := filepath.Join(dir, e.Name())
 			mu.Lock()
@@ -63,6 +80,60 @@ func Serve(ctx context.Context, dir, procDir string, tick time.Duration, h Handl
 	}
 }
 
+// spoolBase recognizes both requester and broker temporary files.
+func spoolBase(name string) string {
+	temporary := strings.HasSuffix(name, tmpSuffix)
+	name = strings.TrimSuffix(name, tmpSuffix)
+	for _, suffix := range []string{reqSuffix, replySuffix, outSuffix} {
+		if strings.HasSuffix(name, suffix) {
+			return strings.TrimSuffix(name, suffix)
+		}
+	}
+	if temporary {
+		return name
+	}
+	return ""
+}
+
+// sweep collects old, unheld requests and orphaned sidecars. The grace
+// period also protects a requester still preparing its temporary file.
+func sweep(base, procDir string, grace time.Duration) {
+	st, err := os.Lstat(base + reqSuffix)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err == nil {
+		if !st.Mode().IsRegular() || time.Since(st.ModTime()) < grace {
+			return
+		}
+		sys, ok := st.Sys().(*syscall.Stat_t)
+		if !ok || len(Holders(procDir, sys.Dev, sys.Ino)) != 0 {
+			return
+		}
+	}
+	removed := false
+	for _, suffix := range []string{reqSuffix, replySuffix, outSuffix, tmpSuffix, replySuffix + tmpSuffix} {
+		path := base + suffix
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || (st == nil && time.Since(info.ModTime()) < grace) {
+			continue
+		}
+		// An orphaned requester temporary file can still be in use.
+		if suffix == tmpSuffix {
+			sys, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || len(Holders(procDir, sys.Dev, sys.Ino)) != 0 {
+				continue
+			}
+		}
+		if os.Remove(path) == nil {
+			removed = true
+		}
+	}
+	if removed {
+		fmt.Fprintf(os.Stderr, "beekeeper sandbox broker: swept stale spool entry %s\n", filepath.Base(base))
+	}
+}
+
 // answer answers the request at path once: a request with an answer is
 // left to its requester, and an answer whose requester gave up is removed.
 func answer(ctx context.Context, path, procDir string, h Handler) {
@@ -83,8 +154,16 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 		r = Reply{Error: err.Error()}
 	}
 	b, _ := json.Marshal(r)
-	tmp := out + tmpSuffix
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// The spool is sandbox-writable: never open an existing staging entry.
+	f, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+"-*"+tmpSuffix)
+	if err != nil {
+		return
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, err = f.Write(b)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
 		return
 	}
 	_ = os.Rename(tmp, out)
@@ -175,7 +254,8 @@ func safe(h Handler) Handler {
 // read reads the request at path, closed again before its holders are
 // looked for.
 func read(path string) ([]byte, os.FileInfo, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // a request in our own spool
+	// A substituted FIFO must not block open before we can inspect its type.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // a request in our own spool
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,6 +263,10 @@ func read(path string) ([]byte, os.FileInfo, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return nil, nil, err
+	}
+	// Check the opened inode: the listed path may have been replaced.
+	if !st.Mode().IsRegular() {
+		return nil, nil, errors.New("request is not a regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxRequest+1))
 	return raw, st, err

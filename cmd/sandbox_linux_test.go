@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -355,5 +356,36 @@ func TestStoreSourceUsesBrokerWhenRequired(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProtectionInTheSandboxGoesThroughTheBroker(t *testing.T) {
+	a, _, _ := secretApp(t)
+	t.Setenv(sandbox.Env, "1")
+	var got []sandbox.Request
+	hostBroker(t, a, func(_ context.Context, _ int, req sandbox.Request) (sandbox.Reply, error) {
+		if req.Op != sandbox.OpProtection {
+			return sandbox.Reply{}, nil
+		}
+		got = append(got, req)
+		return sandbox.Reply{Out: `{"enforce_admins":{"enabled":true}}`}, nil
+	})
+	c := a.sandboxProtectionCmd()
+	c.SetArgs([]string{dependabotTestRepo, protectionTestBranch})
+	err := c.Execute()
+	out := a.out.(interface{ String() string }).String()
+	if err != nil || !strings.Contains(out, `"enabled":true`) {
+		t.Fatalf("%q %v", out, err)
+	}
+	if len(got) != 1 || strings.Join(got[0].Args, " ") != "giantswarm/example release/v1" {
+		t.Fatalf("broker received %+v", got)
+	}
+	c = a.sandboxProtectionCmd()
+	c.SetArgs([]string{dependabotTestRepo, mainBranch, http.MethodDelete})
+	if err := c.Execute(); err == nil {
+		t.Fatal("accepted a write argument")
+	}
+	if len(got) != 1 {
+		t.Fatal("write argument reached broker")
 	}
 }

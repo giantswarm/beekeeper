@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/giantswarm/go-selfupdate"
+
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // fakeSource stands in for GitHub: the releases it lists, how it fails and
@@ -248,7 +250,7 @@ func TestRefusesADevelopmentBuild(t *testing.T) {
 		src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}}
 		setup(t, current, src)
 		_, err := Run(context.Background(), io.Discard, false)
-		if err == nil || !strings.Contains(err.Error(), "development build") || !strings.Contains(err.Error(), "go install github.com/giantswarm/beekeeper@latest") {
+		if err == nil || !strings.Contains(err.Error(), "development build") || !strings.Contains(err.Error(), project.Source+"/releases") {
 			t.Errorf("%q: Run() = %v, want a refusal that says how to install a release", current, err)
 		}
 		if n := src.calls.Load(); n != 0 {
@@ -516,17 +518,99 @@ func TestInstallVersionDoesNotTouchBackupPath(t *testing.T) {
 	}
 }
 
-func TestInstallVersionPermissionFailurePreservesExecutable(t *testing.T) {
+// A refused verification, or a directory this account cannot write, leaves the
+// installed binary as it was. Nothing is retried with privilege: a sudo on PATH
+// would record its call.
+func TestInstallVersionNeverEscalates(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("sudo installation is Unix only")
+	}
+	for _, tc := range []struct {
+		name      string
+		verifyErr error
+	}{
+		{name: "verification lacks permission", verifyErr: &os.PathError{Op: "mkdir", Path: "dir", Err: os.ErrPermission}},
+		{name: "invalid signature", verifyErr: errors.New("invalid signature")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+			setup(t, running, src)
+			exe, content := installed(t)
+			newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+			bin := t.TempDir()
+			called := filepath.Join(bin, "called")
+			if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\n: > \""+called+"\"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			original := installVerified
+			t.Cleanup(func() { installVerified = original })
+			installVerified = func(context.Context, *selfupdate.Updater, *selfupdate.Release, string) error { return tc.verifyErr }
+			if _, err := InstallVersion(context.Background(), io.Discard, latestV); !errors.Is(err, tc.verifyErr) {
+				t.Fatalf("error = %v", err)
+			}
+			assertUnchanged(t, exe, content)
+			if _, err := os.Stat(called); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("install called sudo: %v", err)
+			}
+		})
+	}
+}
+
+// An installation directory this account cannot write fails before anything
+// is downloaded, instead of bypassing the journal.
+func TestInstallVersionRefusesAnUnwritableDirectory(t *testing.T) {
+	if runtime.GOOS == windowsOS || os.Geteuid() == 0 {
+		t.Skip("needs directory permissions that bind this account")
+	}
 	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
 	setup(t, running, src)
 	exe, content := installed(t)
-	original := installVerified
-	t.Cleanup(func() { installVerified = original })
-	installVerified = func(context.Context, *selfupdate.Updater, *selfupdate.Release, string) error { return os.ErrPermission }
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	dir := filepath.Dir(exe)
+	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // a directory of this test
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // TempDir cleanup needs it writable
 	if _, err := InstallVersion(context.Background(), io.Discard, latestV); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("error = %v", err)
 	}
 	assertUnchanged(t, exe, content)
+}
+
+// The replacement keeps the executable's mode and, beside the update directory,
+// leaves nothing: no temporary file and no backup.
+func TestInstallVersionReplacesAtomicallyWithoutBackup(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("mode bits are Unix only")
+	}
+	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+	setup(t, running, src)
+	exe, _ := installed(t)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	before, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != newBinary {
+		t.Fatalf("installed %q, %v", got, err)
+	}
+	after, err := os.Stat(exe)
+	if err != nil || after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("mode %v, want %v, %v", after, before.Mode().Perm(), err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(exe) && e.Name() != filepath.Base(exe)+".update" {
+			t.Fatalf("installation left %s behind", e.Name())
+		}
+	}
 }
 
 func TestCanaryRefusesBadBinaryAndSkipsRelease(t *testing.T) {
@@ -587,4 +671,57 @@ func TestCanaryCannotModifyTheVerifiedCandidate(t *testing.T) {
 		t.Fatal("installed modified candidate")
 	}
 	assertUnchanged(t, exe, content)
+}
+
+func TestRunExactReleaseCandidate(t *testing.T) {
+	const tag = "v0.3.0-rc.3"
+	for _, check := range []bool{true, false} {
+		t.Run(fmt.Sprint(check), func(t *testing.T) {
+			src := &fakeSource{releases: []selfupdate.SourceRelease{release(tag)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
+			setup(t, running, src)
+			exe, original := installed(t)
+			validator := &acceptingValidator{}
+			newValidator = func() selfupdate.Validator { return validator }
+			ctx := WithOptions(context.Background(), Options{Version: tag})
+			res, err := Run(ctx, io.Discard, check)
+			if res.Latest != tag || !res.Newer {
+				t.Fatalf("result = %+v", res)
+			}
+			if check {
+				if !errors.Is(err, ErrOutdated) || res.Updated || validator.asset != "" {
+					t.Fatalf("check = %+v, %v", res, err)
+				}
+				assertUnchanged(t, exe, original)
+			} else {
+				if err != nil || !res.Updated || string(validator.bundle) != installBundle {
+					t.Fatalf("install = %+v, %v", res, err)
+				}
+				got, err := os.ReadFile(exe) //nolint:gosec // a path of this test
+				if err != nil || string(got) != newBinary {
+					t.Fatalf("installed = %q, %v", got, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunExactReleaseRefusalsKeepBinary(t *testing.T) {
+	const tag = "v0.3.0-rc.3"
+	unsigned := release(tag)
+	unsigned.assets = []selfupdate.SourceAsset{fakeAsset{binaryID, binaryName()}}
+	for name, src := range map[string]*fakeSource{
+		"missing":  {},
+		"unsigned": {releases: []selfupdate.SourceRelease{unsigned}},
+		"tampered": {releases: []selfupdate.SourceRelease{release(tag)}, assets: map[int64][]byte{binaryID: []byte("tampered"), bundleID: []byte("{}")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup(t, running, src)
+			exe, original := installed(t)
+			_, err := Run(WithOptions(context.Background(), Options{Version: tag}), io.Discard, false)
+			if err == nil || strings.Contains(err.Error(), "\n") {
+				t.Fatalf("expected one-line refusal, got %v", err)
+			}
+			assertUnchanged(t, exe, original)
+		})
+	}
 }

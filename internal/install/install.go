@@ -64,6 +64,9 @@ func Install(ctx context.Context, e Env) error {
 		return err
 	}
 	before := m.encode()
+	var prior Manifest
+	// Detach the snapshot before planning mutates maps and slices.
+	_ = json.Unmarshal(before, &prior)
 	p := &plan{home: e.Spec.Home}
 	if err := e.planHooks(p, &m); err != nil {
 		return err
@@ -86,8 +89,19 @@ func Install(ctx context.Context, e Env) error {
 	m.addDirs(e.StateDir)
 	failAgyHooks(p, e.AgyHooks, agyRejected)
 	if after := m.encode(); !bytes.Equal(before, after) {
+		prior.Previous = nil
+		m.Previous = append(m.Previous, prior)
+		pending := m.encode()
 		p.first("record", e.manifest(), "what install writes, for uninstall", func() error {
-			return writeFile(e.manifest(), after)
+			return writeFile(e.manifest(), pending)
+		})
+	}
+	if len(m.Previous) > 0 {
+		p.add("record", e.manifest(), "install completed", func() error {
+			// Earlier steps can clear pending service work. Keep ownership until
+			// those steps finish and encode their final state here.
+			m.Previous = nil
+			return writeFile(e.manifest(), m.encode())
 		})
 	}
 	return p.run(e.Out, e.DryRun)
@@ -102,6 +116,13 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 	if err != nil {
 		return err
 	}
+	for _, old := range m.Previous {
+		for path := range old.Files {
+			if _, ok := m.Files[path]; !ok {
+				m.Files[path] = old.Files[path]
+			}
+		}
+	}
 	p := &plan{home: e.Spec.Home}
 	if e.Setup.Available() {
 		for _, svc := range m.Services {
@@ -112,7 +133,7 @@ func Uninstall(ctx context.Context, e Env, purge bool) error {
 				}
 				stop = e.Setup.Halt
 			}
-			if e.Setup.Started(ctx, svc) {
+			if e.Setup.NeedsStop(ctx, svc) {
 				p.command(ctx, e, stop(svc))
 			}
 		}
@@ -234,6 +255,7 @@ func (e Env) planFile(p *plan, m *Manifest, f platform.File) fileState {
 	if symlink(f.Path) {
 		delete(m.Files, f.Path)
 		m.Services = slices.DeleteFunc(m.Services, func(s string) bool { return s == f.Path })
+		m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == f.Path })
 		p.add("keep", f.Path, "a symlink to "+resolve(f.Path)+": install never writes through a link; "+
 			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
 		return fileKept
@@ -278,6 +300,12 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	states := map[string]fileState{}
 	for _, f := range files {
 		s := e.planFile(p, m, f)
+		// A long-running service can become a timer-triggered oneshot (for
+		// example when switching Teleport from Machine ID back to SSO).
+		if !f.Service && s == fileUpdated && slices.Contains(m.Services, f.Path) {
+			p.command(ctx, e, e.Setup.Stop(f.Path))
+			m.Services = slices.DeleteFunc(m.Services, func(path string) bool { return path == f.Path })
+		}
 		written = written || s == fileNew || s == fileUpdated
 		if f.Service {
 			units, states[f.Path] = append(units, f), s
@@ -287,7 +315,20 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 		p.add("skip", s, "", nil)
 	}
 	if written {
-		p.command(ctx, e, e.Setup.Reload())
+		m.ReloadPending = true
+	}
+	if m.ReloadPending {
+		if argv := e.Setup.Reload(); argv != nil {
+			p.add("run", strings.Join(argv, " "), "", func() error {
+				if err := e.Run(ctx, argv); err != nil {
+					return err
+				}
+				m.ReloadPending = false
+				return writeFile(e.manifest(), m.encode())
+			})
+		} else {
+			m.ReloadPending = false
+		}
 	}
 	for _, u := range units {
 		e.planStart(ctx, p, m, u.Path, states[u.Path])
@@ -300,14 +341,16 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 	name := filepath.Base(path)
 	switch {
 	case state == fileKept:
+		m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == path })
 		p.add("keep", name, "its definition is not beekeeper install's", nil)
 	case state != fileNew && e.Setup.Started(ctx, path):
-		if state == fileUpdated {
+		if state == fileUpdated || slices.Contains(m.RestartsPending, path) {
+			if !slices.Contains(m.RestartsPending, path) {
+				m.RestartsPending = append(m.RestartsPending, path)
+			}
 			prepared, deferred := false, false
-			for _, argv := range e.Setup.Restart(path) {
-				if argv == nil {
-					continue
-				}
+			commands := slices.DeleteFunc(e.Setup.Restart(path), func(argv []string) bool { return argv == nil })
+			for i, argv := range commands {
 				p.add("run", strings.Join(argv, " "), "", func() error {
 					if deferred {
 						return nil
@@ -326,6 +369,9 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 						}
 						return err
 					}
+					if i == len(commands)-1 {
+						return e.finishRestart(m, path)
+					}
 					return nil
 				})
 			}
@@ -336,8 +382,25 @@ func (e Env) planStart(ctx context.Context, p *plan, m *Manifest, path string, s
 		if !slices.Contains(m.Services, path) {
 			m.Services = append(m.Services, path)
 		}
-		p.command(ctx, e, e.Setup.Start(path))
+		argv := e.Setup.Start(path)
+		if argv != nil && slices.Contains(m.RestartsPending, path) {
+			// A multi-command restart may have stopped the service before
+			// failing to start it. Starting it completes that pending change.
+			p.add("run", strings.Join(argv, " "), "", func() error {
+				if err := e.Run(ctx, argv); err != nil {
+					return err
+				}
+				return e.finishRestart(m, path)
+			})
+		} else {
+			p.command(ctx, e, argv)
+		}
 	}
+}
+
+func (e Env) finishRestart(m *Manifest, path string) error {
+	m.RestartsPending = slices.DeleteFunc(m.RestartsPending, func(s string) bool { return s == path })
+	return writeFile(e.manifest(), m.encode())
 }
 
 // plan is the steps install or uninstall takes, printed as they run.
@@ -395,6 +458,8 @@ func (p *plan) tilde(s string) string {
 
 // Manifest is what install wrote, read by the next install and uninstall.
 type Manifest struct {
+	// Previous retains ownership candidates until every install step succeeds.
+	Previous []Manifest `json:"previous,omitempty"`
 	// Files are the files install wrote and the SHA-256 of their content.
 	Files map[string]string `json:"files,omitempty"`
 	// Dirs are the directories install created.
@@ -402,6 +467,10 @@ type Manifest struct {
 	// Services are the definitions of the units install started: the
 	// standby service, the keeper's timer.
 	Services []string `json:"services,omitempty"`
+	// ReloadPending and RestartsPending survive a failed or deferred service
+	// update even when its new definition is already on disk.
+	ReloadPending   bool     `json:"reloadPending,omitempty"`
+	RestartsPending []string `json:"restartsPending,omitempty"`
 	// Service is the standby service's definition as earlier installs
 	// recorded it, read into Services.
 	Service string `json:"service,omitempty"`
@@ -477,7 +546,10 @@ func (m *Manifest) addDirs(dir string) {
 // owns reports whether install wrote the file at path with content cur.
 func (m Manifest) owns(path string, cur []byte) bool {
 	h, ok := m.Files[path]
-	return ok && h == sum(cur)
+	if ok && h == sum(cur) {
+		return true
+	}
+	return slices.ContainsFunc(m.Previous, func(old Manifest) bool { return old.owns(path, cur) })
 }
 
 // ownsTarget reports whether install wrote the file the symlink at path
@@ -580,4 +652,25 @@ func writeFile(path string, content []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// hookCandidates includes entries from interrupted installs as well as the
+// current plan. Matching exact entries preserves unrelated user edits.
+func (m Manifest) hookCandidates() []Hook {
+	out := slices.Clone(m.Hooks)
+	for _, old := range m.Previous {
+		out = append(out, old.Hooks...)
+	}
+	return out
+}
+
+func (m Manifest) ownsHook(cur json.RawMessage, codex bool) bool {
+	entry := m.AgyHook
+	if codex {
+		entry = m.CodexHook
+	}
+	if len(entry) > 0 && sameJSON(cur, entry) {
+		return true
+	}
+	return slices.ContainsFunc(m.Previous, func(old Manifest) bool { return old.ownsHook(cur, codex) })
 }

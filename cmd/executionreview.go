@@ -27,9 +27,6 @@ func sameReviewSession(a, b state.Party) bool {
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
 		worker, ok := executionReviewWorker(st, act)
-		if !ok {
-			return nil, nil
-		}
 		for _, round := range st.DeskReviews {
 			if round.Ref == act.Ref && round.Head == act.Head && round.Round == act.Round {
 				return nil, nil
@@ -41,6 +38,20 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 			candidate := &st.Starts[i]
 			if candidate.Name == name && candidate.By.Is(loopParty) && (start == nil || candidate.At.After(start.At)) {
 				start = candidate
+			}
+		}
+		if !ok {
+			if start == nil || start.Execution == nil {
+				return nil, nil
+			}
+			// A remote reviewer also needs an assignment when the author is
+			// local or this is an ownerless pull request.
+			worker = state.Party{Name: act.Agent}
+			for _, ag := range st.Agents {
+				if ag.Name == act.Agent {
+					worker = ag.Party
+					break
+				}
 			}
 		}
 		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, worker) {
@@ -119,15 +130,25 @@ var readDeskReview = func(ctx context.Context, repository string, pr int, id str
 // is admitted only when it merely merges the base into that head
 // (readBaseMerge), as the reviewed merge's own branch update does.
 func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull) error {
+	return a.authenticateReviewResult(ctx, st, use, pull, false)
+}
+
+// A pending exact-head loop claim may merge green fixes after the authenticated
+// review. Worker grants still require approval of their head.
+func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use execution.MergeUse, pull superloop.Pull, loopClaim bool) error {
 	round := executionReviewRound(st, use)
 	_, workerIndex := executionRecord(st, use.Ref)
 	reviewed := use.Head
-	if round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
+	fixes := loopClaim && use.ID == "" && pull.Green && pull.Head == use.Head && round != nil && round.Head != use.Head && round.Result != nil && (round.Result.Verdict == superloop.Approved || round.Result.Verdict == superloop.ChangesRequested)
+	if fixes {
+		reviewed = round.Head
+	}
+	if !fixes && round != nil && round.Head != use.Head && pull.Head == use.Head && round.Result != nil && round.Result.Verdict == superloop.Approved {
 		covered, err := readBaseMerge(ctx, pull, round.Head)
 		if err != nil {
 			return err
 		}
-		if covered {
+		if covered || st.ReviewNitsChecked(pull.Ref, use.Head, round.Head) {
 			reviewed = round.Head
 		}
 	}
@@ -141,7 +162,7 @@ func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, 
 		return refused("no assigned independent review round for this execution and head")
 	}
 	result := round.Result
-	if result == nil || !sameReviewSession(result.By, round.Reviewer) || result.Verdict != superloop.Approved {
+	if result == nil || !sameReviewSession(result.By, round.Reviewer) || (!fixes && result.Verdict != superloop.Approved) {
 		return refused("assigned independent reviewer has not approved this head")
 	}
 	currentIndex := slices.IndexFunc(pull.Reviews, func(review superloop.Review) bool { return review.ID == result.ID })
@@ -149,7 +170,7 @@ func (a *app) authenticateExecutionReview(ctx context.Context, st *state.State, 
 		return refused("authenticated independent review no longer exists")
 	}
 	current := pull.Reviews[currentIndex]
-	if current.Author != result.Author || current.Head != reviewed || current.Commit != reviewed || current.Verdict != superloop.Approved || execution.Digest([]byte(current.Body)) != result.BodyDigest {
+	if current.Author != result.Author || current.Head != reviewed || current.Commit != reviewed || current.Verdict != result.Verdict || execution.Digest([]byte(current.Body)) != result.BodyDigest {
 		return refused("authenticated independent review changed; new supervisor approval required")
 	}
 	for _, later := range pull.Reviews[currentIndex+1:] {

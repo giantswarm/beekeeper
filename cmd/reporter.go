@@ -166,7 +166,7 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 			st.ReportPause.Final, st.ReportPause.Since = time.Time{}, w.now.UTC()
 		}
 		s := state.Start{Party: p, Mode: state.ModeBypass, Dir: rc.Dir, By: reporterParty, At: w.now.UTC()}
-		reg, err := recordStart(st, s, briefTask(brief), "", live)
+		reg, err := w.recordStart(st, s, briefTask(brief), "", live)
 		if err != nil {
 			return nil, err
 		}
@@ -197,6 +197,10 @@ func (w *watcher) startReport(ctx context.Context, sessions []*claude.Session, a
 // ExecStopPost: nothing reopens it in the desktop. Its settings add the
 // report check as a PreToolUse hook on the post, for this session only.
 func (w *watcher) launchReport(unit, id, name, prompt string) error {
+	if err := w.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
@@ -37,11 +39,38 @@ const gateBrokeredTimeout = 3 * time.Hour
 // trusts it with; serve runs the proxy until ctx ends. The token stays in
 // the broker's memory, renewed from devctl's App login.
 func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) {
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	dir := sandbox.EgressDir(runtimeDir)
+	dir := a.sandboxPolicy().Egress
 	if dir == "" {
 		return nil, errors.New("no XDG_RUNTIME_DIR: the egress proxy's CA has nowhere to go")
 	}
+	// Hold ownership before changing any files, including obsolete tokens.
+	brokerDir := filepath.Dir(dir)
+	if err := os.MkdirAll(brokerDir, 0o700); err != nil {
+		return nil, err
+	}
+	lock := flock.New(filepath.Join(brokerDir, "broker.lock"))
+	owned, err := lock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, fmt.Errorf("broker runtime %s is already owned by another broker", brokerDir)
+	}
+	ready := false
+	defer func() {
+		if !ready {
+			_ = lock.Unlock()
+		}
+	}()
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(a.cfg.Sandbox.ProxyPort)))
+	if err != nil {
+		return nil, fmt.Errorf("egress proxy: %w", err)
+	}
+	defer func() {
+		if !ready {
+			_ = ln.Close()
+		}
+	}()
 	ca, err := sandbox.NewCA(config.GitHubHosts, time.Now())
 	if err != nil {
 		return nil, err
@@ -53,12 +82,8 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 	if err := sandbox.WriteEgress(dir, ca.PEM(), exe); err != nil {
 		return nil, fmt.Errorf("egress: %w", err)
 	}
-	if err := sandbox.RemoveMaskedGitHub(runtimeDir); err != nil {
+	if err := sandbox.RemoveMaskedGitHubIn(brokerDir); err != nil {
 		return nil, fmt.Errorf("the masked GitHub token files: %w", err)
-	}
-	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(a.cfg.Sandbox.ProxyPort)))
-	if err != nil {
-		return nil, fmt.Errorf("egress proxy: %w", err)
 	}
 	say := func(line string) { _, _ = fmt.Fprintln(a.out, line) }
 	say(fmt.Sprintf("egress proxy on %s, its CA in %s", ln.Addr(), dir))
@@ -68,10 +93,16 @@ func (a *app) listenEgress(ctx context.Context) (serve func() error, err error) 
 		return devctlToken(ctx, devctl)
 	}, say)
 	e := &sandbox.Egress{
-		Allow: a.sandboxPolicy().Domains, Inject: config.GitHubHosts, Token: tok.Get, CA: ca,
+		AllowedOrgs: a.cfg.GitHub.AllowedOrgs,
+		Allow:       a.sandboxPolicy().Domains, Inject: config.GitHubHosts, Token: tok.Get, CA: ca,
 		Peer: sandbox.SameUser("/proc"), Say: say,
 	}
-	return func() error { return e.Serve(ctx, ln) }, nil
+	ready = true
+	return func() error {
+		defer lock.Unlock() //nolint:errcheck // releasing broker ownership on exit
+		defer ln.Close()    //nolint:errcheck // Serve also closes the listener
+		return e.Serve(ctx, ln)
+	}, nil
 }
 
 // devctlToken is devctl's App user token: devctl auth exec hands it to a

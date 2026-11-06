@@ -73,6 +73,20 @@ down. A sandboxed git signs through the broker as well.`,
 		},
 	}
 	c.AddCommand(&cobra.Command{
+		Use:   executionStatus,
+		Short: "Show which broker runtime files the configured sandbox uses",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			p := a.sandboxPolicy()
+			runtime := filepath.Dir(p.Egress)
+			if p.Egress == "" {
+				runtime = "unavailable (no XDG_RUNTIME_DIR)"
+			}
+			_, err := fmt.Fprintf(a.out, "broker state: %s\nbroker runtime: %s\negress files: %s\nproxy port: %d\n", a.cfg.StateDir, runtime, p.Egress, p.ProxyPort)
+			return err
+		},
+	})
+	c.AddCommand(&cobra.Command{
 		Use:   "render",
 		Short: "Print the policy as Claude Code settings",
 		Long: `render prints the policy as the managed settings drop-in install puts in
@@ -127,7 +141,7 @@ readable parent read-only over a writable child.`,
 			return err
 		},
 	})
-	c.AddCommand(a.sandboxBrokerCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
+	c.AddCommand(a.sandboxProtectionCmd(), a.sandboxBrokerCmd(), a.sandboxScratchCmd(), sandboxScopeCmd(), a.sandboxGPGCmd())
 	return c
 }
 
@@ -168,7 +182,8 @@ func sandboxInstallSteps(dir, stateDir string, b []byte) ([]string, error) {
 const brokerTick = 50 * time.Millisecond
 
 func (a *app) sandboxBrokerCmd() *cobra.Command {
-	return &cobra.Command{
+	var secretsOnly bool
+	c := &cobra.Command{
 		Use:   "broker",
 		Short: "Serve the sandboxed sessions' capped runs on the host",
 		Long: `broker runs on the host, outside the sandbox, as the user unit
@@ -202,7 +217,10 @@ memory, and it terminates TLS for github.com, api.github.com and
 uploads.github.com with a CA it makes at start, its key in memory alone, to
 set the Authorization header of each request; bodies pass untouched. The
 CA, a bundle of the system's roots and the CA, and gh's login (a fixed
-word, no token) go to $XDG_RUNTIME_DIR/beekeeper/egress.
+word, no token) go to $XDG_RUNTIME_DIR/beekeeper/egress for the default
+state directory. Other state directories use beekeeper/brokers/<state-name>-<digest>
+under the runtime directory. sandbox status shows the configured broker's paths.
+Only one broker may own a runtime directory at a time.
 
 A sandboxed session's gated devctl command (pr merge, pr wait, release
 promote, release wait, rollout wait) runs here as beekeeper gate, as the
@@ -231,8 +249,10 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			// a state directory made after the install lacks them as well
-			if err := a.sandboxPolicy().MountPoints(); err != nil {
-				return err
+			if !secretsOnly {
+				if err := a.sandboxPolicy().MountPoints(); err != nil {
+					return err
+				}
 			}
 			// the broker logs the calls that logged themselves not, and the
 			// vault keeper's sign-ins, in the state's event log
@@ -263,22 +283,25 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			if err != nil {
 				return err
 			}
-			serveEgress, err := a.listenEgress(ctx)
-			if err != nil {
-				return err
-			}
 			egress := make(chan error, 1)
-			go func() { egress <- serveEgress() }()
+			if !secretsOnly {
+				serveEgress, err := a.listenEgress(ctx)
+				if err != nil {
+					return err
+				}
+				go func() { egress <- serveEgress() }()
+			}
 			secretCall := func(env []string) sandbox.Handler {
 				return a.secretCallLogged(brokeredCallTimeout, brokeredCall(exe, "/proc", 0, env, brokeredSecretArgv(a.cfg.Secret.Session)))
 			}
 			spool := make(chan error, 1)
 			go func() {
-				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
+				spool <- sandbox.Serve(ctx, dir, "/proc", brokerTick, secretBrokerOnly(secretsOnly, brokered(brokeredCap(plat.Capper, a.memcapCPU()), map[string]sandbox.Handler{
 					sandbox.OpScopeState: brokeredScopeState(plat.Capper),
 					sandbox.OpSecret:     a.brokeredVault(keeper, secretCall),
 					sandbox.OpVault:      brokeredVaultState(keeper),
 					sandbox.OpKubeconfig: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredKubeconfigArgv),
+					sandbox.OpProtection: a.brokeredProtection(),
 					sandbox.OpGate:       brokeredCall(exe, "/proc", gateBrokeredTimeout, devctlPath(a.cfg.Sandbox.Devctl), brokeredGateArgv),
 					// an omp start on a vault provider gets the vault session, as a secret call does
 					sandbox.OpAgents: a.brokeredVault(keeper, func(vault []string) sandbox.Handler {
@@ -290,7 +313,7 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 					sandbox.OpLab:    brokeredCall(exe, "/proc", labBrokeredTimeout, nil, brokeredLabArgv),
 					sandbox.OpSign:   brokeredSign(hostGPG(ctx)),
 					sandbox.OpPerson: brokeredCall(exe, "/proc", brokeredCallTimeout, nil, brokeredPersonArgv),
-				}))
+				})))
 			}()
 			// either one ending ends the broker, which its unit restarts
 			select {
@@ -304,6 +327,8 @@ git's signing call only; the key and the agent stay out of the sandbox.`,
 			}
 		},
 	}
+	c.Flags().BoolVar(&secretsOnly, "secrets-only", false, "Serve secret calls without starting the egress proxy or changing sandbox mounts")
+	return c
 }
 
 var (

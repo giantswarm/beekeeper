@@ -12,10 +12,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
@@ -140,7 +143,7 @@ func TestWorkerGitHubScopedIssuanceAndRevocation(t *testing.T) {
 func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 	a, r := workerGitHubTestApp(t)
 	sopsDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sopsDir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sopsFile := filepath.Join(sopsDir, "worker-github.sops.yaml")
@@ -164,7 +167,7 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 				"user_code":        "ABCD-1234",
 				"verification_uri": "https://github.com/login/device",
 				testExpiresIn:      900,
-				"interval":         1,
+				intervalKey:        1,
 			})
 		case workerGitHubOAuthTokenPath:
 			_ = req.ParseForm()
@@ -196,9 +199,36 @@ func TestWorkerGitHubDeviceFlowLoginAndSOPSPersistence(t *testing.T) {
 	githubWeb, githubAPI = server.URL, server.URL
 	t.Cleanup(func() { githubWeb, githubAPI = prevWeb, prevAPI })
 
+	// A competing issuer or revoker must not enter while login replaces
+	// the refresh token and the matching coordinator cache.
+	if err := os.MkdirAll(filepath.Dir(a.workerGitHubOAuthPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	persisted := false
+	previousRun := secretRun
+	t.Cleanup(func() { secretRun = previousRun })
+	secretRun = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == "sops" && slices.Contains(args, "encrypt") {
+			persisted = true
+			lock := flock.New(a.workerGitHubOAuthPath() + ".lock")
+			locked, err := lock.TryLock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if locked {
+				_ = lock.Unlock()
+				t.Error("login persisted refresh token without the shared OAuth lock")
+			}
+		}
+		return previousRun(ctx, dir, env, in, name, args...)
+	}
+
 	var out bytes.Buffer
 	if err := a.authorizeWorkerGitHub(context.Background(), "", "", &out); err != nil {
 		t.Fatal(err)
+	}
+	if !persisted {
+		t.Fatal("login did not persist refresh token")
 	}
 	if !strings.Contains(out.String(), "ABCD-1234") || !strings.Contains(out.String(), "authorized fixture-operator") || strings.Contains(out.String(), "ghr_") || strings.Contains(out.String(), workerTokenFixture) {
 		t.Fatalf("unexpected login output: %s", out.String())

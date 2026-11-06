@@ -57,6 +57,13 @@ func (s *Server) ReceiveSource(ctx context.Context, ref Ref, chunk SourceChunk) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// No journal exists yet: this record is the upload's inventory entry, written
+	// before the bundle, so a start that never lands can still be retired.
+	if !prepared {
+		if err := atomicFile(filepath.Join(filepath.Dir(p), sourceOwnerFile), mustJSON(ref)); err != nil {
+			return err
+		}
+	}
 	flags := os.O_CREATE | os.O_RDWR
 	if prepared {
 		flags = os.O_RDONLY
@@ -76,17 +83,25 @@ func (s *Server) ReceiveSource(ctx context.Context, ref Ref, chunk SourceChunk) 
 	if info.Size() < chunk.Offset || info.Size() > chunk.Total {
 		return errors.New("out-of-order source chunk")
 	}
-	if info.Size() > chunk.Offset {
-		old := make([]byte, len(chunk.Data))
-		if _, err := f.ReadAt(old, chunk.Offset); err != nil || !bytes.Equal(old, chunk.Data) {
+	// An interrupted or short write can leave a matching partial chunk.
+	// Verify the stored prefix before appending only its missing suffix.
+	overlap := min(info.Size()-chunk.Offset, int64(len(chunk.Data)))
+	if overlap > 0 {
+		old := make([]byte, overlap)
+		if _, err := f.ReadAt(old, chunk.Offset); err != nil || !bytes.Equal(old, chunk.Data[:overlap]) {
 			return errors.New("conflicting source chunk retry")
 		}
-		return nil
 	}
-	if _, err := f.WriteAt(chunk.Data, chunk.Offset); err != nil {
+	if overlap < int64(len(chunk.Data)) {
+		if _, err := f.WriteAt(chunk.Data[overlap:], chunk.Offset+overlap); err != nil {
+			return err
+		}
+	}
+	// A complete retry may follow a failed Sync rather than a lost reply.
+	if err := f.Sync(); err != nil {
 		return err
 	}
-	return f.Sync()
+	return nil
 }
 
 func (t SSHTransport) UploadSource(ctx context.Context, ref Ref, data []byte) error {
