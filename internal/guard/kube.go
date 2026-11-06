@@ -2,6 +2,7 @@ package guard
 
 import (
 	"cmp"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,10 +115,22 @@ func KubeGuardOff(production string, protectedContexts ...string) string {
 
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
-	if h.ProductionNote != nil && strings.Contains(cmd, "BEEKEEPER_PROD_NOTE") {
+	if h.ProductionNote != nil && strings.HasPrefix(cmd, "BEEKEEPER_PROD_NOTE=") {
 		return h.productionNoteRefusal(cmd)
 	}
-	return h.scanKube(cmd, kubeEnv{kubeconfig: h.Kubeconfig}, 0)
+	if r := h.scanKube(commandText(cmd), kubeEnv{kubeconfig: h.Kubeconfig}, 0); r != "" {
+		return r
+	}
+	// A note authorises a command run now, under this check. What an argument
+	// runs later is judged without one, so it meets the ordinary refusal.
+	later := h
+	later.ProductionNote = nil
+	for _, command := range laterCommands(cmd) {
+		if r := later.kubeRefusal(command); r != "" {
+			return r
+		}
+	}
+	return ""
 }
 
 func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
@@ -157,7 +170,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		words := shellWords(sc.plain[sg.start:sg.end])
 		at := strings.Join(words, " ")
 		if r := h.simpleKube(words, &env, aliases, at); r != "" {
-			return r
+			return fmt.Sprintf("Matched token %q at byte %d. %s", kubeMatchToken(words), sg.start+max(0, strings.Index(sc.plain[sg.start:sg.end], kubeMatchToken(words))), r)
 		}
 		for k, w := range words {
 			if !shells[path.Base(w)] {
@@ -641,3 +654,23 @@ func (h Hook) productionNoteRefusal(cmd string) string {
 // Deliberately narrow: no expansions, redirections, extra flags, lists,
 // selectors, multiple names or shell operators can share a note's authority.
 var productionNoteCommand = regexp.MustCompile(`^BEEKEEPER_PROD_NOTE=([0-9]+) (kubectl --context [a-zA-Z0-9_.-]+ delete [a-z][a-z0-9.-]* [a-z0-9][a-z0-9.-]* --namespace [a-z0-9][a-z0-9-]*)$`)
+
+// kindCmd is the kind command-line tool.
+const kindCmd = "kind"
+
+// kubeMatchToken identifies the command word responsible for a kube decision.
+func kubeMatchToken(words []string) string {
+	for _, w := range words {
+		switch path.Base(w) {
+		case kubectlCmd, "kubectx", "kubeswitch", "switcher", "kubie", "helm", "flux", "tsh", kindCmd:
+			return w
+		}
+		if pluginBinary.MatchString(path.Base(w)) {
+			return w
+		}
+	}
+	if len(words) > 0 {
+		return words[0]
+	}
+	return ""
+}

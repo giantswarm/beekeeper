@@ -47,3 +47,17 @@ func TestProductionNoteLeavesProtectedContextsRefused(t *testing.T) {
 		}
 	}
 }
+
+// An argument that runs later is checked, and a note never covers it: nobody is
+// there when it runs. Text nobody runs may name the marker, note on or off.
+func TestProductionNoteCoversNoLaterCommand(t *testing.T) {
+	marked := "BEEKEEPER_PROD_NOTE=42 kubectl --context production delete job stale --namespace monitoring"
+	called := false
+	h := Hook{Production: noteProduction, ProductionNote: func(int, string) error { called = true; return nil }}
+	if r := h.kubeRefusal(`beekeeper timer add 1m "later" --probe '` + marked + `'`); !strings.Contains(r, "a production cluster") || called {
+		t.Fatalf("refusal %q, note spent %v", r, called)
+	}
+	if r := h.kubeRefusal(`beekeeper note add "does BEEKEEPER_PROD_NOTE work?"`); r != "" || called {
+		t.Fatalf("refusal %q, note spent %v", r, called)
+	}
+}

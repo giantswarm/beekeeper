@@ -26,6 +26,7 @@ const (
 func (a *app) agentReviewCmd() *cobra.Command {
 	var model, nitsOf string
 	var lightLines int
+	var verdicts bool
 	c := &cobra.Command{
 		Use:   "review <owner/repo>#<n>",
 		Short: "Start one independent review of a green pull request head",
@@ -38,6 +39,9 @@ func (a *app) agentReviewCmd() *cobra.Command {
 			p, err := readLoopPull(cmd.Context(), refName(r))
 			if err != nil {
 				return err
+			}
+			if verdicts {
+				return a.printReviewVerdicts(cmd.Context(), p)
 			}
 			if p.State != superloop.Open || p.Draft || p.Head == "" {
 				return refused("review requires an open, ready pull request with a head commit")
@@ -114,10 +118,14 @@ func (a *app) agentReviewCmd() *cobra.Command {
 			if err := a.store.Record(about(event(loopParty, "supervisor.review", "%s", act.Line(what)), p.Ref)); err != nil {
 				return err
 			}
+			if err := a.noteReviewStarter(act); err != nil {
+				return err
+			}
 			_, err = fmt.Fprintln(a.out, what)
 			return err
 		},
 	}
+	c.Flags().BoolVar(&verdicts, "verdict", false, "print the desk verdicts on the pull request, a commented one included, and start nothing")
 	c.Flags().StringVar(&nitsOf, "nits-of", "", "supervisor attestation: this head only fixes the approval nits at this full SHA; no new reviewer")
 	c.Flags().StringVar(&model, "model", "", "review model (default: supervisor.reviewModel, then opus)")
 	c.Flags().IntVar(&lightLines, "light-lines", 0, "diff-only review below this changed-line count (default: supervisor.reviewLightLines, then 150; -1 disables size shortcut)")
@@ -262,6 +270,73 @@ func reviewContext(ctx context.Context, p superloop.Pull, previous string, thres
 
 // All entry points reserve atomically before starting a process, including the
 // automatic loop and the CLI racing on the same head.
+// noteReviewStarter records the caller as who asked for act's review, for
+// its verdict to reach it (reviewStarter).
+func (a *app) noteReviewStarter(act superloop.Action) error {
+	me, err := a.caller()
+	if err != nil {
+		return nil //nolint:nilerr // no session to tell: the review still stands
+	}
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.ReviewRequests {
+			if r := &st.ReviewRequests[i]; strings.EqualFold(r.Ref, act.Ref) && r.Head == act.Head {
+				r.By = me
+			}
+		}
+		return nil, nil
+	})
+}
+
+// reviewStarter is the session that started the review ag reports the
+// verdict of: the one that asked through agents review, else the one that
+// ran agents start --review. A review the loop started names nobody: the
+// loop reads its verdict itself.
+func reviewStarter(st *state.State, ag state.Agent, report string) state.Party {
+	if github.DeskVerdict(report) == "" {
+		return state.Party{}
+	}
+	for _, r := range st.ReviewRequests {
+		if r.By != (state.Party{}) && strings.EqualFold(ag.Name, superloop.ReviewerName(r.Ref, r.Round)) {
+			return r.By
+		}
+	}
+	if k := st.StartIndex(ag.Party); k >= 0 {
+		if by := st.Starts[k].By; by != (state.Party{}) && by.Name != loopParty.Name && !by.Is(ag.Party) {
+			return by
+		}
+	}
+	return state.Party{}
+}
+
+// printReviewVerdicts says the desk verdicts on p, oldest first, as the
+// loop and the merge gate read them: a verdict posted as a plain comment,
+// all GitHub allows on a pull request of the reviewer's own login, counts
+// as one GitHub recorded. Exit 3 when there is none.
+func (a *app) printReviewVerdicts(ctx context.Context, p superloop.Pull) error {
+	reviews, err := a.trustedReviews(ctx, p)
+	if err != nil {
+		return err
+	}
+	if len(reviews) == 0 {
+		return refused("%s has no desk verdict", p.Ref)
+	}
+	slices.SortStableFunc(reviews, func(x, y superloop.Review) int { return x.At.Compare(y.At) })
+	if a.json {
+		return a.printJSON(reviews)
+	}
+	for _, r := range reviews {
+		reviewed := cmp.Or(r.Head, r.Commit)
+		line := fmt.Sprintf("%s: %s at head %s by %s, %s", p.Ref, r.Verdict, shortSHA(reviewed), r.Author, r.At.UTC().Format(time.RFC3339))
+		if !sameCommit(reviewed, p.Head) {
+			line += fmt.Sprintf(" (head is now %s)", shortSHA(p.Head))
+		}
+		if _, err := fmt.Fprintln(a.out, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *app) reserveReview(act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
 		for _, request := range st.ReviewRequests {

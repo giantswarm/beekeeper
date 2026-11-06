@@ -218,7 +218,7 @@ func TestAgyRunnerSingleTurn(t *testing.T) {
 	}
 	line := strings.TrimSpace(string(calls))
 	msg := strings.TrimSpace(string(agyStreamMessage(f.r.Prompt)))
-	want := f.s.agyHomeDir() + "|--input-format stream-json --output-format stream-json --model gemini-3.1-pro-high --dangerously-skip-permissions --new-project|" + msg
+	want := f.s.agyMCPHomeDir(f.r.Ref) + "|--input-format stream-json --output-format stream-json --model gemini-3.1-pro-high --dangerously-skip-permissions --new-project|" + msg
 	if line != want {
 		t.Fatalf("first turn:\n got %q\nwant %q", line, want)
 	}
@@ -301,7 +301,7 @@ func TestAgyRunnerWakesResumeTheConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.agyHomeDir()+"|")[1:]
+	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.agyMCPHomeDir(f.r.Ref)+"|")[1:]
 	for i := range turns {
 		turns[i] = strings.TrimSpace(turns[i])
 	}
