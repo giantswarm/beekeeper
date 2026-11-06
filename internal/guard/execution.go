@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -344,6 +345,57 @@ func executionWithin(root, p string) bool {
 	}
 }
 
+// graphQLWrite is an operation that is no read. It may stand anywhere in a
+// document, so any occurrence counts, a field of that name included.
+var graphQLWrite = regexp.MustCompile(`(?i)\b(mutation|subscription)\b`)
+
+// executionGraphQLRead says args, those of gh api, are a GraphQL read the guard
+// can see in full: the endpoint, one literal query that holds no write, literal
+// variables, and only the flags that shape the output. Anything else, a file or
+// a dynamic word above all, is no read here. A dynamic word is empty.
+func executionGraphQLRead(args []string) bool {
+	endpoint, query := "", 0
+	field := func(value string) bool {
+		key, val, ok := strings.Cut(value, "=")
+		switch {
+		case !ok || key == "" || val == "" || strings.HasPrefix(val, "@"):
+			return false
+		case key != "query":
+			return true
+		}
+		query++
+		return !graphQLWrite.MatchString(val)
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "":
+			return false
+		case a == "-f" || a == "-F" || a == "--field" || a == "--raw-field":
+			i++
+			if i == len(args) || !field(args[i]) {
+				return false
+			}
+		case strings.HasPrefix(a, "--field=") || strings.HasPrefix(a, "--raw-field="):
+			if _, value, _ := strings.Cut(a, "="); !field(value) {
+				return false
+			}
+		case a == "--jq" || a == "-q" || a == "--template" || a == "-t" || a == "--cache":
+			i++
+			if i == len(args) || args[i] == "" {
+				return false
+			}
+		case a == "--paginate" || a == "--slurp" || a == "--silent" || a == "--include" || a == "-i" || a == "--verbose":
+		case strings.HasPrefix(a, "--jq=") || strings.HasPrefix(a, "--template=") || strings.HasPrefix(a, "--cache="):
+		case strings.HasPrefix(a, "-") || endpoint != "":
+			return false
+		default:
+			endpoint = a
+		}
+	}
+	return endpoint == executionGraphQL && query == 1
+}
+
 func executionLiteral(w *syntax.Word) (string, error) {
 	env := os.Environ()
 	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
@@ -511,7 +563,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-			if len(args) > 0 && args[0] == "api" {
+			if len(args) > 0 && args[0] == "api" && !executionGraphQLRead(args[1:]) {
 				for _, arg := range args[1:] {
 					lower := strings.ToLower(arg)
 					if strings.Contains(lower, "/merge") || lower == executionGraphQL || lower == "-f" || lower == "--field" || lower == "--raw-field" || strings.HasPrefix(lower, "--field=") || strings.HasPrefix(lower, "--raw-field=") || strings.HasPrefix(lower, "query=") && strings.Contains(lower, "mutation") || lower == "post" || lower == "put" || lower == executionPatch || lower == "delete" || lower == "--input" || strings.HasPrefix(lower, "--input=") {

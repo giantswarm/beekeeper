@@ -110,6 +110,18 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 		}
 		return json.NewEncoder(output).Encode(reply)
 	}
+	if req.Operation == executionLogRead {
+		value, callErr := a.executionLog(ctx, host, req)
+		if callErr != nil {
+			reply.Error = callErr.Error()
+		} else {
+			reply.Payload, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		return json.NewEncoder(output).Encode(reply)
+	}
 	if req.Operation == executionRerun {
 		value, callErr := a.executionCIRerun(ctx, host, req)
 		if callErr != nil {
@@ -420,8 +432,14 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			// Record the park and its wake atomically. No host-local timer or
 			// devctl is required, and this is not a completed review handoff.
 			ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: oneLine(v.Waits), Checks: true}
+			// CI that never settles still wakes the worker, at the wait a merge
+			// gives it, and the timer says it timed out.
+			var until time.Time
+			if d := a.cfg.Merge.TimeoutFor(ref.Repo); d > 0 {
+				until = a.now.UTC().Add(d)
+			}
 			st.NextTimer++
-			t := state.Timer{ID: st.NextTimer, By: me, At: a.now.UTC(), Due: a.now.UTC(), When: "pr-checks " + on, Every: timerEvery, Wake: ag.Name, WakeParkAt: ag.Park.At, What: "CI settled for " + on + ": read the result, fix failures or park for desk review"}
+			t := state.Timer{ID: st.NextTimer, By: me, At: a.now.UTC(), Due: a.now.UTC(), When: "pr-checks " + on, Every: timerEvery, Until: until, Wake: ag.Name, WakeParkAt: ag.Park.At, What: "CI settled for " + on + ": read the result, fix failures or park for desk review"}
 			st.Timers = append(st.Timers, t)
 			return "CI park and wake timer recorded on coordinator; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now)), event(me, "timer.add", "#%d %s", t.ID, t.When)}, nil
 		}

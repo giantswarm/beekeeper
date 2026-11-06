@@ -345,14 +345,19 @@ type Capabilities struct {
 	CIWait        bool              `json:"ciWait"`
 	// SourcePreparation promises source-chunk upload and typed not-found
 	// responses when inspecting an execution whose journal does not exist.
-	SourcePreparation bool              `json:"sourcePreparation"`
-	GitHub            bool              `json:"github,omitempty"`
-	Publication       bool              `json:"publication"`
-	Protocol          int               `json:"protocol"`
-	Identity          HostID            `json:"identity"`
-	Version           string            `json:"version"`
-	PolicyDigest      string            `json:"policyDigest"`
-	Harnesses         map[string]string `json:"harnesses"`
+	SourcePreparation bool `json:"sourcePreparation"`
+	// GitHub says a worker here can read GitHub. The host only promises the
+	// protocol; the coordinator's check settles it against GitHubLogin and its
+	// worker App.
+	GitHub bool `json:"github,omitempty"`
+	// GitHubLogin is the host's own gh login, empty from an older host.
+	GitHubLogin  string            `json:"githubLogin,omitempty"`
+	Publication  bool              `json:"publication"`
+	Protocol     int               `json:"protocol"`
+	Identity     HostID            `json:"identity"`
+	Version      string            `json:"version"`
+	PolicyDigest string            `json:"policyDigest"`
+	Harnesses    map[string]string `json:"harnesses"`
 	// Unavailable names each configured harness that failed its version,
 	// login or guard probe. The host advertises only the passing ones.
 	Unavailable map[string]string           `json:"unavailable,omitempty"`

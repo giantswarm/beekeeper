@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,6 +48,24 @@ func setTool(t *testing.T, f fixture, name string, c ToolConfig) {
 	}
 	if _, err := f.s.Prepare(f.s.Policy()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckReportsTheHostsGitHubLogin(t *testing.T) {
+	for want, answer := range map[string]error{GitHubLoggedIn: nil, GitHubLoggedOut: errors.New("no login")} {
+		t.Run(want, func(t *testing.T) {
+			f := testFixture(t)
+			next := f.s.Command
+			f.s.Command = func(ctx context.Context, dir string, env []string, bin string, args ...string) ([]byte, error) {
+				if bin == fixtureGitHubExecutable && slices.Equal(args, []string{"auth", "token"}) {
+					return nil, answer
+				}
+				return next(ctx, dir, env, bin, args...)
+			}
+			if got := f.s.gitHubLogin(t.Context()); got != want {
+				t.Fatalf("login = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

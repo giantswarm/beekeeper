@@ -55,7 +55,10 @@ Git, and a pinned Claude Code version
 in the supported family (`>= 2.1.268, < 3.0.0`), a pinned Codex CLI (see
 "Codex on an execution host"), or both. Provision its subscription login
 there independently. `agents hosts check` reads version and authentication
-metadata; it makes no model request. Starting a session never copies a provider
+metadata; it makes no model request. Its `github` field answers for a worker's
+reads: without `github.workerApp` on the coordinator it follows the host's own
+`gh` login (`githubLogin`), and a logged-out host fails the check and every
+start, naming the reason. Starting a session never copies a provider
 credential store or forwards an authentication agent.
 
 Provision the worker toolchain the same way on every host, and pin it under
@@ -590,6 +593,14 @@ a replacement for an uncertain running unit. A failed or partial workspace is
 preserved for inspection. Do not issue another start under a new identity to
 escape an unknown outcome.
 
+A start whose activation times out reads the host's journal before it answers:
+a process that came up is the start succeeding, a prepared execution with no
+process is named as such, and a host that still does not answer leaves the
+outcome unknown. Repeating the same start, by name, task and host, activates
+that execution rather than reserving another. One nobody retried is stopped by
+the host sync `15m` after its start was sent, so it holds no slot and no host
+update; its workspace stays.
+
 Notes, parks, reports, and handover events from a managed worker reach the
 coordinator through a durable ordered outbox. Failed delivery is explicit and
 never falls back to host-local scheduling state. `hosts sync` and the watch
@@ -881,7 +892,9 @@ This transfers upstream commits through the same coordinator, fetches them into
 the owned workspace and merges them with hooks disabled. The merge resolves
 the worker's usual author and committer identities, including global Git identity,
 and supplies only those identity fields to the isolated Git operation. Other
-global configuration stays disabled. Resolve conflicts and
+global configuration stays disabled. A host whose execution user has no identity
+prepares its workspaces with `beekeeper <beekeeper@execution.invalid>`, so a
+worker commits and merges there without supplying one. Resolve conflicts and
 commit locally, then publish. No source checkout is modified and no host GitHub
 credential or SSH agent is forwarded. This command creates no review or merge
 authorization; park on the returned PR and follow the independent review gate.
@@ -896,6 +909,15 @@ aside once the execution is retired. Failed staging directories remain for
 inspection under the coordinator's `execution-publications/transfer-*` state
 directories; successful staging directories are removed.
 
+A republication with `--title` or `--body-file` updates the existing pull
+request's title or body and lists the fields in `updated`; a flag left out keeps
+the field, and a failed update is an error that an identical retry repeats.
+
+A lost `gh pr create` answer settles by the owned branch: a pull request found
+there is returned. None found, the error says GitHub created none and why. Only
+a branch that cannot be read stays `PR creation outcome uncertain`. Creating and
+that read have their own 15-second limits, outside the attempt's 20 seconds.
+
 A failed Git step reports its stage and a fixed diagnosis, never Git's raw
 output, which may carry URLs or credentials: for example `publication Git push
 failed: GitHub refused a workflow file change: the coordinator's GitHub
@@ -908,7 +930,10 @@ non-fast-forward push, a rejected or missing credential, denied write access,
 an unreachable GitHub or the 20-second limit; anything else is an
 unclassified Git failure. The coordinator's event log records each denial as
 `execution.publish-denied` with the head and the same diagnosis (`beekeeper
-log`).
+log`). A worker on a host runs `beekeeper log` too: its flags go to the
+coordinator, which answers with up to 256 KiB of the newest events, for example
+as the proof of a step that ran there after a merge. It is the only coordinator
+read of its kind; `status`, `board` and `supervisor status` stay refused.
 
 Every chunk and publication checks the exact execution generation, repository
 allowlist, current lease, completion, execution/global stop and GitHub hold.
@@ -1037,7 +1062,11 @@ Every other `gh` subcommand is refused unless the wrapper lists it as a read
 `run watch`, `run download`, `release download`, `release verify`, `release
 verify-asset`). `gh api` runs GET and HEAD only: `-f`/`-F` need an explicit
 `-X GET`, since gh otherwise sends POST, and `--input`, `--hostname` and
-GraphQL's POST are refused. A worker may work in and
+GraphQL's POST are refused. On a host without the worker App, where `gh` runs on
+the host's own login, the execution guard passes a `gh api graphql` read whose
+query and variables are all literal and that holds no mutation. An empty
+`projectItems` is no proof an issue is off a board: it can omit another owner's.
+A worker may work in and
 open pull requests across multiple repositories in one task (using its primary
 workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner
 installs dispatch scripts for `gh` and `git` ahead of the pinned tools; scripts
