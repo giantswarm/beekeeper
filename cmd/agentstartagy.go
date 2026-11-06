@@ -123,6 +123,15 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 		}
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
 	}
+	// The link files go with the inbox; the roster name must outlive them.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := st.StartIndex(s.Party); i >= 0 {
+			st.Starts[i].Conversation = convID
+		}
+		return nil, nil
+	}); err != nil {
+		return err
+	}
 	var remoteLine string
 	if a.cfg.Agy.RemoteControl && a.cfg.Agy.RemoteDaemon != "" {
 		remoteLine = a.notifyAgyRemoteDaemon(ctx, id, convID)

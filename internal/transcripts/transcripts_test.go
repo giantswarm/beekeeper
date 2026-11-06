@@ -294,3 +294,48 @@ func TestDefaultAccessRequiresWorkerRole(t *testing.T) {
 		}
 	}
 }
+
+func TestAgyResultsAndLoss(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agy.jsonl")
+	big := strings.Repeat("x", maxResultBytes+10)
+	lines := strings.Join([]string{
+		`{"type":"USER_INPUT","content":"<USER_REQUEST>brief <truncated 41433 bytes></USER_REQUEST>"}`,
+		`{"type":"PLANNER_RESPONSE","content":"looking","tool_calls":[{"name":"run_command","args":{"CommandLine":"ls"}},{"name":"view_file","args":{"Path":"a.txt"}}]}`,
+		`{"type":"TOOL_RESPONSE","content":"a.txt"}`,
+		`{"type":"GENERIC","content":"` + big + `"}`,
+		`{"type":"PLANNER_RESPONSE","content":"","tool_calls":[{"name":"run_command","args":{"CommandLine":"pwd"}}]}`,
+		`{"type":"PLANNER_RESPONSE","content":"done <truncated 7215 bytes>"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ParseFile("agy", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results []string
+	for _, turn := range p.Turns {
+		if turn.Role == RoleTool {
+			results = append(results, turn.Result)
+		}
+	}
+	if len(results) != 3 || results[0] != "a.txt" || !strings.HasSuffix(results[1], "… <10 bytes not stored>") || results[2] != "" {
+		t.Fatalf("tool results = %q", results)
+	}
+	l := LossOf(p.Turns, true)
+	if want := (Loss{HarnessBytes: 48648, HarnessCuts: 2, ClippedBytes: 10, Clipped: 1, NoResult: 1}); l != want {
+		t.Fatalf("loss = %+v, want %+v", l, want)
+	}
+	for _, part := range []string{"48648 bytes", "10 bytes not stored", "1 tool calls have no stored result"} {
+		if !strings.Contains(l.String(), part) {
+			t.Errorf("%q does not say %q", l, part)
+		}
+	}
+	if LossOf(p.Turns, false).NoResult != 0 {
+		t.Error("a read without results reports results as lost")
+	}
+	if (Loss{}).String() != "" {
+		t.Error("no loss says something")
+	}
+}

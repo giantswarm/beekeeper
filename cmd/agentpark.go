@@ -443,7 +443,10 @@ func (a *app) agentResumeCmd() *cobra.Command {
 does: by name to a running CLI, else headless. Its turn carries what
 settled the wait, a person's answer word for word, or that the caller
 resumed it by hand. Before retirement, a gone agent can also be resumed:
-its task becomes busy again. A recent agent that is not parked is refused:
+its task becomes busy again. After it, a worker off the roster is resumed by
+its exact name as agents wake reaches it: its last task and its own
+conversation come back, or the refusal says its harness cannot continue and
+names its transcript. A recent agent that is not parked is refused:
 agents wake messages it. While USAGE HIGH holds on the 5-hour window
 (capacity.usage.highPercent), resume refuses until fiveHour.resetsAt
 unless --force is given.
@@ -474,6 +477,15 @@ agents.autoResume leaves such a park resumable for the agent's own resume.`,
 					return refused("a managed SSH worker resumes only its own park: beekeeper agents resume, no agent named")
 				}
 				return a.remoteControl(cmd.Context(), execution.ControlResume, struct{}{})
+			}
+			if st, err := a.store.Read(); err == nil {
+				if s, ok := a.endedWorker(st, q); ok {
+					ag := state.Agent{Party: s.Party}
+					if block := a.usageHighBlockForAgent(cmd.Context(), st, nil, &ag); block != "" && !force {
+						return refused("no resume: %s (--force resumes anyway)", block)
+					}
+					return a.wakeEnded(cmd.Context(), by, s, endedResumeMessage, "")
+				}
 			}
 			return a.resumeParkedOpts(cmd.Context(), by, q, force)
 		},

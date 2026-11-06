@@ -94,6 +94,11 @@ func GrantAppliesTo(g state.TranscriptGrant, caller Caller) bool {
 	return false
 }
 
+// Covers reports whether the scope of g reaches meta.
+func Covers(g state.TranscriptGrant, meta Meta) bool {
+	return grantCovers(g, meta, cmp.Or(strings.TrimSpace(meta.Repo), RepoOfRef(meta.Ref)))
+}
+
 func grantCovers(g state.TranscriptGrant, meta Meta, metaRepo string) bool {
 	if g.All {
 		return true

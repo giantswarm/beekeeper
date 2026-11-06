@@ -871,6 +871,12 @@ type Start struct {
 	// Once relieved or taken over, its session stays the person's to close: nothing stops or
 	// archives it.
 	Role string `json:"role,omitempty"`
+	// Conversation is the harness's own id of the conversation where it
+	// differs from the start's (agy): its transcript's id, which outlives the
+	// link files removed with the session's inbox.
+	Conversation string `json:"conversation,omitempty"`
+	// Task is the task an ended worker held last (EndedWorkers).
+	Task string `json:"task,omitempty"`
 
 	rest rest
 }
@@ -1190,7 +1196,8 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
-	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// EndedWorkers retain local removed identities for orphan-process cleanup
+	// and for a wake or resume by name (endedWorker).
 	// They grant no start permissions; Starts remains the authorization ledger.
 	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a

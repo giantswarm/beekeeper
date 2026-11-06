@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,9 +166,70 @@ func mergePromptTurns(prompts, turns []Turn) []Turn {
 func clipResult(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > maxResultBytes {
-		return s[:maxResultBytes] + "…"
+		return s[:maxResultBytes] + fmt.Sprintf("… <%d bytes not stored>", len(s)-maxResultBytes)
 	}
 	return s
+}
+
+var (
+	harnessCut = regexp.MustCompile(`<truncated (\d+) bytes>`)
+	storeClip  = regexp.MustCompile(`… <(\d+) bytes not stored>$`)
+)
+
+// bytesInText sums the byte counts of re's markers in s, and counts them.
+func bytesInText(re *regexp.Regexp, s string) (n int64, hits int) {
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		b, _ := strconv.ParseInt(m[1], 10, 64)
+		n += b
+		hits++
+	}
+	return n, hits
+}
+
+// Loss is what a transcript's turns do not hold, which no read brings back:
+// text its harness cut before the store read it, tool results the store
+// clipped, and tool calls stored with no result.
+type Loss struct {
+	HarnessBytes int64 `json:"harnessBytes,omitempty"`
+	HarnessCuts  int   `json:"harnessCuts,omitempty"`
+	ClippedBytes int64 `json:"clippedBytes,omitempty"`
+	Clipped      int   `json:"clipped,omitempty"`
+	NoResult     int   `json:"noResult,omitempty"`
+}
+
+// LossOf reads the loss of turns, as ReadTurns returned them: results counts
+// only when they were asked for.
+func LossOf(turns []Turn, results bool) Loss {
+	var l Loss
+	for _, t := range turns {
+		for _, text := range []string{t.Text, t.Result} {
+			n, hits := bytesInText(harnessCut, text)
+			l.HarnessBytes += n
+			l.HarnessCuts += hits
+		}
+		n, hits := bytesInText(storeClip, t.Result)
+		l.ClippedBytes += n
+		l.Clipped += hits
+		if results && t.Role == RoleTool && t.Result == "" {
+			l.NoResult++
+		}
+	}
+	return l
+}
+
+// String says the loss in one line, "" for none.
+func (l Loss) String() string {
+	var parts []string
+	if l.HarnessCuts > 0 {
+		parts = append(parts, fmt.Sprintf("the harness cut %d bytes in %d places before the store read them", l.HarnessBytes, l.HarnessCuts))
+	}
+	if l.Clipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool results are clipped, %d bytes not stored", l.Clipped, l.ClippedBytes))
+	}
+	if l.NoResult > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool calls have no stored result", l.NoResult))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func forEachLine(r io.Reader, fn func(line []byte)) {
@@ -367,6 +430,8 @@ func parseAgy(r io.Reader) Parsed {
 		Content   string        `json:"content"`
 		ToolCalls []agyToolCall `json:"tool_calls"`
 	}
+	// A step after a planner response answers its oldest open tool call.
+	var pending []int
 	addStep := func(st agyStep, fallbackAt time.Time) {
 		at := st.CreatedAt
 		if at.IsZero() {
@@ -389,7 +454,13 @@ func parseAgy(r io.Reader) Parsed {
 						Tool: tc.Name,
 						Text: agyToolGist(tc.Name, tc.Args),
 					})
+					pending = append(pending, len(p.Turns)-1)
 				}
+			}
+		case "GENERIC", "TOOL_RESPONSE":
+			if len(pending) > 0 {
+				p.Turns[pending[0]].Result = clipResult(st.Content)
+				pending = pending[1:]
 			}
 		}
 	}
@@ -430,7 +501,7 @@ func parseAgy(r io.Reader) Parsed {
 		}
 		kind := cmp.Or(ev.Type, ev.Event)
 		switch kind {
-		case "USER_INPUT", "PLANNER_RESPONSE", "user_input", "planner_response":
+		case "USER_INPUT", "PLANNER_RESPONSE", "GENERIC", "TOOL_RESPONSE", "user_input", "planner_response":
 			addStep(agyStep{Type: strings.ToUpper(kind), CreatedAt: cmp.Or(ev.CreatedAt, ev.Timestamp), Content: ev.Content, ToolCalls: ev.ToolCalls}, ev.Timestamp)
 		case "step_update", "step":
 			if ev.Step != nil {

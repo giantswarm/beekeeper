@@ -557,8 +557,17 @@ func registerAgent(st *state.State, me state.Party, live func(state.Party) bool,
 // waits on anyone.
 func removeAgent(st *state.State, i int) {
 	ag := st.Agents[i]
-	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") && !slices.ContainsFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }) {
-		st.EndedWorkers = append(st.EndedWorkers, state.Start{Party: ag.Party, At: ag.Registered})
+	if ag.Execution == nil && (ag.Session != "" || ag.HostSession != "") {
+		task := cmp.Or(ag.Task, ag.LastTask)
+		if k := slices.IndexFunc(st.EndedWorkers, func(s state.Start) bool { return s.Is(ag.Party) }); k >= 0 {
+			st.EndedWorkers[k].Task = cmp.Or(task, st.EndedWorkers[k].Task)
+		} else {
+			ended := state.Start{Party: ag.Party, At: ag.Registered, Harness: ag.Harness, Model: ag.Model, Task: task}
+			if j := st.StartIndex(ag.Party); j >= 0 {
+				ended.Dir, ended.Conversation = st.Starts[j].Dir, st.Starts[j].Conversation
+			}
+			st.EndedWorkers = append(st.EndedWorkers, ended)
+		}
 	}
 	for j := range st.Records {
 		if st.Records[j].Session.Is(st.Agents[i].Party) {
@@ -740,6 +749,9 @@ func stoppedAgents(agents []state.Agent, sessions []*claude.Session) []state.Age
 
 // resumeMessage is the turn a resumed worker starts with.
 const resumeMessage = "Your CLI stopped (a reboot or a crash). Re-query the live state of your task and continue it."
+
+// endedResumeMessage is the turn of a worker resumed after it left the roster.
+const endedResumeMessage = "Someone resumed you by hand. Re-query the live state of your task and continue it."
 
 // resumeHint is how a stopped agent comes back: a desktop session by
 // opening its row, a background one by claude --bg --resume, and another
