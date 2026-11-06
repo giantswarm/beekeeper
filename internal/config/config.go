@@ -697,6 +697,11 @@ type Kube struct {
 	ProtectedContexts []string `yaml:"protectedContexts"`
 	// ReadOnlyExecQueries lists exact SELECT queries allowed through psql -X -c.
 	ReadOnlyExecQueries []string `yaml:"readOnlyExecQueries"`
+	// ProductionNoteDeletes lets an answered note authorise one literal
+	// production kubectl delete. Off by default, and unsafe to switch on where
+	// agents can record answers: nothing proves a person gave the answer, so an
+	// agent that can record one can authorise its own deletion.
+	ProductionNoteDeletes bool `yaml:"productionNoteDeletes"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
