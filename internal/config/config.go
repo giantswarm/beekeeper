@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -3337,6 +3338,15 @@ func Load(path string) (*Config, error) {
 func parse(path string, raw []byte) (*Config, error) {
 	c := &Config{}
 	if err := yaml.Unmarshal(raw, c); err != nil {
+		var doc yaml.Node
+		if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) > 0 {
+			var findings, invalid []string
+			root := effectiveNode(doc.Content[0], "", map[*yaml.Node]bool{}, &findings)
+			checkNode(root, reflect.TypeFor[Config](), "", &findings, &invalid)
+			if len(findings) > 0 {
+				return nil, fmt.Errorf("%s: %s: %w", path, strings.Join(findings, "; "), err)
+			}
+		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := c.defaults(); err != nil {

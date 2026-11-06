@@ -139,6 +139,9 @@ reset. A development build (version dev) is refused.`,
 			if a.json {
 				w = io.Discard
 			}
+			if !check {
+				a.warnUpdateConfig(w)
+			}
 			started := time.Now()
 			ctx := update.WithOptions(cmd.Context(), update.Options{
 				Version: version,
@@ -339,4 +342,14 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 		}
 	}
 	return nil
+}
+
+// warnUpdateConfig runs before handing control to a newer binary, which may
+// understand configuration that this installed version cannot read.
+func (a *app) warnUpdateConfig(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "WARNING: configuration changes made with a newer release may be unreadable by the currently installed binary. Before changing configuration, finish the update and restart older beekeeper processes; validate configuration before reverting.")
+
+	if err := a.loadConfig(); err != nil {
+		_, _ = fmt.Fprintf(w, "WARNING: the installed binary cannot read the configuration: %v. A newer release may accept or write values this version cannot read; repair the configuration before reverting.\n", err)
+	}
 }

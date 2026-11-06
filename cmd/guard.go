@@ -27,6 +27,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -408,6 +409,7 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(a.relayHookCmd())
 	c.AddCommand(&cobra.Command{
 		Use:   "check-scope",
 		Short: "Verify a proof event has a session ID and is in the hook's scope",
@@ -461,8 +463,10 @@ raised to 10 minutes; a background run gets a 60-minute wait instead. A
 command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
-machine kubeconfig. A configuration that does not load refuses every Bash
-call, naming the error.
+machine kubeconfig. A configuration that does not load enables recovery mode:
+literal read-only inspection and beekeeper commands (including config set and
+self-update) still run, with the configuration error named; other Bash calls
+are refused until the file is repaired.
 A merge of a merge.devctlOwners repository is the gate's devctl pr merge
 alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
 naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
@@ -658,10 +662,18 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					_, _ = w.Write(guard.DenyCodex(reason))
 					return nil
 				}
-				if cfgErr != nil {
-					_, _ = w.Write(guard.DenyCodex("Refused: cannot load beekeeper configuration (" + cfgErr.Error() + "); failing closed."))
-					return nil
+			}
+			if cfgErr != nil {
+				h := guard.Hook{ConfigErr: cfgErr}
+				switch {
+				case isCodex:
+					_, _ = w.Write(h.DecideCodex(raw))
+				case isAgy:
+					_, _ = w.Write(h.DecideAgy(raw))
+				default:
+					_, _ = w.Write(h.Decide(raw))
 				}
+				return nil
 			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
@@ -744,6 +756,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			out := h.Decide(raw)
+			if a.cfg != nil {
+				out = peer.WithInstructionContext(a.cfg.StateDir, raw, out)
+			}
 			a.recordGitHubCalls(raw, formatFlag, out)
 			if out != nil {
 				_, _ = w.Write(out)

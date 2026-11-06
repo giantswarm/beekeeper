@@ -363,7 +363,23 @@ func TestEnvtestServeTools(t *testing.T) {
 	if by, _ := note["by"].(map[string]any); by["team"] != ourTeam {
 		t.Errorf("note_add %v", note)
 	}
-	e.expect(t, pia, "note_list", map[string]any{}, false, "which lane for muster?")
+	e.expect(t, pia, noteListTool, map[string]any{}, false, "no open notes")
+	for _, caller := range []*mcpCaller{ana, bo, pia} {
+		for _, tool := range []string{noteListTool, snapshotTool} {
+			text, result, failed := caller.call(tool, map[string]any{})
+			want := 1
+			if caller == pia {
+				want = 0
+			}
+			notes, ok := result[keyNotes].([]any)
+			if failed || !ok || len(notes) != want {
+				t.Errorf("%s: notes = %v, failed = %v, want %d", tool, result[keyNotes], failed, want)
+			}
+			if strings.Contains(text, "which lane for muster?") != (want == 1) {
+				t.Errorf("%s: unexpected note visibility in text: %s", tool, text)
+			}
+		}
+	}
 	e.expect(t, pia, "note_answer", map[string]any{paramNote: 1, paramText: "the merge lane"}, true, "only its addressee")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "the portal lane"}, false, "note #1 answered and closed")
 	e.expect(t, bo, "note_answer", map[string]any{paramNote: 1, paramText: "again"}, true, "not open")
@@ -377,7 +393,7 @@ func TestEnvtestServeTools(t *testing.T) {
 	e.expect(t, pia, "list_agents", map[string]any{"scope": scopeTeam}, false, piaTeam)
 	e.expect(t, ana, "list_agents", map[string]any{}, false, "ana@example.com")
 
-	snap := e.expect(t, ana, "snapshot", map[string]any{}, false, "== Agents")
+	snap := e.expect(t, ana, snapshotTool, map[string]any{}, false, "== Agents")
 	for _, k := range []string{"leases", "holds", "lanes", keyNotes, "agents"} {
 		if _, ok := snap[k]; !ok {
 			t.Errorf("snapshot lacks %s", k)

@@ -1272,6 +1272,17 @@ func TestWatchBatchInterval(t *testing.T) {
 	}
 }
 
+func TestLoadNamesUnparsableKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "watch.interval") {
+		t.Fatalf("want key in parse error, got %v", err)
+	}
+}
+
 func TestLeasableInstallations(t *testing.T) {
 	c := Config{Resources: []string{leasableShared}}
 	c.Alerts.Installations = []Installation{{Name: leasableCustomer}, {Name: leasableShared}, {Name: leasableCustomer}}

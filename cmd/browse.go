@@ -719,6 +719,10 @@ func (a *app) browseLease() error {
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	if permanentDeletionSteps.MatchString(steps) {
 		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
 	}
@@ -2050,7 +2054,7 @@ const uploadWords = "The caller shares these files with you for upload, and only
 	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. " +
 	"A page keeps hidden file inputs (a review-reply box beside the comment box) that take an upload as readily as the intended one, so before " +
 	"each file_upload resolve its input: run this upload-target check with javascript_tool on the tab, scope set to a selector of the " +
-	"intended form or comment box (\"\" for the whole page): %s It marks the one visible, enabled file input there or says why it marked none " +
+	"intended form or comment box (\"\" for the whole page; form[action=\"...\"] matches the destination, ignoring its query): %s It marks the one visible, enabled file input there or says why it marked none " +
 	"(hidden, disabled, several: narrow the scope; none visible: open the intended comment box, or stop and report it). Then find '" +
 	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. " +
 	"The hook reads the check and the find from their results, so both answer before the call that holds the file_upload, never in its batch. "

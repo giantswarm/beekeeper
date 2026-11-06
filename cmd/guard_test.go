@@ -706,16 +706,21 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 		t.Errorf("malformed JSON: got %v, want deny", badRes)
 	}
 
-	// Broken config fails closed.
+	// Broken config fails closed, past the recovery commands.
 	brokenCfg := filepath.Join(dir, "broken.yaml")
 	if err := os.WriteFile(brokenCfg, []byte("invalid: [yaml\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	validRaw := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"git status"}}`
-	brokenRes := runCodexRaw(t, brokenCfg, validRaw)
+	brokenCall := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"%s"}}`
+	brokenRes := runCodexRaw(t, brokenCfg, fmt.Sprintf(brokenCall, "rm config.yaml"))
 	brokenSpec, _ := brokenRes["hookSpecificOutput"].(map[string]any)
 	if brokenSpec["permissionDecision"] != wantDeny {
 		t.Errorf("broken config: got %v, want deny", brokenRes)
+	}
+	recoveryRes := runCodexRaw(t, brokenCfg, fmt.Sprintf(brokenCall, "git status"))
+	recoverySpec, _ := recoveryRes["hookSpecificOutput"].(map[string]any)
+	if recoverySpec["permissionDecision"] != appAllow || !strings.Contains(fmt.Sprint(recoverySpec["permissionDecisionReason"]), "broken.yaml") {
+		t.Errorf("broken config recovery: got %v, want allow naming the error", recoveryRes)
 	}
 
 	// Out of scope -> {} (pass).
