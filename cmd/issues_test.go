@@ -70,7 +70,7 @@ func TestIssueMonitorSlackRefusesOtherDestinations(t *testing.T) {
 		return nil, nil
 	})
 	for name, webhook := range map[string]string{
-		"empty":      "",
+		"no webhook": "",
 		"unparsable": "https://hooks.slack.com:port/services/T000/B000/XXXX",
 		"plain http": "http://hooks.slack.com/services/T000/B000/XXXX",
 		"other host": "https://hooks.example.invalid/services/T000/B000/XXXX",
