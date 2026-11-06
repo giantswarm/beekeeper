@@ -264,7 +264,7 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 					}
 					cancel()
 					select {
-					case _ = <-waiting:
+					case <-waiting:
 					case <-time.After(time.Second):
 						t.Error("role start did not honor cancellation")
 					}
