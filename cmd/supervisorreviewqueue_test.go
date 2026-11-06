@@ -153,7 +153,7 @@ func removeRig(t *testing.T, onRoster bool, code int, out string) (*loopRig, *su
 	r := newLoopRig(t)
 	if onRoster {
 		if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker-x"}, Task: "work"})
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: "worker-x"}, Task: "queue work"})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)
@@ -211,7 +211,7 @@ func TestRemovedDetailKeepsTheNameReadable(t *testing.T) {
 // review or agents start --review; the loop reads its own reviews itself.
 func TestReviewStarterGetsTheVerdict(t *testing.T) {
 	guide := state.Party{Session: queueGuide, Name: "guide"}
-	reviewer := state.Party{Session: "reviewer-session", Name: queueReviewer}
+	reviewer := state.Party{Session: "queue-reviewer-session", Name: queueReviewer}
 	ag := state.Agent{Party: reviewer}
 	for _, tc := range []struct {
 		name   string
@@ -219,9 +219,9 @@ func TestReviewStarterGetsTheVerdict(t *testing.T) {
 		report string
 		want   state.Party
 	}{
-		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: "o/r#7", Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, guide},
+		{"by agents review", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1, By: guide}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, guide},
 		{"by agents start", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, queueVerdict, guide},
-		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: "o/r#7", Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, state.Party{}},
+		{"by the loop", state.State{ReviewRequests: []state.ReviewRequest{{Ref: claimIssue, Head: loopHead, Round: 1}}, Starts: []state.Start{{Party: reviewer, By: loopParty}}}, queueVerdict, state.Party{}},
 		{"no verdict", state.State{Starts: []state.Start{{Party: reviewer, By: guide}}}, "shipped it", state.Party{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,13 +239,13 @@ func TestReviewVerdictsPrintACommentedVerdict(t *testing.T) {
 	r.a.cfg.Supervisor.Ownership.Authors = []string{loopDesk}
 	p := superloop.Pull{Ref: loopPR, Head: loopFixed, Reviews: []superloop.Review{
 		{Author: loopDesk, Commit: loopHead, Verdict: superloop.Verdict("COMMENTED", queueVerdict), Body: queueVerdict, At: r.a.now},
-		{Author: "stranger", Commit: loopFixed, Verdict: superloop.Approved, At: r.a.now.Add(time.Minute)},
+		{Author: "queue-stranger", Commit: loopFixed, Verdict: superloop.Approved, At: r.a.now.Add(time.Minute)},
 	}}
 	if err := r.a.printReviewVerdicts(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	out := r.out.String()
-	if !strings.Contains(out, superloop.ChangesRequested) || !strings.Contains(out, "head is now") || strings.Contains(out, "stranger") {
+	if !strings.Contains(out, superloop.ChangesRequested) || !strings.Contains(out, "head is now") || strings.Contains(out, "queue-stranger") {
 		t.Fatalf("verdicts:\n%s", out)
 	}
 	p.Reviews = p.Reviews[1:]
@@ -258,7 +258,7 @@ func TestReviewVerdictsPrintACommentedVerdict(t *testing.T) {
 func TestWatchSaysAVerdictItCouldNotDeliver(t *testing.T) {
 	r := newLoopRig(t)
 	w := &watcher{app: r.a, last: map[string]time.Time{}, reported: map[string]bool{}}
-	w.tellReviewVerdicts(context.Background(), []state.WorkerReport{{By: state.Party{Name: queueReviewer}, Text: queueVerdict, TellTo: state.Party{Session: "gone", Name: "gone-guide"}}})
+	w.tellReviewVerdicts(context.Background(), []state.WorkerReport{{By: state.Party{Name: queueReviewer}, Text: queueVerdict, TellTo: state.Party{Session: holderGone, Name: "gone-guide"}}})
 	if !strings.Contains(r.out.String(), "REVIEW VERDICT NOT DELIVERED") {
 		t.Fatalf("output:\n%s", r.out)
 	}
