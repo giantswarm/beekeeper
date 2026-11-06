@@ -7,7 +7,7 @@ import (
 )
 
 func TestBoardAddShowCommands(t *testing.T) {
-	for _, name := range []string{"add", "show"} {
+	for _, name := range []string{loopAdd, noteShowName} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			a.cfg.Board.Owner, a.cfg.Board.Project = "o", 7
@@ -35,7 +35,7 @@ func TestBoardAddShowCommands(t *testing.T) {
 			}
 			c := a.boardCmd()
 			args := []string{name, "o/r#5"}
-			if name == "add" {
+			if name == loopAdd {
 				args = append(args, "--kind", "bug")
 			}
 			c.SetArgs(args)
@@ -45,7 +45,7 @@ func TestBoardAddShowCommands(t *testing.T) {
 			if !strings.Contains(out.String(), "Status Backlog; Kind Bug") {
 				t.Fatalf("output: %s", out.String())
 			}
-			if name == "show" && writes != 0 || name == "add" && writes != 2 {
+			if name == noteShowName && writes != 0 || name == loopAdd && writes != 2 {
 				t.Fatalf("writes: %d", writes)
 			}
 		})

@@ -76,9 +76,10 @@ func command(entry json.RawMessage) []string {
 	}
 	var subs []string
 	for _, h := range e.Hooks {
-		f := strings.Fields(h.Command)
-		if len(f) == 3 && filepath.Base(strings.Trim(f[0], `'"`)) == project.Name && f[1] == hookWord {
-			subs = append(subs, f[2])
+		for _, sub := range []string{"pretooluse", "permissionrequest", "posttooluse", "sessionstart"} {
+			if exe := installedHookBinary(h.Command, " "+hookWord+" "+sub); filepath.Base(exe) == project.Name {
+				subs = append(subs, sub)
+			}
 		}
 	}
 	return subs
@@ -107,7 +108,7 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 		}
 		what := e.Settings + ": " + want.Event + " hook"
 		mine := slices.IndexFunc(m.Hooks, func(h Hook) bool { return h.Event == want.Event })
-		switch i, state := find(list, want, m.Hooks, mine); state {
+		switch i, state := find(list, want, m.hookCandidates()); state {
 		case fileSame:
 			p.add("ok", what, "", nil)
 		case fileUpdated:
@@ -157,24 +158,28 @@ func writeVerb(existed bool) string {
 }
 
 // find is where want stands in list: as it is, as the entry install added
-// earlier (mine, an index into added, -1 for none) or one running the same
+// earlier (one of added) or one running the same
 // command with another matcher or timeout (fileUpdated), as a beekeeper hook
 // of the same subcommand with another command (fileKept), or absent
 // (fileNew).
-func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileState) {
+func find(list []json.RawMessage, want Hook, added []Hook) (int, fileState) {
 	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return sameJSON(r, want.Entry) }) {
 		return 0, fileSame
 	}
-	if mine >= 0 {
-		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, added[mine].Entry) }); i >= 0 {
+	for _, candidate := range added {
+		if candidate.Event != want.Event {
+			continue
+		}
+		if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameJSON(r, candidate.Entry) }); i >= 0 {
 			return i, fileUpdated
 		}
 	}
+
 	if i := slices.IndexFunc(list, func(r json.RawMessage) bool { return sameCommand(r, want.Entry) }); i >= 0 {
 		return i, fileUpdated
 	}
 	sub := command(want.Entry)
-	if slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
+	if len(sub) > 0 && slices.ContainsFunc(list, func(r json.RawMessage) bool { return slices.Equal(command(r), sub) }) {
 		return 0, fileKept
 	}
 	return 0, fileNew
@@ -182,7 +187,7 @@ func find(list []json.RawMessage, want Hook, added []Hook, mine int) (int, fileS
 
 // planUnhooks removes the hooks install added and the keys it created.
 func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
-	if len(m.Hooks) == 0 {
+	if len(m.hookCandidates()) == 0 {
 		return nil
 	}
 	s, err := readSettings(e.Settings)
@@ -190,7 +195,7 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 		return err
 	}
 	changed := false
-	for _, h := range m.Hooks {
+	for _, h := range m.hookCandidates() {
 		list, err := s.hooks(h.Event)
 		if err != nil {
 			return err
@@ -212,10 +217,12 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 	}
 	switch {
 	case !changed:
-	case m.SettingsCreated && len(s.top) == 0:
+	case m.SettingsCreated && len(s.top) == 0 && !symlink(e.Settings):
 		removed[e.Settings] = true
 		p.add("remove", e.Settings, "", func() error { return os.Remove(e.Settings) })
 	default:
+		// A link introduced since install belongs to the user. Keep it and
+		// remove our hooks through it, even when that leaves an empty object.
 		raw := s.encode()
 		p.add("update", e.Settings, "", func() error { return writeFile(e.Settings, raw) })
 	}
@@ -256,18 +263,24 @@ func AgyHook(exe string) json.RawMessage {
 	return bytes.TrimSpace(b.Bytes())
 }
 
-const pretooluseWord = "pretooluse"
-
 // agyHookBinary returns the binary path and timeout of an agy hook entry
 // that runs "<exe> hook pretooluse --format agy", or ("", 0) when raw is
 // not such an entry.
 func agyHookBinary(raw json.RawMessage) (string, int) {
-	var events map[string][]hookEntry
+	var events map[string]json.RawMessage
 	if json.Unmarshal(raw, &events) != nil {
 		return "", 0
 	}
-	list := events["PreToolUse"]
-	if len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
+	// Match agy's typed decoding: case variants and duplicates apply in
+	// source order, and null leaves the current boolean unchanged.
+	metadata := struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: true}
+	if json.Unmarshal(raw, &metadata) != nil || !metadata.Enabled {
+		return "", 0
+	}
+	var list []hookEntry
+	if json.Unmarshal(events["PreToolUse"], &list) != nil || len(list) != 1 || list[0].Matcher != "*" || len(list[0].Hooks) != 1 || list[0].Hooks[0].Type != hookTypeCommand {
 		return "", 0
 	}
 	for _, suffix := range []string{" hook pretooluse --format agy", " hook pretooluse --format=agy"} {
@@ -346,7 +359,7 @@ func (e Env) planAgyHooks(p *plan, m *Manifest) (string, error) {
 	switch {
 	case ok && sameJSON(cur, want):
 		p.add("ok", what, "", nil)
-	case ok && (len(m.AgyHook) > 0 && sameJSON(cur, m.AgyHook) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
+	case ok && (m.ownsHook(cur, false) || func() bool { exe, _ := agyHookBinary(cur); return exe == e.Exe }()):
 		s.top.set(project.Name, want)
 		m.AgyHook = want
 		changed = true
@@ -410,7 +423,7 @@ func (e Env) planAgyUnhooks(p *plan, m Manifest, removed map[string]bool) error 
 		return err
 	}
 	cur, ok := s.top.get(project.Name)
-	if !ok || !sameJSON(cur, m.AgyHook) {
+	if !ok || !m.ownsHook(cur, false) {
 		return nil
 	}
 	s.top.del(project.Name)
@@ -577,8 +590,8 @@ func isBeekeeperSkillsEntry(raw json.RawMessage, wantDir, home string) bool {
 		strings.HasSuffix(clean, sep+filepath.Join(project.Name, "plugin", plugin.SkillsDir)) {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(clean, "worker-rules", "SKILL.md"))
-	return err == nil
+	// Skill names are shared across unrelated collections and do not prove ownership.
+	return false
 }
 
 // staleAgySkills returns the names of the embedded skills whose files under
@@ -834,12 +847,10 @@ func codexHookBinary(raw json.RawMessage) (bin, matcher string, timeout int) {
 	if json.Unmarshal(raw, &e) != nil || len(e.Hooks) != 1 || e.Hooks[0].Type != hookTypeCommand {
 		return "", "", 0
 	}
-	f := strings.Fields(e.Hooks[0].Command)
-	if len(f) == 5 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format" && f[4] == "codex" {
-		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
-	}
-	if len(f) == 4 && f[1] == hookWord && f[2] == pretooluseWord && f[3] == "--format=codex" {
-		return strings.Trim(f[0], `'"`), e.Matcher, e.Hooks[0].Timeout
+	for _, suffix := range []string{" hook pretooluse --format codex", " hook pretooluse --format=codex"} {
+		if exe := installedHookBinary(e.Hooks[0].Command, suffix); exe != "" {
+			return exe, e.Matcher, e.Hooks[0].Timeout
+		}
 	}
 	return "", "", 0
 }
@@ -876,18 +887,21 @@ func (e Env) planCodexHooks(p *plan, m *Manifest) error {
 	if e.CodexHooks == "" {
 		return nil
 	}
-	if err := e.planCodexHooksFile(p, m, e.CodexHooks, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
+	// Keep the prior ownership entry stable while planning both files: the first
+	// file may update the manifest to the new executable path.
+	previousHook := m.CodexHook
+	if err := e.planCodexHooksFile(p, m, previousHook, e.CodexHooks, &m.CodexHooksKeys, &m.CodexHooksCreated); err != nil {
 		return err
 	}
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := e.planCodexHooksFile(p, m, workerHooks, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
+		if err := e.planCodexHooksFile(p, m, previousHook, workerHooks, &m.CodexWorkerHooksKeys, &m.CodexWorkerHooksCreated); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]string, created *bool) error {
+func (e Env) planCodexHooksFile(p *plan, m *Manifest, previousHook json.RawMessage, path string, keys *[]string, created *bool) error {
 	if symlink(path) {
 		p.add("keep", path, "a symlink to "+resolve(path)+": install never writes through a link; "+
 			"replace the link with a regular file for install to manage it, or edit the target yourself", nil)
@@ -904,7 +918,7 @@ func (e Env) planCodexHooksFile(p *plan, m *Manifest, path string, keys *[]strin
 	want := CodexHook(e.Exe)
 	what := path + ": " + project.Name + " PreToolUse hook"
 	idx := slices.IndexFunc(list, func(r json.RawMessage) bool {
-		if sameJSON(r, want) || len(m.CodexHook) > 0 && sameJSON(r, m.CodexHook) {
+		if sameJSON(r, want) || m.ownsHook(r, true) || len(previousHook) > 0 && sameJSON(r, previousHook) {
 			return true
 		}
 		bin, _, _ := codexHookBinary(r)
@@ -956,18 +970,18 @@ func (e Env) planCodexUnhooks(p *plan, m Manifest, removed map[string]bool) erro
 	if len(m.CodexHook) == 0 || e.CodexHooks == "" {
 		return nil
 	}
-	if err := planCodexUnhooksFile(p, m.CodexHook, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
+	if err := planCodexUnhooksFile(p, m, e.CodexHooks, m.CodexHooksKeys, m.CodexHooksCreated, removed); err != nil {
 		return err
 	}
 	if workerHooks := CodexWorkerHooks(e.StateDir); workerHooks != "" && filepath.Clean(workerHooks) != filepath.Clean(e.CodexHooks) {
-		if err := planCodexUnhooksFile(p, m.CodexHook, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
+		if err := planCodexUnhooksFile(p, m, workerHooks, m.CodexWorkerHooksKeys, m.CodexWorkerHooksCreated, removed); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []string, created bool, removed map[string]bool) error {
+func planCodexUnhooksFile(p *plan, m Manifest, path string, keys []string, created bool, removed map[string]bool) error {
 	if path == "" || symlink(path) {
 		return nil
 	}
@@ -980,7 +994,7 @@ func planCodexUnhooksFile(p *plan, hook json.RawMessage, path string, keys []str
 		return err
 	}
 	kept := slices.DeleteFunc(slices.Clone(list), func(r json.RawMessage) bool {
-		return sameJSON(r, hook)
+		return m.ownsHook(r, true)
 	})
 	if len(kept) == len(list) {
 		return nil
@@ -1064,18 +1078,23 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 			"replace the link with a directory for install to manage it, or edit the target yourself", nil)
 		return nil
 	}
-	names := plugin.SkillNames()
+	var names []string
 	linksOK := true
 	anyExisted := exists(e.CodexSkills)
 	var links []string
-	for _, name := range names {
+	for _, name := range plugin.SkillNames() {
 		dst := filepath.Join(e.CodexSkills, name)
 		wantTarget := filepath.Join(skillsDir, name)
-		links = append(links, dst)
 		gotTarget, err := os.Readlink(dst)
 		if err != nil || filepath.Clean(gotTarget) != filepath.Clean(wantTarget) {
+			if exists(dst) {
+				p.add("keep", dst, "an existing skill install did not write", nil)
+				continue
+			}
 			linksOK = false
 		}
+		names = append(names, name)
+		links = append(links, dst)
 	}
 	workerSkills := CodexWorkerSkills(e.StateDir)
 	if workerSkills != "" && filepath.Clean(workerSkills) != filepath.Clean(e.CodexSkills) {
@@ -1127,7 +1146,6 @@ func (e Env) planCodexSkills(p *plan, m *Manifest) error {
 			if gotTarget, err := os.Readlink(dst); err == nil && filepath.Clean(gotTarget) == filepath.Clean(wantTarget) {
 				continue
 			}
-			_ = os.RemoveAll(dst)
 			if err := os.Symlink(wantTarget, dst); err != nil {
 				return err
 			}
@@ -1175,9 +1193,23 @@ func (e Env) planCodexUnskills(p *plan, m Manifest, removed map[string]bool, pur
 	}
 	var toRemove []string
 	for _, dst := range m.CodexSkillLinks {
-		if symlink(dst) {
+		// Reconstruct the target install wrote, including the two worker
+		// links. Readlink also works when the original target is now missing.
+		wantTarget := filepath.Join(m.CodexSkillsDir, filepath.Base(dst))
+		switch dst {
+		case CodexWorkerSkills(e.StateDir):
+			wantTarget = m.CodexSkillsDir
+		case filepath.Join(e.StateDir, "codex", "home", "AGENTS.md"):
+			if e.CodexSkills == "" {
+				continue // The original user rules location is unknown.
+			}
+			wantTarget = filepath.Join(filepath.Dir(e.CodexSkills), "AGENTS.md")
+		}
+		if target, err := os.Readlink(dst); err == nil && m.CodexSkillsDir != "" && filepath.Clean(target) == filepath.Clean(wantTarget) {
 			toRemove = append(toRemove, dst)
 			removed[dst] = true
+		} else if symlink(dst) {
+			p.add("keep", dst, "changed since beekeeper install wrote it", nil)
 		}
 	}
 	agyStillUses := func() bool {
@@ -1366,6 +1398,11 @@ type member struct {
 }
 
 func decodeObject(raw []byte) (object, error) {
+	// Validate the entire document, including its closing delimiter and
+	// trailing input, before trusting any hook entries it contains.
+	if !json.Valid(raw) {
+		return nil, errors.New("not valid JSON")
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil, errors.New("not a JSON object")

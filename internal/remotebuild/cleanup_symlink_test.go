@@ -46,7 +46,7 @@ func TestSweepFinishedSymlinkAliases(t *testing.T) {
 				calls = append(calls, slices.Clone(args))
 				return nil
 			}}
-			runner.Config.Kubeconfig = "fixture-kubeconfig"
+			runner.Config.Kubeconfig = filepath.Join(state, "fixture-kubeconfig")
 			runner.Config.Context = "fixture-context"
 			runner.Config.Namespace = "builders"
 			if err := runner.remember(recorded, host, builder); err != nil {

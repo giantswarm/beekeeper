@@ -90,7 +90,7 @@ func TestReadsOnFirstWriteOnly(t *testing.T) {
 		".claude/rules/sub/deep.md":   "deep rule",
 		".claude/settings.json":       `{"env":{"TOKEN":"do-not-show"},"hooks":{"PreToolUse":[]},"permissions":{"allow":["Bash(make:*)"]}}`,
 		".claude/settings.local.json": `{"permissions":{"allow":["local"]}}`,
-		"CLAUDE.local.md":             "personal",
+		"CLAUDE.local.md":             litPersonal,
 	})
 	h := readsHook(t, project)
 
@@ -138,12 +138,12 @@ func TestReadsTools(t *testing.T) {
 	relative := write(writeTool, filePathKey, "sub/a")
 	relative.CWD = other
 	for name, ev := range map[string]call{
-		"write":    write(writeTool, filePathKey, filepath.Join(other, "a")),
-		"relative": relative,
-		"notebook": write(notebookTool, notebookPathKey, filepath.Join(other, "n.ipynb")),
-		"cd":       shell(project, "cd "+other+" && git add -A && git commit -m 'x'"),
-		"dash-C":   shell(project, "git -C "+other+" commit -m x"),
-		"in cwd":   shell(other, "git commit --amend --no-edit"),
+		ompWriteTool: write(writeTool, filePathKey, filepath.Join(other, "a")),
+		"relative":   relative,
+		"notebook":   write(notebookTool, notebookPathKey, filepath.Join(other, "n.ipynb")),
+		"cd":         shell(project, "cd "+other+" && git add -A && git commit -m 'x'"),
+		"dash-C":     shell(project, "git -C "+other+" commit -m x"),
+		"in cwd":     shell(other, "git commit --amend --no-edit"),
 	} {
 		if ctx, _ := contextOf(t, readsHook(t, project), ev); !strings.Contains(ctx, otherRules) {
 			t.Errorf("%s: want the reads, got %q", name, ctx)
@@ -152,7 +152,7 @@ func TestReadsTools(t *testing.T) {
 	noSession := edit(filepath.Join(other, "a"))
 	noSession.Session = ""
 	for name, ev := range map[string]call{
-		"read":       write("Read", filePathKey, filepath.Join(other, "a")),
+		ompReadTool:  write("Read", filePathKey, filepath.Join(other, "a")),
 		"git status": shell(project, "git -C "+other+" status"),
 		"echo":       shell(other, "echo git commit"),
 		"no session": noSession,
