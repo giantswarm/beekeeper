@@ -517,9 +517,6 @@ func TestTranscriptRuntimeProgramInputs(t *testing.T) {
 			if err := os.WriteFile(script, []byte("#!/usr/bin/env "+tc.name+"\n"+tc.code), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Chmod(script, 0o700); err != nil {
-				t.Fatal(err)
-			}
 			for _, command := range []string{
 				tc.name + " <<'CODE'\n" + tc.code + "\nCODE",
 				tc.name + " <<< '" + tc.code + "'",
