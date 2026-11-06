@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	noteListTool = "note_list"
-	snapshotTool = "snapshot"
+	noteListTool         = "note_list"
+	snapshotTool         = "snapshot"
+	noteScopeReaderEmail = "reader@example.com"
+	noteScopeOtherEmail  = "other@example.com"
 )
 
 func TestNoteToolsScope(t *testing.T) {
@@ -34,7 +36,7 @@ func TestNoteToolsScope(t *testing.T) {
 		{ID: 1, For: "READER@example.com", Text: "personal decision"},
 		{ID: 2, For: "team:readers", Text: "team decision"},
 		{ID: 3, For: "team:others", By: state.Party{Person: "READER@example.com"}, Text: "filed decision"},
-		{ID: 4, For: "team:others", By: state.Party{Person: "other@example.com", Team: "others"}, Text: "private decision", Default: "private default", StatusQuo: "private context"},
+		{ID: 4, For: "team:others", By: state.Party{Person: noteScopeOtherEmail, Team: "others"}, Text: "private decision", Default: "private default", StatusQuo: "private context"},
 		{ID: 5, For: "colleague@example.com", By: state.Party{Team: "readers"}, Text: "colleague decision"},
 		{ID: 6, Text: "unaddressed decision"},
 	}
@@ -49,8 +51,8 @@ func TestNoteToolsScope(t *testing.T) {
 		who  identity.Caller
 		want []state.Note
 	}{
-		{"person and team", identity.Caller{Email: "reader@example.com", Team: "readers"}, notes[:3]},
-		{"person without team", identity.Caller{Email: "reader@example.com"}, []state.Note{notes[0], notes[2]}},
+		{"person and team", identity.Caller{Email: noteScopeReaderEmail, Team: "readers"}, notes[:3]},
+		{"person without team", identity.Caller{Email: noteScopeReaderEmail}, []state.Note{notes[0], notes[2]}},
 		{"unrelated caller", identity.Caller{Email: "stranger@example.com"}, []state.Note{}},
 	} {
 		for _, tool := range []serveTool{{tool: mcp.NewTool(noteListTool), run: toolNoteList}, {tool: mcp.NewTool("snapshot"), run: toolSnapshot}} {
@@ -89,14 +91,14 @@ func TestNoteToolsScope(t *testing.T) {
 }
 
 func TestNotesConcerningPersonAlias(t *testing.T) {
-	cfg := config.Serve{People: map[string]string{"reader": "reader@example.com"}}
-	notes := []state.Note{{ID: 1, For: "READER"}, {ID: 2, For: "unknown"}}
+	cfg := config.Serve{People: map[string]string{"reader": noteScopeReaderEmail}}
+	notes := []state.Note{{ID: 1, For: "READER"}, {ID: 2, For: kindUnknown}}
 	for _, tc := range []struct {
 		email string
 		want  []state.Note
 	}{
-		{"reader@example.com", notes[:1]},
-		{"other@example.com", []state.Note{}},
+		{noteScopeReaderEmail, notes[:1]},
+		{noteScopeOtherEmail, []state.Note{}},
 	} {
 		if got := notesConcerning(notes, identity.Caller{Email: tc.email}, cfg); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("caller %s: got %#v, want %#v", tc.email, got, tc.want)
