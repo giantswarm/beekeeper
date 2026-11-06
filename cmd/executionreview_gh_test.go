@@ -72,3 +72,68 @@ func TestReadDeskReviewRefusesAnotherPullRequestsReview(t *testing.T) {
 		t.Fatal("a review of o/r#13 was accepted for o/r#12")
 	}
 }
+
+func TestExecutionReviewReportVerifiesFixedHeadDescentAndGreenCI(t *testing.T) {
+	const (
+		url          = "https://github.com/o/r/pull/14#pullrequestreview-346"
+		assignedHead = "0123456789abcdef0123456789abcdef01234567"
+		fixedHead    = "fedcba9876543210fedcba9876543210fedcba98"
+		reviewPRRef  = "o/r#14"
+	)
+	dir := t.TempDir()
+	answer := filepath.Join(dir, "review.json")
+	writeFile(t, answer, `{"node_id":"PRR_346","html_url":"`+url+`","pull_request_url":"https://api.github.com/repos/o/r/pulls/14",`+
+		`"body":"Review: approved\nHead reviewed: `+"`"+fixedHead+"`"+`","state":"COMMENTED","commit_id":"`+fixedHead+`",`+
+		`"submitted_at":"`+time.Now().UTC().Format(time.RFC3339)+`","user":{"login":"reviewer-login"}}`)
+	script := "#!/bin/sh\ncase \"$*\" in\n" +
+		"'api repos/o/r/pulls/14/reviews/346') cat '" + answer + "' ;;\n" +
+		"*) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\nesac\n"
+	writeFile(t, filepath.Join(dir, "gh"), script)
+	if err := os.Chmod(filepath.Join(dir, "gh"), 0o700); err != nil { //nolint:gosec // a fake gh
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldPull := readLoopPull
+	oldDesc := readReviewerFixedHead
+	t.Cleanup(func() {
+		readLoopPull = oldPull
+		readReviewerFixedHead = oldDesc
+	})
+
+	pullGreen := false
+	descends := false
+	readLoopPull = func(_ context.Context, _ string) (superloop.Pull, error) {
+		return superloop.Pull{Ref: reviewPRRef, State: superloop.Open, Head: fixedHead, Green: pullGreen}, nil
+	}
+	readReviewerFixedHead = func(_ context.Context, _, base, head string) (bool, error) {
+		return descends && base == assignedHead && head == fixedHead, nil
+	}
+
+	reviewer := state.Party{Name: litReviewer, Session: "reviewer-fixed-head"}
+	newState := func() *state.State {
+		return &state.State{DeskReviews: []state.DeskReview{{
+			ID: "round", Ref: reviewPRRef, Head: assignedHead, Round: 1,
+			Worker:     state.Party{Name: workerRole, Session: "assigned-worker"},
+			Reviewer:   reviewer,
+			AssignedAt: time.Now().Add(-time.Minute),
+		}}}
+	}
+
+	// Refused when fixedHead is not green or does not descend from assignedHead.
+	if err := (&app{}).captureExecutionReviewReport(context.Background(), newState(), reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
+		t.Fatal("accepted self-fixed review head before CI was green and descent verified")
+	}
+	pullGreen = true
+	if err := (&app{}).captureExecutionReviewReport(context.Background(), newState(), reviewer, "Review: approved\n"+url, time.Now(), true); err == nil {
+		t.Fatal("accepted self-fixed review head that did not descend from assignedHead")
+	}
+	descends = true
+	st := newState()
+	if err := (&app{}).captureExecutionReviewReport(context.Background(), st, reviewer, "Review: approved\n"+url, time.Now(), true); err != nil {
+		t.Fatalf("expected green descendant self-fixed review head to be accepted, got: %v", err)
+	}
+	if st.DeskReviews[0].Result == nil || st.DeskReviews[0].Result.Head != fixedHead {
+		t.Fatalf("unexpected review result: %+v", st.DeskReviews[0].Result)
+	}
+}

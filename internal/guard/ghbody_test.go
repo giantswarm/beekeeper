@@ -194,3 +194,30 @@ func TestGHBodyUnreadableFileExplainsEarlierToolCall(t *testing.T) {
 		t.Fatalf("agy got %+v, want refusal containing %q", d, want)
 	}
 }
+
+func TestGHPRCreateRefusesDuplicateIssuePullRequest(t *testing.T) {
+	dir := t.TempDir()
+	h := Hook{
+		Self:  testBeekeeperExe,
+		Shell: testShell,
+		PRCreate: func(_, repo, head, title, body string) string {
+			if repo == "o/r" && head != "own-branch" && strings.Contains(title+"\n"+body, "https://github.com/o/r/issues/7") {
+				return "o/r#7 already has an open pull request https://github.com/o/r/pull/42"
+			}
+			return ""
+		},
+	}
+	cmd := `gh pr create --repo o/r --head other-branch --title "fix: issue 7" --body "Closes https://github.com/o/r/issues/7"`
+	const want = "o/r#7 already has an open pull request https://github.com/o/r/pull/42"
+	if d := decide(t, h, dir, cmd, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, want) {
+		t.Fatalf("claude got %+v, want deny containing %q", d, want)
+	}
+	draftCmd := `gh pr create --draft --repo o/r --head other-branch --title "fix: issue 7" --body "Closes https://github.com/o/r/issues/7"`
+	if d := decide(t, h, dir, draftCmd, nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Fatalf("draft PR create should not be refused: %+v", d)
+	}
+	ownCmd := `gh pr create --repo o/r --head own-branch --title "fix: issue 7" --body "Closes https://github.com/o/r/issues/7"`
+	if d := decide(t, h, dir, ownCmd, nil); d != nil && d.PermissionDecision == decisionDeny {
+		t.Fatalf("own-branch PR create should not be refused: %+v", d)
+	}
+}

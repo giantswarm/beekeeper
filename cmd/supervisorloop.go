@@ -351,7 +351,7 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 			p.Closes = append(p.Closes, refName(r))
 		}
 	}
-	for _, issue := range superloop.ParseClosingIssues(ref, j.Body) {
+	for _, issue := range superloop.ParseClosingIssues(ref, j.Title+"\n"+j.Body) {
 		if r, ok := parseRef(issue); ok {
 			name := refName(r)
 			if !slices.ContainsFunc(p.Closes, func(existing string) bool { return strings.EqualFold(existing, name) }) {

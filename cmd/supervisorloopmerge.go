@@ -324,16 +324,13 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	}
 	if act.Message != strings.ToLower(superloop.Closed) {
 		l.mu.Lock()
-		mp := l.merged[act.Ref]
+		mp, ok := l.merged[act.Ref]
 		l.mu.Unlock()
-		if mp.Ref == "" {
-			if readMP, err := readLoopPull(ctx, act.Ref); err == nil {
-				mp = readMP
-			}
+		if ok {
+			mp.Ref = cmp.Or(mp.Ref, act.Ref)
+			mp.URL = cmp.Or(mp.URL, act.URL)
+			l.recordClosedPullIssues(closeMergedPullIssues(ctx, st, mp))
 		}
-		mp.Ref = cmp.Or(mp.Ref, act.Ref)
-		mp.URL = cmp.Or(mp.URL, act.URL)
-		l.recordClosedPullIssues(closeMergedPullIssues(ctx, st, mp))
 	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
@@ -707,6 +704,9 @@ func absorbedClosingIssues(ctx context.Context, st *state.State, absorbs []strin
 			for _, c := range origPull.Closes {
 				add(c)
 			}
+			for _, c := range superloop.ParseClosingIssues(orig, origPull.Title+"\n"+origPull.Body) {
+				add(c)
+			}
 		}
 	}
 	return out
@@ -748,6 +748,9 @@ func closeMergedPullIssues(ctx context.Context, st *state.State, p superloop.Pul
 		}
 	}
 	for _, c := range p.Closes {
+		add(c)
+	}
+	for _, c := range superloop.ParseClosingIssues(p.Ref, p.Title+"\n"+p.Body) {
 		add(c)
 	}
 	for _, c := range absorbedClosingIssues(ctx, st, p.Absorbs) {

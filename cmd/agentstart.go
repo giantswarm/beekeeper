@@ -448,7 +448,7 @@ work, which takes no choice on a self-hosted provider.`,
 					return err
 				}
 			}
-			if err := a.openPullStartGate(cmd.Context(), name, issues, review || ofSelfHosted, force, dryRun); err != nil {
+			if err := a.openPullStartGate(cmd.Context(), name, brief, issues, review || ofSelfHosted, force, dryRun); err != nil {
 				return err
 			}
 			// an omp agent whose provider's key is in the vault starts where
@@ -2202,6 +2202,21 @@ var briefURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/(?:issu
 
 // briefIssueURL is an issue URL in a brief, excluding PR URLs.
 var briefIssueURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)`)
+
+// briefPullURL is a pull request URL in a brief.
+var briefPullURL = regexp.MustCompile(`https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)`)
+
+// briefPulls returns all distinct pull requests (owner/repo#n) named by URL in brief.
+func briefPulls(brief string) []string {
+	var out []string
+	for _, m := range briefPullURL.FindAllStringSubmatch(brief, -1) {
+		ref := m[1] + "#" + m[2]
+		if !slices.ContainsFunc(out, func(existing string) bool { return strings.EqualFold(existing, ref) }) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
 
 // briefContextIntro matches a line prefix that cites a related or follow-up
 // issue for background rather than assigning it as work.

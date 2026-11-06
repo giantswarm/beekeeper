@@ -410,13 +410,15 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			}
 			closing = superloop.ParseClosingIssues(r.Request.Repository+"#0", p.Title+"\n"+p.Body)
 			if len(closing) > 0 {
-				openPulls, _ := readRepoOpenPulls(ctx, r.Request.Repository)
-				if len(openPulls) == 0 {
-					if listRaw, listErr := executionPublishGH(ctx, "pr", "list", "--repo", r.Request.Repository, "--state", "open", "--limit", "100", "--json", "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences"); listErr == nil {
-						_ = json.Unmarshal(listRaw, &openPulls)
-					}
+				openPulls, listErr := readRepoOpenPullsWithGH(ctx, executionPublishGH, r.Request.Repository)
+				if listErr != nil {
+					return result, refused("open pull requests for %s cannot be read (%v); retry publication once GitHub is readable", r.Request.Repository, listErr)
 				}
-				if matched, prURL := openPullClosingIssue(r.Request.Repository, openPulls, result.Branch, closing, absorbs); matched != "" {
+				matched, prURL, findErr := findOpenPullClosingIssues(ctx, executionPublishGH, r.Request.Repository, openPulls, result.Branch, closing, absorbs)
+				if findErr != nil {
+					return result, refused("open pull requests for %s cannot be read (%v); retry publication once GitHub is readable", r.Request.Repository, findErr)
+				}
+				if matched != "" {
 					return result, refused("%s already has an open pull request %s; update %s or combine with it instead of opening a duplicate PR", matched, prURL, prURL)
 				}
 			}

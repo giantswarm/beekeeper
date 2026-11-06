@@ -3855,4 +3855,12 @@ func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing
 			t.Fatalf("issue %s was not closed by %s (closedIssues=%v)", iss, loopURL, closedIssues)
 		}
 	}
+
+	parsed, err := parseLoopPull(loopPR, []byte(`{"url":"`+loopURL+`","state":"OPEN","headRefOid":"`+loopHead+`","baseRefName":"release-1.0","title":"fix: closes #53","body":"This does not fix https://github.com/o/r/issues/99\nCloses https://github.com/o/r/issues/54","closingIssuesReferences":[]}`))
+	if err != nil {
+		t.Fatalf("parseLoopPull: %v", err)
+	}
+	if want := []string{"o/r#53", "o/r#54"}; !slices.Equal(parsed.Closes, want) {
+		t.Fatalf("parseLoopPull Closes = %v, want %v", parsed.Closes, want)
+	}
 }

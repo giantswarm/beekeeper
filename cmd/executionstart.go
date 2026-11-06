@@ -70,7 +70,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 			return err
 		}
 	}
-	if err := a.openPullStartGate(ctx, name, issues, o.Review || o.ReviewOfSelfHosted, o.Force, o.DryRun); err != nil {
+	if err := a.openPullStartGate(ctx, name, brief, issues, o.Review || o.ReviewOfSelfHosted, o.Force, o.DryRun); err != nil {
 		return err
 	}
 	k := a.liveCapacity()

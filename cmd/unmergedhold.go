@@ -41,18 +41,99 @@ type unmergedPull struct {
 	} `json:"closingIssuesReferences"`
 }
 
+const (
+	unmergedPullPageLimit = 100
+	unmergedPullFields    = "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences"
+)
+
+// readRepoOpenPullsWithGH lists open non-draft pull requests in repo
+// (owner/name) through gh, paginating by createdAt when a page hits the
+// 100-item limit so repositories with more than 100 open pull requests are
+// inspected in full.
+func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]unmergedPull, error) {
+	search := "draft:false"
+	seen := map[string]bool{}
+	var all []unmergedPull
+	for range 20 {
+		out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", search, "--limit", "100", "--json", unmergedPullFields)
+		if err != nil {
+			return nil, err
+		}
+		var page []unmergedPull
+		if err := json.Unmarshal(out, &page); err != nil {
+			return nil, fmt.Errorf("gh pr list %s: %w", repo, err)
+		}
+		added := 0
+		var oldest time.Time
+		for _, p := range page {
+			if !p.CreatedAt.IsZero() && (oldest.IsZero() || p.CreatedAt.Before(oldest)) {
+				oldest = p.CreatedAt
+			}
+			key := p.URL
+			if p.Number > 0 {
+				key = fmt.Sprintf("%s#%d", strings.ToLower(repo), p.Number)
+			}
+			if key != "" {
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+			}
+			all = append(all, p)
+			added++
+		}
+		if len(page) < unmergedPullPageLimit || added == 0 || oldest.IsZero() {
+			break
+		}
+		search = "draft:false created:<=" + oldest.UTC().Format(time.RFC3339)
+	}
+	return all, nil
+}
+
 // readRepoOpenPulls lists open pull requests in repo (owner/name). Tests
 // replace it to avoid calling gh.
 var readRepoOpenPulls = func(ctx context.Context, repo string) ([]unmergedPull, error) {
-	out, err := unmergedGH(ctx, "pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences")
-	if err != nil {
-		return nil, err
+	return readRepoOpenPullsWithGH(ctx, unmergedGH, repo)
+}
+
+// findOpenPullClosingIssues checks pulls for an open non-draft pull request
+// closing any of closingIssues, and when pulls hit the single-page limit
+// without timestamps to paginate, queries gh per issue number.
+func findOpenPullClosingIssues(ctx context.Context, gh github.GH, repo string, pulls []unmergedPull, ownBranch string, closingIssues, absorbedPulls []string) (issue, prURL string, err error) {
+	if matched, url := openPullClosingIssue(repo, pulls, ownBranch, closingIssues, absorbedPulls); matched != "" {
+		return matched, url, nil
 	}
-	var pulls []unmergedPull
-	if err := json.Unmarshal(out, &pulls); err != nil {
-		return nil, fmt.Errorf("gh pr list %s: %w", repo, err)
+	if len(pulls) < unmergedPullPageLimit || gh == nil {
+		return "", "", nil
 	}
-	return pulls, nil
+	hasTimestamps := true
+	for _, p := range pulls {
+		if p.CreatedAt.IsZero() {
+			hasTimestamps = false
+			break
+		}
+	}
+	if hasTimestamps {
+		return "", "", nil
+	}
+	for _, want := range closingIssues {
+		r, ok := parseRef(want)
+		if !ok || !strings.EqualFold(r.Repo, repo) {
+			continue
+		}
+		out, ghErr := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", fmt.Sprintf("draft:false %d", r.N), "--limit", "100", "--json", unmergedPullFields)
+		if ghErr != nil {
+			return "", "", ghErr
+		}
+		var searched []unmergedPull
+		if err := json.Unmarshal(out, &searched); err != nil {
+			return "", "", fmt.Errorf("gh pr list %s: %w", repo, err)
+		}
+		if matched, url := openPullClosingIssue(repo, searched, ownBranch, []string{want}, absorbedPulls); matched != "" {
+			return matched, url, nil
+		}
+	}
+	return "", "", nil
 }
 
 // openPullClosingIssue checks whether any open non-draft pull request in
@@ -101,40 +182,205 @@ func openPullClosingIssue(repo string, pulls []unmergedPull, ownBranch string, c
 	return "", ""
 }
 
+// incidentExempt reports whether st has an active incident hold on the
+// repository of one of refs that explicitly exempts that ref (--except).
+func incidentExempt(st *state.State, now time.Time, refs ...string) bool {
+	if st == nil || len(refs) == 0 {
+		return false
+	}
+	for _, raw := range refs {
+		r, ok := parseRef(raw)
+		if !ok {
+			continue
+		}
+		target := refName(r)
+		for _, h := range st.Holds {
+			if !h.Incident || !h.Active(now) || !strings.EqualFold(h.Target, r.Repo) || h.Except == "" {
+				continue
+			}
+			if er, ok := parseRef(h.Except); ok && strings.EqualFold(refName(er), target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isTrackedRepairPull reports whether prRef is an existing pull request on
+// the desk or whether agent name is an authenticated fixer/continuation for it.
+func isTrackedRepairPull(st *state.State, name, prRef string) bool {
+	if strings.EqualFold(name, superloop.PullWorkerName(prRef)) {
+		return true
+	}
+	if st == nil {
+		return false
+	}
+	if _, ok := st.ReviewParkFor(prRef); ok {
+		return true
+	}
+	if slices.ContainsFunc(st.Parks, func(p state.Park) bool { return strings.EqualFold(p.On, prRef) }) {
+		return true
+	}
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return (ag.Park != nil && strings.EqualFold(ag.Park.On, prRef)) ||
+			(strings.EqualFold(ag.Name, name) && (ag.Task != "" || ag.Park != nil))
+	}) {
+		return true
+	}
+	return false
+}
+
+// startGateExemptions determines which repositories and pull requests are
+// exempt from the unmerged-backlog hold and self-duplicate PR refusal because
+// the start is the named incident repair or an authenticated repair/fixer
+// continuation of an existing open pull request.
+func (a *app) startGateExemptions(name, brief string, issues []string, now time.Time) (exemptRepos map[string]bool, exemptPulls []string) {
+	exemptRepos = map[string]bool{}
+	addPull := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok {
+			return
+		}
+		ref := refName(r)
+		if !slices.ContainsFunc(exemptPulls, func(e string) bool { return strings.EqualFold(e, ref) }) {
+			exemptPulls = append(exemptPulls, ref)
+		}
+	}
+	addRepairPull := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok {
+			return
+		}
+		exemptRepos[strings.ToLower(r.Repo)] = true
+		addPull(raw)
+	}
+
+	var st *state.State
+	if a.store != nil {
+		st, _ = a.store.Read()
+		if evs, err := a.store.Events(0, func(e state.Event) bool {
+			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)
+		}); err == nil {
+			settled := map[string]bool{}
+			for i := len(evs) - 1; i >= 0; i-- {
+				e := evs[i]
+				key, agent, ok := keyed(e.Detail)
+				if !ok {
+					continue
+				}
+				if e.Verb == loopClaimEndVerb {
+					settled[key] = true
+					continue
+				}
+				if settled[key] || !strings.EqualFold(agent, name) {
+					continue
+				}
+				if !strings.HasPrefix(key, "next") && !strings.HasPrefix(key, "fill ") && !strings.HasPrefix(key, "review ") {
+					addRepairPull(e.Subject)
+					for _, iss := range issues {
+						if ir, ok := parseRef(iss); ok {
+							exemptRepos[strings.ToLower(ir.Repo)] = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	pullsInBrief := briefPulls(brief)
+	hasIssueURL := briefIssueURL.MatchString(brief)
+	allRefs := append(slices.Clone(issues), pullsInBrief...)
+	if incidentExempt(st, now, allRefs...) {
+		for _, ref := range allRefs {
+			if r, ok := parseRef(ref); ok {
+				exemptRepos[strings.ToLower(r.Repo)] = true
+			}
+		}
+		for _, pr := range pullsInBrief {
+			addRepairPull(pr)
+		}
+	}
+	for _, pr := range pullsInBrief {
+		if !hasIssueURL || isTrackedRepairPull(st, name, pr) {
+			addRepairPull(pr)
+			for _, iss := range issues {
+				if ir, ok := parseRef(iss); ok {
+					exemptRepos[strings.ToLower(ir.Repo)] = true
+				}
+			}
+		}
+	}
+	for _, iss := range issues {
+		if ir, ok := parseRef(iss); ok {
+			for _, ab := range superloop.ParseAbsorbedPulls(ir.Repo+"#0", "", brief) {
+				addPull(ab)
+			}
+		}
+	}
+	return exemptRepos, exemptPulls
+}
+
 // openPullStartGate refuses an implementation worker start when the target
 // repository is at supervisor.unmergedLimit or when one of issues already has
 // an open pull request (--force aside).
-func (a *app) openPullStartGate(ctx context.Context, name string, issues []string, isReview, force, dryRun bool) error {
+func (a *app) openPullStartGate(ctx context.Context, name, brief string, issues []string, isReview, force, dryRun bool) error {
 	if isReview || len(issues) == 0 {
 		return nil
 	}
 	limit, window := a.unmergedPolicy()
 	now := a.timeNow()
+	exemptRepos, exemptPulls := a.startGateExemptions(name, brief, issues, now)
 	byRepo := map[string][]unmergedPull{}
 	for _, issue := range issues {
 		r, ok := parseRef(issue)
 		if !ok {
 			continue
 		}
+		target := refName(r)
 		key := strings.ToLower(r.Repo)
+		skipDup := slices.ContainsFunc(exemptPulls, func(p string) bool { return strings.EqualFold(p, target) })
+		if exemptRepos[key] && skipDup {
+			continue
+		}
 		pulls, seen := byRepo[key]
 		if !seen {
 			var err error
 			pulls, err = readRepoOpenPulls(ctx, r.Repo)
 			if err != nil {
+				if !force {
+					return refused("open pull requests for %s cannot be read (%v); retry once GitHub is readable (--force starts anyway)", r.Repo, err)
+				}
+				if dryRun {
+					_, _ = fmt.Fprintf(a.out, "dry run over unreadable open pull requests for %s: %v (--force)\n", r.Repo, err)
+				}
 				continue
 			}
 			byRepo[key] = pulls
-			if why := unmergedHoldReason(r.Repo, recentUnmergedPulls(r.Repo, pulls, now, window), limit, window); why != "" {
-				if !force {
-					return refused("%s; --force starts anyway", why)
-				}
-				if dryRun {
-					_, _ = fmt.Fprintf(a.out, "dry run over %s (--force)\n", why)
+			if !exemptRepos[key] {
+				if why := unmergedHoldReason(r.Repo, recentUnmergedPulls(r.Repo, pulls, now, window), limit, window); why != "" {
+					if !force {
+						return refused("%s; --force starts anyway", why)
+					}
+					if dryRun {
+						_, _ = fmt.Fprintf(a.out, "dry run over %s (--force)\n", why)
+					}
 				}
 			}
 		}
-		if matched, prURL := openPullClosingIssue(r.Repo, pulls, "", []string{refName(r)}, nil); matched != "" {
+		if skipDup {
+			continue
+		}
+		matched, prURL, findErr := findOpenPullClosingIssues(ctx, unmergedGH, r.Repo, pulls, "", []string{target}, exemptPulls)
+		if findErr != nil {
+			if !force {
+				return refused("open pull requests for %s cannot be read (%v); retry once GitHub is readable (--force starts anyway)", r.Repo, findErr)
+			}
+			if dryRun {
+				_, _ = fmt.Fprintf(a.out, "dry run over unreadable open pull requests for %s: %v (--force)\n", r.Repo, findErr)
+			}
+			continue
+		}
+		if matched != "" {
 			if !force {
 				return refused("%s already has an open pull request %s; update %s or combine with it instead of starting a second worker (--force starts anyway)", issue, prURL, prURL)
 			}
@@ -146,6 +392,65 @@ func (a *app) openPullStartGate(ctx context.Context, name string, issues []strin
 		}
 	}
 	return nil
+}
+
+// hookPRCreate enforces the duplicate open pull request refusal on raw
+// non-draft `gh pr create` commands and records the session's issue claims in
+// st.Records when admitted.
+func (a *app) hookPRCreate(session, repo, head, title, body string) string {
+	ownBranch := strings.TrimSpace(head)
+	if _, branch, ok := strings.Cut(ownBranch, ":"); ok {
+		ownBranch = branch
+	}
+	selfRef := cmp.Or(repo, "unknown/unknown") + "#0"
+	closing := superloop.ParseClosingIssues(selfRef, title+"\n"+body)
+	if len(closing) == 0 {
+		return ""
+	}
+	absorbs := superloop.ParseAbsorbedPulls(selfRef, title, body)
+	ctx := context.Background()
+	byRepo := map[string][]unmergedPull{}
+	for _, iss := range closing {
+		r, ok := parseRef(iss)
+		if !ok {
+			continue
+		}
+		key := strings.ToLower(r.Repo)
+		pulls, seen := byRepo[key]
+		if !seen {
+			var err error
+			pulls, err = readRepoOpenPulls(ctx, r.Repo)
+			if err != nil {
+				return fmt.Sprintf("open pull requests for %s cannot be read (%v); retry once GitHub is readable", r.Repo, err)
+			}
+			byRepo[key] = pulls
+		}
+		matched, prURL, err := findOpenPullClosingIssues(ctx, unmergedGH, r.Repo, pulls, ownBranch, []string{refName(r)}, absorbs)
+		if err != nil {
+			return fmt.Sprintf("open pull requests for %s cannot be read (%v); retry once GitHub is readable", r.Repo, err)
+		}
+		if matched != "" {
+			return fmt.Sprintf("%s already has an open pull request %s; update %s or combine with it instead of opening a duplicate PR", matched, prURL, prURL)
+		}
+	}
+	store := a.store
+	if store == nil && a.cfg != nil && a.cfg.StateDir != "" {
+		store, _ = state.Open(a.cfg.StateDir)
+	}
+	if store != nil {
+		who := state.Party{Session: session}
+		if by, err := a.caller(); err == nil {
+			who = by
+			if who.Session == "" {
+				who.Session = session
+			}
+		}
+		now := a.timeNow()
+		_ = store.Update(func(st *state.State) ([]state.Event, error) {
+			return recordSessionIssues(st, who, who, now, closing), nil
+		})
+	}
+	return ""
 }
 
 // recordSessionIssues records session as serving each of issues in st.Records
@@ -239,18 +544,25 @@ func (a *app) unmergedPolicy() (limit int, window time.Duration) {
 // skipUnmergedBacklog walks the picks of pick in order and marks candidates
 // in a repository whose recent open pull requests meet or exceed
 // supervisor.unmergedLimit skipped, advancing board next to other
-// repositories. A failed read warns once and leaves the pick standing.
+// repositories. A failed read warns once and marks the unreadable
+// repository's candidates skipped so board next fails closed on that repo.
 func (a *app) skipUnmergedBacklog(ctx context.Context, warn io.Writer, cands []board.Candidate, pick func() *board.Candidate) {
 	limit, window := a.unmergedPolicy()
 	if limit <= 0 || window <= 0 {
 		return
 	}
 	now := a.timeNow()
+	var st *state.State
+	if a.store != nil {
+		st, _ = a.store.Read()
+	}
 	checked := map[string]string{}
-	failed := map[string]bool{}
 	for {
 		p := pick()
 		if p == nil {
+			return
+		}
+		if incidentExempt(st, now, p.Ref) {
 			return
 		}
 		r, ok := parseRef(p.Ref)
@@ -258,19 +570,16 @@ func (a *app) skipUnmergedBacklog(ctx context.Context, warn io.Writer, cands []b
 			return
 		}
 		repoKey := strings.ToLower(r.Repo)
-		if failed[repoKey] {
-			return
-		}
 		reason, seen := checked[repoKey]
 		if !seen {
 			pulls, err := readRepoOpenPulls(ctx, r.Repo)
 			if err != nil {
-				failed[repoKey] = true
 				_, _ = fmt.Fprintf(warn, "beekeeper: unmerged pull requests unread for %s: %v\n", r.Repo, err)
-				return
+				reason = fmt.Sprintf("held: open pull requests for %s cannot be read: %v", r.Repo, err)
+			} else {
+				recent := recentUnmergedPulls(r.Repo, pulls, now, window)
+				reason = unmergedHoldReason(r.Repo, recent, limit, window)
 			}
-			recent := recentUnmergedPulls(r.Repo, pulls, now, window)
-			reason = unmergedHoldReason(r.Repo, recent, limit, window)
 			checked[repoKey] = reason
 		}
 		if reason == "" {
@@ -278,7 +587,7 @@ func (a *app) skipUnmergedBacklog(ctx context.Context, warn io.Writer, cands []b
 		}
 		marked := false
 		for i := range cands {
-			if cands[i].Skip != "" {
+			if cands[i].Skip != "" || incidentExempt(st, now, cands[i].Ref) {
 				continue
 			}
 			if cr, ok := parseRef(cands[i].Ref); ok && strings.EqualFold(cr.Repo, r.Repo) {
@@ -384,16 +693,24 @@ func (l *supervisorLoop) unmergedStart(ctx context.Context, nextRef string) erro
 	if !ok {
 		return nil
 	}
+	var st *state.State
+	if l.a != nil && l.a.store != nil {
+		st, _ = l.a.store.Read()
+	}
+	exempt := incidentExempt(st, l.a.timeNow(), nextRef)
 	recent, why, err := l.repoRecentUnmerged(ctx, r.Repo)
 	if err != nil {
 		l.sayOnce("unmerged read "+strings.ToLower(r.Repo), "SUPERVISOR LOOP cannot read open pull requests for %s: %v", r.Repo, err)
-		return nil
+		if exempt {
+			return nil
+		}
+		return errLoopLater
 	}
 	l.clearSaid("unmerged read " + strings.ToLower(r.Repo))
 	if err := l.escalateUnmergedBacklog(r.Repo, recent, why); err != nil {
 		return err
 	}
-	if why != "" {
+	if why != "" && !exempt {
 		l.sayOnce("unmerged "+strings.ToLower(r.Repo), "SUPERVISOR START WAITS %s: %s", nextRef, why)
 		return errLoopLater
 	}

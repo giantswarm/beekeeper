@@ -275,6 +275,11 @@ type Hook struct {
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
+	// PRCreate checks whether a raw non-draft `gh pr create` would open a
+	// duplicate pull request for an issue that already has an open pull
+	// request, and records the session's issue claims when admitted; returns
+	// the refusal reason, or "" to pass.
+	PRCreate func(session, repo, head, title, body string) string
 }
 
 // event is the part of a PreToolUse event the hook reads.

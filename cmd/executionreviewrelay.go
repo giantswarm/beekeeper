@@ -65,11 +65,13 @@ func (a *app) relayExecutionReview(ctx context.Context, st *state.State, ref exe
 		reviewedHead := superloop.ReviewedHead(request.Body, "")
 		headOK := reviewedHead == round.Head && pull.Head == round.Head
 		if !headOK && verdict == superloop.Approved && reviewedHead != "" && reviewedHead == pull.Head {
-			headOK = true
-			for _, prev := range st.DeskReviews[:roundIndex] {
-				if strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == pull.Head || prev.Result != nil && prev.Result.Head == pull.Head) {
-					headOK = false
-					break
+			if descends, descErr := readReviewerFixedHead(ctx, round.Ref, round.Head, reviewedHead); descErr == nil && descends {
+				headOK = true
+				for _, prev := range st.DeskReviews[:roundIndex] {
+					if strings.EqualFold(prev.Ref, round.Ref) && (prev.Head == pull.Head || prev.Result != nil && prev.Result.Head == pull.Head) {
+						headOK = false
+						break
+					}
 				}
 			}
 		}
