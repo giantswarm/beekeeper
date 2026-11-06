@@ -19,9 +19,30 @@
 version: 2.1
 
 jobs:
+  test-loop-workflow:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.42
+      entrypoint: /bin/bash
+    resource_class: medium
+    environment:
+      LANG: C.UTF-8
+      BEEKEEPER_TEST_LOOP_ARTIFACTS: /tmp/loop-workflow-artifacts
+    steps:
+    - checkout
+    - architect/tools-info
+    - architect/go-cache-restore
+    - run:
+        name: Exercise the real supervisor binary and historical parser control
+        no_output_timeout: 15m
+        command: timeout 15m make test-loop-workflow
+    - store_artifacts:
+        path: /tmp/loop-workflow-artifacts
+        destination: loop-workflow
+    - architect/go-cache-save
+
   test-envtest:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.41
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.42
       entrypoint: /bin/bash
     - image: gsoci.azurecr.io/giantswarm/postgres:18.6-alpine
       environment:
@@ -46,7 +67,7 @@ jobs:
 
   test-stable-version:
     docker:
-    - image: gsoci.azurecr.io/giantswarm/architect:8.6.41
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.42
       entrypoint: /bin/bash
     resource_class: medium
     steps:
@@ -80,6 +101,12 @@ workflows:
   build:
     jobs:
     - test-envtest:
+        filters:
+          tags:
+            only: /^v.*/
+    # No path or branch filters: loop, merge, capacity, watch, update and CI
+    # changes all run the same check. Tags also exercise it before release.
+    - test-loop-workflow:
         filters:
           tags:
             only: /^v.*/

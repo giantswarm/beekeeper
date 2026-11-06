@@ -129,7 +129,8 @@ func checkReviewedMerge(ctx context.Context, a *app, p superloop.Pull, head stri
 	if _, err := runGit(ctx, repoDir, "worktree", loopAdd, "--force", "--detach", tmpDir, baseSHA); err != nil {
 		return true, "creating merge-check worktree: " + err.Error(), github.SquashTooling
 	}
-	if _, err := runGit(ctx, tmpDir, "-c", "user.name=Beekeeper", "-c", "user.email=beekeeper@giantswarm.io", gitMerge, "--no-ff", "--no-edit", head); err != nil {
+	// The merge commit is thrown away, so the machine's signing setup never applies.
+	if _, err := runGit(ctx, tmpDir, "-c", "user.name=Beekeeper", "-c", "user.email=beekeeper@giantswarm.io", "-c", "commit.gpgsign=false", gitMerge, "--no-ff", "--no-edit", head); err != nil {
 		// Only unmerged index entries prove a branch conflict. Git can fail
 		// because the checker cannot write, start a hook or create a commit.
 		unmerged, readErr := runGit(ctx, tmpDir, "diff", "--name-only", "--diff-filter=U")
@@ -501,6 +502,7 @@ func runMergeCheckCmd(ctx context.Context, dir, name string, args ...string) (st
 func mergeCheckHostFailure(out string) bool {
 	for _, diagnostic := range []string{
 		"no space left on device", "disk quota exceeded",
+		"cannot allocate memory", "signal: killed",
 		"resource temporarily unavailable", "too many open files",
 		"runtime: failed to create new OS thread",
 	} {

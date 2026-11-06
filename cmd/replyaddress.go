@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -35,9 +37,9 @@ func fromLine(from, to, msg string) string {
 }
 
 // inboxPeer is the PreToolUse hook's delivery of a SendMessage by name to a
-// roster agent whose harness reads an inbox (omp, agy, codex), which no
-// SendMessage reaches: the line that says where it went, "" when name is no
-// such agent (or the state does not read: the send passes as written).
+// roster agent whose harness reads an inbox, or a live Claude session whose
+// instruction is consumed by a boundary hook. It returns the delivery status
+// and route, or "" when the target is unknown and the send should pass.
 func (a *app) inboxPeer(session, name, msg string) (string, error) {
 	if a.loadConfig() != nil {
 		return "", nil
@@ -52,7 +54,17 @@ func (a *app) inboxPeer(session, name, msg string) (string, error) {
 	}
 	ag, h, id, ok := inboxAgent(st, name)
 	if !ok {
-		return "", nil
+		target, err := a.instructionTarget(name)
+		if err != nil || target == nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		status, err := a.relayInstruction(ctx, target.ID, instructionAddress(target), msg)
+		if err != nil {
+			return "", err
+		}
+		return status + "; instruction reaches the session chat at its next tool or turn boundary", nil
 	}
 	by := state.Party{Session: session, Name: session}
 	for _, rl := range roles {

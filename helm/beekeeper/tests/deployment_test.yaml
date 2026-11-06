@@ -163,13 +163,13 @@ tests:
   - it: renders the decisions' people, channels and gateway into config.yaml
     template: configmap.yaml
     set:
-      serve.people: {timo: timo@example.io}
+      serve.people: {alex: alex@example.io}
       serve.channels: {bumblebee: C0123}
       serve.gateway.url: http://klaus-gateway.klaus-gateway.svc
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: "timo: timo@example.io"
+          pattern: "alex: alex@example.io"
       - matchRegex:
           path: data["config.yaml"]
           pattern: "bumblebee: C0123"

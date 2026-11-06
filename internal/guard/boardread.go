@@ -68,8 +68,10 @@ func boardReadRefusal(cmd string, budget func() string) string {
 		"at an estimated 10 to 100 GraphQL points each: a board of thousands of items spends the hourly limit every session " +
 		"on this machine shares. GraphQL left: " + left + ".\n" +
 		"Instead:\n" +
-		"- add an issue or PR: `gh project item-add <board> --owner <org> --url <issue-url>` (its JSON names the item id)\n" +
-		"- set a field: `gh project item-edit --id <item-id> --project-id <project-id> --field-id <field-id> ...` with the item id from item-add, or from the issue's own `projectItems` (`gh api graphql` over `repository.issue.projectItems`)\n" +
-		"- move an item's Status, adding the issue to the board when it is missing: `beekeeper board move <owner/repo#n> <status>`; issues from any accessible repository use the configured board, subject to GitHub permissions\n" +
+		"- add an issue with Team, Status and Kind: `beekeeper board add <owner/repo#n> --kind <kind>` (default Status: Backlog)\n" +
+		"- inspect an issue's board fields: `beekeeper board show <owner/repo#n>` (reads the issue's own `projectItems`)\n" +
+		"- for a personal-account repository, name it on every gh call with `GH_REPO=<owner/repo>` or `-R <owner/repo>` where supported, so the worker uses the person's login\n" +
+		"- set a field by a known item id: `GH_REPO=<owner/repo> gh project item-edit --id <item-id> --project-id <project-id> --field-id <field-id> ...`; an issue's `projectItems` can omit another owner's board\n" +
+		"- move an item's Status, adding the issue to the board when it is missing: `beekeeper board move <owner/repo#n> <status>`; issues from any accessible repository use the configured board, subject to GitHub permissions; to prove access, move an existing item to its current status\n" +
 		"- find items: `gh project item-list <board> --owner <org> --query \"<filter>\"`, or `projectV2.items(query: \"<filter>\")`"
 }

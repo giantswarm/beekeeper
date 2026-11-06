@@ -62,7 +62,7 @@ var (
 	// metaCmds print a file's metadata or move it, never its content.
 	metaCmds = map[string]bool{
 		"ls": true, statCommand: true, fileCommand: true, "wc": true, "du": true, testCommand: true, "[": true, "[[": true,
-		"realpath": true, readlinkCmd: true, dirnameCmd: true, "basename": true, "touch": true, "chmod": true,
+		"realpath": true, readlinkCmd: true, dirnameCmd: true, "basename": true, transcriptTouch: true, "chmod": true,
 		"chown": true, findCmd: true, "lsof": true, "fuser": true, "namei": true, "getfacl": true, "mv": true,
 		"rm": true, trashCmd: true, trashPutCmd: true, ompCommand: true, selfCmd: true,
 	}

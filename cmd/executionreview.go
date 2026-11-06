@@ -27,9 +27,6 @@ func sameReviewSession(a, b state.Party) bool {
 func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) error {
 	return a.store.Update(func(st *state.State) ([]state.Event, error) {
 		worker, ok := executionReviewWorker(st, act)
-		if !ok {
-			return nil, nil
-		}
 		for _, round := range st.DeskReviews {
 			if round.Ref == act.Ref && round.Head == act.Head && round.Round == act.Round {
 				return nil, nil
@@ -41,6 +38,20 @@ func (a *app) assignExecutionReview(ctx context.Context, act superloop.Action) e
 			candidate := &st.Starts[i]
 			if candidate.Name == name && candidate.By.Is(loopParty) && (start == nil || candidate.At.After(start.At)) {
 				start = candidate
+			}
+		}
+		if !ok {
+			if start == nil || start.Execution == nil {
+				return nil, nil
+			}
+			// A remote reviewer also needs an assignment when the author is
+			// local or this is an ownerless pull request.
+			worker = state.Party{Name: act.Agent}
+			for _, ag := range st.Agents {
+				if ag.Name == act.Agent {
+					worker = ag.Party
+					break
+				}
 			}
 		}
 		if start == nil || start.At.IsZero() || start.Session == "" && start.HostSession == "" || sameReviewSession(start.Party, worker) {
@@ -137,7 +148,7 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 		if err != nil {
 			return err
 		}
-		if covered {
+		if covered || st.ReviewNitsChecked(pull.Ref, use.Head, round.Head) {
 			reviewed = round.Head
 		}
 	}

@@ -34,18 +34,36 @@ const (
 // clears the label of every file input, marks the one input that is enabled
 // and whose box is rendered (no ancestor display:none, visibility:hidden,
 // hidden or inert) and scrolls it into view; several such inputs or none
-// mark nothing and say which there are.
+// mark nothing and say which there are. A scope of form[action="..."]
+// compares the action destination (origin and path), ignoring query and fragment.
 const UploadTargetScript = `(() => {
   const label = '` + UploadTargetLabel + `';
   document.querySelectorAll('input[type=file]').forEach(e => { if (e.getAttribute('aria-label') === label) e.removeAttribute('aria-label'); });
-  const root = scope ? document.querySelector(scope) : document;
+  // An action selector identifies a destination; query tokens are page state.
+  const actionScope = /^form\[action=(["'])(.*?)\1\]$/.exec(scope);
+  const target = action => { const u = new URL(action.split('?')[0].split('#')[0], document.baseURI); return u.origin + u.pathname; };
+  const roots = actionScope ? [...document.querySelectorAll('form[action]')].filter(f => {
+    try { return target(f.getAttribute('action')) === target(actionScope[2]); } catch { return false; }
+  }) : [];
+  if (actionScope && roots.length > 1) return label + ': none: several forms match the action target';
+  const root = actionScope ? roots[0] : (scope ? document.querySelector(scope) : document);
   if (!root) return label + ': none: no element matches the scope ' + scope;
   const name = e => { const f = e.form || e.closest('form'); return 'input' + (e.id ? '#' + e.id : '') + (e.name ? '[name=' + e.name + ']' : '') +
     (f ? ' in form' + (f.id ? '#' + f.id : '') + (f.getAttribute('action') ? ' (' + f.getAttribute('action') + ')' : '') : ''); };
-  const shown = e => !e.disabled && !!e.parentElement && e.parentElement.checkVisibility({ visibilityProperty: true }) && !e.parentElement.closest('[hidden],[inert]');
+  // File inputs can themselves be hidden by the upload widget. Judge the
+  // containing box, skipping boxless wrappers without skipping hidden ones.
+  const box = e => {
+    let p = e.parentElement;
+    while (p && getComputedStyle(p).display === 'contents') {
+      if (getComputedStyle(p).visibility !== 'visible') return null;
+      p = p.parentElement;
+    }
+    return p;
+  };
+  const shown = e => { const p = box(e); return !e.disabled && !!p && p.checkVisibility({ visibilityProperty: true }) && !e.closest('[hidden],[inert]'); };
   const all = [...root.querySelectorAll('input[type=file]')];
   const ok = all.filter(shown);
-  if (ok.length === 1) { ok[0].setAttribute('aria-label', label); ok[0].parentElement.scrollIntoView({ block: 'center' });
+  if (ok.length === 1) { ok[0].setAttribute('aria-label', label); box(ok[0]).scrollIntoView({ block: 'center' });
     return label + ': marked ' + name(ok[0]) + ' (' + (all.length - 1) + ' other file inputs hidden or disabled); find "' + label + '" for its ref'; }
   if (ok.length > 1) return label + ': none: ' + ok.length + ' visible file inputs (' + ok.map(name).join('; ') + '): run again with scope set to the intended form or comment box';
   return label + ': none: ' + all.length + ' file inputs, every one hidden or disabled' + (all.length ? ' (' + all.map(name).join('; ') + ')' : '');

@@ -105,8 +105,8 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 		{"gone local", claimOther, false, true},
 		{"live local", claimOther, true, false},
 		{"gone codex", state.Party{HostSession: "codex_gone", Name: "Codex"}, false, true},
-		{"person-held", state.Party{Name: "operator"}, false, false},
-		{"remote holder", state.Party{Session: "foreign-worker", Host: "other-host"}, false, false},
+		{"person-held", state.Party{Name: litOperator}, false, false},
+		{"remote holder", state.Party{Session: "foreign-worker", Host: otherHostName}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := claimApp(t)
@@ -128,7 +128,7 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 			if err != nil || (h == nil) != tc.wantRelease {
 				t.Fatalf("holder: %v, %v", h, err)
 			}
-			evs, err := a.store.Events(100, func(e state.Event) bool { return e.Verb == "lease.release-gone" })
+			evs, err := a.store.Events(100, func(e state.Event) bool { return e.Verb == leaseReleaseGoneVerb })
 			want := 0
 			if tc.wantRelease {
 				want = 1
@@ -143,7 +143,7 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 func TestLabLifecycleFailureAndRefusal(t *testing.T) {
 	a := claimApp(t)
 	_, starts, stops := lifecycleDocker(t, a)
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	if _, err := runLease(a, "claim", labOne, "-p", "not mine"); Code(err) != ExitRefused || *starts != 0 || *stops != 0 {
 		t.Fatalf("refused claim touched Docker: %v", err)
 	}
