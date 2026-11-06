@@ -24,6 +24,14 @@ type testExecutionTransport struct {
 	inspect func(context.Context, execution.Ref) (execution.Observation, error)
 	sync    func(context.Context, execution.Ref) (execution.ControlResult, error)
 	rebind  func(context.Context, execution.Ref, execution.PolicyRebind) (execution.Observation, error)
+	resume  func(context.Context, execution.Ref, execution.ContinueRequest) (execution.Handle, error)
+}
+
+func (f *testExecutionTransport) Continue(ctx context.Context, r execution.Ref, q execution.ContinueRequest) (execution.Handle, error) {
+	if f.resume == nil {
+		return execution.Handle{}, execution.ErrUnsupported
+	}
+	return f.resume(ctx, r, q)
 }
 
 func (f *testExecutionTransport) ResolveMessage(ctx context.Context, r execution.Ref, q execution.MessageResolution) (execution.Ack, error) {
