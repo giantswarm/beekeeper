@@ -936,10 +936,22 @@ func ValidEffort(level string) bool {
 	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
 }
 
+// PolicyBundle lists explicitly approved files below Root. Each start reads
+// them anew, so an edit reaches the next remote worker; no directory is harvested.
+type PolicyBundle struct {
+	Root         string                       `yaml:"root"`
+	Sources      []execution.BundleSource     `yaml:"sources"`
+	Settings     map[string]string            `yaml:"settings,omitempty"`
+	Capabilities []execution.BundleCapability `yaml:"capabilities,omitempty"`
+}
+
 // Agents configures the hand-over of registered agents.
 type Agents struct {
 	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
 	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
+	// PolicyBundle names the coordinator's rules and skills every remote start
+	// carries to its host. Unset, a remote worker has the host's policy alone.
+	PolicyBundle *PolicyBundle `yaml:"policyBundle,omitempty"`
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
@@ -964,12 +976,6 @@ type Agents struct {
 	// unkept task holder is retired after this age; gone task holders free
 	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
-	// ArchiveAgreement says where the person agreed that the desktop
-	// sessions of finished workers beekeeper started are archived without
-	// asking, never a session the person started (their standing
-	// instruction, quoted to a steward). Empty: beekeeper asks no steward to
-	// archive, since a peer's message is not the person's agreement.
-	ArchiveAgreement string `yaml:"archiveAgreement"`
 	// AutoResume has the watch resume a parked agent (agents park) with
 	// what settled its wait, once the note it parked on is closed or the
 	// pull request merged or closed; off, the watch only says AGENT
@@ -2319,6 +2325,14 @@ type Guide struct {
 	// WaitingTTL is how long a stopped session that waits on the person
 	// stays in the queue and the feed; older ones fold into one line.
 	WaitingTTL Duration `yaml:"waitingTTL"`
+	// PersonNames are other names the person goes by: note add --for one of
+	// them files the note for Person, where the guide sees it.
+	PersonNames []string `yaml:"personNames"`
+	// Desk is the folder (~/ allowed) the guide keeps its memory in, a desk
+	// checkout: the guide's session writes files there and the desk commits
+	// them. A refused write to a harness's own memory names it. Empty: the
+	// guide edits nothing.
+	Desk string `yaml:"desk"`
 }
 
 // DefaultLoopGraphQLLimit is supervisor.graphQLLimit when unset.
@@ -4087,6 +4101,9 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
 		report(fmt.Errorf("agents.remoteMCP: %w", err))
+	}
+	if b := c.Agents.PolicyBundle; b != nil && (!filepath.IsAbs(b.Root) || len(b.Sources) == 0) {
+		report(fmt.Errorf("agents.policyBundle: an absolute root and at least one source are required"))
 	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {

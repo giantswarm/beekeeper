@@ -35,7 +35,7 @@ and keeps the roadmap board true. It is not the supervisor and not a worker: it 
 its own, touches holds and other operational state only as the escalation point above, merges
 nothing, fixes no code, and runs no research, proofs, subagents or test sessions. beekeeper's PreToolUse hook holds it to that: in the guide's session an Edit, Write or
 NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
-reading a page are refused, with the hint to file the work in that turn as an issue in its owning repository, put on the board, and tell the person in one line, never to hand it back to them. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
+reading a page are refused, with the hint to file the work in that turn as an issue in its owning repository, put on the board, and tell the person in one line, never to hand it back to them. The one place it writes is the desk, `guide.desk`: its memory, which it adds files to and edits at any time; the desk commits them, the guide does not. No session writes to a harness's own memory: what lasts goes to the desk. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
 ## Emergency controls
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,25 +85,6 @@ func TestArchivable(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("lacks %q:\n%s", want, out)
 		}
-	}
-}
-
-// Without the person's agreement configured, no steward is asked to
-// archive and the archive is not owed.
-func TestArchiveNeedsTheAgreement(t *testing.T) {
-	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
-	a, _ := archiveApp(t, func(st *state.State) {
-		st.Starts = append(st.Starts, state.Start{Party: worker})
-		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: worker, Finished: true, At: time.Now()})
-	})
-	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
-	st, err := a.store.Read()
-	if err != nil {
-		t.Fatal(err)
-	}
-	o := a.archiveDesktops(context.Background(), st, []state.Party{worker}, "test")[0]
-	if !strings.Contains(o.line, "agents.archiveAgreement is not set") || o.host != "" || o.asked || !o.unagreed {
-		t.Errorf("outcome %+v", o)
 	}
 }
 
@@ -203,7 +185,6 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 					st.Declines = []state.Decline{{Host: finishedHost, At: time.Now(), Why: "No."}}
 				}
 			})
-			a.cfg.Agents.ArchiveAgreement = "agreed"
 			plat.Machine = noCLIMachine{plat.Machine}
 			desktopRecord(t, a.cfg.Claude.DesktopDir, runHost, "run9", false)
 			desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
@@ -245,6 +226,53 @@ func TestArchiveAsksNoSessionAboutItselfAgain(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Finished workers are archived through a steward with the default config.
+func TestArchiveFinishedWorkerWithoutConfiguration(t *testing.T) {
+	worker := state.Party{Session: finishedID, HostSession: finishedHost, Name: finishedName}
+	a, _ := archiveApp(t, func(st *state.State) {
+		st.Starts = append(st.Starts, state.Start{Party: worker})
+		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{By: worker, Finished: true, At: time.Now()})
+	})
+	desktopRecord(t, a.cfg.Claude.DesktopDir, finishedHost, finishedID, false)
+	runtime := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtime)
+	if err := os.MkdirAll(filepath.Join(runtime, "cc-socks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(peerSocket(runtime, 7), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warm := &atomic.Bool{}
+	warm.Store(true)
+	plat.Machine = warmMachine{Machine: plat.Machine, id: finishedID, warm: warm}
+	sent := fakeRelay(t, false)
+	// The fake steward records the archive before acknowledging the request.
+	script := filepath.Join(filepath.Dir(sent), "claude")
+	raw, err := os.ReadFile(filepath.Clean(script))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_ARCHIVE_RECORD", filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", finishedHost+".json"))
+	raw = []byte(strings.Replace(string(raw), "#!/bin/sh\n", "#!/bin/sh\nsed -i 's/\"isArchived\":false/\"isArchived\":true/' \"$TEST_ARCHIVE_RECORD\"\n", 1))
+	if err := os.WriteFile(script, raw, 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	outcome := a.archiveDesktops(ctx, st, []state.Party{worker}, "beekeeper doctor")[0]
+	record, ok := claude.ReadRecord(a.cfg, finishedHost)
+	if !ok || !record.IsArchived || outcome.host != "" || !strings.Contains(outcome.line, "is archived") {
+		t.Fatalf("outcome %+v, record %+v", outcome, record)
+	}
+	if got := relayed(t, sent); len(got) != 1 || got[0] != "uds:"+peerSocket(runtime, 7) {
+		t.Fatalf("steward deliveries %v", got)
 	}
 }
 

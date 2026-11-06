@@ -37,6 +37,10 @@ type hookCommand struct {
 const (
 	hookTypeCommand = "command"
 	hookWord        = "hook"
+	// autoMemoryKey switches Claude Code's own memory: beekeeper's hook
+	// refuses a session's writes to it, and this keeps Claude Code from
+	// writing there itself.
+	autoMemoryKey = "autoMemoryEnabled"
 )
 
 // Hooks are the entries install adds for the binary exe: the guard before
@@ -159,6 +163,12 @@ func (e Env) planHooks(p *plan, m *Manifest) error {
 		}
 		s.setHooks(want.Event, list)
 	}
+	if !s.has(autoMemoryKey) {
+		s.top.set(autoMemoryKey, json.RawMessage("false"))
+		m.SettingsKeys = append(m.SettingsKeys, autoMemoryKey)
+		changed = true
+		p.add("add", e.Settings+": "+autoMemoryKey+" false", "", nil)
+	}
 	if !changed {
 		return nil
 	}
@@ -237,6 +247,11 @@ func (e Env) planUnhooks(p *plan, m Manifest, removed map[string]bool) error {
 	}
 	if slices.Contains(m.SettingsKeys, "hooks") && len(s.hooksObj()) == 0 {
 		s.top.del("hooks")
+	}
+	if slices.Contains(m.SettingsKeys, autoMemoryKey) && s.has(autoMemoryKey) {
+		s.top.del(autoMemoryKey)
+		changed = true
+		p.add("remove", e.Settings+": "+autoMemoryKey, "", nil)
 	}
 	switch {
 	case !changed:

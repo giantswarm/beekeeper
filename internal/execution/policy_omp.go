@@ -25,7 +25,7 @@ func (s *Server) ompEnvironment() []string {
 	return append(cleanEnvironment("", s.Executable), "PI_CODING_AGENT_DIR="+s.Config.Harnesses[HarnessOmp].ConfigDir)
 }
 func (s *Server) ompArgs(model, effort string) []string {
-	args := []string{"--mode", "rpc", "--no-ui", "--no-extensions", "--extension", s.ompGuardFile(), "--tools", "bash,read,write", "--approval-mode", "yolo", "--append-system-prompt", filepath.Join(s.Root, "CLAUDE.md")}
+	args := []string{"--mode", "rpc", "--no-ui", "--no-extensions", "--extension", s.ompGuardFile(), "--tools", "bash,read,write", "--approval-mode", "yolo", "--append-system-prompt", s.rulesFile()}
 	if model != "" {
 		args = append(args, "--model", model)
 	}

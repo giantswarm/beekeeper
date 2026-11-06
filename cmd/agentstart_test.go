@@ -53,13 +53,14 @@ func TestResumeSeededTask(t *testing.T) {
 }
 
 func TestRecordStart(t *testing.T) {
+	const keptSession = "kept"
 	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 	live := func(p state.Party) bool { return p.Session == "r" }
 	start := func(id, name string, at time.Time) state.Start {
 		return state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: name}, Mode: state.ModeBypass, Dir: "/w", At: at}
 	}
 	old := start("old", "test: gone", now.Add(-startsKept-time.Hour))
-	kept := start("kept", "test: kept", now.Add(-startsKept+time.Hour))
+	kept := start(keptSession, "test: kept", now.Add(-startsKept+time.Hour))
 
 	// A start is recorded with its mode, the old ones forgotten, and the
 	// agent registered busy with the brief.
@@ -68,7 +69,7 @@ func TestRecordStart(t *testing.T) {
 	if err != nil || reg.task != "Brief: count lines" {
 		t.Fatalf("registration = %+v, err = %v", reg, err)
 	}
-	if ids := []string{st.Starts[0].Session, st.Starts[len(st.Starts)-1].Session}; len(st.Starts) != 2 || !slices.Equal(ids, []string{"kept", "n"}) {
+	if ids := []string{st.Starts[0].Session, st.Starts[len(st.Starts)-1].Session}; len(st.Starts) != 2 || !slices.Equal(ids, []string{keptSession, "n"}) {
 		t.Errorf("starts = %+v", st.Starts)
 	}
 	if s, ok := st.BypassStart("n"); !ok || s.Name != workerName {

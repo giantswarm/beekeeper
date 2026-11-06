@@ -44,7 +44,7 @@ func TestParkReleaseAvailability(t *testing.T) {
 		err       error
 		want      int
 	}{
-		{name: "pending", raw: `{"verdict":"timeout","exitCode":2}`, err: errors.New("exit 2")},
+		{name: "release still building", raw: `{"verdict":"timeout","exitCode":2}`, err: errors.New("exit 2")},
 		{name: "unavailable tool", err: errors.New("missing devctl")},
 		{name: handoverMalformedMode, raw: `not JSON`},
 		{name: "failed CI", raw: `{"verdict":"ci_failed","exitCode":1}`},

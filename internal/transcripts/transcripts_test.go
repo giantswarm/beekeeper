@@ -18,6 +18,8 @@ const (
 	testDevctlRepo    = "giantswarm/devctl"
 	testExecution     = "exec-1"
 	testRosterWorker  = "worker-bk-1"
+	testConv          = "conv"
+	testClaude        = "claude"
 )
 
 func TestStoreHarnessesAndRedaction(t *testing.T) {
@@ -292,5 +294,119 @@ func TestDefaultAccessRequiresWorkerRole(t *testing.T) {
 		if got := Allowed(caller, meta, nil, time.Now()); got != (role == testWorker) {
 			t.Errorf("role %q: allowed = %v", role, got)
 		}
+	}
+}
+
+func TestAgyResultsAndLoss(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agy.jsonl")
+	big := strings.Repeat("x", maxResultBytes+10)
+	lines := strings.Join([]string{
+		`{"type":"USER_INPUT","content":"<USER_REQUEST>brief <truncated 41433 bytes></USER_REQUEST>"}`,
+		`{"type":"PLANNER_RESPONSE","content":"looking","tool_calls":[{"name":"run_command","args":{"CommandLine":"ls"}},{"name":"view_file","args":{"Path":"a.txt"}}]}`,
+		`{"type":"TOOL_RESPONSE","content":"a.txt"}`,
+		`{"type":"GENERIC","content":"` + big + `"}`,
+		`{"type":"PLANNER_RESPONSE","content":"","tool_calls":[{"name":"run_command","args":{"CommandLine":"pwd"}}]}`,
+		`{"type":"PLANNER_RESPONSE","content":"done <truncated 7215 bytes>"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ParseFile(harnessAgy, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results []string
+	for _, turn := range p.Turns {
+		if turn.Role == RoleTool {
+			results = append(results, turn.Result)
+		}
+	}
+	if len(results) != 3 || results[0] != "a.txt" || !strings.HasSuffix(results[1], "… <10 bytes not stored>") || results[2] != "" {
+		t.Fatalf("tool results = %q", results)
+	}
+	l := LossOf(p.Turns, true, false)
+	if want := (Loss{HarnessBytes: 48648, HarnessCuts: 2, ClippedBytes: 10, Clipped: 1, NoResult: 1}); l != want {
+		t.Fatalf("loss = %+v, want %+v", l, want)
+	}
+	for _, part := range []string{"48648 bytes", "1 tool results are clipped", "1 tool calls have no stored result"} {
+		if !strings.Contains(l.Lost()+l.Unindexed(), part) {
+			t.Errorf("%+v does not say %q", l, part)
+		}
+	}
+	if LossOf(p.Turns, false, false).NoResult != 0 {
+		t.Error("a read without results reports results as lost")
+	}
+}
+
+func TestLossSeparatesWhatIsGoneFromWhatIsMissing(t *testing.T) {
+	turns := []Turn{
+		{Role: RoleUser, Text: "brief <truncated 5 bytes>"},
+		{Role: RoleTool, Text: "empty", Answered: true},
+		{Role: RoleTool, Text: "none"},
+		{Role: RoleTool, Text: "older clip", Result: strings.Repeat("x", maxResultBytes) + "…"},
+	}
+	ended := LossOf(turns, true, false)
+	if ended.NoResult != 1 || ended.Pending != 0 || ended.Clipped != 1 {
+		t.Fatalf("ended = %+v: empty output is an answer, an older clip still counts", ended)
+	}
+	if strings.Contains(ended.Lost(), "tool") || !strings.Contains(ended.Lost(), "5 bytes") {
+		t.Errorf("lost = %q: only the harness's cut is gone for good", ended.Lost())
+	}
+	if !strings.Contains(ended.Unindexed(), "may still hold") {
+		t.Errorf("unindexed = %q", ended.Unindexed())
+	}
+	ended.SourceGone = true
+	if !strings.Contains(ended.Unindexed(), "lost too") {
+		t.Errorf("unindexed with its source gone = %q", ended.Unindexed())
+	}
+	running := LossOf(turns[:3], true, true)
+	if running.NoResult != 0 || running.Pending != 1 || running.Unindexed() != "1 tool calls have no result yet" {
+		t.Fatalf("running = %+v, %q", running, running.Unindexed())
+	}
+	if (Loss{}).Lost()+(Loss{}).Unindexed() != "" {
+		t.Error("no loss says something")
+	}
+}
+
+func TestIngestReadsAnOlderAgyIndexAgainOnce(t *testing.T) {
+	dir := t.TempDir()
+	store := Store{Root: filepath.Join(dir, "transcripts")}
+	path := filepath.Join(dir, "agy.jsonl")
+	lines := `{"type":"PLANNER_RESPONSE","content":"","tool_calls":[{"name":"run_command","args":{"CommandLine":"ls"}}]}` + "\n" + `{"type":"TOOL_RESPONSE","content":"a.txt"}` + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As an older version left it: same source, no result, no parser version.
+	key := SafeKey(harnessAgy, testLocalHost, testConv)
+	old := Meta{Key: key, ID: testConv, Harness: harnessAgy, Host: testLocalHost, SourcePath: path, SourceMod: fi.ModTime(), SourceSize: fi.Size()}
+	if _, err := store.Save(old, []Turn{{Role: RoleTool, Tool: "run_command", Text: "run_command: ls"}}); err != nil {
+		t.Fatal(err)
+	}
+	m, changed, err := store.IngestFile(Meta{Key: key, ID: testConv, Harness: harnessAgy, Host: testLocalHost}, path)
+	if err != nil || !changed || m.Parser != parserVersions[harnessAgy] {
+		t.Fatalf("ingest = %+v, %v, %v", m, changed, err)
+	}
+	turns, err := store.ReadTurns(key, ReadOptions{Results: true})
+	if err != nil || len(turns) != 1 || turns[0].Result != "a.txt" {
+		t.Fatalf("turns = %+v, %v", turns, err)
+	}
+	if _, changed, err = store.IngestFile(Meta{Key: key, ID: testConv, Harness: harnessAgy, Host: testLocalHost}, path); err != nil || changed {
+		t.Fatalf("an unchanged source was read again: %v, %v", changed, err)
+	}
+	// Harnesses whose parser did not change keep the cheap path.
+	claudeFile := filepath.Join(dir, "claude.jsonl")
+	if err := os.WriteFile(claudeFile, []byte(`{"type":"user","timestamp":"2026-10-05T09:00:00Z","message":{"role":"user","content":"hi"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.IngestFile(Meta{Key: "c", Harness: testClaude, Host: testLocalHost}, claudeFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err = store.IngestFile(Meta{Key: "c", Harness: testClaude, Host: testLocalHost}, claudeFile); err != nil || changed {
+		t.Fatalf("a claude transcript was read again: %v, %v", changed, err)
 	}
 }
