@@ -53,7 +53,7 @@ func TestMemoryRefusalFollowsDirectoryLinks(t *testing.T) {
 		"write a new file": toolEvent(writeTool, map[string]any{filePathKey: filepath.Join(notes, "new.md")}),
 		"edit a file":      toolEvent(editTool, map[string]any{filePathKey: filepath.Join(notes, "old.md")}),
 		"deeper":           toolEvent(writeTool, map[string]any{filePathKey: filepath.Join(notes, "a/b/new.md")}),
-		"redirect":         bashCall("echo x >> " + filepath.Join(notes, "new.md")),
+		"shell redirect":   bashCall("echo x >> " + filepath.Join(notes, "new.md")),
 		"tee":              bashCall("echo x | tee " + filepath.Join(notes, "new.md")),
 	} {
 		t.Run(name, func(t *testing.T) {

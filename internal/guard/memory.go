@@ -16,6 +16,9 @@ import (
 // codexHomeEnv moves codex's folder, its memories with it.
 const codexHomeEnv = "CODEX_HOME"
 
+// geminiDir is agy's folder in the home.
+const geminiDir = ".gemini"
+
 // harnessMemory names the harness whose own memory the absolute path p is in,
 // "" for any other path. It reads the path's parts, so a managed home on an
 // execution host counts as the person's does.
@@ -35,7 +38,7 @@ func harnessMemory(p string) string {
 			if len(after) >= 1 && after[0] == "memories" {
 				return harnessCodexName
 			}
-		case ".gemini":
+		case geminiDir:
 			if len(after) == 1 && after[0] == "GEMINI.md" || len(after) >= 2 && after[0] == "antigravity" && after[1] == "knowledge" {
 				return harnessAgyName
 			}
@@ -123,7 +126,7 @@ func memoryWrite(p string) string {
 func memoryRoots() []string {
 	var roots []string
 	if home, err := guardHomeDir(); err == nil {
-		for _, dir := range []string{".claude", ".codex", ".gemini", ".omp"} {
+		for _, dir := range []string{".claude", ".codex", geminiDir, ".omp"} {
 			roots = append(roots, filepath.Join(home, dir))
 		}
 	}
