@@ -697,6 +697,8 @@ type Kube struct {
 	// ProtectedContexts lists additional production-class contexts (including
 	// full test installations) whose clusters agents must not change directly.
 	ProtectedContexts []string `yaml:"protectedContexts"`
+	// ReadOnlyExecQueries lists exact SELECT queries allowed through psql -X -c.
+	ReadOnlyExecQueries []string `yaml:"readOnlyExecQueries"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in

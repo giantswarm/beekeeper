@@ -647,7 +647,9 @@ kube guard is off and `beekeeper snapshot` says so):
   install/uninstall. The target is the `--context`/`--kube-context`/`--cluster` given, else the current
   context of the kubeconfig the command uses (`--kubeconfig`, `KUBECONFIG` in the command or the
   session). Changes to production go through GitOps pull requests and platformctl; there is no
-  break-glass. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
+  break-glass. The one exec that passes is a read: a query listed exactly in
+  `kube.readOnlyExecQueries`, run as `kubectl exec <pod> -- psql -X [-U <user>] [-d <database>] -c
+  '<query>'`, without `-i` or `-t`; every other exec is refused with the reason named. Reads (`get`, `describe`, `logs`, `top`, `auth can-i`, `diff`, `--dry-run=server`;
   `helm list|status|get|template`; `flux get|logs`) and writes to any other cluster pass.
 - A kubectl plugin's write to production: `kubectl <plugin> …` (a first word that is no kubectl
   command) and a `kubectl-<plugin>` binary (a path or `go run ./cmd/kubectl-<plugin>` included), with
@@ -3771,6 +3773,7 @@ The organisation and desk keys, and their defaults:
 |---|---|---|
 | `kube.protectedContexts` | none | Additional production-class contexts whose clusters refuse direct writes; include full test installation contexts |
 | `kube.production` | unset | The installation whose clusters agents never write to, and the no-current-context rule of the machine kubeconfig |
+| `kube.readOnlyExecQueries` | none | Exact queries `kubectl exec <pod> -- psql -X … -c '<query>'` may run on production and `kube.protectedContexts`, on any pod the context reaches; only `SELECT *`, a column list or `count(*)` from a named relation, optionally `LIMIT` |
 | `kube.contextTemplate` | unset: the context named after the installation, else `*@<name>` | An installation's kube context, `{installation}` its name (`login.example.com-{installation}`) |
 | `kube.kubeconfig` | `KUBECONFIG`'s files, else `~/.kube/config` | The kubeconfig files a `k8s://` source of `beekeeper secret` resolves its context in, merged as kubectl merges a `KUBECONFIG` list (`~/` allowed); a kind lab's context reads through kind instead |
 | `alerts.installations`, `lanes`, `resources` | none | The installations whose alerts are read, the merge lanes, the leasable environments |
