@@ -26,6 +26,8 @@ func executionDenied(b []byte) bool {
 	return json.Unmarshal(b, &out) == nil && out.Hook.PermissionDecision == decisionDeny
 }
 
+const viewerGraphQLCmd = "gh api graphql -f query='{ viewer { login } }'"
+
 // A read-only GraphQL query passes where every field of it is literal; the
 // board hook's own hint recommends one. A write, or what the guard cannot read,
 // stays with the coordinator.
@@ -40,8 +42,8 @@ func TestExecutionGuardAllowsLiteralGraphQLReads(t *testing.T) {
 		"gh api graphql -f " + query + " -F n=3199",
 		"gh api graphql --raw-field " + query + " --field n=3199 --jq .data",
 		"gh api graphql -F " + query + " -F n=3199 --paginate --slurp",
-		"gh api graphql -f query='{ viewer { login } }'",
-		"GH_REPO=giantswarm/beekeeper gh api graphql -f query='{ viewer { login } }' -q .data.viewer.login",
+		viewerGraphQLCmd,
+		"GH_REPO=giantswarm/beekeeper " + viewerGraphQLCmd + " -q .data.viewer.login",
 	} {
 		if executionDenied(h.DecideExecution(executionEvent(bashTool, map[string]any{commandKey: cmd}, workspace), executionFixture, workspace, nil)) {
 			t.Errorf("read-only query was denied: %s", cmd)
