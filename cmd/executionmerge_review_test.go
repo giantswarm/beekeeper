@@ -540,3 +540,43 @@ func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
 		t.Fatal("another remote session authenticated as reviewer")
 	}
 }
+
+// The merge authority consumes the same authenticated completion result when
+// the independent reviewer is a Codex execution on a host, with no worker App.
+func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.DeskReviews = nil
+		start := &st.Starts[len(st.Starts)-1]
+		start.Host = "review-host"
+		start.Session = "remote-codex-review-session"
+		start.Harness = execution.HarnessCodex
+		record := *st.Starts[0].Execution
+		record.Handle.Ref.Execution = "independent-review-execution"
+		record.Handle.Ref.Host = "review-host"
+		record.Request.Harness = execution.HarnessCodex
+		record.Request.Ref = record.Handle.Ref
+		start.Execution = &record
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.assignExecutionReview(context.Background(), superloop.Action{Ref: use.Repository + "#7", Head: use.Head, Round: 1, Agent: hostFixtureWorker}); err != nil {
+		t.Fatal(err)
+	}
+	approved := superloop.Review{ID: "remote-review", Verdict: superloop.Approved}
+	completeMergeReview(t, a, use, &approved)
+	pull.Reviews = []superloop.Review{approved}
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	use.ID = grant.ID
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatal(err)
+	}
+}

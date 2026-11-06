@@ -38,6 +38,8 @@ const removeParked = "parked"
 
 const removeUnused = "unused"
 
+const cleanupUpstream = "upstream"
+
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -86,7 +88,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	writeT(t, filepath.Join(clone, ".gitignore"), "*.log\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "init")
-	gitT(t, clone, "remote", "add", "origin", "https://github.com/acme/app.git")
+	gitT(t, clone, "remote", "add", workerGitHubOrigin, "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
 	for _, b := range []string{mergedPR, "work", litUnpushed, noteStatusOpen, "nopr", "live", "recent"} {
@@ -490,5 +492,76 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 				t.Fatalf("checkout exists = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// The recheck callback changes task identity after publication evidence was read.
+// These temporary repositories never query a real publication service.
+func TestAutomaticWorktreesRejectChangedTask(t *testing.T) {
+	for _, action := range []string{worktrees.Remove, worktrees.Clean} {
+		for _, change := range []string{"branch", cleanupUpstream, workerGitHubOrigin, "index"} {
+			t.Run(action+"/"+change, func(t *testing.T) {
+				a, read, root := worktreeApp(t)
+				m, err := read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(root, mergedPR)
+				if action == worktrees.Clean {
+					dir = filepath.Join(root, "work")
+				}
+				external := filepath.Join(t.TempDir(), "output")
+				writeT(t, filepath.Join(external, "artifact"), "build")
+				m.dirs = []string{dir}
+				m.automatic = true
+				m.trash = filepath.Join(t.TempDir(), "trash")
+				m.outputs = []config.BuildOutput{{Path: external, Worktree: dir}}
+				before, err := worktrees.Inspect(context.Background(), m.git, dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pulls, err := m.pulls(context.Background(), []github.Head{{Repo: before.Repo, Branch: before.HeadBranch()}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				pull := pulls[github.Head{Repo: before.Repo, Branch: before.HeadBranch()}]
+				if v := worktrees.Automatic(before, &pull, false, false, false, true, m.now); v.Action != action {
+					t.Fatalf("initial action = %s, want %s", v.Action, action)
+				}
+				calls := 0
+				m.recheck = func() ([]string, error) {
+					calls++
+					switch change {
+					case "branch":
+						gitT(t, dir, "checkout", "-q", "-b", "new-task")
+					case cleanupUpstream:
+						gitT(t, dir, "update-ref", "refs/remotes/origin/new-task", "HEAD")
+						gitT(t, dir, "branch", "--set-upstream-to=origin/new-task")
+					case workerGitHubOrigin:
+						gitT(t, dir, "remote", "set-url", workerGitHubOrigin, "https://github.com/acme/other.git")
+					case "index":
+						gd := gitT(t, dir, "rev-parse", "--absolute-git-dir")
+						// Advance activity while leaving it outside the grace period.
+						later := before.Touched.Add(time.Minute)
+						if err := os.Chtimes(filepath.Join(gd, "index"), later, later); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if head := gitT(t, dir, "rev-parse", "HEAD"); head != before.Head {
+						t.Fatal("callback moved HEAD")
+					}
+					return nil, nil
+				}
+				r := a.trimWorktrees(false, func() (worktreeMachine, error) { return m, nil })
+				if r.err != nil || len(r.failed) > 0 || calls != 1 || r.acted() || r.kept["worktree changed during inspection"] != 1 {
+					t.Errorf("run = %s, error = %v, failed = %v, callbacks = %d", r, r.err, r.failed, calls)
+				}
+				for _, path := range []string{dir, filepath.Join(dir, "node_modules", "pkg", "index.js"), filepath.Join(external, "artifact")} {
+					if !exists(path) {
+						t.Errorf("removed protected path %s", path)
+					}
+				}
+			})
+		}
 	}
 }

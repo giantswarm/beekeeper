@@ -203,6 +203,19 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			touchActive()
 			value = result
+		case executionReviewRelay:
+			var request executionReviewRequest
+			if execution.Decode(req.Payload, &request) != nil {
+				return nil, errors.New("invalid review relay request")
+			}
+			reviewCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, reviewErr := a.relayExecutionReview(reviewCtx, st, req.Ref, request)
+			if reviewErr != nil {
+				return nil, reviewErr
+			}
+			touchActive()
+			value = result
 		case executionPublish:
 			var publication executionPublication
 			if execution.Decode(req.Payload, &publication) != nil {

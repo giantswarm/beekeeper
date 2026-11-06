@@ -2330,6 +2330,14 @@ const loopRestartEvery = time.Minute
 // DOWN and notifies (no-supervisor) until it runs again. No session is
 // ever started or relayed for it.
 func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
+	if line, err := w.checkThroughput(w.now, false); err != nil {
+		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
+	} else {
+		w.clear(watchThroughputKey)
+		if line != "" {
+			w.emitNow(watchThroughputKey, "%s", line)
+		}
+	}
 	if w.loopRunning() {
 		if w.stand.loopDown {
 			w.emitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.now, w.stand.loopSince))
