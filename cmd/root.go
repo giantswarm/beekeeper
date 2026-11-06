@@ -252,7 +252,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	}
 	hook := a.hookCmd()
 	hook.AddCommand(a.preInvocationCmd())
-	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.issuesCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}

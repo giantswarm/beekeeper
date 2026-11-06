@@ -579,7 +579,7 @@ func TestOwnedEnvironmentRoutesWorkerPaths(t *testing.T) {
 	if !slices.Contains(env, workerGitHubTestPath) {
 		t.Fatalf("environment lost PATH: %v", env)
 	}
-	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOTMPDIR", "XDG_CACHE_HOME", "GOCACHE", "GOPATH", "GOMODCACHE"} {
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOTMPDIR", "XDG_CACHE_HOME", "GOCACHE", "GOPATH", "GOMODCACHE", "XDG_STATE_HOME", "CARGO_HOME"} {
 		values := []string{}
 		for _, kv := range env {
 			if v, ok := strings.CutPrefix(kv, key+"="); ok {

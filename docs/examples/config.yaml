@@ -86,6 +86,9 @@ kube:
   production: production
   # Additional production-class contexts, including full test installations.
   protectedContexts: [full-test, full-test-operations]
+  # Off by default. On, a recorded answer authorises one literal production
+  # kubectl delete, and an agent able to record an answer can forge that.
+  # productionNoteDeletes: false
   # Exact queries allowed on protected clusters via:
   # kubectl --context production exec pod/db -- psql -X -d app -c 'select * from conversations limit 5'
   # Only SELECT *, column lists or count(*) FROM a named relation, optionally
@@ -251,6 +254,7 @@ upgrades:
 
 supervisor:                 # the supervisor loop, which beekeeper install always installs as a user service (systemd or launchd); no session holds the role
   postMergeWindow: 2h       # retain merged workers until done or this long without activity
+  graphQLLimit: 1500        # GraphQL points an hour the board's reads may spend (keep above 800); past it the board waits for the reset, reviews and merges go on
   hosts: []                # execution host selectors (agents.hosts) worker starts may run on, in order; with no room locally, or always with hostsFirst: true; a host must map the item's repository and pass its check (capacity --host); reviewers may run there with github.workerApp configured
   hostsFirst: false        # prefer the first host with room over the coordinator's own machine, whatever its room is
   # The loop owns a watch beside it, reading alerts every alerts.every;
