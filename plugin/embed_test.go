@@ -106,6 +106,13 @@ func TestGitHubSkillHeadroom(t *testing.T) {
 	}
 }
 
+// The hook takes a slot for a source scan, so the rule says the scan waits.
+func TestGitHubSkillNamesTheScanWait(t *testing.T) {
+	if !strings.Contains(Skill("github"), "**Builds/tests/lints/scans**: `beekeeper run`") {
+		t.Error("the github skill must say a code scan waits for a build slot")
+	}
+}
+
 func TestGitHubSkillPersonalAccountGraphQL(t *testing.T) {
 	if !strings.Contains(Skill("github"), "**Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`") {
 		t.Error("the github skill must name GH_REPO for personal-account GraphQL")

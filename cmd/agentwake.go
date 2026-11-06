@@ -43,10 +43,17 @@ harness process reading its inbox) is refused as gone.
 
 A worker taken off the roster is reached by its exact name too: it comes
 back on the roster with its last task, in its own conversation. Claude Code
-continues one whose CLI ended; an omp, agy or codex worker whose process
+continues one whose CLI ended; a local omp, agy or codex worker whose process
 ended is refused, and the refusal names its stored transcript. Only this
 command and agents resume do that: a timer or a settled wait for a finished
 worker wakes nobody.
+
+An SSH worker whose process exited goes on the same way, on or off the
+roster: its host runs the same unit again in the same workspace and
+conversation, and the message is its next turn. A parked one goes on for a
+settled wait too. That takes a claude, codex or agy execution, on the rules
+it ran under, that nobody stopped and no retirement reached; anything else
+is refused, and the refusal names its stored transcript.
 
 A message from a roster agent or a role's holder is headed with the name
 it is answered by ([from "<name>": reply by SendMessage to "<name>", …]):
@@ -56,8 +63,9 @@ agent's roster name is written to its inbox by the PreToolUse hook.
 
 An SSH execution receives a durable ordered envelope. Success requires a
 harness acceptance event containing its message ID. A pending or uncertain
-delivery exits nonzero; agents messages shows its receipt and agents hosts
-sync reconciles it without creating another process. Reuse --request-id for
+delivery exits nonzero, as the first delivery to an execution that has to
+start again does; agents messages shows its receipt and agents hosts sync
+reconciles it without creating another process. Reuse --request-id for
 an identical retry; use a new ID for another identical message.
 
 An omp agent (agents start --harness omp) or an agy agent (agents start
@@ -106,6 +114,12 @@ desktop send to its local_ id by name to it, so no second copy starts.`,
 			if st, err := a.store.Read(); err == nil {
 				if s, ok := a.endedWorker(st, args[0]); ok {
 					return a.wakeEnded(cmd.Context(), by, s, msg, mode)
+				}
+				// Only a wake by name brings back an SSH worker that is done.
+				if i, err := findAgent(st, args[0]); err == nil && st.Agents[i].Execution != nil {
+					if err := a.continueExecution(cmd.Context(), by, st.Agents[i]); err != nil {
+						return err
+					}
 				}
 			}
 			return a.wakeAgent(cmd.Context(), by, args[0], msg, mode)

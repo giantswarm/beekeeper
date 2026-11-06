@@ -690,6 +690,8 @@ type StoreRule struct {
 // Kube configures the kube guard and how an installation's name becomes its
 // kube context.
 type Kube struct {
+	// APIReads are operator-provisioned API identities and exact read RPCs.
+	APIReads map[string]APIRead `yaml:"apiReads"`
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
 	// guard is off unless ProtectedContexts is set.
@@ -715,6 +717,17 @@ type Kube struct {
 	// kind lab's context makes through kind instead. Empty, the files
 	// KUBECONFIG lists, else the machine kubeconfig ~/.kube/config.
 	Kubeconfig []string `yaml:"kubeconfig"`
+}
+
+// APIRead binds a reader identity to one TLS endpoint and token audience.
+// The API must enforce read-only authorization for this service account.
+type APIRead struct {
+	Context        string   `yaml:"context"`
+	Namespace      string   `yaml:"namespace"`
+	ServiceAccount string   `yaml:"serviceAccount"`
+	Audience       string   `yaml:"audience"`
+	Endpoint       string   `yaml:"endpoint"`
+	Methods        []string `yaml:"methods"`
 }
 
 // DiskPruneAuto and DiskPruneAsk select the automatic disk step or the
