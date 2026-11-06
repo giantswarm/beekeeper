@@ -17,6 +17,9 @@ import (
 
 const reviewTestPath = "main.go"
 
+// reviewCaseRedCI is the review start case whose head has failing checks.
+const reviewCaseRedCI = "red CI"
+
 func TestLightReview(t *testing.T) {
 	for _, tt := range []struct {
 		name                    string
@@ -64,11 +67,11 @@ func TestReviewRoundPinsHeadAcrossRestarts(t *testing.T) {
 }
 
 func TestAgentsReviewRefusesBeforeStarting(t *testing.T) {
-	for _, name := range []string{"red CI", "draft PR", "closed", "reviewed", "requested"} {
+	for _, name := range []string{reviewCaseRedCI, "draft PR", "closed", "reviewed", "requested"} {
 		t.Run(name, func(t *testing.T) {
 			r := newLoopRig(t)
 			switch name {
-			case "red CI":
+			case reviewCaseRedCI:
 				r.pull.Green = false
 			case "draft PR":
 				r.pull.Draft = true
@@ -110,7 +113,7 @@ func TestAgentsReviewStartsInCheckoutWithFilledBrief(t *testing.T) {
 		if !slices.Equal(issues, r.pull.Closes) {
 			t.Fatalf("issues: %v", issues)
 		}
-		return []string{"https://github.com/o/r/issues/1"}, nil
+		return []string{issueOneURL}, nil
 	}
 	c := r.a.agentReviewCmd()
 	c.SetArgs([]string{loopPR, modelFlag, defaultReviewModel})
@@ -131,7 +134,7 @@ func TestAgentsReviewStartsInCheckoutWithFilledBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{loopURL, loopHead, "CI green at " + loopHead, "Light review:", epicTen, "https://github.com/o/r/issues/1", "review round 1", "none (first round)", deskReviewApproved} {
+	for _, want := range []string{loopURL, loopHead, "CI green at " + loopHead, "Light review:", epicTen, issueOneURL, "review round 1", "none (first round)", deskReviewApproved} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("brief lacks %q", want)
 		}
@@ -154,7 +157,7 @@ func TestRequireReviewRejectsGoWithoutFixedCommentAndAcceptsPinnedApproval(t *te
 		want       bool
 	}{
 		{"", loopHead, false},
-		{"Review: approved", loopHead, false},
+		{loopApproved, loopHead, false},
 		{deskReviewApproved, loopFixed, false},
 		{deskReviewApproved, loopHead, true},
 		{"Desk review (opus): changes requested", loopHead, false},

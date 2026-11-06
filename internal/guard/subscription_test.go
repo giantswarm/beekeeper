@@ -1,15 +1,14 @@
 package guard
 
 import (
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
 
 // browseTurn is the session of the browse turn the guard tests decide in.
 const browseTurn = "browse-turn"
+
+const subscriptionRef = "ref_45"
 
 // The page read of an issue the subscription tests click on: the edit
 // history control, the thread's Subscribe button, and a ref read again as
@@ -28,14 +27,9 @@ const issueRead = `- heading "browse: a scripted click" [ref_3]
 // click on the element the step names passes, and so does a typed text, a
 // read and a script that clicks nothing.
 func TestSubscriptionRefusal(t *testing.T) {
-	transcript := filepath.Join(t.TempDir(), "t.jsonl")
-	lines := []string{
-		resultLine(strconv.Quote(strings.ReplaceAll(issueRead, "Notifications", "Customize"))),
-		resultLine(`[{"type":"text","text":` + strconv.Quote(issueRead) + `}]`),
-	}
-	if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	transcript := drawsTranscript(t,
+		drawsCall{chromeReadPage, map[string]any{tabKey: tab7}, strings.ReplaceAll(issueRead, "Notifications", "Customize"), applicationsPage},
+		drawsCall{chromeReadPage, map[string]any{tabKey: tab7}, issueRead, applicationsPage})
 	click := func(ref, summary string) map[string]any {
 		return tabInput(leftClick, map[string]any{refKey: ref, summaryKey: summary})
 	}
@@ -51,11 +45,11 @@ func TestSubscriptionRefusal(t *testing.T) {
 		"Unsubscribe by its summary":     {chromeComputer, tabInput("double_click", map[string]any{summaryKey: "Unsubscribes from the thread"}), `("Unsubscribes")`},
 		"Watch by its summary":           {chromeComputer, click("", "Opens the Watch menu"), `("Watch")`},
 		"Star by its summary":            {chromeComputer, click("", "Stars the repository"), `("Stars")`},
-		"a ref the page read names":      {chromeComputer, click("ref_45", "Clicks the edited control"), `the click's ref_45 is ` + SubscriptionControls + ` ("Subscribe")`},
+		"a ref the page read names":      {chromeComputer, click(subscriptionRef, "Clicks the edited control"), `the click's ref_45 is ` + SubscriptionControls + ` ("Subscribe")`},
 		"the last read of a ref":         {chromeComputer, click("ref_7", "Clicks the button"), `("Notifications")`},
 		"a ref without a summary":        {chromeComputer, tabInput(leftClick, map[string]any{refKey: "ref_51"}), `("Unwatch")`},
-		"a form value on a subscription": {chromeForm, map[string]any{refKey: "ref_45", valueKey: true, tabKey: tab7}, `("Subscribe")`},
-		"a batch with the click":         {chromeBatch, map[string]any{actionsKey: []any{batchAction(chromeComputer, tabInput("screenshot", nil)), batchAction(chromeComputer, click("ref_45", ""))}}, `("Subscribe")`},
+		"a form value on a subscription": {chromeForm, map[string]any{refKey: subscriptionRef, valueKey: true, tabKey: tab7}, `("Subscribe")`},
+		"a batch with the click":         {chromeBatch, map[string]any{actionsKey: []any{batchAction(chromeComputer, tabInput("screenshot", nil)), batchAction(chromeComputer, click(subscriptionRef, ""))}}, `("Subscribe")`},
 		"a scripted click naming one":    {chromeScript, script(`document.querySelector('button[aria-label="Subscribe"]').click()`), `the scripted click's code names ` + SubscriptionControls},
 		"a scripted click on a sweep":    {chromeScript, script(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('edited')).click()`), "a sweep over the page's buttons or links (querySelectorAll('button'))"},
 		"a sweep by tag name":            {chromeScript, script(`for (const b of document.getElementsByTagName("button")) if (b.innerText === 'edited') b.click()`), "a sweep over the page's buttons"},

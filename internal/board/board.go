@@ -43,6 +43,8 @@ type Item struct {
 	Blockers      int      `json:"blockers,omitempty"`
 	OpenBlockers  int      `json:"openBlockers,omitempty"`
 	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
+	// BlockerDetails names blockers and their linked unmerged pull requests.
+	BlockerDetails []string `json:"blockerDetails,omitempty"`
 	// StatusSet is when its Status was last set, BlockersClosed when the
 	// last of its recorded blockers closed; zero when unknown.
 	StatusSet      time.Time `json:"statusSet,omitzero"`
@@ -59,6 +61,10 @@ type Item struct {
 	// subIssues counts its sub-issues, closed ones too: what a read of
 	// them returns.
 	subIssues int
+	// Remaining label pages must be read before labels are used to select
+	// work or determine its required leases.
+	labelsMore   bool
+	labelsCursor string
 }
 
 // missingBoardFields is the start of Missing's entry for a sub-issue's

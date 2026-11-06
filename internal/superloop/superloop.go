@@ -31,10 +31,8 @@ const (
 	// review rounds stay the loop's, and no merge question reaches the
 	// person.
 	KindRework = "rework"
-	// KindEscalate is retained for legacy review escalation log entries.
-	KindEscalate = "escalate"
-	// KindAnswer tells the worker the person's answer to an escalation
-	// that did not release the pull request.
+	// KindAnswer tells the worker the person's answer to an ownership
+	// question that did not override the owning team.
 	KindAnswer = "answer"
 	// KindDone takes an agent off the roster: one that reported done, or
 	// one the loop retires (a reviewer whose verdict it acted on, the
@@ -85,7 +83,7 @@ const OverlapWait = 30 * time.Minute
 
 // Verbs is every log verb the loop writes.
 func Verbs() []string {
-	return []string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
+	return []string{KindReview, KindGo, KindForward, KindRework, KindAnswer, KindDone, KindNext, KindRelease, KindClassify, KindQuestion, KindFile, KindEnd,
 		KindLeave, KindRelay, KindOwnership, KindOverride, KindRed, KindIntake, KindOwner, KindMerge}
 }
 
@@ -117,6 +115,7 @@ type Pull struct {
 	Closes                []string
 	Draft                 bool
 	Mergeable, MergeState string
+	ReviewDecision        string
 	Ref                   string // owner/repo#n
 	URL                   string
 	State                 string
@@ -170,6 +169,12 @@ type Review struct {
 	Body    string
 	At      time.Time
 }
+
+// MaxReviews is how many reviews the loop starts for one pull request,
+// whatever happens: one, and a second only for a change an approval does
+// not cover. A later change merges on the loop's go: the loop merges after
+// the reviews and their fixes, and never asks a person whether to merge.
+const MaxReviews = 2
 
 // verdictSlack is how much earlier than its round's start a verdict may
 // be stamped: GitHub's clock and the machine's differ a little.
@@ -316,11 +321,6 @@ type Input struct {
 	BaseMerged func(p Pull, approved string) bool
 	// NitsChecked is an explicit supervisor attestation against the approved head.
 	NitsChecked func(p Pull, approved string) bool
-	// ChangedPast lists the files whose change p's head makes differs from
-	// the one reviewed made, the base's own changes left out
-	// (github.ChangedPast); nil, or an error: not known, and a head past
-	// the last review goes to the person.
-	ChangedPast func(p Pull, reviewed string) ([]string, error)
 	// Open reports whether an issue or pull request (owner/repo#n) is
 	// open; one it cannot read counts as open. nil: none is, so a merged
 	// pull request's worker is retired as before.
@@ -381,71 +381,6 @@ func (in Input) baseMerged(p Pull, approved string) bool {
 	return in.BaseMerged != nil && approved != "" && !sameHead(approved, p.Head) && in.BaseMerged(p, approved)
 }
 
-// fixesOnly reports whether p's head changes, past the change of the
-// reviewed head, only what the reviews of p asked for, and says why or why
-// not: every file whose change differs is a test (testFile) or one a
-// review's findings name, by its path or its base name.
-func (in Input) fixesOnly(p Pull, reviewed string, findings []string) (bool, string) {
-	if in.ChangedPast == nil {
-		return false, "what it changes since is not known"
-	}
-	files, err := in.ChangedPast(p, reviewed)
-	if err != nil {
-		return false, "what it changes since cannot be read: " + err.Error()
-	}
-	text := strings.Join(findings, "\n")
-	var beyond []string
-	for _, f := range files {
-		if !testFile(f) && !named(text, f) {
-			beyond = append(beyond, f)
-		}
-	}
-	switch {
-	case len(beyond) > 0:
-		return false, fmt.Sprintf("it changes %s, which no review finding names", strings.Join(beyond, ", "))
-	case len(files) == 0:
-		return true, fmt.Sprintf("head %s makes the reviewed change", short(p.Head))
-	}
-	return true, fmt.Sprintf("head %s changes only %s, the files of the reviews' findings and tests", short(p.Head), strings.Join(files, ", "))
-}
-
-// testFile reports whether path holds tests or their fixtures alone.
-func testFile(path string) bool {
-	return strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "testdata/") || strings.Contains(path, "/testdata/")
-}
-
-// named reports whether text names path, by its path or its base name,
-// each as a whole token (token): loop.go is not named by a finding on
-// cmd/supervisorloop.go. A base name stands for the file in any directory.
-func named(text, path string) bool {
-	return token(text, path) || token(text, path[strings.LastIndex(path, "/")+1:])
-}
-
-// token reports whether s occurs in text as a whole token: no path or
-// identifier character right before it, and none right after it but a
-// sentence's closing dot.
-func token(text, s string) bool {
-	for i := 0; s != ""; {
-		j := strings.Index(text[i:], s)
-		if j < 0 {
-			return false
-		}
-		start, end := i+j, i+j+len(s)
-		before := start == 0 || !pathChar(text[start-1])
-		after := end == len(text) || !pathChar(text[end]) || text[end] == '.' && (end+1 == len(text) || !pathChar(text[end+1]))
-		if before && after {
-			return true
-		}
-		i = start + 1
-	}
-	return false
-}
-
-// pathChar reports whether c can be part of a file path or an identifier.
-func pathChar(c byte) bool {
-	return c == '/' || c == '.' || c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
 // gated reports whether the gate's devctl pr merge serves repo. A
 // repository in Admin merges with gh pr merge --admin instead.
 func (in Input) gated(repo string) bool {
@@ -474,11 +409,15 @@ type Action struct {
 	Agent string // the worker it concerns
 	Head  string
 	Round int
+	// The verdict the merge decision observed. A newer change request must
+	// force replanning before the loop records its exact-head authorization.
+	ReviewID      string
+	ReviewVerdict string
 	// SelfHosted asks for a reviewer on no self-hosted provider.
 	SelfHosted bool
 	// Message is what the worker or the guide is told.
 	Message string
-	// Question is an escalation's or an ownership decision's question for
+	// Question is an ownership decision's question for
 	// the guide's person; Options an ownership decision's choices.
 	Question string
 	Options  []string
@@ -532,48 +471,45 @@ type round struct {
 	earlier []string
 }
 
-// escalation is a pull request handed to the guide's person: the head it
-// names, when, and the person's answer once there is one.
-type escalation struct {
-	head   string
+// question is a pull request whose ownership the guide's person was asked
+// about: when, and the person's answer once there is one.
+type question struct {
 	at     time.Time
 	answer *Answer
 }
-
-// open reports whether the escalation still waits for the person.
-func (e escalation) open() bool { return e.answer == nil }
 
 // ledger is what the taken actions say.
 type ledger struct {
 	keys map[string]Taken
 	// rounds are the review rounds each pull request had, oldest first,
-	// escalated the pull requests handed to the guide, ended the ones
-	// merged or closed.
-	rounds    map[string][]round
-	escalated map[string]escalation
-	ended     map[string]bool
-	reviewer  map[string]string // a pull request's worker, from its last review
+	// ended the ones merged or closed.
+	rounds   map[string][]round
+	ended    map[string]bool
+	reviewer map[string]string // a pull request's worker, from its last review
 	// goAgent is the worker the go for a pull request was given to; goHead
 	// is the last head given a go and not superseded by a later review,
-	// forward, rework or escalation; acts are when the loop acted on a pull
-	// request (a review, go, forward, escalation or end), oldest first.
+	// forward or rework; acts are when the loop acted on a pull request (a
+	// review, go, forward, rework or end), oldest first.
 	goAgent map[string]string
 	goHead  map[string]string
 	acts    map[string][]time.Time
 	// asked are the pull requests whose ownership the person was asked
 	// about, overridden the ones they let the desk take over.
-	asked      map[string]escalation
+	asked      map[string]question
 	overridden map[string]bool
 	// red are the checks the loop woke a worker for, by redKey.
 	red map[string]bool
+	// episode identifies a new tracking episode after a close.
+	episode map[string]string
 }
 
 func newLedger(taken []Taken, answers []Answer) ledger {
-	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, escalated: map[string]escalation{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]escalation{}, overridden: map[string]bool{}, red: map[string]bool{}}
+	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, ended: map[string]bool{}, reviewer: map[string]string{},
+		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]question{}, overridden: map[string]bool{}, red: map[string]bool{}, episode: map[string]string{}}
+	taken, l.episode = episodeTaken(taken)
 	for _, t := range taken {
 		l.keys[t.Key] = t
-		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindEscalate, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
+		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
 			l.acts[t.Ref] = append(l.acts[t.Ref], t.At)
 		}
 		switch t.Kind {
@@ -585,16 +521,12 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			// Its refusal must not suppress the go after actual approval.
 			delete(l.keys, goKey(t.Ref, head))
 			delete(l.goHead, t.Ref)
-		case KindEscalate:
-			_, head, _ := strings.Cut(t.Key, "@")
-			l.escalated[t.Ref] = escalation{head: head, at: t.At}
-			delete(l.goHead, t.Ref)
 		case KindRework:
 			delete(l.goHead, t.Ref)
 		case KindEnd:
 			l.ended[t.Ref] = true
 		case KindOwnership:
-			l.asked[t.Ref] = escalation{at: t.At}
+			l.asked[t.Ref] = question{at: t.At}
 		case KindOverride:
 			l.overridden[t.Ref] = true
 		case KindRed:
@@ -630,19 +562,88 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 			}
 		}
 	}
-	// The person's answer to an escalation is the last one recorded after
-	// it to the loop's question about that pull request.
-	// So is the answer to a question about its ownership.
+	// The person's answer to a question about a pull request's ownership
+	// is the last one recorded after it to the loop's question.
 	for _, an := range answers {
-		for prefix, asked := range map[string]map[string]escalation{escalationPrefix: l.escalated, ownershipPrefix: l.asked} {
-			e, ok := asked[an.Ref]
-			if ok && an.At.After(e.at) && strings.HasPrefix(an.Question, prefix) {
-				e.answer = &an
-				asked[an.Ref] = e
-			}
+		q, ok := l.asked[an.Ref]
+		if ok && an.At.After(q.at) && strings.HasPrefix(an.Question, ownershipPrefix) {
+			q.answer = &an
+			l.asked[an.Ref] = q
 		}
 	}
 	return l
+}
+
+// episodeTag gives every action after a reopen a distinct durable key,
+// including another review of the same head and another end of the same ref.
+const episodeTag = " reopened "
+
+// episodeTaken retains only the latest tracking episode of each pull request.
+// Legacy keys belong to its original episode. The planner uses keys without
+// the suffix internally; emitted actions restore it before execution.
+func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
+	episodes := map[string]string{}
+	for _, t := range taken {
+		if _, episode := splitEpisode(t.Key); episode != "" && t.Ref != "" {
+			episodes[t.Ref] = episode
+		}
+	}
+	var active []Taken
+	for _, t := range taken {
+		if t.Ref == "" {
+			active = append(active, t)
+			continue
+		}
+		key, episode := splitEpisode(t.Key)
+		if t.Ref != "" && episode != episodes[t.Ref] {
+			continue
+		}
+		t.Key = key
+		active = append(active, t)
+	}
+	return active, episodes
+}
+
+// splitEpisode recognizes only a trailing episode timestamp. Check names and
+// other key text may themselves contain episodeTag.
+func splitEpisode(key string) (string, string) {
+	if i := strings.LastIndex(key, episodeTag); i >= 0 {
+		episode := key[i+len(episodeTag):]
+		if _, err := time.Parse(time.RFC3339Nano, episode); err == nil {
+			return key[:i], episode
+		}
+	}
+	return key, ""
+}
+
+// BaseActionKey removes a reopened episode suffix for action comparisons.
+// Durable claim and completion records must still use the full key.
+func BaseActionKey(key string) string {
+	base, _ := splitEpisode(key)
+	return base
+}
+
+// reopen discards the closed episode only after GitHub reports OPEN.
+func (l ledger) reopen(ref string) {
+	l.episode[ref] = l.keys[endKey(ref)].At.UTC().Format(time.RFC3339Nano)
+	for key, t := range l.keys {
+		if t.Ref == ref {
+			delete(l.keys, key)
+		}
+	}
+	for key := range l.red {
+		if strings.HasPrefix(key, "red "+ref+"@") {
+			delete(l.red, key)
+		}
+	}
+	delete(l.rounds, ref)
+	delete(l.ended, ref)
+	delete(l.reviewer, ref)
+	delete(l.goAgent, ref)
+	delete(l.goHead, ref)
+	delete(l.acts, ref)
+	delete(l.asked, ref)
+	delete(l.overridden, ref)
 }
 
 func (l ledger) has(key string) bool { _, ok := l.keys[key]; return ok }
@@ -702,7 +703,6 @@ func reworkKey(ref, head string, parked time.Time) string {
 func ownerKey(ref, head string, parked time.Time) string {
 	return fmt.Sprintf("owner %s@%s %s", ref, head, parked.UTC().Format(time.RFC3339Nano))
 }
-func escalateKey(ref, head string) string   { return fmt.Sprintf("escalate %s@%s", ref, head) }
 func answerKey(ref string, note int) string { return fmt.Sprintf("answer %s #%d", ref, note) }
 func endKey(ref string) string              { return "end " + ref }
 func intakeKey(ref string) string           { return "intake " + strings.ToLower(ref) }
@@ -747,8 +747,7 @@ func IsPull(on string) bool { return prRef.MatchString(on) }
 // an agent is parked on, every overlapping pull request another worker is
 // parked on, every one the loop started a review of that it
 // has not seen merged or closed, and every ended one whose worker waits
-// for its retirement. An escalation an earlier loop filed holds none of
-// them: their review rounds are the loop's. None outside the
+// for its retirement. None outside the
 // desk's organisations or in its never list is read, nor one whose park
 // is from before the loop's first start.
 func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []string {
@@ -775,7 +774,10 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		}
 		// An open question about its ownership keeps it read: the owning
 		// team's reviews still reach its worker meanwhile.
-		if !l.ended[ref] || l.workerDue(ref, workers) {
+		requestedAgain := slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.ParkedOn == ref && w.ReviewRequested && w.ParkedAt.After(l.keys[endKey(ref)].At) && fresh[ref]
+		})
+		if !l.ended[ref] || requestedAgain || l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
@@ -841,7 +843,10 @@ func Plan(in Input) []Action {
 	rounds := max(in.Rounds, 1)
 	var out []Action
 	add := func(a Action) {
-		if !l.has(a.Key) && !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
+		if l.has(a.Key) {
+			return
+		}
+		if !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
 			out = append(out, a)
 		}
 	}
@@ -888,6 +893,15 @@ func Plan(in Input) []Action {
 	slices.Sort(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
+		if p.State == Open && l.ended[ref] {
+			l.reopen(ref)
+			delete(swept.lastAct, ref)
+			for key := range swept.sweeps {
+				if strings.HasPrefix(key, ref+"@") {
+					delete(swept.sweeps, key)
+				}
+			}
+		}
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
 			// The end action durably marks when the merge was observed. A
 			// quiet worker retains its inbox while waiting for its release.
@@ -924,10 +938,6 @@ func Plan(in Input) []Action {
 		if l.ended[ref] {
 			continue
 		}
-		// An escalation an earlier loop filed and nobody answered holds
-		// nothing: the review rounds go on as for any other.
-		esc, escalated := l.escalated[ref]
-		escalated = escalated && !esc.open()
 		ask, asked := l.asked[ref]
 		if p.State == Merged || p.State == Closed {
 			if len(l.rounds[ref]) > 0 {
@@ -935,7 +945,7 @@ func Plan(in Input) []Action {
 			}
 			continue
 		}
-		planPull(in, l, rounds, ref, p, parked, esc, escalated, ask, asked, leave, add)
+		planPull(in, l, rounds, ref, p, parked, ask, asked, leave, add)
 		planOverlap(in, l, ref, p, parked, func(r string) bool {
 			return slices.ContainsFunc(out, func(a Action) bool { return strings.EqualFold(a.Ref, r) })
 		}, add)
@@ -1156,10 +1166,17 @@ func Plan(in Input) []Action {
 		}
 		return 0
 	})
+	// Keep canonical keys throughout planning: pending forwards are compared
+	// with event findings before actions receive their durable episode suffix.
+	for i := range out {
+		if episode := l.episode[out[i].Ref]; episode != "" {
+			out[i].Key += episodeTag + episode
+		}
+	}
 	return out
 }
 
-func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[string]Worker, esc escalation, escalated bool, ask escalation, asked bool, leave func(string, string, string, string, string), add func(Action)) {
+func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[string]Worker, ask question, asked bool, leave func(string, string, string, string, string), add func(Action)) {
 	w, isParked := parked[ref]
 	if !isParked && slices.ContainsFunc(in.Workers, func(w Worker) bool { return w.Name == l.reviewer[ref] && w.ParkedOn == ref && !w.ReviewRequested }) {
 		return
@@ -1208,48 +1225,21 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		return
 	}
 	planRed(l, p, w, isParked, add)
-	// An escalation logged before its key named a head was on the
-	// head of the last round, whose findings stood unfixed.
-	if escalated && esc.head == "" && len(rs) > 0 {
-		esc.head = rs[len(rs)-1].head
-	}
-	if escalated {
-		// The person answered: a release is the merge go for the head
-		// the escalation named unless a later review asked for changes;
-		// any other answer goes to the worker, and the pull request's
-		// review rounds go on from there.
-		// A release of a head the worker moved past goes on as the
-		// rounds say of the new head, unless the new head only merges
-		// the base into the released one.
-		an := esc.answer
-		laterChanges := slices.ContainsFunc(p.Reviews, func(r Review) bool {
-			return r.Verdict == ChangesRequested && r.At.After(an.At)
-		})
-		released := Releases(an.Text) && !laterChanges
-		if released && (sameHead(esc.head, p.Head) || p.Green && in.baseMerged(p, esc.head)) {
-			if p.Green {
-				why := fmt.Sprintf("%s released it, answering note #%d: %s", an.By, an.Note, oneLine(an.Text))
-				if !sameHead(esc.head, p.Head) {
-					why += fmt.Sprintf("; head %s only merges %s into the released head %s", short(p.Head), baseName(p), short(esc.head))
-				}
-				add(goAction(in, base, why))
-			}
-			return
-		}
-		if ak := answerKey(ref, an.Note); !Releases(an.Text) && !l.has(ak) {
-			a := base
-			a.Key, a.Kind = ak, KindAnswer
-			a.Message = answerMessage(p, esc.head, *an)
-			add(a)
-			return
-		}
+	if head := l.goHead[ref]; p.Green && head != "" && !sameHead(head, p.Head) && !slices.ContainsFunc(p.Reviews, func(r Review) bool {
+		return r.Verdict == ChangesRequested && (sameHead(r.Head, p.Head) || !r.At.Before(l.keys[goKey(ref, head)].At))
+	}) && in.baseMerged(p, head) {
+		add(goAction(in, base, fmt.Sprintf("head %s had the merge go; head %s only brings %s into it", short(head), short(p.Head), baseName(p))))
+		return
 	}
 	review := func() {
 		a := base
 		a.Key, a.Kind, a.Round, a.SelfHosted = reviewKey(ref, p.Head), KindReview, len(rs)+1, w.SelfHosted
 		add(a)
 	}
-	// Rounds count findings for reporting; they never authorize an unreviewed head.
+	// cycles is how many of the rounds asked for changes: the rounds
+	// supervisor.reviewRounds caps. An approved head is no cycle; a new
+	// head after it gets a review only for a change the approval does
+	// not cover, and never past MaxReviews.
 	cycles := 0
 	for _, rd := range rs {
 		if v := p.verdict(rd, l.pushed(p)); v != nil && v.Verdict == ChangesRequested {
@@ -1292,9 +1282,29 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !done || sameHead(p.Head, last.head) || !p.Green || !isParked || !requested {
 			return
 		}
-		review()
+		if len(rs) < MaxReviews {
+			review()
+			return
+		}
+		// The reviews are used: the loop merges after a verdict, never
+		// asking a person, and never without one.
+		for i, rd := range slices.Backward(rs[:len(rs)-1]) {
+			if ev := p.verdict(rd, l.pushed(p)); ev != nil {
+				if ev.Verdict == ChangesRequested && (sameHead(ev.Head, p.Head) || in.baseMerged(p, ev.Head)) {
+					a := base
+					a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
+					a.Message = reworkMessage(p, ev.Head, cycles, rounds, false) + "\n\nThe review, word for word:\n\n" + ev.Body
+					add(a)
+					return
+				}
+				add(goAction(in, base, fmt.Sprintf("its %d reviews are used, round %d %s head %s and the last reviewer finished without a verdict", len(rs), i+1, ev.Verdict, short(ev.Head))))
+				return
+			}
+		}
+		leave(ref, p.URL, agent, leftNoVerdict(p.Head), fmt.Sprintf("its %d reviews are used and none gave a verdict: no merge go comes without a desk review's verdict", len(rs)))
 		return
 	}
+	left := cycles < rounds && len(rs) < MaxReviews
 	// reviewed is the head the verdict is on: the round's, or a newer
 	// one the worker pushed while the round ran.
 	reviewed, moved := v.Head, ""
@@ -1313,8 +1323,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// that only brings the base into the approved one (the gate's
 		// --update-branch, the worker's merge of the base and its
 		// conflicts' resolution, a rebase onto it); any other change
-		// gets its own review. A base merge needs no new park: it brings no
-		// change of the worker's. Any other head asks for its park.
+		// gets a review while one of MaxReviews is left, else the go.
+		// A base merge needs no new park: it brings no
+		// change of the worker's. Any other head asks for a park
+		// since the round opened.
 		if !p.Green {
 			return
 		}
@@ -1337,13 +1349,20 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 			leave(ref, p.URL, agent, leftUnreviewed(p.Head), fmt.Sprintf("head %s moved past head %s, which review round %d approved, and the park on it is from before that round: park on the pull request again for its review", short(p.Head), short(reviewed), len(rs)))
 			return
 		}
-		review()
+		if len(rs) < MaxReviews {
+			review()
+			return
+		}
+		// The reviews are used: the head merges as the desk's standing
+		// rule says, the reviews, then the fixes and the merge. No
+		// person is asked whether to merge.
+		add(goAction(in, base, fmt.Sprintf("its %d reviews are used, the last approving head %s", len(rs), short(reviewed))))
 	case ChangesRequested:
 		fk := forwardKey(ref, v.ID)
 		if !l.has(fk) {
 			a := base
 			a.Key, a.Kind = fk, KindForward
-			a.Message = forwardMessage(p, *v)
+			a.Message = forwardMessage(p, *v, left)
 			add(a)
 			return
 		}
@@ -1355,14 +1374,13 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// were about carries no fixes: it is that head, never a go.
 		merged := p.Green && in.baseMerged(p, reviewed)
 		if sameHead(p.Head, reviewed) || merged {
-			// The findings stand unfixed: the worker reworks, once for
-			// each such park. Review and rework are the loop's; no
-			// merge question goes to the person, and an answered
-			// escalation of this head is handled above.
-			if !escalated || !sameHead(esc.head, p.Head) {
+			// The findings stand unfixed: the worker reworks once per park.
+			// Review and rework are the loop's; no merge question goes
+			// to the person.
+			if !left || merged {
 				a := base
 				a.Key, a.Kind = reworkKey(ref, p.Head, w.ParkedAt), KindRework
-				a.Message = reworkMessage(p, reviewed, cycles, rounds)
+				a.Message = reworkMessage(p, reviewed, cycles, rounds, left)
 				add(a)
 			}
 			return
@@ -1370,7 +1388,11 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		if !p.Green {
 			return
 		}
-		review()
+		if left {
+			review()
+			return
+		}
+		add(goAction(in, base, fmt.Sprintf("%d of %d change-request round(s) used, %d of %d review(s); head %s carries the fixes of the last round's findings on %s", cycles, rounds, len(rs), MaxReviews, short(p.Head), short(reviewed))))
 	}
 }
 
@@ -1441,18 +1463,23 @@ func planOverlap(in Input, l ledger, ref string, p Pull, parked map[string]Worke
 				if hasPlanned(serves) {
 					continue
 				}
-				sHead, sURL := p.Head, p.URL
-				if sp, ok := in.Pulls[serves]; ok && sp.Head != "" {
-					sHead, sURL = sp.Head, sp.URL
+				// The handoff changes the target: validate its observation and
+				// ownership independently of the pull request being visited.
+				sp, ok := in.Pulls[serves]
+				if !ok || sp.State != Open || sp.Head == "" {
+					continue
+				}
+				if o, _, _ := in.Desk.owner(sp, l.overridden[serves]); o != ours {
+					continue
 				}
 				add(Action{
-					Key:     ownerKey(serves, sHead, waiter.ParkedAt),
+					Key:     ownerKey(serves, sp.Head, waiter.ParkedAt),
 					Kind:    KindOwner,
 					Ref:     serves,
 					Block:   ref,
-					URL:     sURL,
+					URL:     sp.URL,
 					Agent:   waiter.Name,
-					Head:    sHead,
+					Head:    sp.Head,
 					Message: fmt.Sprintf("%s goes ahead of %s: %s is recorded blocked by %s; finish and merge %s first, then %s follows.", serves, ref, ref, serves, serves, ref),
 				})
 				continue
@@ -1593,7 +1620,7 @@ func redMessage(p Pull, lines []string) string {
 // its ownership, the owning team's reviews told to the worker parked on it,
 // and, once that team let the worker wait OwnerWait without a review, the
 // person asked whether the desk takes it over.
-func planTheirs(in Input, l ledger, p Pull, w Worker, isParked bool, base Action, ask escalation, asked bool, add func(Action)) {
+func planTheirs(in Input, l ledger, p Pull, w Worker, isParked bool, base Action, ask question, asked bool, add func(Action)) {
 	if asked && ask.answer != nil {
 		an := *ask.answer
 		a := base
@@ -1738,6 +1765,17 @@ func EventAgent(verb, detail, by string) string {
 func goAction(in Input, base Action, why string) Action {
 	a := base
 	a.Key, a.Kind = goKey(base.Ref, base.Head), KindGo
+	var latest *Review
+	pull := in.Pulls[base.Ref]
+	for i := range pull.Reviews {
+		r := &pull.Reviews[i]
+		if r.Verdict != "" && (latest == nil || !r.At.Before(latest.At)) {
+			latest = r
+		}
+	}
+	if latest != nil {
+		a.ReviewID, a.ReviewVerdict = latest.ID, latest.Verdict
+	}
 	repo, n, _ := strings.Cut(base.Ref, "#")
 	if in.gated(repo) {
 		a.Message = fmt.Sprintf("Merge go for %s at head %s (%s): merge it now through the gate, `devctl pr merge %s %s --update-branch`, once `gh pr view` shows head %s. This go covers a head the gate's --update-branch moves on by merging the base alone: let that merge run to its end, then report.",
@@ -1760,65 +1798,18 @@ func baseName(p Pull) string {
 	return p.Base
 }
 
-// escalationPrefix opens every escalation's question: an answer to a note
-// with it is the person's answer to an escalation.
-const escalationPrefix = "Merge "
-
-// EscalationQuestion is the question an escalation asks the guide's
-// person: the pull request and the head it names, which changes more than
-// its reviews saw. An earlier loop's escalations asked it of findings left
-// unfixed; their answers count alike.
-func EscalationQuestion(url, head string) string {
-	return fmt.Sprintf("%s%s at head %s without a third review, or have it reworked?", escalationPrefix, url, short(head))
-}
-
-// EscalationOptions are an escalation's choices: the first releases it.
-func EscalationOptions(head string) []string {
-	return []string{
-		fmt.Sprintf("Merge: the supervisor loop gives the worker the merge go for head %s", short(head)),
-		"Rework: the worker is told the answer, reworks the change and parks again",
-	}
-}
-
-// releases are the whole answers, in their own words, that release an
-// escalation: a bare go to merge and nothing else.
-var releases = []string{"merge", "merge it", "you can merge", "you can merge it", "go ahead and merge", "ok merge", "ok merge it",
-	"yes merge", "yes merge it", "lgtm", "ship it", "approved"}
-
-// Releases reports whether the person's answer to an escalation releases
-// the pull request. It fails closed: only the first option's label
-// ("Merge", its words after it or not) or a bare go to merge (releases)
-// does; any other words, which may ask for fixes first, do not, and go to
-// the worker word for word.
-func Releases(answer string) bool {
-	label, _, _ := strings.Cut(strings.TrimSpace(answer), " — ")
-	if strings.EqualFold(strings.TrimSpace(label), "merge") {
-		return true
-	}
-	words := strings.Fields(strings.ToLower(strings.Map(func(r rune) rune {
-		if strings.ContainsRune(".,!:;", r) {
-			return ' '
-		}
-		return r
-	}, answer)))
-	return slices.Contains(releases, strings.Join(words, " "))
-}
-
-// answerMessage tells the worker of p the person's answer an to the
-// escalation of head.
-func answerMessage(p Pull, head string, an Answer) string {
-	return fmt.Sprintf("%s answered the escalation of %s at head %s (note #%d), word for word: %s\n\nThe loop does not read it as releasing the merge: rework as it says, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree.", an.By, p.URL, short(head), an.Note, an.Text)
-}
-
 // reworkMessage tells the worker of p, parked again on reviewed, the head
 // its last review asked changes on, or on a head that only merges the base
 // into it, to fix them.
-func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
+func reworkMessage(p Pull, reviewed string, cycles, rounds int, left bool) string {
 	at := fmt.Sprintf("at head %s, the head its last review asked for changes on", short(p.Head))
 	if !sameHead(p.Head, reviewed) {
 		at = fmt.Sprintf("at head %s, which only brings %s into head %s, the head its last review asked for changes on", short(p.Head), baseName(p), short(reviewed))
 	}
-	next := "the next review round starts then"
+	next := "the merge go for the new head follows"
+	if left {
+		next = "the next review round starts then"
+	}
 	return fmt.Sprintf("You parked on %s again %s: those findings stand unfixed, %d of %d change-request round(s) are used, and no merge go comes for this head. Nobody else decides it: fix every finding of that review (forwarded to you, and on the pull request), push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: %s.",
 		p.URL, at, cycles, rounds, next)
 }
@@ -1827,9 +1818,11 @@ func reworkMessage(p Pull, reviewed string, cycles, rounds int) string {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // forwardMessage forwards review r of p word for word.
-func forwardMessage(p Pull, r Review) string {
+func forwardMessage(p Pull, r Review, again bool) string {
 	next := "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: the next review round starts then."
-
+	if !again {
+		next = "Fix every finding, push, and once CI is green on the new head, run `cd \"<worktree>\" && beekeeper agents park --on <owner/repo#n> \"desk review\"` from the published worktree: no further review runs, the merge go for the new head follows."
+	}
 	return fmt.Sprintf("The review of %s asks for changes on head %s. %s The review, word for word:\n\n%s", p.URL, r.Head, next, r.Body)
 }
 

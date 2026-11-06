@@ -43,7 +43,7 @@ var (
 	pathVar = regexp.MustCompile(`\$\{(\w+)\}|\$(\w+)`)
 	// localShells read a script file, a -c string or their input as a
 	// command line; shellOptions are their options that take a value.
-	localShells  = map[string]bool{"sh": true, bashCmd: true, zshCmd: true, "dash": true, "ksh": true}
+	localShells  = map[string]bool{"sh": true, bashCmd: true, zshCmd: true, executionDash: true, litKsh: true}
 	shellOptions = interpreter{values: []string{"-o", "-O", "+o", "+O", "--rcfile", "--init-file"}}
 	// python, node, perl and ruby, as their command lines are read.
 	python = interpreter{code: []string{"-c"}, module: []string{"-m"}, values: []string{"-W", "-X", "--check-hash-based-pycs"}}
@@ -51,7 +51,7 @@ var (
 	perl   = interpreter{code: []string{"-e", "-E"}, combined: "eE", values: []string{"-I"}}
 	ruby   = interpreter{code: []string{"-e"}, combined: "e", values: []string{"-I", "-r", "-C", "-E"}}
 	// runSub is the subcommand a script follows (deno run, bun run).
-	runSub = []string{"run"}
+	runSub = []string{executionRunCommand}
 	// interpreters run a script file, the code behind one of their options,
 	// or the program on their input.
 	interpreters = map[string]interpreter{

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -290,4 +291,16 @@ func (a *app) releaseUnstartedReview(act superloop.Action) {
 		st.ReviewRequests = slices.DeleteFunc(st.ReviewRequests, func(r state.ReviewRequest) bool { return r.Ref == act.Ref && r.Head == act.Head })
 		return nil, nil
 	})
+}
+
+// readChangedPast reads the files p's head changes past the change of
+// reviewed (github.ChangedPast).
+var readChangedPast = func(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
+	r, ok := parseRef(p.Ref)
+	if !ok || p.Base == "" {
+		return nil, fmt.Errorf("%s names no pull request with a base", p.Ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return github.ChangedPast(ctx, github.RunGH, r.Repo, p.Base, reviewed, p.Head)
 }

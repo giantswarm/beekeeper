@@ -99,7 +99,7 @@ func TestCountAgentsWaiting(t *testing.T) {
 		{ID: "s-Poll", LastActive: quiet, Commands: []claude.Command{sleep}},
 		{ID: "s-CI", LastActive: quiet, Commands: []claude.Command{{Args: "gh run watch 7", Wait: true}}},
 		{ID: "s-Fresh", LastActive: keepNow.Add(-time.Minute), Commands: []claude.Command{sleep}},
-		{ID: "s-Build", LastActive: quiet, Commands: []claude.Command{sleep, {Args: "go test ./..."}}},
+		{ID: "s-Build", LastActive: quiet, Commands: []claude.Command{sleep, {Args: litGoTest}}},
 	}
 	c := countAgents(st, sessions, keepNow, nil)
 	if want := []string{"Fresh", "Build"}; !slices.Equal(c.Busy, want) {

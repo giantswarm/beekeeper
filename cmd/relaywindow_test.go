@@ -107,7 +107,7 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessions := []*claude.Session{
-		{ID: out.Session, HostID: out.HostSession, Name: out.Name, Peer: "klaus-lab-15", PID: 249},
+		{ID: out.Session, HostID: out.HostSession, Name: out.Name, Peer: "fixture-lab-15", PID: 249},
 		{ID: succ.Session, HostID: succ.HostSession, Name: succ.Name, Peer: derivedPeer, PID: 250},
 	}
 	sock := func(pid int) string { return "/run/" + strconv.Itoa(pid) + ".sock" }
@@ -140,4 +140,4 @@ func TestSupervisorSendAfterARelayReachesTheCLIByItsPeerName(t *testing.T) {
 
 // derivedPeer is the name a desktop CLI derived from its folder takes
 // messages under while its title is the supervisor's run name.
-const derivedPeer = "klaus-lab-16"
+const derivedPeer = "fixture-lab-16"

@@ -484,7 +484,7 @@ func (a *app) printSnapshot(s *snapshot) {
 	if s.KubeContext != "" {
 		p("machine kubeconfig has a current context: %s (unset it: kubectl config unset current-context)", s.KubeContext)
 	}
-	if off := guard.KubeGuardOff(a.cfg.Kube.Production); off != "" {
+	if off := guard.KubeGuardOff(a.cfg.Kube.Production, a.cfg.Kube.ProtectedContexts...); off != "" {
 		p("%s", off)
 	}
 	var cl []string
