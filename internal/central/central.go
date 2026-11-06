@@ -25,11 +25,12 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-// Unreachable is a call that did not reach the central instance: muster's
-// context or sign-in, the network, muster, or beekeeper serve behind it.
+// Unreachable is a call that could not obtain the central instance's answer:
+// muster's context or sign-in, the network, muster, or beekeeper serve behind it.
 type Unreachable struct {
 	Context string
 	Reason  string
@@ -100,6 +101,9 @@ func (c *Client) unreachable(format string, args ...any) error {
 
 // endpoint is the muster context's endpoint URL.
 func (c *Client) endpoint(ctx context.Context) (string, error) {
+	if os.Getenv(sandbox.Env) != "" && os.Getenv(sandbox.Brokered) == "" {
+		return "", c.unreachable("central access is host-only; run this command on the host outside the agent sandbox")
+	}
 	out, err := c.run(ctx, "context", "show", c.cfg.Context, "-o", "json")
 	if err != nil {
 		return "", c.unreachable("%v", err)
@@ -132,7 +136,7 @@ func (c *Client) Tool(name string) string { return "x_" + c.cfg.Server + "_" + n
 
 // Call calls the central instance's tool with args and decodes its
 // structured result into v (nil: none wanted). It returns the tool's text.
-// A refusal is *Refused; a call that did not reach the instance is
+// A refusal is *Refused; a call without the instance's answer is
 // *Unreachable, naming the stage that timed out and its deadline. Each call
 // connects afresh: a stalled connection of an earlier call is never reused.
 func (c *Client) Call(ctx context.Context, tool string, args map[string]any, v any) (string, error) {
@@ -209,10 +213,11 @@ func (c *Client) connect(ctx context.Context, deadline time.Duration) (*client.C
 // 2026-07-28) as the person and blocks until ctx ends (nil) or the stream
 // does (*Unreachable, or *Refused when the subscription is refused). ready
 // is called each time the subscription is acknowledged, updated with the
-// URI of each notifications/resources/updated. Only the handshake is bound
-// by the call timeout: the stream lasts.
+// URI of each notifications/resources/updated. Establishment through the
+// first acknowledgment is bound by the call timeout; the acknowledged
+// stream lasts until ctx ends or the stream does.
 func (c *Client) Listen(ctx context.Context, uris []string, ready func(), updated func(uri string)) error {
-	hctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout.Duration)
+	hctx, cancel, deadline := c.bound(ctx)
 	defer cancel()
 	url, err := c.endpoint(hctx)
 	if err != nil {
@@ -230,9 +235,17 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 		return c.unreachable("%v", err)
 	}
 	defer func() { _ = mc.Close() }()
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	// Establishment includes the subscription acknowledgment, but an
+	// acknowledged stream must retain the caller's longer lifetime.
+	stopHandshake := context.AfterFunc(hctx, cancelStream)
+	defer stopHandshake()
 	mc.OnNotification(func(n mcp.JSONRPCNotification) {
 		switch n.Method {
 		case mcp.MethodNotificationSubscriptionsAcknowledged:
+			stopHandshake()
+			cancel()
 			ready()
 		case mcp.MethodNotificationResourceUpdated:
 			if uri, ok := n.Params.AdditionalFields["uri"].(string); ok {
@@ -247,15 +260,17 @@ func (c *Client) Listen(ctx context.Context, uris []string, ready func(), update
 	init.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	init.Params.ClientInfo = mcp.Implementation{Name: project.Name, Version: project.Version()}
 	if _, err := mc.Initialize(hctx, init); err != nil {
-		return c.timedOut(hctx, stageConnect, c.cfg.Timeout.Duration, c.unreachable("muster at %s: %v", url, err))
+		return c.timedOut(hctx, stageConnect, deadline, c.unreachable("muster at %s: %v", url, err))
 	}
 	if v := mc.ProtocolVersion(); !mcp.IsModernProtocol(v) {
 		return c.unreachable("muster at %s speaks MCP %s: subscriptions/listen needs %s", url, v, mcp.ProtocolVersion20260728)
 	}
-	err = mc.Listen(ctx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
+	err = mc.Listen(streamCtx, mcp.SubscriptionFilter{ResourceSubscriptions: uris})
 	switch {
 	case ctx.Err() != nil:
 		return nil
+	case errors.Is(hctx.Err(), context.DeadlineExceeded):
+		return c.timedOut(hctx, stageSubscribe, deadline, err)
 	case err == nil:
 		return c.unreachable("muster ended the subscription")
 	}
@@ -270,9 +285,10 @@ var baseTransport = http.DefaultTransport.(*http.Transport)
 
 // The stages of a call, as a timeout names them.
 const (
-	stageConnect  = "connect"
-	stageAuth     = "auth"
-	stageToolCall = "tool call"
+	stageConnect   = "connect"
+	stageAuth      = "auth"
+	stageToolCall  = "tool call"
+	stageSubscribe = "subscribe"
 )
 
 // timedOut is err, or Unreachable naming stage and deadline when the call's
@@ -286,7 +302,8 @@ func (c *Client) timedOut(ctx context.Context, stage string, deadline time.Durat
 
 // result unwraps muster's call_tool result: its text is the envelope of
 // the wrapped tool's result, its structured content the tool's own. An
-// error without beekeeper's outcome never came from beekeeper serve.
+// error without beekeeper's outcome does not establish whether beekeeper
+// serve acted before its reply was lost.
 func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, error) {
 	text := envelopeText(res)
 	outcome, code := "", 0.0
@@ -301,7 +318,7 @@ func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, er
 		case "error":
 			return text, errors.New(text)
 		}
-		return text, c.unreachable("%s: %s", c.Tool(tool), firstLine(text))
+		return text, &Unreachable{Context: c.cfg.Context, Reason: fmt.Sprintf("%s: %s", c.Tool(tool), firstLine(text)), Sent: true}
 	}
 	if v != nil && res.StructuredContent != nil {
 		raw, err := json.Marshal(res.StructuredContent)
