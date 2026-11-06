@@ -20,7 +20,7 @@ description: Load before GitHub scans, builds, browser or waits.
 - **Headless** (first or `wake`): foreground waits (`devctl pr wait`, bounded Bash);
   background waits never wake them. End done or parked (`beekeeper:park`).
 - **No @-mention**: pings via `note add` to the supervisor.
-- **Builds/tests/lints**: `beekeeper run` (hook does it). Exit 75: no slot, rerun in
+- **Builds/tests/lints/scans**: `beekeeper run` (hook does it). Exit 75: no slot, rerun in
   background, never a loop. Exit 137: cap, bound parallelism. Avoid heavy work under
   `beekeeper watch` load or memory pressure.
 - **Browser / Dependabot:** before either, read [references/browser-and-security.md](references/browser-and-security.md).

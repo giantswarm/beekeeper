@@ -36,6 +36,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 // loopParty is the party the supervisor loop acts and logs as.
@@ -3625,7 +3626,7 @@ func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (s
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
-	if l.holdingStarts() {
+	if l.holdingStarts() || l.a.recoveryHeld() != "" {
 		return "", errLoopLater
 	}
 	k := l.a.cfg.Supervisor
@@ -3868,6 +3869,14 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 		return "", err
 	}
 	if st.AutoInstallPaused {
+		return "", errLoopLater
+	}
+	if why := l.a.recoveryHeld(); why != "" {
+		l.sayOnce("recovery-hold", "%s", why)
+		return "", errLoopLater
+	}
+	// A candidate under supervision gets its verdict before the next one.
+	if exe, err := os.Executable(); err == nil && update.WatchedProbation(exe) {
 		return "", errLoopLater
 	}
 

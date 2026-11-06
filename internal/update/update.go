@@ -77,7 +77,15 @@ type Options struct {
 	// that the candidate runs the update is its evidence.
 	Health Health
 	Skip   func(tag string) bool
+	// Recovery launches the controller that supervises the candidate about to
+	// replace target, from the verified recovery binary at artifact. It runs
+	// before the replacement: a candidate that never starts cannot prevent it.
+	// Nil or an error leaves the candidate unwatched, promoted by its next update.
+	Recovery Recovery
 }
+
+// Recovery launches a recovery controller; see Options.Recovery.
+type Recovery func(ctx context.Context, previous Binary, artifact, target string) error
 
 type optionsKey struct{}
 

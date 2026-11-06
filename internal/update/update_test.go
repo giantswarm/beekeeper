@@ -830,7 +830,7 @@ func TestRootOwnedRollbackRestoresThroughPrivilege(t *testing.T) {
 	if _, err := InstallVersion(context.Background(), io.Discard, thirdV); err != nil {
 		t.Fatal(err)
 	}
-	guard := func(_ string, restore func() error) error { return restore() }
+	guard := func(_, _ string, restore func() error) error { return restore() }
 	if err := Rollback(context.Background(), exe, "failed health", guard); err != nil {
 		t.Fatal(err)
 	}

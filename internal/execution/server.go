@@ -829,6 +829,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				if err == nil {
 					value, err = s.Message(ctx, req.Ref, m)
 				}
+			case continueOperation:
+				var q ContinueRequest
+				err = Decode(req.Payload, &q)
+				if err == nil {
+					value, err = s.Continue(ctx, req.Ref, q)
+				}
 			case "resolve-message":
 				var q MessageResolution
 				err = Decode(req.Payload, &q)

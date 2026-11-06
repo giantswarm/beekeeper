@@ -1,6 +1,7 @@
 package diskprune
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -76,6 +77,57 @@ func TestInUseResolvesAliases(t *testing.T) {
 	}
 	if InUse(real, []string{base}) {
 		t.Fatal("a parent process blocks unrelated children")
+	}
+}
+
+// A scan resolves each reference once, not once per candidate: that product
+// kept a dry run going for minutes on a machine with many open files.
+func TestChildrenResolvesReferencesOnce(t *testing.T) {
+	base := t.TempDir()
+	old := time.Now().Add(-48 * time.Hour)
+	const candidates, refCount = 20, 50
+	refs := make([]string, 0, refCount)
+	for i := range refCount {
+		refs = append(refs, filepath.Join(base, "open", fmt.Sprint(i)))
+	}
+	for i := range candidates {
+		d := filepath.Join(base, fmt.Sprint(i))
+		if err := os.Mkdir(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	defer func(f func(string) (string, error)) { evalSymlinks = f }(evalSymlinks)
+	evalSymlinks = func(p string) (string, error) {
+		calls++
+		return filepath.EvalSymlinks(p)
+	}
+	Children(base, old.Add(time.Hour), refs, true)
+	// A missing reference resolves through its parents: a few calls each.
+	if limit := 4*refCount + 4*candidates; calls > limit {
+		t.Fatalf("%d resolutions for %d candidates and %d references, want at most %d", calls, candidates, refCount, limit)
+	}
+}
+
+func TestRefsHolds(t *testing.T) {
+	root := t.TempDir()
+	refs := NewRefs([]string{filepath.Join(root, "a-b", "file"), filepath.Join(root, "exact")})
+	for path, want := range map[string]bool{
+		filepath.Join(root, "a-b"):                  true,
+		filepath.Join(root, "exact"):                true,
+		filepath.Join(root, "a"):                    false,
+		filepath.Join(root, "other"):                false,
+		filepath.Join(root, "a-b", "file", "below"): false,
+	} {
+		if got := refs.Holds(path); got != want {
+			t.Errorf("Holds(%s) = %v, want %v", path, got, want)
+		}
+	}
+	if (Refs{}).Holds(root) {
+		t.Error("no references hold nothing")
 	}
 }
 

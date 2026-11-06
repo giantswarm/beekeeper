@@ -690,6 +690,8 @@ type StoreRule struct {
 // Kube configures the kube guard and how an installation's name becomes its
 // kube context.
 type Kube struct {
+	// APIReads are operator-provisioned API identities and exact read RPCs.
+	APIReads map[string]APIRead `yaml:"apiReads"`
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
 	// guard is off unless ProtectedContexts is set.
@@ -715,6 +717,17 @@ type Kube struct {
 	// kind lab's context makes through kind instead. Empty, the files
 	// KUBECONFIG lists, else the machine kubeconfig ~/.kube/config.
 	Kubeconfig []string `yaml:"kubeconfig"`
+}
+
+// APIRead binds a reader identity to one TLS endpoint and token audience.
+// The API must enforce read-only authorization for this service account.
+type APIRead struct {
+	Context        string   `yaml:"context"`
+	Namespace      string   `yaml:"namespace"`
+	ServiceAccount string   `yaml:"serviceAccount"`
+	Audience       string   `yaml:"audience"`
+	Endpoint       string   `yaml:"endpoint"`
+	Methods        []string `yaml:"methods"`
 }
 
 // DiskPruneAuto and DiskPruneAsk select the automatic disk step or the
@@ -2177,7 +2190,19 @@ type Identity struct {
 
 // Serve configures `beekeeper serve`, the central instance behind muster:
 // whose Dex tokens it accepts and what their groups authorize.
+// FleetWatch selects the read-only muster tools used by serve's fleet watch.
+// Empty tools disables the watch, allowing identity grants to be deployed first.
+type FleetWatch struct {
+	MinCallInterval Duration `yaml:"minCallInterval"`
+	Kubernetes      string   `yaml:"kubernetes"`
+	Kagent          string   `yaml:"kagent"`
+	Alertmanager    string   `yaml:"alertmanager"`
+	Concurrency     int      `yaml:"concurrency"`
+	Timeout         Duration `yaml:"timeout"`
+}
+
 type Serve struct {
+	FleetWatch FleetWatch `yaml:"fleetWatch"`
 	// Issuer is the Dex issuer URL every caller's ID token is checked
 	// against (its JWKS).
 	Issuer string `yaml:"issuer"`
@@ -2915,6 +2940,7 @@ type Watch struct {
 	// --once always prints immediately. Action lines never wait for a batch.
 	BatchInterval Duration `yaml:"batchInterval"`
 	Interval      Duration `yaml:"interval"`
+	StuckAfter    Duration `yaml:"stuckAfter"`
 	// Repeat paces how often a lasting condition is handed to the
 	// notifier (which sends it again after notify.repeat); the watch
 	// prints it once when it starts and once when it ends.

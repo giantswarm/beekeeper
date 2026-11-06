@@ -42,11 +42,11 @@ type personAnswer struct {
 }
 
 func (a *app) personCmd() *cobra.Command {
-	var org string
+	var org, team string
 	var refresh bool
 	c := &cobra.Command{
-		Use:   personName + " <login>",
-		Short: "Whether a GitHub login is a member of the org: member, not a member or permission missing",
+		Use:   personName + " <login> | --team <slug>",
+		Short: "Whether a GitHub login is a member of the org, or the logins of one of its teams",
 		Long: `Answer whether login is a member of the org (--org, default giantswarm),
 private memberships included, so that no agent asks GitHub's members
 endpoints itself: the App's token an agent's gh carries sees public
@@ -61,9 +61,21 @@ without the members permission) answers "permission missing", never "not a
 member". In the agent sandbox the host's broker answers.
 
 Prints member or not a member and exits 0; prints permission missing and
-exits 3 when the roster cannot be read whole.`,
-		Args: cobra.ExactArgs(1),
+exits 3 when the roster cannot be read whole.
+
+--team <slug> reads the team's member logins instead, one per line, with the
+same login and no kept copy; a team the login may not read answers
+permission missing and exits 3. Both only read.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if team != "" {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if team != "" {
+				return a.printTeam(cmd, org, team)
+			}
 			login := args[0]
 			ans := personAnswer{Login: login, Org: org}
 			r, err := a.roster(cmd.Context(), org, refresh)
@@ -89,8 +101,32 @@ exits 3 when the roster cannot be read whole.`,
 		},
 	}
 	c.Flags().StringVar(&org, "org", defaultOrg, "the GitHub organization")
+	c.Flags().StringVar(&team, "team", "", "print this team's member logins")
 	c.Flags().BoolVar(&refresh, "refresh", false, "read the roster again even when the kept one is under a day old")
 	return c
+}
+
+// printTeam prints the logins of org's team as the person's own gh login
+// reads them.
+func (a *app) printTeam(cmd *cobra.Command, org, team string) error {
+	token, err := personToken(cmd.Context(), a.cfg.Agents.Shell.Path)
+	if err != nil {
+		return err
+	}
+	logins, err := github.ReadTeam(cmd.Context(), &http.Client{Timeout: 30 * time.Second}, token, org, team)
+	switch {
+	case errors.Is(err, github.ErrPermission):
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), github.ErrPermission.Error())
+		return refused("%s", err.Error())
+	case err != nil:
+		return err
+	case a.json:
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"org": org, "team": team, "members": logins})
+	}
+	for _, login := range logins {
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), login)
+	}
+	return nil
 }
 
 // rosterPath is where org's roster is kept.

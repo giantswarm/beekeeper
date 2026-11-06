@@ -424,6 +424,21 @@ func TestKubeGuardOffWithoutProduction(t *testing.T) {
 	}
 }
 
+// Token requests must use api-read so credentials cannot reach tool output.
+func TestKubeProductionDirectTokensRefused(t *testing.T) {
+	h := kubeHook(machineKC)
+	h.Production = "fixtureprod"
+	for _, command := range []string{
+		"kubectl --context fixtureprod create token writer",
+		"kubectl --context fixtureprod create token writer --duration=5m",
+		"kubectl --context fixtureprod create token reader",
+		"kubectl --context fixtureprod create token reader --duration=5m",
+	} {
+		wantRefused(t, h, command, prodMsg)
+	}
+	wantPassed(t, h, "beekeeper api-read example-api Reader/List --duration=5m")
+}
+
 func TestKubeProtectedContexts(t *testing.T) {
 	contexts := []string{"production", "full-test", "full-test-operations"}
 	h := kubeHook(machineKC)

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `agents wake` and `agents resume` continue an SSH worker whose process exited, on or off the roster, and a settled wait continues a parked one: its host runs the same unit in the same workspace and conversation. A stopped or retired execution, or one on omp, is refused and the refusal names its transcript ([#3283](https://github.com/giantswarm/beekeeper/issues/3283)).
+- `beekeeper disk prune`, `disk holders` and the worktree trim resolve live process references once per scan instead of once per candidate, and each measured disk root and directory has its own read budget, so a large state directory cannot hide the user cache (https://github.com/giantswarm/beekeeper/issues/3244).
 - `note add --for` files a note for another name of the guide's person for that person, and refuses a name nobody on the desk goes by, so a decision never lands where no guide sees it ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
 - A central instance that answers "tool not found" is named as a version mismatch, not as unreachable ([#3205](https://github.com/giantswarm/beekeeper/issues/3205))
 - The merge skill reads branch protection through the GitHub API, which needs no muster login ([#3208](https://github.com/giantswarm/beekeeper/issues/3208))
@@ -34,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper disk usage` lists what holds the disk by owner: beekeeper's state by subdirectory, the user cache by program and every worktree, harness worktrees included (https://github.com/giantswarm/beekeeper/issues/3244).
+- An opt-in fleet watch in `beekeeper serve` reads each installation through central muster into the feed (https://github.com/giantswarm/beekeeper/issues/159).
 - `agents.policyBundle` carries the coordinator's approved rules and skills to a remote worker on every start: each start binds the bundle's digest, only a host that lacks it receives it, a failed transfer starts no worker, and `agents hosts check` reports a host whose bundle differs. An active or parked worker keeps the bundle it was admitted under (https://github.com/giantswarm/beekeeper/issues/2283, https://github.com/giantswarm/beekeeper/issues/2110).
 - `agents hosts check` accounts for retired, recovery and bundle resources and reports what a worker left in the account's state directory; `agents hosts reconcile` enters the shared retirement, and retirements proved disposable are removed after retention (https://github.com/giantswarm/beekeeper/issues/2285, https://github.com/giantswarm/beekeeper/issues/2113).
 - `beekeeper board add` adds an issue idempotently with Team, Status (default Backlog) and optional Kind; `beekeeper board show` prints its board fields using issue-scoped reads (https://github.com/giantswarm/beekeeper/issues/486).
@@ -65,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Serialize Teleport renewals from the same desk, preserving browser ownership and keeper results during contention (https://github.com/giantswarm/beekeeper/issues/3028).
 - Include open review drafts beyond the oldest 50 in status reports and report incomplete draft searches as errors (https://github.com/giantswarm/beekeeper/issues/2848).
 - Keep the whole files-mode cache when a checkout appears during its scan, preserving older source files (https://github.com/giantswarm/beekeeper/issues/2708).
 - Keep session scratch, go-build and throwaway temporary directories until their directory entries and regular files have all passed the retention period, including newly copied files with preserved timestamps (https://github.com/giantswarm/beekeeper/issues/2762).
