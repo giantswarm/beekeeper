@@ -3344,7 +3344,7 @@ func parse(path string, raw []byte) (*Config, error) {
 			root := effectiveNode(doc.Content[0], "", map[*yaml.Node]bool{}, &findings)
 			checkNode(root, reflect.TypeFor[Config](), "", &findings, &invalid)
 			if len(findings) > 0 {
-				return nil, fmt.Errorf("%s: %s", path, strings.Join(findings, "; "))
+				return nil, fmt.Errorf("%s: %s: %w", path, strings.Join(findings, "; "), err)
 			}
 		}
 		return nil, fmt.Errorf("%s: %w", path, err)

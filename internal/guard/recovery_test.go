@@ -3,7 +3,7 @@ package guard
 import "testing"
 
 func TestRecoveryCommands(t *testing.T) {
-	for _, command := range []string{"pwd", "ls -l", "git status", "beekeeper config set watch.interval 1m", "beekeeper self-update", "cd /tmp && beekeeper config check"} {
+	for _, command := range []string{"pwd", "ls -l", codexGitStatus, "beekeeper config set watch.interval 1m", "beekeeper self-update", "cd /tmp && beekeeper config check"} {
 		if !recoveryCommand(command) {
 			t.Errorf("refused recovery: %s", command)
 		}

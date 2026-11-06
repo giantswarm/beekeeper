@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -281,10 +280,9 @@ func TestHookBrokenConfigRecovery(t *testing.T) {
 			if err := os.WriteFile(a.cfgPath, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			raw, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]string{"command": command}})
-			ev := string(raw)
+			ev := fmt.Sprintf(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":%q}}`, command)
 			got := runHook(t, a, &out, "pretooluse", ev)
-			decision := "allow"
+			decision := appAllow
 			if command == "rm config.yaml" {
 				decision = "deny"
 			}

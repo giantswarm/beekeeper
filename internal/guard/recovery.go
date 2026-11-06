@@ -2,6 +2,7 @@ package guard
 
 import (
 	"os"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -11,6 +12,12 @@ func (h Hook) recoveryReason() string {
 	return "Beekeeper configuration cannot load: " + h.ConfigErr.Error() +
 		". Recovery mode permits read-only inspection and beekeeper (use beekeeper config set or self-update to repair it)."
 }
+
+// recoveryPrograms run with any literal arguments; git runs only as
+// recoveryGit.
+var recoveryPrograms = strings.Fields("beekeeper pwd ls cat head tail wc stat cd")
+
+const recoveryGit = gitCmd + " status"
 
 // recoveryCommand admits literal commands only. No expansion, redirection,
 // assignments, shell wrappers or executable search helpers can escape the list.
@@ -42,13 +49,7 @@ func recoveryCommand(command string) bool {
 				safe = false
 				return false
 			}
-			switch args[0] {
-			case "beekeeper", "pwd", "ls", "cat", "head", "tail", "wc", "stat", "cd":
-			case "git":
-				safe = len(args) == 2 && args[1] == "status"
-			default:
-				safe = false
-			}
+			safe = slices.Contains(recoveryPrograms, args[0]) || strings.Join(args, " ") == recoveryGit
 		}
 		return safe
 	})
