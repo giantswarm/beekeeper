@@ -82,7 +82,7 @@ func (a *app) doctorLabs(ctx context.Context, sessions []*claude.Session, r doct
 			}
 			st.Released[h.Env] = a.now.UTC()
 			lines = append(lines, line+configLine)
-			evs = append(evs, event(r.by, "lease.release-gone", "%s%s", line, configLine))
+			evs = append(evs, event(r.by, leaseReleaseGoneVerb, "%s%s", line, configLine))
 		}
 		for _, res := range a.cfg.Resources {
 			cluster := a.cfg.LabCluster(res)

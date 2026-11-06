@@ -123,14 +123,14 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 
 	// A start taking over a stopped entry's open task keeps that task and
 	// records nothing for the brief.
-	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: "stopped", Name: worker.Name}, Task: staleTask}}}
+	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: reviewedStoppedCase, Name: worker.Name}, Task: staleTask}}}
 	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil || len(st.Records) != 0 {
 		t.Errorf("take over: records %+v, %v", st.Records, err)
 	}
 }
 
 func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: "default"}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
+	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: paramDefault}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
 	for id, want := range map[string]bool{"b": true, "d": false, "x": false, "": false} {
 		if _, ok := st.BypassStart(id); ok != want {
 			t.Errorf("BypassStart(%q) = %v", id, ok)
@@ -313,7 +313,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 	if err := os.WriteFile(path, []byte(turn), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := titleTranscript(projects, "id", `Guide run 2: Timo's "open" decisions`); err != nil {
+	if err := titleTranscript(projects, "id", `Guide run 2: Alex's "open" decisions`); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's own transcript
@@ -328,7 +328,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 		SessionID   string `json:"sessionId"`
 	}
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &title); err != nil || title.Type != "custom-title" ||
-		title.CustomTitle != `Guide run 2: Timo's "open" decisions` || title.SessionID != "id" {
+		title.CustomTitle != `Guide run 2: Alex's "open" decisions` || title.SessionID != "id" {
 		t.Errorf("the import window's last line = %q (%v)", lines[len(lines)-1], err)
 	}
 	if model, err := claude.Model(path); err != nil || model != "claude-haiku-4-5-20251001" {

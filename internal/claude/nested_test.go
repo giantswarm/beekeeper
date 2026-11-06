@@ -7,6 +7,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
+const beekeeperBin = "beekeeper"
+
 // chain is a process table holding one parent chain, outermost first: each
 // entry is a process's argv, named by its first word, its PID its position
 // plus one.
@@ -29,7 +31,7 @@ func TestNested(t *testing.T) {
 		cli      = []string{cliComm}
 		nested   = []string{cliComm, "-p", "--", "register as X"}
 		shell    = []string{"zsh"}
-		register = []string{"beekeeper", "agents", "register"}
+		register = []string{beekeeperBin, "agents", "register"}
 	)
 	for _, c := range []struct {
 		name string

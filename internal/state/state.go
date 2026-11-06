@@ -47,7 +47,7 @@ type Party struct {
 }
 
 // Owner names whose agent the party is, of which team, on which host
-// ("timo@example.com, team bumblebee, on lab"); empty when none is known.
+// ("alex@example.com, team bumblebee, on lab"); empty when none is known.
 func (p Party) Owner() string {
 	var parts []string
 	if p.Person != "" {
@@ -74,7 +74,8 @@ func (p Party) Is(o Party) bool {
 		return true
 	case p.HostSession != "" && p.HostSession == o.HostSession:
 		return true
-	case p.Session == "" && o.Session == "" && p.Name != "" && p.Name == o.Name:
+	// Names identify parties only when neither carries a session identity.
+	case p.Session == "" && o.Session == "" && p.HostSession == "" && o.HostSession == "" && p.Name != "" && p.Name == o.Name:
 		return true
 	}
 	return false
@@ -717,7 +718,11 @@ type Claim struct {
 // session ends or the alert resolves. A party without a session id is a
 // person, who owns it until it resolves.
 type AlertOwner struct {
-	// Alert is the alert's key in the alert baseline (fingerprint@start).
+	// Cluster and Namespace are optional exact matchers used when taking ownership.
+	Cluster   string `json:"cluster,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	// Alert is the firing key (installation/fingerprint@start); legacy
+	// records use fingerprint@start with the installation recorded in Name.
 	Alert string    `json:"alert"`
 	Name  string    `json:"name"`
 	By    Party     `json:"by"`
@@ -874,6 +879,10 @@ type Start struct {
 // Request includes the private component callback credential and must never
 // be returned by an operator status or logs command.
 type ExecutionRecord struct {
+	// Endpoint pins the approved journal route at reservation time. Nil marks
+	// older records whose original route cannot be reconstructed.
+	Endpoint *execution.Endpoint `json:"endpoint,omitempty"`
+
 	Lease           *execution.LeaseGrant              `json:"lease,omitempty"`
 	Completed       bool                               `json:"completed,omitempty"`
 	Settled         bool                               `json:"settled,omitempty"`
@@ -925,7 +934,38 @@ type ExecutionRecord struct {
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
 	ReleaseReason string    `json:"releaseReason,omitempty"`
-	rest          rest
+	// Retirement is the execution's one retirement, nil until a terminal path
+	// (final report, stop, failed start, crash) enters it.
+	Retirement *ExecutionRetirement `json:"retirement,omitempty"`
+	rest       rest
+}
+
+// ExecutionRetirement is the coordinator's resumable retirement of an
+// execution: its GitHub authorization and its host resources end independently,
+// each confirmed only by its own success, and a failed step keeps its error
+// and its next attempt so that neither outage can stand in for the other.
+type ExecutionRetirement struct {
+	ID          string    `json:"id"`
+	Trigger     string    `json:"trigger"`
+	RequestedAt time.Time `json:"requestedAt"`
+	// RevokedAt is when the worker's GitHub authorization was confirmed
+	// revoked, zero until then; RevokeError is why the last attempt failed.
+	RevokedAt   time.Time `json:"revokedAt,omitzero"`
+	RevokeError string    `json:"revokeError,omitempty"`
+	// RetiredAt is when the host confirmed Stage, zero until then; HostError is
+	// why the last attempt failed.
+	RetiredAt   time.Time           `json:"retiredAt,omitzero"`
+	Stage       string              `json:"stage,omitempty"`
+	HostError   string              `json:"hostError,omitempty"`
+	Recovery    *execution.Recovery `json:"recovery,omitempty"`
+	RetainUntil time.Time           `json:"retainUntil,omitzero"`
+	Attempts    int                 `json:"attempts,omitempty"`
+	NextAttempt time.Time           `json:"nextAttempt,omitzero"`
+}
+
+// Finished says both ends of the retirement are confirmed.
+func (r *ExecutionRetirement) Finished() bool {
+	return r != nil && !r.RevokedAt.IsZero() && !r.RetiredAt.IsZero()
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -1553,6 +1593,8 @@ type Merge struct {
 	Lane string `json:"lane"`
 	By   Party  `json:"by"`
 	PID  int    `json:"pid"`
+	// Version is the binary that owns this place. Older releases may not record it.
+	Version string `json:"version,omitempty"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
 	Child int `json:"child,omitempty"`
@@ -1685,6 +1727,8 @@ type Event struct {
 	// on the events the sink may dispatch (config.SinkVerbs); empty on the
 	// rest.
 	Subject string `json:"subject,omitempty"`
+	// NoteTeam identifies the note owner independently of the event actor.
+	NoteTeam string `json:"noteTeam,omitempty"`
 }
 
 // NoteLookup is the optional complete history of a store that retains closed notes.
@@ -1866,8 +1910,11 @@ func (s *FileStore) busy(waited time.Duration) error {
 func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
-// back atomically together with the events fn returns. When fn fails nothing
-// is written, nor when a newer release wrote the state (StaleWriterError).
+// back with the events fn returns under the same lock. When fn fails nothing
+// is written. Newer release state refuses the callback with StaleWriterError.
+// Event-log open failures leave state unchanged. Later event write/close failures
+// and crashes can still leave state and events inconsistent; this is not a
+// transaction across the two files.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1883,6 +1930,9 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err != nil {
 		return err
 	}
+	if err := s.checkWriter(st, time.Now()); err != nil {
+		return err
+	}
 	events, err := fn(st)
 	if err != nil {
 		return err
@@ -1890,10 +1940,23 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
+	var log *os.File
+	if len(events) > 0 {
+		log, err = s.openEventLog()
+		if err != nil {
+			return err
+		}
+	}
 	if err := writeJSON(s.path("state.json"), st); err != nil {
+		if log != nil {
+			_ = log.Close()
+		}
 		return err
 	}
-	return s.append(events)
+	if log == nil {
+		return nil
+	}
+	return appendEvents(log, events)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -1951,6 +2014,22 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
+	_, ok := release(s.version)
+	if !ok {
+		return nil
+	}
+	if err := s.checkWriter(st, now); err != nil {
+		return err
+	}
+	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	// Releases before the refusal recorded their stale saves here instead.
+	delete(st.rest, "staleWriters")
+	return nil
+}
+
+// checkWriter refuses an older release before an update can have side effects.
+// The caller holds the state lock.
+func (s *FileStore) checkWriter(st *State, now time.Time) error {
 	own, ok := release(s.version)
 	if !ok {
 		return nil
@@ -1960,9 +2039,6 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 			return s.refuse(st.Writer.Version, now)
 		}
 	}
-	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
-	// Releases before the refusal recorded their stale saves here instead.
-	delete(st.rest, "staleWriters")
 	return nil
 }
 
@@ -2054,10 +2130,19 @@ func (s *FileStore) append(events []Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	f, err := os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := s.openEventLog()
 	if err != nil {
 		return err
 	}
+	return appendEvents(f, events)
+}
+
+func (s *FileStore) openEventLog() (*os.File, error) {
+	return os.OpenFile(s.path("events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+}
+
+// appendEvents consumes and closes f, including on failure.
+func appendEvents(f *os.File, events []Event) error {
 	if err := endLine(f); err != nil {
 		_ = f.Close()
 		return err
@@ -2158,27 +2243,24 @@ func (s *FileStore) Follow(name string, keep func(Event) bool) ([]Event, error) 
 	if _, err := f.Seek(at.offset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	sc.Split(wholeLines)
-	for sc.Scan() {
-		at.offset += int64(len(sc.Bytes())) + 1
+	reader := bufio.NewReader(f)
+	for {
+		// Events can contain unbounded reports, just as in Events. Only
+		// advance past complete lines: a partial append is read again later.
+		line, readErr := reader.ReadBytes('\n')
+		if errors.Is(readErr, io.EOF) {
+			return slices.Clone(at.kept), nil
+		}
+		if readErr != nil {
+			return slices.Clone(at.kept), readErr
+		}
+		at.offset += int64(len(line))
 		var e Event
-		line := bytes.TrimLeft(sc.Bytes(), "\x00")
+		line = bytes.TrimLeft(line, "\x00")
 		if json.Unmarshal(line, &e) == nil && (keep == nil || keep(e)) {
 			at.kept = append(at.kept, e)
 		}
 	}
-	return slices.Clone(at.kept), sc.Err()
-}
-
-// wholeLines splits the log into its complete lines: a line still being
-// appended, without its newline yet, is left for the next read.
-func wholeLines(data []byte, _ bool) (advance int, token []byte, err error) {
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		return i + 1, data[:i], nil
-	}
-	return 0, nil, nil
 }
 
 // ReadFile decodes a JSON side file of the store (the last snapshot);

@@ -118,11 +118,12 @@ or "wake turn running".`,
 	fullFlag(c, &full)
 	var name, harness string
 	register := &cobra.Command{
-		Use:   "register",
+		Use:   "register [name]",
 		Short: "Register the calling session as an idle agent",
 		Long: `Register the calling session as an idle agent, named by its title unless
---name overrides it. A caller whose parent chain passes two claude session
-CLIs, a claude started inside another session, is refused with the name of
+a positional name or --name overrides it. If both are given, they must match.
+A caller whose parent chain passes two claude session CLIs, a claude started
+inside another session, is refused with the name of
 that parent session, whose ids it inherits and whose entry stays as it is.
 
 Workers launched by agents start are already registered. Repeating register
@@ -134,8 +135,14 @@ Their agents park commands use that same identity without an extra flag.
 message route to such a session, so agents resume and the watch never wake
 it headless, which would start a second, unrelated Claude Code session; it
 leaves its own park with agents resume, no agent named.`,
-		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				if cmd.Flags().Changed("name") && name != args[0] {
+					return refused("positional name %q differs from --name %q", args[0], name)
+				}
+				name = args[0]
+			}
 			h, ok := harnessByName(harness)
 			if !ok {
 				return usageErr("--harness %s is not a harness beekeeper knows: claude, omp, agy or codex", harness)
@@ -337,9 +344,9 @@ completion is refused under --as.`,
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
-				verb := "agents.idle"
+				verb := litAgentsIdle
 				if finished {
-					verb = "agents.done"
+					verb = executionDone
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
 				if finished {

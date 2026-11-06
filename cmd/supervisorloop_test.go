@@ -160,7 +160,7 @@ func logs(args []string) (state.Event, bool) {
 		return event(loopParty, "agents.wake", "%s: sent by name", args[2]), true
 	case args[0] == agentsName && args[1] == loopRemove:
 		return event(loopParty, "agents.remove", "%s", args[2]), true
-	case args[0] == "note" && args[1] == loopAdd:
+	case args[0] == paramNote && args[1] == loopAdd:
 		return event(loopParty, "note.add", "#1 %s", args[len(args)-1]), true
 	case args[0] == loopBoard && args[1] == loopBoardMove:
 		return event(loopParty, "board.move", "%s: → %s", args[2], args[3]), true
@@ -943,15 +943,15 @@ func TestLoopWaitsWhenNoHostHasRoom(t *testing.T) {
 	}
 }
 
-// Reviews need the coordinator's GitHub read and public review path, even
-// when hostsFirst prefers a host and the host has room.
-func TestLoopReviewersStayOnCoordinator(t *testing.T) {
+// Without supervisor host placement configured, reviewers use local capacity.
+func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 	for _, first := range []bool{false, true} {
 		for _, room := range []bool{false, true} {
 			for _, selfHosted := range []bool{false, true} {
 				t.Run(fmt.Sprintf("first=%t/room=%t/selfHosted=%t", first, room, selfHosted), func(t *testing.T) {
 					r := newLoopRig(t)
 					r.sshLoopHost(t, true)
+					r.a.cfg.Supervisor.Hosts = nil
 					r.a.cfg.Supervisor.HostsFirst = first
 					r.answer = func(args []string) (string, int) {
 						if args[0] == loopCapacity {
@@ -3000,9 +3000,8 @@ func TestLoopHostsFirstStartsAnUnmappedRepositoryLocally(t *testing.T) {
 	}
 }
 
-// Reviewers of a mixed queue retain every eligible local choice; hostsFirst
-// must not reserve the host-supported choices for remote reviews.
-func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
+// Reviewers of a mixed queue use local choices unsupported by the full host.
+func TestLoopHostsFirstReviewerExcludesHostedChoices(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.HostsFirst = true
 	r.sshLoopHost(t, true)
@@ -3029,8 +3028,8 @@ func TestLoopHostsFirstReviewerKeepsAllLocalChoices(t *testing.T) {
 	if start == nil {
 		t.Fatalf("no reviewer started: %v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(start, loopHostFlag) || slices.Contains(start, "--"+excludeFlag) {
-		t.Errorf("the reviewer start = %v, want local without exclusions", start)
+	if slices.Contains(start, loopHostFlag) || !slices.Contains(start, "--"+excludeFlag) {
+		t.Errorf("the reviewer start = %v, want local with host choices excluded", start)
 	}
 }
 
@@ -3676,9 +3675,9 @@ func TestLoopOverlapDeferredStartDoesNotRepeatBoardBlock(t *testing.T) {
 	}
 }
 
-// GitHub-enabled reviewers follow the same placement preferences as workers,
+// Reviewers without a worker GitHub App follow the placement preferences of workers,
 // including Codex, and retain review and self-hosted capacity accounting.
-func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
+func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 	branch := ghDefaultBranch
 	t.Cleanup(func() { ghDefaultBranch = branch })
 	ghDefaultBranch = func(context.Context, string) (string, error) { return mainBranch, nil }
@@ -3689,7 +3688,7 @@ func TestLoopPlacesGitHubReviewersOnExecutionHosts(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/first=%t/local=%t/selfHosted=%t", harness, first, localRoom, selfHosted), func(t *testing.T) {
 						r := newLoopRig(t)
 						r.sshLoopHost(t, true)
-						r.a.cfg.GitHub.WorkerApp = &config.WorkerGitHub{}
+						r.a.cfg.GitHub.WorkerApp = nil
 						r.a.cfg.Supervisor.HostsFirst = first
 						r.a.cfg.Capacity.Choices[0].Harness = harness
 						h := r.a.cfg.Agents.Hosts[sshTestSelector]
