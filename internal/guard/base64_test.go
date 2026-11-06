@@ -2,11 +2,11 @@ package guard
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/png"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,9 +220,8 @@ func TestRedactSkipsImagesAndScansSurroundingText(t *testing.T) {
 func BenchmarkRedactPNG4MiB(b *testing.B) {
 	// Incompressible pixels model a 4 MiB screenshot as a real PNG.
 	pixels := image.NewNRGBA(image.Rect(0, 0, 1024, 1024))
-	rng := rand.New(rand.NewPCG(1, 2))
-	for i := range pixels.Pix {
-		pixels.Pix[i] = byte(rng.Uint32())
+	if _, err := rand.Read(pixels.Pix); err != nil {
+		b.Fatal(err)
 	}
 	var payload bytes.Buffer
 	if err := png.Encode(&payload, pixels); err != nil {
