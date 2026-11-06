@@ -2826,8 +2826,11 @@ uncommitted changes, untracked files that are no build output, or commits neithe
 nor its pull request has, keeps them and loses only those build directories. Any other worktree
 (an open or no pull request, closed within the six hours) whose HEAD and index are six hours old
 loses only those build directories too: the next build writes them again, and git state, branch
-and commits stay. A worktree a running process, a running session or an unarchived desktop session
-works in, and a locked one, stay untouched. A run that removed something is one `WORKTREES` line
+and commits stay. A worktree a running process, a running session, an unfinished roster agent or a
+desktop session active in the last seven days works in, and a locked one, stay untouched; an
+unarchived desktop session alone keeps it no longer. The hook's refusal to `mv` or `rm` a live
+worktree follows the same bound, and past it still refuses a worktree holding uncommitted or unpushed
+work. A run that removed something is one `WORKTREES` line
 with the bytes of each tier and one `worktrees.trim` event naming each path, its size and why; a
 failed one is `WORKTREES FAILED`. `beekeeper worktrees` says the same per path (`--apply` does it,
 `--root` looks under another folder), and `beekeeper doctor` trims the same (`--dry-run` says what

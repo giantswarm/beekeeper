@@ -533,6 +533,50 @@ func TestTranscriptRuntimeProgramInputs(t *testing.T) {
 	}
 }
 
+func TestTranscriptOwnJobDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	projects := filepath.Join(home, ".claude", "projects", "project")
+	job := filepath.Join(projects, "jobs", "own")
+	script := filepath.Join(job, "tmp", "run.sh")
+	foreign := filepath.Join(projects, "other.jsonl")
+	if err := os.MkdirAll(filepath.Dir(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{script, foreign} {
+		if err := os.WriteFile(p, []byte("echo ok\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(job, "tmp", "link.jsonl")
+	if err := os.Symlink(foreign, link); err != nil {
+		t.Fatal(err)
+	}
+	refused := func(command string) bool {
+		d := decide(t, h, home, command, nil)
+		return d != nil && d.PermissionDecision == decisionDeny
+	}
+	if !refused("bash " + script) {
+		t.Fatal("a store path passed with no job directory: the test proves nothing")
+	}
+	t.Setenv(transcriptJobDir, job)
+	for _, command := range []string{"bash " + script, "python3 " + script, "cat " + script, `bash "$CLAUDE_JOB_DIR/tmp/run.sh"`} {
+		if refused(command) {
+			t.Errorf("own job directory refused: %s", command)
+		}
+	}
+	for _, command := range []string{"cat " + foreign, "cat " + link, `cat "$CLAUDE_JOB_DIR/../../other.jsonl"`} {
+		if !refused(command) {
+			t.Errorf("transcript reachable from the job directory: %s", command)
+		}
+	}
+	t.Setenv(transcriptJobDir, filepath.Join(home, ".claude"))
+	if !refused("cat " + foreign) {
+		t.Error("a job directory holding a store exempted it")
+	}
+}
+
 func TestTranscriptOrdinaryWorktreeCommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

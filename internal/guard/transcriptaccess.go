@@ -27,6 +27,8 @@ type transcriptAccess struct {
 	failed        bool
 	session       string
 	own           []transcriptOwnRoot
+	// job is the session's own job directory, "" for none.
+	job string
 }
 
 type transcriptOwnRoot struct {
@@ -101,6 +103,14 @@ func (h Hook) transcriptAccess(session string) transcriptAccess {
 			}
 		}
 	}
+	// The harness sets this for the hook and the session cannot change it. A
+	// directory holding a whole store is no session's own scratch.
+	if job := os.Getenv(transcriptJobDir); filepath.IsAbs(job) {
+		job = filepath.Clean(job)
+		if !slices.ContainsFunc(a.roots, func(root string) bool { return hasDirPrefix(root, job) }) {
+			a.job = job
+		}
+	}
 	if session != "" {
 		for _, grant := range h.Transcripts.Grants[session] {
 			if p := wordPath(grant, ""); filepath.IsAbs(p) && !strings.ContainsAny(p, "*?[") {
@@ -167,6 +177,9 @@ func (a transcriptAccess) denied(p string, recursive bool) bool {
 		return false
 	}
 	if glob < 0 {
+		if a.job != "" && hasDirPrefix(p, a.job) && hasDirPrefix(real, transcriptReal(a.job)) {
+			return false
+		}
 		for _, own := range a.own {
 			if a.owns(own.path, p, own.depth) && a.owns(transcriptReal(own.path), real, own.depth) {
 				return false
@@ -196,6 +209,7 @@ func (a transcriptAccess) owns(root, p string, depth int) bool {
 const (
 	transcriptClaudeConfig = "CLAUDE_CONFIG_DIR"
 	transcriptGeminiHome   = "GEMINI_CLI_HOME"
+	transcriptJobDir       = "CLAUDE_JOB_DIR"
 	transcriptTouch        = "touch"
 	transcriptChmod        = "chmod"
 	transcriptReadlink     = "readlink"
@@ -328,7 +342,7 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 // candidateDenied checks one path a word may name, from every directory the
 // command may run in. embedded marks text the shell does not expand itself.
 func (a transcriptAccess) candidateDenied(candidate string, dirs []string, recursive, embedded bool) bool {
-	for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
+	for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, transcriptJobDir, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
 		if home := os.Getenv(env); home != "" {
 			candidate = strings.ReplaceAll(candidate, "${"+env+"}", home)
 			candidate = strings.ReplaceAll(candidate, "$"+env, home)
