@@ -730,6 +730,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
+				h.ReadOnlyExecQueries = a.cfg.Kube.ReadOnlyExecQueries
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
