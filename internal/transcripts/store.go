@@ -34,6 +34,8 @@ type Turn struct {
 	Tool   string    `json:"tool,omitempty"`
 	Text   string    `json:"text"`
 	Result string    `json:"result,omitempty"`
+	// Answered says a result arrived, however empty.
+	Answered bool `json:"answered,omitempty"`
 	// Phase is a Codex assistant message's phase ("commentary",
 	// "final_answer"), empty where the harness names none.
 	Phase string `json:"phase,omitempty"`
@@ -66,6 +68,8 @@ type Meta struct {
 	SourceMod    time.Time `json:"sourceMod,omitzero"`
 	SourceSize   int64     `json:"sourceSize,omitempty"`
 	RemoteCursor string    `json:"remoteCursor,omitempty"`
+	// Parser is the parser version that indexed the turns (parserVersions).
+	Parser int `json:"parser,omitempty"`
 }
 
 // DisplayName is the most descriptive human-readable name for the session.
@@ -237,6 +241,7 @@ func mergeMeta(prev, next Meta) Meta {
 	if next.RemoteCursor != "" {
 		out.RemoteCursor = next.RemoteCursor
 	}
+	out.Parser = max(prev.Parser, next.Parser)
 	if next.Turns > 0 || prev.Turns == 0 {
 		out.Turns = next.Turns
 	}
@@ -394,11 +399,12 @@ func (s Store) IngestFile(meta Meta, path string) (Meta, bool, error) {
 	}
 
 	if prev, ok, err := s.ReadMeta(meta.Key); err == nil && ok {
-		if prev.SourcePath == meta.SourcePath && prev.SourceSize == meta.SourceSize && prev.SourceMod.Equal(meta.SourceMod) && prev.Turns > 0 {
+		if prev.SourcePath == meta.SourcePath && prev.SourceSize == meta.SourceSize && prev.SourceMod.Equal(meta.SourceMod) && prev.Turns > 0 && prev.Parser >= parserVersions[meta.Harness] {
 			updated, err := s.UpdateMeta(meta)
 			return updated, false, err
 		}
 	}
+	meta.Parser = parserVersions[meta.Harness]
 
 	parsed, err := ParseFile(meta.Harness, path)
 	if err != nil {

@@ -92,8 +92,8 @@ func TestEndedHarnessWorkerRefusalNamesItsTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := transcripts.SafeKey(agy.Harness, "local", endedConv)
-	if _, err := a.transcriptStore().Save(transcripts.Meta{Key: key, ID: endedConv, Harness: agy.Harness, Host: "local"}, []transcripts.Turn{{Role: transcripts.RoleUser, Text: "brief"}}); err != nil {
+	key := transcripts.SafeKey(agy.Harness, executionLocal, endedConv)
+	if _, err := a.transcriptStore().Save(transcripts.Meta{Key: key, ID: endedConv, Harness: agy.Harness, Host: executionLocal}, []transcripts.Turn{{Role: transcripts.RoleUser, Text: endedTask}}); err != nil {
 		t.Fatal(err)
 	}
 	s, ok := a.endedWorker(st, endedName)

@@ -22,11 +22,17 @@ import (
 const (
 	contentTypeText    = "text"
 	contentTypeMessage = "message"
+	harnessAgy         = "agy"
 )
 
 // maxResultBytes bounds the stored text of a single tool result so large file
 // reads or command outputs do not bloat the transcript index.
 const maxResultBytes = 4096
+
+// parserVersions are the harnesses whose parser learned to read more of an
+// unchanged source: a transcript indexed by an older version is read again
+// once. Bump one only for that harness; a store-wide reparse is costly.
+var parserVersions = map[string]int{harnessAgy: 1}
 
 // Parsed holds the turns and metadata extracted from a harness transcript file
 // or remote execution stream.
@@ -103,7 +109,7 @@ func ParseRemoteStream(harness string, raw []byte, prompts []Turn) Parsed {
 func parseReader(harness string, r io.Reader, prompts []Turn) (Parsed, error) {
 	var p Parsed
 	switch strings.ToLower(strings.TrimSpace(harness)) {
-	case "agy":
+	case harnessAgy:
 		p = parseAgy(r)
 	case "codex":
 		p = parseCodex(r)
@@ -163,6 +169,11 @@ func mergePromptTurns(prompts, turns []Turn) []Turn {
 	return append(missing, turns...)
 }
 
+// answer records s as the result of the tool call t, empty output included.
+func (t *Turn) answer(s string) {
+	t.Result, t.Answered = clipResult(s), true
+}
+
 func clipResult(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > maxResultBytes {
@@ -186,20 +197,27 @@ func bytesInText(re *regexp.Regexp, s string) (n int64, hits int) {
 	return n, hits
 }
 
-// Loss is what a transcript's turns do not hold, which no read brings back:
-// text its harness cut before the store read it, tool results the store
-// clipped, and tool calls stored with no result.
+// Loss is what a transcript's turns do not hold. Text its harness cut before
+// the store read it is gone for good. The rest is only missing from the
+// index, and its source may still hold it: tool results the store clipped,
+// and tool calls of an ended session stored with no result. A running
+// session's Pending calls may simply not have finished. A call answered with
+// empty output is none of these.
 type Loss struct {
 	HarnessBytes int64 `json:"harnessBytes,omitempty"`
 	HarnessCuts  int   `json:"harnessCuts,omitempty"`
 	ClippedBytes int64 `json:"clippedBytes,omitempty"`
 	Clipped      int   `json:"clipped,omitempty"`
 	NoResult     int   `json:"noResult,omitempty"`
+	Pending      int   `json:"pending,omitempty"`
+	// SourceGone says the source file the index was read from no longer
+	// exists, so what the index misses is gone too.
+	SourceGone bool `json:"sourceGone,omitempty"`
 }
 
 // LossOf reads the loss of turns, as ReadTurns returned them: results counts
-// only when they were asked for.
-func LossOf(turns []Turn, results bool) Loss {
+// only when they were asked for, and running says the session still runs.
+func LossOf(turns []Turn, results, running bool) Loss {
 	var l Loss
 	for _, t := range turns {
 		for _, text := range []string{t.Text, t.Result} {
@@ -208,28 +226,52 @@ func LossOf(turns []Turn, results bool) Loss {
 			l.HarnessCuts += hits
 		}
 		n, hits := bytesInText(storeClip, t.Result)
+		// An older index clipped with a bare ellipsis, saying no size.
+		if hits == 0 && len(t.Result) >= maxResultBytes && strings.HasSuffix(t.Result, "…") {
+			hits = 1
+		}
 		l.ClippedBytes += n
 		l.Clipped += hits
-		if results && t.Role == RoleTool && t.Result == "" {
-			l.NoResult++
+		if results && t.Role == RoleTool && t.Result == "" && !t.Answered {
+			if running {
+				l.Pending++
+			} else {
+				l.NoResult++
+			}
 		}
 	}
 	return l
 }
 
-// String says the loss in one line, "" for none.
-func (l Loss) String() string {
-	var parts []string
-	if l.HarnessCuts > 0 {
-		parts = append(parts, fmt.Sprintf("the harness cut %d bytes in %d places before the store read them", l.HarnessBytes, l.HarnessCuts))
+// Lost says what no read brings back, "" for nothing.
+func (l Loss) Lost() string {
+	if l.HarnessCuts == 0 {
+		return ""
 	}
+	return fmt.Sprintf("the harness cut %d bytes in %d places before the store read them", l.HarnessBytes, l.HarnessCuts)
+}
+
+// Unindexed says what the index misses and whether its source may hold it,
+// "" for nothing.
+func (l Loss) Unindexed() string {
+	var parts []string
 	if l.Clipped > 0 {
-		parts = append(parts, fmt.Sprintf("%d tool results are clipped, %d bytes not stored", l.Clipped, l.ClippedBytes))
+		parts = append(parts, fmt.Sprintf("%d tool results are clipped to %d bytes", l.Clipped, maxResultBytes))
 	}
 	if l.NoResult > 0 {
 		parts = append(parts, fmt.Sprintf("%d tool calls have no stored result", l.NoResult))
 	}
-	return strings.Join(parts, "; ")
+	var out string
+	if len(parts) > 0 {
+		out = strings.Join(parts, ", ") + ": the source transcript may still hold them"
+		if l.SourceGone {
+			out = strings.Join(parts, ", ") + ": the source transcript is gone, so they are lost too"
+		}
+	}
+	if l.Pending > 0 {
+		out = strings.TrimPrefix(out+fmt.Sprintf("; %d tool calls have no result yet", l.Pending), "; ")
+	}
+	return out
 }
 
 func forEachLine(r io.Reader, fn func(line []byte)) {
@@ -356,7 +398,7 @@ func parseClaude(r io.Reader) Parsed {
 				case "tool_result":
 					resText := extractToolResultText(b.Content)
 					if idx, ok := callIdx[b.ToolUseID]; ok && idx >= 0 && idx < len(p.Turns) {
-						p.Turns[idx].Result = clipResult(resText)
+						p.Turns[idx].answer(resText)
 					}
 					if e.Type == RoleUser && !b.IsError {
 						if askCall[b.ToolUseID] || len(resMeta.Answers) > 0 || strings.HasPrefix(strings.TrimSpace(resText), "User has answered") {
@@ -459,7 +501,7 @@ func parseAgy(r io.Reader) Parsed {
 			}
 		case "GENERIC", "TOOL_RESPONSE":
 			if len(pending) > 0 {
-				p.Turns[pending[0]].Result = clipResult(st.Content)
+				p.Turns[pending[0]].answer(st.Content)
 				pending = pending[1:]
 			}
 		}
@@ -660,11 +702,12 @@ func parseCodex(r io.Reader) Parsed {
 				if cmd != "" {
 					first, _, _ := strings.Cut(cmd, "\n")
 					p.Turns = append(p.Turns, Turn{
-						At:     ev.Timestamp,
-						Role:   RoleTool,
-						Tool:   "exec_command",
-						Text:   "exec_command: " + first,
-						Result: clipResult(ev.Item.AggregatedOutput),
+						At:       ev.Timestamp,
+						Role:     RoleTool,
+						Tool:     "exec_command",
+						Text:     "exec_command: " + first,
+						Result:   clipResult(ev.Item.AggregatedOutput),
+						Answered: true,
 					})
 				}
 			case "mcp_tool_call":
@@ -728,7 +771,7 @@ func parseCodex(r io.Reader) Parsed {
 				}
 			case "function_call_output", "custom_tool_call_output":
 				if idx, ok := callIdx[ev.Payload.CallID]; ok && idx >= 0 && idx < len(p.Turns) {
-					p.Turns[idx].Result = clipResult(ev.Payload.Output)
+					p.Turns[idx].answer(ev.Payload.Output)
 				}
 			}
 		}
@@ -822,7 +865,7 @@ func parseOmp(r io.Reader) Parsed {
 					}
 				}
 				if idx, ok := callIdx[e.Message.ToolCallID]; ok && idx >= 0 && idx < len(p.Turns) {
-					p.Turns[idx].Result = clipResult(strings.Join(parts, "\n"))
+					p.Turns[idx].answer(strings.Join(parts, "\n"))
 				}
 				return
 			}

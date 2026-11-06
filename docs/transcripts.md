@@ -54,13 +54,12 @@ Transcript access is enforced both in `beekeeper transcripts` (local and coordin
 
 ### What a Read Cannot Return
 
-`beekeeper transcripts read` opens with a `# lost for good:` line when the turns it returns are incomplete, and with `--json` the same counts are in `loss`:
+`beekeeper transcripts read` opens with what the turns it returns do not hold, and with `--json` the same counts are in `loss`. A worker that continues from a predecessor learns from these lines what it does not have, and whether it can get it.
 
-- text the harness cut before the store read it (a `<truncated N bytes>` marker in its own transcript);
-- tool results the store clipped to 4 KiB, each ending in `… <N bytes not stored>`;
-- tool calls stored with no result.
+- `# lost for good:` text the harness cut before the store read it (a `<truncated N bytes>` marker in its own transcript). No read brings it back.
+- `# not in the index:` tool results the store clipped to 4 KiB, each ending in `… <N bytes not stored>`, and tool calls of an ended session stored with no result. The source transcript may still hold them, which reading needs a `hooks.transcriptGrants` grant for; the line says so, or says the source is gone and they are lost too. A running session's calls without a result are counted apart: they may not have finished. A call answered with empty output is not counted.
 
-Nothing brings these back. A worker that continues from a predecessor learns from this line what it does not have.
+An agy transcript indexed before tool results were stored is read again once at the next sync, while its source exists. A remote execution's transcript is read again at its next log page.
 
 ## CLI Reference
 

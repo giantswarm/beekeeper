@@ -242,8 +242,11 @@ func (a *app) transcriptsReadCmd() *cobra.Command {
 			if m.Repo != "" || m.Ref != "" {
 				_, _ = fmt.Fprintf(a.out, "# repo: %s  ref: %s\n", cmp.Or(m.Repo, "-"), cmp.Or(m.Ref, "-"))
 			}
-			if lost := resp.Loss.String(); lost != "" {
+			if lost := resp.Loss.Lost(); lost != "" {
 				_, _ = fmt.Fprintf(a.out, "# lost for good: %s\n", lost)
+			}
+			if missing := resp.Loss.Unindexed(); missing != "" {
+				_, _ = fmt.Fprintf(a.out, "# not in the index: %s\n", missing)
 			}
 			for _, t := range resp.Turns {
 				_, _ = fmt.Fprintf(a.out, "--- %s %s\n%s\n", clock(a.now, t.At), t.Role, t.Text)
@@ -681,7 +684,13 @@ func (a *app) readTranscriptForCaller(ctx context.Context, st *state.State, call
 	if err != nil {
 		return remoteTranscriptReadResp{}, err
 	}
-	return remoteTranscriptReadResp{Meta: m, Turns: turns, Loss: transcripts.LossOf(turns, req.Results)}, nil
+	loss := transcripts.LossOf(turns, req.Results, m.Running)
+	if m.SourcePath != "" {
+		if _, err := os.Stat(m.SourcePath); errors.Is(err, os.ErrNotExist) {
+			loss.SourceGone = true
+		}
+	}
+	return remoteTranscriptReadResp{Meta: m, Turns: turns, Loss: loss}, nil
 }
 
 func (a *app) recordTranscriptRequest(st *state.State, me state.Party, req remoteTranscriptAccessReq) (state.TranscriptRequest, []state.Event, error) {

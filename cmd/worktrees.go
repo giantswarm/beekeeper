@@ -151,12 +151,20 @@ func unsavedSessionDirs(cfg *config.Config, now time.Time) []string {
 			continue
 		}
 		for _, d := range []string{r.Cwd, r.OriginCwd} {
-			if d == "" || checked[d] || !worktrees.Linked(d) {
+			if d == "" {
 				continue
 			}
-			checked[d] = true
-			if t, err := worktrees.Inspect(ctx, runGit, d); err != nil || len(t.Work) > 0 || t.Unpushed > 0 {
+			tree, err := worktrees.Containing(d)
+			if err != nil {
 				out = append(out, d)
+				continue
+			}
+			if tree == "" || checked[tree] {
+				continue
+			}
+			checked[tree] = true
+			if t, err := worktrees.Inspect(ctx, runGit, tree); err != nil || len(t.Work) > 0 || t.Unpushed > 0 {
+				out = append(out, tree)
 			}
 		}
 	}

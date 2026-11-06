@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
@@ -21,6 +22,12 @@ func idleRecord(t *testing.T, dir, host, cli, cwd string, seen time.Time) {
 }
 
 func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
+	t.Run("worktree root", func(t *testing.T) { idleSessions(t, "") })
+	t.Run("worktree subdirectory", func(t *testing.T) { idleSessions(t, "cmd") })
+}
+
+// idleSessions runs the desktop sessions in sub of each worktree.
+func idleSessions(t *testing.T, sub string) {
 	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.com")
 	}
@@ -28,7 +35,7 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 	bare, clone := filepath.Join(base, "bare.git"), filepath.Join(base, "clone")
 	gitT(t, base, "init", "-q", "--bare", bare)
 	gitT(t, base, "init", "-q", "-b", "main", clone)
-	writeT(t, filepath.Join(clone, "a.txt"), "a\n")
+	writeT(t, filepath.Join(clone, "cmd", "a.txt"), "a\n")
 	gitT(t, clone, "add", ".")
 	gitT(t, clone, "commit", "-q", "-m", "init", "--author", "T <test@example.com>")
 	gitT(t, clone, "remote", "add", "local", bare)
@@ -50,9 +57,9 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-worktrees.SessionIdle - time.Hour)
 	for i, d := range []string{saved, dirty, unpushed, parked} {
-		idleRecord(t, a.cfg.Claude.DesktopDir, fmt.Sprintf("local_old%d", i), fmt.Sprintf("cli-old%d", i), d, old)
+		idleRecord(t, a.cfg.Claude.DesktopDir, fmt.Sprintf("local_old%d", i), fmt.Sprintf("cli-old%d", i), filepath.Join(d, sub), old)
 	}
-	idleRecord(t, a.cfg.Claude.DesktopDir, "local_recent", "cli-recent", recent, now.Add(-time.Hour))
+	idleRecord(t, a.cfg.Claude.DesktopDir, "local_recent", "cli-recent", filepath.Join(recent, sub), now.Add(-time.Hour))
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		worker := state.Party{Session: "cli-old3", Name: "parked worker"}
 		st.Starts = append(st.Starts, state.Start{Party: worker, Dir: parked, At: old})
@@ -66,12 +73,12 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{saved, dirty, unpushed} {
+	for _, d := range []string{filepath.Join(saved, sub), filepath.Join(dirty, sub), filepath.Join(unpushed, sub)} {
 		if slices.Contains(live, d) {
 			t.Errorf("an idle desktop session alone kept %s live", d)
 		}
 	}
-	for _, d := range []string{recent, parked} {
+	for _, d := range []string{filepath.Join(recent, sub), parked} {
 		if !slices.Contains(live, d) {
 			t.Errorf("%s lost its session or its unfinished task", d)
 		}
@@ -83,8 +90,11 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 		t.Errorf("unsaved = %v, want %v: a mv or rm stays refused only where work would be lost", unsaved, want)
 	}
 	hook := a.hookLiveDirs()
-	if !slices.Contains(hook, dirty) || slices.Contains(hook, saved) {
-		t.Errorf("hook folders = %v", hook)
+	if wt, _ := guard.LiveWorktreeUnder(dirty, hook); wt == "" {
+		t.Errorf("rm of a worktree with unsaved work passes the hook: %v", hook)
+	}
+	if wt, _ := guard.LiveWorktreeUnder(saved, hook); wt != "" {
+		t.Errorf("the saved worktree of an idle session stays refused: %s", wt)
 	}
 
 	// A transcript written since the record's last activity counts as activity.
@@ -93,7 +103,7 @@ func TestIdleDesktopSessionKeepsNoWorktreeLive(t *testing.T) {
 	if err := os.Chtimes(transcript, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if live, err = a.liveFolders(now); err != nil || !slices.Contains(live, saved) {
+	if live, err = a.liveFolders(now); err != nil || !slices.Contains(live, filepath.Join(saved, sub)) {
 		t.Errorf("a session with a fresh transcript is not live: %v, %v", live, err)
 	}
 }
