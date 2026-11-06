@@ -8,9 +8,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 )
 
+const testProduction = "fixtureprod"
+
 func TestHookTextPayloads(t *testing.T) {
 	h := kubeHook(machineKC)
-	h.Production = "fixtureprod"
+	h.Production = testProduction
 	for _, command := range []string{
 		`beekeeper agents idle --done --report "Blocked; muster auth login is required"`,
 		"beekeeper agents idle --done --report 'Report:\nmuster auth login is required'",
@@ -53,7 +55,7 @@ func TestHookTextPayloads(t *testing.T) {
 // Only text is exempt: what a timer or a login note runs later stays checked.
 func TestHookExecutedArgumentsStayChecked(t *testing.T) {
 	h := kubeHook(machineKC)
-	h.Production = "fixtureprod"
+	h.Production = testProduction
 	h.Leases = func() []lease.Holder { return nil }
 	for _, payload := range []string{"kubectl --context fixtureprod apply -f manifest.yaml", "muster auth login", "xdg-open https://example.com"} {
 		for _, command := range []string{
@@ -80,7 +82,7 @@ func TestHookExecutedArgumentsStayChecked(t *testing.T) {
 
 func TestHookLaterCommandsMayRead(t *testing.T) {
 	h := kubeHook(machineKC)
-	h.Production = "fixtureprod"
+	h.Production = testProduction
 	for _, command := range []string{
 		`beekeeper timer add 1m "check" --probe 'kubectl --context fixtureprod get pods'`,
 		`beekeeper timer add 1m "check" --run 'beekeeper agents wake x done' --when 'pr-merged o/r#1'`,
