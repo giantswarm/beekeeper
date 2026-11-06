@@ -91,7 +91,9 @@ gone is one MERGE LOST line: it settles with an unknown release. A
 running merge whose devctl runs on merge.hungAfter (45m) after its pull
 request merged, or that long after its start once the pull request is
 closed, is one MERGE HUNG line: the watch ends its devctl and records the
-merge at the next poll. A
+merge at the next poll. Startup, a detected suspend, or a long gap between
+checks gives waits a fresh merge.hungAfter grace period before they can
+be ended as hung. A
 registered agent with a task and no running CLI is one AGENTS STOPPED
 line with how to resume it, unless it is kept (agents keep, or a timer
 that wakes it). A positive capacity.ceiling reached is one CAPACITY FULL
@@ -137,7 +139,8 @@ Every upgrades.every (5m) the same installations' Cluster API clusters are
 read, and every watch.interval an installation an upgrade runs on or holds
 (one list of Clusters, KubeadmControlPlanes, MachinePools and
 MachineDeployments per installation, one per kind on one that does not serve
-them all, within alerts.timeout, in parallel). The readings are shared
+them all, in parallel, with one retry and a deadline per attempt of at least
+two minutes or alerts.timeout if longer). The readings are shared
 (upgrades.json): a second watch, snapshot and ui use a fresh one instead of
 reading again. A
 cluster whose release changes begins an upgrade: its release label differs
@@ -151,7 +154,8 @@ installation is held (hold upgrade:<installation>/<cluster>): the gate
 refuses the merges of its lanes and lease claims of its name are refused.
 "UPGRADE <installation>/<cluster> <from> → <to>" is said when it begins and
 "UPGRADE ENDED …" when it ends, once each; an unreadable installation is one
-line and keeps its holds. The installations whose kube context is not in the
+line naming the cause and deadline and keeps its holds. Held upgrades name
+the number of consecutive ticks their reader has failed. The installations whose kube context is not in the
 kubeconfig kubectl reads are not read, keep their holds and alert baselines,
 and are named once per watch in one line each for UPGRADES and ALERTS.
 
@@ -167,7 +171,9 @@ note it filed, and one DOCTOR FAULT line while a known fault lasts. Every
 doctor.freeEvery (1h) one watch frees what dead sessions and dead go
 commands left in the tmpfs /tmp (beekeeper free --apply --only
 session-dirs,go-build): one FREED line when it freed something, FREE
-FAILED while it fails; the TMPFS line says when it ran last.
+FAILED while it fails; the TMPFS line says when it ran last. Above the
+tmpfs warning threshold it also names the three largest entries, their
+sizes, and the commands and worker sessions referencing them when known.
 
 A running beekeeper watch, this one included, whose binary self-update
 replaced keeps the code it started with: one WATCH STALE line names the
@@ -267,7 +273,8 @@ process tree, each running over a minute, are one STACKED line with the
 count, the oldest's age, its parent and its session. More than
 watch.toolProcsMax (1000) processes of the CLIs in watch.tools (kubectl,
 helm, tsh, gh, flux, devctl) running machine-wide are one LOAD line with
-their commands and the sessions that run them. Each ends with an ENDED
+their commands and the sessions that run them. A parent-child chain of one
+CLI longer than watch.toolProcsMax is named as a possible recursion. Each ends with an ENDED
 line; a negative threshold turns it off. A printed command line
 keeps no value: the program, its subcommands and the flag names.
 
@@ -363,6 +370,11 @@ type watcher struct {
 	// kept in its mark.
 	feedID   string
 	lastPoll time.Time
+	// Hung checks get a fresh grace period on startup and after a suspend
+	// (or a long gap in observations). These times stay in memory so their
+	// monotonic readings can exclude time spent asleep.
+	lastHungCheck time.Time
+	hungGrace     time.Time
 	// refusedSince is the newest hook.refused event said; zero before the
 	// first reading, which said none.
 	refusedSince time.Time
@@ -389,7 +401,8 @@ type watcher struct {
 	// standby leaves a running supervisor's events to its watch.
 	standby bool
 	// upgrades are the last upgrade readings of the installations.
-	upgrades upgrade.Readings
+	upgrades        upgrade.Readings
+	upgradeFailures map[string]int
 	// noContextSaid are the readers (ALERTS, UPGRADES) whose installations
 	// without a kube context this watch said.
 	noContextSaid map[string]bool
@@ -493,7 +506,8 @@ type watcher struct {
 	polls atomic.Int64
 	// failed counts the reads that failed (fail): --once exits non-zero on
 	// any, so a silent run means no change.
-	failed atomic.Int64
+	failed        atomic.Int64
+	resolverState resolverWatch
 	// missing are the sections whose platform part this build does not
 	// have, said once each.
 	missing map[string]bool
@@ -1166,6 +1180,9 @@ func (w *watcher) modelServer(ctx context.Context, models []machine.HostModel) {
 // emitNow records every event immediately, then batches only known routine lines.
 func (w *watcher) emitNow(key string, format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
+	if key != "resolver" && w.resolverFailure(line) {
+		return
+	}
 	if w.store != nil {
 		_ = w.store.Record(event(watchParty, "watch."+key, "%s", line))
 	}
@@ -1224,7 +1241,16 @@ func (w *watcher) sample(ctx context.Context) {
 		w.check("psi", psi > th.PSIMax, "MEMORY PRESSURE: full avg60 %.0f%%", psi)
 	}
 	if d, err := machine.ReadDisk("/tmp"); err == nil {
-		w.check("tmp", d.UsedMiB > th.TmpMax(d.TotalMiB), "TMPFS /tmp: %d MiB; %s", d.UsedMiB, w.lastFreeNote())
+		large := d.UsedMiB > th.TmpMax(d.TotalMiB)
+		var largest string
+		if large {
+			var owners map[int]string
+			if o := w.owners.Load(); o != nil {
+				owners = *o
+			}
+			largest = "; " + tmpfsLargest("/tmp", table, owners, proc.References)
+		}
+		w.check("tmp", large, "TMPFS /tmp: %d MiB; %s%s", d.UsedMiB, w.lastFreeNote(), largest)
 	}
 	if d, err := machine.ReadDisk("/"); err == nil {
 		var owners map[int]string
@@ -1476,6 +1502,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.clear("proc")
 		w.pollSessions(ctx, since, t)
 	}
+	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
 	w.pollToolWindow(ctx, watchParty)
@@ -1668,6 +1695,11 @@ func (w *watcher) budget(ctx context.Context, now time.Time) {
 		var callers string
 		if refused {
 			callers = w.callersText()
+			if recorded, err := githubWindowCallers(w.app, b.GraphQL); err != nil {
+				callers = "window callers unknown (" + err.Error() + "); live: " + callers
+			} else if len(recorded) > 0 {
+				callers = "window: " + githubCallersText(recorded) + "; live: " + callers
+			}
 		}
 		if l := w.check("graphql", refused, "%s; callers: %s", graphqlText(w.app, b.GraphQL), callers); l != "" {
 			w.notifyAt(ctx, now, notify.Budget, "", "beekeeper: GitHub refuses GraphQL", l+"\nbeekeeper budget")
@@ -1738,6 +1770,21 @@ func (w *watcher) lostMerges(ctx context.Context) {
 // pull request (endHung), one MERGE HUNG line each; the next poll records
 // it (lostMerges), or its gate does.
 func (w *watcher) hungMerges(ctx context.Context, now time.Time) {
+	// GitHub and persisted merge timestamps have no monotonic reading.
+	// Never use their wall-clock age alone to kill a wait after a suspend.
+	// The wall/monotonic difference detects suspend on platforms whose
+	// monotonic clock stops asleep; a long gap also covers other platforms
+	// and clocks without monotonic readings.
+	gap := max(5*time.Minute, 2*slowReads*w.cfg.Watch.Interval.Duration)
+	wallElapsed := now.Round(0).Sub(w.lastHungCheck.Round(0))
+	elapsed := now.Sub(w.lastHungCheck)
+	if w.lastHungCheck.IsZero() || wallElapsed-elapsed > time.Second || wallElapsed > gap || wallElapsed < 0 {
+		w.hungGrace = now
+	}
+	w.lastHungCheck = now
+	if now.Sub(w.hungGrace) <= w.cfg.Merge.HungAfter.Duration {
+		return
+	}
 	for _, h := range w.endHung(ctx, watchParty, now, w.cfg.Merge.HungAfter.Duration, func(m state.Merge) bool {
 		return now.Sub(m.Started) > w.cfg.Merge.HungAfter.Duration
 	}) {
@@ -1801,6 +1848,9 @@ func (w *watcher) settled(ctx context.Context, now time.Time) {
 		if since := now.Sub(m.Finished); since > w.cfg.Merge.SettleTimeout.Duration {
 			key := "stuck:" + lane.Name + ":" + m.Key()
 			stuck[key] = true
+			if m.Release == "" && !m.ReleaseFailed {
+				why += fmt.Sprintf("; recover with devctl release wait %s --pr %d, then name the release with beekeeper lanes settle %s %d --release <version>", m.Repo, m.PR, m.Repo, m.PR)
+			}
 			w.emit(key, "LANE STUCK %s: %s has not settled %s after its merge: %s; fix the installation or clear the lane (beekeeper lanes clear %s)",
 				lane.Name, m.Key(), dur(since), why, lane.Name)
 		}
@@ -2081,10 +2131,12 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.actTimers(ctx, fires)
-	for _, n := range defaulted {
+	if len(defaulted) > 0 {
 		w.timerActs.Go(func() {
-			w.tellFiler(ctx, watchParty, &n, defaultedLine(&n))
-			w.emitReleased(ctx, &n, closedDefaulted)
+			w.tellDefaulted(ctx, defaulted)
+			for _, n := range defaulted {
+				w.emitReleased(ctx, &n, closedDefaulted)
+			}
 		})
 	}
 	for _, n := range overtaken {
@@ -2133,12 +2185,10 @@ func (w *watcher) noteAnswers(st *state.State) {
 	}
 }
 
-// refusals says each command the upstream guard refused since the last
-// reading, by whom and to which repository: the supervisor finds out what
-// the session was about to write and why it tried. The first reading is the
-// baseline and says none.
+// refusals reports upstream refusals and recovered hook panics since the
+// last reading. The first reading establishes a baseline and says none.
 func (w *watcher) refusals() {
-	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused })
+	evs, err := w.store.Follow("watch.refused", func(e state.Event) bool { return e.Verb == verbHookRefused || e.Verb == "hook.panic" })
 	if err != nil {
 		return // the next reading reads them again
 	}
@@ -2150,6 +2200,10 @@ func (w *watcher) refusals() {
 	for _, e := range evs {
 		if e.At.After(since) {
 			w.refusedSince = e.At
+			if e.Verb == "hook.panic" {
+				w.emitNow("hook.panic", "HOOK PANIC %s", truncate(e.Detail, 400))
+				continue
+			}
 			w.emitNow("refused", "REFUSED %s: %s", cmp.Or(e.By.Name, e.By.Session), truncate(e.Detail, 400))
 		}
 	}
@@ -2390,7 +2444,7 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 			r.Ended = time.Time{} // resumed: its next end is reported again
 			evs = append(evs, event(watchParty, "session.resumed", "%s: %s", r.Session.Name, recordText(*r)))
 		}
-		if live || !r.Ended.IsZero() {
+		if live || !r.Ended.IsZero() || rosterKept(st, r.Session, now) != "" {
 			continue
 		}
 		r.Ended = now.UTC()
@@ -2430,6 +2484,9 @@ func reportLines(r state.WorkerReport) []string {
 // name only the supervisor or the guide wait on an operational handoff,
 // including a gate or install chain. A park on a lease never waits on a person.
 func parkOnPerson(p *state.Park, person string) bool {
+	if p.Checks {
+		return false
+	}
 	// Desk reviews belong to the supervisor loop, including an unproven
 	// review park that the worker still needs to correct.
 	if strings.Contains(strings.ToLower(p.Waits), "desk review") {
@@ -2537,6 +2594,11 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	}
 	found := map[string]bool{}
 	for _, h := range holders {
+		if h.Damaged != "" {
+			found["lease-damaged:"+h.Env] = true
+			w.emit("lease-damaged:"+h.Env, "DAMAGED LEASE: %s's holder record cannot be read (%s): it stays held until beekeeper lease release %s --force", h.Env, h.Damaged, h.Env)
+			continue
+		}
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
 		if overrun := w.leaseOverrun(h); overrun != "" {
@@ -2551,4 +2613,5 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.clearMissing("lease-round:", found)
+	w.clearMissing("lease-damaged:", found)
 }

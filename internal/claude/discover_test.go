@@ -206,7 +206,7 @@ func TestDiscoverTakesTheSessionFromTheRecord(t *testing.T) {
 
 // claudeProcess is a claude process with the arguments args, separated by "|".
 func claudeProcess(args string) *proc.Process {
-	return &proc.Process{Comm: "claude", Args: strings.Split(args, "|")}
+	return &proc.Process{Comm: cliComm, Args: strings.Split(args, "|")}
 }
 
 func TestIsCLI(t *testing.T) {
@@ -214,7 +214,7 @@ func TestIsCLI(t *testing.T) {
 	for args, want := range map[string]bool{
 		"claude|--output-format|stream-json":   true,
 		"claude|-p|ok":                         true,
-		"claude":                               true,
+		cliComm:                                true,
 		"claude|stop the daemon":               true, // a prompt, not a subcommand
 		"claude|--session-id|x|-n|test":        true,
 		"claude|daemon|run|--origin|transient": false,

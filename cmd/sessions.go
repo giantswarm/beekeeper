@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
 
 // sessionView is a session with what the state and its transcript add.
@@ -135,6 +136,7 @@ func (a *app) collect(withWork bool) (*view, error) {
 		}
 		v.Sessions = append(v.Sessions, sv)
 	}
+	v.attributeBrowseSessions()
 	slices.SortFunc(v.Sessions, func(x, y *sessionView) int { return y.LastActive.Compare(x.LastActive) })
 	if withWork {
 		v.Overlaps = claude.Overlaps(raw, work, claude.OverlapOptions{
@@ -143,6 +145,39 @@ func (a *app) collect(withWork bool) (*view, error) {
 		})
 	}
 	return v, nil
+}
+
+// attributeBrowseSessions uses browse's explicit start record: its CLI has
+// intentionally shed the caller's environment and may run outside a checkout.
+func (v *view) attributeBrowseSessions() {
+	for _, s := range v.Sessions {
+		for _, start := range v.st.Starts {
+			if start.Name != browseStart || !start.Is(s.Party()) {
+				continue
+			}
+			s.Parent = cmp.Or(start.By.Session, start.By.HostSession)
+			parent := &claude.Session{ID: start.By.Session, HostID: start.By.HostSession}
+			if s.Role == "" {
+				s.Role = roleOf(v.st, parent)
+			}
+			for _, p := range v.Sessions {
+				if p == s || !start.By.Is(p.Party()) {
+					continue
+				}
+				if s.Repo == "" {
+					s.Repo = p.Repo
+				}
+				if len(s.Work.Repos) == 0 {
+					s.Work.Repos = slices.Clone(p.Work.Repos)
+				}
+				if len(s.Work.Refs) == 0 {
+					s.Work.Refs = slices.Clone(p.Work.Refs)
+				}
+				break
+			}
+			break
+		}
+	}
 }
 
 func roleOf(st *state.State, s *claude.Session) string {
@@ -306,10 +341,11 @@ func (a *app) serveCmd() *cobra.Command {
 	var waits string
 	var clearOwn bool
 	c := &cobra.Command{
-		Use:   "serve <session> <owner/repo#n> | serve --clear",
-		Short: "Record the issue or epic a session serves and what it waits on",
-		Long: `Record, for any running session (a registered agent or not), the issue or
-epic it serves and what it waits on. A new record replaces the session's
+		Use:   "serve <session> <item> | serve --clear",
+		Short: "Record the item a session serves and what it waits on",
+		Long: `Record, for any running session (a registered agent or not), the item it
+serves and what it waits on: an issue or epic (owner/repo#n), a repository
+(owner/repo), or quoted free text. A new record replaces the session's
 last one. sessions and the hand-over show it, and beekeeper watch prints one
 line when the session ends, naming the issue to re-query. The session is a
 session id, a PID, a session's own name or a registered agent's roster name
@@ -334,8 +370,8 @@ removes the calling session's own record; agents idle --done clears it too.`,
 			if clearOwn {
 				return a.clearRecord()
 			}
-			if !issueRef.MatchString(args[1]) {
-				return usageErr("%q is not an issue: owner/repo#n", args[1])
+			if strings.TrimSpace(args[1]) == "" {
+				return usageErr("served item must not be empty")
 			}
 			me, err := a.caller()
 			if err != nil {
@@ -629,7 +665,7 @@ func servedBy(st *state.State, p state.Party) state.Party {
 func rosterRole(st *state.State, me state.Party) string {
 	switch {
 	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
-		return "the guide"
+		return guideRoleAlias
 	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
 		return workerRole
 	}
@@ -859,6 +895,16 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	}
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	caller, _ := a.resolveTranscriptCaller(st)
+	meta := transcripts.Meta{ID: s.ID, HostSession: s.HostID, Name: s.Name, Repo: s.Repo, Cwd: s.Cwd, Harness: s.Harness}
+	a.enrichMetaFromState(st, &meta, s.Party(), claude.ByCLI(a.cfg))
+	if !transcripts.Allowed(caller, meta, st.TranscriptGrants, now) {
+		return nil, refused("transcript %q is outside your transcript access; request a grant with `beekeeper transcripts request --session %s --reason <why>`", meta.DisplayName(), cmp.Or(meta.ID, meta.HostSession))
 	}
 	h := harnessForSession(s)
 	if tools {

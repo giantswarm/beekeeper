@@ -157,6 +157,44 @@ func TestSweepTranscriptsNamesTheFilesOfAnEncodedIdentity(t *testing.T) {
 	}
 }
 
+func TestAuditEncodedIndexedValueAllowMarker(t *testing.T) {
+	ix := plantedIndex(t)
+	file, _ := ageIdentity()
+	document := "MODE=test\nTOKEN=" + planted + "\n" + file
+	encoded := base64.StdEncoding.EncodeToString([]byte(document))
+	for name, value := range map[string]string{
+		"document":        encoded,
+		"nested document": base64.StdEncoding.EncodeToString([]byte("attachment: " + encoded + "\n")),
+		"decoded marker":  base64.StdEncoding.EncodeToString([]byte("TOKEN=" + planted + " # " + allowMarker + "\n")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := "config: " + value + " # " + allowMarker
+			out, found := ix.Redact(text)
+			if out != "config: [redacted: "+plantedRef+"] # "+allowMarker {
+				t.Fatal("encoded indexed value was not replaced with its reference")
+			}
+			if len(found) != 1 || found[0].Ref != plantedRef || found[0].Rule != "" || found[0].Count != 1 {
+				t.Fatalf("findings = %+v", found)
+			}
+		})
+	}
+}
+
+func TestRedactAllowsEncodedPatternsWithAllowMarker(t *testing.T) {
+	file, _ := ageIdentity()
+	encoded := base64.StdEncoding.EncodeToString([]byte(file))
+	for _, value := range []string{
+		encoded,
+		base64.StdEncoding.EncodeToString([]byte("attachment: " + encoded + "\n")),
+		base64.StdEncoding.EncodeToString([]byte("ordinary configuration document\n")),
+	} {
+		text := "config: " + value + " # " + allowMarker
+		if out, found := plantedIndex(t).Redact(text); out != text || found != nil {
+			t.Fatal("allow marker did not preserve an encoded document without indexed values")
+		}
+	}
+}
+
 func TestRedactSkipsImagesAndScansSurroundingText(t *testing.T) {
 	file, key := ageIdentity()
 	encoded := base64.StdEncoding.EncodeToString([]byte(file))

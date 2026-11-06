@@ -93,14 +93,15 @@ func b64Char(c byte, url bool) bool {
 }
 
 // encodedSpans are the spans of s whose base64 decoding carries a token
-// pattern or an indexed value, each named by what it carries.
-func (ix *Index) encodedSpans(s string, depth int) []span {
+// pattern or an indexed value, each named by what it carries. Allow markers
+// suppress patterns through nested encodings, but never indexed values.
+func (ix *Index) encodedSpans(s string, depth int, patterns bool) []span {
 	if depth > maxBase64Depth {
 		return nil
 	}
 	var out []span
 	for _, m := range base64Runs(s) {
-		if allowed(s, m[0]) || imageBase64(s, m) {
+		if imageBase64(s, m) {
 			continue
 		}
 		for _, run := range runs(s, m[0], m[1]) {
@@ -108,7 +109,7 @@ func (ix *Index) encodedSpans(s string, depth int) []span {
 			if !ok {
 				continue
 			}
-			if name, ref, found := ix.carries(d, depth); found {
+			if name, ref, found := ix.carries(d, depth, patterns && !allowed(s, run[0])); found {
 				out = append(out, span{run[0], run[1], name, ref})
 				break
 			}
@@ -158,16 +159,19 @@ func decodeBase64(run string) (string, bool) {
 
 // carries names what the decoded text d holds: an indexed reference, a
 // token pattern's rule, or either within a further encoding.
-func (ix *Index) carries(d string, depth int) (name string, ref, found bool) {
+func (ix *Index) carries(d string, depth int, patterns bool) (name string, ref, found bool) {
 	if m := ix.matches(d); len(m) > 0 {
 		return m[0].name, true, true
 	}
 	for _, r := range tokenRules {
+		if !patterns {
+			break
+		}
 		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(d, k) }) && r.re.MatchString(d) {
 			return r.id, false, true
 		}
 	}
-	if inner := ix.encodedSpans(d, depth+1); len(inner) > 0 {
+	if inner := ix.encodedSpans(d, depth+1, patterns); len(inner) > 0 {
 		return inner[0].name, inner[0].ref, true
 	}
 	return "", false, false
