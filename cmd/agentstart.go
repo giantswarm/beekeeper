@@ -927,7 +927,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
@@ -2424,4 +2424,12 @@ func titleTranscript(projectsDir, id, name string) error {
 func unitEnded(ctx context.Context, unit string) bool {
 	s := plat.Launcher.State(ctx, unit)
 	return s == "inactive" || s == "failed"
+}
+
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+	reg, err := recordStart(st, s, task, serves, live)
+	if err != nil {
+		return reg, err
+	}
+	return reg, a.handRegistration(st, reg, s.Party)
 }
