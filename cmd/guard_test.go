@@ -42,6 +42,9 @@ func TestMain(m *testing.M) {
 	// GitHub: the desk has none open beside those a test tracks; a test of
 	// the sweep stubs its own.
 	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return nil, nil }
+	readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) { return nil, nil }
+	closePullIssue = func(context.Context, github.PR, string) error { return nil }
+	editPullBody = func(context.Context, github.PR, string) error { return nil }
 	// Nor does an execution host wait for the release the test binary was
 	// built as: the coordinator is a development build, and a test of the
 	// host updates names its own release.

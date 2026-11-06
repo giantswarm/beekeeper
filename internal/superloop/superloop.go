@@ -137,11 +137,11 @@ type Pull struct {
 	// Checks are the names of the non-superseded checks on Head.
 	Checks  []string
 	Reviews []Review // oldest first
-	// Author is the login that opened it; Title, Branch (its head branch)
+	// Author is the login that opened it; Title, Body, Branch (its head branch)
 	// and Files (the paths it changes, ChangedFiles of them in all, which
 	// gh may list only in part) are what may name a repository the desk
 	// does no work on.
-	Author, Title, Branch string
+	Author, Title, Body, Branch string
 	Files                 []string
 	ChangedFiles          int
 	Additions, Deletions  int
@@ -1709,7 +1709,123 @@ var (
 	absorbNextGap    = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
 	absorbBulletLead = regexp.MustCompile(`^(?:[-*+]|\d+\.)\s+`)
 	shortPullMention = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
+	closingLead      = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b`)
+	closingHeader    = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?:\s+issues?)?\s*:?\s*(?:\*\*)?$`)
+	closingFirstGap  = regexp.MustCompile(`(?i)^[\s:]*(?:(?:issues?)\b[\s:]*)*$`)
+	closingNextGap   = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?|issues?)\b[\s,]*)*$`)
+	shortIssueRef    = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/pull/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:#|/)(\d+)\b`)
 )
+
+// ParseClosingIssues extracts the issues (owner/repo#n) that body's closing
+// keywords (Closes, Fixes, Resolves) name, including multi-issue lists and
+// non-default-branch pull requests where GitHub omits closingIssuesReferences.
+func ParseClosingIssues(selfRef, body string) []string {
+	defaultRepo := repoOf(selfRef)
+	var out []string
+	addRef := func(r string) {
+		if r == "" || strings.EqualFold(r, selfRef) {
+			return
+		}
+		if !slices.ContainsFunc(out, func(existing string) bool { return strings.EqualFold(existing, r) }) {
+			out = append(out, r)
+		}
+	}
+	scanList := func(rest string) {
+		cursor := 0
+		first := true
+		lastRepo := defaultRepo
+		for _, loc := range shortIssueRef.FindAllStringSubmatchIndex(rest, -1) {
+			matchStart := loc[0]
+			if loc[10] >= 0 && matchStart < loc[10] {
+				if c := rest[matchStart]; c != '#' && c != '/' {
+					matchStart++
+				}
+			}
+			gap := rest[cursor:matchStart]
+			if first {
+				if !closingFirstGap.MatchString(gap) {
+					break
+				}
+			} else if !closingNextGap.MatchString(gap) {
+				break
+			}
+			switch {
+			case loc[2] >= 0 && loc[3] >= 0:
+				lastRepo = rest[loc[2]:loc[3]]
+				addRef(lastRepo + "#" + rest[loc[4]:loc[5]])
+			case loc[6] >= 0 && loc[7] >= 0:
+				lastRepo = rest[loc[6]:loc[7]]
+				addRef(lastRepo + "#" + rest[loc[8]:loc[9]])
+			case loc[10] >= 0 && loc[11] >= 0:
+				if lastRepo == "" {
+					return
+				}
+				addRef(lastRepo + "#" + rest[loc[10]:loc[11]])
+			default:
+				return
+			}
+			cursor = loc[1]
+			first = false
+		}
+	}
+	scanLine := func(line string) {
+		for _, lead := range closingLead.FindAllStringIndex(line, -1) {
+			scanList(line[lead[1]:])
+		}
+	}
+	inCloseList := false
+	for line := range strings.Lines(body) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			inCloseList = false
+			continue
+		}
+		if closingHeader.MatchString(trimmed) {
+			inCloseList = true
+			continue
+		}
+		if inCloseList {
+			if m := absorbBulletLead.FindStringIndex(trimmed); m != nil {
+				scanList(trimmed[m[1]:])
+				continue
+			}
+			inCloseList = false
+		}
+		scanLine(trimmed)
+	}
+	return out
+}
+
+// AppendClosingKeywords ensures body carries an explicit "Closes <issue-url>"
+// line for each issue in issues (owner/repo#n or full issue URL) that body does
+// not already close.
+func AppendClosingKeywords(selfRef, body string, issues []string) string {
+	existing := ParseClosingIssues(selfRef, body)
+	var lines []string
+	for _, raw := range issues {
+		ref := strings.TrimSpace(raw)
+		if strings.HasPrefix(ref, "https://github.com/") {
+			ref = issueRefFromURL(ref)
+		}
+		repo, n, ok := strings.Cut(ref, "#")
+		if !ok || repo == "" || n == "" || strings.EqualFold(ref, selfRef) {
+			continue
+		}
+		if slices.ContainsFunc(existing, func(e string) bool { return strings.EqualFold(e, ref) }) {
+			continue
+		}
+		existing = append(existing, ref)
+		lines = append(lines, fmt.Sprintf("Closes https://github.com/%s/issues/%s", repo, n))
+	}
+	if len(lines) == 0 {
+		return body
+	}
+	trimmed := strings.TrimRight(body, "\n")
+	if trimmed == "" {
+		return strings.Join(lines, "\n")
+	}
+	return trimmed + "\n\n" + strings.Join(lines, "\n")
+}
 
 // ParseAbsorbedPulls extracts the original pull requests (owner/repo#n) that a
 // combining pull request explicitly supersedes or absorbs from its title and body.

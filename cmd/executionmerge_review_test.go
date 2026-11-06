@@ -580,3 +580,50 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	fixedHead := strings.Repeat("c", 40)
+	pull.Head = fixedHead
+	use.Head = fixedHead
+	review := superloop.Review{
+		ID:      "reviewer-fixed-approval",
+		Author:  "shared-github-account",
+		Head:    fixedHead,
+		Commit:  fixedHead,
+		Verdict: superloop.Approved,
+		URL:     fmt.Sprintf("https://github.com/%s/pull/%d#pullrequestreview-100", use.Repository, use.PR),
+		Body:    fmt.Sprintf("Desk review (opus): approved\nHead reviewed: `%s`\nfixed nit directly on branch", fixedHead),
+		At:      time.Now(),
+	}
+	pull.Reviews = []superloop.Review{review}
+	old := readDeskReview
+	t.Cleanup(func() { readDeskReview = old })
+	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
+		if repository != use.Repository || pr != use.PR || id != "100" {
+			t.Fatal("review fetched from a different repository or URL")
+		}
+		return review, nil
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		round := executionReviewRound(st, use)
+		return nil, a.captureExecutionReviewReport(context.Background(), st, round.Reviewer, "Desk review (opus): approved\n"+review.URL, time.Now(), true)
+	}); err != nil {
+		t.Fatalf("reviewer approval of fixed head refused: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := executionReviewRound(st, use).Result.Head; got != fixedHead {
+		t.Fatalf("Result.Head = %q, want %q", got, fixedHead)
+	}
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, fixedHead, loopParty)
+	if err != nil {
+		t.Fatalf("issueExecutionMerge on reviewer-fixed head failed: %v", err)
+	}
+	use.ID = grant.ID
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatalf("executionMergeLive on reviewer-fixed head failed: %v", err)
+	}
+}

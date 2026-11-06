@@ -20,6 +20,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const executionPublish = "publish"
@@ -401,6 +402,25 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if len(pulls) == 0 && (strings.TrimSpace(p.Title) == "" || strings.TrimSpace(p.Body) == "") {
 			return result, refused("first publication requires --title and --body-file")
 		}
+		var absorbs, closing []string
+		if len(pulls) == 0 {
+			absorbs = superloop.ParseAbsorbedPulls(r.Request.Repository+"#0", p.Title, p.Body)
+			if len(absorbs) > 0 {
+				p.Body = superloop.AppendClosingKeywords(r.Request.Repository+"#0", p.Body, absorbedClosingIssues(ctx, st, absorbs))
+			}
+			closing = superloop.ParseClosingIssues(r.Request.Repository+"#0", p.Title+"\n"+p.Body)
+			if len(closing) > 0 {
+				openPulls, _ := readRepoOpenPulls(ctx, r.Request.Repository)
+				if len(openPulls) == 0 {
+					if listRaw, listErr := executionPublishGH(ctx, "pr", "list", "--repo", r.Request.Repository, "--state", "open", "--limit", "100", "--json", "number,url,state,createdAt,isDraft,headRefName,title,body,closingIssuesReferences"); listErr == nil {
+						_ = json.Unmarshal(listRaw, &openPulls)
+					}
+				}
+				if matched, prURL := openPullClosingIssue(r.Request.Repository, openPulls, result.Branch, closing, absorbs); matched != "" {
+					return result, refused("%s already has an open pull request %s; update %s or combine with it instead of opening a duplicate PR", matched, prURL, prURL)
+				}
+			}
+		}
 		if _, liveErr := checkAuthority(st, ref); liveErr != nil {
 			return result, liveErr
 		}
@@ -423,6 +443,12 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 				return result, errors.New("PR creation outcome uncertain; retry publication to reconcile the owned branch")
 			}
 			result.URL = strings.TrimSpace(string(raw))
+			if len(closing) > 0 {
+				if _, idx := executionRecord(st, ref); idx >= 0 && idx < len(st.Starts) {
+					party := st.Starts[idx].Party
+					_ = recordSessionIssues(st, party, party, time.Now(), closing)
+				}
+			}
 		}
 	}
 	success = true

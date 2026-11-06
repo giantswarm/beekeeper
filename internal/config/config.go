@@ -2369,10 +2369,23 @@ type Supervisor struct {
 	// capacity's ceiling stays unchanged and no agent is done or removed
 	// (5m), doubled for each further one in a row up to four times.
 	FillRetryEvery Duration `yaml:"fillRetryEvery"`
+	// UnmergedLimit holds back new board starts on a repository once it has
+	// this many open pull requests opened within UnmergedWindow, escalating
+	// the backlog to the guide (default 10; negative disables).
+	UnmergedLimit int `yaml:"unmergedLimit"`
+	// UnmergedWindow is the lookback window for UnmergedLimit (default 168h / 7d).
+	UnmergedWindow Duration `yaml:"unmergedWindow"`
 	// Ownership is whose pull requests the loop reviews and gives the
 	// merge go for.
 	Ownership Ownership `yaml:"ownership"`
 }
+
+const (
+	// DefaultUnmergedLimit is supervisor.unmergedLimit when unset.
+	DefaultUnmergedLimit = 10
+	// DefaultUnmergedWindow is supervisor.unmergedWindow when unset.
+	DefaultUnmergedWindow = 7 * 24 * time.Hour
+)
 
 // DefaultTeamFiles is supervisor.ownership.teamFiles unless the
 // configuration sets it: the team files of giantswarm/github.
@@ -3501,6 +3514,9 @@ func (c *Config) defaults() error {
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
+	if c.Supervisor.UnmergedLimit == 0 {
+		c.Supervisor.UnmergedLimit = DefaultUnmergedLimit
+	}
 	if c.Supervisor.GraphQLLimit == 0 {
 		c.Supervisor.GraphQLLimit = DefaultLoopGraphQLLimit
 	}
@@ -3511,6 +3527,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Supervisor.ReleaseEvery, 10*time.Minute)
 	setDur(&c.Supervisor.PostMergeWindow, 2*time.Hour)
 	setDur(&c.Supervisor.FillRetryEvery, 5*time.Minute)
+	setDur(&c.Supervisor.UnmergedWindow, DefaultUnmergedWindow)
 	setDur(&c.Supervisor.NoteDue, 24*time.Hour)
 	if c.Supervisor.Ownership.Team != "" {
 		setStr(&c.Supervisor.Ownership.TeamFiles, DefaultTeamFiles)
@@ -3965,6 +3982,7 @@ func (c *Config) validateEach(report func(error)) {
 		{"alerts.every", c.Alerts.Every.Duration},
 		{"alerts.pagerduty.every", c.Alerts.PagerDuty.Every.Duration},
 		{"supervisor.loopInterval", c.Supervisor.LoopInterval.Duration},
+		{"supervisor.unmergedWindow", c.Supervisor.UnmergedWindow.Duration},
 	} {
 		if interval.value < 0 {
 			report(fmt.Errorf("%s: %s is negative", interval.key, interval.value))

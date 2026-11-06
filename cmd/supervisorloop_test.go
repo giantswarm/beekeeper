@@ -205,8 +205,15 @@ func newLoopRig(t *testing.T) *loopRig {
 	reviewedMergeCheck = func(context.Context, *app, superloop.Pull, string) (bool, string, int) { return false, "", 0 }
 	readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) { return true, nil }
 	wasBehind := readReviewedBehind
-	t.Cleanup(func() { readReviewedBehind = wasBehind })
+	oldCloseIssue, oldEditBody, oldOpenPulls := closePullIssue, editPullBody, readRepoOpenPulls
+	t.Cleanup(func() {
+		readReviewedBehind = wasBehind
+		closePullIssue, editPullBody, readRepoOpenPulls = oldCloseIssue, oldEditBody, oldOpenPulls
+	})
 	readReviewedBehind = func(context.Context, superloop.Pull) (int, error) { return 0, nil }
+	closePullIssue = func(context.Context, github.PR, string) error { return nil }
+	editPullBody = func(context.Context, github.PR, string) error { return nil }
+	readRepoOpenPulls = func(context.Context, string) ([]unmergedPull, error) { return nil, nil }
 	r.a = &app{store: rigStore{Store: store, r: r}, out: &out, now: time.Now(), cfg: cfg}
 	oldBudget := readLoopGraphQLBudget
 	t.Cleanup(func() { readLoopGraphQLBudget = oldBudget })
@@ -3736,6 +3743,116 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 					})
 				}
 			}
+		}
+	}
+}
+
+func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing.T) {
+	r := newLoopRig(t)
+	const (
+		origA    = "o/r#401"
+		origB    = "o/r#402"
+		issueA   = "o/r#50"
+		issueB   = "o/r#51"
+		issueC   = "o/r#52"
+		issueURL = "https://github.com/o/r/issues/"
+	)
+	r.pulls[origA] = superloop.Pull{
+		Ref:    origA,
+		URL:    "https://github.com/o/r/pull/401",
+		State:  superloop.Open,
+		Head:   loopHead,
+		Author: loopDesk,
+		Closes: []string{issueA},
+	}
+	r.pulls[origB] = superloop.Pull{
+		Ref:    origB,
+		URL:    "https://github.com/o/r/pull/402",
+		State:  superloop.Open,
+		Head:   loopHead,
+		Author: loopDesk,
+	}
+	noPost := ""
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.UpsertReviewPark(state.ReviewPark{
+			On:         origB,
+			At:         r.a.timeNow(),
+			ReviewHead: loopHead,
+			Agent:      loopSecondWorker,
+			Party:      state.Party{Name: loopSecondWorker, Session: "session-b"},
+			Serves:     issueB,
+			PostMerge:  &noPost,
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pull.Body = "Combines https://github.com/o/r/pull/401 and https://github.com/o/r/pull/402.\n\nCloses " + issueURL + "52"
+	r.pull.Absorbs = []string{origA, origB}
+	r.pull.Closes = []string{issueC}
+
+	var editedBody string
+	editPullBody = func(_ context.Context, pr github.PR, body string) error {
+		if pr.Repo != repo || pr.N != 7 {
+			t.Fatalf("unexpected editPullBody target: %+v", pr)
+		}
+		editedBody = body
+		return nil
+	}
+	closedIssues := map[string]string{}
+	closePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
+		closedIssues[refName(iss)] = pullURL
+		return nil
+	}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			if ref.N == 7 || ref.N == 401 || ref.N == 402 {
+				out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+				continue
+			}
+			state := github.Open
+			if closedIssues[refName(ref)] != "" {
+				state = github.Closed
+			}
+			out[ref] = github.RefState{Kind: github.RefIssue, State: state}
+		}
+		return out, nil
+	}
+
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Agents {
+			if st.Agents[i].Name == loopWorker && st.Agents[i].Park != nil {
+				st.Agents[i].Park.PostMerge = &noPost
+			}
+		}
+		for i := range st.ReviewParks {
+			if st.ReviewParks[i].On == loopPR {
+				st.ReviewParks[i].PostMerge = &noPost
+				st.ReviewParks[i].Serves = issueC
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+	r.pass(t)
+
+	for _, want := range []string{
+		"Closes " + issueURL + "50",
+		"Closes " + issueURL + "51",
+		"Closes " + issueURL + "52",
+	} {
+		if !strings.Contains(editedBody, want) {
+			t.Fatalf("combining PR body missing %q:\n%s", want, editedBody)
+		}
+	}
+	for _, iss := range []string{issueA, issueB, issueC} {
+		if closedIssues[iss] != loopURL {
+			t.Fatalf("issue %s was not closed by %s (closedIssues=%v)", iss, loopURL, closedIssues)
 		}
 	}
 }

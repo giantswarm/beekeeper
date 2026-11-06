@@ -1603,3 +1603,29 @@ func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 		t.Fatalf("ended refs = %v, want [%s]", endedRefs, origB)
 	}
 }
+
+func TestParseClosingIssuesAndAppendClosingKeywords(t *testing.T) {
+	const selfRef = "o/r#400"
+	body := "Combines https://github.com/o/r/pull/401 and https://github.com/o/r/pull/402.\n" +
+		"Closes https://github.com/o/r/issues/50, /51 and #52\n" +
+		"Fixes:\n- https://github.com/o/r/issues/53\n- o/r#54\n\n" +
+		"Related: https://github.com/o/r/issues/99\n"
+	got := ParseClosingIssues(selfRef, body)
+	want := []string{"o/r#50", "o/r#51", "o/r#52", "o/r#53", "o/r#54"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ParseClosingIssues = %v, want %v", got, want)
+	}
+	appended := AppendClosingKeywords(selfRef, "Combines https://github.com/o/r/pull/401.\n\nCloses https://github.com/o/r/issues/50", []string{"o/r#50", "o/r#51", "https://github.com/o/r/issues/52"})
+	for _, wantLine := range []string{
+		"Closes https://github.com/o/r/issues/50",
+		"Closes https://github.com/o/r/issues/51",
+		"Closes https://github.com/o/r/issues/52",
+	} {
+		if !strings.Contains(appended, wantLine) {
+			t.Fatalf("AppendClosingKeywords missing %q in:\n%s", wantLine, appended)
+		}
+	}
+	if strings.Count(appended, "issues/50") != 1 {
+		t.Fatalf("AppendClosingKeywords duplicated existing issue:\n%s", appended)
+	}
+}
