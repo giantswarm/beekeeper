@@ -779,7 +779,7 @@ func TestLoopReloadsOwnershipNeverConfigAndSkipsNeverRepo(t *testing.T) {
 		{Item: board.Item{Ref: "o/never#1", Status: "Ready"}},
 		{Item: board.Item{Ref: idleRef, Status: "Ready"}},
 	}
-	skipUnread(cands, nil, r.a.cfg.Supervisor.Ownership.Never)
+	skipUnread(cands, r.a.cfg.Supervisor.Ownership.Never)
 	if cands[0].Skip == "" || cands[1].Skip != "" {
 		t.Fatalf("skipUnread = [%q, %q], want o/never#1 skipped and %s free", cands[0].Skip, cands[1].Skip, idleRef)
 	}

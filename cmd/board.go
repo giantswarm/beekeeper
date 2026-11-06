@@ -244,7 +244,7 @@ alone, until exit 3 says none is left.`,
 				return err
 			}
 			skipHeldLeases(cands, holders, me)
-			skipUnread(cands, a.cfg.GitHub.AllowedOrgs, a.cfg.Supervisor.Ownership.Never)
+			skipUnread(cands, a.cfg.Supervisor.Ownership.Never)
 			skipAsked(cands, skip)
 			st, err := a.store.Read()
 			if err != nil {
@@ -483,10 +483,10 @@ func skipAsked(cands []board.Candidate, skip []string) {
 	}
 }
 
-// skipUnread marks candidates in repositories outside github.allowedOrgs or in
-// supervisor.ownership.never skipped before board next offers or claims them.
-func skipUnread(cands []board.Candidate, orgs, never []string) {
-	desk := superloop.Desk{Orgs: orgs, Never: never}
+// skipUnread marks candidates in supervisor.ownership.never skipped before
+// board next offers or claims them.
+func skipUnread(cands []board.Candidate, never []string) {
+	desk := superloop.Desk{Never: never}
 	for i := range cands {
 		if cands[i].Skip == "" {
 			if _, why := desk.Unread(cands[i].Ref); why != "" {
