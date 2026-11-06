@@ -36,7 +36,7 @@ type laneView struct {
 	Pairs map[string]string `json:"pairs,omitempty"`
 	// Progress is the detached child's current phase and activity clock.
 	Progress *mergeProgress `json:"progress,omitempty"`
-	Stale string `json:"stale,omitempty"`
+	Stale    string         `json:"stale,omitempty"`
 	// Pace is how long one place has held the lane of late (lanePace), Drain
 	// how long its queue takes at that pace: its waiting places and the
 	// running one.

@@ -3,9 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+const releasePipelinePhase = "release wait: pipeline"
 
 // mergeProgress is persisted by the child, so detached gates and later lanes
 // invocations see the same phase clock. Output refreshes Last, not Since.
@@ -46,8 +49,17 @@ func newMergeProgress(base string, argv []string, now time.Time) *mergeProgress 
 
 func (p *mergeProgress) save() {
 	raw, err := json.Marshal(p)
-	if err == nil && os.WriteFile(p.base+".progress.tmp", raw, 0o600) == nil { //nolint:gosec // private child state
-		_ = os.Rename(p.base+".progress.tmp", p.base+".progress")
+	if err != nil {
+		return
+	}
+	root, err := os.OpenRoot(filepath.Dir(p.base))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(p.base) + ".progress"
+	if root.WriteFile(name+".tmp", raw, 0o600) == nil {
+		_ = root.Rename(name+".tmp", name)
 	}
 }
 
@@ -71,15 +83,15 @@ func (p *mergeProgress) observe(output string, now time.Time) {
 		case strings.HasPrefix(lower, "release: waiting"):
 			phase = "release wait: tag"
 		case strings.HasPrefix(lower, "merged:"), strings.HasPrefix(lower, "merge queue:"), strings.Contains(lower, "retrying the merge call"), strings.Contains(lower, ": green"):
-			phase = "merge"
+			phase = gitMerge
 		case strings.HasPrefix(phase, "release wait:"):
 			switch {
 			case strings.Contains(lower, "does not exist yet"), strings.HasPrefix(lower, "no tag on "):
 				phase = "release wait: tag"
 			case strings.HasPrefix(lower, "tag "), strings.Contains(lower, "pipeline"), strings.HasPrefix(lower, "status "), strings.HasPrefix(lower, "actions run "), strings.HasPrefix(lower, "check run "), strings.Contains(lower, "workflows"):
-				phase = "release wait: pipeline"
+				phase = releasePipelinePhase
 			case strings.Contains(lower, "every artifact is available"):
-				phase = "release wait: pipeline"
+				phase = releasePipelinePhase
 			case strings.HasPrefix(lower, "expecting "), strings.Contains(lower, "registry"), strings.Contains(lower, " available ("), strings.Contains(lower, "asset"), strings.HasPrefix(lower, "no release for "), strings.HasPrefix(lower, "catalog "):
 				phase = "release wait: assets"
 			}

@@ -14,15 +14,15 @@ import (
 )
 
 func TestMergeProgressTracksPhasesAndSilence(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "merge")
+	base := filepath.Join(t.TempDir(), gitMerge)
 	start := time.Now().UTC()
 	p := newMergeProgress(base, []string{"--timeout", "9m", "--release-timeout=30m"}, start)
 	for i, step := range []struct{ line, phase string }{
 		{"poll 1: waiting for checks\n", "CI"},
-		{"poll 2: green\n", "merge"},
+		{"poll 2: green\n", gitMerge},
 		{"merged: squash\nrelease: waiting for the release of abc\n", "release wait: tag"},
-		{"tag v1.0.0 at abc: release model binary, CI circleci\n", "release wait: pipeline"},
-		{"pipeline 123: workflow build running\n", "release wait: pipeline"},
+		{"tag v1.0.0 at abc: release model binary, CI circleci\n", releasePipelinePhase},
+		{"pipeline 123: workflow build running\n", releasePipelinePhase},
 		{"expecting binary archive\n", "release wait: assets"},
 	} {
 		now := start.Add(time.Duration(i+1) * time.Minute)
@@ -47,7 +47,7 @@ func TestLanesShowsReleasePipelineAge(t *testing.T) {
 	now := time.Now().UTC()
 	var out bytes.Buffer
 	a := &app{out: &out, now: now}
-	a.printLanes([]laneView{{Lane: merge.Lane{Name: "test", Running: &state.Merge{Repo: "o/r", PR: 7, Started: now.Add(-time.Hour)}}, Progress: &mergeProgress{Phase: "release wait: pipeline", Since: now.Add(-21 * time.Minute)}}})
+	a.printLanes([]laneView{{Lane: merge.Lane{Name: "test", Running: &state.Merge{Repo: scratchRepo, PR: 7, Started: now.Add(-time.Hour)}}, Progress: &mergeProgress{Phase: releasePipelinePhase, Since: now.Add(-21 * time.Minute)}}})
 	if !strings.Contains(out.String(), "phase release wait: pipeline for 21m") {
 		t.Fatal(out.String())
 	}
@@ -57,7 +57,7 @@ func TestLanesShowsReleasePipelineAge(t *testing.T) {
 }
 
 func TestActiveMergeOutputPreventsHungDetection(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "merge")
+	base := filepath.Join(t.TempDir(), gitMerge)
 	start := time.Now().UTC().Add(-2 * time.Hour)
 	p := newMergeProgress(base, nil, start)
 	p.observe("release: waiting for the release of abc\n", start.Add(time.Minute))
@@ -79,17 +79,17 @@ func TestActiveMergeOutputPreventsHungDetection(t *testing.T) {
 }
 
 func TestMergeChildCapturesProgress(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "merge")
-	out, err := os.Create(base + ".json")
+	base := filepath.Join(t.TempDir(), gitMerge)
+	out, err := os.Create(filepath.Clean(base + ".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer out.Close()
-	log, err := os.Create(base + ".log")
+	defer func() { _ = out.Close() }()
+	log, err := os.Create(filepath.Clean(base + ".log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer log.Close()
+	defer func() { _ = log.Close() }()
 	var current atomic.Pointer[os.Process]
 	var stop atomic.Value
 	var gone atomic.Bool
@@ -98,10 +98,10 @@ func TestMergeChildCapturesProgress(t *testing.T) {
 		t.Fatalf("exit %d", rc)
 	}
 	p := readMergeProgress(base)
-	if p == nil || p.Phase != "release wait: pipeline" {
+	if p == nil || p.Phase != releasePipelinePhase {
 		t.Fatalf("child progress: %+v", p)
 	}
-	raw, err := os.ReadFile(base + ".log")
+	raw, err := os.ReadFile(filepath.Clean(base + ".log"))
 	if err != nil || !strings.Contains(string(raw), "pipeline 123") {
 		t.Fatalf("progress log %q: %v", raw, err)
 	}
