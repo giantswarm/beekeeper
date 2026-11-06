@@ -478,7 +478,7 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 					t.Fatal(err)
 				}
 			case removeDesktop:
-				writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_other.json"), `{"sessionId":"local_other","cliSessionId":removeOther,"cwd":"`+dir+`"}`)
+				writeT(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_other.json"), `{"sessionId":"local_other","cliSessionId":"other","cwd":"`+dir+`"}`)
 			case "process unavailable":
 				plat.Machine = platform.Stub().Machine
 			case "roster unavailable":
