@@ -532,3 +532,37 @@ func TestTranscriptRuntimeProgramInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestTranscriptOrdinaryWorktreeCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "worktrees", "task")
+	sessions := filepath.Join(home, ".codex", "sessions")
+	projects := filepath.Join(home, ".claude", "projects")
+	foreign := filepath.Join(sessions, "other.jsonl")
+	for _, command := range []string{
+		`grep -n 'TestTranscript' cmd/*_test.go`,
+		"grep token fixture" + filepath.Join(sessions, "synthetic.jsonl"),
+		"python3 <<'PY'\nfrom pathlib import Path\nPath('cmd/example_test.go').write_text('package cmd\\n')\nPY",
+		"du -sh " + filepath.Join(home, "cache") + " " + filepath.Join(home, "state", "worktrees"),
+		`ssh "$REMOTE" 'sed -n 1,20p projects/example/config/config.yaml'`,
+		"du -sh " + projects + " " + sessions,
+		"df " + sessions,
+		"stat " + foreign,
+	} {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("ordinary command refused: %s: %+v", command, d)
+		}
+	}
+	for _, command := range []string{
+		"cat " + foreign,
+		"grep token " + filepath.Join(projects, "project", "other.jsonl"),
+		"du -sh < " + foreign,
+		`du(){ cat "$1"; }; du ` + foreign,
+	} {
+		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("transcript reader passed: %s: %+v", command, d)
+		}
+	}
+}
