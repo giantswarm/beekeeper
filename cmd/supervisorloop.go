@@ -431,7 +431,10 @@ its key first in the detail):
             supervisor.hostsFirst, which prefers hosts for what a host
             can run, as for a worker. No host with room and no room
             locally: the start waits. A desk with
-            no capacity.choices never places remotely
+            no capacity.choices never places remotely. Execution reviewers use
+            agents review to read their assigned PR and linked issues and post
+            their exact-head review through the coordinator, without a host
+            GitHub credential
   red       an agent parked from its pull request's worktree at its
             published HEAD (a review request, local or on an execution
             host) whose head has a check that concluded red (failed,
@@ -3118,7 +3121,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement applies host preferences to workers and GitHub-enabled
+// startPlacement applies host preferences to workers and coordinator-relayed
 // reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
@@ -3130,7 +3133,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
 // passed quietly) and skipped; a host's check weighs only the choices it
-// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// can run. With supervisor.hostsFirst and no host with room
 // a start a host could run waits, as it does on a full machine; a start no
 // host can run starts locally within the local room (capacity.local.
 // ceiling among its guards): one whose repository no host maps, or the
@@ -3148,21 +3151,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// A remote reviewer needs the per-worker GitHub adapter to read the PR
-	// and post its review. Publication-only hosts cannot perform reviews.
-	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
-		if !l.capacityRoom(ctx, flags...) {
-			return startHost{}, errLoopLater
-		}
-		return startHost{}, nil
-	}
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
 		// room. When agents.models selects a model, check its room before
 		// claiming the action.
-		if model != "" && !l.capacityRoom(ctx, flags...) {
+		if (review || model != "") && !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil

@@ -550,21 +550,26 @@ an adapter for, starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs, and
 waits instead when that exclusion alone would make a self-hosted choice the pick
 while a subscription is eligible. A desk
-without `capacity.choices` never places remotely. With `github.workerApp`
-configured, reviewers (including Codex) follow the same host preferences and
-retain review capacity accounting. The per-worker GitHub adapter reads the PR
-and gives `gh pr review` write access to the task repository; the coordinator
-authenticates the reviewer session, exact head and reported review before a
-merge. Without that adapter, reviewers stay on the coordinator and wait when
-coordinator review capacity is full.
+without `capacity.choices` never places remotely. Reviewers (including Codex)
+follow the same host preferences and retain review capacity accounting, even
+without `github.workerApp`. On the execution host, `beekeeper agents review`
+reads the assigned PR and its closing issues, `beekeeper agents review --diff`
+reads its diff, and `beekeeper agents review --body-file <file>` posts a comment
+review through the coordinator. The body must begin with `Review: approved` or
+`Review: changes requested` and include `Head reviewed: <full SHA>` for the
+assigned head. Report the returned review URL in the authenticated completion
+report. If the supervisor has not recorded the assignment yet, retry the read.
+The relay requires a live execution lease and refuses a moved or closed PR;
+retrying an identical review reconciles a lost response. No host GitHub
+credential is needed. The coordinator authenticates the reviewer session,
+exact head and reported review before a merge.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
 Every local start, the loop's and one by hand, is refused at it; a review may
-use `capacity.reviewHeadroom` above it, since reviews run only on the
-coordinator. A retired remote worker is
+use `capacity.reviewHeadroom` above it. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
