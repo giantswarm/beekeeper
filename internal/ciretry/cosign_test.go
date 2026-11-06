@@ -69,7 +69,38 @@ echo success-diagnostic >&2
 	}
 }
 
-func TestGoBuildInstallsCosignRetry(t *testing.T) {
+func TestInstallCosignRetry(t *testing.T) {
+	dir := t.TempDir()
+	// bash itself is the underlying probe: --version succeeds only if the
+	// wrapper dispatches to the original binary instead of recursing.
+	// command -v must resolve a real executable, so provide a symlink.
+	probeDir := filepath.Join(dir, "probe")
+	if err := os.Mkdir(probeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bash, filepath.Join(probeDir, "cosign")); err != nil {
+		t.Fatal(err)
+	}
+	// Run the actual installation, then a later step of the same job.
+	cmd := exec.Command("bash", "-eu", "-c", `bash .circleci/install-cosign-retry.sh
+source "$BASH_ENV"
+test "$(command -v cosign)" = "$EXPECTED_WRAPPER"
+cosign --version
+`)
+	cmd.Dir = "../.."
+	cmd.Env = append(os.Environ(), "BASH_ENV="+filepath.Join(dir, "env"), "BEEKEEPER_COSIGN_BIN_DIR="+filepath.Join(dir, "bin"), "PATH="+probeDir+":"+os.Getenv("PATH"), "EXPECTED_WRAPPER="+filepath.Join(dir, "bin", "cosign"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install and dispatch: %v: %s", err, out)
+	}
+}
+
+// The retry reaches the signing step only through the generated job's make
+// test: a generation that stops running it there must turn this test red.
+func TestGoBuildRunsMakeTest(t *testing.T) {
 	raw, err := os.ReadFile("../../.circleci/workflows.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +108,8 @@ func TestGoBuildInstallsCosignRetry(t *testing.T) {
 	var config struct {
 		Workflows map[string]struct {
 			Jobs []map[string]struct {
-				PreSteps []any `yaml:"pre-steps"`
+				Name       string `yaml:"name"`
+				TestTarget string `yaml:"test_target"`
 			}
 		}
 	}
@@ -89,38 +121,30 @@ func TestGoBuildInstallsCosignRetry(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if len(build.PreSteps) != 2 || build.PreSteps[0] != "checkout" {
-			t.Fatal("retry installation needs checkout first")
-		}
-		step := build.PreSteps[1].(map[string]any)["run"].(map[string]any)
-		dir := t.TempDir()
-		// Run the actual installation step, isolated from the machine's cosign.
-		command := strings.ReplaceAll(step["command"].(string), "/tmp/beekeeper-cosign-bin", filepath.Join(dir, "bin"))
-		//nolint:gosec // the step under test, read from this repository
-		cmd := exec.Command("bash", "-eu", "-c", command+`source "$BASH_ENV"
-test "$(command -v cosign)" = "$EXPECTED_WRAPPER"
-cosign --version
-`)
-		cmd.Dir = "../.."
-		// bash itself is the underlying probe: --version succeeds only if the
-		// wrapper dispatches to the original binary instead of recursing.
-		// command -v must resolve a real executable, so provide a symlink.
-		probeDir := filepath.Join(dir, "probe")
-		if err := os.Mkdir(probeDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		bash, err := exec.LookPath("bash")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(bash, filepath.Join(probeDir, "cosign")); err != nil {
-			t.Fatal(err)
-		}
-		cmd.Env = append(os.Environ(), "BASH_ENV="+filepath.Join(dir, "env"), "PATH="+probeDir+":"+os.Getenv("PATH"), "EXPECTED_WRAPPER="+filepath.Join(dir, "bin", "cosign"))
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("install and dispatch: %v: %s", err, out)
+		if build.Name != "go-build" || build.TestTarget != "test" {
+			t.Fatalf("go-build job %+v no longer installs the retry", build)
 		}
 		return
 	}
 	t.Fatal("missing architect/go-build job")
+}
+
+func TestMakeTestInstallsCosignRetryOnlyInGoBuild(t *testing.T) {
+	makeBin, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make is not installed")
+	}
+	for job, want := range map[string]bool{"go-build": true, "test-stable-version": false} {
+		t.Run(job, func(t *testing.T) {
+			cmd := exec.Command(makeBin, "-n", "test", "CIRCLE_JOB="+job) //nolint:gosec // the job names of this test
+			cmd.Dir = "../.."
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make: %v\n%s", err, out)
+			}
+			if got := strings.Contains(string(out), "install-cosign-retry.sh"); got != want {
+				t.Fatalf("installs the retry: %v, want %v\n%s", got, want, out)
+			}
+		})
+	}
 }
