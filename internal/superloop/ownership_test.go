@@ -169,6 +169,26 @@ func TestAParkFromBeforeTheLoopsFirstStartIsLeftAlone(t *testing.T) {
 	}
 }
 
+// A bot's pull request is left alone until the desk names the bot; a park on
+// it is then a review request, under any spelling of the login. Never still
+// outranks it.
+func TestABotPullRequestIsReviewedOnRequest(t *testing.T) {
+	for _, author := range []string{"app/renovate", "renovate[bot]", "renovate"} {
+		pulls := owned(ourTeam)
+		q := pulls[pr]
+		q.Author = author
+		pulls[pr] = q
+		left(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: desk(), Now: t0}), leftAuthor)
+
+		d := desk()
+		d.Bots = []string{"renovate[bot]"}
+		only(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), KindReview)
+
+		d.Never = []string{repoOf(pr)}
+		left(t, Plan(Input{Workers: parked(t0), Pulls: pulls, Rounds: 1, Desk: d, Now: t0}), leftNever)
+	}
+}
+
 func TestAPullRequestSomebodyElseOpenedIsLeftAlone(t *testing.T) {
 	pulls := owned(ourTeam)
 	q := pulls[pr]
