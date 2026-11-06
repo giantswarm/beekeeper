@@ -2411,6 +2411,21 @@ an advanced clock and no paid model calls.
 
 ### Agents started without a click
 
+Local worker starts by hand require `--dir <checkout> --branch <new-branch>`.
+The supervisor loop's starts are outside this rule: it knows a repository, not a
+checkout, so they run in `agents.dir` and their briefs say where to work.
+The directory must be exactly one main repository checkout; parent folders,
+organisation folders and linked worktrees are refused with accepted checkout
+paths. The session launches in the checkout to load its repository instructions,
+then works in `<stateDir>/worktrees/<repo>/<branch>`, created from the freshly
+fetched origin default branch (`agents.worktreesDir` overrides the worktree
+place). Review starts require a PR URL in the brief and
+use a detached `<stateDir>/worktrees/<repo>/review-<number>` instead. Existing
+worktree destinations are refused. The prompt forbids commits, stashes and
+checkouts in the main checkout. Split tasks spanning repositories into one task
+per repository. `--dry-run` previews the path and rules without fetching or
+creating a worktree.
+
 `beekeeper agents start <name> <brief file>` starts an agent the way a person would start a
 session and hand it a brief, without the click. The first prompt is the worker rules beekeeper
 ships (the `worker-rules` skill, under the binary's version), then the brief as the task, so a
