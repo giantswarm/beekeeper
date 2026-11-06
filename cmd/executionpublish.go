@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -269,9 +270,11 @@ type publicationWrite func() (context.Context, context.CancelFunc, error)
 // changes nothing, so an identical retry writes nothing.
 func updatePublishedPull(repository, dir string, pull publicationPull, p executionPublication, write publicationWrite) ([]string, error) {
 	var updated []string
-	args := []string{"pr", "edit", pull.URL, loopRepoFlag, repository}
+	// REST, not gh pr edit: that reads review requests, which an App token may
+	// not reach, and fails the edit with them.
+	args := []string{"api", "-X", "PATCH", "repos/" + repository + "/pulls/" + path.Base(pull.URL), "--silent"}
 	if title := strings.TrimSpace(p.Title); title != "" && title != strings.TrimSpace(pull.Title) {
-		args = append(args, "--title", p.Title)
+		args = append(args, "--raw-field", publicationTitle+"="+p.Title)
 		updated = append(updated, publicationTitle)
 	}
 	if strings.TrimSpace(p.Body) != "" && strings.TrimSpace(p.Body) != strings.TrimSpace(pull.Body) {
@@ -279,7 +282,7 @@ func updatePublishedPull(repository, dir string, pull publicationPull, p executi
 		if err := os.WriteFile(bodyPath, []byte(p.Body), 0o600); err != nil {
 			return nil, err
 		}
-		args = append(args, "--body-file", bodyPath)
+		args = append(args, "--field", publicationBody+"=@"+bodyPath)
 		updated = append(updated, publicationBody)
 	}
 	if len(updated) == 0 {
@@ -811,12 +814,12 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			// publication. Include all upstream changes since that common ancestor.
 			p.Head = j.Handle.Commit
 		} else if bodyPath != "" {
-			path, pathErr := filepath.EvalSymlinks(bodyPath)
-			rel, relErr := filepath.Rel(workspace, path)
+			resolved, pathErr := filepath.EvalSymlinks(bodyPath)
+			rel, relErr := filepath.Rel(workspace, resolved)
 			if pathErr != nil || relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return refused("PR body must be a file in the owned workspace")
 			}
-			b, readErr := os.ReadFile(filepath.Clean(path))
+			b, readErr := os.ReadFile(filepath.Clean(resolved))
 			if readErr != nil {
 				return readErr
 			}

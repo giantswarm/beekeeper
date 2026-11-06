@@ -22,7 +22,7 @@ const publicationClaudeVersion = "2.1.291"
 const publicationExpiredLease = "expired publication lease"
 const publicationFixturePush = "push"
 const publicationFixtureCreate = "pr create"
-const publicationFixtureEdit = "pr edit"
+const publicationFixtureEdit = "api -X"
 const publicationFixtureTitle = "fix: fixture change"
 const publicationFixtureBody = "Resolve the fixture defect."
 const publicationFixturePRURL = "https://github.com/giantswarm/beekeeper/pull/42"
@@ -257,6 +257,11 @@ func TestExecutionPublicationCreateOutlivesTheAttemptsDeadline(t *testing.T) {
 	}
 }
 
+// editNames says the edit's arguments carry a field with this prefix.
+func editNames(args []string, prefix string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, prefix) })
+}
+
 func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
 	rig := newPublicationRig(t)
 	p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
@@ -292,7 +297,7 @@ func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(rig.edits) != 1 || slices.Contains(rig.edits[0], "--title") || !slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{publicationBody}) {
+	if len(rig.edits) != 1 || editNames(rig.edits[0], publicationTitle+"=") || !editNames(rig.edits[0], publicationBody+"=@") || !slices.Equal(result.Updated, []string{publicationBody}) {
 		t.Fatal("body update not applied alone", rig.edits, result)
 	}
 
@@ -303,7 +308,7 @@ func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(rig.edits) != 1 || !slices.Contains(rig.edits[0], p.Title) || slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{publicationTitle}) {
+	if len(rig.edits) != 1 || !slices.Contains(rig.edits[0], publicationTitle+"="+p.Title) || editNames(rig.edits[0], publicationBody+"=@") || !slices.Contains(rig.edits[0], "repos/"+rig.request.Repository+"/pulls/42") || !slices.Equal(result.Updated, []string{publicationTitle}) {
 		t.Fatal("title update not applied alone", rig.edits, result)
 	}
 }
