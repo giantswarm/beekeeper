@@ -166,6 +166,25 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+To prove a candidate's secret verbs before installing it, run a command under
+its temporary broker (Linux):
+
+```sh
+./beekeeper --config /tmp/test-config.yaml sandbox scratch -- sh -c '
+  ./beekeeper secret fingerprint "file:///tmp/test-input.json#password"
+'
+```
+
+`sandbox scratch` copies the selected configuration and replaces its state,
+lease and runtime directories with private temporary directories. The child
+inherits `BEEKEEPER_CONFIG`; secret calls use the candidate's broker, including
+when `secret.session` is off. Use the candidate binary explicitly in the child.
+The broker does not start an egress proxy or install sandbox mounts. Its spool
+and vault socket are separate from the installed broker's. On command exit,
+failure or interrupt, the runner stops and reaps the broker before removing the
+temporary directories. Run outside the agent sandbox and use test secret sources
+and destinations: the configured sources and any requested writes remain real.
+
 The doctor releases a local lease when its session is no longer running,
 preserving any lab configuration drift for the next claimant. Person-held
 leases and remote holders are left alone. Each release is logged once as

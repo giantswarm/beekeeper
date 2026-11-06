@@ -882,11 +882,22 @@ var unmodeledWrappers = map[string]bool{
 
 // commandAt returns the index of the word the simple command runs, past its
 // assignments, wrappers (sudo, env, timeout, nice, stdbuf, ionice, chrt,
-// flock, taskset, xargs, beekeeper run, …), the shell's keywords and a
-// function definition's head.
+// flock, taskset, xargs, beekeeper run, beekeeper sandbox scratch, …), the
+// shell's keywords and a function definition's head.
 func commandAt(words []string) int {
 	rest, _ := unwrapWords(words)
 	return len(words) - len(rest)
+}
+
+// scratchWords counts the words of args, the arguments of a beekeeper call,
+// up to and including "sandbox scratch", whose command runs on the host: 0
+// when it is another call.
+func scratchWords(args []string) int {
+	verb := executionVerb(args)
+	if len(verb) < 2 || verb[0] != "sandbox" || verb[1] != "scratch" {
+		return 0
+	}
+	return len(args) - len(verb) + 2
 }
 
 // unwrapWords strips leading assignments, keywords, redirections and modeled
@@ -916,6 +927,8 @@ func unwrapWords(words []string) (rest []string, unsure string) {
 			}
 		case name == selfCmd && i+1 < len(words) && words[i+1] == executionRunCommand:
 			i += 2
+		case name == selfCmd && scratchWords(words[i+1:]) > 0:
+			i += 1 + scratchWords(words[i+1:])
 		case name == "nohup" || name == "setsid" || name == "time":
 			i++
 			for i < len(words) && strings.HasPrefix(words[i], "-") {
