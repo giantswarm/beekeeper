@@ -21,6 +21,9 @@ type Desk struct {
 	// Authors are the logins the desk opens its pull requests as; empty:
 	// anybody's.
 	Authors []string
+	// Bots are the logins of bots whose pull requests the loop reviews on
+	// request: a park on one, as the sweep never lists them.
+	Bots []string
 	// Team is the desk's team as the team files name it; empty: every
 	// repository in Orgs is the desk's.
 	Team string
@@ -109,7 +112,7 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 	if len(d.Never) > 0 && p.ChangedFiles > len(p.Files) {
 		return nobodys, leftFiles, fmt.Sprintf("it changes %d files and gh lists %d: the rest cannot be checked against supervisor.ownership.never", p.ChangedFiles, len(p.Files))
 	}
-	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) {
+	if len(d.Authors) > 0 && !slices.ContainsFunc(d.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) && !d.bot(p.Author) {
 		return nobodys, leftAuthor, fmt.Sprintf("opened by %s, not by the desk (%s): it is not the desk's to review", p.Author, strings.Join(d.Authors, ", "))
 	}
 	if overridden || d.Team == "" || matchesAny(d.Review, repo) {
@@ -122,6 +125,17 @@ func (d Desk) owner(p Pull, overridden bool) (o owner, reason, why string) {
 		return ours, "", ""
 	}
 	return theirs, leftTeam, fmt.Sprintf("%s: its review is theirs; the loop starts no reviewer and gives no go", ownedBy(p.Team, repo))
+}
+
+// bot says whether author is one of Bots. gh names a bot app/<name> and the
+// GitHub API <name>[bot]: either matches, as does the bare name.
+func (d Desk) bot(author string) bool {
+	return slices.ContainsFunc(d.Bots, func(b string) bool { return strings.EqualFold(botName(b), botName(author)) })
+}
+
+// botName is login without gh's and the API's marks of a bot.
+func botName(login string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(login, "app/"), "[bot]")
 }
 
 // ownedBy says who owns repo: team, or no team file.

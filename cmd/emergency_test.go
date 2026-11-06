@@ -356,3 +356,72 @@ func TestEmergencySameSession(t *testing.T) {
 		t.Fatal("display names matched without sessions")
 	}
 }
+
+const emergencyAdminHead = "abc1234"
+
+// adminMergeCall runs an admin merge of o/r#7 at the head under the person's
+// words, the pull request as given, and returns gh's merge calls.
+func adminMergeCall(t *testing.T, words string, p superloop.Pull, authority bool) ([][]string, error) {
+	t.Helper()
+	a := emergencyApp(t)
+	if err := emergencyCall(a, "on", emergencyReasonFlag, words, untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	p.Ref = emergencyTestRepo + "#7"
+	oldRead, oldGH := readLoopPull, github.RunGH
+	t.Cleanup(func() { readLoopPull, github.RunGH = oldRead, oldGH })
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
+	var calls [][]string
+	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, slices.Clone(args))
+		return nil, nil
+	}
+	if authority {
+		if err := a.store.Record(about(event(loopParty, "merge.authorized", "%s at %s: go", "https://github.com/o/r/pull/7", emergencyAdminHead), p.Ref)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin", "--head", emergencyAdminHead)
+	return calls, err
+}
+
+func TestEmergencyAdminMergeNeedsTheNamedDecisionAtTheExactHead(t *testing.T) {
+	green := superloop.Pull{State: superloop.Open, Head: emergencyAdminHead, Green: true, ReviewDecision: "REVIEW_REQUIRED"}
+	named := "Admin merge o/r#7 now."
+	calls, err := adminMergeCall(t, named, green, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"pr", gitMerge, "7", "--repo", emergencyTestRepo, "--squash", "--admin", "--match-head-commit", emergencyAdminHead}
+	if len(calls) != 1 || !slices.Equal(calls[0], want) {
+		t.Fatalf("merge: %v", calls)
+	}
+	moved, red, draft := green, green, green
+	moved.Head, red.Green, draft.Draft = "def4567", false, true
+	for name, tc := range map[string]struct {
+		words     string
+		pull      superloop.Pull
+		authority bool
+	}{
+		"words name another": {"Admin merge o/r#77 now.", green, true},
+		"words name nothing": {"Merge them all.", green, true},
+		"head moved":         {named, moved, true},
+		"red":                {named, red, true},
+		"draft":              {named, draft, true},
+		"no go":              {named, green, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls, err := adminMergeCall(t, tc.words, tc.pull, tc.authority)
+			if Code(err) != ExitRefused || len(calls) != 0 {
+				t.Fatalf("err %v, calls %v", err, calls)
+			}
+		})
+	}
+}
+
+func TestEmergencyAdminNeedsItsHead(t *testing.T) {
+	a := emergencyApp(t)
+	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin"); Code(err) != ExitUsage {
+		t.Fatalf("no head: %v", err)
+	}
+}

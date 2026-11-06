@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `supervisor.ownership.bots`: a park on a named bot's pull request gets the loop's review and go, the route of a green bot pull request the desk did not open.
+- `emergency merge --admin --head <sha>`: the person's logged admin exception for one pull request, named in their quoted words, green and reviewed at that exact head.
+- `queue add <issue> "<row>"`: adds a numbered row to a shared issue body, reading again before the write and proving the row landed afterwards.
+
+### Changed
+
+- A fix after a stable release is tagged as the next patch's release candidate; only the promotion tags it stable.
+
 ### Fixed
 
 - Transcript guard: a repository script's `[[ ]]` patterns and `sed`, `awk`, `grep` and `perl` regexes no longer read as a recursive read of `/`; a glob the shell does not expand is refused only when it can reach a transcript store ([#3288](https://github.com/giantswarm/beekeeper/issues/3288)).
