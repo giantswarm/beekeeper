@@ -73,6 +73,20 @@ down. A sandboxed git signs through the broker as well.`,
 		},
 	}
 	c.AddCommand(&cobra.Command{
+		Use:   executionStatus,
+		Short: "Show which broker runtime files the configured sandbox uses",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			p := a.sandboxPolicy()
+			runtime := filepath.Dir(p.Egress)
+			if p.Egress == "" {
+				runtime = "unavailable (no XDG_RUNTIME_DIR)"
+			}
+			_, err := fmt.Fprintf(a.out, "broker state: %s\nbroker runtime: %s\negress files: %s\nproxy port: %d\n", a.cfg.StateDir, runtime, p.Egress, p.ProxyPort)
+			return err
+		},
+	})
+	c.AddCommand(&cobra.Command{
 		Use:   "render",
 		Short: "Print the policy as Claude Code settings",
 		Long: `render prints the policy as the managed settings drop-in install puts in
@@ -202,7 +216,10 @@ memory, and it terminates TLS for github.com, api.github.com and
 uploads.github.com with a CA it makes at start, its key in memory alone, to
 set the Authorization header of each request; bodies pass untouched. The
 CA, a bundle of the system's roots and the CA, and gh's login (a fixed
-word, no token) go to $XDG_RUNTIME_DIR/beekeeper/egress.
+word, no token) go to $XDG_RUNTIME_DIR/beekeeper/egress for the default
+state directory. Other state directories use beekeeper/brokers/<state-name>-<digest>
+under the runtime directory. sandbox status shows the configured broker's paths.
+Only one broker may own a runtime directory at a time.
 
 A sandboxed session's gated devctl command (pr merge, pr wait, release
 promote, release wait, rollout wait) runs here as beekeeper gate, as the

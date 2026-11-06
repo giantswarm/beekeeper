@@ -3,6 +3,7 @@ package takeover
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,9 @@ func TestHoldGetsTheScreensAnswer(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(dir, tSession, "*")); len(left) != 0 {
 		t.Errorf("Hold left %v behind", left)
 	}
+	if _, err := os.Stat(filepath.Join(dir, tSession)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session folder after answer: %v, want not exist", err)
+	}
 	if err := Answer(dir, tSession, r.ID, Decision{Behavior: Allow}); !errors.Is(err, ErrHandedBack) {
 		t.Errorf("a late answer = %v, want ErrHandedBack", err)
 	}
@@ -112,6 +116,9 @@ func TestHoldHandsBack(t *testing.T) {
 	if el := time.Since(start); el > time.Second {
 		t.Errorf("the give-up took %s", el)
 	}
+	if _, err := os.Stat(filepath.Join(dir, tSession)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session folder after deadline: %v, want not exist", err)
+	}
 
 	// The release: the screen lets go while a request is held.
 	done := hold(context.Background(), dir, Request{ID: "r3", Session: tSession, At: time.Now()})
@@ -124,6 +131,39 @@ func TestHoldHandsBack(t *testing.T) {
 	}
 	if rs, _ := Pending(dir, tSession); len(rs) != 0 {
 		t.Errorf("a handed-back request is still pending: %+v", rs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, tSession)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session folder after release: %v, want not exist", err)
+	}
+}
+
+func TestHoldPreservesNonemptySessionFolder(t *testing.T) {
+	dir := t.TempDir()
+	if err := Take(dir, tSession, Flag{PID: tScreen}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := hold(ctx, dir, Request{ID: "r1", Session: tSession})
+	waitPending(t, dir)
+	other := filepath.Join(dir, tSession, "other.request")
+	const contents = "another held request"
+	if err := os.WriteFile(other, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Release(dir, tSession); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-done; got[1].(bool) || got[2] != nil {
+		t.Fatalf("Hold after release = %v, want no decision or error", got)
+	}
+	if got, err := os.ReadFile(filepath.Clean(other)); err != nil || string(got) != contents {
+		t.Errorf("other request after release = %q, %v", got, err)
+	}
+	for _, ext := range []string{requestExt, answerExt} {
+		if _, err := os.Stat(filepath.Join(dir, tSession, "r1"+ext)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("held request file %s after release: %v, want not exist", ext, err)
+		}
 	}
 }
 
@@ -141,5 +181,64 @@ func TestHoldIgnoresAGarbledAnswer(t *testing.T) {
 	}
 	if got := <-done; got[1].(bool) {
 		t.Fatalf("a garbled answer decided: %v", got)
+	}
+}
+
+func TestReleaseOwnedPreservesReplacement(t *testing.T) {
+	for _, samePID := range []bool{false, true} {
+		t.Run(fmt.Sprint("samePID=", samePID), func(t *testing.T) {
+			dir := t.TempDir()
+			first := Flag{PID: tScreen, By: "screen", Since: time.Now().UTC()}
+			next := first
+			next.Since = first.Since.Add(time.Nanosecond)
+			if !samePID {
+				next.PID++
+			}
+			for _, f := range []Flag{first, next} {
+				if err := Take(dir, tSession, f); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ReleaseOwned(dir, tSession, first); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := Taken(dir, tSession, func(int) bool { return true }); !ok || got != next {
+				t.Fatalf("replacement lost: %+v, %v", got, ok)
+			}
+			if err := ReleaseOwned(dir, tSession, next); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := Taken(dir, tSession, func(int) bool { return true }); ok {
+				t.Fatal("owner could not release")
+			}
+			if err := ReleaseOwned(dir, tSession, next); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestConcurrentReplacementAndOwnedRelease(t *testing.T) {
+	dir := t.TempDir()
+	first := Flag{PID: tScreen, Since: time.Now().UTC()}
+	next := first
+	next.Since = next.Since.Add(time.Nanosecond)
+	for range 100 {
+		if err := Take(dir, tSession, first); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		done := make(chan error, 2)
+		go func() { <-start; done <- ReleaseOwned(dir, tSession, first) }()
+		go func() { <-start; done <- Take(dir, tSession, next) }()
+		close(start)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, ok := Taken(dir, tSession, alive); !ok || got != next {
+			t.Fatalf("replacement lost: %+v, %v", got, ok)
+		}
 	}
 }

@@ -61,7 +61,32 @@ type indexData struct {
 	// the value itself and no other form: what beekeeper secret rotate
 	// finds the carriers of a value by once its source holds a new one.
 	Values map[string]string `json:"values,omitempty"`
+	// Rotations retain both fingerprints until every carrier is updated.
+	Rotations map[string]rotationFingerprints `json:"rotations,omitempty"`
 }
+
+type rotationFingerprints struct {
+	Old string `json:"old"`
+	New string `json:"new"`
+}
+
+// PendingRotation returns the fingerprints needed to resume a partial rotation.
+// No credential value is retained in the index.
+func (ix *Index) PendingRotation(ref string) (oldFP, newFP string, ok bool) {
+	pending, ok := ix.data.Rotations[ref]
+	return pending.Old, pending.New, ok
+}
+
+// SetPendingRotation records recovery metadata until every carrier is written.
+func (ix *Index) SetPendingRotation(ref, oldFP, newFP string) {
+	if ix.data.Rotations == nil {
+		ix.data.Rotations = map[string]rotationFingerprints{}
+	}
+	ix.data.Rotations[ref] = rotationFingerprints{Old: oldFP, New: newFP}
+}
+
+// ClearPendingRotation removes recovery metadata after a complete rotation.
+func (ix *Index) ClearPendingRotation(ref string) { delete(ix.data.Rotations, ref) }
 
 // OpenIndex reads the index in dir, creating its key on first use. The key
 // and the index are readable by the user only.
@@ -80,11 +105,27 @@ func OpenIndex(dir string) (*Index, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, indexKeyFile), key, 0o600); err != nil {
+	// Publish only a complete key, without replacing a concurrent caller's
+	// key. Exclusive creation of the final path would expose an empty or
+	// partially written key to readers before the write completes.
+	tmp, err := os.CreateTemp(dir, ".key-*")
+	if err != nil {
 		return nil, err
 	}
-	ix.key = key
-	return ix, nil
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(key); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Link(tmp.Name(), filepath.Join(dir, indexKeyFile)); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, err
+	}
+	// A competing creator may have won. Always use the persisted key and
+	// reload any index it has already saved.
+	return LoadIndex(dir)
 }
 
 // LoadIndex reads the index in dir without creating anything: with no key
@@ -172,6 +213,7 @@ func (ix *Index) Drop(prefixes ...string) {
 	}
 	maps.DeleteFunc(ix.data.Entries, func(_, ref string) bool { return has(ref) })
 	maps.DeleteFunc(ix.data.Values, func(ref, _ string) bool { return has(ref) })
+	maps.DeleteFunc(ix.data.Rotations, func(ref string, _ rotationFingerprints) bool { return has(ref) })
 }
 
 // ValueFingerprint is the fingerprint of ref's value when it was indexed
@@ -192,11 +234,20 @@ func (ix *Index) Save(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(ix.dir, indexFile+".tmp")
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(ix.dir, ".index-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(ix.dir, indexFile))
+	defer func() {
+		// After publication the temporary name no longer exists; on failure
+		// cleanup is best effort so it does not hide the original error.
+		_ = os.Remove(tmp.Name())
+	}()
+	_, writeErr := tmp.Write(raw)
+	if err := errors.Join(writeErr, tmp.Close()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(ix.dir, indexFile))
 }
 
 // Fingerprint is the keyed hash of s, comparable only through beekeeper;
@@ -280,6 +331,29 @@ type span struct {
 // values. A base64 run whose decoding carries either is replaced whole. An
 // Index without a key matches patterns only.
 func (ix *Index) Redact(s string) (string, []Finding) {
+	// Keep image payloads out of both fingerprint and token pattern scans.
+	var b strings.Builder
+	var findings []Finding
+	at := 0
+	for _, run := range base64Runs(s) {
+		if !imageBase64(s, run) {
+			continue
+		}
+		out, fs := ix.redactText(s[at:run[0]])
+		b.WriteString(out)
+		b.WriteString(s[run[0]:run[1]])
+		findings = mergeFindings(findings, fs)
+		at = run[1]
+	}
+	if at == 0 {
+		return ix.redactText(s)
+	}
+	out, fs := ix.redactText(s[at:])
+	b.WriteString(out)
+	return b.String(), mergeFindings(findings, fs)
+}
+
+func (ix *Index) redactText(s string) (string, []Finding) {
 	// An indexed value wins over a pattern match it overlaps, since it names
 	// what to rotate; among either, the widest span starting first wins.
 	spans := disjoint(ix.matches(s), nil)
@@ -298,7 +372,7 @@ func (ix *Index) Redact(s string) (string, []Finding) {
 		}
 	}
 	spans = disjoint(patterns, spans)
-	spans = disjoint(ix.encodedSpans(s, 1), spans)
+	spans = disjoint(ix.encodedSpans(s, 1, true), spans)
 	if len(spans) == 0 {
 		return s, nil
 	}

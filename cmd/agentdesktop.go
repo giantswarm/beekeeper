@@ -110,8 +110,8 @@ func (a *app) desktopTurn(ctx context.Context, ag state.Agent) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := claude.Live(sessions, ag.Party); ok {
-		_, err := fmt.Fprintf(a.out, "desktop: %s runs a CLI: its next turn is the desktop's\n", ag.Name)
+	if s, ok := wakeLive(sessions, ag.Party, ag.Session); ok {
+		_, err := fmt.Fprintf(a.out, "desktop: %s: its next turn is the desktop's\n", runningCLI(ag, s))
 		return err
 	}
 	if _, err := fmt.Fprintf(a.out, "desktop: %s runs no CLI and no reopen waits: showing it in the desktop\n", ag.Name); err != nil {
@@ -267,4 +267,9 @@ func capText(n int) string {
 		return "CLIs"
 	}
 	return fmt.Sprintf("%d CLIs", n)
+}
+
+// runningCLI describes the same discovered CLI for desktop requests and send hooks.
+func runningCLI(ag state.Agent, s *claude.Session) string {
+	return fmt.Sprintf("%s runs a CLI (messages by name use %q)", ag.Name, s.Address())
 }
