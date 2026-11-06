@@ -112,13 +112,12 @@ func (a *app) agentHandoverCmd() *cobra.Command {
 		Long: `handover moves a registered agent to a fresh session, one line per step:
 it asks the agent (a peer message) to record what is in flight with
 beekeeper agents note, waiting agents.noteWait (3m) at most; builds the
-follow-up's prompt; starts the follow-up as agents start does, under the
-agent's name, taking over its roster entry, task and session record, the
-leases it holds and the grants queued for it, in their places; stops
-the old session's CLI and what it left running (a claude --bg session
-through claude stop first, so its daemon does not resume it); once that CLI
-has exited, archives the old session's desktop row through a steward, as
-the doctor does, so only the follow-up's row carries the name (an archive
+follow-up's prompt; stops the original CLI, turns and child processes
+(a claude --bg session through claude stop first, so its daemon does not
+resume it); starts the follow-up as agents start does, under the agent's
+name, taking over its roster entry, task and session record, the leases it
+holds and the grants queued for it, in their places; archives the old
+session's desktop row through a steward, as the doctor does, so only the follow-up's row carries the name (an archive
 not done now the doctor owes and asks for again); and logs agents.handover. watch says HANDOVER DUE once an agent's
 context reached agents.relayAt, at its first quiet moment, and HANDOVER HELD
 instead while the agent's task is in its last step (agents.lastStepGrace).
@@ -135,8 +134,8 @@ An agent with no task on its roster row (neither an open one nor one it
 reported idle on) is refused, since its follow-up would have nothing to
 carry on: --task names the task, which the follow-up's row records. The
 follow-up is on the roster under the name, busy with the task it was handed,
-before the old session ends; a follow-up that cannot be listed fails the
-hand-over and the old session runs on.
+after the old session ends; a follow-up that cannot be listed fails the
+hand-over.
 
 --prompt prints the follow-up's prompt and changes nothing: the roster task,
 the brief it was started with, its session record, its gated merges, its
@@ -375,7 +374,7 @@ func (h handover) summary() string {
 }
 
 // handOver runs the hand-over's steps, one line each.
-func (a *app) handOver(ctx context.Context, h handover) error {
+func (a *app) handOver(ctx context.Context, h handover) (err error) {
 	defer a.recordStoppedGates(ctx)
 	began := time.Now()
 	me, err := a.caller()
@@ -409,9 +408,20 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if err := a.refuseStopped(st, "handing over "+ag.Name); err != nil {
 		return err
 	}
+	if err := refuseHandoverGate(st, ag.Party); err != nil {
+		return err
+	}
+	release, err := a.beginHandover(ag.Party)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, release()) }()
 	noted := "no note"
 	note, ok, err := a.askNote(ctx, h)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if ok {
@@ -425,7 +435,12 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	if note := gapsNote(gaps); note != "" {
 		a.say("%s", note)
 	}
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
+	// End the predecessor before starting anything under its name. Re-read
+	// sessions: a note request may have started a CLI after readHandover.
+	if err := a.stopHandoverPredecessor(ctx, ag.Party); err != nil {
+		return err
+	}
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: a.workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}
@@ -438,7 +453,7 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	}
 	listed, err := a.listSuccessor(me, ag.Party, follow, h.task())
 	if err != nil {
-		return fmt.Errorf("the follow-up %s is not on the roster, so session %s runs on: %w "+
+		return fmt.Errorf("the follow-up %s is not on the roster after session %s stopped: %w "+
 			"(beekeeper agents register in session %s lists it, beekeeper agents remove %q takes it off)", sa.id, ag.Session, err, sa.id, ag.Name)
 	}
 	a.say("%s", listed)
@@ -460,22 +475,6 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 			a.say("the desktop still shows %s", sa.kept)
 		}
 	}
-	if h.session != nil {
-		n, err := endSession(ctx, h.session)
-		if err != nil {
-			return fmt.Errorf("ending session %s: %w", ag.Session, err)
-		}
-		how := ""
-		if h.session.Background {
-			how = "claude stop, so its daemon does not resume it; "
-		}
-		a.say("ended session %s: %sits CLI %d and %d processes it left stopped", ag.Session, how, h.session.PID, n-1)
-	}
-	// A CLI of the old session the desktop warms later anyway, the watch
-	// stops (stopRevived).
-	for _, l := range stopUnits(ctx, ag.Session) {
-		a.say("%s", l)
-	}
 	if a.hasDesktopSession(ag.Party) {
 		a.say("%s", a.archiveHandedOver(ctx, me, ag.Party, sa.id))
 	}
@@ -488,8 +487,84 @@ func (a *app) handOver(ctx context.Context, h handover) error {
 	return nil
 }
 
+// stopHandoverPredecessor leaves no original CLI or turn running before
+// its successor is launched. A failed stop aborts the handover.
+func (a *app) stopHandoverPredecessor(ctx context.Context, p state.Party) error {
+	st, err := a.store.Read()
+	if err != nil {
+		return err
+	}
+	if err := refuseHandoverGate(st, p); err != nil {
+		return err
+	}
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return err
+	}
+	for _, s := range sessions {
+		if !p.Is(s.Party()) {
+			continue
+		}
+		n, err := endHandoverSession(ctx, s)
+		if err != nil {
+			return refused("handover refused: stopping session %s: %v; no successor started", p.Session, err)
+		}
+		a.say("ended session %s: its CLI %d and %d processes stopped before starting the successor", p.Session, s.PID, n-1)
+	}
+	for _, l := range stopUnits(ctx, p.Session) {
+		a.say("%s", l)
+	}
+	sessions, _, err = a.sessions()
+	if err != nil {
+		return err
+	}
+	if s, live := claude.Live(sessions, p); live {
+		return refused("handover refused: session %s still has a live CLI (PID %d); no successor started", p.Session, s.PID)
+	}
+	if unitsReopening(ctx, p.Session) {
+		return refused("handover refused: session %s still runs a turn; no successor started", p.Session)
+	}
+	return nil
+}
+
+func refuseHandoverGate(st *state.State, p state.Party) error {
+	for _, m := range st.Merges {
+		if m.By.Is(p) && proc.Alive(m.PID) {
+			return refused("handover refused: session %s has a live merge gate for %s; wait for it to finish", p.Session, m.Key())
+		}
+	}
+	return nil
+}
+
+var endHandoverSession = endSession
+
+// beginHandover publishes the guard before any note or successor starts can
+// make the outgoing session appear superseded. Every return releases it.
+func (a *app) beginHandover(p state.Party) (func() error, error) {
+	mark := state.Handover{Party: p, PID: os.Getpid()}
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for _, h := range st.Handovers {
+			if h.Is(p) && proc.Alive(h.PID) {
+				return nil, refused("%q already has a handover in progress", p.Name)
+			}
+		}
+		st.Handovers = slices.DeleteFunc(st.Handovers, func(h state.Handover) bool { return !proc.Alive(h.PID) })
+		st.Handovers = append(st.Handovers, mark)
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		return a.store.Update(func(st *state.State) ([]state.Event, error) {
+			st.Handovers = slices.DeleteFunc(st.Handovers, func(h state.Handover) bool { return h.PID == mark.PID && h.Is(p) })
+			return nil, nil
+		})
+	}, nil
+}
+
 // listSuccessor makes sure the roster lists the follow-up to of the
-// handed-over from under its name, busy with task, before from ends: the
+// handed-over from under its name, busy with task, after from ends: the
 // start recorded it, but a row lost or changed meanwhile (a stray
 // register under the name, the doctor) would leave it running unlisted or
 // idle. It restores the row when it must and returns the step's line; an
@@ -779,7 +854,7 @@ func (a *app) say(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format
 // noteRequest is the peer message that asks the agent for its note, naming
 // the configuration file the hand-over runs with.
 func (a *app) noteRequest(h handover) string {
-	bin := "beekeeper"
+	bin := pluginName
 	if c := a.explicitConfig(); c != "" {
 		bin += " --config " + c
 	}

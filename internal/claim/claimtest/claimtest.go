@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,8 @@ type GitHub struct {
 	// Calls counts the calls by kind: list, notModified, post, edit,
 	// delete, issue.
 	Calls map[string]int
-	// Pulls are the refs (owner/repo#n) that are pull requests.
+	// Pulls are the refs (owner/repo#n) that are pull requests. Repository
+	// names are case insensitive, as they are in GitHub's API.
 	Pulls map[string]bool
 }
 
@@ -45,6 +47,7 @@ func New() *GitHub {
 func (g *GitHub) Add(issue, body string) int64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	issue = strings.ToLower(issue)
 	g.next++
 	g.comments[issue] = append(g.comments[issue], Comment{ID: g.next, Body: body})
 	return g.next
@@ -54,7 +57,7 @@ func (g *GitHub) Add(issue, body string) int64 {
 func (g *GitHub) Comments(issue string) []Comment {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return append([]Comment(nil), g.comments[issue]...)
+	return append([]Comment(nil), g.comments[strings.ToLower(issue)]...)
 }
 
 // Delete removes comment id wherever it is.
@@ -94,30 +97,57 @@ func (g *GitHub) GH(_ context.Context, args ...string) ([]byte, error) {
 			path = args[i]
 		}
 	}
-	path, _, _ = strings.Cut(path, "?")
+	path, query, _ := strings.Cut(path, "?")
+	params, err := url.ParseQuery(query)
+	if err != nil {
+		return nil, fmt.Errorf("gh api %s: invalid query: %w", path, err)
+	}
 	parts := strings.Split(path, "/") // repos o r issues n [comments] | repos o r issues comments id
 	if len(parts) < 5 || len(parts) > 6 || parts[0] != "repos" || parts[3] != "issues" {
 		return nil, fmt.Errorf("gh api %s: not a call claims make", path)
 	}
-	repo := parts[1] + "/" + parts[2]
+	repo := strings.ToLower(parts[1] + "/" + parts[2])
 	if len(parts) == 5 {
 		g.Calls["issue"]++
-		if g.Pulls[repo+"#"+parts[4]] {
-			return []byte(`{"number":` + parts[4] + `,"pull_request":{"url":"x"}}`), nil
+		for issue, pull := range g.Pulls {
+			if pull && strings.EqualFold(issue, repo+"#"+parts[4]) {
+				return []byte(`{"number":` + parts[4] + `,"pull_request":{"url":"x"}}`), nil
+			}
 		}
 		return []byte(`{"number":` + parts[4] + `}`), nil
 	}
 	switch {
 	case method == "" && parts[5] == comments:
 		issue := repo + "#" + parts[4]
-		raw, _ := json.Marshal(append([]Comment{}, g.comments[issue]...))
-		tag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(raw))
+		page, size := 1, 30
+		if n, err := strconv.Atoi(params.Get("page")); err == nil && n > 0 {
+			page = n
+		}
+		if n, err := strconv.Atoi(params.Get("per_page")); err == nil && n > 0 {
+			size = min(n, 100)
+		}
+		cs := g.comments[issue]
+		// Bound the page before multiplying to handle arbitrarily large page numbers.
+		start := len(cs)
+		if page-1 <= len(cs)/size {
+			start = min((page-1)*size, len(cs))
+		}
+		end := min(start+size, len(cs))
+		raw, _ := json.Marshal(append([]Comment{}, cs[start:end]...))
+		link := ""
+		if end < len(cs) {
+			next := url.Values{"per_page": {strconv.Itoa(size)}, "page": {strconv.Itoa(page + 1)}}
+			link = "Link: <" + path + "?" + next.Encode() + `>; rel="next"` + "\r\n"
+		}
+		// Pagination metadata is part of the representation: adding page two
+		// must invalidate a cached first page even when its comments are unchanged.
+		tag := fmt.Sprintf(`W/"%x"`, sha256.Sum256(append(raw, []byte(link)...)))
 		if etag == tag {
 			g.Calls["notModified"]++
 			return []byte("HTTP/2.0 304 Not Modified\r\n\r\n"), fmt.Errorf("gh api %s: exit status 1: gh: HTTP 304", path)
 		}
 		g.Calls["list"]++
-		return []byte("HTTP/2.0 200 OK\r\nEtag: " + tag + "\r\n\r\n" + string(raw)), nil
+		return []byte("HTTP/2.0 200 OK\r\nEtag: " + tag + "\r\n" + link + "\r\n" + string(raw)), nil
 	case method == "POST" && parts[5] == comments:
 		g.Calls["post"]++
 		g.next++

@@ -63,7 +63,7 @@ func timerOfStart(cmd *cobra.Command) (startTimer, bool, error) {
 	} else {
 		vals[flagTimerID], vals[flagTimerDue], vals[flagTimerLate] = os.Getenv(envTimerID), os.Getenv(envTimerDue), os.Getenv(envTimerLate)
 	}
-	for _, k := range []string{envTimerID, envTimerDue, envTimerLate} {
+	for _, k := range []string{envTimerID, envTimerDue, envTimerLate, envTimerCommand} {
 		_ = os.Unsetenv(k)
 	}
 	id, idErr := strconv.Atoi(vals[flagTimerID])

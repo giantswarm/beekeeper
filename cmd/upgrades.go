@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -24,7 +25,7 @@ func (a *app) readUpgrades(ctx context.Context, st *state.State, now time.Time) 
 // upgradeStatuses is the upgrade status of every installation of
 // alerts.installations, in their order. rs, merged with the shared readings,
 // answers for an installation whose reading began less than fresh(name)
-// ago; the others are read, each within alerts.timeout, in parallel, and
+// ago; the others are read, each with two attempts of at least two minutes, in parallel, and
 // kept in rs and the shared readings for the next watch, snapshot or ui.
 func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Time, rs upgrade.Readings, fresh func(installation string) time.Duration) []upgrade.Status {
 	al := a.cfg.Alerts
@@ -44,7 +45,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		for _, in := range due {
 			targets = append(targets, upgrade.Target{Name: in.Name, Context: alerts.ResolveContext(in.Name, in.Context, a.cfg.Kube.Context, contexts)})
 		}
-		r := upgrade.Reader{Kubectl: al.Kubectl, Kubeconfig: a.alertKubeconfig(), Timeout: al.Timeout.Duration}
+		r := upgrade.Reader{Kubectl: al.Kubectl, Kubeconfig: a.alertKubeconfig(), Timeout: max(2*time.Minute, al.Timeout.Duration)}
 		read := r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))
 		if ctx.Err() == nil {
 			rs.Keep(read, now)
@@ -57,7 +58,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		if !ok {
 			r.Status = upgrade.Status{Installation: in.Name, Err: "not read"}
 		}
-		out = append(out, r.Status)
+		out = append(out, upgrade.WithHoldVersions(r.Status, st, now))
 	}
 	return out
 }
@@ -141,7 +142,7 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 		_ = w.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
 	}
 	var statuses []upgrade.Status
-	var begun, ended []state.Hold
+	var begun, ended, holds []state.Hold
 	// Observation and reconciliation must share the state transaction so another
 	// watch cannot apply an observation between these two steps. Retryable stores
 	// repeat the observation along with reconciliation.
@@ -166,6 +167,7 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 			}
 			begun, ended = append(begun, b...), append(ended, e...)
 		}
+		holds = append([]state.Hold(nil), st.Holds...)
 		return ev, nil
 	})
 	if ctx.Err() != nil {
@@ -176,8 +178,21 @@ func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Contex
 		return
 	}
 	w.clear("upgrades")
+	if w.upgradeFailures == nil {
+		w.upgradeFailures = map[string]int{}
+	}
 	var noContext []string
 	for _, s := range statuses {
+		if s.Err != "" {
+			w.upgradeFailures[s.Installation]++
+			for _, h := range holds {
+				if h.Active(now) && strings.HasPrefix(h.Target, upgrade.HoldPrefix+s.Installation+"/") {
+					w.emitNow("upgrade-reader", "%s held: reader failed %d consecutive ticks: %s", h.Target, w.upgradeFailures[s.Installation], s.Err)
+				}
+			}
+		} else {
+			delete(w.upgradeFailures, s.Installation)
+		}
 		switch {
 		case s.NoContext:
 			noContext = append(noContext, s.Installation)

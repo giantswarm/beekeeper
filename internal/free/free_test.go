@@ -20,6 +20,8 @@ import (
 
 var now = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 
+const freeFixtureCwd = "cwd"
+
 // The build CPU line: the slice's reading, its throttling, a slice without
 // a quota, and the configured budget while the slice does not run.
 func TestBuildCPULine(t *testing.T) {
@@ -50,7 +52,7 @@ const (
 	workDir = "/work"
 )
 
-// fixture writes a file of kib KiB under root/rel, touched age ago.
+// fixture writes a file of kib KiB under root/rel, its tree touched age ago.
 func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	t.Helper()
 	p := filepath.Join(root, rel)
@@ -62,6 +64,14 @@ func fixture(t *testing.T, root, rel string, kib int, age time.Duration) {
 	}
 	if err := os.Chtimes(p, now.Add(-age), now.Add(-age)); err != nil {
 		t.Fatal(err)
+	}
+	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+		if err := os.Chtimes(d, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+		if d == root {
+			break
+		}
 	}
 }
 
@@ -134,6 +144,84 @@ func TestSessionDirsFreeOnlyTheDead(t *testing.T) {
 	}
 }
 
+func TestSessionDirsStayInsideScratch(t *testing.T) {
+	for _, level := range []string{"project", "session", "internal-project", "internal-session"} {
+		t.Run(level, func(t *testing.T) {
+			r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+			external := t.TempDir()
+			fixture(t, external, filepath.Join(deadSID, "scratchpad", "keep"), 1, 5*time.Hour)
+			project := filepath.Join(r.Scratch, "-outside")
+			link, target := project, external
+			if strings.HasPrefix(level, "internal-") {
+				target = filepath.Join(r.Scratch, "target")
+				fixture(t, target, filepath.Join("source", deadSID, "scratchpad", "keep"), 1, 5*time.Hour)
+				target = filepath.Join(target, "source")
+			}
+			keep := filepath.Join(target, deadSID, "scratchpad", "keep")
+			if strings.HasSuffix(level, "session") {
+				link, target = filepath.Join(project, deadSID), filepath.Join(target, deadSID)
+			}
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Free(); len(got) != 0 {
+				t.Fatalf("symlink counted as a session: %v", got)
+			}
+			if _, err := os.Stat(keep); err != nil {
+				t.Fatalf("target file lost: %v", err)
+			}
+			if _, err := os.Lstat(link); err != nil {
+				t.Fatalf("symlink removed: %v", err)
+			}
+		})
+	}
+}
+
+// Replace a checked project after scanning, before deletion. A pathname-only
+// containment check would still let RemoveAll follow the replacement alias.
+func TestSessionDirsProjectReplacedBeforeRemoval(t *testing.T) {
+	r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+	fixture(t, r.TmpDir, filepath.Join(sessionDir(deadSID), "scratchpad", "a"), 1, 5*time.Hour)
+	external := t.TempDir()
+	keep := filepath.Join(deadSID, "scratchpad", "keep")
+	fixture(t, external, keep, 1, 5*time.Hour)
+	r.Records = func() map[string]*claude.Record {
+		project := filepath.Dir(filepath.Join(r.TmpDir, sessionDir(deadSID)))
+		if err := os.Rename(project, project+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, project); err != nil {
+			t.Fatal(err)
+		}
+		return map[string]*claude.Record{}
+	}
+	if got := r.Free(); len(got) != 0 {
+		t.Fatalf("failed deletion counted: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(external, keep)); err != nil {
+		t.Fatalf("external file lost: %v", err)
+	}
+}
+
+func TestSessionDirsScratchAlias(t *testing.T) {
+	r, _ := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+	fixture(t, r.TmpDir, filepath.Join(sessionDir(deadSID), "scratchpad", "a"), 1, 5*time.Hour)
+	original := r.Scratch
+	r.Scratch = filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(original, r.Scratch); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Free(); len(got) != 1 || got[0].N != 1 {
+		t.Fatalf("normal cleanup through alias: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.TmpDir, sessionDir(deadSID))); !os.IsNotExist(err) {
+		t.Fatalf("session remains: %v", err)
+	}
+}
+
 func TestSessionDirsTranscriptAndCwdKeep(t *testing.T) {
 	r, out := newRun(t, Options{Summary: true, Only: []string{SessionDirs}})
 	written := sessionDir("55555555-dead-4000-8000-000000000000")
@@ -153,7 +241,7 @@ func TestSessionDirsTranscriptAndCwdKeep(t *testing.T) {
 // project, recording cwd as its working folder, untouched for five hours.
 func transcript(t *testing.T, r *Run, sid, cwd string) {
 	t.Helper()
-	entry, err := json.Marshal(map[string]string{"cwd": cwd})
+	entry, err := json.Marshal(map[string]string{freeFixtureCwd: cwd})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,13 +409,13 @@ func TestSummaryRows(t *testing.T) {
 	}
 	for _, p := range []*proc.Process{
 		{PID: 10, PPID: 2, Comm: node, Args: []string{node, "big\tjob"}, Start: start, RSSKiB: 700 << 10},
-		{PID: 11, PPID: 2, Comm: "graphify", Args: []string{"python3", "graphify"}, Start: start, CPU: 40 * time.Minute, RSSKiB: 20 << 10},
+		{PID: 11, PPID: 2, Comm: "graphify", Args: []string{orphanPython, "graphify"}, Start: start, CPU: 40 * time.Minute, RSSKiB: 20 << 10},
 		{PID: 12, PPID: 2, Comm: "go", Args: []string{"go", "test"}, Start: start, CPU: 59 * time.Minute, RSSKiB: 900 << 10},
 		{PID: 20, PPID: 2, Comm: tumblerd, Args: []string{tumblerd}, Start: start, RSSKiB: 600 << 10},
 		{PID: 21, PPID: 20, Comm: tumblerd, Args: []string{tumblerd}, Start: start, RSSKiB: 600 << 10},
 		{PID: 30, PPID: 2, Comm: "chrome", Args: []string{"/opt/google/chrome/chrome --type=renderer --lang=en"}, Start: start, RSSKiB: 1000 << 10},
 		{PID: 40, PPID: 2, Comm: "dockerd", Args: []string{"dockerd"}, Start: start, RSSKiB: 800 << 10},
-		{PID: 50, PPID: 1, Comm: node, Args: []string{node, "processChild.js"}, Start: start, RSSKiB: 60 << 10},
+		{PID: 50, PPID: 1, Comm: node, Args: []string{node, orphanChildScript}, Start: start, RSSKiB: 60 << 10},
 	} {
 		r.Table.ByPID[p.PID] = p
 	}
@@ -452,5 +540,81 @@ func TestStateSplitsSwapAndNamesOomdRule(t *testing.T) {
 	r.Do()
 	if !strings.Contains(out.String(), "-1256 MiB before systemd-oomd's 90 % swap trigger") {
 		t.Errorf("the oomd trigger of a swap-monitored cgroup is not named:\n%s", out)
+	}
+}
+
+// Process-held paths use the resolved spelling, including deleted open files
+// whose former path no longer exists. No live processes are read here.
+func TestFreeKeepsHeldDirsThroughTempAlias(t *testing.T) {
+	for _, section := range []string{SessionDirs, GoBuild, TmpDirs} {
+		for _, heldKind := range []string{freeFixtureCwd, "exe", "open", "deleted"} {
+			t.Run(section+"/"+heldKind, func(t *testing.T) {
+				r, out := newRun(t, Options{Apply: true, Only: []string{section}})
+				realRoot, err := filepath.EvalSymlinks(r.TmpDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(realRoot, alias); err != nil {
+					t.Fatal(err)
+				}
+				r.TmpDir = alias
+				r.Scratch = filepath.Join(alias, "claude-1000")
+				held, unused := "tmp.held", "tmp.unused"
+				switch section {
+				case SessionDirs:
+					held, unused = sessionDir(deadSID), sessionDir("33333333-dead-4000-8000-000000000000")
+				case GoBuild:
+					held, unused = "go-build-held", "go-build-unused"
+				}
+				for _, dir := range []string{held, unused} {
+					fixture(t, realRoot, filepath.Join(dir, "scratchpad", "a"), 2048, 5*time.Hour)
+				}
+				heldPath := filepath.Join(realRoot, held, "scratchpad", "a")
+				switch heldKind {
+				case freeFixtureCwd:
+					heldPath = filepath.Dir(heldPath)
+				case "deleted":
+					// proc.Held strips the kernel's " (deleted)" suffix.
+					heldPath = filepath.Join(realRoot, held, "scratchpad", "removed")
+					if _, err := os.Stat(heldPath); !os.IsNotExist(err) {
+						t.Fatalf("deleted fixture exists: %v", err)
+					}
+				}
+				r.Table = proc.NewTable(&proc.Process{PID: 7, Comm: litWorker})
+				r.holds = func(int) []string { return []string{heldPath} }
+				freed := r.Free()
+				if _, err := os.Stat(filepath.Join(realRoot, held, "scratchpad", "a")); err != nil {
+					t.Errorf("held candidate removed: %v\n%s", err, out)
+				}
+				if _, err := os.Stat(filepath.Join(realRoot, unused)); !os.IsNotExist(err) {
+					t.Errorf("unused candidate remains: %v\n%s", err, out)
+				}
+				if len(freed) != 1 || freed[0].Section != section || freed[0].N != 1 {
+					t.Errorf("freed = %+v, want only unused candidate", freed)
+				}
+			})
+		}
+	}
+}
+
+func TestFreeKeepsHeldDirThroughScratchAlias(t *testing.T) {
+	r, out := newRun(t, Options{Apply: true, Only: []string{SessionDirs}})
+	scratch, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(scratch, r.Scratch); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join("-home-u-proj", deadSID)
+	fixture(t, scratch, filepath.Join(dir, "scratchpad", "a"), 2048, 5*time.Hour)
+	r.Table = proc.NewTable(&proc.Process{PID: 7})
+	r.holds = func(int) []string { return []string{filepath.Join(scratch, dir, "removed")} }
+	if freed := r.Free(); len(freed) != 0 {
+		t.Errorf("freed held scratch: %+v\n%s", freed, out)
+	}
+	if _, err := os.Stat(filepath.Join(scratch, dir, "scratchpad", "a")); err != nil {
+		t.Fatal(err)
 	}
 }
