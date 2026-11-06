@@ -110,10 +110,10 @@ inputs and outputs in the selected configuration.`,
 			defer func() {
 				_ = broker.Process.Signal(syscall.SIGTERM)
 				select {
-				case <-done:
+				case _ = <-done: // The broker was deliberately stopped.
 				case <-time.After(brokeredStopDelay):
 					_ = broker.Process.Kill()
-					<-done
+					_ = <-done // Reap the killed broker.
 				}
 			}()
 			deadline := time.Now().Add(10 * time.Second)
