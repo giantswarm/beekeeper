@@ -31,8 +31,8 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	supervisor := state.Party{Name: "fixture-supervisor", Session: "fixture-supervisor-session"}
 	supervisedBy(t, w, supervisor, entry.Add(-time.Minute))
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: "idle"}}, {Party: state.Party{Name: "done"}, Task: "finished", Done: true}}
-		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later"}}
+		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished", Done: true}}
+		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later suspend timer"}}
 		return nil, nil
 	})
 	if err != nil {
@@ -78,8 +78,8 @@ func TestSuspendRespectsDeskStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stopped desk must report gaps without scheduling recovery.
-	st.Agents = []state.Agent{{Party: state.Party{Name: "fixture"}, Task: "work"}}
-	st.Stop = &state.Stop{Reason: "fixture stop"}
+	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: "work"}}
+	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
 	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
 	if len(w.suspendRecovery) != 0 {
 		t.Fatal("stopped desk queued recovery")
@@ -94,12 +94,12 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Agents = []state.Agent{
-		{Party: state.Party{Name: "live", Session: "live-id"}, Task: "work"},
-		{Party: state.Party{Name: "parked"}, Task: "wait", Park: &state.Park{}},
-		{Party: state.Party{Name: "stopped", Session: "stopped-id"}, Task: "work"},
+		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: "work"},
+		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
+		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: "work"},
 	}
-	w.resumed(st, []*claude.Session{{Name: "live", ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
-	if len(w.suspendRecovery) != 1 || w.suspendRecovery["stopped"].party.Name != "stopped" {
+	w.resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
+	if len(w.suspendRecovery) != 1 || w.suspendRecovery[reviewedStoppedCase].party.Name != reviewedStoppedCase {
 		t.Fatalf("queued: %v", w.suspendRecovery)
 	}
 }
@@ -113,7 +113,7 @@ func TestSuspendRestartsSupervisorService(t *testing.T) {
 	defer func() { plat.Machine = original }()
 	starts := 0
 	w.stand.loopUnit = &loopService{
-		state: func(context.Context) string { return "inactive" },
+		state: func(context.Context) string { return "suspend fixture inactive" },
 		start: func(context.Context) error { starts++; return nil },
 	}
 	w.suspends(t.Context(), w.now.Add(-time.Minute), nil)

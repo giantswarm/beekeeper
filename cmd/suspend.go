@@ -98,13 +98,13 @@ func (w *watcher) resumed(st *state.State, sessions []*claude.Session, entry, ex
 
 func suspendNames(names []string) string {
 	if len(names) == 0 {
-		return "none"
+		return ghNone
 	}
 	return quoted(names)
 }
 func suspendItems(items []string) string {
 	if len(items) == 0 {
-		return "none"
+		return ghNone
 	}
 	return strings.Join(items, ", ")
 }
