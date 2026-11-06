@@ -83,11 +83,7 @@ func (h Hook) folderRefusal(ev event) string {
 	var targets []string
 	switch ev.ToolName {
 	case writeTool, editTool, multiEditTool, notebookTool:
-		file, _ := ev.ToolInput[filePathKey].(string)
-		if file == "" {
-			file, _ = ev.ToolInput[notebookPathKey].(string)
-		}
-		if file != "" {
+		if file := toolFile(ev); file != "" {
 			targets = []string{absIn(cwd, file)}
 		}
 	case bashTool:
@@ -95,7 +91,7 @@ func (h Hook) folderRefusal(ev event) string {
 		targets = writeTargets(cmd, cwd, 0)
 	}
 	for _, t := range targets {
-		if what := h.personFile(t); what != "" {
+		if what := h.personFile(t); what != "" && !h.guideDeskFile(ev.Session, t) {
 			return "Refused: `" + t + "` is " + what + ", where no session creates or overwrites a file unasked " +
 				"(the person's folders, hooks.personFolders). Scratch files go in this session's scratchpad, " +
 				h.scratchpad(ev) + ", or in ~/.local/state/<program>/; a change to a checkout is made in a worktree of its own. " +
@@ -193,23 +189,45 @@ func writeTargets(cmd, cwd string, depth int) []string {
 // walkTargets is writeTargets, or with moves the existing directories the
 // command line moves or removes (movedDirs).
 func walkTargets(cmd, cwd string, depth int, moves bool) []string {
+	return collectTargets(cmd, cwd, depth, moves, false)
+}
+
+// collectTargets walks a command's write targets, with its entry checks.
+func collectTargets(cmd, cwd string, depth int, moves, entries bool) []string {
+	return walkAllTargets(cmd, cwd, depth, moves, entries, false)
+}
+
+// walkConfigTargets walks a command's write targets, with its config writes.
+func walkConfigTargets(cmd, cwd string, depth int, moves, configs bool) []string {
+	return walkAllTargets(cmd, cwd, depth, moves, false, configs)
+}
+
+func walkAllTargets(cmd, cwd string, depth int, moves, entries, configs bool) []string {
+	return walkAllTargetsMode(cmd, cwd, depth, moves, entries, configs, false)
+}
+
+func walkTargetsMode(cmd, cwd string, depth int, moves, create bool) []string {
+	return walkAllTargetsMode(cmd, cwd, depth, moves, false, false, create)
+}
+
+func walkAllTargetsMode(cmd, cwd string, depth int, moves, entries, configs, create bool) []string {
 	if depth > 4 {
 		return nil
 	}
 	sc := scanShell(cmd)
 	segs := sc.segments()
-	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves}
+	w := targetWalk{cmd: cmd, sc: sc, segs: segs, nested: depth > 0, branches: 1, moves: moves, entries: entries, configs: configs, create: create}
 	st := deleteState{assigned: map[string]string{}, env: os.Getenv, nounset: depth > 0}
 	w.walk(0, st, cwd)
 	out := w.out
 	for _, cs := range shellStrings(cmd) {
 		if sc.masked[cs.at] == cmd[cs.at] {
-			out = append(out, walkTargets(cs.text, cwd, depth+1, moves)...)
+			out = append(out, walkAllTargetsMode(cs.text, cwd, depth+1, moves, entries, configs, create)...)
 		}
 	}
 	for _, hd := range sc.heredocs {
 		if shellReads(sc, segs, hd.op) {
-			out = append(out, walkTargets(cmd[hd.start:hd.end], cwd, depth+1, moves)...)
+			out = append(out, walkAllTargetsMode(cmd[hd.start:hd.end], cwd, depth+1, moves, entries, configs, create)...)
 		}
 	}
 	return out
@@ -284,12 +302,16 @@ type targetWalk struct {
 	// nested: the command line is a shell's -c string or here-document.
 	nested   bool
 	branches int
+	// entries also collects checkout and file creation operands (entries.go).
 	// moves collects the directories moved or removed (liveworktrees.go)
 	// instead of the files written; loops holds what a for loop's variable
 	// takes then.
-	moves bool
-	loops map[string][]string
-	out   []string
+	create  bool
+	entries bool
+	moves   bool
+	configs bool
+	loops   map[string][]string
+	out     []string
 }
 
 // walk follows the segments from i on with the variables st and the
@@ -299,7 +321,7 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 	st.chdir(dir)
 	for ; i < len(w.segs); i++ {
 		sg := w.segs[i]
-		if !w.moves {
+		if !w.moves && !w.create {
 			w.redirections(sg, &st, dir)
 		}
 		cmds := rawCommands(w.sc.plain[sg.start:sg.end])
@@ -319,6 +341,9 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 			st.setVars(raw, sg.after)
 			continue
 		}
+		if w.configs {
+			w.configWrites(&st, dir, path.Base(words[k]), raw[k+1:], words[k+1:])
+		}
 		switch name := path.Base(words[k]); {
 		case declarations[name]:
 			st.setVars(raw[k+1:], sg.after)
@@ -333,10 +358,14 @@ func (w *targetWalk) walk(i int, st deleteState, dir string) {
 				dir = st.cd(dir, raw[k+1:], words[k+1:])
 			}
 			st.chdir(dir)
-		case w.moves && name == "for":
+		case (w.moves || w.create) && name == "for":
 			w.loop(&st, dir, raw[k+1:])
+		case w.create:
+			w.addWorktree(&st, dir, name, raw[k+1:])
 		case w.moves:
 			w.addMoved(&st, dir, name, raw[k+1:])
+		case w.entries && name != teeCmd:
+			w.addEntries(&st, dir, name, withoutRedirections(raw[k+1:]))
 		case name == "tee":
 			for j, word := range words[k+1:] {
 				if strings.HasPrefix(word, ">") || strings.HasPrefix(word, "<") || strings.HasPrefix(word, "2>") {
@@ -425,8 +454,8 @@ func (st *deleteState) path(word string) (string, bool) {
 
 // cd is the directory a cd with the given arguments (as written and as
 // words) leaves the shell in, from dir; "" when unknown. An argument that
-// resolves to nothing (an empty variable) leaves it where it was, as cd ""
-// does.
+// resolves to nothing leaves it where it was when quoted (cd ""), or goes
+// home when unquoted, since the empty argument disappears.
 func (st *deleteState) cd(dir string, raw, words []string) string {
 	for len(words) > 0 && strings.HasPrefix(words[0], "-") && words[0] != "-" {
 		raw, words = raw[1:], words[1:]
@@ -442,6 +471,10 @@ func (st *deleteState) cd(dir string, raw, words []string) string {
 	case !ok:
 		return ""
 	case p == "":
+		if !strings.ContainsAny(raw[0], "\"'") {
+			home, _ := os.UserHomeDir()
+			return home
+		}
 		return dir
 	}
 	if p, ok := st.path(raw[0]); ok && (dir != "" || filepath.IsAbs(p)) {

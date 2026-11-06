@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +15,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 	"github.com/giantswarm/beekeeper/pkg/project"
+)
+
+const (
+	selfUpdateCheckFlag    = "--check"
+	selfUpdateRollbackFlag = "--rollback"
+	selfUpdateReasonFlag   = "--rollback-reason"
+	selfUpdateReason       = "candidate unhealthy"
 )
 
 // An update names the beekeeper processes it leaves on the old binary, pid
@@ -117,7 +125,7 @@ func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 
 	// Budget failures leave the candidate discoverable and retryable.
 	root = New()
-	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, "--check"})
+	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, selfUpdateCheckFlag})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), canaryFailedVersion+" is newer") {
@@ -139,5 +147,127 @@ func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
+	}
+}
+
+// The update hands the health check to the install, and a failed one is not a
+// skipped release: the installed candidate is judged, not the one on offer.
+func TestSelfUpdateChecksTheInstalledCandidate(t *testing.T) {
+	prev, prevCheck := runUpdate, runCanaryCheck
+	t.Cleanup(func() { runUpdate, runCanaryCheck = prev, prevCheck })
+	runCanaryCheck = func(context.Context, string, ...string) (string, error) { return "no answer", errors.New("exit 1") }
+	var health error
+	runUpdate = func(ctx context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		health = update.OptionsFrom(ctx).Health(ctx, "/installed", "v1.2.3")
+		return update.Result{}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if health == nil || !strings.Contains(health.Error(), "no answer") {
+		t.Fatalf("health = %v", health)
+	}
+}
+
+func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
+	for _, args := range [][]string{
+		{selfUpdateRollbackFlag},
+		{selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, "--complete-probation"},
+		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			root := New()
+			root.SetArgs(append([]string{selfUpdateCmdName}, args...))
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			if err := root.Execute(); err == nil {
+				t.Fatal("accepted unsafe flag combination")
+			}
+		})
+	}
+}
+
+func TestSelfUpdateWarnsConfigCompatibility(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runUpdate
+	t.Cleanup(func() { runUpdate = previous })
+	var out bytes.Buffer
+	stopped := errors.New("stop before installation")
+	called := false
+	runUpdate = func(_ context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		called = true
+		if !strings.Contains(out.String(), "installed binary cannot read") || !strings.Contains(out.String(), "watch.interval") {
+			t.Fatalf("missing warning before update: %s", out.String())
+		}
+		return update.Result{}, stopped
+	}
+	root := New()
+	root.SetArgs([]string{"--" + configFlag, cfg, selfUpdateCmdName})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); !errors.Is(err, stopped) || !called {
+		t.Fatalf("update callback not reached: %v", err)
+	}
+}
+
+func TestSelfUpdateVersionFlag(t *testing.T) {
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	const tag = "v0.125.0-rc.3"
+	called := false
+	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
+		called = true
+		if !check || update.OptionsFrom(ctx).Version != tag {
+			t.Fatalf("check=%v options=%+v", check, update.OptionsFrom(ctx))
+		}
+		return update.Result{Current: tag, Latest: tag}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, "--version", tag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("update not called")
+	}
+}
+
+// Global flag values and later arguments must not be mistaken for commands.
+func TestReexecs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args string
+		want bool
+	}{
+		{"no arguments", "", false},
+		{"program only", "beekeeper", false},
+		{"gate wrapper", "beekeeper gate -- devctl pr merge o/r 1", true},
+		{"merge child", "beekeeper merge-child /state/merge", true},
+		{"config gate", "beekeeper --config /config.yaml gate -- devctl pr merge o/r 1", true},
+		{"config merge child", "beekeeper --config /config.yaml merge-child /state/merge", true},
+		{"inline config", "beekeeper --config=/config.yaml gate", true},
+		{"multiple globals", "beekeeper --json --as worker --config /config.yaml merge-child /state/merge", true},
+		{"gate config value", "beekeeper --config gate version", false},
+		{"merge child identity value", "beekeeper --as merge-child version", false},
+		{"later gate", "beekeeper version gate", false},
+		{"separator", "beekeeper -- gate", false},
+		{"missing config value", "beekeeper --config", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reexecs(&proc.Process{Args: strings.Fields(tc.args)}); got != tc.want {
+				t.Errorf("reexecs(%q) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
 	}
 }

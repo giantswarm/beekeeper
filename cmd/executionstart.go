@@ -122,6 +122,17 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if _, err := gateStart(verdict, o.Force); err != nil {
 		return err
 	}
+	if o.Force {
+		if _, err := fmt.Fprintln(a.out, "--force overrides coordinator capacity only; execution-host admission still enforces memory, swap, load, disk, build slots (with --builds) and maxBusy, plus authentication, identity, version and policy checks. Remote preparation can still be refused."); err != nil {
+			return err
+		}
+	}
+	var bundleDigest string
+	if !o.DryRun {
+		if bundleDigest, err = a.syncHostBundle(ctx, host); err != nil {
+			return err
+		}
+	}
 	id := execution.ExecutionID(uuid.NewString())
 	control, err := execution.NewControlKey()
 	if err != nil {
@@ -133,13 +144,15 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
-	if a.cfg.GitHub.WorkerApp != nil {
+	if o.Review {
+		prompt += "\n\nExecution review access: use `beekeeper agents review` to read the assigned pull request and linked issues, and `beekeeper agents review --diff` to read its diff through the coordinator. Post the required review with `beekeeper agents review --body-file <file>`; it returns the exact review URL for your completion report. If the assignment is not available yet, retry after the supervisor finishes recording the start. Review the assigned head; do not publish or park as an author.\n"
+	} else if a.cfg.GitHub.WorkerApp != nil {
 		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
 	} else {
 		prompt += "\n\nSSH execution publication: work in this owned workspace. Commit on a feature branch locally, then use `beekeeper agents publish --title <conventional-title> --body-file <absolute-workspace-file>` instead of raw git push or gh pr create. The coordinator chooses an execution-owned branch and returns the PR URL. Publish review fixes with `beekeeper agents publish`; retry identical publication after a lost response to recover the same PR. Before the desk review approves the PR, merge upstream changes without a GitHub credential on this host with `beekeeper agents publish --sync-base`, resolve any merge conflict and commit, then publish again; after approval only the merge moves the head (it updates a behind branch itself), so sync the base then only to resolve a conflict the supervisor reports. These steps use the coordinator's GitHub account and never require a host write credential. Park on the returned PR for independent review. Merge only with the supervisor's exact-head component authorization.\n"
 	}
 
-	r := execution.StartRequest{GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
+	r := execution.StartRequest{BundleDigest: bundleDigest, GitHub: a.cfg.GitHub.WorkerApp != nil, MCP: len(a.cfg.Agents.RemoteMCP) > 0, LeaseRequired: true, Messaging: true, Ref: execution.Ref{Host: host.Identity, Execution: id, Generation: 1}, RequestID: uuid.NewString(), Coordinator: a.cfg.Identity.Host, Name: name, Task: task, Repository: o.Repository, GitRef: o.GitRef, Harness: o.Harness, Model: o.Model, Effort: o.Effort, Prompt: prompt, PolicyDigest: host.PolicyDigest, ConversationID: uuid.NewString(), ControlKey: control, Builds: o.Builds}
 	if err := r.Validate(); err != nil {
 		return usageErr("%v", err)
 	}
@@ -150,6 +163,11 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	provider, bucket := resolveAgentProviderBucket(k, r.Harness, r.Model)
 	err = a.store.Update(func(current *state.State) ([]state.Event, error) {
 		if err := a.refuseStopped(current, "starting an SSH execution"); err != nil {
+			return nil, err
+		}
+		// Another coordinator can reserve a different route after our catalog
+		// read. Serialize route pinning with admission, just like capacity.
+		if err := validateRetainedExecutionRoute(current, o.Host, host); err != nil {
 			return nil, err
 		}
 		// Provider observations are read once before admission. Only counts
@@ -170,9 +188,10 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		if executionHostBusy(current, host.Identity) >= host.MaxBusy {
 			return nil, refused("execution host maxBusy reached")
 		}
-		rec := &state.ExecutionRecord{Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
+		endpoint := host.Endpoint
+		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
-		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
+		if _, err := a.recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
 		}
 		ref := r.Ref

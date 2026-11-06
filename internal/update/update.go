@@ -65,11 +65,27 @@ type Result struct {
 // executable in place.
 type Canary func(ctx context.Context, path, version string) error
 
+// Health checks the executable at path, the installed candidate of version.
+type Health func(ctx context.Context, path, version string) error
+
 // Options configures a Run call through its context.
 type Options struct {
-	Canary Canary
+	// Version selects an exact release tag, including pre-releases.
+	Version string
+	Canary  Canary
+	// Health checks the installed candidate before an update promotes it. Nil,
+	// that the candidate runs the update is its evidence.
+	Health Health
 	Skip   func(tag string) bool
+	// Recovery launches the controller that supervises the candidate about to
+	// replace target, from the verified recovery binary at artifact. It runs
+	// before the replacement: a candidate that never starts cannot prevent it.
+	// Nil or an error leaves the candidate unwatched, promoted by its next update.
+	Recovery Recovery
 }
+
+// Recovery launches a recovery controller; see Options.Recovery.
+type Recovery func(ctx context.Context, previous Binary, artifact, target string) error
 
 type optionsKey struct{}
 
@@ -122,21 +138,24 @@ func (s *skipSource) ListReleases(ctx context.Context, repository selfupdate.Rep
 //
 // The binary is renamed over the executable in one step, symbolic links
 // resolved: a beekeeper watch that runs keeps running the old binary, every
-// process started afterwards runs the new one, and several updates may run
-// at once. A development build, a release without a bundle for this
+// process started afterwards runs the new one. Concurrent updates serialize
+// through a durable journal lock. A development build, a release without a bundle for this
 // platform's binary and a download that does not verify are refused, and the
 // executable stays as it is.
 func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
+	opts := optionsFrom(ctx)
+	if opts.Version != "" {
+		return selectVersion(ctx, w, opts.Version, checkOnly, func() (selfupdate.Source, error) { return newTagSource(opts.Version) })
+	}
 	res := Result{Current: currentVersion()}
 	if _, err := semver.NewVersion(res.Current); err != nil {
-		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases or with go install %s@latest", res.Current, project.Source, project.Module)
+		return res, fmt.Errorf("cannot self-update a development build (version %s): install a release from %s/releases", res.Current, project.Source)
 	}
 
 	source, err := newSource(prerelease(res.Current))
 	if err != nil {
 		return res, fmt.Errorf("creating release source: %w", err)
 	}
-	opts := optionsFrom(ctx)
 	filtered := &skipSource{Source: source, skip: opts.Skip}
 	up, err := selfupdate.NewUpdater(selfupdate.Config{Source: filtered, Validator: newValidator(), Prerelease: prerelease(res.Current)})
 	if err != nil {
@@ -179,7 +198,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
-		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s to %s.\n", res.Path, res.Latest)
@@ -222,7 +241,8 @@ func prerelease(current string) bool {
 // over the running executable once its bundle verifies, as Run installs the
 // latest: an execution host follows its coordinator's release, never a newer
 // one. The verified download is staged beside the destination and renamed
-// over it atomically, with no backup or ownership-dependent hard link.
+// over it atomically, retaining a verified recovery target once probation has
+// succeeded. First installation has no trusted recovery target.
 func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
 	return installVersion(ctx, w, version, func() (selfupdate.Source, error) { return newTagSource(version) })
 }
@@ -240,6 +260,11 @@ func releaseSemver(version string) (*semver.Version, error) {
 // installVersion installs release version, which newSource lists, as
 // InstallVersion says.
 func installVersion(ctx context.Context, w io.Writer, version string, newSource func() (selfupdate.Source, error)) (Result, error) {
+	return selectVersion(ctx, w, version, false, newSource)
+}
+
+// selectVersion checks or installs an exact tag through the verified installer.
+func selectVersion(ctx context.Context, w io.Writer, version string, checkOnly bool, newSource func() (selfupdate.Source, error)) (Result, error) {
 	res := Result{Current: currentVersion(), Latest: version}
 	want, err := releaseSemver(version)
 	if err != nil {
@@ -249,6 +274,7 @@ func installVersion(ctx context.Context, w io.Writer, version string, newSource 
 		return res, fmt.Errorf("cannot update a development build (version %s) to a release: install %s by hand", res.Current, version)
 	}
 	if version == res.Current {
+		_, _ = fmt.Fprintf(w, "beekeeper %s is already installed.\n", version)
 		return res, nil
 	}
 	source, err := newSource()
@@ -274,11 +300,18 @@ func installVersion(ctx context.Context, w io.Writer, version string, newSource 
 		return res, fmt.Errorf("GitHub answered no release %s of %s that carries a binary for %s/%s", version, Repository, runtime.GOOS, runtime.GOARCH)
 	}
 	res.Published, res.URL, res.Newer = rel.PublishedAt, rel.URL, newer(version, res.Current)
+	if checkOnly {
+		_, _ = fmt.Fprintf(w, "beekeeper %s is available, this is %s.\n", version, res.Current)
+		if res.Newer {
+			return res, ErrOutdated
+		}
+		return res, nil
+	}
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
-		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)

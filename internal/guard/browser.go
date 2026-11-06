@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -39,9 +40,15 @@ const musterNoBrowserEnv = "MUSTER_NO_BROWSER"
 // command that opens the person's browser runs only in the session holding the
 // browser lease.
 func (h Hook) browserRefusal(cmd, session string) string {
+	for _, later := range laterCommands(cmd) {
+		if r := h.browserRefusal(later, session); r != "" {
+			return r
+		}
+	}
 	if r := musterLoginRefusal(cmd); r != "" {
 		return r
 	}
+	cmd = commandText(cmd)
 	m := browserOpener.FindStringSubmatch(cmd)
 	if m == nil || h.Leases == nil {
 		return ""
@@ -51,7 +58,7 @@ func (h Hook) browserRefusal(cmd, session string) string {
 	}) {
 		return ""
 	}
-	return "Refused: `" + short(m[1]) + "` opens a page in the person's browser, in front of whatever they are working in, " +
+	return fmt.Sprintf("Matched token %q at byte %d. ", strings.Fields(m[1])[0], strings.Index(cmd, m[1])) + "Refused: `" + short(m[1]) + "` opens a page in the person's browser, in front of whatever they are working in, " +
 		"and they close it as a stray pop-up. Only the session holding the browser lease opens one: ask your supervisor " +
 		"for \"browser\", claim it with `beekeeper lease claim browser -p \"<purpose>\"` after its yes, run the sign-in, " +
 		"and release the lease right after."
@@ -64,12 +71,13 @@ func (h Hook) browserRefusal(cmd, session string) string {
 // holding the browser lease can finish it. With --no-browser muster prints
 // the sign-in URL and waits for its callback, and a browse step opens it.
 func musterLoginRefusal(cmd string) string {
+	cmd = commandText(cmd)
 	for _, m := range musterLogin.FindAllStringSubmatchIndex(cmd, -1) {
 		prefix, args := cmd[m[2]:m[3]], cmd[m[4]:m[5]]
 		if noBrowserArgs(args) || noBrowserAssigned(prefix) {
 			continue
 		}
-		return "Refused: `muster auth login` opens the person's default browser, outside the Claude in Chrome tab group, " +
+		return fmt.Sprintf("Matched token %q at byte %d. ", "muster", m[3]) + "Refused: `muster auth login` opens the person's default browser, outside the Claude in Chrome tab group, " +
 			"where neither this session's browser tools nor `beekeeper browse` reach the page: the sign-in tab sits in front " +
 			"of the person and never finishes. Run `muster auth login --no-browser` instead (it passes in every session: it " +
 			"opens nothing, prints the sign-in URL and waits for the callback, so start it in the background), then open " +
@@ -93,7 +101,7 @@ func noBrowserArgs(args string) bool {
 		switch {
 		case w == "--":
 			return noBrowser
-		case w == "-h" || w == "--help":
+		case w == "-h" || w == litHelp:
 			return true
 		case w == "--no-browser":
 			noBrowser = true

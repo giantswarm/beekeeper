@@ -156,7 +156,11 @@ func TestAgyProbeRefusesHooksAgyRejects(t *testing.T) {
 	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := f.s.probe(ctx, HarnessAgy, h, &HarnessReadiness{})
+	readiness := HarnessReadiness{Guard: probePassed}
+	err := f.s.probe(ctx, HarnessAgy, h, &readiness)
+	if readiness.Guard != probeFailed {
+		t.Fatalf("rejected hooks reported a passing guard: %+v", readiness)
+	}
 	if err == nil || !strings.Contains(err.Error(), "agy would reject the managed hooks.json and run unguarded") || !strings.Contains(err.Error(), `the "stale" entry`) {
 		t.Fatalf("probe of a rejected hooks.json: %v", err)
 	}
@@ -214,7 +218,7 @@ func TestAgyRunnerSingleTurn(t *testing.T) {
 	}
 	line := strings.TrimSpace(string(calls))
 	msg := strings.TrimSpace(string(agyStreamMessage(f.r.Prompt)))
-	want := f.s.agyHomeDir() + "|--input-format stream-json --output-format stream-json --model gemini-3.1-pro-high --dangerously-skip-permissions --new-project|" + msg
+	want := f.s.agyMCPHomeDir(f.r.Ref) + "|--input-format stream-json --output-format stream-json --model gemini-3.1-pro-high --dangerously-skip-permissions --new-project|" + msg
 	if line != want {
 		t.Fatalf("first turn:\n got %q\nwant %q", line, want)
 	}
@@ -297,7 +301,7 @@ func TestAgyRunnerWakesResumeTheConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.agyHomeDir()+"|")[1:]
+	turns := strings.Split(strings.TrimSpace(string(calls)), f.s.agyMCPHomeDir(f.r.Ref)+"|")[1:]
 	for i := range turns {
 		turns[i] = strings.TrimSpace(turns[i])
 	}
@@ -361,7 +365,7 @@ func TestAgyRunnerSurfacesFailedTurns(t *testing.T) {
 	if runtime.GOOS != messageTestLinux {
 		t.Skip("execution runner uses a Linux user service")
 	}
-	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports error status", "turn-failed"}} {
+	for _, test := range []struct{ name, marker string }{{"first turn exits nonzero", "fail-turn"}, {"first turn reports error status", litTurnFailed}} {
 		t.Run(test.name, func(t *testing.T) {
 			f, dir := agyFixture(t)
 			f.r.Messaging = true

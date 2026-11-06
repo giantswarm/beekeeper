@@ -158,6 +158,11 @@ func (a *app) watchDisk() *watchDiskReading {
 // Budget readings expire rather than treating a dead watch as permission
 // to start workers. Thresholds and all source reads stay in watch.
 func (l *supervisorLoop) watchConditions(ctx context.Context) error {
+	if line, err := l.a.checkThroughput(l.a.timeNow(), false); err != nil {
+		return err
+	} else if line != "" {
+		_, _ = fmt.Fprintln(l.a.out, line)
+	}
 	evs, err := l.a.store.Events(0, func(e state.Event) bool {
 		return strings.HasPrefix(e.Verb, "watch.") || e.Verb == "supervisor.disk" || e.Verb == loopFileVerb || e.Verb == loopClaimVerb || e.Verb == "disk.prune"
 	})
@@ -277,7 +282,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.timeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text
 			}
-			text += ". Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
+			text += ". `beekeeper disk usage` lists what holds the space by owner; the writers above are process counters, not what stayed on disk. Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
 			fileAct := superloop.Action{Kind: superloop.KindFile, Key: diskKey}
 			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.timeNow().UTC().Format(time.RFC3339), fileReportSeparator, text)
 			if err := l.record(fileAct, line); err != nil {

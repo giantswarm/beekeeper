@@ -22,6 +22,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -36,6 +37,17 @@ import (
 	"github.com/giantswarm/beekeeper/internal/remotebuild"
 )
 
+// Projects separates the person's clones from session checkouts.
+type Projects struct {
+	Dir       string   `yaml:"dir"`
+	Worktrees []string `yaml:"worktrees"`
+}
+
+// Home names places for session state, logs and backups.
+type Home struct {
+	Places []string `yaml:"places"`
+}
+
 // Browser is the resource every machine has: the one Chrome the Claude in
 // Chrome extension drives.
 const Browser = "browser"
@@ -46,6 +58,8 @@ const ModelServer = "model-server"
 
 // Config is the parsed configuration with the defaults applied.
 type Config struct {
+	Projects Projects `yaml:"projects"`
+	Home     Home     `yaml:"home"`
 	// StateDir holds state.json, events.jsonl and the last snapshot.
 	StateDir string `yaml:"stateDir"`
 	// LeaseDir holds one directory per held lease (mkdir is the lock).
@@ -469,6 +483,8 @@ type BoardStep struct {
 
 // Hooks configures where beekeeper's Claude Code hooks act.
 type Hooks struct {
+	// GuardPersonalSearch refuses cross-repository issue searches in personal sessions too.
+	GuardPersonalSearch bool `yaml:"guardPersonalSearch"`
 	// Scope is the desk's part of the machine; out of it the hooks are
 	// inert.
 	Scope HookScope `yaml:"scope"`
@@ -476,7 +492,7 @@ type Hooks struct {
 	// Set by the supervisor, never inferred from a hook event.
 	TranscriptGrants map[string][]string `yaml:"transcriptGrants"`
 	// PersonFolders are the person's folders (~/ and globs allowed, e.g.
-	// [~, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
+	// [~/, ~/projects, ~/projects/*]): the PreToolUse hook refuses a file a
 	// session would create directly in one, and one git neither tracks nor
 	// ignores in the main working tree of a checkout that sits directly in
 	// one; scratch files go in the session's scratchpad. Empty, off.
@@ -674,8 +690,18 @@ type StoreRule struct {
 type Kube struct {
 	// Production is the installation whose clusters agents never write to:
 	// a context or cluster name with it as a component. Empty, the kube
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string `yaml:"production"`
+	// ProtectedContexts lists additional production-class contexts (including
+	// full test installations) whose clusters agents must not change directly.
+	ProtectedContexts []string `yaml:"protectedContexts"`
+	// ReadOnlyExecQueries lists exact SELECT queries allowed through psql -X -c.
+	ReadOnlyExecQueries []string `yaml:"readOnlyExecQueries"`
+	// ProductionNoteDeletes lets an answered note authorise one literal
+	// production kubectl delete. Off by default, and unsafe to switch on where
+	// agents can record answers: nothing proves a person gave the answer, so an
+	// agent that can record one can authorise its own deletion.
+	ProductionNoteDeletes bool `yaml:"productionNoteDeletes"`
 	// ContextTemplate is the kube context of an installation, with
 	// {installation} for its name ("login.example.com-{installation}");
 	// empty, an installation's context is its name or the one ending in
@@ -802,11 +828,13 @@ type BuildOutput struct {
 // Auto reports whether the disk step runs without a person's answer.
 func (d Disk) Auto() bool { return d.Prune == "" || d.Prune == DiskPruneAuto }
 
-// Teleport configures the Teleport login's keeper: a periodic user unit
-// that renews the SSO login before it expires, under the browser lease.
+// Teleport configures either the supervised Machine ID bot or the periodic
+// SSO keeper, which renews under the browser lease.
 type Teleport struct {
-	// Proxy is tsh login's --proxy (login.example.com:443); empty, no
-	// keeper runs and the watch reads no login.
+	// Bot selects headless Machine ID operation instead of SSO renewal.
+	Bot TeleportBot `yaml:"bot"`
+	// Proxy is tsh login's --proxy. Without a proxy or a bot, no keeper
+	// runs and the watch reads no identity.
 	Proxy string `yaml:"proxy"`
 	// Auth is tsh login's --auth, the SSO connector; empty, the cluster's
 	// default.
@@ -828,10 +856,26 @@ type Teleport struct {
 	Every Duration `yaml:"every"`
 }
 
+// TeleportBot points at an administrator-provisioned tbot configuration and outputs.
+// The configuration, rather than beekeeper's config or argv, holds the join token.
+type TeleportBot struct {
+	Config      string `yaml:"config"`
+	Binary      string `yaml:"binary"`
+	Certificate string `yaml:"certificate"`
+	Kubeconfig  string `yaml:"kubeconfig"`
+}
+
+// Enabled reports whether Machine ID replaces SSO.
+func (b TeleportBot) Enabled() bool { return b.Config != "" }
+
 // Enabled reports whether a keeper is configured.
-func (t Teleport) Enabled() bool { return t.Proxy != "" }
+func (t Teleport) Enabled() bool { return t.Proxy != "" || t.Bot.Enabled() }
 
 func (t *Teleport) defaults(home string) {
+	setStr(&t.Bot.Binary, "tbot")
+	t.Bot.Config = homePath(home, t.Bot.Config)
+	t.Bot.Certificate = homePath(home, t.Bot.Certificate)
+	t.Bot.Kubeconfig = homePath(home, t.Bot.Kubeconfig)
 	setStr(&t.Tsh, "tsh")
 	setStr(&t.Home, os.Getenv("TELEPORT_HOME"))
 	setStr(&t.Home, filepath.Join(home, ".tsh"))
@@ -890,10 +934,22 @@ func ValidEffort(level string) bool {
 	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
 }
 
+// PolicyBundle lists explicitly approved files below Root. Each start reads
+// them anew, so an edit reaches the next remote worker; no directory is harvested.
+type PolicyBundle struct {
+	Root         string                       `yaml:"root"`
+	Sources      []execution.BundleSource     `yaml:"sources"`
+	Settings     map[string]string            `yaml:"settings,omitempty"`
+	Capabilities []execution.BundleCapability `yaml:"capabilities,omitempty"`
+}
+
 // Agents configures the hand-over of registered agents.
 type Agents struct {
 	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
 	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
+	// PolicyBundle names the coordinator's rules and skills every remote start
+	// carries to its host. Unset, a remote worker has the host's policy alone.
+	PolicyBundle *PolicyBundle `yaml:"policyBundle,omitempty"`
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
@@ -918,12 +974,6 @@ type Agents struct {
 	// unkept task holder is retired after this age; gone task holders free
 	// their capacity slots. Negative disables stale retirement.
 	StaleAfter Duration `yaml:"staleAfter"`
-	// ArchiveAgreement says where the person agreed that the desktop
-	// sessions of finished workers beekeeper started are archived without
-	// asking, never a session the person started (their standing
-	// instruction, quoted to a steward). Empty: beekeeper asks no steward to
-	// archive, since a peer's message is not the person's agreement.
-	ArchiveAgreement string `yaml:"archiveAgreement"`
 	// AutoResume has the watch resume a parked agent (agents park) with
 	// what settled its wait, once the note it parked on is closed or the
 	// pull request merged or closed; off, the watch only says AGENT
@@ -936,6 +986,9 @@ type Agents struct {
 	// agents handover, a role's successor): the desk's checkout, whose
 	// project instructions every session loads. Empty: the caller's.
 	Dir string `yaml:"dir"`
+	// WorktreesDir is the place for worktrees created by agents start.
+	// Empty uses <stateDir>/worktrees.
+	WorktreesDir string `yaml:"worktreesDir"`
 	// Roots are the folders under which an agent may run instead, with
 	// --dir: the worktrees of the desk's repositories. Any other folder is
 	// refused while Dir is set.
@@ -2049,7 +2102,7 @@ type Doctor struct {
 	DockerEvery Duration `yaml:"dockerEvery"`
 	// WorktreeRoots are the folders (~/ allowed) under which the watch
 	// looks for the linked git worktrees of finished workers (default
-	// ~/.local/state/klaus-lab/worktrees).
+	// ~/.local/state/beekeeper/worktrees).
 	WorktreeRoots []string `yaml:"worktreeRoots"`
 	// WorktreesEvery is how often the watch removes the worktrees whose
 	// pull request merged or closed, and the build output of those that
@@ -2101,7 +2154,19 @@ type Identity struct {
 
 // Serve configures `beekeeper serve`, the central instance behind muster:
 // whose Dex tokens it accepts and what their groups authorize.
+// FleetWatch selects the read-only muster tools used by serve's fleet watch.
+// Empty tools disables the watch, allowing identity grants to be deployed first.
+type FleetWatch struct {
+	MinCallInterval Duration `yaml:"minCallInterval"`
+	Kubernetes      string   `yaml:"kubernetes"`
+	Kagent          string   `yaml:"kagent"`
+	Alertmanager    string   `yaml:"alertmanager"`
+	Concurrency     int      `yaml:"concurrency"`
+	Timeout         Duration `yaml:"timeout"`
+}
+
 type Serve struct {
+	FleetWatch FleetWatch `yaml:"fleetWatch"`
 	// Issuer is the Dex issuer URL every caller's ID token is checked
 	// against (its JWKS).
 	Issuer string `yaml:"issuer"`
@@ -2114,7 +2179,9 @@ type Serve struct {
 	Organization string `yaml:"organization"`
 	// Organizations are further groups that make a caller a member: one per
 	// Dex connector where the connectors spell the organization differently
-	// (a GitHub org's <org>:<team>, a directory's group name).
+	// (a GitHub org's <connector>:<org>:<team>, a directory's group name).
+	// Use the exact token group, e.g. giantswarm-github:giantswarm:employees;
+	// an unprefixed <org>:<team> matches only an unprefixed token group.
 	Organizations []string `yaml:"organizations"`
 	// Teams maps a Dex group to the team its members belong to; a caller
 	// in none is refused, a caller in several is the team of TeamGroups'
@@ -2247,18 +2314,44 @@ type Guide struct {
 	// WaitingTTL is how long a stopped session that waits on the person
 	// stays in the queue and the feed; older ones fold into one line.
 	WaitingTTL Duration `yaml:"waitingTTL"`
+	// PersonNames are other names the person goes by: note add --for one of
+	// them files the note for Person, where the guide sees it.
+	PersonNames []string `yaml:"personNames"`
+	// Desk is the folder (~/ allowed) the guide keeps its memory in, a desk
+	// checkout: the guide's session writes files there and the desk commits
+	// them. A refused write to a harness's own memory names it. Empty: the
+	// guide edits nothing.
+	Desk string `yaml:"desk"`
 }
+
+// DefaultLoopGraphQLLimit is supervisor.graphQLLimit when unset.
+const DefaultLoopGraphQLLimit = 1500
 
 // Supervisor configures the supervisor, which is the supervisor loop: the
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
+	// ReviewModel overrides reviewer model selection. The review command
+	// defaults to opus, the strongest Claude review model alias.
+	ReviewModel string `yaml:"reviewModel"`
+	// GraphQLLimit is the GraphQL points an hour the loop's board reads may
+	// spend of their window (1500): past it the board waits for the reset,
+	// while pull reads, reviews and merges go on. A busy desk raises it.
+	GraphQLLimit int `yaml:"graphQLLimit"`
+	// ReviewLightLines selects diff-only review below this changed-line count.
+	// Zero defaults to 150; negative disables the size shortcut.
+	ReviewLightLines int `yaml:"reviewLightLines"`
+
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
-	// ReviewRounds is retained for configuration compatibility and reporting
-	// (default 1). It never releases a head without an approving review.
-	// Every new head gets one independent review, except a proven base-only
-	// update of an approved head, which remains covered by that approval.
+	// ReviewRounds caps the review rounds that ask for changes (default 1);
+	// an approved round counts for none, and superloop.MaxReviews bounds all
+	// rounds. Under the cap a green head with fixes gets the next review.
+	// Once the cap is used it gets the merge go with no new review: fixes
+	// pushed after a review need no review of their own. A head that only
+	// brings the base into the findings' head carries no fixes and goes back
+	// to rework; one that only brings the base into an approved head stays
+	// covered by that approval.
 	ReviewRounds int `yaml:"reviewRounds"`
 	// ReviewBrief and WorkerBrief are files (~/ allowed) holding the Go
 	// templates of the briefs the loop starts a reviewer and the next
@@ -2421,7 +2514,12 @@ const DefaultQueueTTL = 15 * time.Minute
 
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
+	// RequireReview requires a fixed desk approval covering the merge head;
+	// an explicit supervisor go alone cannot substitute for that review.
+	RequireReview bool `yaml:"requireReview"`
+
 	// Methods selects squash, rebase or merge for each repository. Empty: squash.
+	// Rebase also makes the ordinary devctl gate add --rebase automatically.
 	Methods map[string]string `yaml:"methods"`
 	// Cap is the most devctl merges and promotes the machine runs when a
 	// merge starts; the waits only poll and do not count.
@@ -2458,9 +2556,11 @@ type Merge struct {
 	// within its own --timeout, so one running on past it hangs in its lane.
 	HungAfter Duration `yaml:"hungAfter"`
 	// CITimeout is devctl pr merge's --timeout, its wait for the CI outcome,
-	// when the gated command names none: devctl's own 30m is shorter than a
-	// repository's CI restarted from zero by --update-branch.
+	// when the gated command names none (default 2h, including CI queueing).
+	// CITimeouts can override it for repositories with longer pipelines.
 	CITimeout Duration `yaml:"ciTimeout"`
+	// CITimeouts overrides CITimeout for repositories keyed by owner/repo.
+	CITimeouts map[string]Duration `yaml:"ciTimeouts"`
 	// BusyBudget is how long a merge with --update-branch keeps its lane
 	// place running devctl again after a run ends on a busy base (its base
 	// moved during every one of devctl's update waits, exit 3), counted from
@@ -2472,7 +2572,7 @@ type Merge struct {
 	// call without an exit code. Negative: no limit.
 	ToolLimit Duration `yaml:"toolLimit"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
-	// (its GitHub App login reaches its own organisation only); a
+	// with its configured GitHub authentication; a
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`
@@ -2480,6 +2580,16 @@ type Merge struct {
 	// past their branch ruleset after the approved desk review; only their
 	// merge go names --admin.
 	Admin []string `yaml:"admin"`
+}
+
+// TimeoutFor returns the repository's CI timeout, falling back to CITimeout.
+func (m Merge) TimeoutFor(repo string) time.Duration {
+	for name, timeout := range m.CITimeouts {
+		if strings.EqualFold(name, repo) && timeout.Duration > 0 {
+			return timeout.Duration
+		}
+	}
+	return m.CITimeout.Duration
 }
 
 // DevctlServes says whether devctl pr merge serves repo's owner.
@@ -2788,10 +2898,13 @@ type Lemonade struct {
 // (the Default* fractions): its absolute value is read with the method of
 // the same name.
 type Watch struct {
+	// ThroughputAfter bounds how long an eligible PR may wait for a merge (default 2h).
+	ThroughputAfter Duration `yaml:"throughputAfter"`
 	// BatchInterval paces routine stdout notices. Negative disables batching;
 	// --once always prints immediately. Action lines never wait for a batch.
 	BatchInterval Duration `yaml:"batchInterval"`
 	Interval      Duration `yaml:"interval"`
+	StuckAfter    Duration `yaml:"stuckAfter"`
 	// Repeat paces how often a lasting condition is handed to the
 	// notifier (which sends it again after notify.repeat); the watch
 	// prints it once when it starts and once when it ends.
@@ -3001,6 +3114,10 @@ type Model struct {
 	// defaults): a fast request's cost is unknown.
 	Fast          float64 `yaml:"fast" json:"fast,omitempty"`
 	ContextWindow int     `yaml:"contextWindow" json:"contextWindow"`
+	// LongContextThreshold counts all input tokens, including cache reads
+	// and writes. Requests above it multiply every price by LongContextMultiplier.
+	LongContextThreshold  int64   `yaml:"longContextThreshold" json:"longContextThreshold,omitempty"`
+	LongContextMultiplier float64 `yaml:"longContextMultiplier" json:"longContextMultiplier,omitempty"`
 }
 
 // Runaway are the per-session figures over which the watch prints one line.
@@ -3029,6 +3146,7 @@ var DefaultModels = map[string]Model{
 	"claude-sonnet-5-5": {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-5":   {Input: 2, Output: 10, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.2, ContextWindow: 1_000_000},
 	"claude-sonnet-4-6": {Input: 3, Output: 15, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.3, ContextWindow: 1_000_000},
+	"claude-haiku-5-5":  {Input: 0.1, Output: 0.5, CacheWrite5m: 0.125, CacheWrite1h: 0.2, CacheRead: 0.01, ContextWindow: 1_000_000, LongContextThreshold: 100_000, LongContextMultiplier: 5},
 	"claude-haiku-4-5":  {Input: 1, Output: 5, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.1, ContextWindow: 200_000},
 }
 
@@ -3090,6 +3208,8 @@ type Omp struct {
 	// without --model, an exact selector omp lists ("ollama/qwen3.5:9b");
 	// empty: such a start is refused.
 	Model string `yaml:"model"`
+	// ServedBy is the lease resource serving Model. Starts refuse while held.
+	ServedBy string `yaml:"servedBy"`
 	// Providers are the providers of ModelsFile whose key lives in the
 	// vault, by the provider's name there.
 	Providers map[string]OmpProvider `yaml:"providers"`
@@ -3291,6 +3411,15 @@ func Load(path string) (*Config, error) {
 func parse(path string, raw []byte) (*Config, error) {
 	c := &Config{}
 	if err := yaml.Unmarshal(raw, c); err != nil {
+		var doc yaml.Node
+		if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) > 0 {
+			var findings, invalid []string
+			root := effectiveNode(doc.Content[0], "", map[*yaml.Node]bool{}, &findings)
+			checkNode(root, reflect.TypeFor[Config](), "", &findings, &invalid)
+			if len(findings) > 0 {
+				return nil, fmt.Errorf("%s: %s: %w", path, strings.Join(findings, "; "), err)
+			}
+		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := c.defaults(); err != nil {
@@ -3327,6 +3456,22 @@ func (c *Config) defaults() error {
 	home, err := userHomeDir()
 	if err != nil {
 		return err
+	}
+	setStr(&c.Projects.Dir, filepath.Join(home, "projects"))
+	c.Projects.Dir = filepath.Clean(homePath(home, c.Projects.Dir))
+	if c.Projects.Worktrees == nil {
+		c.Projects.Worktrees = []string{filepath.Join(c.Projects.Dir, "worktrees")}
+	}
+	if c.Home.Places == nil {
+		c.Home.Places = []string{filepath.Join(home, ".local", "state")}
+	}
+	for _, places := range [][]string{c.Projects.Worktrees, c.Home.Places} {
+		for i, p := range places {
+			places[i] = filepath.Clean(homePath(home, p))
+		}
+	}
+	if c.Agents.Roots == nil {
+		c.Agents.Roots = slices.Clone(c.Projects.Worktrees)
 	}
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
@@ -3383,6 +3528,9 @@ func (c *Config) defaults() error {
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
+	if c.Supervisor.GraphQLLimit == 0 {
+		c.Supervisor.GraphQLLimit = DefaultLoopGraphQLLimit
+	}
 	if c.Supervisor.ClassifierConfidence == 0 {
 		c.Supervisor.ClassifierConfidence = 0.8
 	}
@@ -3398,9 +3546,11 @@ func (c *Config) defaults() error {
 	c.Supervisor.ReviewBrief = homePath(home, c.Supervisor.ReviewBrief)
 	c.Supervisor.WorkerBrief = homePath(home, c.Supervisor.WorkerBrief)
 	setStr(&c.Serve.Gateway.TokenFile, "/var/run/secrets/klaus-gateway/token")
+	c.Serve.Gateway.TokenFile = homePath(home, c.Serve.Gateway.TokenFile)
 	setStr(&c.Serve.Gateway.AnswerTool, "x_beekeeper_note_answer")
 	setStr(&c.Serve.Gateway.SendTool, "x_beekeeper_send_message")
 	setStr(&c.Serve.Identity.TokenFile, "/var/run/secrets/dex/token")
+	c.Serve.Identity.TokenFile = homePath(home, c.Serve.Identity.TokenFile)
 	setStr(&c.Central.Server, "beekeeper")
 	setStr(&c.Central.Muster, "muster")
 	setDur(&c.Central.Timeout, 30*time.Second)
@@ -3457,12 +3607,17 @@ func (c *Config) defaults() error {
 		c.Apps.Secrets[in] = s
 	}
 	c.Sandbox.defaults(home)
+	c.Run.Remote.Kubeconfig = homePath(home, c.Run.Remote.Kubeconfig)
 	for i := range c.Scan.SOPS {
 		c.Scan.SOPS[i] = homePath(home, c.Scan.SOPS[i])
 	}
 	setStr(&c.Plans.Check, DefaultPlansCheck)
 	c.Sink.defaults()
 	c.Teleport.defaults(home)
+	if b := c.Teleport.Bot; b.Enabled() {
+		c.Kube.Kubeconfig = append([]string{b.Kubeconfig}, c.Kube.Kubeconfig...)
+		c.Alerts.Kubeconfig = append([]string{b.Kubeconfig}, c.Alerts.Kubeconfig...)
+	}
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -3486,6 +3641,7 @@ func (c *Config) defaults() error {
 	setDur(&w.BatchInterval, 5*time.Minute)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
+	setDur(&w.ThroughputAfter, 2*time.Hour)
 	setDur(&w.SwapWindow, 10*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
 	setDur(&w.DiskFillWithin, 2*time.Hour)
@@ -3497,7 +3653,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Doctor.DockerEvery, time.Hour)
 	setDur(&c.Doctor.WorktreesEvery, 6*time.Hour)
 	if c.Doctor.WorktreeRoots == nil {
-		c.Doctor.WorktreeRoots = []string{"~/.local/state/klaus-lab/worktrees"}
+		c.Doctor.WorktreeRoots = []string{"~/.local/state/beekeeper/worktrees"}
 	}
 	for i, r := range c.Doctor.WorktreeRoots {
 		c.Doctor.WorktreeRoots[i] = filepath.Clean(homePath(home, r))
@@ -3531,6 +3687,8 @@ func (c *Config) defaults() error {
 	setStr(&c.Claude.SessionsDir, filepath.Join(home, ".claude", "sessions"))
 	setStr(&c.Omp.SessionsDir, filepath.Join(home, ".omp", "agent", "sessions"))
 	setStr(&c.Omp.ModelsFile, filepath.Join(home, ".omp", "agent", "models.yml"))
+	c.Omp.SessionsDir = homePath(home, c.Omp.SessionsDir)
+	c.Omp.ModelsFile = homePath(home, c.Omp.ModelsFile)
 	setStr(&c.Agy.BrainDir, filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
 	setStr(&c.Agy.ProjectsDir, filepath.Join(home, ".gemini", "config", "projects"))
 	setStr(&c.Agy.ConversationsDir, filepath.Join(home, ".gemini", "antigravity-cli", "conversations"))
@@ -3576,7 +3734,7 @@ func (c *Config) defaults() error {
 	setDur(&c.Merge.ResetFirst, 5*time.Minute)
 	setDur(&c.Merge.StallAfter, 5*time.Minute)
 	setDur(&c.Merge.HungAfter, 45*time.Minute)
-	setDur(&c.Merge.CITimeout, time.Hour)
+	setDur(&c.Merge.CITimeout, 2*time.Hour)
 	setDur(&c.Merge.BusyBudget, 4*time.Hour)
 	setDur(&c.Merge.ToolLimit, 9*time.Minute)
 	setDur(&c.Secret.UnlockWait, 8*time.Minute)
@@ -3824,6 +3982,30 @@ func firstFinding(visit func(func(error))) error {
 }
 
 func (c *Config) validateEach(report func(error)) {
+	// These intervals drive recurring loops; zero receives a default, while
+	// negative values cannot advance the scheduler.
+	for _, interval := range []struct {
+		key   string
+		value time.Duration
+	}{
+		{"watch.interval", c.Watch.Interval.Duration},
+		{"alerts.every", c.Alerts.Every.Duration},
+		{"alerts.pagerduty.every", c.Alerts.PagerDuty.Every.Duration},
+		{"supervisor.loopInterval", c.Supervisor.LoopInterval.Duration},
+	} {
+		if interval.value < 0 {
+			report(fmt.Errorf("%s: %s is negative", interval.key, interval.value))
+		}
+	}
+
+	for key, paths := range map[string][]string{"projects.dir": {c.Projects.Dir}, "projects.worktrees": c.Projects.Worktrees, "home.places": c.Home.Places} {
+		for _, p := range paths {
+			if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) == "/") {
+				report(fmt.Errorf("%s: %q: want an absolute directory below the filesystem root (~/ allowed)", key, p))
+			}
+		}
+	}
+
 	if c.LeaseRound.Duration < 0 {
 		report(errors.New("leaseRound: want a positive duration"))
 	}
@@ -3906,6 +4088,9 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
 		report(fmt.Errorf("agents.remoteMCP: %w", err))
+	}
+	if b := c.Agents.PolicyBundle; b != nil && (!filepath.IsAbs(b.Root) || len(b.Sources) == 0) {
+		report(fmt.Errorf("agents.policyBundle: an absolute root and at least one source are required"))
 	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {
@@ -4038,6 +4223,12 @@ func (c *Config) validateEach(report func(error)) {
 			report(fmt.Errorf("merge.methods[%s]: expected squash, rebase or merge", repo))
 		}
 	}
+	for repo, timeout := range c.Merge.CITimeouts {
+		ownerReposEach("merge.ciTimeouts", []string{repo}, report)
+		if timeout.Duration <= 0 {
+			report(fmt.Errorf("merge.ciTimeouts.%s: %s is not positive", repo, timeout.Duration))
+		}
+	}
 	ownerReposEach("merge.admin", c.Merge.Admin, report)
 	c.Sink.validateEach(report)
 	for i, st := range c.Board.Order {
@@ -4046,6 +4237,13 @@ func (c *Config) validateEach(report func(error)) {
 		}
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
 			report(fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name))
+		}
+	}
+	if b := c.Teleport.Bot; b.Enabled() {
+		for name, value := range map[string]string{"config": b.Config, "certificate": b.Certificate, "kubeconfig": b.Kubeconfig} {
+			if !filepath.IsAbs(value) {
+				report(fmt.Errorf("teleport.bot.%s: an absolute path is required", name))
+			}
 		}
 	}
 	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {
@@ -4105,12 +4303,15 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	c.Notify.validateEach(report)
 	for _, r := range c.Resources {
-		if r == "" || r == Browser || r == ModelServer || filepath.Base(r) != r || r[0] == '.' {
+		if !validResourceName(r) {
 			report(fmt.Errorf("resources: %q is not a valid resource name", r))
 		}
 	}
 	if k := c.Capacity; k.Ceiling < 0 {
 		report(fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling))
+	}
+	if n := c.Supervisor.GraphQLLimit; n < 0 {
+		report(fmt.Errorf("supervisor.graphQLLimit: %d is negative", n))
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
 		report(fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom))
@@ -4198,8 +4399,8 @@ func (c *Config) validateEach(report func(error)) {
 					report(fmt.Errorf("capacity.providers.%s.serveModeCeilings.%s: %d contradicts serveModeModes.%s.sessions %d", name, mode, c, mode, m.Sessions))
 				}
 				for _, n := range m.Nodes {
-					if strings.TrimSpace(n) == "" {
-						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: empty node name", name, mode))
+					if !validResourceName(n) {
+						report(fmt.Errorf("capacity.providers.%s.serveModeModes.%s: %q is not a valid resource name", name, mode, n))
 					}
 				}
 			}
@@ -4327,6 +4528,15 @@ func (c *Config) LaneNamed(name string) (Lane, bool) {
 	return Lane{}, false
 }
 
+// validResourceName requires one local filename component. Leading dots and
+// built-in lease names are reserved; serving-mode nodes share this contract
+// because they become lease resources even when resources does not list them.
+func validResourceName(name string) bool {
+	return strings.TrimSpace(name) != "" && filepath.IsLocal(name) &&
+		filepath.Base(name) == name && name[0] != '.' &&
+		name != Browser && name != ModelServer
+}
+
 // serveModeNodeNames are the machine's nodes named by any self-hosted
 // provider's serving modes: the resources a claim of one of them is the
 // generic constraint "needs node N exclusively". A node a mode occupies is
@@ -4347,10 +4557,15 @@ func (c Capacity) serveModeNodeNames() []string {
 }
 
 // Leasable returns every resource a session can lease: the configured ones,
-// the nodes a self-hosted serving mode occupies, the model server when one is
-// watched, the browser last.
+// the installations under alerts, the nodes a self-hosted serving mode
+// occupies, the model server when one is watched, the browser last.
 func (c *Config) Leasable() []string {
 	out := slices.Clone(c.Resources)
+	for _, in := range c.Alerts.Installations {
+		if !slices.Contains(out, in.Name) {
+			out = append(out, in.Name)
+		}
+	}
 	for _, n := range c.Capacity.serveModeNodeNames() {
 		if !slices.Contains(out, n) {
 			out = append(out, n)
@@ -4396,7 +4611,7 @@ func (c *Config) LabLease(cluster string) string {
 	return ""
 }
 
-// IsLeasable reports whether name is a configured resource or the browser.
+// IsLeasable reports whether name is one of the resources returned by Leasable.
 func (c *Config) IsLeasable(name string) bool {
 	return slices.Contains(c.Leasable(), name)
 }

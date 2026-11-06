@@ -89,7 +89,8 @@ func (c chore) String() string {
 // taken off the roster once it reported its work done and its CLI is idle
 // (busy: a turn or a gated merge of its own runs), once it was relieved of
 // a role, or once it stayed idle or gone staleAfter (0: never) with no CLI running,
-// unless a keep marker or a timer that wakes it keeps it (a keep chore).
+// unless it is parked, or a keep marker or a timer that wakes it keeps it
+// (a keep chore).
 // A started session the roster keeps whose desktop record shows another
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
@@ -102,6 +103,12 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 			if why := stoppedExecutionWhy(st, ag); why != "" && !busy(ag.Party) {
 				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
 			}
+			continue
+		}
+		// A parked local session may have been stopped by the watch to
+		// release memory. Its park, rather than CLI liveness or a stale
+		// done/role marker, owns its next wake and must stay on the roster.
+		if ag.Park != nil {
 			continue
 		}
 		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
@@ -259,12 +266,10 @@ type doctorRun struct {
 
 // doctorReport is what a run of the doctor found and did, a line each.
 type doctorReport struct {
-	chores []string
-	faults []faultFinding
-	notes  []string
-	// unagreed counts the finished workers whose archive waits on
-	// agents.archiveAgreement, said once for all, not per agent.
-	unagreed int
+	appDrifts []string
+	chores    []string
+	faults    []faultFinding
+	notes     []string
 	// stale are the running beekeeper processes of a binary an install
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
@@ -298,15 +303,20 @@ func staleLine(s staleBinary) string {
 // doctor finds the chores and the faults, and fixes what it may.
 func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	var rep doctorReport
+	if line := a.teleportContextsLine(); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return rep, err
 	}
+	rep.appDrifts = driftLines(a.appDrifts(ctx, st.Apps))
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
+	rep.chores = append(rep.chores, a.doctorMCP(ctx, r.dryRun)...)
 	rep.staleLoop = a.staleLoopLine(ctx)
 	loopPID := a.loopPID()
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), func(s staleBinary) bool {
@@ -393,7 +403,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return rep, err
 		}
 	}
-	rosterLines, unagreed, err := a.finishRoster(ctx, chores, sessions, record, busy, r.by, "beekeeper doctor")
+	rosterLines, err := a.finishRoster(ctx, chores, sessions, record, busy, r.by, "beekeeper doctor")
 	if err != nil {
 		return rep, err
 	}
@@ -403,7 +413,6 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, orphanLines...)
-	rep.unagreed += unagreed
 	st, err = a.store.Read()
 	if err != nil {
 		return rep, err
@@ -542,16 +551,15 @@ func (a *app) backgroundStartsToStop(ctx context.Context, st *state.State, sessi
 // relieved background starts that already left the roster.
 func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*claude.Session,
 	record func(string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party, byCmd string,
-) ([]string, int, error) {
+) ([]string, error) {
 	var lines []string
-	var unagreed int
 	removed, err := a.removeAgents(chores, by)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	st, err := a.store.Read()
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	var archive []state.Party
 	for _, c := range removed {
@@ -562,7 +570,7 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 	}
 	owed, err := a.owedArchives(sessions, record, busy, by)
 	if err != nil {
-		return lines, 0, err
+		return lines, err
 	}
 	lines = append(lines, owed.lines...)
 	for _, p := range slices.Concat(owed.retry, a.backgroundStartsToStop(ctx, st, sessions, busy)) {
@@ -576,17 +584,13 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 			owedLines := owe(st, outcomes, a.now)
 			var evs []state.Event
 			for i, l := range owedLines {
-				if outcomes[i].unagreed {
-					unagreed++
-					continue
-				}
 				lines = append(lines, fmt.Sprintf("%q: %s", archive[i].Name, l))
 				evs = append(evs, event(by, "agents.archive", "%s: %s", archive[i].Name, l))
 			}
 			return evs, nil
 		})
 	}
-	return lines, unagreed, nil
+	return lines, nil
 }
 
 const whyReportedDone = "it reported its work done"
@@ -641,6 +645,11 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 				return (x.Task == "" || c.gone || relieved(st, x.Party) || stoppedExecutionWhy(st, x) != "") && x.Is(c.agent.Party) && x.Task == c.agent.Task && x.ActivityAt.Equal(c.agent.ActivityAt) && x.AssignedAt.Equal(c.agent.AssignedAt)
 			})
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
+				continue
+			}
+			// A worker can park after the snapshot used to plan cleanup.
+			// Recheck under the state lock before removing a local worker.
+			if st.Agents[i].Execution == nil && st.Agents[i].Park != nil {
 				continue
 			}
 			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
@@ -710,6 +719,8 @@ line:
   transient unit beekeeper-reopen-<id> that gives it its row and warms its
   CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
   such worker meanwhile;
+- stops attached stdio MCP containers whose Docker client ended, naming
+  each container; detached services and containers with a live client stay;
 - releases leases whose local session ended, logging each release once;
 - stops configured kind labs after 15 minutes without a lease, preserving
   their containers and data; the next successful claim starts them again;
@@ -750,7 +761,7 @@ line:
   last; negative: off); each run that freed something is logged
   (free.apply);
 - with disk.prune: ask, removes finished workers' worktrees: a linked worktree under
-  doctor.worktreeRoots (~/.local/state/klaus-lab/worktrees) whose branch's newest pull
+  doctor.worktreeRoots (~/.local/state/beekeeper/worktrees) whose branch's newest pull
   request merged or closed six hours ago, untouched as long, goes whole
   (a worktree on a detached HEAD: untouched three days)
   when it holds nothing but build output (ignored files, and untracked
@@ -813,9 +824,7 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
-			if rep.unagreed > 0 {
-				lines = append(lines, unagreedLine(rep.unagreed))
-			}
+			lines = append(lines, rep.appDrifts...)
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
 			}
@@ -877,6 +886,8 @@ faults but remedying none.`,
 			return nil
 		},
 	}
+	c.AddCommand(a.doctorRepositoryCmd())
+	c.AddCommand(a.retryArchiveCmd())
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what the doctor would do, fixing nothing")
 	c.Flags().StringArrayVar(&attended, "fault", nil, "run this fault's remedy although it may not run unattended (repeatable)")
 	return c
@@ -950,8 +961,7 @@ func (w *watcher) doctor(ctx context.Context) {
 }
 
 // sayChores says the doctor's chore lines, each once per watch (a stay that
-// repeats is not said again), its notes, and the finished workers waiting on
-// agents.archiveAgreement as one summary while any do.
+// repeats is not said again), and its notes.
 func (w *watcher) sayChores(rep doctorReport) {
 	if w.doctored == nil {
 		w.doctored = map[string]bool{}
@@ -965,13 +975,6 @@ func (w *watcher) sayChores(rep doctorReport) {
 	for _, l := range rep.notes {
 		w.emitNow("doctor", "DOCTOR %s", l)
 	}
-	w.check("doctor-unagreed", rep.unagreed > 0, "DOCTOR %s", unagreedLine(rep.unagreed))
-}
-
-// unagreedLine says how many finished workers' desktop sessions stay
-// unarchived for want of the person's agreement.
-func unagreedLine(n int) string {
-	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
 }
 
 // checkAgyHooks checks ~/.gemini/config/hooks.json when agy is installed.

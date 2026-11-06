@@ -29,7 +29,7 @@ and keeps the roadmap board true. It is not the supervisor and not a worker: it 
 its own, touches holds and other operational state only as the escalation point above, merges
 nothing, fixes no code, and runs no research, proofs, subagents or test sessions. beekeeper's PreToolUse hook holds it to that: in the guide's session an Edit, Write or
 NotebookEdit, a git commit or push, a merge, promotion or review, and a browser action other than
-reading a page are refused, with the hint to file the work in that turn as an issue in its owning repository, put on the board, and tell the person in one line, never to hand it back to them. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
+reading a page are refused, with the hint to file the work in that turn as an issue in its owning repository, put on the board, and tell the person in one line, never to hand it back to them. The one place it writes is the desk, `guide.desk`: its memory, which it adds files to and edits at any time; the desk commits them, the guide does not. No session writes to a harness's own memory: what lasts goes to the desk. `$ARGUMENTS`, when given, narrows the queue (a session, an epic, a repo).
 
 ## Emergency controls
 
@@ -66,7 +66,7 @@ roadmap board shows what is really in progress, blocked, in validation and done.
   takes the role in a run beekeeper started (`guide start --new` starts one); `beekeeper guide watch` is the `Monitor`
   source: one line, once, for each new decision (`GUIDE DECISION`), each session newly waiting on
   the person (`GUIDE WAITING`), each unfiled finding (`GUIDE PROBLEM`, the full report
-  to file in its owning repository, put on the board in `Backlog` with `beekeeper board move <issue> backlog --intake` and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
+  to file in its owning repository, put on the board in `Backlog` with `beekeeper board add <issue> --kind <kind>` (inspect fields with `beekeeper board show <issue>`) and place on the board with `beekeeper board rank <issue> --after <epic-or-item>`, without asking the person),
   each answered or closed note, and the guide's own relay (`GUIDE
   RELAY DUE` at `guide.relayAt`); `GUIDE WATCH STALE` or `GUIDE SAVE REFUSED` means re-arm the
   `Monitor` with the command the line names. `beekeeper guide next` serves the one decision to ask now, due

@@ -763,13 +763,15 @@ func TestInstalled(t *testing.T) {
 		v    string
 		want bool
 	}{
+		{state.Hold{Tool: Tool, ToolPR: 7, ToolFrom: toolFrom}, toolNextVersion, false},
+		{state.Hold{Tool: Tool, ToolPR: 7, ToolMerged: true, ToolFrom: toolFrom}, toolNextVersion, false},
 		{released, "8.0.0", false},
 		{released, "8.0.5", false},
 		{released, "8.1.0", true},
 		{released, "v8.1.0", true},
 		{released, "8.2.0", true},
 		{opened, "8.0.0", false},
-		{opened, "8.0.1", true},
+		{opened, toolNextVersion, true},
 	} {
 		if got := Installed(c.h, c.v); got != c.want {
 			t.Errorf("Installed(%+v, %q) = %v, want %v", c.h, c.v, got, c.want)
@@ -900,3 +902,20 @@ func TestSettlesFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestRequireRebase(t *testing.T) {
+	for _, flags := range []string{"", "--rebase", "--rebase=true", "--rebase=false", "--rebase=false --rebase=true"} {
+		argv := strings.Fields("devctl pr merge o/r 7 " + flags + " -- --rebase=false")
+		before := slices.Clone(argv)
+		got := RequireRebase(argv)
+		want := strings.Fields("devctl pr merge --rebase o/r 7 -- --rebase=false")
+		if !slices.Equal(got, want) {
+			t.Errorf("%v: got %v, want %v", argv, got, want)
+		}
+		if !slices.Equal(argv, before) {
+			t.Errorf("changed caller arguments: %v", argv)
+		}
+	}
+}
+
+const toolNextVersion = "8.0.1"

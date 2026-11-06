@@ -40,6 +40,9 @@ const uiRefreshEvery = 2 * time.Second
 type collector struct {
 	a *app
 
+	// owned remembers the exact flag written for shutdown cleanup, guarded by mu.
+	owned map[string]takeover.Flag
+
 	// budgetEvery and upgradesEvery pace the slow readings; 0 leaves that
 	// reading off entirely (the tests run that way).
 	budgetEvery, upgradesEvery time.Duration
@@ -235,19 +238,44 @@ func (c *collector) takeOver(sessions []*claude.Session, q string, now time.Time
 		return refused("%s: no session id is known, so its approvals cannot be told apart", s.Name)
 	}
 	person := c.a.uiPerson()
-	if err := takeover.Take(c.takeoverDir(), s.ID, takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}); err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flag := takeover.Flag{PID: os.Getpid(), By: person, Since: time.Now().UTC()}
+	if err := takeover.Take(c.takeoverDir(), s.ID, flag); err != nil {
 		return err
 	}
+	if c.owned == nil {
+		c.owned = make(map[string]takeover.Flag)
+	}
+	c.owned[s.ID] = flag
 	_ = c.a.store.Log(event(state.Party{Name: person}, "ui.takeover", "%s: its approvals come to the screen", s.Name))
 	return nil
 }
 
 // Release hands the approvals of session id back to its own window.
 func (c *collector) Release(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := takeover.Release(c.takeoverDir(), id); err != nil {
 		return err
 	}
+	delete(c.owned, id)
 	_ = c.a.store.Log(event(state.Party{Name: c.a.uiPerson()}, "ui.release", "%s: its approvals go to its own window", id))
+	return nil
+}
+
+// ReleaseOwned cleans up only the takeover this collector wrote.
+func (c *collector) ReleaseOwned(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	flag, ok := c.owned[id]
+	if !ok {
+		return nil
+	}
+	if err := takeover.ReleaseOwned(c.takeoverDir(), id, flag); err != nil {
+		return err
+	}
+	delete(c.owned, id)
 	return nil
 }
 
@@ -269,15 +297,21 @@ func (c *collector) withApprovals(ss []tui.Session) []tui.Session {
 		if s.ID == "" {
 			continue
 		}
-		if _, ok := takeover.Taken(dir, s.ID, proc.Alive); !ok {
-			continue
+		for j, id := range []string{s.ID, s.TakeoverAlias} {
+			if id == "" || j > 0 && id == s.ID {
+				continue
+			}
+			if _, ok := takeover.Taken(dir, id, proc.Alive); !ok {
+				continue
+			}
+			s.TakenOver = true
+			rs, _ := takeover.Pending(dir, id)
+			for _, r := range rs {
+				s.Approvals = append(s.Approvals, tui.Approval{Session: id, ID: r.ID, At: r.At,
+					Gist: claude.ToolGist(r.Tool, r.Input), Detail: inputLines(r.Input)})
+			}
 		}
-		s.TakenOver = true
-		rs, _ := takeover.Pending(dir, s.ID)
-		for _, r := range rs {
-			s.Approvals = append(s.Approvals, tui.Approval{ID: r.ID, At: r.At,
-				Gist: claude.ToolGist(r.Tool, r.Input), Detail: inputLines(r.Input)})
-		}
+		slices.SortFunc(s.Approvals, func(a, b tui.Approval) int { return a.At.Compare(b.At) })
 	}
 	return ss
 }
@@ -531,6 +565,11 @@ func uiSessions(v *view, waits map[string]string) []tui.Session {
 			PID: s.PID, ID: s.ID, Name: s.Name, Role: s.Role, Harness: s.Harness, State: s.State, Cwd: s.Cwd, Repo: s.Repo, Branch: s.Branch,
 			Model: s.Model, Permission: s.Permission, Started: s.Started, LastActive: s.LastActive,
 			MemMiB: s.MemMiB, Leases: slices.Clone(s.Leases), Waits: waits[s.Name],
+		}
+		if v.st != nil {
+			if start, ok := v.st.BypassStartOf(s.Party()); ok && start.Session != s.ID {
+				x.TakeoverAlias = start.Session
+			}
 		}
 		if s.Waiting != nil {
 			x.Waiting = s.Waiting.Action

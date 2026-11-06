@@ -43,7 +43,7 @@ Without a subcommand, lists the open notes.`,
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
-		Use:   "add <text>",
+		Use:   "add <question>",
 		Short: "Add a note",
 		Long: `Add a note for a person (--for). --kind is decision, the default, or
 login. A decision is refused without --due and a --default that is an
@@ -78,7 +78,13 @@ note's default and recommendation stand) or ask a different question.
 question. A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
 A decision is refused without --ref: its answer is
-recorded on that thread (beekeeper answer). A note for a person whose
+recorded on that thread (beekeeper answer). With guide.person set, a --for
+that is one of guide.personNames, "guide", or carries the person's
+serve.people email, is filed for guide.person, so the guide sees it; one nobody
+on this desk goes by (not guide.person, serve.people, board.people, an email,
+team:<name> or supervisor) is refused, naming them. A central instance judges the names it is sent itself;
+one it is not sent, by --holds or by filing on the machine when it cannot be
+reached, is judged here. A note for a person whose
 --ref an answer of that person was recorded on within the last 72 hours
 (answer.recorded) is filed with a warning that quotes the answer.
 
@@ -139,8 +145,18 @@ person's own decision: neither is one. The classification runs before
 is closed or merged, or whose issue's parent epic is closed, is refused as
 superseded; a thread GitHub does not answer is filed with a warning. Each
 refusal logs note.redirected; only what is the person's to decide (live,
-public, costly or reserved for them) reaches them.`,
-		Args: cobra.MinimumNArgs(1),
+public, costly or reserved for them) reaches them.
+
+A decision that asks whether to merge a pull request (to approve, confirm
+or authorise its merge) is refused from anyone, logged as note.redirected:
+the supervisor loop merges a pull request after its desk review and the
+fixes of its findings, once its checks are green, and asks nobody.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageErr("a note needs a question as its first argument; flags provide its context\nUsage: %s", cmd.UseLine())
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
 			if err != nil {
@@ -187,6 +203,12 @@ public, costly or reserved for them) reaches them.`,
 				return usageErr("--until is a login's: --kind login")
 			}
 			n.Kind, draft.Due = draft.Kind, due
+			if a.managedExecutionID() == "" {
+				if forWho, err = a.noteAddressee(forWho, into.Central || a.centralNote(&n, holds, foldInto)); err != nil {
+					return err
+				}
+				n.For = forWho
+			}
 			if holds {
 				switch {
 				case n.Kind != noteDecision:
@@ -200,6 +222,9 @@ public, costly or reserved for them) reaches them.`,
 			// Classified before any fold: a fold puts the ask before the
 			// open note's person as surely as a note of its own.
 			if n.Kind == noteDecision {
+				if err := a.refuseMergeAsk(cmd.ErrOrStderr(), me, draft, refs); err != nil {
+					return err
+				}
 				worker, err := a.isWorker(me)
 				if err != nil {
 					return err
@@ -423,14 +448,14 @@ notes' only.`,
 	done.Flags().StringVar(&reason, "reason", "", "why the note is withdrawn, retained in its closure")
 	done.Flags().StringVar(&overtaken, "overtaken", "", "close them as overtaken: why what they ask is settled")
 	done.MarkFlagsMutuallyExclusive("reason", "overtaken")
-	var choice int
+	var choiceLabel string
 	var via string
 	var post bool
 	answer := &cobra.Command{
 		Use:   "answer <id> [<answer>]",
 		Short: "Record a person's answer to a note, word for word, and close it",
 		Long: `beekeeper answer for a note: its thread is the note's first --ref. The
-answer is --choice <n>, one of its options (1-based), the person's own
+answer is --choice <label|n>, one of its stored labels or options (1-based), the person's own
 words (at most 3000 characters), or both, with the way it came (--via, cli unless it came from
 Slack). It is logged as answer.recorded and the note closed; the session
 that filed it is told at once. A decision its default closed within the
@@ -470,6 +495,23 @@ naming both. --post is the machine's notes' only.`,
 				ids[0].Central = true
 			}
 			if ids[0].Central {
+				var centralNote *state.Note
+				if _, numericErr := strconv.Atoi(choiceLabel); choiceLabel != "" && numericErr != nil {
+					notes, err := a.listCentralNotes()
+					if err != nil {
+						return err
+					}
+					for i := range notes {
+						if notes[i].ID == ids[0].ID {
+							centralNote = &notes[i]
+							break
+						}
+					}
+				}
+				choice, err := resolveNoteChoice(centralNote, choiceLabel)
+				if err != nil {
+					return err
+				}
 				return a.answerCentral(cmd.Context(), ids[0].ID, choice, via, strings.Join(args[1:], " "), post)
 			}
 			if n == nil {
@@ -487,11 +529,15 @@ naming both. --post is the machine's notes' only.`,
 			if len(n.Refs) == 0 {
 				return refused("note #%d links no issue or pull request (--ref) for its answer's thread: beekeeper answer <owner/repo#n> --note %d", n.ID, n.ID)
 			}
+			choice, err := resolveNoteChoice(n, choiceLabel)
+			if err != nil {
+				return err
+			}
 			return a.recordAnswer(cmd.Context(), n.Refs[0], n.ID, choice, via, strings.Join(args[1:], " "), post)
 		},
 	}
-	answer.Flags().IntVar(&choice, "choice", 0, "the option chosen, 1-based")
-	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack; the channel answer verify reads is set from where it runs")
+	answer.Flags().StringVar(&choiceLabel, "choice", "", "the stored option label or its number, 1-based")
+	answer.Flags().StringVar(&via, "via", viaCLI, "how the words came: cli or slack")
 	answer.Flags().BoolVar(&post, "post", false, "also record the decision as a GitHub comment")
 	var listFor string
 	var full bool

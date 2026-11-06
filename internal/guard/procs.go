@@ -12,12 +12,15 @@ import (
 // credential there. So the reads that print whole command lines or
 // environments are Secret reads: ps with its args column, pgrep -a,
 // pstree -a, /proc/<pid>/cmdline and environ, docker and podman inspect
-// without a format limited to names and state, docker ps --no-trunc.
+// without a format limited to names, state and safe image config fields,
+// docker ps --no-trunc.
 
 var procSafe = "  beekeeper ps [name|pid…]   (PID, parent, age, CPU, memory and the command line masked)\n" +
 	"  ps -eo pid,ppid,etime,time,rss,comm\n" +
 	"  pgrep -l <name>   (pgrep -f <pattern> prints PIDs only, pgrep -c a count)\n" +
-	"  docker inspect --format '{{.Name}} {{.State.Status}}' <container>"
+	"  docker inspect --format '{{.Name}} {{.State.Status}}' <container>\n" +
+	"  docker image inspect --format '{{json .Config.Entrypoint}} {{.Config.User}}' <image>\n" +
+	`  docker image inspect --format '{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}' <image>`
 
 var (
 	// procFile: a process's command line or environment under /proc, after
@@ -28,6 +31,12 @@ var (
 	// leakyContainerFormat: a docker or podman format that prints the
 	// command line, the environment or the whole object.
 	leakyContainerFormat = regexp.MustCompile(`(?i)\b(?:Args|Env|Cmd|Entrypoint|Config|Command|Path)\b|\{\{-?\s*(?:json\s+)?\.\s*-?\}\}`)
+	// Only complete actions are removed: inspecting Config itself, indexing
+	// Env, or adding another expression must still trigger the leak check.
+	safeImageConfigAction = regexp.MustCompile(`\{\{-?\s*(?:json\s+)?\.Config\.(?:Entrypoint|Cmd|User|WorkingDir|ExposedPorts)\s*-?\}\}`)
+	// Docker's split helper separates NAME=value at '='. This deliberately
+	// accepts only index zero, with no variable binding or additional output.
+	safeImageEnvNames = regexp.MustCompile(`\{\{-?\s*range\s+\.Config\.Env\s*-?\}\}\{\{-?\s*println\s+\(index\s+\(split\s+\.\s+"="\)\s+0\)\s*-?\}\}\{\{-?\s*end\s*-?\}\}`)
 )
 
 // subcommandHosts take ps as a subcommand of their own: docker ps is no
@@ -230,6 +239,13 @@ func shortFlag(args []string, letter byte, value string) bool {
 // or environments: inspect without a narrow --format, ps --no-trunc
 // without a format that leaves the command out. "" when it prints none.
 func containerLeak(name string, args []string) string {
+	// These Docker subcommands read registry metadata, not a container's
+	// command line or environment. Match the command prefix so an argument
+	// or a global option's value cannot exempt a container inspection.
+	if name == dockerCmd && (len(args) >= 2 && slices.Equal(args[:2], []string{"manifest", "inspect"}) ||
+		len(args) >= 3 && slices.Equal(args[:3], []string{"buildx", "imagetools", "inspect"})) {
+		return ""
+	}
 	sub := nonFlags(args)
 	inspect := slices.Contains(sub, "inspect")
 	format, hasFormat := "", false
@@ -243,7 +259,12 @@ func containerLeak(name string, args []string) string {
 			format, hasFormat = val, true
 		}
 	}
-	leaky := !hasFormat || leakyContainerFormat.MatchString(format)
+	checkedFormat := format
+	if inspect {
+		checkedFormat = safeImageEnvNames.ReplaceAllString(checkedFormat, "")
+		checkedFormat = safeImageConfigAction.ReplaceAllString(checkedFormat, "")
+	}
+	leaky := !hasFormat || leakyContainerFormat.MatchString(checkedFormat)
 	switch {
 	case inspect && leaky:
 		return name + " inspect, which prints the command line and the environment"

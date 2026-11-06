@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,6 +50,9 @@ const (
 	// worktreesTimeout bounds one run: git in every worktree, the pull
 	// requests' reads and the removals.
 	worktreesTimeout = 30 * time.Minute
+	// worktreesHookTimeout bounds the hook's look for unsaved work in idle
+	// sessions' worktrees; a tree it did not reach stays live.
+	worktreesHookTimeout = 10 * time.Second
 )
 
 // worktreeMachine is what a run reads: the linked worktrees under the roots,
@@ -78,7 +82,7 @@ type worktreeMachine struct {
 var liveWorktrees = (*app).worktreeMachine
 
 // worktreeMachine reads the worktrees under doctor.worktreeRoots and the
-// folders every process, running session and unarchived desktop session
+// folders every process, running session and recently active desktop session
 // works in. An unreadable process table fails the run: with no process
 // known, every worktree would look unused.
 func (a *app) worktreeMachine() (worktreeMachine, error) {
@@ -114,14 +118,64 @@ func (a *app) hookLiveDirs() []string {
 		w.store = store
 	}
 	live, _ := w.liveFolders(time.Now())
-	return live
+	// The trim judges a tree's work itself; a plain mv or rm does not.
+	return append(live, unsavedSessionDirs(a.cfg, time.Now())...)
 }
 
-// liveFolders are the folders every process, running session, unarchived
-// desktop session and unfinished roster agent works in: what the worktree
-// trim keeps and the hook refuses to move away (guard.Hook.LiveDirs). An
-// unreadable process table or roster is an error, with the folders read
-// before it.
+// sessionIdle says the desktop record r has shown no activity, in its record
+// or its transcript, for worktrees.SessionIdle at now. A record with no
+// activity at all says nothing, so it does not count as idle.
+func sessionIdle(cfg *config.Config, r *claude.Record, now time.Time) bool {
+	seen := r.LastSeen()
+	if seen.IsZero() || now.Sub(seen) < worktrees.SessionIdle {
+		return false
+	}
+	if p := claude.Transcript(cfg, r.CLISessionID, cmp.Or(r.Cwd, r.OriginCwd)); p != "" {
+		if fi, err := os.Stat(p); err == nil {
+			seen = latest(seen, fi.ModTime())
+		}
+	}
+	return now.Sub(seen) >= worktrees.SessionIdle
+}
+
+// unsavedSessionDirs are the folders of idle unarchived desktop sessions
+// whose worktree holds uncommitted or unpushed work, or could not be read
+// within worktreesHookTimeout.
+func unsavedSessionDirs(cfg *config.Config, now time.Time) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), worktreesHookTimeout)
+	defer cancel()
+	var out []string
+	checked := map[string]bool{}
+	for _, r := range claude.ByCLI(cfg) {
+		if r.IsArchived || !sessionIdle(cfg, r, now) {
+			continue
+		}
+		for _, d := range []string{r.Cwd, r.OriginCwd} {
+			if d == "" {
+				continue
+			}
+			tree, err := worktrees.Containing(d)
+			if err != nil {
+				out = append(out, d)
+				continue
+			}
+			if tree == "" || checked[tree] {
+				continue
+			}
+			checked[tree] = true
+			if t, err := worktrees.Inspect(ctx, runGit, tree); err != nil || len(t.Work) > 0 || t.Unpushed > 0 {
+				out = append(out, tree)
+			}
+		}
+	}
+	return out
+}
+
+// liveFolders are the folders every process, running session, recently
+// active unarchived desktop session and unfinished roster agent works in:
+// what the worktree trim keeps and the hook refuses to move away
+// (guard.Hook.LiveDirs). An unreadable process table or roster is an error,
+// with the folders read before it.
 func (a *app) liveFolders(now time.Time) ([]string, error) {
 	var live []string
 	t, err := plat.Machine.Processes()
@@ -138,7 +192,7 @@ func (a *app) liveFolders(now time.Time) ([]string, error) {
 	}
 	records := claude.ByCLI(a.cfg)
 	for _, r := range records {
-		if !r.IsArchived {
+		if !r.IsArchived && !sessionIdle(a.cfg, r, now) {
 			live = append(live, r.Cwd, r.OriginCwd)
 		}
 	}
@@ -378,8 +432,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			r.err = errors.Join(r.err, m.retire(ctx, finished, r.dryRun))
 		}
 	}()
+	live := diskprune.NewRefs(append(slices.Clone(m.live), m.refs...))
 	for _, d := range m.dirs {
-		if diskprune.InUse(d, append(slices.Clone(m.live), m.refs...)) {
+		if live.Holds(d) {
 			r.kept[worktrees.KeptLive]++
 			continue
 		}
@@ -449,7 +504,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				}
 			}
 			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
-			v = worktrees.Automatic(t, pull, gone, harness, diskprune.InUse(t.Dir, append(slices.Clone(m.live), m.refs...)), knownPushed, m.now)
+			v = worktrees.Automatic(t, pull, gone, harness, live.Holds(t.Dir), knownPushed, m.now)
 		}
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
 			if m.recheck != nil {
@@ -464,7 +519,8 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 					continue
 				}
 				m.refs = refs
-				if diskprune.InUse(t.Dir, append(slices.Clone(m.live), refs...)) {
+				live = diskprune.NewRefs(append(slices.Clone(m.live), refs...))
+				if live.Holds(t.Dir) {
 					r.kept[worktrees.KeptLive]++
 					continue
 				}
@@ -474,7 +530,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				errs = append(errs, err)
 				continue
 			}
-			if fresh.Locked || fresh.Head != t.Head || (v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
+			if fresh.Locked || fresh.Head != t.Head || fresh.Repo != t.Repo || fresh.Branch != t.Branch ||
+				fresh.Pushed != t.Pushed || fresh.Touched.After(t.Touched) ||
+				(v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
 				r.kept["worktree changed during inspection"]++
 				continue
 			}
@@ -613,6 +671,17 @@ func (a *app) cleanRemovedWorktree(ctx context.Context, dir, publishedHead strin
 	if t.Unpushed > 0 && (publishedHead == "" || t.Head != publishedHead) {
 		return
 	}
+	// Re-read all live users after the Git checks, immediately before removal.
+	// Missing liveness data must keep the checkout, just as the trim does.
+	live, err := a.liveFolders(time.Now())
+	if err != nil || diskprune.InUse(t.Dir, live) {
+		return
+	}
+	for _, path := range live {
+		if diskprune.InUse(path, []string{t.Dir}) {
+			return
+		}
+	}
 	_ = removeWorktree(ctx, runGit, t.Dir)
 }
 
@@ -708,8 +777,10 @@ with beekeeper disk prune. The legacy policy has three tiers:
 Build output is what git ignores and the untracked directories a build
 writes again (` + strings.Join(worktrees.Regenerable, ", ") + `); in a kept
 worktree only those directories go, git state, branch and commits stay. A
-worktree a running process, a running session or an unarchived desktop
-session works in, and a locked one, are never touched. An orphan, a
+worktree a running process, a running session, an unfinished roster agent
+or a desktop session active in the last ` + hoursStr(worktrees.SessionIdle) + ` works in, and a locked
+one, are never touched; an unarchived desktop session alone keeps it no
+longer than that. An orphan, a
 worktree whose gitfile names a repository that no longer exists, is moved
 aside under its root's ` + orphansDir + ` folder, never deleted. Each path is
 listed with its size and why; an applied run is logged (worktrees.trim).`,

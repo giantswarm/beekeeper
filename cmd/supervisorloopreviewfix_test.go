@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
@@ -312,7 +313,7 @@ func TestReviewFixEndsWorkerFreesSlotStartsFixerAndMerges(t *testing.T) {
 	}
 }
 
-func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(t *testing.T) {
+func TestReviewFixPreservesPostMergeAndStartsLocalContinuationFromSurvivingRef(t *testing.T) {
 	r := newLoopRig(t)
 	r.a.cfg.Supervisor.ReviewRounds = 2
 	r.sshLoopHost(t, true)
@@ -398,25 +399,42 @@ func TestReviewFixPreservesPostMergeAndStartsRemoteContinuationFromSurvivingRef(
 		t.Fatalf("plain fixer park lost original Serves or PostMerge: %+v", st.ReviewParks)
 	}
 
-	// Pass 4: R2 approves and merges; pass 5 sees the merged PR and starts post-merge continuation on "main", not the deleted PR branch.
+	// Pass 4: R2 approves and merges. The continuation waits for local
+	// room even though the execution host has room.
 	r.verdict("R2", loopFixed, superloop.Approved, "")
 	r.pass(t)
 	r.pull.State = superloop.Merged
 	r.pull.MergeCommit = "9999999999999999999999999999999999999999"
 	r.pass(t)
+	if start := r.called(agentsName, agentStartName, loopWorker); start != nil {
+		t.Fatalf("full coordinator started continuation: %v", start)
+	}
+	r.answer = func(args []string) (string, int) {
+		if args[0] == loopCapacity {
+			if slices.Contains(args, loopHostFlag) {
+				t.Fatal("continuation probed an execution host")
+			}
+			return loopRoomJSON, 0
+		}
+		return "", 0
+	}
+	r.a.cfg.Supervisor.HostsFirst = true
+	r.pass(t)
 	contStart := r.called(agentsName, agentStartName, loopWorker)
 	if contStart == nil {
 		t.Fatalf("expected post-merge continuation start, got calls=%v\n%s", r.calls, r.out)
 	}
-	if slices.Contains(contStart, "fix-2079-deleted-after-merge") || !slices.Contains(contStart, mainBranch) {
-		t.Fatalf("post-merge continuation used deleted PR branch instead of surviving ref: %v", contStart)
+	for _, flag := range []string{loopHostFlag, loopRepoFlag, loopRefFlag, "--" + excludeFlag} {
+		if slices.Contains(contStart, flag) {
+			t.Errorf("local continuation has placement flag %s: %v", flag, contStart)
+		}
 	}
 	contBriefBytes, err := os.ReadFile(contStart[3])
 	if err != nil {
 		t.Fatal(err)
 	}
 	contBrief := string(contBriefBytes)
-	if !strings.Contains(contBrief, reviewFixServedURL) || !strings.Contains(contBrief, postMergeWork) || strings.Contains(contBrief, "request the next review round") {
+	if !strings.Contains(contBrief, "Fetch origin and work from "+mainBranch) || !strings.Contains(contBrief, reviewFixServedURL) || !strings.Contains(contBrief, postMergeWork) || strings.Contains(contBrief, "request the next review round") {
 		t.Fatalf("continuation brief did not use continuation instructions:\n%s", contBrief)
 	}
 }
@@ -564,5 +582,309 @@ func TestLoopReviewsParkWhileWorkerTurnStillRuns(t *testing.T) {
 	}
 	if r.called(agentsName, agentStartName, loopReviewer) == nil {
 		t.Fatalf("review waits on worker retirement: %v\n%s", r.calls, r.out)
+	}
+}
+
+func TestContinuationWaitsWhenCoordinatorCapacityCannotBeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		code int
+	}{
+		{name: "empty capacity response"},
+		{name: "capacity command failure", out: loopRoomJSON, code: 1},
+		{name: handoverMalformedMode, out: "{"},
+		{name: "missing room", out: "{}"},
+		{name: "full", out: `{"room":0}`},
+		{name: "negative", out: `{"room":-1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.sshLoopHost(t, true)
+			r.a.cfg.Supervisor.HostsFirst = true
+			r.answer = func(args []string) (string, int) {
+				if args[0] == loopCapacity {
+					if slices.Contains(args, loopHostFlag) {
+						t.Fatal("continuation probed an execution host")
+					}
+					return tc.out, tc.code
+				}
+				return "", 0
+			}
+			st, err := r.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := &supervisorLoop{a: r.a, said: map[string]bool{}}
+			err = l.startFixer(t.Context(), st, superloop.Action{Kind: superloop.KindEnd, Ref: loopPR, Agent: loopWorker, Key: "continuation"})
+			if !errors.Is(err, errLoopLater) {
+				t.Fatalf("unreadable coordinator capacity: %v", err)
+			}
+			if start := r.called(agentsName, agentStartName); start != nil {
+				t.Fatalf("started without coordinator capacity: %v", start)
+			}
+		})
+	}
+}
+
+func TestLoopPrunesEndedReviewParksAndStartsActiveReviewUnderAllowanceHold(t *testing.T) {
+	r := newLoopRig(t)
+	now := r.a.now
+	const (
+		endedPR      = "o/r#2"
+		unreviewedPR = "o/r#3"
+		otherPR      = "o/r#9"
+	)
+	r.pulls[unreviewedPR] = superloop.Pull{Ref: unreviewedPR, URL: "https://github.com/o/r/pull/3", State: superloop.Merged, Head: loopHead, MergeCommit: loopFixed, Author: loopDesk}
+	r.pulls[otherPR] = superloop.Pull{Ref: otherPR, URL: "https://github.com/o/r/pull/9", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = []state.ReviewPark{
+			{On: endedPR, At: now.Add(-40 * time.Second), ReviewHead: loopHead, Agent: "ended-worker", Party: state.Party{Name: "ended-worker", Host: "ended-id"}},
+			{On: unreviewedPR, At: now.Add(-20 * time.Second), ReviewHead: loopHead, Agent: "merged-worker", Party: state.Party{Name: "merged-worker", Host: "merged-id"}},
+		}
+		st.Agents = append(st.Agents, state.Agent{
+			Party: state.Party{Name: "plain-waiter", Host: "plain-id"},
+			Park:  &state.Park{On: otherPR, At: now.Add(-10 * time.Second), Waits: "overlap: waiting for o/r#9"},
+		})
+		return []state.Event{
+			{At: now.Add(-35 * time.Second), By: loopParty, Verb: "supervisor.end", Subject: endedPR, Detail: "[end " + endedPR + "] https://github.com/o/r/pull/2 merged: tracking ends"},
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.park(t, loopPR, now)
+	var readOrder []string
+	prevRead := readLoopPull
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		readOrder = append(readOrder, ref)
+		if ref == otherPR {
+			return superloop.Pull{}, errLoopLater
+		}
+		return prevRead(ctx, ref)
+	}
+	r.pass(t)
+	if slices.Contains(readOrder, endedPR) {
+		t.Fatalf("an ended ReviewPark was read from GitHub: %v", readOrder)
+	}
+	if len(readOrder) == 0 || readOrder[0] != loopPR {
+		t.Fatalf("active live review park was not observed first: %v", readOrder)
+	}
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("reviewer did not start when later PR hit allowance hold: %v\n%s", r.calls, r.out)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{endedPR, unreviewedPR} {
+		if _, ok := st.ReviewParkFor(stale); ok {
+			t.Fatalf("stale ReviewPark %s remained in state: %+v", stale, st.ReviewParks)
+		}
+	}
+}
+
+func TestLoopSkipsClosedPullFixerAndSettlesClosedServedTask(t *testing.T) {
+	r := newLoopRig(t)
+	r.a.cfg.Supervisor.ReviewRounds = 2
+	r.park(t, loopPR, time.Now())
+	r.started(t, loopWorker, "worker-closed-pr")
+	work := ""
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents[0].Park.PostMerge = &work
+		st.Records = append(st.Records, state.Record{Session: st.Agents[0].Party, Issue: reviewFixServedRef})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Pass 1: worker ends into ReviewParks and R1 starts.
+	r.pass(t)
+	if r.called(agentsName, agentStartName, loopReviewer) == nil {
+		t.Fatalf("expected R1 reviewer start: %v", r.calls)
+	}
+
+	// Now R1 requests changes, and before startFixer runs, live PR read fails transiently:
+	// neither startFixer nor wakeOrStartFixer may dispatch work on a failed live read.
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "needs work")
+	prevRead := readLoopPull
+	observeCalls := 0
+	failLiveRead := true
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		observeCalls++
+		p, err := prevRead(ctx, ref)
+		if err != nil {
+			return p, err
+		}
+		if observeCalls > 1 {
+			if failLiveRead {
+				return superloop.Pull{}, errors.New("transient GitHub API failure")
+			}
+			p.State = superloop.Closed
+		}
+		return p, nil
+	}
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName, loopWorker); start != nil {
+		t.Fatalf("started fixer when live PR read failed: %v", start)
+	}
+
+	// Next pass: live PR read explicitly returns CLOSED before startFixer runs.
+	failLiveRead = false
+	r.pass(t)
+	if start := r.called(agentsName, agentStartName, loopWorker); start != nil {
+		t.Fatalf("started fixer for closed PR: %v", start)
+	}
+
+	// Existing worker on roster must also not be woken when live PR read fails or returns CLOSED,
+	// and recoverParks must not resume a harness when a cached l.opens entry is stale and live read is CLOSED.
+	resumed := 0
+	origResume := loopResumePark
+	t.Cleanup(func() { loopResumePark = origResume })
+	loopResumePark = func(*app, context.Context, state.Party, string) error {
+		resumed++
+		return nil
+	}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			out[ref] = github.RefState{Kind: github.RefIssue, State: github.Closed}
+		}
+		return out, nil
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{
+			Party: state.Party{Name: "resumable-closed-pr", HostSession: "codex_closed-pr"},
+			Task:  "Fix " + loopURL,
+			Park:  &state.Park{On: loopPR, RefKind: github.RefPullRequest, At: time.Now(), Resumable: time.Now()},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pull.State = superloop.Closed
+	r.pass(t)
+	if resumed != 0 {
+		t.Fatalf("recoverParks resumed harness for closed PR (%d times)", resumed)
+	}
+	if start := r.called(agentsName, agentStartName, loopWorker); start != nil {
+		t.Fatalf("endMerged started continuation fixer for closed PR with closed issue: %v", start)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.ReviewParkFor(loopPR); ok {
+		t.Fatalf("ReviewPark not cleared after closed PR settled: %+v", st.ReviewParks)
+	}
+}
+
+func TestLoopReloadsOwnershipNeverConfigAndSkipsNeverRepo(t *testing.T) {
+	r := newLoopRig(t)
+	cfgFile := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(cfgFile, []byte("guide:\n  person: "+loopPerson+"\nsupervisor:\n  ownership:\n    never:\n      - o/never\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.a.cfgPath = cfgFile
+	neverPR := "o/never#12"
+	r.pulls[neverPR] = superloop.Pull{Ref: neverPR, URL: "https://github.com/o/never/pull/12", State: superloop.Open, Head: loopHead, Green: true, Author: loopDesk}
+	resumedNever := 0
+	origResume := loopResumePark
+	t.Cleanup(func() { loopResumePark = origResume })
+	loopResumePark = func(*app, context.Context, state.Party, string) error {
+		resumedNever++
+		return nil
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		party := state.Party{Name: "never-worker", Session: "never-session", HostSession: "codex_never-session"}
+		st.Agents = append(st.Agents, state.Agent{
+			Party: party,
+			Task:  "work on https://github.com/o/never/issues/12",
+			Park:  &state.Park{On: neverPR, At: time.Now(), Resumable: time.Now(), Waits: deskReviewWait, ReviewHead: loopHead},
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if !slices.Contains(r.a.cfg.Supervisor.Ownership.Never, "o/never") {
+		t.Fatalf("reloadConfig did not load supervisor.ownership.never: %+v", r.a.cfg.Supervisor.Ownership.Never)
+	}
+	if resumedNever != 0 {
+		t.Fatalf("recoverParks attempted harness resume for supervisor.ownership.never repository (%d times)", resumedNever)
+	}
+	if start := r.called(agentsName, agentStartName); start != nil {
+		t.Fatalf("started reviewer or worker for supervisor.ownership.never repository: %v", start)
+	}
+
+	cands := []board.Candidate{
+		{Item: board.Item{Ref: "o/never#1", Status: "Ready"}},
+		{Item: board.Item{Ref: idleRef, Status: "Ready"}},
+	}
+	skipUnread(cands, r.a.cfg.Supervisor.Ownership.Never)
+	if cands[0].Skip == "" || cands[1].Skip != "" {
+		t.Fatalf("skipUnread = [%q, %q], want o/never#1 skipped and %s free", cands[0].Skip, cands[1].Skip, idleRef)
+	}
+}
+
+func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
+	r := newLoopRig(t)
+	const (
+		origPR     = "o/r#41"
+		combinedPR = "o/r#42"
+	)
+	p, err := parseLoopPull(combinedPR, []byte(`{"state":"MERGED","url":"https://github.com/o/r/pull/42","headRefOid":"`+loopFixed+`","title":"fix: combine PRs","body":"Combines https://github.com/o/r/pull/41 into one batch."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Absorbs, []string{origPR}) {
+		t.Fatalf("parseLoopPull Absorbs = %v, want [%s]", p.Absorbs, origPR)
+	}
+	r.pulls[origPR] = superloop.Pull{Ref: origPR, URL: "https://github.com/o/r/pull/41", State: superloop.Open, Head: loopHead, Red: []superloop.Check{{Name: behindUnit}}, Author: loopDesk}
+	r.pulls[combinedPR] = p
+
+	rescueName := superloop.PullWorkerName(origPR)
+	r.started(t, rescueName, "rescue-session")
+	origWork := "release and prove deployment"
+	combWork := ""
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		rescueParty := state.Party{Name: rescueName, Session: "rescue-session"}
+		st.Agents = append(st.Agents, state.Agent{
+			Party: rescueParty,
+			Task:  "Fix https://github.com/o/r/pull/41",
+		})
+		st.Starts = append(st.Starts, state.Start{
+			Party: rescueParty,
+			By:    loopParty,
+			At:    time.Now(),
+		})
+		st.ReviewParks = append(st.ReviewParks,
+			state.ReviewPark{
+				On: origPR, At: time.Now(), ReviewHead: loopHead, Agent: rescueName,
+				Party: rescueParty, PostMerge: &origWork,
+			},
+			state.ReviewPark{
+				On: combinedPR, At: time.Now(), ReviewHead: loopFixed, Agent: "combiner",
+				Party: state.Party{Name: "combiner", Session: "combiner-session"}, PostMerge: &combWork,
+			},
+		)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	if r.called(agentsName, loopRemove, rescueName) == nil {
+		t.Fatalf("absorbed PR's rescue worker was not retired: %v\n%s", r.calls, r.out)
+	}
+	if wake := r.called(agentsName, agentWakeName, rescueName); wake != nil {
+		t.Fatalf("absorbed PR's rescue worker was woken as post-merge continuation: %v", wake)
+	}
+	if start := r.called(agentsName, agentStartName, rescueName); start != nil {
+		t.Fatalf("absorbed PR's rescue worker was started as post-merge continuation: %v", start)
+	}
+	st, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.ReviewParkFor(origPR); ok {
+		t.Fatalf("absorbed PR's ReviewPark remained in state: %+v", st.ReviewParks)
 	}
 }

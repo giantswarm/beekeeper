@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // runUpdate is the update; the tests replace it.
@@ -67,7 +70,9 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 }
 
 func (a *app) selfUpdateCmd() *cobra.Command {
-	var check, pluginsOnly bool
+	var check, pluginsOnly, completeProbation, rollback, controller, clearHold bool
+	var rollbackReason, version, recoveryTarget string
+	var every, step time.Duration
 	c := &cobra.Command{
 		Use:   selfUpdateCmdName,
 		Short: "Replace this binary with the latest signed release (--check only asks)",
@@ -77,6 +82,10 @@ running executable. A pre-release (a release candidate) looks among the
 pre-releases too, a release only among releases. --check only reports both
 versions: exit 125 when a newer release exists, 0 when this is the latest.
 
+--version <tag> selects an exact release, including a release candidate
+(for example --version v0.125.0-rc.3), even when older than this binary.
+--check --version <tag> reports that release without installing it.
+
 Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The download is installed only after that bundle
 verifies for a CircleCI build of ` + update.Repository + ` (certificate identity
@@ -84,6 +93,28 @@ https://circleci.com/api/v2/projects/..., issuer https://oidc.circleci.com, neve
 GitHub identity); a release without
 a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
+
+The installation journal and verified recovery bytes are retained beside the
+executable, or in this account's state when it cannot write there. The next
+update run by the installed candidate repeats the local health checks and
+promotes it to last-known-good; a failed check quarantines it and the update
+moves past it. --complete-probation does the same at once, and alone lifts a
+recovery fence. The first protected install has no verified recovery target.
+--rollback --rollback-reason restores the previous
+verified binary only when the live state writer is compatible; it never
+restores a state snapshot. Recovery fences newer writers, including processes
+still running the candidate. State already advanced by a newer release needs
+an explicit lossless migration or a compatible signed release instead.
+An update launches a recovery controller from the retained last-known-good
+bytes before it replaces the binary. It evaluates the candidate every minute:
+a failure streak, a failed isolated workflow probe or a missing loop heartbeat
+restores the recovery target and quarantines the candidate within 30 minutes,
+and a healthy probation promotes it. An update waits for that verdict. A
+recovery that cannot complete holds updates and worker starts and reports why;
+--clear-recovery-hold lifts the hold once that is dealt with.
+An executable directory this account cannot write takes sudo -n for the final
+replacement alone: the journal is written first, and nothing else runs with
+privilege.
 
 The new binary is renamed over the old one in one step, and every
 beekeeper started afterwards is the new one. A running beekeeper watch (the
@@ -104,7 +135,7 @@ broker serving calls (a gate, a secret call, an agents start) is left to
 finish them, and the restart still due is named with its command (due).
 
 The beekeeper plugin goes with the binary: an update brings every
-installed beekeeper plugin up to its marketplace's latest (claude plugin
+installed beekeeper plugin to this binary's release tag (claude plugin
 marketplace update, then claude plugin update in the plugin's scope), so
 the role skills it serves are the ones the new binary hands its workers;
 on the latest release a plugin whose skills differ from the binary's is
@@ -126,6 +157,53 @@ reset. A development build (version dev) is refused.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if controller {
+				return a.runRecoveryController(cmd.Context(), a.out, recoveryTarget, every, cmp.Or(step, every))
+			}
+			if clearHold {
+				path, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				return a.clearRecoveryHold(cmd.Context(), path)
+			}
+			if completeProbation || rollback {
+				path, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				if completeProbation {
+					if err := a.canaryRelease(cmd.Context(), a.out, path, project.Version()); err != nil {
+						if qerr := update.Quarantine(cmd.Context(), path, "post-install health checks failed"); qerr != nil {
+							return errors.Join(err, qerr)
+						}
+						return err
+					}
+					if err := a.loadConfig(); err != nil {
+						return err
+					}
+					store, err := state.Open(a.cfg.StateDir)
+					if err != nil {
+						return err
+					}
+					if err := update.CompleteProbation(cmd.Context(), path, project.Version()); err != nil {
+						return err
+					}
+					return store.ResumeRecoveredWrites(project.Version())
+				}
+				if err := a.loadConfig(); err != nil {
+					return err
+				}
+				store, err := state.Open(a.cfg.StateDir)
+				if err != nil {
+					return err
+				}
+				if err := update.Rollback(cmd.Context(), path, rollbackReason, store.RecoverVersion); err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(a.out, "Restored the verified recovery binary. Restart candidate processes at a quiet moment; manually re-arm alerts and guide watches. Newer state writers remain fenced.")
+				return err
+			}
 			if pluginsOnly {
 				return a.syncInstalledPlugins(cmd.Context())
 			}
@@ -133,12 +211,25 @@ reset. A development build (version dev) is refused.`,
 			if a.json {
 				w = io.Discard
 			}
+			if !check {
+				a.warnUpdateConfig(w)
+			}
 			started := time.Now()
 			ctx := update.WithOptions(cmd.Context(), update.Options{
+				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {
 					return a.canaryRelease(ctx, w, path, version)
 				},
-				Skip: a.isSkippedRelease,
+				Health: func(ctx context.Context, path, _ string) error {
+					why := canaryFailure(ctx, a.cfgPath, path)
+					if why == "" {
+						return nil
+					}
+					_, _ = fmt.Fprintf(w, "The installed candidate failed its health check (%s); quarantining it.\n", why)
+					return errors.New(why)
+				},
+				Skip:     a.isSkippedRelease,
+				Recovery: a.launchRecovery,
 			})
 			res, err := runUpdate(ctx, w, check)
 			if a.json && res.Latest != "" {
@@ -171,6 +262,7 @@ reset. A development build (version dev) is refused.`,
 				}
 			}
 			switch {
+			case !syncsUnder(a.explicitConfig()):
 			case err != nil || check:
 			case res.Updated:
 				a.syncByInstalled(cmd.Context(), w, res.Path)
@@ -180,23 +272,38 @@ reset. A development build (version dev) is refused.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&version, "version", "", "install an exact release tag, including a pre-release (works with --check)")
+	c.Flags().BoolVar(&completeProbation, "complete-probation", false, "run health checks and promote the installed candidate to last-known-good")
+	c.Flags().BoolVar(&rollback, "rollback", false, "restore the verified previous binary only if live state is compatible")
+	c.Flags().StringVar(&rollbackReason, "rollback-reason", "", "durable quarantine reason for the failed candidate")
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
+	c.Flags().BoolVar(&clearHold, "clear-recovery-hold", false, "lift the hold of a failed recovery once its cause is dealt with")
+	c.Flags().BoolVar(&controller, recoveryControllerFlag, false, "run the recovery controller of a candidate in probation")
+	c.Flags().StringVar(&recoveryTarget, recoveryTargetFlag, "", "the installed executable the recovery controller supervises")
+	c.Flags().DurationVar(&every, recoveryEveryFlag, recoveryEvery, "time between two recovery evaluations")
+	c.Flags().DurationVar(&step, recoveryStepFlag, 0, "probation time one evaluation counts, by default that time")
+	for _, hidden := range []string{recoveryControllerFlag, recoveryTargetFlag, recoveryEveryFlag, recoveryStepFlag} {
+		_ = c.Flags().MarkHidden(hidden)
+	}
+	c.MarkFlagsRequiredTogether(recoveryControllerFlag, recoveryTargetFlag)
+	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag)
+	c.MarkFlagsMutuallyExclusive("version", "complete-probation", "rollback", syncPluginsFlag)
+	c.MarkFlagsRequiredTogether("rollback", "rollback-reason")
 	_ = c.Flags().MarkHidden(syncPluginsFlag)
 	return c
 }
 
 // syncByInstalled has the binary an update installed at path bring the plugins up
 // to date with its own sync, so they follow the new binary whatever this
-// one knows; a new binary that does not run is said, and this one syncs.
+// one knows; a new binary that does not run leaves the sync to its next run.
 func (a *app) syncByInstalled(ctx context.Context, w io.Writer, path string) {
 	args := []string{selfUpdateCmdName, "--" + syncPluginsFlag}
 	if a.cfgPath != "" {
 		args = append(args, "--"+configFlag, a.cfgPath)
 	}
 	if err := runInstalled(ctx, w, path, args...); err != nil {
-		_, _ = fmt.Fprintf(w, "The installed %s did not sync its plugin (%v): this binary syncs it.\n", path, err)
-		syncPlugins(ctx, w, true)
+		_, _ = fmt.Fprintf(w, "The installed %s did not sync its plugin (%v): its next command will retry.\n", path, err)
 	}
 }
 
@@ -212,6 +319,8 @@ func (a *app) syncInstalledPlugins(ctx context.Context) error {
 	switch {
 	case binaryIdentity() == "":
 		_, _ = fmt.Fprintln(a.out, "A development build leaves the beekeeper plugin as it is.")
+	case !syncsUnder(a.explicitConfig()):
+		_, _ = fmt.Fprintln(a.out, "A scratch configuration leaves the beekeeper plugin as it is.")
 	case !runsInstalled():
 		_, _ = fmt.Fprintln(a.out, "This beekeeper is not the one on PATH: it leaves the beekeeper plugin as it is.")
 	case !syncOnce(ctx, a.out, a.cfg.StateDir):
@@ -248,7 +357,8 @@ func leftBehind(stale []*proc.Process, old, installed string) string {
 // installed at its path by itself once replaced: a gate call, waiting for
 // its turn or following its devctl, and a merge-child.
 func reexecs(p *proc.Process) bool {
-	return len(p.Args) > 1 && (p.Args[1] == gateCmdName || p.Args[1] == mergeChildCmd)
+	sub := claude.BeekeeperSubcommand(p)
+	return sub == gateCmdName || sub == mergeChildCmd
 }
 
 func (a *app) selfUpdateStore() state.Store {
@@ -308,11 +418,32 @@ func (a *app) skipRelease(version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
+	name, why := canaryCheck(ctx, a.cfgPath, path)
+	if why == "" {
+		return nil
+	}
+	// Live budget, status and capacity failures can be transient. Only
+	// the offline version probe diagnoses a broken local candidate.
+	if name == "version" && ctx.Err() == nil {
+		a.skipRelease(version, why)
+	}
+	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
+	return fmt.Errorf("skipping %s: %s", version, why)
+}
+
+// canaryFailure runs the canary checks on the binary at path and says why the
+// first failed, "" when all passed.
+func canaryFailure(ctx context.Context, cfgPath, path string) string {
+	_, why := canaryCheck(ctx, cfgPath, path)
+	return why
+}
+
+func canaryCheck(ctx context.Context, cfgPath, path string) (string, string) {
 	for _, check := range canaryChecks {
 		name := strings.Join(check, " ")
 		args := check
-		if a.cfgPath != "" {
-			args = append([]string{"--" + configFlag, a.cfgPath}, check...)
+		if cfgPath != "" {
+			args = append([]string{"--" + configFlag, cfgPath}, check...)
 		}
 		out, err := runCanaryCheck(ctx, path, args...)
 		if err != nil {
@@ -320,15 +451,18 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 			if detail == "" {
 				detail = oneLine(err.Error())
 			}
-			why := fmt.Sprintf("canary %s failed: %s", name, detail)
-			// Live budget, status and capacity failures can be transient. Only
-			// the offline version probe diagnoses a broken local candidate.
-			if name == "version" && ctx.Err() == nil {
-				a.skipRelease(version, why)
-			}
-			_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
-			return fmt.Errorf("skipping %s: %s", version, why)
+			return name, fmt.Sprintf("canary %s failed: %s", name, detail)
 		}
 	}
-	return nil
+	return "", ""
+}
+
+// warnUpdateConfig runs before handing control to a newer binary, which may
+// understand configuration that this installed version cannot read.
+func (a *app) warnUpdateConfig(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "WARNING: configuration changes made with a newer release may be unreadable by the currently installed binary. Before changing configuration, finish the update and restart older beekeeper processes; validate configuration before reverting.")
+
+	if err := a.loadConfig(); err != nil {
+		_, _ = fmt.Fprintf(w, "WARNING: the installed binary cannot read the configuration: %v. A newer release may accept or write values this version cannot read; repair the configuration before reverting.\n", err)
+	}
 }

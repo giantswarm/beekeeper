@@ -112,6 +112,9 @@ delivers it to the filing session.`,
 			if err := s.watch(ctx, rc); err != nil {
 				return err
 			}
+			if err := s.startFleetWatch(ctx); err != nil {
+				return err
+			}
 			srv := &http.Server{Addr: addr, Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() {
 				<-ctx.Done()
@@ -173,9 +176,12 @@ type (
 const mcpMaxBody = 4 << 20
 
 // mcpServer is serve's MCP server: its tools and resources.
-func (s *server) mcpServer() *mcpserver.MCPServer {
-	m := mcpserver.NewMCPServer(project.Name, project.Version(), mcpserver.WithToolCapabilities(false),
-		mcpserver.WithResourceCapabilities(true, false), mcpserver.WithHooks(s.subscriptionHooks()))
+func (s *server) mcpServer(options ...mcpserver.ServerOption) *mcpserver.MCPServer {
+	// Updates are delivered through subscriptions/listen only. Advertising
+	// legacy resources/subscribe would acknowledge requests we never track.
+	options = append([]mcpserver.ServerOption{mcpserver.WithToolCapabilities(false),
+		mcpserver.WithResourceCapabilities(false, false), mcpserver.WithHooks(s.subscriptionHooks())}, options...)
+	m := mcpserver.NewMCPServer(project.Name, project.Version(), options...)
 	for _, t := range append(s.tools(), s.messageTools()...) {
 		m.AddTool(t.tool, s.handle(t))
 	}
@@ -184,11 +190,25 @@ func (s *server) mcpServer() *mcpserver.MCPServer {
 }
 
 func (s *server) handler() http.Handler {
-	m := s.mcpServer()
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", s.authenticate(http.MaxBytesHandler(mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true)), mcpMaxBody)))
+	mux.Handle("/mcp", s.authenticate(http.MaxBytesHandler(s.mcpHandler(), mcpMaxBody)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	return mux
+}
+
+// The library uses resources.subscribe for both legacy subscriptions and
+// subscriptions/listen. Enable it only for the revision that implements the
+// latter, which rejects the legacy methods itself.
+func (s *server) mcpHandler() http.Handler {
+	legacy := mcpserver.NewStreamableHTTPServer(s.mcpServer(), mcpserver.WithStateLess(true))
+	modern := mcpserver.NewStreamableHTTPServer(s.mcpServer(mcpserver.WithResourceCapabilities(true, false)), mcpserver.WithStateLess(true))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("MCP-Protocol-Version") == "2026-07-28" {
+			modern.ServeHTTP(w, r)
+			return
+		}
+		legacy.ServeHTTP(w, r)
+	})
 }
 
 // authenticate refuses a request without a valid token of a member, before
@@ -235,11 +255,19 @@ type call struct {
 type auditStore struct {
 	*kube.Store
 	wrote bool
+	// authorize checks the current state before every write attempt,
+	// including a retry after another writer changed the object.
+	authorize func(*state.State) error
 }
 
 func (s *auditStore) Update(fn func(*state.State) ([]state.Event, error)) error {
 	n := 0
 	err := s.Store.Update(func(st *state.State) ([]state.Event, error) {
+		if s.authorize != nil {
+			if err := s.authorize(st); err != nil {
+				return nil, err
+			}
+		}
 		evs, err := fn(st)
 		n = len(evs)
 		return evs, err

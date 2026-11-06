@@ -63,7 +63,7 @@ func (p *person) run(args ...string) (string, int) {
 	if i := slices.Index(args, "--json"); i > 0 {
 		a.json, args = true, slices.Delete(slices.Clone(args), i, i+1)
 	}
-	cmd := map[string]func() *cobra.Command{"lease": a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, "guide": a.guideCmd, agentsName: a.agentsCmd}[args[0]]()
+	cmd := map[string]func() *cobra.Command{kindLease: a.leaseCmd, verbHold: a.holdCmd, lanesName: a.lanesCmd, "note": a.noteCmd, guideName: a.guideCmd, agentsName: a.agentsCmd}[args[0]]()
 	cmd.SetArgs(args[1:])
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -153,7 +153,7 @@ func TestCentralEnvtest(t *testing.T) {
 		state.Agent{Party: state.Party{Name: agentTwo}, Registered: time.Now()})
 	w.syncRoster(context.Background())
 	got := roster()
-	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != "busy" || a["task"] != "giantswarm/beekeeper#157" || a["person"] != anaEmail {
+	if a := got["local:ana-laptop/"+agentOne]; a == nil || a["state"] != busyWord || a["task"] != "giantswarm/beekeeper#157" || a["person"] != anaEmail {
 		t.Errorf("Agent one on the roster: %v", got)
 	}
 	if a := got["local:ana-laptop/"+agentTwo]; a == nil || a["state"] != stateIdle {

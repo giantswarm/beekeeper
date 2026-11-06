@@ -19,16 +19,20 @@ import (
 // fail is set. It returns the file of recorded inputs, one per line.
 func fakeRelay(t *testing.T, fail bool) string {
 	t.Helper()
-	dir := t.TempDir()
-	sent := filepath.Join(dir, "sent")
-	turn := `echo "$req" >> "` + sent + `"
-echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'`
+	turn := `echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'`
 	if fail {
 		turn = `echo '{"type":"assistant","error":"authentication_failed","message":{"content":[]}}'
 echo '{"type":"result","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
 exit 1`
 	}
-	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\n" + turn + "\n"
+	return fakeRelayTurn(t, turn)
+}
+
+func fakeRelayTurn(t *testing.T, turn string) string {
+	t.Helper()
+	dir := t.TempDir()
+	sent := filepath.Join(dir, "sent")
+	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\necho \"$req\" >> \"" + sent + "\"\n" + turn + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
@@ -57,11 +61,11 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	agents := []state.Agent{{Party: four}, {Party: state.Party{Session: "s5", Name: agentFive}}}
 	sessions := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}, {ID: "s5", Name: agentFive}}
 	s := steward{host: "local_steward", sock: "/run/user/1000/cc-socks/1.sock"}
-	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor", "agreed")
+	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor")
 	done := func() bool { return true }
 
 	sent := fakeRelay(t, false)
-	told, missed := broadcast(context.Background(), agents, sessions, nil, func(ctx context.Context, name string) error {
+	told, missed := broadcast(context.Background(), &state.State{Agents: agents}, sessions, nil, func(ctx context.Context, name string) error {
 		return a.peerSend(ctx, name, "hello")
 	})
 	if fmt.Sprint(told) != "[Agent four Agent five]" || len(missed) != 0 {
@@ -75,7 +79,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	}
 
 	fakeRelay(t, true)
-	_, missed = broadcast(context.Background(), agents, sessions, nil, func(ctx context.Context, name string) error {
+	_, missed = broadcast(context.Background(), &state.State{Agents: agents}, sessions, nil, func(ctx context.Context, name string) error {
 		return a.peerSend(ctx, name, "hello")
 	})
 	err := askSteward(context.Background(), s, ask, done, a.peerSend, time.Second)

@@ -11,12 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const exampleToolRepo = "example/tool"
+
 const (
 	untitledPID    = 1<<23 + 34
 	unrosteredPID  = 1<<23 + 35
-	untitledName   = "klaus-lab-34"
+	untitledName   = "fixture-lab-34"
 	rosterName     = "BK worker"
-	unrosteredName = "klaus-lab-35"
+	unrosteredName = "fixture-lab-35"
 	servesRoster   = `"BK worker" serves`
 	servesPark     = `"BK park" serves`
 )
@@ -65,7 +67,7 @@ func TestServeRecordsTheRosterName(t *testing.T) {
 	if out, err := serve(a, untitledName, "giantswarm/beekeeper#1027"); err != nil || !strings.Contains(out, `"BK worker" serves giantswarm/beekeeper#1027`) {
 		t.Fatalf("serve the roster's session: %q, %v", out, err)
 	}
-	if out, err := serve(a, unrosteredName, "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"klaus-lab-35" serves giantswarm/beekeeper#1026`) {
+	if out, err := serve(a, unrosteredName, "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"fixture-lab-35" serves giantswarm/beekeeper#1026`) {
 		t.Fatalf("serve the session off the roster: %q, %v", out, err)
 	}
 	st, _ := store.Read()
@@ -99,7 +101,7 @@ func TestServeResolvesTheSession(t *testing.T) {
 		{name: "session off the roster", q: unrosteredName, want: strconv.Quote(unrosteredName) + " serves"},
 		{name: "whole name before a part", q: "BK park", want: servesPark},
 		{name: "roster agent without a CLI", q: "BK parked worker", want: `"BK parked worker" serves giantswarm/beekeeper#789; no CLI of "BK parked worker" runs`},
-		{name: "part of several names", q: "klaus-lab", refusal: `"klaus-lab" matches 2 sessions: "klaus-lab-34" (s` + strconv.Itoa(untitledPID) + `), "klaus-lab-35"`},
+		{name: "part of several names", q: "fixture-lab", refusal: `"fixture-lab" matches 2 sessions: "fixture-lab-34" (s` + strconv.Itoa(untitledPID) + `), "fixture-lab-35"`},
 		{name: "task title", q: "BK park (opus, builds)", want: servesPark},
 		{name: "task title, any case", q: "bk PARK (Opus, Builds)", want: servesPark},
 		{name: "roster name and a suffix", q: "BK parked worker (sonnet, no build)", want: `"BK parked worker" serves`},
@@ -174,5 +176,66 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 	a.out = &bytes.Buffer{}
 	if out, err := serve(a, "--clear"); err != nil || !strings.Contains(out, `"BK 772 worker" has no record to clear`) {
 		t.Fatalf("serve --clear again: %q, %v", out, err)
+	}
+}
+
+func TestServeAcceptsItems(t *testing.T) {
+	const waits = "fixture review"
+	for _, item := range []string{exampleToolRepo, "investigate build failures", "example/tool#42"} {
+		t.Run(item, func(t *testing.T) {
+			a, store := serveApp(t)
+			out, err := serve(a, rosterName, item, "--waits", waits)
+			want := `"BK worker" serves ` + item + ", waiting on " + waits
+			if err != nil || !strings.Contains(out, want) {
+				t.Fatalf("serve: %q, %v; want %q", out, err, want)
+			}
+			st, err := store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Records) != 1 || st.Records[0].Issue != item || st.Records[0].Waits != waits {
+				t.Fatalf("records: %+v", st.Records)
+			}
+			sessions, _, err := a.sessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := printedRecords(st, sessions); !strings.Contains(got, want) {
+				t.Errorf("listing: %q; want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestServeRejectsEmptyItems(t *testing.T) {
+	for _, item := range []string{"", " \t\n"} {
+		a, store := serveApp(t)
+		if _, err := serve(a, rosterName, item); err == nil || !strings.Contains(err.Error(), "served item must not be empty") {
+			t.Fatalf("serve(%q): %v", item, err)
+		}
+		st, err := store.Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Records) != 0 {
+			t.Fatalf("empty item recorded: %+v", st.Records)
+		}
+	}
+}
+
+// A session serving free text is asked about nothing: its claim gets the
+// plain refusal, never a failed read of an item that is no issue.
+func TestServedOpenSkipsItemsWithoutAState(t *testing.T) {
+	a, store := serveApp(t)
+	me := state.Party{Session: "free-text-session"}
+	if err := store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: exampleToolRepo}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := servedOpen(t.Context(), nil, a.store, me)
+	if err != nil || !open("investigate build failures") {
+		t.Fatalf("open=%v err=%v", open("investigate build failures"), err)
 	}
 }

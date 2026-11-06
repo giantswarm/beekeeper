@@ -16,7 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -141,6 +143,27 @@ func guides(person string, n *state.Note) bool {
 	}
 	who, _ := noteFor(n)
 	return strings.EqualFold(who, person)
+}
+
+// noteAddressee is who a note filed --for who is for: guide.person when who is
+// another name of theirs or the guide, who itself when the desk knows it (the
+// supervisor is a role, read by the loop). A name nobody
+// here goes by is refused: its note would reach no guide. With guide.person
+// unset every note is the guide's. central says the note goes to the central
+// instance, which judges its own names; a note kept on this machine does not.
+func (a *app) noteAddressee(who string, central bool) (string, error) {
+	person := a.cfg.Guide.Person
+	if person == "" || strings.HasPrefix(who, teamPrefix) || strings.EqualFold(who, supervisorCommand) {
+		return who, nil
+	}
+	email := personEmail(a.cfg.Serve, who)
+	if strings.EqualFold(who, person) || strings.EqualFold(who, guideName) || board.ContainsFold(a.cfg.Guide.PersonNames, who) || email != "" && strings.EqualFold(email, personEmail(a.cfg.Serve, person)) {
+		return person, nil
+	}
+	if email != "" || central || board.ContainsFold(a.cfg.Board.People, who) {
+		return who, nil
+	}
+	return "", usageErr("--for %q names nobody on this desk, so no guide would see the note: the guide's person is %q (guide.person; guide.personNames adds other names of theirs), others are in serve.people, board.people, an email or team:<name>", who, person)
 }
 
 // guideQueue is the queue of the guide of person: the open notes filed for
@@ -623,8 +646,8 @@ settled (GUIDE PROBLEM, the full report to file in its owning repository), and t
 relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again; only a standing
-GUIDE RELAY DUE is said once more, by each feed and after a change of
-guide.relayAt. Runs until killed; --once polls once.
+GUIDE RELAY DUE is said by each feed and repeats every five minutes until
+a relay opens, and after a change of guide.relayAt. Runs until killed; --once polls once.
 
 The feed never re-executes itself. Once self-update replaced its binary it
 says GUIDE WATCH STALE, once, with the version it runs, the one installed
@@ -691,6 +714,7 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	central, centralErr := a.guideCentral(ctx, st)
 	var archived map[string]bool
 	if sessionLinked(st) {
 		archived = claude.Archived(a.cfg)
@@ -704,6 +728,9 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		rl, re := guideRole.fireRelay(st, a.now)
 		pl, pf := guideProblemLines(st, problems)
 		fl, fed := a.feedLines(st, sessions, closed, findOrphaned(st, archived))
+		cl, cf := a.centralGuideLines(st, sessions, central.notes, central.closed, centralErr == nil)
+		lines = append(lines, cl...)
+		fed = fed || cf
 		lines = append(lines, pl...)
 		fed = fed || pf
 		lines = append(append(lines, rl...), fl...)
@@ -716,16 +743,109 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
 	}
-	if _, _, changed := fire(st); !changed {
+	// Preserve the read-only preview when the writer fence refuses the callback.
+	lines, _, changed := fire(st)
+	if !changed {
 		return nil, ctx.Err()
 	}
-	var lines []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, _ = fire(st)
 		return evs, nil
 	})
 	return lines, err
+}
+
+type guideCentralSnapshot struct {
+	notes  []state.Note
+	closed map[int]state.Event
+}
+
+// guideCentral reads outside the state lock. A failed read preserves delivery
+// marks until the central instance can establish which notes remain open.
+func (a *app) guideCentral(ctx context.Context, st *state.State) (out guideCentralSnapshot, err error) {
+	me, _ := a.caller()
+	out.notes, err = a.centralNotes(ctx, me)
+	if err != nil || !a.centralNotesOn() {
+		return
+	}
+	missing := false
+	for _, k := range st.GuideRole().Fed {
+		if strings.HasPrefix(k, "note:"+a.cfg.Central.Context+"#") && !slices.ContainsFunc(out.notes, func(n state.Note) bool { return k == "note:"+noteRef(&n) }) {
+			missing = true
+		}
+	}
+	if !missing {
+		return
+	}
+	var f feed.Feed
+	if _, err = a.callCentralRaw(ctx, me, nameReadFeed, map[string]any{}, &f); err != nil {
+		return
+	}
+	out.closed = map[int]state.Event{}
+	for _, ev := range f.Events {
+		detail, ok := strings.CutPrefix(ev.Line, feed.Line(ev.Kind, ev.Actor, ""))
+		if !ok || !noteClosing(ev.Kind) {
+			continue
+		}
+		id, _, _ := strings.Cut(strings.TrimPrefix(detail, "#"), " ")
+		e := state.Event{Verb: ev.Kind, Detail: detail, By: state.Party{Name: ev.Actor.Name}}
+		n, parseErr := strconv.Atoi(id)
+		if an, ok := parseAnswered(e); ok {
+			n, parseErr = an.ID, nil
+		}
+		if parseErr == nil {
+			out.closed[n] = e
+		}
+	}
+	return
+}
+
+func (a *app) centralGuideLines(st *state.State, sessions []*claude.Session, notes []state.Note, closed map[int]state.Event, available bool) (lines []string, changed bool) {
+	if !available {
+		return
+	}
+	guideRole.update(st, func(r *state.Role) {
+		before := slices.Clone(r.Fed)
+		var current []string
+		for _, it := range withCentral(nil, notes, sessions, a.cfg.Guide.Person, a.cfg.Identity.Host) {
+			current = append(current, it.Key)
+			if !slices.Contains(r.Fed, it.Key) {
+				lines = append(lines, "GUIDE DECISION: "+truncate(a.queueText(it), 240))
+			}
+		}
+		r.Fed = slices.DeleteFunc(r.Fed, func(k string) bool {
+			if !strings.HasPrefix(k, "note:"+a.cfg.Central.Context+"#") || slices.Contains(current, k) {
+				return false
+			}
+			if slices.ContainsFunc(notes, func(n state.Note) bool { return k == "note:"+noteRef(&n) }) {
+				return false
+			}
+			ref := strings.TrimPrefix(k, "note:")
+			_, id, _ := strings.Cut(ref, "#")
+			n, _ := strconv.Atoi(id)
+			e, ok := closed[n]
+			switch {
+			case ok && e.Verb == answerRecorded:
+				lines = append(lines, fmt.Sprintf("GUIDE ANSWERED (%s): %s: %s", truncate(e.By.Name, 30), ref, truncate(oneLine(e.Detail), 240)))
+			case ok && e.Verb == noteDefaulted:
+				lines = append(lines, "GUIDE DEFAULTED: "+ref+": "+truncate(oneLine(e.Detail), 240))
+			case ok && e.Verb == noteOvertaken:
+				lines = append(lines, "GUIDE CLOSED "+ref+" overtaken: "+truncate(oneLine(overtakenReason(e)), 200))
+			default:
+				lines = append(lines, "GUIDE CLOSED: note "+ref)
+			}
+			return true
+		})
+		for _, k := range current {
+			if !slices.Contains(r.Fed, k) {
+				r.Fed = append(r.Fed, k)
+			}
+		}
+		slices.Sort(r.Fed)
+		changed = !slices.Equal(before, r.Fed)
+	})
+	return
 }
 
 // closedNotes are the events that closed the notes the feed reported and
@@ -769,7 +889,7 @@ func (a *app) feedLines(st *state.State, sessions []*claude.Session, closed map[
 	guideRole.update(st, func(r *state.Role) {
 		var cur []string
 		for _, k := range r.Fed {
-			if strings.HasPrefix(k, "problem:") {
+			if strings.HasPrefix(k, "problem:") || strings.HasPrefix(k, "note:") {
 				cur = append(cur, k)
 			}
 		}

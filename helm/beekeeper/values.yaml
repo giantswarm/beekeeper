@@ -16,9 +16,12 @@ serve:
   # The Dex group every member of the organization carries.
   organization: ""
   # Further groups that make a caller a member, one per Dex connector that
-  # spells the organization differently (a GitHub org's <org>:<team>, a
-  # directory's group name). A refused caller's log line names the groups its
-  # token carries.
+  # spells the organization differently. Dex's GitHub connector emits
+  # <connector>:<org>:<team>, e.g. giantswarm-github:giantswarm:employees.
+  # Use the exact group from the token, including the connector prefix.
+  # An unprefixed <org>:<team> matches only an unprefixed token group.
+  # A refused caller's log line names the groups its token carries.
+  # The same exact matching applies to organization, teams and supervisors.
   organizations: []  # @schema item: string
   # Dex group -> team. Each team gets its namespace, beekeeper-<team>, for its
   # notes and agents (teamNamespaces.create). A caller in several is the team
@@ -146,10 +149,10 @@ securityContext:
 # Further environment variables, volumes and mounts of serve's container,
 # and init containers of its pod (a sidecar is one with restartPolicy
 # Always): a private CA for the issuer (SSL_CERT_FILE), a local proxy to it.
-extraEnv: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
-extraVolumes: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
-extraVolumeMounts: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
-initContainers: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Container
+extraEnv: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
+extraVolumes: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
+extraVolumeMounts: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
+initContainers: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Container
 
 nodeSelector: {}  # @schema additionalProperties: true
 tolerations: []  # @schema item: object

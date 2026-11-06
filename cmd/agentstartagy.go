@@ -81,7 +81,7 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 	var reg registration
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, func(p state.Party) bool { _, ok := claude.Live(sessions, p); return ok })
 		if err != nil {
 			return nil, err
 		}
@@ -122,6 +122,15 @@ func (a *app) startAgyAgent(ctx context.Context, sp agentStart) error {
 			return a.failAgyQuotaStart(by, s.Party, id, model, qerr)
 		}
 		return a.undelivered(by, s.Party, fmt.Errorf("%w (journalctl --user -u %s)", err, unit))
+	}
+	// The link files go with the inbox; the roster name must outlive them.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := st.StartIndex(s.Party); i >= 0 {
+			st.Starts[i].Conversation = convID
+		}
+		return nil, nil
+	}); err != nil {
+		return err
 	}
 	var remoteLine string
 	if a.cfg.Agy.RemoteControl && a.cfg.Agy.RemoteDaemon != "" {

@@ -71,10 +71,14 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 	if err := ownedDirectory(cfgDir); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"GEMINI.md", hooksJSONFile, "skills.json"} {
+	for _, name := range []string{agyRulesFile, hooksJSONFile, "skills.json"} {
 		dst := filepath.Join(cfgDir, name)
 		_ = os.Remove(dst)
-		if err := os.Symlink(filepath.Join(s.agyConfigDir(), name), dst); err != nil {
+		target := filepath.Join(s.agyConfigDir(), name)
+		if name == agyRulesFile && s.coordinatorBundle != nil {
+			target = s.rulesFile()
+		}
+		if err := os.Symlink(target, dst); err != nil {
 			return "", err
 		}
 	}
@@ -95,6 +99,9 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 			},
 		},
 	})
+	if !j.Request.MCP {
+		mcp = mustJSON(map[string]any{mcpServersKey: map[string]any{}})
+	}
 	if err := atomicFile(filepath.Join(cfgDir, "mcp_config.json"), mcp); err != nil {
 		return "", err
 	}
@@ -109,13 +116,9 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 	if err := s.linkAgyLogin(); err != nil {
 		return errors.New("agy login link in the managed home is unavailable")
 	}
-	home := s.agyHomeDir()
-	if j.Request.MCP {
-		var err error
-		home, err = s.prepareAgyMCPHome(ref, j)
-		if err != nil {
-			return err
-		}
+	home, err := s.prepareAgyMCPHome(ref, j)
+	if err != nil {
+		return err
 	}
 	log, err := s.openLog(ref)
 	if err != nil {
@@ -145,7 +148,11 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 		}()
 	}
 	env := append(s.toolPath(s.agyEnvironmentWithHome(home)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
-	env, envErr := s.GitHubEnvironment(j, env)
+	env, envErr := s.ownedEnvironment(j, env)
+	if envErr != nil {
+		return envErr
+	}
+	env, envErr = s.GitHubEnvironment(j, env)
 	if envErr != nil {
 		return envErr
 	}

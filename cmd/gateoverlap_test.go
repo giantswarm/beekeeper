@@ -80,6 +80,7 @@ func TestAMergeInALaneWithoutAnInstallationFreesItsLaneForTheNextCIWhileItsRelea
 // settle rule.
 func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerdict(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
+		const failedReleaseTag = "v1.2.4"
 		noSystemd(t)
 		fakeDevctl(t, handCutDevctl)
 		stubGitHub(t, github.Merged, "")
@@ -96,6 +97,14 @@ func TestAFailedReleaseInALaneWithoutAnInstallationStopsTheNextMergeUntilItsVerd
 		out := gateStderr(t, func() { err = startMerge(t, g) })
 		if Code(err) != devctlReleaseFailed {
 			t.Fatalf("exit %d, want %d\n%s", Code(err), devctlReleaseFailed, out)
+		}
+		st := gateState(t, g)
+		if len(st.Merges) != 1 {
+			t.Fatalf("failed release barrier was deleted: %+v", st.Merges)
+		}
+		m := st.Merges[0]
+		if m.Phase != state.Settling || m.Releasing || !m.ReleaseFailed || m.Release != failedReleaseTag || m.Exit != devctlReleaseFailed || m.Finished.IsZero() {
+			t.Fatalf("failed release verdict not persisted: %+v", m)
 		}
 		if merges == "" {
 			t.Error("the next merge could land while the release ran")
@@ -370,5 +379,26 @@ func TestLanePaceIsTheMedianOfItsLatestPlaces(t *testing.T) {
 	}
 	if _, ok := lanePace(events, "none"); ok {
 		t.Error("a lane without merges has a pace")
+	}
+}
+
+func TestWarmUpUsesRepositoryCITimeout(t *testing.T) {
+	g := runningMerge(t, scratchRepo, localLane)
+	g.argv = mergeArgv(scratchRepo)
+	g.cfg.Merge.CITimeout.Duration = time.Hour
+	g.cfg.Merge.CITimeouts = map[string]config.Duration{scratchRepo: {Duration: 3 * time.Hour}}
+	wasWait := prWarmWait
+	t.Cleanup(func() { prWarmWait = wasWait })
+	called := false
+	prWarmWait = func(ctx context.Context, repo string, pr int) {
+		called = true
+		deadline, ok := ctx.Deadline()
+		if left := time.Until(deadline); !ok || left < 3*time.Hour-time.Minute || left > 3*time.Hour {
+			t.Errorf("warm-up deadline = %v, want three hours from now", deadline)
+		}
+	}
+	g.warmUp(context.Background())
+	if !called {
+		t.Fatal("warm-up did not wait for CI")
 	}
 }

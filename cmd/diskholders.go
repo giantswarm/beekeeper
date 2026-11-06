@@ -65,7 +65,7 @@ type holder struct {
 // says the processes could not all be read: the listing goes on, and no
 // holder is eligible.
 type holderMachine struct {
-	refs    []string
+	live    diskprune.Refs
 	refsErr error
 	st      *state.State
 }
@@ -77,7 +77,7 @@ func (a *app) holderMachine() (holderMachine, error) {
 	}
 	m := holderMachine{st: st}
 	d, err := diskReferences()
-	m.refs = d.refs
+	m.live = diskprune.NewRefs(d.refs)
 	if err != nil {
 		m.refsErr = fmt.Errorf("process references unavailable, no holder is eligible: %w", err)
 	}
@@ -190,7 +190,7 @@ func (a *app) inspectHolder(m holderMachine, name, path string, aside bool) hold
 		h.Why = "kept by disk.holders.keep"
 	case m.refsErr != nil:
 		h.Why = "process use unknown"
-	case diskprune.InUse(path, m.refs):
+	case m.live.Holds(path):
 		h.Why = "in use by a running process"
 	case h.TaskOpen:
 		h.Why = "its task is open"

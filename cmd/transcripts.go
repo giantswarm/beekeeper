@@ -67,7 +67,13 @@ type remoteTranscriptReadReq struct {
 type remoteTranscriptReadResp struct {
 	Meta  transcripts.Meta   `json:"meta"`
 	Turns []transcripts.Turn `json:"turns"`
+	Loss  transcripts.Loss   `json:"loss,omitzero"`
 }
+
+// transcriptGrantReach says what a grant reaches, which a reader cannot tell
+// from a refused read.
+const transcriptGrantReach = "it covers the stored transcript (transcripts read, transcripts search), not the files that session wrote: " +
+	"a file under a harness store needs hooks.transcriptGrants, and a file elsewhere follows its own rules"
 
 type remoteTranscriptAccessReq struct {
 	Repo    string `json:"repo,omitempty"`
@@ -236,6 +242,12 @@ func (a *app) transcriptsReadCmd() *cobra.Command {
 			if m.Repo != "" || m.Ref != "" {
 				_, _ = fmt.Fprintf(a.out, "# repo: %s  ref: %s\n", cmp.Or(m.Repo, "-"), cmp.Or(m.Ref, "-"))
 			}
+			if lost := resp.Loss.Lost(); lost != "" {
+				_, _ = fmt.Fprintf(a.out, "# lost for good: %s\n", lost)
+			}
+			if missing := resp.Loss.Unindexed(); missing != "" {
+				_, _ = fmt.Fprintf(a.out, "# not in the index: %s\n", missing)
+			}
 			for _, t := range resp.Turns {
 				_, _ = fmt.Fprintf(a.out, "--- %s %s\n%s\n", clock(a.now, t.At), t.Role, t.Text)
 				if req.Results && t.Result != "" {
@@ -369,9 +381,16 @@ func (a *app) transcriptsGrantCmd() *cobra.Command {
 			if a.json {
 				return a.printJSON(granted)
 			}
-			_, err = fmt.Fprintf(a.out, "granted transcript access #%d to %q (%s) until %s\n",
-				granted.ID, granted.To.Name, transcriptScopeText(granted.Repo, granted.Session, granted.All), clockZone(a.now, granted.Expires))
-			return err
+			_, err = fmt.Fprintf(a.out, "granted transcript access #%d to %q (%s) until %s: %s\n",
+				granted.ID, granted.To.Name, transcriptScopeText(granted.Repo, granted.Session, granted.All), clockZone(a.now, granted.Expires), transcriptGrantReach)
+			if err != nil {
+				return err
+			}
+			if metas, err := a.transcriptStore().List(); err == nil && !slices.ContainsFunc(metas, func(m transcripts.Meta) bool { return transcripts.Covers(granted, m) }) {
+				_, err = fmt.Fprintf(a.out, "no stored transcript matches it yet: `beekeeper transcripts list` names what the store holds\n")
+				return err
+			}
+			return nil
 		},
 	}
 	c.Flags().StringVar(&repo, "repo", "", "repository to grant access to (owner/repo)")
@@ -665,7 +684,13 @@ func (a *app) readTranscriptForCaller(ctx context.Context, st *state.State, call
 	if err != nil {
 		return remoteTranscriptReadResp{}, err
 	}
-	return remoteTranscriptReadResp{Meta: m, Turns: turns}, nil
+	loss := transcripts.LossOf(turns, req.Results, m.Running)
+	if m.SourcePath != "" {
+		if _, err := os.Stat(m.SourcePath); errors.Is(err, os.ErrNotExist) {
+			loss.SourceGone = true
+		}
+	}
+	return remoteTranscriptReadResp{Meta: m, Turns: turns, Loss: loss}, nil
 }
 
 func (a *app) recordTranscriptRequest(st *state.State, me state.Party, req remoteTranscriptAccessReq) (state.TranscriptRequest, []state.Event, error) {
@@ -729,10 +754,9 @@ func (a *app) resolveTranscriptCaller(st *state.State) (transcripts.Caller, stat
 		if h := st.GuideRole().Holder; h != nil && h.Is(envP) {
 			return transcripts.Caller{Party: me, RosterName: cmp.Or(h.Name, guideRole.name), Role: guideRole.name, IsGuide: true}, me
 		}
-		if st.Knows(envP) {
-			return a.workerCallerForParty(st, envP, me.Name), me
-		}
-		return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.name, IsGuide: true}, me
+		// An unregistered or retired harness session is still a worker.
+		// Only the current guide holder above has unrestricted access.
+		return a.workerCallerForParty(st, envP, me.Name), me
 	}
 	me := state.Party{Name: cmp.Or(a.cfg.Identity.Person, "operator"), Person: a.cfg.Identity.Person, Team: a.cfg.Identity.Team, Host: a.cfg.Identity.Host}
 	return transcripts.Caller{Party: me, RosterName: me.Name, Role: guideRole.name, IsGuide: true}, me
@@ -993,7 +1017,18 @@ func (a *app) enrichMetaFromState(st *state.State, meta *transcripts.Meta, p sta
 	}
 
 	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
-		if s.Is(p) || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
+		conversation := meta.ID != "" && s.Conversation == meta.ID
+		if s.Is(p) || conversation || (meta.ID != "" && s.Session == meta.ID) || (meta.HostSession != "" && s.HostSession == meta.HostSession) {
+			if conversation {
+				meta.HostSession = cmp.Or(meta.HostSession, s.HostSession)
+				p.HostSession = cmp.Or(s.HostSession, p.HostSession)
+			}
+			for _, ref := range transcripts.ExtractRefs(s.Task) {
+				meta.Ref = cmp.Or(meta.Ref, ref)
+				if !slices.Contains(meta.Refs, ref) {
+					meta.Refs = append(meta.Refs, ref)
+				}
+			}
 			if meta.RosterName == "" {
 				meta.RosterName = s.Name
 			}

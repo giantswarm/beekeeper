@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -42,6 +43,21 @@ type HostConfig struct {
 	// Tools pins the worker toolchain (go, gh) a worker calls by bare name.
 	// Omitted, it leaves the configuration digest of a host without it as is.
 	Tools map[string]ToolConfig `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// Retention is how long a retired execution's moved-aside resources are
+	// kept, a Go duration. Omitted, it is DefaultRetention and leaves the
+	// configuration digest of a host without it as is.
+	Retention string `yaml:"retention,omitempty" json:"retention,omitempty"`
+	// SharedHome keeps workers on the account's HOME instead of one in their
+	// execution root. Omitted, it leaves the configuration digest as it is.
+	SharedHome bool `yaml:"sharedHome,omitempty" json:"sharedHome,omitempty"`
+}
+
+// retention is the validated Retention, DefaultRetention when unset.
+func (c HostConfig) retention() time.Duration {
+	if d, err := time.ParseDuration(c.Retention); err == nil && d > 0 {
+		return d
+	}
+	return DefaultRetention
 }
 
 // The adapter relies on restricted settings and auth status's configDirectory
@@ -60,6 +76,11 @@ const AgyVersions = ">= 1.4.7, < 2.0.0"
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 && len(c.RepositoryOrgs) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
 		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex, agy or omp")
+	}
+	if c.Retention != "" {
+		if d, err := time.ParseDuration(c.Retention); err != nil || d <= 0 {
+			return errors.New("execution host retention must be a positive duration")
+		}
 	}
 	if err := validateRepositoryOrgs(c.RepositoryOrgs); err != nil {
 		return err
@@ -145,8 +166,15 @@ type Policy struct {
 func (p Policy) Digest() string { b, _ := json.Marshal(p); return Digest(b) }
 
 // Policy describes precisely what prepare installs. ConfigurationDigest also
-// binds the caller's host-local guard configuration, not just these fields.
+// binds the caller's host-local guard configuration, not just these fields. A
+// coordinator bundle is no part of it: a rule change must not move the host's
+// pin, and each execution's request binds the bundle it runs under instead.
 func (s *Server) Policy() Policy {
+	if s.coordinatorBundle != nil {
+		host := *s
+		host.coordinatorBundle = nil
+		return host.Policy()
+	}
 	b, _ := json.Marshal(struct {
 		Host     HostConfig
 		Security string
@@ -164,9 +192,16 @@ func (s *Server) Policy() Policy {
 	return p
 }
 
-// codexHomeDir is the managed CODEX_HOME of every remote codex worker on
-// this host: policy-owned config, hooks and rules, never the person's own.
-func (s *Server) codexHomeDir() string { return filepath.Join(s.Root, "codex-home") }
+// codexHomeDir is the managed CODEX_HOME of a remote codex worker on this
+// host: policy-owned config, hooks and rules, never the person's own. One bound
+// to a coordinator bundle keeps that bundle's home, and with it its thread,
+// across later bundles.
+func (s *Server) codexHomeDir() string {
+	if s.coordinatorBundle != nil {
+		return filepath.Join(s.bundleDir(s.coordinatorBundle.Digest()), codexBundleHome)
+	}
+	return filepath.Join(s.Root, "codex-home")
+}
 
 // codexConfig is the managed home's config.toml, the local worker's settings
 // without any person's project trust. Code-mode provides the worker's tools;
@@ -200,7 +235,20 @@ skill_mcp_dependency_install = false
 func (s *Server) codexFiles() map[string][]byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard --format codex"
 	hooks := mustJSON(map[string]any{hooksKey: preToolUse(cmd)})
-	return map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": s.Rules}
+	files := map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": append([]byte(nil), s.Rules...)}
+	if b := s.coordinatorBundle; b != nil {
+		for _, a := range b.Artifacts {
+			if name, ok := codexSkillFile(a.Artifact); ok {
+				files[name] = a.Content
+			} else {
+				files["AGENTS.md"] = append(files["AGENTS.md"], append([]byte("\n\nCoordinator rules:\n"), a.Content...)...)
+			}
+		}
+		if value, ok := b.Settings["model_reasoning_effort"]; ok {
+			files["config.toml"] = []byte("model_reasoning_effort = \"" + value + "\"\n" + codexConfig)
+		}
+	}
+	return files
 }
 
 // linkCodexLogin links the person's own host login into the managed home. A
@@ -220,6 +268,7 @@ func (s *Server) linkCodexLogin() error {
 }
 
 const (
+	agyRulesFile   = "GEMINI.md"
 	agyLoginToken  = "antigravity-oauth-token" //nolint:gosec // OAuth token file basename, not a credential value
 	hooksJSONFile  = "hooks.json"
 	mcpServersKey  = "mcpServers"
@@ -247,7 +296,7 @@ func (s *Server) agyFiles() map[string][]byte {
 	hooks := mustJSON(map[string]any{managedBinary: agyPreToolUse(cmd)})
 	mcp := mustJSON(map[string]any{mcpServersKey: map[string]any{}})
 	skills := mustJSON(map[string]any{"entries": []any{}})
-	return map[string][]byte{"GEMINI.md": s.Rules, hooksJSONFile: hooks, "mcp_config.json": mcp, "skills.json": skills}
+	return map[string][]byte{agyRulesFile: s.Rules, hooksJSONFile: hooks, "mcp_config.json": mcp, "skills.json": skills}
 }
 
 func agyPreToolUse(command string) map[string]any {
@@ -316,8 +365,9 @@ func preToolUseMatcher(matcher, command string) map[string]any {
 func (s *Server) settings() []byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard"
 	b, _ := json.Marshal(map[string]any{
-		hooksKey:      preToolUse(cmd),
-		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
+		hooksKey:            preToolUse(cmd),
+		"permissions":       map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
+		"autoMemoryEnabled": false,
 	})
 	return b
 }
@@ -343,7 +393,7 @@ func (s *Server) Prepare(p Policy) (string, error) {
 	if err := ownedDirectory(s.Config.WorkspaceRoot); err != nil {
 		return "", err
 	}
-	for name, b := range map[string][]byte{"settings.json": s.settings(), "CLAUDE.md": s.Rules} {
+	for name, b := range map[string][]byte{claudeSettingsFile: s.settings(), claudeRulesFile: s.Rules} {
 		if err := atomicFile(filepath.Join(s.Root, name), b); err != nil {
 			return "", err
 		}
@@ -353,6 +403,9 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 		for name, b := range s.codexFiles() {
+			if err := ownedDirectory(filepath.Dir(filepath.Join(s.codexHomeDir(), name))); err != nil {
+				return "", err
+			}
 			if err := atomicFile(filepath.Join(s.codexHomeDir(), name), b); err != nil {
 				return "", err
 			}
@@ -388,6 +441,9 @@ func (s *Server) Prepare(p Policy) (string, error) {
 			return "", err
 		}
 	}
+	if err := s.refreshBundles(); err != nil {
+		return "", err
+	}
 	// The manifest comes last: a host is prepared only once every file is.
 	if err := atomicFile(filepath.Join(s.Root, "policy.json"), mustJSON(p)); err != nil {
 		return "", err
@@ -406,7 +462,7 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 	if p != s.Policy() {
 		return p, errors.New("installed execution policy is stale; prepare the matching bundle")
 	}
-	for name, digest := range map[string]string{"settings.json": p.SettingsDigest, "CLAUDE.md": p.RulesDigest} {
+	for name, digest := range map[string]string{claudeSettingsFile: p.SettingsDigest, claudeRulesFile: p.RulesDigest} {
 		b, err := readRegular(filepath.Join(s.Root, name), MaxWire)
 		if err != nil || Digest(b) != digest {
 			return p, errors.New("installed execution rules or hooks do not match the policy")
@@ -474,7 +530,7 @@ func (s *Server) probe(ctx context.Context, name string, h HarnessConfig, readin
 	if name == HarnessOmp {
 		return s.probeOmp(ctx, h, readiness)
 	}
-	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
+	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, claudeSettingsFile), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
 		readiness.VersionCheck = probeFailed
@@ -529,7 +585,8 @@ func (s *Server) probeCodex(ctx context.Context, h HarnessConfig, readiness *Har
 }
 
 // agyEnvironment runs agy against the managed agy home only while keeping the
-// host account's Go build and module caches for worker build commands.
+// host account's Go build and module caches for its probes; a worker's run
+// replaces them with its owned paths (ownedEnvironment).
 func (s *Server) agyEnvironment() []string {
 	return s.agyEnvironmentWithHome(s.agyHomeDir())
 }
@@ -571,6 +628,7 @@ func (s *Server) probeAgy(ctx context.Context, h HarnessConfig, readiness *Harne
 		return errors.New("agy login link in the managed home is unavailable")
 	}
 	if err := s.agyHooksLoad(); err != nil {
+		readiness.Guard = probeFailed
 		return err
 	}
 	version, err := s.command(ctx, "", s.agyEnvironment(), h.Executable, "--version")

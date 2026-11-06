@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -25,6 +26,10 @@ const (
 	sliceAgent = "beekeeper 985"
 	tzUTC      = "UTC"
 )
+
+const intervalKey = "interval"
+
+const availableWord = "available"
 
 // kindsApp is a stub app with a filer kind (one busy, one start an hour)
 // and a meta kind over filers and scans (two busy).
@@ -83,7 +88,7 @@ func TestKindGateRefusesInsideTheIntervalAndAtTheBusyCap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.kindGate(filerTwo); err == nil || strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "minInterval") {
+	if err := a.kindGate(filerTwo); err == nil || strings.Contains(err.Error(), busyWord) || !strings.Contains(err.Error(), "minInterval") {
 		t.Errorf("done filer inside the interval: %v", err)
 	}
 	a.now = a.now.Add(time.Hour)
@@ -137,7 +142,7 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 	for _, flag := range []string{"--force", testDryRunFlag} {
 		c := a.agentStartCmd()
 		c.SilenceErrors, c.SilenceUsage = true, true
-		c.SetArgs([]string{filerTwo, brief, flag})
+		c.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{filerTwo, brief, usageDirFlag, filepath.Dir(brief), flag}))
 		c.SetContext(t.Context())
 		err := c.Execute()
 		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") {
@@ -150,6 +155,68 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 	}
 	if len(st.Starts) != 1 {
 		t.Errorf("the refused start was recorded: %+v", st.Starts)
+	}
+}
+
+func TestSSHAgentStartKindAdmission(t *testing.T) {
+	for _, limit := range []string{intervalKey, busyWord, availableWord} {
+		for _, dry := range []bool{false, true} {
+			if limit == availableWord && !dry {
+				continue
+			}
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/dry=%t/force=%t", limit, dry, force), func(t *testing.T) {
+					a, brief := sshStartTestApp(t)
+					a.cfg.Capacity.Providers = map[string]config.Provider{claudeComm: {Ceiling: 10}}
+					stubSubscriptionUsage(a)
+					k := config.AgentKind{Name: kindFiler, Match: "^filer"}
+					switch limit {
+					case intervalKey:
+						k.MinInterval = config.Duration{Duration: time.Hour}
+					case busyWord:
+						k.MaxBusy = 1
+					}
+					a.cfg.Agents.Kinds = []config.AgentKind{k}
+					if limit != availableWord {
+						recordKindStart(t, a, filerOne, "s-filer-1", a.now.Add(-5*time.Minute))
+					}
+					a.executionTransport = func(config.ExecutionHost) execution.Transport {
+						t.Fatal("kind refusal or dry run reached SSH transport")
+						return nil
+					}
+					args := []string{agentStartName, filerTwo, brief, loopHostFlag, sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch, modelFlag, bgModel}
+					if dry {
+						args = append(args, testDryRunFlag)
+					}
+					if force {
+						args = append(args, usageForceFlag)
+					}
+					out, err := runAgents(a, args...)
+					wantStarts := 1
+					if limit == availableWord {
+						wantStarts = 0
+						if err != nil || !strings.Contains(out, "dry run:") {
+							t.Fatalf("admitted dry run: %q, %v", out, err)
+						}
+					} else {
+						want := "minInterval"
+						if limit == busyWord {
+							want = "maxBusy"
+						}
+						if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") || !strings.Contains(err.Error(), want) || strings.Contains(out, "dry run:") {
+							t.Fatalf("kind admission: %q, %v", out, err)
+						}
+					}
+					st, err := a.store.Read()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(st.Starts) != wantStarts || len(st.Agents) != wantStarts {
+						t.Fatal("kind refusal or dry run changed reservations")
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -238,7 +238,7 @@ with central configured), 125 a newer release (self-update --check).`,
 		&cobra.Group{ID: supervisorGroup, Title: "Supervising:"},
 		&cobra.Group{ID: "guarding", Title: "Guarding:"},
 	)
-	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.psCmd()} {
+	for _, c := range []*cobra.Command{a.statusCmd(), a.capacityCmd(), a.sessionsCmd(), a.tailCmd(), a.transcriptsCmd(), a.snapshotCmd(), a.uiCmd(), a.onHost(a.watchCmd(), sandbox.OpWatch, 0), a.alertsCmd(), a.securityCmd(), a.budgetCmd(), a.spendCmd(), a.teleportCmd(), a.claudeLoginCmd(), a.psCmd()} {
 		c.GroupID = "watching"
 		root.AddCommand(c)
 	}
@@ -252,7 +252,7 @@ with central configured), 125 a newer release (self-update --check).`,
 	}
 	hook := a.hookCmd()
 	hook.AddCommand(a.preInvocationCmd())
-	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
+	for _, c := range []*cobra.Command{a.runCmd(), hook, a.freeCmd(), a.cacheCmd(), a.diskCmd(), a.gateCmd(), a.scanCmd(), a.issuesCmd(), a.secretCmd(), a.sandboxCmd(), a.appCmd()} {
 		c.GroupID = "guarding"
 		root.AddCommand(c)
 	}

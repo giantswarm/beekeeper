@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/lease"
@@ -20,6 +22,9 @@ import (
 
 // teleportFile is the keeper's record in the state directory.
 const teleportFile = "teleport.json"
+
+// teleportRenewLock serializes the full renewal, outside the swapped home.
+const teleportRenewLock = "teleport-renew.lock"
 
 // teleportPurpose is the purpose of the browser lease a renewal holds.
 const teleportPurpose = "Teleport login renewal"
@@ -40,6 +45,7 @@ var teleportKeys = []string{teleportWarn, teleportExpired, teleportFailed, telep
 // teleportView is the Teleport login as teleport, watch and snapshot show
 // it: metadata and the keeper's record, never key material.
 type teleportView struct {
+	Bot        bool      `json:"bot,omitempty"`
 	Cluster    string    `json:"cluster,omitempty"`
 	Username   string    `json:"username,omitempty"`
 	ValidUntil time.Time `json:"validUntil,omitzero"`
@@ -76,6 +82,23 @@ func newTeleportView(p teleport.Profile, perr error, rec teleport.Record, now ti
 // line is the login in one line: the watch's condition line while there is
 // one, else its expiry.
 func (v teleportView) line(now time.Time) string {
+	if v.Bot {
+		if v.Error != "" {
+			line := "TELEPORT BOT: " + v.Error
+			if !v.ValidUntil.IsZero() {
+				line += "; identity expires " + clock(now, v.ValidUntil)
+			}
+			return line
+		}
+		state := "expires"
+		if v.Key == teleportExpired {
+			state = "EXPIRED"
+		}
+		if v.Key == teleportWarn {
+			state = "EXPIRING"
+		}
+		return fmt.Sprintf("TELEPORT BOT: %s %s (%s left)", state, clock(now, v.ValidUntil), dur(v.ValidUntil.Sub(now)))
+	}
 	until := "expires " + clock(now, v.ValidUntil)
 	if v.ValidUntil.IsZero() {
 		until = "has no active profile"
@@ -117,6 +140,16 @@ func (a *app) readTeleport(ctx context.Context) *teleportView {
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
+	if t.Bot.Enabled() {
+		p, err := teleport.BotStatus(t.Bot.Certificate)
+		v := newTeleportView(p, err, teleport.Record{}, time.Now(), t.WarnBefore.Duration)
+		v.Bot = true
+		if health := teleport.BotRunning(ctx); health != nil {
+			v.Error = errors.Join(err, health).Error()
+			v.Key = teleportFailed
+		}
+		return &v
+	}
 	p, perr := teleport.Status(ctx, t.Tsh, t.Home)
 	rec, err := a.teleportRecord()
 	if err != nil && perr == nil {
@@ -145,14 +178,18 @@ func (a *app) teleportCause(ctx context.Context) string {
 func (a *app) teleportCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "teleport",
-		Short: "The Teleport login: its expiry and its keeper (exit 3 when it needs a renewal)",
+		Short: "The Teleport identity: its expiry and its keeper (exit 3 when it needs attention)",
 		Long: `Print the Teleport login the kube contexts reach the installations through:
 user, cluster and expiry from tsh status (metadata, never key material), and
 what its keeper last did. Exit 3 while it needs a person: expired, under
 teleport.warnBefore, or its keeper's renewal failed; that makes it the probe
 of the sign-in note a failed renewal leaves.
 
-The keeper (beekeeper install writes beekeeper-teleport.timer when
+With teleport.bot.config set, read the bot public certificate and report
+the tbot user service health instead. Machine ID renews without a browser;
+beekeeper install supervises tbot using the supplied configuration.
+
+The SSO keeper (beekeeper install writes beekeeper-teleport.timer when
 teleport.proxy is set) runs ` + "`teleport renew --keeper`" + ` every teleport.every.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -204,13 +241,34 @@ last run: a suspend, a powered-off machine) renews a login under
 teleport.renewBefore even after a failure, and a failure of that run is
 tried once more at the next run before the note. A
 login whose SSO callback exchange with the proxy timed out after the
-browser's sign-in is retried once first, both attempts in the log.`,
+browser's sign-in is retried once first, both attempts in the log.
+
+Every keeper run with a valid login also fills the keeper kubeconfig
+(alerts.kubeconfig's first file other than the machine kubeconfig) for
+alerts.installations that Teleport lists, even when renewal is not due.
+Doctor names installations it could not write and why.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			t := a.cfg.Teleport
 			if !t.Enabled() {
 				return usageErr("teleport.proxy is not configured")
 			}
+			if t.Bot.Enabled() {
+				return usageErr("Machine ID renews automatically through beekeeper-teleport.service; no SSO renewal is used")
+			}
+			lock := flock.New(filepath.Join(a.cfg.StateDir, teleportRenewLock))
+			locked, err := lock.TryLock()
+			if err != nil {
+				return fmt.Errorf("lock the Teleport renewal: %w", err)
+			}
+			if !locked {
+				if keeper {
+					_, err := fmt.Fprintln(a.out, "teleport: a renewal is already running; waiting for the next run")
+					return err
+				}
+				return refused("a Teleport renewal is already running")
+			}
+			defer func() { _ = lock.Unlock() }()
 			me, err := a.caller()
 			if err != nil {
 				return err
@@ -223,7 +281,12 @@ browser's sign-in is retried once first, both attempts in the log.`,
 			before, perr := teleport.Status(ctx, t.Tsh, t.Home)
 			missed := false
 			if keeper {
-				missed = rec.Missed(a.now, t.Every.Duration)
+				if perr == nil && before.Left(a.now) > 0 {
+					if err := a.keepTeleportContexts(ctx); err != nil {
+						return err
+					}
+				}
+				missed = rec.PendingMiss || rec.Missed(a.now, t.Every.Duration)
 				due, why := teleport.Due(before, perr, rec, a.now, t.RenewBefore.Duration, missed)
 				last := rec.CheckedAt
 				rec.CheckedAt = a.now.UTC()
@@ -245,6 +308,7 @@ browser's sign-in is retried once first, both attempts in the log.`,
 				if !keeper {
 					return err
 				}
+				rec.PendingMiss = missed
 				rec.Waiting, rec.WaitingAt = err.Error(), a.now.UTC()
 				if werr := a.store.WriteFile(teleportFile, rec); werr != nil {
 					return werr
@@ -261,6 +325,9 @@ browser's sign-in is retried once first, both attempts in the log.`,
 				return a.teleportFailed(me, keeper, missed, before, perr, err)
 			}
 			if err := a.store.WriteFile(teleportFile, teleport.Record{RenewedAt: a.now.UTC(), ValidUntil: after.ValidUntil, CheckedAt: rec.CheckedAt}); err != nil {
+				return err
+			}
+			if err := a.keepTeleportContexts(ctx); err != nil {
 				return err
 			}
 			from := "no active profile"
@@ -378,4 +445,28 @@ func (a *app) holdBrowser(me state.Party) (func(), error) {
 			return []state.Event{event(me, "lease.release", "%s", config.Browser)}, nil
 		})
 	}, nil
+}
+
+// keepTeleportContexts also runs on ticks that need no login renewal.
+func (a *app) keepTeleportContexts(ctx context.Context) error {
+	var targets []alerts.Target
+	for _, in := range a.cfg.Alerts.Installations {
+		targets = append(targets, alerts.Target{Name: in.Name, Context: in.Context})
+	}
+	unread := a.alertDiscoverer().EnsureContexts(ctx, targets)
+	return a.store.WriteFile("teleport-contexts.json", unread)
+}
+
+func (a *app) teleportContextsLine() string {
+	if !a.cfg.Teleport.Enabled() {
+		return ""
+	}
+	var unread []string
+	if _, err := a.store.ReadFile("teleport-contexts.json", &unread); err != nil {
+		return "Teleport kube contexts: could not read keeper diagnostics"
+	}
+	if len(unread) == 0 {
+		return ""
+	}
+	return "Teleport kube contexts: " + strings.Join(unread, "; ")
 }

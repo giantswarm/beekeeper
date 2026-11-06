@@ -46,7 +46,7 @@ func TestRetitle(t *testing.T) {
 		{desc: "kept", titles: []string{name}, find: own, want: "keeps its title"},
 		{desc: "lost, then retitled", titles: []string{"", "", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: "the session retitled it"},
 		{desc: "retitled by another steward", titles: []string{"", name}, find: other, wantTo: "uds:/s/43.sock", wantArg: `"local_retitled"`, want: "steward local_2 retitled it"},
-		{desc: "replaced, then retitled", titles: []string{"klaus-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"klaus-lab" instead of`},
+		{desc: "replaced, then retitled", titles: []string{"fixture-lab", name}, find: own, wantTo: ownTo, wantArg: selfArg, want: `"fixture-lab" instead of`},
 		{desc: "no steward", titles: []string{""}, find: func(context.Context, []string) (steward, error) { return steward{}, errors.New("no idle desktop CLI") }, want: "no idle desktop CLI", wantErr: true},
 		{desc: "send fails", titles: []string{""}, find: own, sendErr: errors.New("not sent"), wantTo: ownTo, wantArg: selfArg, want: "not sent", wantErr: true},
 		{desc: "never recorded", titles: []string{""}, find: own, wantTo: ownTo, wantArg: selfArg, want: "did not record it", wantErr: true},
@@ -216,7 +216,7 @@ func TestPickSteward(t *testing.T) {
 // or it keeps a role, also a role's run whose relief was forgotten.
 func TestArchiveDesktopKeeps(t *testing.T) {
 	a := &app{}
-	ag := state.Party{Session: "a", Name: "worker"}
+	ag := state.Party{Session: "a", Name: workerRole}
 	archive := func(st *state.State, ag state.Party) string {
 		return a.archiveDesktops(context.Background(), st, []state.Party{ag}, "test")[0].line
 	}
@@ -374,7 +374,7 @@ func TestArchiveSteward(t *testing.T) {
 // A warmed steward archives its own session as "self", after the others.
 func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
 	s := steward{host: stewardA, sock: "/s/2.sock"}
-	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor", "agreed")
+	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor")
 	if !strings.Contains(msg, strconv.Quote(stewardB)+`, "self"`) {
 		t.Errorf("request %q", msg)
 	}

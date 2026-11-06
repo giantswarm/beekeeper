@@ -101,7 +101,7 @@ func TestShowChromeForTheTurn(t *testing.T) {
 	if err := p.restore(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if c.window.Workspace != musicWS || c.output {
+	if c.window.Workspace != musicWS || !c.output {
 		t.Errorf("after restore: Chrome on %+v, output there %v; commands %q", c.window.Workspace, c.output, c.calls)
 	}
 	if _, err := os.Stat(record); !errors.Is(err, fs.ErrNotExist) {
@@ -137,7 +137,7 @@ func TestShowChromeRecoversADiedTurn(t *testing.T) {
 		"it went back to workspace special:music\nwindow shown: ") {
 		t.Errorf("line = %q", l)
 	}
-	if err := p.restore(t.Context()); err != nil || c.window.Workspace != musicWS || c.output {
+	if err := p.restore(t.Context()); err != nil || c.window.Workspace != musicWS || !c.output {
 		t.Errorf("restore = %v, Chrome on %+v, output %v", err, c.window.Workspace, c.output)
 	}
 }
@@ -166,7 +166,7 @@ func TestShowChromeUnderALockedScreen(t *testing.T) {
 // locked, naming the locker and the probe to park on; unlocked, it refuses
 // nothing.
 func TestBrowseRefusesALockedScreen(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	ran := filepath.Join(bin, "ran")
 	writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\n: > "+ran+"\n")
@@ -326,7 +326,7 @@ func TestFollowYieldsTheWindow(t *testing.T) {
 	if !errors.Is(cause, errPersonAtChrome) || !strings.Contains(cause.Error(), "eDP-1 shows workspace special:music") {
 		t.Errorf("cancel cause = %v", cause)
 	}
-	if c.window.Workspace != musicWS || c.output || c.redirect || !p.Restored || p.Watch != "" {
+	if c.window.Workspace != musicWS || !c.output || c.redirect || !p.Restored || p.Watch != "" {
 		t.Errorf("after the yield: Chrome on %+v, output %v, redirect %v, placement %+v", c.window.Workspace, c.output, c.redirect, p)
 	}
 	if l := p.line(); !strings.Contains(l, "window yielded: during the turn eDP-1 shows workspace special:music") {

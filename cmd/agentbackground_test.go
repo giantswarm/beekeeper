@@ -394,7 +394,8 @@ func TestDesktopModeOverridesConfiguredBackground(t *testing.T) {
 	a, _ := stubApp(t)
 	a.cfg.Agents.Mode = config.ModeBackground
 	c := a.agentStartCmd()
-	c.SetArgs([]string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop})
+	checkout := t.TempDir()
+	c.SetArgs(testCheckoutArgs(t, checkout, []string{bgName, filepath.Join(t.TempDir(), "missing-brief.md"), bgDesktopFlag, modeFlag, config.ModeDesktop, usageDirFlag, checkout}))
 	c.SetContext(t.Context())
 	// Reaching the brief read proves the explicit desktop mode passed
 	// validation without launching a session or consulting capacity.
@@ -671,7 +672,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 		time.Sleep(200 * time.Millisecond) // the wake runs meanwhile, and waits
 		mu.Lock()
 		defer mu.Unlock()
-		seq = append(seq, "stopped")
+		seq = append(seq, reviewedStoppedCase)
 		live = nil
 		return "", nil
 	}
@@ -679,7 +680,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bgStopCmd, "stopped", bgFlag}; !slices.Equal(seq, want) {
+	if want := []string{bgStopCmd, reviewedStoppedCase, bgFlag}; !slices.Equal(seq, want) {
 		t.Errorf("calls %v, want %v", seq, want)
 	}
 

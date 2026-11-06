@@ -329,7 +329,7 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 	startCmd := aStart.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{busyTwo, brief, usageDirFlag, dir})
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{busyTwo, brief, usageDirFlag, dir}))
 	if err := startCmd.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: usage high: 5h 96% at or past 95%") {
 		t.Fatalf("agents start under USAGE HIGH = exit %d (%v)", Code(err), err)
 	}
@@ -339,7 +339,7 @@ func TestCapacityUsageBandsJSONAndStartGate(t *testing.T) {
 	forceCmd := aStart.agentStartCmd()
 	forceCmd.SilenceErrors = true
 	forceCmd.SilenceUsage = true
-	forceCmd.SetArgs([]string{busyTwo, brief, usageDirFlag, dir, modeFlag, config.ModeBackground, usageForceFlag})
+	forceCmd.SetArgs(testCheckoutArgs(t, dir, []string{busyTwo, brief, usageDirFlag, dir, modeFlag, config.ModeBackground, usageForceFlag}))
 	if err := forceCmd.Execute(); err != nil {
 		t.Fatalf("agents start --force under USAGE HIGH = %v", err)
 	}
@@ -1058,7 +1058,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	}
 
 	brief := filepath.Join(dir, "auto-brief.md")
-	if err := os.WriteFile(brief, []byte("Work the auto task.\n"), 0o600); err != nil {
+	if err := os.WriteFile(brief, []byte("Work the auto task.\nhttps://github.com/example/repo/pull/1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stubBackground(t, "backgrounded · "+bgShortID+" · AutoWorker\n", bgSession{ID: bgShortID, SessionID: bgID, Name: "AutoWorker"})
@@ -1066,7 +1066,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	startCmd := aAuto.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto})
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoWorker", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto}))
 	if err := startCmd.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto: %v", err)
 	}
@@ -1093,7 +1093,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 	refuseCmd := aRefuse.agentStartCmd()
 	refuseCmd.SilenceErrors = true
 	refuseCmd.SilenceUsage = true
-	refuseCmd.SetArgs([]string{"BlockedWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	refuseCmd.SetArgs(testCheckoutArgs(t, dir, []string{"BlockedWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
 	err = refuseCmd.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room:") ||
 		!strings.Contains(err.Error(), "7d 82% at or past worker cap 80%") || outRefuse.String() != "" {
@@ -1137,7 +1137,7 @@ func TestProvidersChoicesPaceMarginExcludeAndMachineGuards(t *testing.T) {
 			}()
 		},
 	}
-	reviewArgs := []string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--" + reviewFlag, testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46}
+	reviewArgs := testCheckoutArgs(t, dir, []string{"ReviewAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, "--" + reviewFlag, testExcludeFlag, claudeComm, testExcludeFlag, testModelOpus46})
 	aRevRefuse, outRevRefuse := newApp(t0, false)
 	revRefuseCmd := aRevRefuse.agentStartCmd()
 	revRefuseCmd.SilenceErrors = true
@@ -1273,7 +1273,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdFail := aFail.agentStartCmd()
 	cmdFail.SilenceErrors = true
 	cmdFail.SilenceUsage = true
-	cmdFail.SetArgs([]string{"ClaudeOnFail", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
+	cmdFail.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeOnFail", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm}))
 	err = cmdFail.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: subscription usage unknown (claude endpoint down)") {
 		t.Fatalf("explicit claude start on failed read: code=%d, err=%v", Code(err), err)
@@ -1286,7 +1286,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdHigh := aHigh.agentStartCmd()
 	cmdHigh.SilenceErrors = true
 	cmdHigh.SilenceUsage = true
-	cmdHigh.SetArgs([]string{"ClaudeOnHigh", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
+	cmdHigh.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeOnHigh", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm}))
 	err = cmdHigh.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: usage high: 5h 96% at or past 95%") {
 		t.Fatalf("explicit claude start on USAGE HIGH: code=%d, err=%v", Code(err), err)
@@ -1307,7 +1307,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdCeil := aCeil.agentStartCmd()
 	cmdCeil.SilenceErrors = true
 	cmdCeil.SilenceUsage = true
-	cmdCeil.SetArgs([]string{"ClaudeAtCeil", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm})
+	cmdCeil.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeAtCeil", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm}))
 	err = cmdCeil.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: 1 busy at the ceiling of 1") {
 		t.Fatalf("explicit claude start at ceiling: code=%d, err=%v", Code(err), err)
@@ -1318,7 +1318,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdForce := aForce.agentStartCmd()
 	cmdForce.SilenceErrors = true
 	cmdForce.SilenceUsage = true
-	cmdForce.SetArgs([]string{"ClaudeForced", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm, usageForceFlag})
+	cmdForce.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeForced", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, claudeComm, usageForceFlag}))
 	if err := cmdForce.Execute(); err != nil {
 		t.Fatalf("explicit claude start --force: %v", err)
 	}
@@ -1354,7 +1354,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryAgy := aDryAgy.agentStartCmd()
 	cmdDryAgy.SilenceErrors = true
 	cmdDryAgy.SilenceUsage = true
-	cmdDryAgy.SetArgs([]string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto})
+	cmdDryAgy.SetArgs(testCheckoutArgs(t, dir, []string{"DryAgy", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto}))
 	if err := cmdDryAgy.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking agy: %v", err)
 	}
@@ -1369,7 +1369,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBgAgy := aBgAgy.agentStartCmd()
 	cmdBgAgy.SilenceErrors = true
 	cmdBgAgy.SilenceUsage = true
-	cmdBgAgy.SetArgs([]string{"BgAgy", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto})
+	cmdBgAgy.SetArgs(testCheckoutArgs(t, dir, []string{"BgAgy", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto}))
 	err = cmdBgAgy.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness agy") {
 		t.Fatalf("--mode background --harness auto picking agy: code=%d, err=%v", Code(err), err)
@@ -1389,7 +1389,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoAgyBadModel := aAutoAgyBadModel.agentStartCmd()
 	cmdAutoAgyBadModel.SilenceErrors = true
 	cmdAutoAgyBadModel.SilenceUsage = true
-	cmdAutoAgyBadModel.SetArgs([]string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, usageForceFlag})
+	cmdAutoAgyBadModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgyBadModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, usageForceFlag}))
 	err = cmdAutoAgyBadModel.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), `agy lists no model "gemini-3-1-pro-medium"`) {
 		t.Fatalf("--harness auto picking agy unlisted model: code=%d, err=%v", Code(err), err)
@@ -1460,7 +1460,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoAgy := aAutoAgy.agentStartCmd()
 	cmdAutoAgy.SilenceErrors = true
 	cmdAutoAgy.SilenceUsage = true
-	cmdAutoAgy.SetArgs([]string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	cmdAutoAgy.SetArgs(testCheckoutArgs(t, dir, []string{"AutoAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
 	if err := cmdAutoAgy.Execute(); err != nil {
 		t.Fatalf("--harness auto picking agy: %v", err)
 	}
@@ -1494,7 +1494,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdDryOmp := aDryOmp.agentStartCmd()
 	cmdDryOmp.SilenceErrors = true
 	cmdDryOmp.SilenceUsage = true
-	cmdDryOmp.SetArgs([]string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdDryOmp.SetArgs(testCheckoutArgs(t, dir, []string{"DryOmp", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
 	if err := cmdDryOmp.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking omp: %v", err)
 	}
@@ -1508,7 +1508,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBgOmp := aBgOmp.agentStartCmd()
 	cmdBgOmp.SilenceErrors = true
 	cmdBgOmp.SilenceUsage = true
-	cmdBgOmp.SetArgs([]string{"BgOmp", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdBgOmp.SetArgs(testCheckoutArgs(t, dir, []string{"BgOmp", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
 	err = cmdBgOmp.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "--mode background and --harness omp") {
 		t.Fatalf("--mode background --harness auto picking omp: code=%d, err=%v", Code(err), err)
@@ -1522,7 +1522,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdAutoOmp := aAutoOmp.agentStartCmd()
 	cmdAutoOmp.SilenceErrors = true
 	cmdAutoOmp.SilenceUsage = true
-	cmdAutoOmp.SetArgs([]string{"AutoOmp", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdAutoOmp.SetArgs(testCheckoutArgs(t, dir, []string{"AutoOmp", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
 	if err := cmdAutoOmp.Execute(); err != nil {
 		t.Fatalf("--harness auto picking omp: %v", err)
 	}
@@ -1543,7 +1543,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdNone := aNone.agentStartCmd()
 	cmdNone.SilenceErrors = true
 	cmdNone.SilenceUsage = true
-	cmdNone.SetArgs([]string{"NoChoiceWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy, testExcludeFlag, omp.Harness})
+	cmdNone.SetArgs(testCheckoutArgs(t, dir, []string{"NoChoiceWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy, testExcludeFlag, omp.Harness}))
 	err = cmdNone.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: no choice has room: claude/claude-opus-4-7: usage high: 5h 96% at or past 95%") ||
 		!strings.Contains(err.Error(), "agy/gemini-3-1-pro-medium: excluded") ||
@@ -1559,7 +1559,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdExpAgy := aExpAgy.agentStartCmd()
 	cmdExpAgy.SilenceErrors = true
 	cmdExpAgy.SilenceUsage = true
-	cmdExpAgy.SetArgs([]string{"ExplicitAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAgy, modelFlag, testModelOpus46})
+	cmdExpAgy.SetArgs(testCheckoutArgs(t, dir, []string{"ExplicitAgy", brief, usageDirFlag, dir, testHarnessFlag, harnessAgy, modelFlag, testModelOpus46}))
 	if err := cmdExpAgy.Execute(); err != nil {
 		t.Fatalf("explicit --harness agy: %v", err)
 	}
@@ -1598,7 +1598,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdUnknownModel := aUnknownModel.agentStartCmd()
 	cmdUnknownModel.SilenceErrors = true
 	cmdUnknownModel.SilenceUsage = true
-	cmdUnknownModel.SetArgs([]string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, "not-in-choices"})
+	cmdUnknownModel.SetArgs(testCheckoutArgs(t, dir, []string{"AutoUnknownModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, "not-in-choices"}))
 	err = cmdUnknownModel.Execute()
 	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "not in capacity.choices") || outUnknownModel.String() != "" {
 		t.Fatalf("--harness auto with unknown --model: code=%d, err=%v, out=%q", Code(err), err, outUnknownModel.String())
@@ -1610,7 +1610,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		cmdExModel := aExModel.agentStartCmd()
 		cmdExModel.SilenceErrors = true
 		cmdExModel.SilenceUsage = true
-		args := []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46}
+		args := testCheckoutArgs(t, dir, []string{"AutoExModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, testModelOpus46, modelFlag, testModelOpus46})
 		if isDry {
 			args = append(args, testDryRunFlag)
 		}
@@ -1627,7 +1627,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 		cmdHighModel := aHighModel.agentStartCmd()
 		cmdHighModel.SilenceErrors = true
 		cmdHighModel.SilenceUsage = true
-		args := []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46}
+		args := testCheckoutArgs(t, dir, []string{"AutoHighModel", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46})
 		if isDry {
 			args = append(args, testDryRunFlag)
 		}
@@ -1643,7 +1643,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdForceModelDry := aForceModelDry.agentStartCmd()
 	cmdForceModelDry.SilenceErrors = true
 	cmdForceModelDry.SilenceUsage = true
-	cmdForceModelDry.SetArgs([]string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, usageForceFlag})
+	cmdForceModelDry.SetArgs(testCheckoutArgs(t, dir, []string{"AutoForceModelDry", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, usageForceFlag}))
 	if err := cmdForceModelDry.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto --model --force: %v", err)
 	}
@@ -1662,7 +1662,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdNoClaude := aNoClaude.agentStartCmd()
 	cmdNoClaude.SilenceErrors = true
 	cmdNoClaude.SilenceUsage = true
-	cmdNoClaude.SetArgs([]string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, modelFlag, testModelOpus47, usageForceFlag})
+	cmdNoClaude.SetArgs(testCheckoutArgs(t, dir, []string{"AutoNoClaude", brief, usageDirFlag, dir, modeFlag, config.ModeBackground, testHarnessFlag, harnessAuto, modelFlag, testModelOpus47, usageForceFlag}))
 	if err := cmdNoClaude.Execute(); err == nil {
 		t.Fatal("expected error when claude is absent from PATH")
 	}
@@ -1698,7 +1698,7 @@ func TestExplicitHarnessGateAndAutoHarnessValidation(t *testing.T) {
 	cmdBrokerUnavail := aBrokerUnavail.agentStartCmd()
 	cmdBrokerUnavail.SilenceErrors = true
 	cmdBrokerUnavail.SilenceUsage = true
-	cmdBrokerUnavail.SetArgs([]string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy})
+	cmdBrokerUnavail.SetArgs(testCheckoutArgs(t, dir, []string{"AutoBrokerUnavail", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto, testExcludeFlag, harnessAgy}))
 	err = cmdBrokerUnavail.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no sandbox broker answers") || outBrokerUnavail.String() != "" {
 		t.Fatalf("brokered omp unavailable broker: code=%d, err=%v, out=%q", Code(err), err, outBrokerUnavail.String())
@@ -2096,7 +2096,7 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 	childCmd := a.agentStartCmd()
 	childCmd.SilenceErrors = true
 	childCmd.SilenceUsage = true
-	childCmd.SetArgs(childArgs)
+	childCmd.SetArgs(append(testCheckoutArgs(t, filepath.Dir(brief), []string{usageDirFlag, filepath.Dir(brief)}), childArgs...))
 	if err := childCmd.Execute(); err != nil {
 		t.Fatalf("brokered child agentStartCmd failed: %v", err)
 	}
@@ -2109,7 +2109,7 @@ func TestSandboxedAutoExcludeSerializationAndDispatch(t *testing.T) {
 	bracketCmd := a.agentStartCmd()
 	bracketCmd.SilenceErrors = true
 	bracketCmd.SilenceUsage = true
-	bracketCmd.SetArgs([]string{testHarnessFlag, harnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief})
+	bracketCmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, harnessAuto, "--exclude=[claude]", "--dry-run", "SandboxedAuto2", brief, usageDirFlag, filepath.Dir(brief)}))
 	if err := bracketCmd.Execute(); err != nil {
 		t.Fatalf("bracketed --exclude failed: %v", err)
 	}
@@ -2172,7 +2172,7 @@ func TestAutoModelFilterCountsBusyAgentsAcrossAllChoices(t *testing.T) {
 	cmd := a.agentStartCmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-	cmd.SetArgs([]string{testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief})
+	cmd.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{testHarnessFlag, harnessAuto, modelFlag, testModelOpus46, "BlockedWorker", brief, usageDirFlag, filepath.Dir(brief)}))
 	err = cmd.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "1 busy at the ceiling of 1") {
 		t.Fatalf("expected refusal when shared provider ceiling 1 is held by another choice's model: code=%d, err=%v", Code(err), err)
@@ -2343,7 +2343,7 @@ capacity:
 	dryCmd := aDry.agentStartCmd()
 	dryCmd.SilenceErrors = true
 	dryCmd.SilenceUsage = true
-	dryCmd.SetArgs([]string{"DryCodexAuto", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto})
+	dryCmd.SetArgs(testCheckoutArgs(t, dir, []string{"DryCodexAuto", brief, usageDirFlag, dir, testDryRunFlag, testHarnessFlag, harnessAuto}))
 	if err := dryCmd.Execute(); err != nil {
 		t.Fatalf("--dry-run --harness auto picking codex: %v", err)
 	}
@@ -2384,7 +2384,7 @@ capacity:
 	startCmd := aStart.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{"AutoCodexWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{"AutoCodexWorker", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
 	if err := startCmd.Execute(); err != nil {
 		t.Fatalf("--harness auto picking codex: %v", err)
 	}
@@ -2608,7 +2608,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdStart := aStart.agentStartCmd()
 	cmdStart.SilenceErrors = true
 	cmdStart.SilenceUsage = true
-	cmdStart.SetArgs([]string{"OmpOnHeldSubscription", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	cmdStart.SetArgs(testCheckoutArgs(t, dir, []string{"OmpOnHeldSubscription", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness}))
 	if err := cmdStart.Execute(); err != nil {
 		t.Fatalf("agents start --harness omp at subscription ceiling 0: %v\n%s", err, startOut.String())
 	}
@@ -2630,7 +2630,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdAuto := aAuto.agentStartCmd()
 	cmdAuto.SilenceErrors = true
 	cmdAuto.SilenceUsage = true
-	cmdAuto.SetArgs([]string{"OmpByAuto", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto})
+	cmdAuto.SetArgs(testCheckoutArgs(t, dir, []string{"OmpByAuto", brief, usageDirFlag, dir, testHarnessFlag, harnessAuto}))
 	if err := cmdAuto.Execute(); err != nil {
 		t.Fatalf("agents start --harness auto at subscription ceiling 0: %v\n%s", err, autoOut.String())
 	}
@@ -2667,7 +2667,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdRefuse := aRefuse.agentStartCmd()
 	cmdRefuse.SilenceErrors = true
 	cmdRefuse.SilenceUsage = true
-	cmdRefuse.SetArgs([]string{"OmpOverCeiling", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	cmdRefuse.SetArgs(testCheckoutArgs(t, dir, []string{"OmpOverCeiling", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness}))
 	err = cmdRefuse.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: 2 busy at the ceiling of 2") {
 		t.Fatalf("omp start at the self-hosted ceiling: code=%d err=%v", Code(err), err)
@@ -2679,7 +2679,7 @@ func TestSelfHostedProviderCeiling(t *testing.T) {
 	cmdClaude := aClaude.agentStartCmd()
 	cmdClaude.SilenceErrors = true
 	cmdClaude.SilenceUsage = true
-	cmdClaude.SetArgs([]string{"ClaudeWhileHeld", brief, usageDirFlag, dir, testHarnessFlag, claudeComm})
+	cmdClaude.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeWhileHeld", brief, usageDirFlag, dir, testHarnessFlag, claudeComm}))
 	err = cmdClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: ceiling 0") {
 		t.Fatalf("claude start while the subscription is held: code=%d err=%v", Code(err), err)
@@ -2779,7 +2779,7 @@ func TestSelfHostedMachineGuardRefusesBoth(t *testing.T) {
 	cmdOmp := aOmp.agentStartCmd()
 	cmdOmp.SilenceErrors = true
 	cmdOmp.SilenceUsage = true
-	cmdOmp.SetArgs([]string{"OmpOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	cmdOmp.SetArgs(testCheckoutArgs(t, dir, []string{"OmpOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness}))
 	err = cmdOmp.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: MemAvailable 10.0 GiB under 20 GiB") {
 		t.Fatalf("omp start on a tight machine: code=%d err=%v", Code(err), err)
@@ -2790,7 +2790,7 @@ func TestSelfHostedMachineGuardRefusesBoth(t *testing.T) {
 	cmdClaude := aClaude.agentStartCmd()
 	cmdClaude.SilenceErrors = true
 	cmdClaude.SilenceUsage = true
-	cmdClaude.SetArgs([]string{"ClaudeOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, claudeComm})
+	cmdClaude.SetArgs(testCheckoutArgs(t, dir, []string{"ClaudeOnTightMachine", brief, usageDirFlag, dir, testHarnessFlag, claudeComm}))
 	err = cmdClaude.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider claude: MemAvailable 10.0 GiB under 20 GiB") {
 		t.Fatalf("claude start on a tight machine: code=%d err=%v", Code(err), err)
@@ -3039,7 +3039,7 @@ omp:
 		sc := a.agentStartCmd()
 		sc.SilenceErrors = true
 		sc.SilenceUsage = true
-		args := []string{tc.name, brief, usageDirFlag, dir}
+		args := testCheckoutArgs(t, dir, []string{tc.name, brief, usageDirFlag, dir})
 		if tc.harness != "" {
 			args = append(args, testHarnessFlag, tc.harness)
 		}
@@ -3089,7 +3089,7 @@ omp:
 	cmdStart := aStart.agentStartCmd()
 	cmdStart.SilenceErrors = true
 	cmdStart.SilenceUsage = true
-	cmdStart.SetArgs([]string{"OmpNoChoices", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness})
+	cmdStart.SetArgs(testCheckoutArgs(t, dir, []string{"OmpNoChoices", brief, usageDirFlag, dir, testHarnessFlag, omp.Harness}))
 	if err := cmdStart.Execute(); err != nil {
 		t.Fatalf("agents start --harness omp without choices: %v\n%s", err, startOut.String())
 	}
@@ -3328,11 +3328,12 @@ func loadOnlySelfHosted(t *testing.T, cfgPath string, ceiling int, choices bool)
 
 // startHarness runs one agents start of the harness ("" the default claude)
 // and returns its error; dryRun adds --dry-run.
-func startHarness(a *app, name, brief, dir, harness, model string, dryRun bool) error {
+func startHarness(t *testing.T, a *app, name, brief, dir, harness, model string, dryRun bool) error {
+	t.Helper()
 	sc := a.agentStartCmd()
 	sc.SilenceErrors = true
 	sc.SilenceUsage = true
-	args := []string{name, brief, usageDirFlag, dir}
+	args := testCheckoutArgs(t, dir, []string{name, brief, usageDirFlag, dir})
 	if dryRun {
 		args = append(args, testDryRunFlag)
 	}
@@ -3379,7 +3380,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 	} {
 		var startOut bytes.Buffer
 		a := newSelfHostedApp(cfgPath, cfg, store, &startOut, t0)
-		err := startHarness(a, tc.name, brief, dir, tc.harness, tc.model, false)
+		err := startHarness(t, a, tc.name, brief, dir, tc.harness, tc.model, false)
 		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
 			t.Fatalf("%s start at ceiling 0: code=%d err=%v", tc.name, Code(err), err)
 		}
@@ -3419,21 +3420,21 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 		return newSelfHostedApp(cfgPath, cfg, store, out, t0)
 	}
 	out.Reset()
-	if err := startHarness(ompApp(&out), "OmpRoomOne", brief, dir, omp.Harness, "", false); err != nil {
+	if err := startHarness(t, ompApp(&out), "OmpRoomOne", brief, dir, omp.Harness, "", false); err != nil {
 		t.Fatalf("omp start at ceiling 0: %v\n%s", err, out.String())
 	}
 	// Its busy sessions never shrink the omp room below the provider ceiling.
 	out.Reset()
-	if err := startHarness(ompApp(&out), "OmpRoomTwo", brief, dir, omp.Harness, "", false); err != nil {
+	if err := startHarness(t, ompApp(&out), "OmpRoomTwo", brief, dir, omp.Harness, "", false); err != nil {
 		t.Fatalf("second omp start at ceiling 0: %v\n%s", err, out.String())
 	}
 	out.Reset()
-	if err := startHarness(ompApp(&out), "OmpRoomThree", brief, dir, omp.Harness, "", false); err != nil {
+	if err := startHarness(t, ompApp(&out), "OmpRoomThree", brief, dir, omp.Harness, "", false); err != nil {
 		t.Fatalf("third omp start at ceiling 0: %v\n%s", err, out.String())
 	}
 	// The provider is full at 3; omp refuses on its own ceiling.
 	out.Reset()
-	err := startHarness(ompApp(&out), "OmpOverProvider", brief, dir, omp.Harness, "", false)
+	err := startHarness(t, ompApp(&out), "OmpOverProvider", brief, dir, omp.Harness, "", false)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: provider local-model: 3 busy at the ceiling of 3") {
 		t.Fatalf("fourth omp start: code=%d err=%v", Code(err), err)
 	}
@@ -3444,7 +3445,7 @@ func TestSelfHostedOnlyCeilingBoundsOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	var claudeOut bytes.Buffer
-	err = startHarness(newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "ClaudeProviderFull", brief, dir, claudeComm, "claude-opus-4-7", false)
+	err = startHarness(t, newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "ClaudeProviderFull", brief, dir, claudeComm, "claude-opus-4-7", false)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") ||
 		strings.Contains(err.Error(), "no choice has room") {
 		t.Fatalf("claude start with the self-hosted provider full: code=%d err=%v\n%s", Code(err), err, capOut.String())
@@ -3512,13 +3513,13 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	// same words the real start refuses with.
 	var agyOut bytes.Buffer
 	aAgy := newSelfHostedApp(cfgPath, cfg, store, &agyOut, t0)
-	err := startHarness(aAgy, "DryAgyHeld", brief, dir, harnessAgy, "gemini-3-1-pro-medium", true)
+	err := startHarness(t, aAgy, "DryAgyHeld", brief, dir, harnessAgy, "gemini-3-1-pro-medium", true)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
 		t.Fatalf("--dry-run agy at ceiling 0: code=%d err=%v", Code(err), err)
 	}
 	// A claude dry run refuses alike.
 	var claudeOut bytes.Buffer
-	err = startHarness(newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "DryClaudeHeld", brief, dir, claudeComm, "claude-opus-4-7", true)
+	err = startHarness(t, newSelfHostedApp(cfgPath, cfg, store, &claudeOut, t0), "DryClaudeHeld", brief, dir, claudeComm, "claude-opus-4-7", true)
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start: ceiling 0") {
 		t.Fatalf("--dry-run claude at ceiling 0: code=%d err=%v", Code(err), err)
 	}
@@ -3558,7 +3559,7 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	}}
 	var ompOut bytes.Buffer
 	aOmp := newSelfHostedApp(cfgPath, cfg, store, &ompOut, t0)
-	if err := startHarness(aOmp, "DryOmpRoom", brief, dir, omp.Harness, "", true); err != nil {
+	if err := startHarness(t, aOmp, "DryOmpRoom", brief, dir, omp.Harness, "", true); err != nil {
 		t.Fatalf("--dry-run omp at ceiling 0: %v\n%s", err, ompOut.String())
 	}
 	if !strings.Contains(ompOut.String(), "room for 3 starts") ||
@@ -3570,7 +3571,7 @@ func TestSelfHostedOnlyDryRunPrintsVerdict(t *testing.T) {
 	// gate's verdict with it.
 	var autoOut bytes.Buffer
 	aAuto := newSelfHostedApp(cfgPath, cfg, store, &autoOut, t0)
-	if err := startHarness(aAuto, "DryOmpAuto", brief, dir, harnessAuto, "", true); err != nil {
+	if err := startHarness(t, aAuto, "DryOmpAuto", brief, dir, harnessAuto, "", true); err != nil {
 		t.Fatalf("--dry-run auto at ceiling 0: %v\n%s", err, autoOut.String())
 	}
 	if !strings.Contains(autoOut.String(), "room for 3 starts") {
@@ -3835,5 +3836,66 @@ func TestCodexStaleSourceValidation(t *testing.T) {
 	r.SourceAt = now.Add(2 * time.Minute)
 	if err := validateReadingAt(r, builtin, now); err == nil {
 		t.Fatal("large future timestamp must fail")
+	}
+}
+
+func TestCodexAccountStopSurvivesProbeFailure(t *testing.T) {
+	dir, cfgPath := isolateUsageTestEnv(t)
+	if err := os.WriteFile(cfgPath, []byte("capacity:\n  providers:\n    codex:\n      ceiling: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenVersion(cfg.StateDir, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 3, 19, 0, 0, 0, time.UTC)
+	a := &app{cfg: cfg, store: store, now: now}
+	u := cfg.Capacity.Providers[codex.Harness].Usage
+	executable := filepath.Join(dir, "codex")
+	reply := func(result string) {
+		t.Helper()
+		script := "#!/bin/sh\nread -r init\necho '{\"id\":1,\"result\":{}}'\nread -r ready\nread -r request\necho '{\"id\":2,\"result\":" + result + "}'\nread -r keepalive\n"
+		if err := os.WriteFile(executable, []byte(script), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
+			t.Fatal(err)
+		}
+	}
+	healthy := fmt.Sprintf(`{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":%d}}}`, now.Add(24*time.Hour).Unix())
+	reply(healthy)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err != nil {
+		t.Fatal(err)
+	}
+	a.now = now.Add(u.EffectiveEvery() + time.Second)
+	reply(`{"ordinaryUsageAllowed":false}`)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // executable fixture in the test-owned temporary directory
+		t.Fatal(err)
+	}
+	// Even a recent rollout must not override a newer account stop.
+	rolloutDir := codex.HomeSessionsDir(cfg.StateDir)
+	if err := os.MkdirAll(rolloutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := fmt.Sprintf(`{"timestamp":%q,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":20,"window_minutes":10080,"resets_at":%d}}}}`+"\n", a.now.Add(-time.Second).Format(time.RFC3339Nano), now.Add(24*time.Hour).Unix())
+	if err := os.WriteFile(filepath.Join(rolloutDir, "healthy.jsonl"), []byte(rollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.resolveReading(context.Background(), usageProviderFile("codex-alias"), u); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("recent rollout hid account stop: %v", err)
+	}
+	// Recreate the app to prove that the stop survives process restarts and
+	// the refresh interval, rather than only blocking one capacity call.
+	a = &app{cfg: cfg, store: store, now: a.now.Add(u.EffectiveEvery() + time.Second)}
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); !errors.Is(err, codex.ErrUsageStopped) {
+		t.Fatalf("failed refresh forgot account stop: %v", err)
+	}
+	reply(healthy)
+	if _, err := a.resolveReading(context.Background(), usageProviderFile(codex.Harness), u); err != nil {
+		t.Fatalf("successful refresh must recover: %v", err)
 	}
 }

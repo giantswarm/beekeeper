@@ -43,6 +43,8 @@ type Item struct {
 	Blockers      int      `json:"blockers,omitempty"`
 	OpenBlockers  int      `json:"openBlockers,omitempty"`
 	OpenBlockedBy []string `json:"openBlockedBy,omitempty"`
+	// BlockerDetails names blockers and their linked unmerged pull requests.
+	BlockerDetails []string `json:"blockerDetails,omitempty"`
 	// StatusSet is when its Status was last set, BlockersClosed when the
 	// last of its recorded blockers closed; zero when unknown.
 	StatusSet      time.Time `json:"statusSet,omitzero"`
@@ -59,6 +61,10 @@ type Item struct {
 	// subIssues counts its sub-issues, closed ones too: what a read of
 	// them returns.
 	subIssues int
+	// Remaining label pages must be read before labels are used to select
+	// work or determine its required leases.
+	labelsMore   bool
+	labelsCursor string
 }
 
 // missingBoardFields is the start of Missing's entry for a sub-issue's
@@ -205,7 +211,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
+		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it.Ref, up, byRef, b.People))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -219,7 +225,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				continue
 			}
 			m := matched(st, it)
-			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 || len(assignedOutside(it, b.People)) > 0 || assignedAbove(it.Ref, snap.Parent, byRef, b.People) != "" {
 				offer(it, st.Name, m, "", "")
 				continue
 			}
@@ -368,14 +374,17 @@ func span(d time.Duration) string {
 }
 
 func skipReason(it Item, b config.Board, now time.Time) string {
+	if containsFold(it.Labels, "follow-up") {
+		return "follow-up: unranked backlog work"
+	}
+
 	if it.OpenBlockers > 0 {
 		return it.HeldText()
 	}
 	if d := b.StaleAfter.Duration; d > 0 && now.Sub(it.Updated) > d {
 		return "no activity since " + it.Updated.Format(time.DateOnly)
 	}
-	others := slices.DeleteFunc(slices.Clone(it.Assignees), func(a string) bool { return containsFold(b.People, a) })
-	if len(others) > 0 {
+	if others := assignedOutside(it, b.People); len(others) > 0 {
 		return "assigned to " + strings.Join(others, ", ")
 	}
 	return ""

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/agy"
+	"github.com/giantswarm/beekeeper/internal/brieflint"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -107,7 +109,7 @@ var desktopInput = func(ctx context.Context) (func() time.Time, error) { return 
 
 func (a *app) agentStartCmd() *cobra.Command {
 	var nameFlag, model, dir, task, harness, mode, choiceLine string
-	var host, repository, gitRef, effortLevel string
+	var host, repository, gitRef, effortLevel, branch string
 	var exclude []string
 	var desktop, builds, force, dryRun, review, ofSelfHosted bool
 	c := &cobra.Command{
@@ -143,6 +145,11 @@ verdict without room refuses the start with exit 3, the guards named,
 and no session is created; --force starts it anyway and records the
 verdict overridden in the event log (agents.start).
 
+For SSH --host starts, --force overrides coordinator capacity only. The
+execution host still enforces memory, swap, load, disk, build slots (with
+--builds) and maxBusy during admission, so remote preparation can still be
+refused. Authentication, identity, version and policy checks remain required.
+
 A seed turn creates the session: "claude -p" under a session id beekeeper
 chooses, without tools, with the brief as its first prompt, in a transient
 user unit (beekeeper-agent-<id>, its output in journalctl --user -u <unit>);
@@ -152,9 +159,9 @@ it shows in the sidebar as local_<id>, titled with <name> (beekeeper appends
 the name's custom-title line to the transcript first, and a steward restores
 a title or model the import dropped; the session never sets its own model,
 which the desktop refuses). --model is the model its turns keep: while the
-desktop records another, its turns run headless on --model, and start says
-so with the call that sets it. A headless turn on a model runs its security
-reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
+desktop records another and no steward can restore it, the seeded start
+is refused before its task runs. Its seed stays recorded for inspection.
+A headless turn on a model runs its security reviews on it too (SECURITY_REVIEW_MODEL in its --settings). The import switches the desktop's main
 window to the new session for a moment and back to the session it showed
 (claude://code/continue); the window's focus does not hold it, the person's
 typing for 1 minute at most, and a locked screen not at all.
@@ -186,17 +193,33 @@ same start gate a real start is, and prints its verdict: the auto choice,
 and with --force the verdict it goes over; a verdict without room refuses
 the dry run with exit 3 too (--force aside).
 
-A start that delivers no turn of the task fails: it exits non-zero, logs
+A warm desktop CLI gets up to 15 seconds per attempt to accept the task,
+with one retry if delivery fails. A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
+
+A worker start requires --dir to name exactly one main repository checkout
+and --branch to name a new branch. Parent folders and linked worktrees are
+refused with the available checkout paths. The session starts in the checkout
+so its instructions load, then works in <state>/worktrees/<repo>/<branch>,
+created from the freshly fetched origin default branch. A --review start
+instead requires a pull request URL in its brief and creates a detached
+<state>/worktrees/<repo>/review-<number>. Existing destinations are refused.
+A brief spanning repositories must be split into one task per repository.
+The supervisor loop's starts are outside these rules: it knows a repository,
+not a checkout, so they run in agents.dir and their briefs say where to work.
+Before sending a brief, start runs the same checks as beekeeper lint briefs.
+A finding is printed to stderr with its file, line and rule; the start goes on,
+so a generated brief quoting its issue never stops a worker.
 
 The first prompt is the worker rules beekeeper ships with its role skills
 (the worker-rules skill, under the binary's version), then the brief as the
 task: a brief carries only its task, and a worker reports to "the
 supervisor", which the PreToolUse hook delivers to the role's holder. The
 rules name the topic skills a worker loads before the step that needs
-them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park);
+them (beekeeper:lease, beekeeper:merge, beekeeper:github, beekeeper:park,
+beekeeper:alerts, beekeeper:long-proofs);
 a topic no enabled beekeeper plugin installed serves as this binary embeds
 it (none installed, or out of date) follows the rules in the first prompt
 itself, and start says so with the command that updates the plugin.
@@ -351,6 +374,9 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 				sp := agentStart{name: name, kind: a.selectionKind, task: task, model: model, effort: effortLevel}
 				if dryRun {
+					if err := a.kindGate(name); err != nil {
+						return err
+					}
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
 				return a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })
@@ -387,10 +413,26 @@ work, which takes no choice on a self-hosted provider.`,
 			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
 				return err
 			}
+			// The supervisor loop has a repository, no checkout: its workers
+			// and reviewers start in agents.dir, and a resumed or replaced
+			// worker keeps a branch and worktree that already exist.
+			worktreeManaged := a.as != loopParty.Name
+			if worktreeManaged {
+				dir, err = a.startCheckout(dir)
+				if err != nil {
+					return err
+				}
+			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
 				return err
 			}
+			if worktreeManaged {
+				if _, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true); err != nil {
+					return err
+				}
+			}
+			warnBriefLint(cmd.ErrOrStderr(), briefFile)
 			// The timer whose command runs this start, from its
 			// environment or, on the broker's side, the flags a brokered
 			// start forwards it in.
@@ -477,7 +519,14 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				rules := ""
+				if worktreeManaged {
+					rules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true)
+					if err != nil {
+						return err
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -486,7 +535,8 @@ work, which takes no choice on a self-hosted provider.`,
 			// A timer's start says what the gate did to it in the log.
 			origHarness, origModel := harness, model
 			autoPick := origHarness == harnessAuto
-			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			baseBrief := a.workerPrompt(taskPrompt(brief), gaps...)
+			worktreeRules := ""
 			var timerLine string
 			for {
 				gateFrom := time.Now()
@@ -556,7 +606,13 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
+				if worktreeManaged && worktreeRules == "" {
+					worktreeRules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, false)
+					if err != nil {
+						return err
+					}
+				}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: worktreeRules + baseBrief, task: task, serves: briefIssue(brief), dir: dir, model: model, effort: effortLevel, desktop: desktop, mode: mode}
 				if byTimer {
 					if timerLine == "" {
 						var err error
@@ -593,6 +649,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&model, "model", "", "the session's model (default: Claude Code's; omp: omp.model; agy: required; codex: codex.model; auto: the chosen model)")
 	c.Flags().StringVar(&effortLevel, "effort", "", "session effort: low, medium, high, xhigh, max (default: task kind, else harness default)")
 	c.Flags().StringVar(&host, "host", "", "execution host selector; empty or local keeps local behavior")
+	c.Flags().StringVar(&branch, "branch", "", "new worker branch, created from the freshly fetched origin default branch")
 	c.Flags().StringVar(&repository, "repo", "", "canonical owner/repository mapped on the SSH host")
 	c.Flags().StringVar(&gitRef, "ref", "", "host-local source ref to pin in an isolated clone")
 	c.Flags().StringVar(&dir, "dir", "", "the session's working directory (default: agents.dir, else the current one)")
@@ -604,7 +661,7 @@ work, which takes no choice on a self-hosted provider.`,
 	c.Flags().StringVar(&mode, "mode", "", "desktop (imported into Claude Desktop) or background (a claude --bg session with Remote Control); default: agents.mode")
 	c.Flags().BoolVar(&desktop, "desktop", false, "the task needs desktop turns: import it past the desktop window's focus, as agents desktop does")
 	c.Flags().BoolVar(&builds, buildsFlag, false, "the task builds, tests or lints: the start waits its turn for a build slot")
-	c.Flags().BoolVar(&force, "force", false, "start although capacity says no start, or another desk claims the brief's issue; the event log records what it overrode")
+	c.Flags().BoolVar(&force, "force", false, "override coordinator capacity or another desk's issue claim; SSH execution-host admission limits still apply; record overrides")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print how the session would start (the profile applied and its first turn's command line) and start nothing")
 	c.Flags().StringVar(&choiceLine, "choice", "", "the auto choice line forwarded to a brokered start")
 	_ = c.Flags().MarkHidden("choice")
@@ -822,6 +879,10 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
+	if err := a.requireClaudeLogin(); err != nil {
+		return startedAgent{}, err
+	}
+
 	st, err := a.store.Read()
 	if err != nil {
 		return startedAgent{}, err
@@ -874,10 +935,10 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	if err != nil {
 		return startedAgent{}, err
 	}
+	if err := titleTaken(sessions, sp.name, state.Party{}); err != nil {
+		return startedAgent{}, err
+	}
 	live := func(p state.Party) bool {
-		if sp.replaces != nil && p.Is(*sp.replaces) {
-			return false
-		}
 		_, ok := claude.Live(sessions, p)
 		return ok
 	}
@@ -906,7 +967,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
@@ -1006,8 +1067,9 @@ const taskTurn = "beekeeper: this desktop turn starts your task. Work the task o
 // the desktop's import reads), the desktop imports it under its name once
 // the seed ended, past the window's focus and the person's typing within
 // desktopTurnWait, and the task's first turn then runs as a desktop turn
-// (turnInDesktop). Only a desktop that cannot run it gets the turn headless,
-// as agents wake resumes a session, and sa.turn says why.
+// (turnInDesktop). A model mismatch refuses the start before its task;
+// other desktop failures get the turn headless, as agents wake resumes a
+// session, and sa.turn says why.
 func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit, dir string, sa startedAgent, by state.Party) (startedAgent, error) {
 	id := sa.id
 	seed, err := withReviewModel(sp.model, []string{toolsFlag, "", strictMCPConfigFlag})
@@ -1050,21 +1112,55 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
-	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
+	line, err := a.startDesktopTurn(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
 		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
 	}
+	var delivery desktopDeliveryError
+	if errors.As(err, &delivery) {
+		return sa, err
+	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
-		sa.turn += " on " + w.model
+		sa.turn = fmt.Sprintf("start refused before its task: %v", err)
 	}
 	_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
-	if err := a.resumeTurn(ctx, by, w, taskTurn); err != nil {
+	if err := resumeSeededTask(err, func() error {
+		return a.resumeTurn(ctx, by, w, taskTurn)
+	}); err != nil {
 		return sa, err
 	}
 	return sa, nil
+}
+
+// startDesktopTurn retries a warm CLI's delivery once. A CLI that is still
+// warming must take the task itself; asking a steward to start it cannot
+// establish that an already running CLI received the task.
+func (a *app) startDesktopTurn(ctx context.Context, w wakeTarget, msg string, wait time.Duration) (string, error) {
+	var err error
+	for range 2 {
+		var line string
+		line, err = a.turnInDesktop(ctx, w, msg, wait)
+		if err == nil {
+			return line, nil
+		}
+		var delivery desktopDeliveryError
+		if !errors.As(err, &delivery) || ctx.Err() != nil {
+			break
+		}
+	}
+	return "", err
+}
+
+// resumeSeededTask refuses a seeded desktop start whose requested model
+// could not be restored. Other desktop failures still permit a headless task.
+func resumeSeededTask(desktopErr error, resume func() error) error {
+	if errors.As(desktopErr, new(modelNotHeld)) {
+		return fmt.Errorf("start refused before its task: %w; the seed stays recorded; restore its desktop model before waking it", desktopErr)
+	}
+	return resume()
 }
 
 // importVisible imports a seeded session into the running desktop once the
@@ -1979,6 +2075,24 @@ func readBrief(path string) (string, error) {
 	return brief, nil
 }
 
+// warnBriefLint prints what beekeeper lint briefs finds in the brief at path.
+// It never refuses: agents start also carries the supervisor's generated
+// briefs, whose quoted issue text no worker can fix. It lints the original
+// file so findings keep their line numbers.
+func warnBriefLint(w io.Writer, path string) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the caller's brief file
+	if err != nil {
+		return
+	}
+	found, err := brieflint.Lint(path, bytes.NewReader(raw))
+	if err != nil {
+		return
+	}
+	for _, f := range found {
+		_, _ = fmt.Fprintf(w, "brief lint: %s:%d: %s: %s\n  %s\n", f.Path, f.Line, f.Rule, f.Why, f.Text)
+	}
+}
+
 // taskPrompt is the part of a worker's first prompt that is its task: the
 // brief, enclosed so that a hand-over passes on the brief alone.
 func taskPrompt(brief string) string {
@@ -2010,8 +2124,18 @@ func workerPrompt(prompt string, inline ...string) string {
 		}
 		rules = b.String()
 	}
-	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
-		project.Version(), rules, prompt)
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\nYour worktree path: `<root>/<repo>/<branch>-%s` (replace root, repo and branch; keep this unique session suffix). Use the workspace provided by beekeeper instead when BEEKEEPER_EXECUTION_ID is set.\n\n%s",
+		project.Version(), rules, uuid.NewString(), prompt)
+}
+
+// workerPrompt adds this desk's configured paths to the shipped Git rule.
+func (a *app) workerPrompt(prompt string, inline ...string) string {
+	return strings.Replace(workerPrompt(prompt, inline...), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1)
+}
+
+func (a *app) entryRules() string {
+	home, _ := os.UserHomeDir()
+	return guard.EntryRules(home, a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places, scratchpadMark)
 }
 
 // topicSkills names topics as the skills a worker loads.
@@ -2340,4 +2464,12 @@ func titleTranscript(projectsDir, id, name string) error {
 func unitEnded(ctx context.Context, unit string) bool {
 	s := plat.Launcher.State(ctx, unit)
 	return s == "inactive" || s == "failed"
+}
+
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+	reg, err := recordStart(st, s, task, serves, live)
+	if err != nil {
+		return reg, err
+	}
+	return reg, a.handRegistration(st, reg, s.Party)
 }

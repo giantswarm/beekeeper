@@ -36,6 +36,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
+	"github.com/giantswarm/beekeeper/internal/update"
 )
 
 // loopParty is the party the supervisor loop acts and logs as.
@@ -161,23 +162,11 @@ var readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,headRefName,files,changedFiles,mergeCommit,isDraft,mergeable,mergeStateStatus,closingIssuesReferences,updatedAt")
+	out, err := github.RunGH(ctx, "pr", "view", strconv.Itoa(r.N), "--repo", r.Repo, "--json", "state,url,headRefOid,baseRefName,statusCheckRollup,reviews,author,title,body,headRefName,files,changedFiles,additions,deletions,mergeCommit,isDraft,mergeable,mergeStateStatus,reviewDecision,closingIssuesReferences,updatedAt")
 	if err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view %d --repo %s: %w", r.N, r.Repo, err)
 	}
 	return parseLoopPull(ref, out)
-}
-
-// readChangedPast reads the files p's head changes past the change of
-// reviewed (github.ChangedPast).
-var readChangedPast = func(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
-	r, ok := parseRef(p.Ref)
-	if !ok || p.Base == "" {
-		return nil, fmt.Errorf("%s names no pull request with a base", p.Ref)
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	return github.ChangedPast(ctx, github.RunGH, r.Repo, p.Base, reviewed, p.Head)
 }
 
 // readBaseMerge reads whether the approval of approved covers p's head: it
@@ -224,14 +213,16 @@ const teamsEvery = time.Hour
 
 // loopPullJSON is gh pr view's answer.
 type loopPullJSON struct {
-	Closes []struct {
+	Additions, Deletions int
+	Closes               []struct {
 		URL string `json:"url"`
 	} `json:"closingIssuesReferences"`
-	Updated     time.Time `json:"updatedAt"`
-	Draft       bool      `json:"isDraft"`
-	Mergeable   string    `json:"mergeable"`
-	MergeState  string    `json:"mergeStateStatus"`
-	MergeCommit struct {
+	Updated        time.Time `json:"updatedAt"`
+	Draft          bool      `json:"isDraft"`
+	Mergeable      string    `json:"mergeable"`
+	MergeState     string    `json:"mergeStateStatus"`
+	ReviewDecision string    `json:"reviewDecision"`
+	MergeCommit    struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 	State  string      `json:"state"`
@@ -241,6 +232,7 @@ type loopPullJSON struct {
 	Rollup []loopCheck `json:"statusCheckRollup"`
 	Author loopLogin   `json:"author"`
 	Title  string      `json:"title"`
+	Body   string      `json:"body"`
 	Branch string      `json:"headRefName"`
 	Files  []struct {
 		Path string `json:"path"`
@@ -350,8 +342,10 @@ func parseLoopPull(ref string, out []byte) (superloop.Pull, error) {
 	if err := json.Unmarshal(out, &j); err != nil {
 		return superloop.Pull{}, fmt.Errorf("gh pr view of %s: %w", ref, err)
 	}
-	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p := superloop.Pull{Draft: j.Draft, Mergeable: j.Mergeable, MergeState: j.MergeState, ReviewDecision: j.ReviewDecision, MergeCommit: j.MergeCommit.OID, Ref: ref, URL: j.URL, State: j.State, Head: j.Head, Base: j.Base, Green: len(j.Rollup) > 0, Author: j.Author.Login, Title: j.Title, Branch: j.Branch, ChangedFiles: j.ChangedFiles}
+	p.Additions, p.Deletions = j.Additions, j.Deletions
 	p.Updated = j.Updated
+	p.Absorbs = superloop.ParseAbsorbedPulls(ref, j.Title, j.Body)
 	for _, issue := range j.Closes {
 		if r, ok := parseRef(issue.URL); ok {
 			p.Closes = append(p.Closes, refName(r))
@@ -412,7 +406,7 @@ its key first in the detail):
             GitHub budget is above its floor: board tidy, its lines printed
             as SUPERVISOR BOARD <line>; a dry run tidies nothing
   leave     a park the desk's ownership leaves alone (below), said once with
-            its reason: no reviewer, no go, no forward, no escalation, and
+            its reason: no reviewer, no go, no forward, and
             a reviewer the loop started on it earlier retires
   resume    a settled park whose non-Claude harness reports its session gone:
             restart under
@@ -425,9 +419,11 @@ its key first in the detail):
             published HEAD (agents park --on owner/repo#n), with every
             check on the head green, for the
             first round and for each new head the last approval does not
-            cover, including fixes after changes requested. There is one
-            review per head; supervisor.reviewRounds never releases an
-            unapproved head. A reviewer starts
+            cover, including fixes after changes requested, while a round
+            is left: supervisor.reviewRounds caps the rounds that ask for
+            changes, superloop.MaxReviews all rounds. With the cap used, a
+            green head with fixes gets the merge go and no new review.
+            A reviewer starts
             (agents start --review) with supervisor.reviewBrief or the
             built-in brief, on capacity's pick (--harness auto with
             capacity.choices), using reserved review headroom; a worker on a
@@ -440,7 +436,10 @@ its key first in the detail):
             supervisor.hostsFirst, which prefers hosts for what a host
             can run, as for a worker. No host with room and no room
             locally: the start waits. A desk with
-            no capacity.choices never places remotely
+            no capacity.choices never places remotely. Execution reviewers use
+            agents review to read their assigned PR and linked issues and post
+            their exact-head review through the coordinator, without a host
+            GitHub credential
   red       an agent parked from its pull request's worktree at its
             published HEAD (a review request, local or on an execution
             host) whose head has a check that concluded red (failed,
@@ -477,16 +476,21 @@ its key first in the detail):
   forward   the last round's verdict asks for changes: the review, word
             for word, to the worker, whatever its head is now
   rework    the worker parked again after the forward on the head the
-            findings were about, or a head that only brings the base into
-            it: tell the worker to fix them and push, once per park. Its
-            new green head gets its own review. Exhausted rounds never
-            authorize a merge or send a merge question to guide.person
-  answer    the person answered an escalation (beekeeper answer --note):
-            an answer that releases it (the
-            Merge option, or words to merge that refuse nothing) is the
-            merge go for the head the escalation named, once its checks
-            are green; any other answer goes to the worker word for word,
-            and the rounds go on. One nobody answered holds nothing
+            findings were about with no change-request round left
+            (supervisor.reviewRounds counts the rounds that asked for
+            changes; an approved head is none), or, rounds left or not, on
+            a head that only brings the base into it, which carries no
+            fixes: the worker is told to fix them and push (agents wake),
+            once for each such park; its new green head gets the next
+            round, or the merge go once none is left. Review and rework
+            stay in the loop: no merge question goes to guide.person
+  go        (past the reviews) a green head the worker parked on after
+            superloop.MaxReviews reviews, the last approving or, when the
+            last reviewer finished without a verdict, an earlier round's
+            verdict standing: the desk's rule is the review, then the fixes
+            and the merge, so the merge go. No third reviewer starts, and
+            no note asks guide.person whether to merge; reviews that gave
+            no verdict at all get no go, said once as a leave line
   relay     another team's pull request: each review its owning team
             posted after the worker parked, told to it word for word
   ownership another team's pull request whose worker waited
@@ -525,7 +529,7 @@ its key first in the detail):
   done      agents.done: once its turn ends, the agent leaves the roster
             (agents remove); the loop retires a session beekeeper started
             the same way, once its turn ends: a reviewer once the loop
-            acted on its round's verdict (a go, forward, escalation, next
+            acted on its round's verdict (a go, forward, next
             round or end), and a worker given the merge go after its post-merge
             report or supervisor.postMergeWindow without activity
             (default 2h). A worker that still serves other open work, the
@@ -537,7 +541,7 @@ its key first in the detail):
             the host acknowledged its termination. Each pass also runs the
             doctor's roster and archive step (removing finished, relieved
             and stale entries with no CLI, archiving owed desktop sessions
-            under agents.archiveAgreement and stopping finished or relieved
+            and stopping finished or relieved
             background sessions). A session its person started is never
             retired
   next      after a done, and every pass below capacity.ceiling while capacity
@@ -610,7 +614,7 @@ its key first in the detail):
             re-addressed to guide.person, into the guide's queue
 
 Ownership decides what the loop does with a parked pull request, before any
-review, go, forward or escalation:
+review, go or forward:
 
   - outside github.allowedOrgs: nothing at all, not even a read
   - in supervisor.ownership.never, or its title, head branch or a changed
@@ -661,10 +665,11 @@ fires no timer and takes no lock, so it can run beside the loop.`,
 
 // supervisorLoop is one run of the loop: what it said once.
 type supervisorLoop struct {
-	mu    sync.Mutex
-	a     *app
-	since time.Time
-	once  bool
+	reviewDir string // explicit agents review checkout
+	mu        sync.Mutex
+	a         *app
+	since     time.Time
+	once      bool
 	// said are the failures already printed, by key.
 	said map[string]bool
 	// releaseAt is when the loop last looked for a release.
@@ -712,9 +717,6 @@ type supervisorLoop struct {
 	// baseMerges are the answers of readBaseMerge, by pull request,
 	// approved head and head: two commits' relation does not change.
 	baseMerges map[string]bool
-	// changedPast are the answers of readChangedPast, by pull request,
-	// reviewed head and head.
-	changedPast map[string][]string
 	// opens are the answers of refStates, by issue or pull request,
 	// each kept for loopOpenEvery.
 	opens map[string]loopOpen
@@ -727,6 +729,7 @@ type supervisorLoop struct {
 	// at openPullsAt.
 	openPulls   []string
 	openPullsAt time.Time
+	cfgSum      [32]byte
 }
 
 // loopOpen is whether an issue or pull request was open when read at at.
@@ -769,6 +772,29 @@ func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 	return open
 }
 
+// liveOpen reports whether the issue or pull request ref is confirmed open by a
+// fresh live read. Unlike open, it never uses the 10-minute cache and fails
+// closed when the live state cannot be read.
+func (l *supervisorLoop) liveOpen(ctx context.Context, ref string) bool {
+	r, ok := parseRef(ref)
+	if !ok {
+		return false
+	}
+	states, err := refStates(ctx, []github.PR{r})
+	st, read := states[r]
+	if err != nil || !read {
+		return false
+	}
+	open := st.State == github.Open
+	l.mu.Lock()
+	if l.opens == nil {
+		l.opens = map[string]loopOpen{}
+	}
+	l.opens[refName(r)] = loopOpen{open: open, at: l.a.timeNow()}
+	l.mu.Unlock()
+	return open
+}
+
 // loopServes is the issue ag's active sessions serve record names, as
 // owner/repo#n: "" without one, once its session ended or once it waits
 // for "done".
@@ -789,7 +815,7 @@ func loopServes(st *state.State, ag state.Agent) string {
 
 func loopTaskServes(ag state.Agent, parkedOn string) string {
 	for _, task := range []string{ag.Task, ag.LastTask} {
-		if m := refURL.FindString(task); m != "" {
+		if m := refURL.FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
 			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
 				return refName(r)
 			}
@@ -970,7 +996,12 @@ func (a *app) newSupervisorLoop(dryRun bool) (*supervisorLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, changedPast: map[string][]string{}, dryRun: dryRun, bin: loopBinary()}
+	l := &supervisorLoop{a: a, since: a.timeNow().UTC(), said: map[string]bool{}, baseMerges: map[string]bool{}, dryRun: dryRun, bin: loopBinary()}
+	if a.loadedCfg != "" {
+		if raw, readErr := os.ReadFile(a.loadedCfg); readErr == nil { //nolint:gosec // configured path
+			l.cfgSum = sha256.Sum256(raw)
+		}
+	}
 	if len(starts) > 0 {
 		l.since = starts[0].At
 	}
@@ -1035,8 +1066,116 @@ func (l *supervisorLoop) reexec(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// reloadConfig refreshes l.a.cfg from disk when the configured file changed
+// since startup or the last pass, so live config edits and settled overrides
+// take effect without restarting the loop process.
+func (l *supervisorLoop) reloadConfig() {
+	path := cmp.Or(l.a.cfgPath, l.a.loadedCfg)
+	if path == "" {
+		return
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // configured path
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(raw)
+	if sum == l.cfgSum {
+		return
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		return
+	}
+	if l.a.loadedCfg != "" {
+		l.a.cfg = c
+	} else {
+		if len(c.GitHub.AllowedOrgs) > 0 {
+			l.a.cfg.GitHub.AllowedOrgs = c.GitHub.AllowedOrgs
+		}
+		if len(c.Supervisor.Ownership.Never) > 0 {
+			l.a.cfg.Supervisor.Ownership.Never = c.Supervisor.Ownership.Never
+		}
+		if len(c.Supervisor.Ownership.Authors) > 0 {
+			l.a.cfg.Supervisor.Ownership.Authors = c.Supervisor.Ownership.Authors
+		}
+		if len(c.Supervisor.Ownership.Review) > 0 {
+			l.a.cfg.Supervisor.Ownership.Review = c.Supervisor.Ownership.Review
+		}
+		if c.Supervisor.Ownership.Team != "" {
+			l.a.cfg.Supervisor.Ownership.Team = c.Supervisor.Ownership.Team
+		}
+	}
+	l.cfgSum = sum
+}
+
+func (l *supervisorLoop) unreadRepo(ref string) string {
+	r, ok := parseRef(ref)
+	if !ok {
+		return ""
+	}
+	_, why := (superloop.Desk{Orgs: l.a.cfg.GitHub.AllowedOrgs, Never: l.a.cfg.Supervisor.Ownership.Never}).Unread(refName(r))
+	return why
+}
+
+func (l *supervisorLoop) agentUnreadRepo(st *state.State, ag state.Agent, ref string) string {
+	if why := l.unreadRepo(ref); why != "" {
+		return why
+	}
+	if ag.Park != nil && ag.Park.On != "" {
+		if why := l.unreadRepo(ag.Park.On); why != "" {
+			return why
+		}
+	}
+	if st != nil {
+		for _, r := range st.Records {
+			if r.Session.Is(ag.Party) && r.Issue != "" {
+				if why := l.unreadRepo(r.Issue); why != "" {
+					return why
+				}
+			}
+		}
+	}
+	for _, m := range namedRefs(ag.Task+" "+ag.LastTask, l.a.cfg.Board.Owner) {
+		if why := l.unreadRepo(m); why != "" {
+			return why
+		}
+	}
+	for _, pat := range l.a.cfg.Supervisor.Ownership.Never {
+		if pat = strings.TrimSpace(pat); pat != "" && !strings.ContainsAny(pat, "*?") {
+			if strings.Contains(strings.ToLower(ag.Task+" "+ag.LastTask), strings.ToLower(pat)) {
+				return pat + " is in supervisor.ownership.never"
+			}
+		}
+	}
+	return ""
+}
+
+func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
+	if ref == "" || p.State == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pulls != nil {
+		prev := l.pulls[ref]
+		prev.pull = p
+		prev.at = l.a.timeNow()
+		l.pulls[ref] = prev
+	}
+	if p.State == superloop.Merged {
+		if l.merged == nil {
+			l.merged = map[string]superloop.Pull{}
+		}
+		l.merged[ref] = p
+	}
+	if p.State != superloop.Open && len(l.openPulls) > 0 {
+		l.openPulls = slices.DeleteFunc(l.openPulls, func(r string) bool { return strings.EqualFold(r, ref) })
+	}
+}
+
 // pass is one look: gather, plan, act.
 func (l *supervisorLoop) pass(ctx context.Context) error {
+	l.reloadConfig()
 	a := l.a.snapshotAtNow()
 	l.mu.Lock()
 	l.boardNone = nil
@@ -1072,16 +1211,26 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			return err
 		}
 		l.settleOverrides(ctx, st)
+		l.reloadConfig()
+		a = l.a.snapshotAtNow()
 	}
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		if !l.dryRun {
+			if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+				return err
+			}
+		}
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
 	l.clearSaid("graphql budget")
 	if !l.dryRun {
 		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			if saveErr := l.observeThroughput(superloop.Input{}, nil, false); saveErr != nil {
+				return saveErr
+			}
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 			return nil
 		}
@@ -1119,12 +1268,13 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
+	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
 		DevctlOwners: a.cfg.Merge.DevctlOwners, Admin: a.cfg.Merge.Admin,
 		BaseMerged:  func(p superloop.Pull, approved string) bool { return l.baseMerged(ctx, p, approved) },
-		ChangedPast: func(p superloop.Pull, reviewed string) ([]string, error) { return l.changed(ctx, p, reviewed) },
+		NitsChecked: func(p superloop.Pull, approved string) bool { return st.ReviewNitsChecked(p.Ref, p.Head, approved) },
 		Open:        func(ref string) bool { return l.open(ctx, ref) }, StaleAfter: a.cfg.Agents.StaleAfter.Duration,
 		Board: a.cfg.Board.Owner != "" && a.cfg.Board.Project != 0}
 	if in.Board {
@@ -1148,27 +1298,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			w.Serves = loopTaskServes(ag, w.ParkedOn)
 		}
 		in.Workers = append(in.Workers, w)
-	}
-	for _, rp := range st.ReviewParks {
-		if rp.On == "" || rp.ReviewHead == "" {
-			continue
-		}
-		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
-		}) {
-			continue
-		}
-		in.Workers = append(in.Workers, superloop.Worker{
-			Name:            rp.Agent,
-			ParkedOn:        rp.On,
-			ParkedAt:        rp.At,
-			ReviewRequested: true,
-			ParkedHead:      rp.ReviewHead,
-			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
-			Started:         false,
-			Serves:          rp.Serves,
-			Saved:           true,
-		})
 	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
@@ -1251,8 +1380,40 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
-	// The person's answers to the loop's own notes: an escalation's answer
-	// is the loop's to act on, no session's.
+	endedParks := false
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if reviewParkEnded(in.Taken, rp) {
+			endedParks = true
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+			Saved:           true,
+		})
+	}
+	if endedParks && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) })
+			return nil, nil
+		})
+	}
+	// The person's answers to the loop's own notes: an ownership answer is
+	// the loop's to act on, no session's.
 	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
 	if err != nil {
 		return err
@@ -1264,6 +1425,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	sortTrackedPulls(in, tracked)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -1273,6 +1435,10 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	sweepReads := 0
+	unread := map[string]bool{}
+	unreviewedEnded := map[string]bool{}
+	pullHeld := false
 	for _, ref := range tracked {
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
@@ -1286,12 +1452,27 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = mergedPull
 			continue
 		}
-		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
+		if pullHeld {
+			unread[ref] = true
+			continue
+		}
+		changed := loopPullChanged(in, ref)
+		if slices.Contains(swept, ref) && l.sweepReadDue(ref, changed) {
+			if sweepReads >= sweepReadsPerPass {
+				unread[ref] = true
+				continue
+			}
+			sweepReads++
+		}
+		p, err := l.observePull(ctx, ref, changed)
 		if err != nil {
+			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-				return nil
+				pullHeld = true
+				continue
 			}
+			observationUnknown = true
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
@@ -1302,6 +1483,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
+			unreviewedEnded[strings.ToLower(ref)] = true
+		}
 		if p.State == superloop.Merged {
 			l.mu.Lock()
 			if l.merged == nil {
@@ -1309,7 +1493,48 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			}
 			l.merged[ref] = p
 			l.mu.Unlock()
+			if !l.dryRun {
+				for _, orig := range p.Absorbs {
+					stage := "absorbed " + strings.ToLower(orig)
+					if !stages[stage] {
+						_ = a.store.Record(about(event(loopParty, loopStageVerb, "[%s] %s", stage, ref), orig))
+						stages[stage] = true
+						stageDetail[stage] = ref
+					}
+				}
+			}
 		}
+	}
+	for stage, by := range stageDetail {
+		orig, ok := strings.CutPrefix(stage, "absorbed ")
+		if !ok || !stages[stage] || orig == "" || by == "" {
+			continue
+		}
+		mp := in.Pulls[by]
+		mp.Ref = cmp.Or(mp.Ref, by)
+		mp.State = superloop.Merged
+		if !slices.ContainsFunc(mp.Absorbs, func(a string) bool { return strings.EqualFold(a, orig) }) {
+			mp.Absorbs = append(mp.Absorbs, orig)
+		}
+		in.Pulls[by] = mp
+	}
+	l.mu.Lock()
+	for mref, mp := range l.merged {
+		if _, ok := in.Pulls[mref]; !ok && (len(mp.Absorbs) > 0 || len(superloop.ParseAbsorbedPulls(mref, mp.Title, "")) > 0) {
+			in.Pulls[mref] = mp
+		}
+	}
+	l.mu.Unlock()
+	if len(unreviewedEnded) > 0 && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
+				return unreviewedEnded[strings.ToLower(rp.On)]
+			})
+			return nil, nil
+		})
+	}
+	if pullHeld && len(in.Pulls) == 0 {
+		return nil
 	}
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
@@ -1380,10 +1605,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if l.pauseForReexec() {
 		return nil
 	}
-	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless); err != nil {
+	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
+	if !l.dryRun {
+		if err := l.reportSweep(in.Ownerless, unread); err != nil {
+			return err
+		}
+	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
+			return err
+		}
+	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
@@ -1611,7 +1846,12 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitionOrder := []string{}
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
-		key := "transition:" + cmp.Or(act.Agent, act.Kind)
+		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
+		if act.Kind == superloop.KindEnd {
+			if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok && by != "" {
+				key = "transition:" + strings.TrimSpace(by)
+			}
+		}
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
@@ -1678,29 +1918,6 @@ func (l *supervisorLoop) baseMerged(ctx context.Context, p superloop.Pull, appro
 	return ok
 }
 
-// changed lists the files p's head changes past the change of reviewed,
-// read once per pair of heads; a read that fails is read again next pass.
-func (l *supervisorLoop) changed(ctx context.Context, p superloop.Pull, reviewed string) ([]string, error) {
-	key := p.Ref + " " + reviewed + " " + p.Head
-	l.mu.Lock()
-	if files, read := l.changedPast[key]; read {
-		l.mu.Unlock()
-		return files, nil
-	}
-	l.mu.Unlock()
-	files, err := readChangedPast(ctx, p, reviewed)
-	if err != nil {
-		return nil, err
-	}
-	l.mu.Lock()
-	if l.changedPast == nil {
-		l.changedPast = map[string][]string{}
-	}
-	l.changedPast[key] = files
-	l.mu.Unlock()
-	return files, nil
-}
-
 // ownership readies the desk's policy for a pass's reads: the logins the
 // desk opens its pull requests as and, once supervisor.ownership.team is
 // set, the team files, read again every teamsEvery. False, said once, while
@@ -1743,7 +1960,7 @@ func would(act superloop.Action) string {
 	switch act.Kind {
 	case superloop.KindReview:
 		return fmt.Sprintf("start reviewer %q for %s at %s, round %d", superloop.ReviewerName(act.Ref, act.Round), act.URL, act.Head, act.Round)
-	case superloop.KindEscalate, superloop.KindOwnership:
+	case superloop.KindOwnership:
 		return "ask the guide's person: " + act.Question
 	case superloop.KindDone:
 		return "take off the roster " + act.Message
@@ -1904,7 +2121,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
-			logged("agents.remove", func(d string) bool { return d == c.target })
+			logged("agents.remove", func(d string) bool { return removedAgent(d, c.target) })
 	case superloop.KindClassify:
 		// An unclassified park's wake claims the agent's name; a note for
 		// the guide claims its question.
@@ -1913,7 +2130,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 		} else {
 			done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 		}
-	case superloop.KindEscalate, superloop.KindOwnership:
+	case superloop.KindOwnership:
 		done = logged("note.add", func(d string) bool { return strings.Contains(d, c.target) })
 	case superloop.KindIntake:
 		for _, e := range evs {
@@ -2011,13 +2228,14 @@ func (f loopFailure) recent(now time.Time) bool {
 
 // failed logs act's failure and keeps it in failures, by key.
 func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFailure, cause error) error {
+	now := l.a.timeNow()
 	l.mu.Lock()
 	previous := failures[act.Key]
-	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: l.a.now, At: l.a.now}
+	f := loopFailure{Message: cause.Error(), Count: 1, Kind: act.Kind, Ref: act.Ref, Since: now, At: now}
 	// Compare exact messages: a changing timestamp or PID is a different
 	// failure and starts a new count, rather than hiding a new cause.
 	// An episode expires after its retry has been missed for loopStuckRecent.
-	if f.Message == previous.Message && previous.recent(l.a.now) {
+	if f.Message == previous.Message && previous.recent(now) {
 		f.Count = previous.Count + 1
 		f.Since = cmp.Or(previous.Since, f.Since)
 	} else {
@@ -2028,7 +2246,7 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 		}
 	}
 	if f.Count >= 2 {
-		f.RetryAt = l.a.timeNow().Add(loopFailureDelay(f.Count))
+		f.RetryAt = now.Add(loopFailureDelay(f.Count))
 	}
 	failures[act.Key] = f
 	l.mu.Unlock()
@@ -2050,9 +2268,10 @@ func (l *supervisorLoop) failed(act superloop.Action, failures map[string]loopFa
 
 // stuckGroup are the failures of kind with message attempted recently, by key.
 func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, message string) map[string]loopFailure {
+	now := l.a.timeNow()
 	group := map[string]loopFailure{}
 	for key, f := range failures {
-		if f.Kind == kind && f.Message == message && f.recent(l.a.now) {
+		if f.Kind == kind && f.Message == message && f.recent(now) {
 			group[key] = f
 		}
 	}
@@ -2064,6 +2283,7 @@ func (l *supervisorLoop) stuckGroup(failures map[string]loopFailure, kind, messa
 // PROBLEM. An episode filed before it began (filed, by step and error) is a
 // new one.
 func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string]time.Time) error {
+	now := l.a.timeNow()
 	keys := slices.Sorted(maps.Keys(failures))
 	done := map[string]bool{}
 	for _, key := range keys {
@@ -2078,7 +2298,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		if len(group) == 0 {
 			continue
 		}
-		since, attempts := l.a.now, 0
+		since, attempts := now, 0
 		var items []string
 		for _, k := range slices.Sorted(maps.Keys(group)) {
 			g := group[k]
@@ -2086,7 +2306,7 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 			attempts += g.Count
 			items = append(items, cmp.Or(g.Ref, k))
 		}
-		if len(group) < 2 && l.a.now.Sub(since) < loopStuckAfter {
+		if len(group) < 2 && now.Sub(since) < loopStuckAfter {
 			continue
 		}
 		if at, ok := filed[step]; ok && !at.Before(since) {
@@ -2097,13 +2317,13 @@ func (l *supervisorLoop) stuck(failures map[string]loopFailure, filed map[string
 		text := fmt.Sprintf("The supervisor loop's %s step has failed the same way since %s, %d attempt(s), blocking %s: %s. "+
 			"It retries with backoff from %s up to %s; own the failure to the component its error names.",
 			f.Kind, since.UTC().Format(time.RFC3339), attempts, strings.Join(items, ", "), f.Message, loopFailureBackoff, loopFailureBackoffCap)
-		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.now.UTC().Format(time.RFC3339), fileReportSeparator, text)
+		line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, now.UTC().Format(time.RFC3339), fileReportSeparator, text)
 		// Each episode its own key: guide watch says each one once.
 		fileKey := step + " " + since.UTC().Format("20060102T150405Z")
 		if err := l.record(superloop.Action{Kind: superloop.KindFile, Key: fileKey}, line); err != nil {
 			return err
 		}
-		filed[step] = l.a.now
+		filed[step] = now
 	}
 	return nil
 }
@@ -2267,6 +2487,24 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 	return out, nil
 }
 
+// remove takes name off the roster, saying why in the log. An agent already
+// gone is removed: the doctor or a person can take it off between the pass's
+// reading and this call, and a step must not fail forever on work done.
+func (l *supervisorLoop) remove(ctx context.Context, name, reason string) error {
+	_, err := l.run(ctx, agentsName, loopRemove, name, "--"+reasonFlagName, reason)
+	if err == nil || Code(err) != ExitRefused {
+		return err
+	}
+	st, readErr := l.a.store.Read()
+	if readErr != nil {
+		return err
+	}
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }) {
+		return err
+	}
+	return nil
+}
+
 // act takes one transition and says what it did.
 func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	a := l.a
@@ -2302,13 +2540,6 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		return fmt.Sprintf("the owning team's review of %s told", act.URL), nil
 	case superloop.KindOwner:
 		return l.ownOverlap(ctx, st, act)
-	case superloop.KindEscalate:
-		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
-			fmt.Sprintf("legacy review escalation for head %s; new heads now get their own independent review", shortSHA(act.Head)),
-			fmt.Sprintf("leave %s unmerged and its worker parked", act.URL), superloop.EscalationOptions(act.Head)...); err != nil {
-			return "", err
-		}
-		return "to the guide: " + act.Message, nil
 	case superloop.KindOwnership:
 		if err := l.toGuide(ctx, act, act.URL, act.Question, act.Message,
 			"its owning team's review blocks the desk's work, and only a person overrides the ownership of a pull request; the loop reviews it and gives the merge go as for the desk's own on an answer that overrides it",
@@ -2345,7 +2576,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
 		}
-		if _, err := l.run(ctx, agentsName, loopRemove, act.Agent); err != nil {
+		if err := l.remove(ctx, act.Agent, cmp.Or(act.Message, "supervisor loop: task done")); err != nil {
 			return "", err
 		}
 		if act.Message != "" {
@@ -2491,7 +2722,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
-	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
+	_, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
 	return err
 }
 
@@ -2527,8 +2758,8 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
 		return s
 	}
-	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
-		if r, ok := parseRef(ref); ok {
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) && !strings.Contains(strings.ToLower(ref), "/pull/") {
+		if r, ok := parseRef(ref); ok && !strings.EqualFold(refName(r), on) {
 			return refName(r)
 		}
 	}
@@ -2538,13 +2769,63 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	return ""
 }
 
+// reviewParkEnded reports a park whose own pull request the loop already
+// ended. A park is per pull request: nothing about its worker ends it, since a
+// worker finishing one pull request can have others waiting for review.
+func reviewParkEnded(taken []superloop.Taken, rp state.ReviewPark) bool {
+	return slices.ContainsFunc(taken, func(t superloop.Taken) bool {
+		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
+	})
+}
+
+func hasLoopRound(taken []superloop.Taken, ref string) bool {
+	for _, t := range taken {
+		if (t.Kind == superloop.KindReview || t.Kind == superloop.KindGo) && strings.EqualFold(t.Ref, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortTrackedPulls(in superloop.Input, tracked []string) {
+	type priority struct {
+		tier    int
+		changed time.Time
+	}
+	pri := make(map[string]priority, len(tracked))
+	for _, ref := range tracked {
+		tier := 3
+		for _, w := range in.Workers {
+			if !strings.EqualFold(w.ParkedOn, ref) || !w.ReviewRequested {
+				continue
+			}
+			if !w.Saved {
+				tier = 0
+				break
+			}
+			tier = min(tier, 1)
+		}
+		if tier > 1 && hasLoopRound(in.Taken, ref) {
+			tier = 2
+		}
+		pri[ref] = priority{tier: tier, changed: loopPullChanged(in, ref)}
+	}
+	slices.SortStableFunc(tracked, func(a, b string) int {
+		pa, pb := pri[a], pri[b]
+		if pa.tier != pb.tier {
+			return cmp.Compare(pa.tier, pb.tier)
+		}
+		return pb.changed.Compare(pa.changed)
+	})
+}
+
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
 	for _, ag := range st.Agents {
 		if ag.Park == nil || ag.Park.ReviewHead == "" {
 			continue
 		}
 		on := loopParkOn(ag.Park)
-		if on == "" {
+		if on == "" || l.unreadRepo(on) != "" {
 			continue
 		}
 		if l.dryRun || !shouldEndReviewWorker(st, ag) {
@@ -2601,7 +2882,7 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 				}
 			}
 		}
-		if _, err := l.run(ctx, agentsName, loopRemove, ag.Name); err != nil {
+		if err := l.remove(ctx, ag.Name, "supervisor loop: desk review of "+on+" requested; its park stays saved for the review and the merge"); err != nil {
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}
@@ -2620,7 +2901,20 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 }
 
 func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if l.unreadRepo(act.Ref) != "" {
+		return errLoopLater
+	}
 	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
+		if act.Kind != superloop.KindEnd && act.Ref != "" {
+			p, err := readLoopPull(ctx, act.Ref)
+			if err != nil {
+				return errLoopLater
+			}
+			l.cachePull(act.Ref, p)
+			if p.State != superloop.Open {
+				return errLoopLater
+			}
+		}
 		return l.wake(ctx, act)
 	}
 	return l.startFixer(ctx, st, act)
@@ -2630,7 +2924,7 @@ const defaultFixerBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and fix{{els
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Collect all fixes for the round, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and request the next review round with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 `
 
@@ -2638,7 +2932,7 @@ const defaultRepairBrief = `{{if .ServesURL}}Continue {{.ServesURL}} and repair{
 
 {{.Task}}
 
-Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}} (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
+Fetch origin and work on branch {{.Branch}} in a worktree under ~/.local/state/beekeeper/worktrees/{{.Repo}}/{{.Branch}}-<session suffix from your startup prompt> (or in the workspace beekeeper cloned for you when BEEKEEPER_EXECUTION_ID is set). Resolve the conflict or repair the branch, run the focused checks, then push once to {{.Branch}} (or run beekeeper agents publish when BEEKEEPER_EXECUTION_ID is set), wait for green CI on {{.URL}} and park from the worktree with:
 cd "<worktree>" && beekeeper agents park --on {{.Repo}}#{{.Number}}{{if .PostMerge}} --post-merge {{printf "%q" .PostMerge}}{{end}} "desk review"
 If the new head only rebases onto or merges the base branch to resolve conflicts, its earlier approval still covers it and the supervisor merges once CI is green without starting a new review.
 `
@@ -2651,6 +2945,9 @@ Fetch origin and work from {{.Branch}} in a worktree under ~/.local/state/beekee
 `
 
 func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act superloop.Action) error {
+	if l.unreadRepo(act.Ref) != "" {
+		return errLoopLater
+	}
 	if err := l.incidentStart(act.Ref); err != nil {
 		return err
 	}
@@ -2660,6 +2957,18 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	r, ok := parseRef(act.Ref)
 	if !ok {
 		return refused("invalid pull request ref %q", act.Ref)
+	}
+	var livePull superloop.Pull
+	if act.Kind != superloop.KindEnd {
+		p, err := readLoopPull(ctx, act.Ref)
+		if err != nil {
+			return errLoopLater
+		}
+		l.cachePull(act.Ref, p)
+		if p.State != superloop.Open {
+			return errLoopLater
+		}
+		livePull = p
 	}
 	rp, hasRP := st.ReviewParkFor(act.Ref)
 	var servesURL, postMerge string
@@ -2672,10 +2981,33 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		}
 	}
 	name := cmp.Or(act.Agent, fmt.Sprintf("%s %d", repoName(r.Repo), r.N))
-	place, err := l.startPlacement(ctx, name, r.Repo, false, false)
+	var place startHost
+	var err error
+	if act.Kind == superloop.KindEnd {
+		// Terminal continuations can need the live desk checkout and host
+		// policy sync. Execution hosts only have prepared workspaces, so
+		// keep this work on the coordinator even under hostsFirst.
+		flags := startFlags(false, false)
+		if model := l.a.ruleModel(name, workerRole); model != "" {
+			flags = append(flags, modelFlag, model)
+		}
+		out, code, readErr := beekeeperRun(ctx, l.as(append([]string{loopCapacity}, flags...)...)...)
+		var capacity struct {
+			Room int `json:"room"`
+		}
+		if readErr != nil || code != 0 || json.Unmarshal([]byte(out), &capacity) != nil || capacity.Room <= 0 {
+			err = errLoopLater
+		}
+	} else {
+		place, err = l.startPlacement(ctx, name, r.Repo, false, false)
+	}
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
-			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet on any host", act.URL)
+			where := "on any host"
+			if act.Kind == superloop.KindEnd {
+				where = "on the coordinator"
+			}
+			l.sayOnce("room "+act.Key, "SUPERVISOR FIXER WAITS %s: no room for a start yet %s", act.URL, where)
 			return errLoopLater
 		}
 		return err
@@ -2692,14 +3024,9 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		merged := l.merged[act.Ref]
 		l.mu.Unlock()
 		head = cmp.Or(merged.MergeCommit, act.Head, rp.ReviewHead)
-		branch = cmp.Or(place.Ref, merged.Base, head)
-		if place.remote() && place.Ref == "" {
-			place.Ref = cmp.Or(merged.Base, merged.MergeCommit)
-		}
+		branch = cmp.Or(merged.Base, head)
 	} else {
-		if p, err := readLoopPull(ctx, act.Ref); err == nil {
-			branch = p.Branch
-		}
+		branch = livePull.Branch
 		if branch == "" {
 			branch = fmt.Sprintf("pr-%d", r.N)
 		}
@@ -2729,13 +3056,17 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return err
+	}
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return nil
+				return l.a.operationOutcome(agentStartName, "", act.URL, true)
 			} else if !errors.Is(rerr, errLoopLater) {
 				return rerr
 			}
@@ -2762,12 +3093,42 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 type briefData struct {
 	URL, Repo, Head, Branch, Worker, Task, ServesURL, PostMerge string
 	Number, Round                                               int
+	Context                                                     string
 }
 
 // defaultReviewBrief is the review brief without supervisor.reviewBrief.
 const defaultReviewBrief = `Review {{.URL}} at head {{.Head}}, review round {{.Round}}, the work of {{.Worker}}.
+CI green at {{.Head}}.
+{{.Context}}
 
-Read the pull request, the issue it closes and the diff. Judge whether it does what the issue asks, and find its bugs. Post one review on the pull request (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>): its first line "Review: approved" or "Review: changes requested", its second "Head reviewed: ` + "`{{.Head}}`" + `", then every blocking finding with its file and line. Then report: beekeeper agents idle --done --report "<the same Review: verdict line, a newline, and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>" for each problem the review met).
+You are an independent reviewer in a fresh session. Read the shipped beekeeper review skill.
+Read the PR, its closing issues and their parent epic, including acceptance lines and comments.
+Check fulfilment in full, not just correctness or the minimum that passes CI. Nothing may be
+narrowed or deferred without a linked follow-up allowed by the issue. Check behaviour tests,
+including failure paths; dead paths; unsupported claims in code, docs and the PR; and changes
+that a later epic sub-issue would need to undo.
+
+Trust green CI on the exact reviewed head. Do not repeat its full gate. Build only for your
+own probes (new or mutated tests, or a benchmark touched by the diff); in later rounds probe
+only what the fixes touch. For a full review use your own detached worktree at the pinned
+head, read repository rules and inspect tests and lints. For a light review read the diff,
+issue and CI without checkout or build. Never edit the worker branch or merge.
+
+Every finding is blocking or a nit to fix in this round; drop anything else. Open an issue
+only for a real gap outside this PR or an explicitly permitted deferral, label it follow-up,
+leave it unranked in the backlog and do not attach it as an epic sub-issue.
+An approval's nit-only push is checked by the supervisor against the approved head; do not
+start another independent review for it. Other changes require review of the new head.
+
+Post exactly one review comment (gh pr review {{.Number}} --repo {{.Repo}} --comment --body-file <file>).
+First line exactly "Desk review (opus): approved" or "Desk review (opus): changes requested",
+regardless of your configured model. Second line "Head reviewed: ` + "`{{.Head}}`" + `".
+Each finding: <file>:<line>: <what is wrong> → <what would be right>.
+Never use gh pr review --approve. Report to the supervisor:
+beekeeper agents idle --done --report "<the same Desk review (opus): verdict line, a newline,
+and the exact review URL>" --problem none (or --problem "<finding, evidence, owning repo>"
+for each problem encountered). The supervisor relays findings to the worker and gives the
+merge go only after approval. Do not review an unchanged approved head again.
 `
 
 // brief renders the template in file (def when file is empty) with d into
@@ -2802,6 +3163,9 @@ var briefName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // startReviewer starts the reviewer of act's head.
 func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action) (string, error) {
+	if l.unreadRepo(act.Ref) != "" {
+		return "", errLoopLater
+	}
 	if err := l.incidentStart(act.Ref); err != nil {
 		return "", err
 	}
@@ -2809,7 +3173,30 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		return "", errLoopLater
 	}
 	r, _ := parseRef(act.Ref)
-	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent})
+	if act.Message == "" {
+		p, err := readLoopPull(ctx, act.Ref)
+		if err != nil {
+			return "", err
+		}
+		l.cachePull(act.Ref, p)
+		if p.State != "" && p.State != superloop.Open {
+			return "", errLoopLater
+		}
+		if p.Head != act.Head || !p.Green {
+			return "", refused("review head moved or CI is not green")
+		}
+		previous := ""
+		for _, review := range p.Reviews {
+			if review.Verdict != "" {
+				previous = review.Body
+			}
+		}
+		act.Message, err = reviewContext(ctx, p, previous, l.a.cfg.Supervisor.ReviewLightLines)
+		if err != nil {
+			return "", err
+		}
+	}
+	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Round: act.Round, Worker: act.Agent, Context: act.Message})
 	if err != nil {
 		return "", err
 	}
@@ -2826,7 +3213,11 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 	}
 	name := superloop.ReviewerName(act.Ref, act.Round)
-	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, authorFlags...)
+	placementFlags := slices.Clone(authorFlags)
+	if l.a.cfg.Supervisor.ReviewModel != "" {
+		placementFlags = append(placementFlags, modelFlag, l.a.cfg.Supervisor.ReviewModel)
+	}
+	place, err := l.startPlacement(ctx, name, r.Repo, true, act.SelfHosted, placementFlags...)
 	if err != nil {
 		if errors.Is(err, errLoopLater) {
 			l.sayOnce("room "+act.Key, "SUPERVISOR REVIEW WAITS %s: no room for a start yet on any host", act.URL)
@@ -2835,8 +3226,14 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		return "", err
 	}
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
+	if l.reviewDir != "" {
+		args = append(args, "--dir", l.reviewDir)
+	}
+	if l.a.cfg.Supervisor.ReviewModel != "" {
+		args = append(args, modelFlag, l.a.cfg.Supervisor.ReviewModel)
+	}
 	args = append(args, authorFlags...)
-	if len(l.a.cfg.Capacity.Choices) > 0 {
+	if len(l.a.cfg.Capacity.Choices) > 0 && l.a.cfg.Supervisor.ReviewModel == "" {
 		// The reviewer takes capacity's pick, decided as a worker's start
 		// is; a self-hosted model's work gets one on no self-hosted provider.
 		args = append(args, "--harness", harnessAuto)
@@ -2846,15 +3243,31 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	}
 	args = append(args, place.remoteStartFlags()...)
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(act.Ref); err != nil {
+		return "", err
+	}
+	if err := l.a.reserveReview(act); err != nil {
+		return "", err
+	}
+	started := false
+	defer func() {
+		if !started {
+			l.a.releaseUnstartedReview(act)
+		}
+	}()
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused {
 			if place.remote() {
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+						return "", saveErr
+					}
 					return what, nil
 				} else if !errors.Is(rerr, errLoopLater) {
 					return "", rerr
@@ -2865,6 +3278,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		}
 		return "", err
 	}
+	started = true
 	if err := l.a.assignExecutionReview(ctx, act); err != nil {
 		return "", err
 	}
@@ -3022,7 +3436,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement applies host preferences to workers and GitHub-enabled
+// startPlacement applies host preferences to workers and coordinator-relayed
 // reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
@@ -3034,7 +3448,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
 // passed quietly) and skipped; a host's check weighs only the choices it
-// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// can run. With supervisor.hostsFirst and no host with room
 // a start a host could run waits, as it does on a full machine; a start no
 // host can run starts locally within the local room (capacity.local.
 // ceiling among its guards): one whose repository no host maps, or the
@@ -3052,9 +3466,8 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// A remote reviewer needs the per-worker GitHub adapter to read the PR
-	// and post its review. Publication-only hosts cannot perform reviews.
-	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
+	// agents review names its checkout, so the reviewer stays on this machine.
+	if review && l.reviewDir != "" {
 		if !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
@@ -3066,7 +3479,7 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		// before, and the start's own gate makes it wait when it has no
 		// room. When agents.models selects a model, check its room before
 		// claiming the action.
-		if model != "" && !l.capacityRoom(ctx, flags...) {
+		if (review || model != "") && !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -3213,7 +3626,7 @@ func (l *supervisorLoop) remoteStartRefused(ctx context.Context, name string) (s
 // with room (and the board item's repository is mapped there), else on the
 // coordinator's own machine.
 func (l *supervisorLoop) startNext(ctx context.Context, act superloop.Action) (string, error) {
-	if l.holdingStarts() {
+	if l.holdingStarts() || l.a.recoveryHeld() != "" {
 		return "", errLoopLater
 	}
 	k := l.a.cfg.Supervisor
@@ -3302,6 +3715,9 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 // 3 after printing its document with no pick: that is the board's answer,
 // nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
+	if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
+		return next, err
+	}
 	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
 	if err != nil {
 		return nil, err
@@ -3352,6 +3768,12 @@ type loopBoardItem struct {
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if l.unreadRepo(next.Ref) != "" {
+		return "", errLoopLater
+	}
+	if err := l.a.allowMonitoredIssue(ctx, next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
@@ -3383,10 +3805,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 		args = append(args, "--host", place.Selector, "--repo", place.Repo, "--ref", place.Ref)
 	}
 	args = append(args, place.excludeFlags()...)
+	// Placement and preparation may block while an incident hold is set.
+	if err := l.incidentStart(next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
@@ -3396,6 +3822,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
+				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+					return "", saveErr
+				}
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {
@@ -3411,8 +3840,14 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 		}
 		if Code(err) == ExitRefused {
+			if strings.Contains(err.Error(), "omp start waits on lease") {
+				l.sayOnce("omp lease "+act.Key, "SUPERVISOR NEXT WAITS %s: %v", next.URL, err)
+			}
 			return "", errLoopLater
 		}
+		return "", err
+	}
+	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	if place.remote() {
@@ -3431,6 +3866,14 @@ func (l *supervisorLoop) install(ctx context.Context, act superloop.Action) (str
 		return "", err
 	}
 	if st.AutoInstallPaused {
+		return "", errLoopLater
+	}
+	if why := l.a.recoveryHeld(); why != "" {
+		l.sayOnce("recovery-hold", "%s", why)
+		return "", errLoopLater
+	}
+	// A candidate under supervision gets its verdict before the next one.
+	if exe, err := os.Executable(); err == nil && update.WatchedProbation(exe) {
 		return "", errLoopLater
 	}
 
@@ -3606,6 +4049,9 @@ var readIntakeAnchor = func(ctx context.Context, a *app, ref, from string) (stri
 }
 
 func (l *supervisorLoop) ownOverlap(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if l.unreadRepo(act.Ref) != "" {
+		return "", errLoopLater
+	}
 	blockStage := act.Key + " blocked"
 	l.mu.Lock()
 	blocked := l.stages[blockStage]

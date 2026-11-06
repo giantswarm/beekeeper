@@ -36,7 +36,7 @@ func TestWakeCodexAndPreToolUseHook(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{StateDir: dir}, store: store, out: &out}
 	ag := state.Agent{Party: state.Party{HostSession: codex.HostPrefix + id, Name: "test: codex"}}
-	by := state.Party{Name: "test"}
+	by := state.Party{Name: goTestSubcmd}
 	inbox := codex.InboxPath(dir, id)
 	if err := codex.MakeInbox(inbox); err != nil {
 		t.Fatal(err)
@@ -281,9 +281,10 @@ func TestStartCodexAgentAndIdentity(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte("stateDir: "+stateDir+"\nleaseDir: "+leaseDir+"\ncapacity:\n  availMinMiB: 1024\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	testCheckoutArgs(t, root, nil)
 	for _, args := range [][]string{
-		{"--" + configFlag + "=" + cfgPath, agentsName, agentStartName, "--dry-run=true", testHarnessFlag, codex.Harness, modelFlag, testCodexModel, nameFlag, testWorkerName, usageDirFlag, root, briefPath},
-		{"--" + configFlag + "=" + cfgPath, agentsName, agentStartName, "--dry-run=true", testHarnessFlag, codex.Harness, modelFlag, testCodexModel, usageDirFlag, root, testWorkerName, briefPath},
+		{"--" + configFlag + "=" + cfgPath, agentsName, agentStartName, "--dry-run=true", testHarnessFlag, codex.Harness, modelFlag, testCodexModel, nameFlag, testWorkerName, usageDirFlag, root, briefPath, testBranchFlag, "test-named"},
+		{"--" + configFlag + "=" + cfgPath, agentsName, agentStartName, "--dry-run=true", testHarnessFlag, codex.Harness, modelFlag, testCodexModel, usageDirFlag, root, testWorkerName, briefPath, testBranchFlag, "test-positional"},
 	} {
 		cmd := New()
 		cmd.SetArgs(args)

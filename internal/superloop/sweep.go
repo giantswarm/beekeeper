@@ -52,7 +52,8 @@ type sweepLedger struct {
 // sweptBy reads the sweep's ledger from taken.
 func sweptBy(taken []Taken) sweepLedger {
 	sw := sweepLedger{sweeps: map[string]int{}, lastAct: map[string]time.Time{}}
-	for _, t := range taken {
+	active, _ := episodeTaken(taken)
+	for _, t := range active {
 		if IsSweep(t.Key) {
 			sw.sweeps[t.Ref+"@"+KeyHead(t.Key)]++
 		}
@@ -73,9 +74,11 @@ func leftSwept(head string) string { return "swept@" + short(head) }
 // a review, and an epic's plan waits for its person.
 func Ownerless(in Input) []string {
 	l := newLedger(in.Taken, in.Answers)
+	absorbed := absorbedByMerged(in)
 	var out []string
 	for ref, p := range in.Pulls {
-		if orphanable(in, l, ref, p) && liveOwner(in, l, ref, p) == "" {
+		p.Ref = cmp.Or(p.Ref, ref)
+		if absorbed[strings.ToLower(ref)] == "" && orphanable(in, l, ref, p) && liveOwner(in, l, ref, p) == "" {
 			out = append(out, ref)
 		}
 	}
@@ -86,7 +89,11 @@ func Ownerless(in Input) []string {
 // orphanable reports whether p is a pull request the sweep may give an
 // owner: open, not a draft, the desk's own, still tracked.
 func orphanable(in Input, l ledger, ref string, p Pull) bool {
-	if p.State != Open || p.Head == "" || p.Draft || l.ended[ref] {
+	p.Ref = cmp.Or(p.Ref, ref)
+	if p.State != Open || p.Head == "" || p.Draft {
+		return false
+	}
+	if absorbedByMerged(in)[strings.ToLower(ref)] != "" {
 		return false
 	}
 	if reason, _ := in.Desk.unread(ref); reason != "" {
@@ -143,10 +150,10 @@ func reviews(ref, name string, rounds int) bool {
 // head that conflicts, is red, carries a review's unfixed changes request,
 // or is behind a base its merge does not update; the merge go again for a
 // green head whose go was given and never carried out; a reviewer for a
-// green head awaiting its review, however many rounds it had. A head with
-// checks still running waits. Each stretch without an owner gets one action,
-// a head at most MaxSweeps; an escalation or ownership question still open
-// is the person's.
+// green head awaiting its review; a worker to take it over and park once
+// its reviews are used. A head with checks still running waits. Each
+// stretch without an owner gets one action, a head at most MaxSweeps; an
+// ownership question still open is the person's.
 func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave func(string, string, string, string, string), add func(Action)) {
 	since, ok := in.Ownerless[ref]
 	if !ok || since.IsZero() {
@@ -168,10 +175,7 @@ func planSweep(in Input, l ledger, sw sweepLedger, ref string, p Pull, leave fun
 	if !orphanable(in, l, ref, p) || liveOwner(in, l, ref, p) != "" {
 		return
 	}
-	if e, ok := l.escalated[ref]; ok && e.open() {
-		return
-	}
-	if e, ok := l.asked[ref]; ok && e.open() {
+	if e, ok := l.asked[ref]; ok && e.answer == nil {
 		return
 	}
 	agent := cmp.Or(l.reviewer[ref], PullWorkerName(ref))

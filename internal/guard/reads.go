@@ -159,7 +159,7 @@ func RepoRoot(p string) string {
 		return ""
 	}
 	for d := filepath.Clean(p); ; d = filepath.Dir(d) {
-		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil { //nolint:gosec // a path of this tool's own state
 			if r, err := filepath.EvalSymlinks(d); err == nil {
 				return r
 			}
@@ -177,7 +177,7 @@ func RepoRoot(p string) string {
 // system, never runs git.
 func gitCommonDir(root string) string {
 	dot := filepath.Join(root, ".git")
-	info, err := os.Stat(dot)
+	info, err := os.Stat(dot) //nolint:gosec // a path of this tool's own state
 	if err != nil {
 		return ""
 	}

@@ -44,7 +44,11 @@ conditional request (a 304 costs nothing; /rate_limit is exempt and lies),
 and the GraphQL limit from a real rateLimit query (one point per identity, read again
 after merge.budgetFresh), the search and code-search limits from
 /rate_limit (free; a spent one names its reset), and list the gh and devctl processes on the
-machine with the session each runs under: the callers drawing on it. A
+machine with the session each runs under: the callers drawing on it. Recorded
+GraphQL invocations name sessions and command classes in the current limit
+window (reset minus one hour), heavy calls first, even after a process exits.
+With no active reset known, show the last hour. Counts are invocations, not
+GraphQL points. A
 GraphQL refusal shows even while its counter looks healthy (a secondary
 limit), with the time it ends when GitHub names one. The budget is shared
 with the person's own logins, the developer portal among them: at zero it
@@ -95,6 +99,7 @@ unread core budget:
 			if callersErr == nil {
 				pollers = githubCallers(a, t, sessions)
 			}
+			callers, callsErr := githubWindowCallers(a, b.GraphQL)
 			hold, held := activeHold(st, a, "github")
 			urgent := urgentLines(a, st)
 			gated := gatedMerges(st, proc.Alive)
@@ -110,13 +115,14 @@ unread core budget:
 			if a.json {
 				_ = a.printJSON(struct {
 					github.Budget
+					Callers []githubCaller    `json:"callers"`
 					Loop    *loopGraphQLSpend `json:"loop,omitempty"`
 					Floor   int               `json:"floor"`
 					Held    bool              `json:"held"`
 					Urgent  []state.Urgent    `json:"urgent,omitempty"`
 					Gated   []gatedParty      `json:"gated,omitempty"`
 					Pollers []poller          `json:"pollers"`
-				}{b, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
+				}{b, callers, &loopSpend, a.cfg.GitHub.Floor, held, st.Urgent, gated, pollers})
 			} else {
 				for _, warning := range b.Warnings {
 					_, _ = fmt.Fprintf(a.out, "WARNING: %s\n", warning)
@@ -137,6 +143,9 @@ unread core budget:
 				if l := loopSpendLine(a, loopSpend); l != "" {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
+				if l := a.heldLine(loopSpend); l != "" {
+					_, _ = fmt.Fprintln(a.out, l)
+				}
 				for _, l := range urgent {
 					_, _ = fmt.Fprintln(a.out, l)
 				}
@@ -148,6 +157,11 @@ unread core budget:
 				}
 				if held {
 					_, _ = fmt.Fprintf(a.out, "GitHub is held by %q until %s: %s\n", hold.By.Name, untilText(a, hold), hold.Reason)
+				}
+				if callsErr != nil {
+					_, _ = fmt.Fprintf(a.out, "GraphQL window callers unknown: %v\n", callsErr)
+				} else if len(callers) > 0 {
+					_, _ = fmt.Fprintf(a.out, "GraphQL window callers: %s\n", githubCallersText(callers))
 				}
 				if callersErr != nil {
 					_, _ = fmt.Fprintf(a.out, "callers unknown: %v\n", callersErr)
@@ -272,7 +286,7 @@ func loopSpendLine(a *app, s loopGraphQLSpend) string {
 		steps = append(steps, fmt.Sprintf("%s %d", step, points))
 	}
 	slices.Sort(steps)
-	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, loopGraphQLLimit)
+	line := fmt.Sprintf("loop GraphQL spend: %d of %d", s.Spent, a.loopGraphQLCap())
 	if len(steps) > 0 {
 		line += " (" + strings.Join(steps, ", ") + ")"
 	}

@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -76,6 +78,85 @@ func offRosterParty(st *state.State, q string) (state.Party, bool) {
 	return state.Party{}, false
 }
 
+// endedWorker is the latest local worker named q exactly that a wake cannot
+// reach otherwise: off the roster, parked nowhere, its session no role's. Only
+// a command naming it on purpose (agents wake, agents resume) looks here: a
+// timer or a settled wait for a finished worker must not bring it back.
+func (a *app) endedWorker(st *state.State, q string) (state.Start, bool) {
+	if _, _, err := a.wakeParty(st, q); err == nil {
+		return state.Start{}, false
+	}
+	var found state.Start
+	for _, s := range slices.Concat(st.Starts, st.EndedWorkers) {
+		if s.Execution == nil && strings.EqualFold(s.Name, strings.TrimSpace(q)) && !s.At.Before(found.At) {
+			task, conv := cmp.Or(s.Task, found.Task), cmp.Or(s.Conversation, found.Conversation)
+			found = s
+			found.Task, found.Conversation = task, conv
+		}
+	}
+	return found, found.Name != ""
+}
+
+// endedMessage is the turn a worker brought back by name starts with: msg
+// after what it was doing.
+func endedMessage(task, msg string) string {
+	if task == "" {
+		return "You left the roster and are back in your own conversation.\n\n" + msg
+	}
+	return fmt.Sprintf("You left the roster and are back in your own conversation, on your task %q.\n\n%s", task, msg)
+}
+
+// wakeEnded brings the ended worker s back by name: on the roster with its
+// last task, in its own conversation. A session that cannot continue leaves
+// the roster as it was, and the refusal names its transcript.
+func (a *app) wakeEnded(ctx context.Context, by state.Party, s state.Start, msg, mode string) error {
+	var task string
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if h := startsHold(st, a.now); h != nil {
+			return nil, refused("waking %s refused: it left the roster and %s", s.Name, a.startsHeldText(h))
+		}
+		if onRoster(st, s.Party) {
+			return nil, nil
+		}
+		task = cmp.Or(s.Task, "back by name, from "+by.Name)
+		st.Agents = append(st.Agents, state.Agent{Party: s.Party, Registered: a.now.UTC(), ActivityAt: a.now.UTC(), Task: task, AssignedAt: a.now.UTC(), Harness: s.Harness, Model: s.Model})
+		return []state.Event{event(by, resumedEvent, "%s: back on the roster by name, busy with %q", s.Name, task)}, nil
+	})
+	if err != nil {
+		return err
+	}
+	err = wakeOwner(a, ctx, by, wakeID(s.Party), endedMessage(s.Task, msg), mode)
+	if err == nil {
+		return nil
+	}
+	_ = a.store.Update(func(st *state.State) ([]state.Event, error) {
+		if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(s.Party) && ag.Task == task }); i >= 0 && task != "" {
+			removeAgent(st, i)
+		}
+		return nil, nil
+	})
+	if !errors.Is(err, errGone) {
+		return err
+	}
+	return goneRefusal("%s: its %s conversation ended and beekeeper cannot continue it: %s", s.Name, cmp.Or(s.Harness, claudeComm), a.transcriptHint(ctx, s))
+}
+
+// transcriptHint says where the conversation of s is stored.
+func (a *app) transcriptHint(ctx context.Context, s state.Start) string {
+	if st, err := a.store.Read(); err == nil {
+		_ = a.syncAllTranscripts(ctx, st, false)
+	}
+	metas, _ := a.transcriptStore().List()
+	for _, id := range []string{s.Conversation, s.Session, s.HostSession, s.Name} {
+		for _, m := range metas {
+			if id != "" && m.ExactMatch(id) {
+				return fmt.Sprintf("read it with `beekeeper transcripts read %s`", m.Key)
+			}
+		}
+	}
+	return "the transcript store holds no transcript of it"
+}
+
 // wakeID is the id a wake of p resolves p by: its CLI session id, else its
 // desktop or harness id.
 func wakeID(p state.Party) string {
@@ -103,7 +184,8 @@ func (a *app) callerAgent(st *state.State, me state.Party) int {
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }); i >= 0 || a.as == "" {
 		return i
 	}
+	// An explicit --as compares names and ownership without session identity.
 	return slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
-		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(me)
+		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(state.Party{Name: me.Name, Person: me.Person, Host: me.Host})
 	})
 }

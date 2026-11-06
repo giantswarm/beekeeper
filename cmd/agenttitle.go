@@ -355,9 +355,9 @@ const archiveTool = "mcp__ccd_session_mgmt__archive_session"
 
 // archiveRequest is the message that has steward s archive the desktop
 // sessions hosts (local_ ids; its own last, as "self"), off the roster by
-// the command by, under the person's agreement: it confirms them with
+// the command by: it confirms them with
 // agents archivable first and archives only those.
-func archiveRequest(s steward, hosts []string, by, agreement string) string {
+func archiveRequest(s steward, hosts []string, by string) string {
 	var ids []string
 	for _, h := range hosts {
 		if h != s.host {
@@ -367,9 +367,9 @@ func archiveRequest(s steward, hosts []string, by, agreement string) string {
 	if slices.Contains(hosts, s.host) {
 		ids = append(ids, strconv.Quote(selfSession))
 	}
-	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Your operator agreed to that without being asked, for those sessions, this one included, and never for a session they started themselves: %s; a standing archive rule in your own instructions says the same, and a role's consent boundary yields to it. "+
+	return fmt.Sprintf(stewardPreamble+"`%s` took finished workers beekeeper started off the roster, a role's run a relay relieved among them, and archives their desktop sessions (reversible: the Archived list brings one back). Never archive a session the person started themselves. "+
 		"Run `beekeeper agents archivable %s` first: it confirms each session is such a finished worker. Call %s once for each session_id of %s it confirms (\"self\" is this session), in that order, with reason %q. Then end the turn without another tool call; if you archive none, reply with one line saying why.",
-		by, agreement, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
+		by, strings.Join(hosts, " "), archiveTool, strings.Join(ids, ", "), by)
 }
 
 // findSteward picks the steward for a request about the desktop session
@@ -570,15 +570,13 @@ const (
 // by line. host is the desktop session left to archive later, "" when it
 // is archived or never to be; asked says a steward was asked for it in vain,
 // looked that the search for one asked none (none ran, each declined, the
-// desktop did not run); unagreed says the person's agreement is not
-// configured, which the doctor reports once for all agents, not per agent.
+// desktop did not run).
 type archiveOutcome struct {
-	agent    state.Party
-	line     string
-	host     string
-	asked    bool
-	looked   bool
-	unagreed bool
+	agent  state.Party
+	line   string
+	host   string
+	asked  bool
+	looked bool
 }
 
 // stewardDeclineFor is how long the doctor asks a steward that declined
@@ -589,7 +587,7 @@ const stewardDeclineFor = 24 * time.Hour
 // roster by the command by, through one steward's turn (archiveSteward: an
 // idle CLI of another session, else one of the sessions' own, warmed for
 // it): only sessions beekeeper started, keeping no role (keepsRole) and
-// running no turn, and only under the person's agreement (agents.archiveAgreement). An archive
+// running no turn. An archive
 // counts once the desktop records it; the line names the steward whose
 // call did it, and what each steward that did not answered. A steward that
 // declined is asked for no archive for stewardDeclineFor. It returns an
@@ -612,10 +610,6 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 		host, why := a.archivable(st, ag)
 		if why != "" {
 			out[i].line, out[i].host = why, host
-			continue
-		}
-		if a.cfg.Agents.ArchiveAgreement == "" {
-			out[i].line, out[i].unagreed = fmt.Sprintf("its desktop session %s stays: agents.archiveAgreement is not set, and a steward archives only on the person's agreement", host), true
 			continue
 		}
 		at[host] = i
@@ -641,7 +635,7 @@ func (a *app) archiveDesktops(ctx context.Context, st *state.State, agents []sta
 			break
 		}
 		sent := time.Now()
-		err = askSteward(ctx, s, archiveRequest(s, left(), by, a.cfg.Agents.ArchiveAgreement), func() bool { return len(left()) == 0 }, a.peerSend, wait)
+		err = askSteward(ctx, s, archiveRequest(s, left(), by), func() bool { return len(left()) == 0 }, a.peerSend, wait)
 		asked = append(asked, stewardAnswer{steward: s, answer: a.stewardAnswer(s.host, sent)})
 		if err == nil {
 			break
@@ -693,6 +687,19 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 // of the session is its running CLI: none is warmed beside it.
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
+	st, err := a.store.Read()
+	if err != nil {
+		return steward{}, err
+	}
+	p := state.Party{Session: id, HostSession: host}
+	if by, _ := superseded(st, p, a.now); by != "" {
+		return steward{}, refused("session %s was superseded by %s: its CLI will not be resumed to archive itself; use another steward", id, by)
+	}
+	// superseded answers nothing during a handover, whose own archive step
+	// must not revive the session it just stopped.
+	if slices.ContainsFunc(st.Handovers, func(h state.Handover) bool { return h.Is(p) && proc.Alive(h.PID) }) {
+		return steward{}, refused("session %s is being handed over: its CLI will not be resumed to archive itself; use another steward", id)
+	}
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
 		a.markWarmed(host)
 		return steward{host: host, sock: sock}, nil
@@ -885,6 +892,9 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 	if host, why = a.archivableRecord(st, ag); why != "" {
 		return host, why
 	}
+	if why := a.unfinishedWorker(st, ag); why != "" {
+		return "", "its desktop session stays: " + why
+	}
 	if s, ok := a.runningTurn(ag); ok {
 		return host, fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
@@ -932,4 +942,58 @@ func turnRunning(sessions []*claude.Session, t *proc.Table, p state.Party, now t
 		}
 	}
 	return nil, false
+}
+
+// unfinishedWorker requires the worker's own completion evidence. Absence
+// from the roster, an ended process or an old report is not completion.
+func (a *app) unfinishedWorker(st *state.State, p state.Party) string {
+	for _, ag := range st.Agents {
+		if ag.Is(p) {
+			if ag.Task != "" {
+				return "it has an open task"
+			}
+		}
+	}
+	for _, r := range st.Records {
+		if r.Session.Is(p) && r.Ended.IsZero() {
+			return "it has an open task record"
+		}
+	}
+	var completed bool
+	var latest time.Time
+	if i := st.StartIndex(p); i >= 0 {
+		latest = st.Starts[i].At
+	}
+	for _, ag := range st.Agents {
+		if ag.Is(p) {
+			if ag.Done {
+				return ""
+			}
+			if ag.AssignedAt.After(latest) {
+				latest = ag.AssignedAt
+			}
+		}
+	}
+	for _, r := range st.WorkerReports {
+		if r.By.Is(p) && !r.At.Before(latest) {
+			completed, latest = r.Finished, r.At
+		}
+	}
+	// Older state can predate WorkerReports; the audit log still records
+	// completion and subsequent idle reports that invalidate it.
+	evs, err := a.store.Events(0, func(e state.Event) bool {
+		return e.By.Is(p) && (e.Verb == executionDone || e.Verb == "agents.idle")
+	})
+	if err != nil {
+		return "its completion history could not be read"
+	}
+	for _, e := range evs {
+		if !e.At.Before(latest) {
+			completed, latest = e.Verb == "agents.done", e.At
+		}
+	}
+	if !completed {
+		return "it has not reported its work done with agents idle --done"
+	}
+	return ""
 }

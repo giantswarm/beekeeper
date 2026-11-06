@@ -1,0 +1,153 @@
+package cmd
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/platform"
+	"github.com/giantswarm/beekeeper/internal/state"
+)
+
+const suspendFixtureTask = "work"
+
+type suspendFixture struct {
+	platform.Machine
+	records []machine.SuspendRecord
+}
+
+func (f *suspendFixture) SuspendRecords(context.Context, time.Time) ([]machine.SuspendRecord, error) {
+	return f.records, nil
+}
+
+func TestSuspendRecoveryAcrossPolls(t *testing.T) {
+	w, out := onceWatch(t, nil)
+	w.standby = true
+	entry := w.now
+	exit := entry.Add(2 * time.Hour)
+	worker := state.Party{Name: "fixture-worker", Session: "fixture-session"}
+	supervisor := state.Party{Name: "fixture-supervisor", Session: "fixture-supervisor-session"}
+	supervisedBy(t, w, supervisor, entry.Add(-time.Minute))
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished suspend fixture", Done: true}}
+		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later suspend timer"}}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: entry, Entry: true}}}
+	original := plat.Machine
+	plat.Machine = fixture
+	defer func() { plat.Machine = original }()
+	calls := map[string]int{}
+	w.suspendDeliver = func(_ context.Context, wake suspendWake) error {
+		calls[wake.party.Name]++
+		if wake.party.Name == worker.Name && calls[worker.Name] == 1 {
+			return errors.New("temporary fixture failure")
+		}
+		return nil
+	}
+	w.suspends(t.Context(), entry.Add(-time.Minute), nil)
+	if len(calls) != 0 {
+		t.Fatal("recovered before resume")
+	}
+	fixture.records = []machine.SuspendRecord{{At: exit}}
+	w.suspends(t.Context(), entry, nil)
+	w.stand.inflight.Wait()
+	// Overlapping journal reads must not report or deliver a successful wake twice.
+	fixture.records = []machine.SuspendRecord{{At: entry, Entry: true}, {At: exit}}
+	w.suspends(t.Context(), exit, nil)
+	w.stand.inflight.Wait()
+	if calls[worker.Name] != 2 || calls[supervisor.Name] != 1 || len(calls) != 2 {
+		t.Fatalf("deliveries: %v", calls)
+	}
+	line := out.String()
+	if strings.Count(line, "SUSPENDED / RESUMED") != 1 || !strings.Contains(line, worker.Name) || !strings.Contains(line, "#1 fixture timer") || strings.Contains(line, "#2 later") {
+		t.Fatalf("output: %s", line)
+	}
+}
+
+func TestSuspendRespectsDeskStop(t *testing.T) {
+	w, _ := onceWatch(t, nil)
+	w.standby = true
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A stopped desk must report gaps without scheduling recovery.
+	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: suspendFixtureTask}}
+	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
+	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
+	if len(w.suspendRecovery) != 0 {
+		t.Fatal("stopped desk queued recovery")
+	}
+}
+
+func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
+	w, _ := onceWatch(t, nil)
+	w.standby = true
+	st, err := w.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Agents = []state.Agent{
+		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: suspendFixtureTask},
+		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
+		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: suspendFixtureTask},
+	}
+	w.resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
+	if len(w.suspendRecovery) != 1 || w.suspendRecovery[reviewedStoppedCase].party.Name != reviewedStoppedCase {
+		t.Fatalf("queued: %v", w.suspendRecovery)
+	}
+}
+
+func TestSuspendRestartsSupervisorService(t *testing.T) {
+	w, _ := onceWatch(t, nil)
+	w.standby = true
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{{At: w.now, Entry: true}, {At: w.now.Add(time.Hour)}}}
+	original := plat.Machine
+	plat.Machine = fixture
+	defer func() { plat.Machine = original }()
+	starts := 0
+	w.stand.loopUnit = &loopService{
+		state: func(context.Context) string { return "suspend fixture inactive" },
+		start: func(context.Context) error { starts++; return nil },
+	}
+	w.suspends(t.Context(), w.now.Add(-time.Minute), nil)
+	w.stand.inflight.Wait()
+	if starts != 1 {
+		t.Fatalf("supervisor starts: %d", starts)
+	}
+	w.suspends(t.Context(), w.now, nil)
+	if starts != 1 {
+		t.Fatalf("duplicate supervisor recovery: %d", starts)
+	}
+}
+
+func TestSuspendReportsEachCompletedGap(t *testing.T) {
+	w, out := onceWatch(t, nil)
+	fixture := &suspendFixture{Machine: plat.Machine, records: []machine.SuspendRecord{
+		{At: w.now.Add(-time.Hour)}, // exit without a known entry is ignored
+		{At: w.now, Entry: true},
+		{At: w.now.Add(time.Hour)},
+		{At: w.now.Add(2 * time.Hour), Entry: true},
+		{At: w.now.Add(3 * time.Hour)},
+		{At: w.now.Add(4 * time.Hour), Entry: true}, // no exit yet
+	}}
+	original := plat.Machine
+	plat.Machine = fixture
+	defer func() { plat.Machine = original }()
+	w.suspends(t.Context(), w.now.Add(-time.Hour), nil)
+	w.suspends(t.Context(), w.now, nil)
+	if got := strings.Count(out.String(), "SUSPENDED / RESUMED"); got != 2 {
+		t.Fatalf("gap lines: %d\n%s", got, out)
+	}
+	if len(w.suspendRecovery) != 0 {
+		t.Fatal("ordinary watch queued recovery")
+	}
+}

@@ -60,25 +60,7 @@ func (a *app) doctorLabs(ctx context.Context, sessions []*claude.Session, r doct
 		}
 		var evs []state.Event
 		for _, h := range holders {
-			// Claims store whole seconds. Protect that entire second so a
-			// claim made after the process snapshot cannot appear older.
-			if a.leaseView(sessions, h).State != holderGone || h.Host != "" && h.Host != a.cfg.Identity.Host || !h.SinceTime().Before(a.now.Truncate(time.Second)) {
-				continue
-			}
-			// Handover keeps the original claim time, but records the
-			// successor before launching it. Read that start under the lock
-			// and allow the first-reply startup window, including starts
-			// recorded after this doctor's process snapshot.
-			if i := st.StartIndex(h.Party()); i >= 0 {
-				started := st.Starts[i].At
-				if !started.IsZero() && a.now.Sub(started) <= replyWait {
-					continue
-				}
-			}
-			// A managed remote execution has no local CLI to discover.
-			if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-				return ag.Is(h.Party()) && ag.Execution != nil && executionReserved(st, ag)
-			}) {
+			if !a.leaseHolderEnded(st, sessions, h) {
 				continue
 			}
 			line := fmt.Sprintf("released %s: holder %q's session ended", h.Env, h.Name)
@@ -100,7 +82,7 @@ func (a *app) doctorLabs(ctx context.Context, sessions []*claude.Session, r doct
 			}
 			st.Released[h.Env] = a.now.UTC()
 			lines = append(lines, line+configLine)
-			evs = append(evs, event(r.by, "lease.release-gone", "%s%s", line, configLine))
+			evs = append(evs, event(r.by, leaseReleaseGoneVerb, "%s%s", line, configLine))
 		}
 		for _, res := range a.cfg.Resources {
 			cluster := a.cfg.LabCluster(res)

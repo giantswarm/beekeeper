@@ -21,14 +21,46 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+func TestResumeSeededTask(t *testing.T) {
+	noSteward := errors.New("no idle desktop CLI")
+	mismatch := modelNotHeld{recorded: "fixture-model", want: sonnetModel, why: noSteward}
+	for _, tc := range []struct {
+		name       string
+		desktopErr error
+		refused    bool
+	}{
+		{"wrong model without steward", mismatch, true},
+		{"missing model without steward", modelNotHeld{want: sonnetModel, why: noSteward}, true},
+		{"wrapped mismatch", fmt.Errorf("desktop: %w", mismatch), true},
+		{"desktop unavailable", errors.New("the desktop does not run"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			resumeErr := errors.New("resume result")
+			err := resumeSeededTask(tc.desktopErr, func() error {
+				called = true
+				return resumeErr
+			})
+			if tc.refused {
+				if called || !errors.As(err, new(modelNotHeld)) || !strings.Contains(err.Error(), "start refused before its task") {
+					t.Fatalf("resume called = %v, error = %v", called, err)
+				}
+			} else if !called || !errors.Is(err, resumeErr) {
+				t.Fatalf("resume called = %v, error = %v", called, err)
+			}
+		})
+	}
+}
+
 func TestRecordStart(t *testing.T) {
+	const keptSession = "kept"
 	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 	live := func(p state.Party) bool { return p.Session == "r" }
 	start := func(id, name string, at time.Time) state.Start {
 		return state.Start{Party: state.Party{Session: id, HostSession: "local_" + id, Name: name}, Mode: state.ModeBypass, Dir: "/w", At: at}
 	}
 	old := start("old", "test: gone", now.Add(-startsKept-time.Hour))
-	kept := start("kept", "test: kept", now.Add(-startsKept+time.Hour))
+	kept := start(keptSession, "test: kept", now.Add(-startsKept+time.Hour))
 
 	// A start is recorded with its mode, the old ones forgotten, and the
 	// agent registered busy with the brief.
@@ -37,7 +69,7 @@ func TestRecordStart(t *testing.T) {
 	if err != nil || reg.task != "Brief: count lines" {
 		t.Fatalf("registration = %+v, err = %v", reg, err)
 	}
-	if ids := []string{st.Starts[0].Session, st.Starts[len(st.Starts)-1].Session}; len(st.Starts) != 2 || !slices.Equal(ids, []string{"kept", "n"}) {
+	if ids := []string{st.Starts[0].Session, st.Starts[len(st.Starts)-1].Session}; len(st.Starts) != 2 || !slices.Equal(ids, []string{keptSession, "n"}) {
 		t.Errorf("starts = %+v", st.Starts)
 	}
 	if s, ok := st.BypassStart("n"); !ok || s.Name != workerName {
@@ -92,14 +124,14 @@ func TestAgentsStartServesTheBriefsIssueFromTheStart(t *testing.T) {
 
 	// A start taking over a stopped entry's open task keeps that task and
 	// records nothing for the brief.
-	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: "stopped", Name: worker.Name}, Task: staleTask}}}
+	st = &state.State{Agents: []state.Agent{{Party: state.Party{Session: reviewedStoppedCase, Name: worker.Name}, Task: staleTask}}}
 	if _, err := recordStart(st, s, briefTask(brief), briefIssue(brief), live); err != nil || len(st.Records) != 0 {
 		t.Errorf("take over: records %+v, %v", st.Records, err)
 	}
 }
 
 func TestBypassStartNeedsTheRecordedMode(t *testing.T) {
-	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: "default"}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
+	st := &state.State{Starts: []state.Start{{Party: state.Party{Session: "d"}, Mode: paramDefault}, {Party: state.Party{Session: "b"}, Mode: state.ModeBypass}}}
 	for id, want := range map[string]bool{"b": true, "d": false, "x": false, "": false} {
 		if _, ok := st.BypassStart(id); ok != want {
 			t.Errorf("BypassStart(%q) = %v", id, ok)
@@ -282,7 +314,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 	if err := os.WriteFile(path, []byte(turn), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := titleTranscript(projects, "id", `Guide run 2: Timo's "open" decisions`); err != nil {
+	if err := titleTranscript(projects, "id", `Guide run 2: Alex's "open" decisions`); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path) //nolint:gosec // the test's own transcript
@@ -297,7 +329,7 @@ func TestTitleTranscriptReachesTheImportWindow(t *testing.T) {
 		SessionID   string `json:"sessionId"`
 	}
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &title); err != nil || title.Type != "custom-title" ||
-		title.CustomTitle != `Guide run 2: Timo's "open" decisions` || title.SessionID != "id" {
+		title.CustomTitle != `Guide run 2: Alex's "open" decisions` || title.SessionID != "id" {
 		t.Errorf("the import window's last line = %q (%v)", lines[len(lines)-1], err)
 	}
 	if model, err := claude.Model(path); err != nil || model != "claude-haiku-4-5-20251001" {

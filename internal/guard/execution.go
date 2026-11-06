@@ -11,6 +11,8 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/giantswarm/beekeeper/internal/policycontent"
 )
 
 const coordinatorMCPPrefix = "mcp__coordinator__"
@@ -73,6 +75,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	if h.ExecutionMCP && strings.HasPrefix(ev.ToolName, coordinatorMCPPrefix) {
 		return h.Decide(raw)
 	}
+	if r := h.memoryRefusal(ev); r != "" {
+		return ExecutionDeny(r)
+	}
 	switch ev.ToolName {
 	case bashTool:
 		command, ok := ev.ToolInput[commandKey].(string)
@@ -102,6 +107,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 		}
 		if p == "" || !executionWithin(workspace, p) {
 			return ExecutionDeny("file tool target is outside its owned workspace")
+		}
+		if ev.ToolName == globTool && !executionWithin(workspace, globRoot(globSearchPath(ev.ToolInput, ev.CWD))) {
+			return ExecutionDeny("glob pattern is outside its owned workspace")
 		}
 	default:
 		return ExecutionDeny("tool is not supported by the managed remote adapter; use component commands for notes and reports")
@@ -163,6 +171,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 		if !target(cwd) {
 			return ExecutionDenyCodex("tool working directory is outside its owned workspace")
 		}
+		if r := h.memoryTargets(writeTargets(command, cwd, 0)); r != "" {
+			return ExecutionDenyCodex(r)
+		}
 		if err := executionShell(command, workspace, cwd, protected, 0); err != nil {
 			return ExecutionDenyCodex(err.Error())
 		}
@@ -173,6 +184,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 			return ExecutionDenyCodex(reason)
 		}
 		for _, hdr := range headers {
+			if r := h.memoryTargets([]string{absIn(ev.CWD, hdr.target)}); r != "" {
+				return ExecutionDenyCodex(r)
+			}
 			if !target(hdr.target) {
 				return ExecutionDenyCodex("patch target is outside its owned workspace")
 			}
@@ -236,6 +250,9 @@ func (h Hook) DecideExecutionAgy(raw []byte, session, workspace string, protecte
 			return ExecutionDenyAgy("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 		}
 		return ExecutionDenyAgy(errReason)
+	}
+	if r := h.memoryRefusal(ev); r != "" {
+		return ExecutionDenyAgy(r)
 	}
 	baseCWD := workspace
 	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {
@@ -341,7 +358,7 @@ func executionWithin(root, p string) bool {
 
 func executionLiteral(w *syntax.Word) (string, error) {
 	env := os.Environ()
-	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+	if h := os.Getenv(executionHomeEnv); filepath.IsAbs(h) {
 		env = append(env, "HOME="+filepath.Clean(h))
 	}
 	return expand.Literal(&expand.Config{Env: expand.ListEnviron(env...)}, w)
@@ -466,8 +483,12 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 					return false
 				}
 			}
-			if len(args) > 0 && args[0] == executionRunCommand {
+			scratch := scratchWords(words[1:]) > 0
+			if scratch || len(args) > 0 && args[0] == executionRunCommand {
 				target := executionRunTarget(args[1:])
+				if scratch {
+					target = executionRunTarget(args[2:])
+				}
 				if len(target) > 0 {
 					unwrapped, err := executionUnwrap(target)
 					if err != nil {
@@ -497,7 +518,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			}
 		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
-		case "gh", "devctl":
+		case "gh", litDevctl:
 			args := executionVerb(words[1:])
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
@@ -515,7 +536,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if strings.Contains(args, "mergepullrequest") || strings.Contains(args, "/merge") || strings.Contains(args, "pr merge") {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-		case "git":
+		case gitCmd:
 			for _, a := range words[1:] {
 				if strings.Contains(a, "alias.") || strings.Contains(a, "core.sshCommand") {
 					refusal = errors.New("execution command aliases cannot bypass the remote guard")
@@ -586,6 +607,9 @@ func executionResolve(p string) string {
 // ExecutionRulesAllowed rejects authentication stores before opening a rules
 // file. Rules are an operator-owned document, never provider credentials.
 func ExecutionRulesAllowed(p string, extra []string) bool {
+	if !policycontent.RulesAllowed(p, extra) {
+		return false
+	}
 	if newSecretFiles(extra).match(p) != "" {
 		return false
 	}

@@ -22,6 +22,71 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+const testParkRelieved = "relieved-role"
+
+const parkedIssueRef = "giantswarm/x#4"
+
+func TestRemoveAgentsHonoursAParkSetSincePlan(t *testing.T) {
+	for _, reason := range []string{verbDone, testParkRelieved} {
+		t.Run(reason, func(t *testing.T) {
+			a, _ := stubApp(t)
+			ag := state.Agent{Party: state.Party{Name: "newly parked", Session: "park-after-plan"}, Done: reason == verbDone}
+			st := &state.State{Agents: []state.Agent{ag}}
+			if reason == testParkRelieved {
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
+			}
+			chores := planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false },
+				func(state.Party) bool { return false }, 24*time.Hour, a.now, nil)
+			if len(chores) != 1 || chores[0].kind != choreRemove {
+				t.Fatalf("expected a removal plan: %+v", chores)
+			}
+			if err := a.store.Update(func(current *state.State) ([]state.Event, error) {
+				*current = *st
+				current.Agents[0].Park = &state.Park{On: parkedIssueRef, Waits: deskReviewWait, At: a.now}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := a.removeAgents(chores, watchParty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(removed) != 0 || len(after.Agents) != 1 || after.Agents[0].Park == nil {
+				t.Fatalf("park lost after planning: removed=%+v, agents=%+v", removed, after.Agents)
+			}
+		})
+	}
+}
+
+func TestPlanChoresKeepsStoppedParkedWorkers(t *testing.T) {
+	for _, reason := range []string{kindStale, verbDone, testParkRelieved} {
+		t.Run(reason, func(t *testing.T) {
+			now := keepNow
+			ag := state.Agent{Party: state.Party{Name: "parked worker", Session: reviewedStoppedCase}, Done: reason == verbDone,
+				Registered: now.Add(-48 * time.Hour), Park: &state.Park{On: parkedIssueRef, Waits: deskReviewWait, At: now.Add(-time.Hour)}}
+			st := &state.State{Agents: []state.Agent{ag}}
+			if reason == testParkRelieved {
+				st.Guide = &state.Role{Relieved: []state.Relief{{Party: ag.Party}}}
+			}
+			plan := func() []chore {
+				return planChores(st, nil, func(string) (*claude.Record, bool) { return nil, false },
+					func(state.Party) bool { return false }, 24*time.Hour, now, nil)
+			}
+			if chores := plan(); slices.ContainsFunc(chores, func(c chore) bool { return c.kind == choreRemove }) {
+				t.Fatalf("stopped parked worker would be removed: %+v", chores)
+			}
+			st.Agents[0].Park = nil
+			if chores := plan(); len(chores) != 1 || chores[0].kind != choreRemove {
+				t.Fatalf("unparked %s worker should be removed: %+v", reason, chores)
+			}
+		})
+	}
+}
+
 // The doctor takes a finished worker off the roster once its CLI is idle,
 // a desktop CLI kept warm included, a relieved role holder at once and an idle worker without a CLI once it
 // went stale, archiving the desktop sessions of the finished and the stale
@@ -38,7 +103,7 @@ func TestPlanChores(t *testing.T) {
 	task.Task, doneTask.Task, doneTask.Done = "a task", "a new task", true
 	task.AssignedAt = now
 	st := &state.State{
-		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent("stale", 48*time.Hour), agent("stale-live", 48*time.Hour),
+		Agents: []state.Agent{done, doneBusy, agent("relieved", 0), agent(kindStale, 48*time.Hour), agent("stale-live", 48*time.Hour),
 			agent("fresh", time.Hour), task, agent("holder", 48*time.Hour), agent("untitled", 0), agent("titled", 0), agent("own", 0), agent("archived", 0), doneTask},
 		Guide: &state.Role{Holder: &state.Supervisor{Party: state.Party{Session: "holder"}}, Relieved: []state.Relief{{Party: state.Party{Session: "relieved"}}}},
 	}
@@ -50,7 +115,7 @@ func TestPlanChores(t *testing.T) {
 	record := func(host string) (*claude.Record, bool) {
 		switch host {
 		case "local_untitled":
-			return &claude.Record{Title: "klaus-lab-3d"}, true
+			return &claude.Record{Title: "fixture-lab-3d"}, true
 		case "local_titled":
 			return &claude.Record{Title: "test: titled"}, true
 		case "local_archived":
@@ -67,7 +132,7 @@ func TestPlanChores(t *testing.T) {
 		`take "test: done" off the roster and archive its desktop session (it reported its work done)`,
 		`take "test: relieved" off the roster (it was relieved of its role, which relays instead)`,
 		`take "test: stale" off the roster and archive its desktop session (idle 2d, its CLI no longer runs)`,
-		`retitle local_untitled "test: untitled" (the desktop recorded "klaus-lab-3d" instead of "test: untitled")`,
+		`retitle local_untitled "test: untitled" (the desktop recorded "fixture-lab-3d" instead of "test: untitled")`,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("chores:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -231,12 +296,17 @@ func TestNoteFaults(t *testing.T) {
 }
 
 // One steward's turn archives a batch, its own session last as "self",
-// under the person's agreement and after agents archivable confirmed it.
+// after agents archivable confirmed it.
 func TestArchiveRequest(t *testing.T) {
-	msg := archiveRequest(steward{host: "local_y"}, []string{"local_x", "local_y", "local_z"}, "beekeeper doctor", "the standing directive in ~/.claude/CLAUDE.md")
-	for _, want := range []string{`"local_x", "local_z", "self"`, "archive_session", "the standing directive in ~/.claude/CLAUDE.md", "beekeeper agents archivable local_x local_y local_z", "never for a session they started"} {
+	msg := archiveRequest(steward{host: "local_y"}, []string{"local_x", "local_y", "local_z"}, "beekeeper doctor")
+	for _, want := range []string{`"local_x", "local_z", "self"`, "archive_session", "beekeeper agents archivable local_x local_y local_z", "Never archive a session the person started"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("request lacks %q: %q", want, msg)
+		}
+	}
+	for _, obsolete := range []string{"agreement", "CLAUDE.md", "directive", "?"} {
+		if strings.Contains(msg, obsolete) {
+			t.Errorf("request contains %q: %s", obsolete, msg)
 		}
 	}
 }
@@ -373,25 +443,26 @@ func TestParkedOnPersonIsSaidOnce(t *testing.T) {
 		Grants: []state.Grant{{Resource: lab, To: state.Party{Name: "first", Session: "s1"}}, {Resource: lab, To: queued}},
 		Agents: []state.Agent{
 			{Party: state.Party{Name: "on a note"}, Task: "t", Park: &state.Park{On: "#12", Waits: "the rollout window"}},
-			{Party: state.Party{Name: "on Timo"}, Task: "t", Park: &state.Park{Waits: "Timo's go"}},
-			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{Waits: "a colleague's reply on the timer setting"}},
-			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: "giantswarm/x#4", Waits: "desk review"}},
+			{Party: state.Party{Name: "on operator"}, Task: "t", Park: &state.Park{On: parkedIssueRef, Waits: "operator's go"}},
+			{Party: state.Party{Name: "on a reply"}, Task: "t", Park: &state.Park{On: "example/tool#13", Waits: "a colleague's reply on the timer setting"}},
+			{Party: state.Party{Name: "on desk review"}, Task: "t", Park: &state.Park{On: parkedIssueRef, Waits: deskReviewWait}},
+			{Party: state.Party{Name: "on a queued gate"}, Task: "t", Park: &state.Park{On: "gate place 12", Waits: "queued merge waits for the person's go"}},
 			{Party: state.Party{Name: "on a merge"}, Task: "t", Park: &state.Park{On: "giantswarm/x#3", Waits: "the merge ahead of mine in the lane"}},
 			{Party: queued, Task: "t", Park: &state.Park{On: leaseParkOn(lab), Waits: "the lease " + lab + ": the supervisor's review proof"}},
 			{Party: state.Party{Name: "on a grant"}, Task: "t", Park: &state.Park{Waits: "the v1.2.0 release and the supervisor's agentlab-2 grant"}},
 			{Party: state.Party{Name: "on a probe"}, Task: "t", Park: &state.Park{Waits: "the rollout probe the supervisor set"}},
 		},
 	}
-	lines, evs := parkedNews(st, "Timo", now)
+	lines, evs := parkedNews(st, "operator", now)
 	if len(lines) != 4 || len(evs) != 4 ||
 		!strings.HasPrefix(lines[0], `PARKED ON A PERSON: "on a note" parked on #12`) ||
-		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on Timo"`) || !strings.Contains(lines[1], "tells Timo") ||
+		!strings.HasPrefix(lines[1], `PARKED ON A PERSON: "on operator"`) || !strings.Contains(lines[1], "tells operator") ||
 		!strings.HasPrefix(lines[2], `PARKED ON A PERSON: "on a reply"`) ||
 		!strings.HasPrefix(lines[3], `PARKED ON A LEASE: "on a lease" parked on lease agentlab-1`) ||
 		!strings.Contains(lines[3], `number 2 in the queue of agentlab-1 behind "first"`) {
 		t.Fatalf("lines = %q", lines)
 	}
-	if lines, _ := parkedNews(st, "Timo", now); len(lines) != 0 {
+	if lines, _ := parkedNews(st, "operator", now); len(lines) != 0 {
 		t.Errorf("said again: %q", lines)
 	}
 }
@@ -402,20 +473,26 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		on, waits string
 		want      bool
 	}{
-		"supervisor ready": {"", "rollout ready; waiting for the supervisor", false},
-		"supervisor go":    {"", "awaiting the supervisor's go", false},
-		"guide handoff":    {"", "the guide handoff ready", false},
-		"gate":             {"", "the supervisor's gate", false},
-		"install chain":    {"", "the supervisor's install chain", false},
-		"local note":       {"#787", "install chain ready", true},
-		"central note":     {"central#12", "gate ready", true},
-		"named person":     {"", "operator's go on the install chain", true},
-		"answer":           {"", "awaiting the person's answer", true},
-		"colleague review": {"example/tool#12", "a colleague's review", true},
+		"supervisor ready":       {"", "rollout ready; waiting for the supervisor", false},
+		"supervisor go":          {"", "awaiting the supervisor's go", false},
+		"guide handoff":          {"", "the guide handoff ready", false},
+		"gate":                   {"", "the supervisor's gate", false},
+		"install chain":          {"", "the supervisor's install chain", false},
+		"local note":             {"#787", "install chain ready", true},
+		"central note":           {"central#12", "gate ready", true},
+		"named person":           {parkedIssueRef, "operator's go on the install chain", true},
+		"answer":                 {parkedIssueRef, "awaiting the person's answer", true},
+		"colleague review":       {parkedIssueRef, "a colleague's review", true},
+		"untargeted answer":      {"", "awaiting the person's answer", false},
+		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
+		loopTimer:                {"timer 12", "timer for the person's answer", false},
+		workerGitHubReleaseGroup: {"release v1.2.0", "release after the operator's go", false},
+		kindLease:                {leaseParkOn(labOne), litThePersonSAnswer, false},
+		verbHold:                 {holdParkOn("merges"), litThePersonSAnswer, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
-			if got := parkOnPerson(p, "operator"); got != tc.want {
+			if got := watchParkOnPerson(p, "operator"); got != tc.want {
 				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
 			}
 		})

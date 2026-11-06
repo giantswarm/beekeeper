@@ -2,6 +2,7 @@ package board
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -20,7 +21,11 @@ func (it Item) HeldText() string {
 	if len(it.OpenBlockedBy) == 0 {
 		return HeldWord + blockersOpen(it)
 	}
-	return fmt.Sprintf("%sblocked by %s; %s", HeldWord, strings.Join(it.OpenBlockedBy, ", "), blockersOpen(it))
+	details := it.OpenBlockedBy
+	if len(it.BlockerDetails) > 0 {
+		details = it.BlockerDetails
+	}
+	return fmt.Sprintf("%sblocked by %s; %s", HeldWord, strings.Join(details, ", "), blockersOpen(it))
 }
 
 // heldAbove is the skip reason of an issue under a held one: the nearest
@@ -34,6 +39,27 @@ func heldAbove(ref string, up func(string) string, byRef map[string]Item) string
 		// is its sub-issue stays free to work.
 		if p, ok := byRef[strings.ToLower(at)]; ok && p.OpenBlockers > 0 && !containsFold(p.OpenBlockedBy, ref) {
 			return fmt.Sprintf("%ssub-issue of %s, %s", HeldWord, p.Ref, strings.TrimPrefix(p.HeldText(), HeldWord))
+		}
+	}
+	return ""
+}
+
+// assignedOutside returns the assignees of it that are not in people.
+func assignedOutside(it Item, people []string) []string {
+	return slices.DeleteFunc(slices.Clone(it.Assignees), func(a string) bool { return containsFold(people, a) })
+}
+
+// assignedAbove is the skip reason of an issue under one assigned outside
+// people: the nearest issue above it through up, among byRef, with an
+// assignee outside people; "" for none.
+func assignedAbove(ref string, up func(string) string, byRef map[string]Item, people []string) string {
+	seen := map[string]bool{strings.ToLower(ref): true}
+	for at := up(ref); at != "" && !seen[strings.ToLower(at)] && len(seen) <= maxDepth; at = up(at) {
+		seen[strings.ToLower(at)] = true
+		if p, ok := byRef[strings.ToLower(at)]; ok {
+			if others := assignedOutside(p, people); len(others) > 0 {
+				return fmt.Sprintf("assigned to %s (sub-issue of %s)", strings.Join(others, ", "), p.Ref)
+			}
 		}
 	}
 	return ""

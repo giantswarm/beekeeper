@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -17,25 +18,45 @@ import (
 
 const checkoutMetadata = ".git"
 
+// evalSymlinks resolves a path; tests count its calls.
+var evalSymlinks = filepath.EvalSymlinks
+
 // whyCheckout keeps data holding a git checkout.
 const whyCheckout = "contains a checkout"
 
 // InUse reports whether a candidate contains a live reference, including
 // references reached through a symlink. A reference to a parent alone does
 // not make all its children busy.
-func InUse(dir string, refs []string) bool {
-	dir = canonical(dir)
+func InUse(dir string, refs []string) bool { return NewRefs(refs).Holds(dir) }
+
+// Refs is live references resolved once. A scan asks about every candidate:
+// resolving each reference again per candidate costs candidates x references
+// x path depth syscalls, which kept a dry run going for minutes.
+type Refs struct{ sorted []string }
+
+// NewRefs resolves refs as they are now; a later read needs a new Refs.
+func NewRefs(refs []string) Refs {
+	sorted := make([]string, 0, len(refs))
 	for _, p := range refs {
-		p = canonical(p)
-		if p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) {
-			return true
-		}
+		sorted = append(sorted, canonical(p))
 	}
-	return false
+	slices.Sort(sorted)
+	return Refs{slices.Compact(sorted)}
+}
+
+// Holds is InUse against the resolved references.
+func (r Refs) Holds(dir string) bool {
+	dir = canonical(dir)
+	if _, found := slices.BinarySearch(r.sorted, dir); found {
+		return true
+	}
+	inside := dir + string(filepath.Separator)
+	i, _ := slices.BinarySearch(r.sorted, inside)
+	return i < len(r.sorted) && strings.HasPrefix(r.sorted[i], inside)
 }
 
 func canonical(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
+	if r, err := evalSymlinks(p); err == nil {
 		return r
 	}
 	p = filepath.Clean(p)
@@ -101,7 +122,11 @@ func Remove(dir string) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	name := filepath.Base(dir)
+	return remove(root, filepath.Base(dir))
+}
+
+// remove keeps inspection and deletion beneath the already opened parent.
+func remove(root *os.Root, name string) error {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return err
@@ -132,7 +157,7 @@ func Remove(dir string) error {
 			return err
 		}
 	}
-	return root.RemoveAll(filepath.Base(dir))
+	return root.RemoveAll(name)
 }
 
 // Result is one cleanup's measured bytes and keep/error reasons.
@@ -171,8 +196,12 @@ func (r *Result) Keep(why string) {
 // Output reclaims a known output directory, refusing checkouts, active
 // references and data newer than cutoff. A dry run measures without writes.
 func Output(dir string, cutoff time.Time, refs []string, dry bool) Result {
+	return output(dir, cutoff, NewRefs(refs), dry)
+}
+
+func output(dir string, cutoff time.Time, refs Refs, dry bool) Result {
 	r := Result{}
-	if InUse(dir, refs) {
+	if refs.Holds(dir) {
 		r.Keep("in use")
 		return r
 	}
@@ -284,8 +313,9 @@ func Children(base string, cutoff time.Time, refs []string, dry bool) Result {
 		r.Errors = append(r.Errors, err)
 		return r
 	}
+	live := NewRefs(refs)
 	for _, e := range entries {
-		r.Add(Output(filepath.Join(base, e.Name()), cutoff, refs, dry))
+		r.Add(output(filepath.Join(base, e.Name()), cutoff, live, dry))
 	}
 	return r
 }

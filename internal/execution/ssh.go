@@ -162,6 +162,7 @@ func SSHCommand(ctx context.Context, argv []string, stdin []byte) ([]byte, error
 		return nil, errors.New("missing SSH command")
 	}
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // fixed SSH executable and validated argument vector
+	c.WaitDelay = commandDrainWait
 	c.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{limit: MaxWire}
 	// Stderr may carry remote diagnostics or credentials. Never reflect it
@@ -196,7 +197,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != "check" && op != inventoryOperation {
+	if op != checkOperation && op != inventoryOperation && op != "resource-audit" && op != bundleStatusOperation && op != bundleSyncOperation {
 		if err := ref.Validate(); err != nil {
 			return err
 		}
@@ -239,8 +240,13 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 		if (op == inspectOperation || op == syncControlOperation || op == stopOperation) && (reply.Code == "not-found" || (reply.Code == "" && missingJournalError(ref, reply.Error))) {
 			return ErrNotFound
 		}
-		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation) && reply.Error == "unknown execution operation") {
+		if reply.Code == "unsupported" || ((op == inventoryOperation || op == missingOperation || op == retireOperation) && reply.Error == "unknown execution operation") {
 			return ErrUnsupported
+		}
+		if op == checkOperation && len(reply.Payload) > 0 {
+			if err := Decode(reply.Payload, result); err != nil {
+				return &UnreachableError{Operation: op, Cause: errors.New("invalid SSH readiness response")}
+			}
 		}
 		return errors.New(reply.Error)
 	}
@@ -253,7 +259,7 @@ func missingJournalError(ref Ref, msg string) bool {
 
 func (t SSHTransport) Check(ctx context.Context) (Capabilities, error) {
 	var x Capabilities
-	err := t.Call(ctx, "check", Ref{}, nil, &x)
+	err := t.Call(ctx, checkOperation, Ref{}, nil, &x)
 	if err == nil && (x.Identity != t.Host.Identity || x.Protocol != Protocol || x.PolicyDigest != t.Host.PolicyDigest) {
 		err = errors.New("execution host identity, protocol or policy mismatch")
 	}

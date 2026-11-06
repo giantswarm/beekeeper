@@ -34,7 +34,7 @@ func fillRig(t *testing.T) (*loopRig, *int) {
 	}
 	r.a.cfg.Supervisor.WorkerBrief = brief
 	r.a.cfg.Supervisor.FillRetryEvery.Duration = 5 * time.Minute
-	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: "test-model"}}
+	r.a.cfg.Capacity.Choices = []config.Choice{{Harness: config.CodexHarness, Model: litTestModel}}
 	busy := 0
 	r.answer = func(args []string) (string, int) {
 		switch args[0] {
@@ -728,6 +728,13 @@ func nothingFreeRig(t *testing.T, doneN int) (*loopRig, *supervisorLoop, *int) {
 
 func (r *loopRig) loopPass(t *testing.T, l *supervisorLoop) {
 	t.Helper()
+	// A pass returns with its actions still running: they end before the
+	// test's state directory goes, or they recreate its lock file in it.
+	t.Cleanup(func() {
+		l.passActions.Wait()
+		l.mergeActions.Wait()
+		l.timerActs.Wait()
+	})
 	r.a.now = r.a.now.Add(30 * time.Second)
 	// The watch keeps publishing: its budget reading never goes stale.
 	w := event(watchParty, "watch.budget-state", "false")
