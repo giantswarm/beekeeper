@@ -32,6 +32,7 @@ func (c *stepClock) Timer(time.Duration) (<-chan time.Time, func()) { return nil
 // file, they are unknown.
 func upgradeKubectl(t *testing.T, dir, upgrading string) (kubectl, log string) {
 	t.Helper()
+	upgradeContexts(t, dir, strings.Join([]string{upgrading, "b", "c", "d", "e"}, "\n"))
 	kubectl, log = filepath.Join(dir, "kubectl"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
 if [ "$1" = config ]; then exec cat "` + dir + `/contexts"; fi
@@ -47,6 +48,21 @@ echo '{"items":[]}'
 		t.Fatal(err)
 	}
 	return kubectl, log
+}
+
+// Context discovery reads a kubeconfig directly; kubectl still supplies objects.
+func upgradeContexts(t *testing.T, dir, names string) {
+	t.Helper()
+	var data strings.Builder
+	data.WriteString("apiVersion: v1\nkind: Config\ncontexts:\n")
+	for _, name := range strings.Fields(names) {
+		fmt.Fprintf(&data, "- name: %q\n  context: {}\n", name)
+	}
+	path := filepath.Join(dir, "contexts.yaml")
+	if err := os.WriteFile(path, []byte(data.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
 }
 
 // phase makes the upgrading installation answer with the objects of the
@@ -276,9 +292,7 @@ func TestWatchNamesInstallationsWithoutContextOnce(t *testing.T) {
 	a, out := stubApp(t)
 	dir := t.TempDir()
 	kubectl, log := upgradeKubectl(t, dir, "upgrading")
-	if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte("prod\nbroken\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	upgradeContexts(t, dir, snapshotInstallation+"\nbroken\n")
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
 		{Name: snapshotInstallation, Context: snapshotInstallation}, {Name: "broken", Context: "broken"},
@@ -326,9 +340,7 @@ func TestSharedReadingWithoutContextIsReadWhereTheContextResolves(t *testing.T) 
 	kubectl, log := upgradeKubectl(t, dir, "upgrading")
 	contexts := func(names string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, "contexts"), []byte(names), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		upgradeContexts(t, dir, names)
 	}
 	a.cfg.Alerts.Kubectl = kubectl
 	a.cfg.Alerts.Installations = []config.Installation{
@@ -401,6 +413,7 @@ func TestUpgradeHeldReaderFailuresReset(t *testing.T) {
 
 func TestUpgradeRetryDoesNotReportUnreadable(t *testing.T) {
 	a, out := stubApp(t)
+	upgradeContexts(t, t.TempDir(), snapshotInstallation)
 	exe := filepath.Join(t.TempDir(), "kubectl")
 	script := `#!/bin/sh
 if [ "$1" = config ]; then echo prod; exit; fi
