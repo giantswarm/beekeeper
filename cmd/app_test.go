@@ -793,15 +793,16 @@ func TestAppCreateClickBelongsToCallingSession(t *testing.T) {
 	t.Cleanup(func() { listenerUp = original })
 	// The hook cannot dial the listener in the command's network namespace.
 	listenerUp = func(state.AppRun) bool { return false }
+	const caller = "session-a"
 	for _, tc := range []struct {
 		name, owner, caller string
 		pid                 int
 		running, allow      bool
 	}{
-		{"own live run", "session-a", "session-a", os.Getpid(), true, true},
-		{"another session", "session-b", "session-a", os.Getpid(), true, false},
-		{"no run", "session-a", "session-a", os.Getpid(), false, false},
-		{"dead run", "session-a", "session-a", -1, true, false},
+		{"own live run", caller, caller, os.Getpid(), true, true},
+		{"other session", "session-b", caller, os.Getpid(), true, false},
+		{"no run", caller, caller, os.Getpid(), false, false},
+		{"dead run", caller, caller, -1, true, false},
 		{"missing session", "", "", os.Getpid(), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
