@@ -78,14 +78,14 @@ func RulesAllowed(p string, extra []string) bool {
 	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
 		stores = append(stores, filepath.Join(codexHome, "auth.json"))
 	}
-	candidate, _ := os.Stat(p)
+	candidate, _ := policyFileInfo(p)
 	for _, excluded := range stores {
 		if strings.HasPrefix(excluded, "~/") {
 			excluded = filepath.Join(home, excluded[2:])
 		}
 		matches, _ := filepath.Glob(excluded)
 		for _, match := range matches {
-			info, err := os.Stat(match)
+			info, err := policyFileInfo(match)
 			if err == nil && candidate != nil && os.SameFile(candidate, info) {
 				return false
 			}
@@ -100,4 +100,29 @@ func RulesAllowed(p string, extra []string) bool {
 		}
 	}
 	return true
+}
+
+// policyFileInfo only inspects metadata. Rooted lookup prevents a configured
+// exclusion from traversing outside its filesystem volume while still following
+// aliases within that volume for the SameFile credential-store comparison.
+func policyFileInfo(name string) (os.FileInfo, error) {
+	absolute, err := filepath.Abs(name)
+	if err != nil {
+		return nil, err
+	}
+	absolute, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return nil, err
+	}
+	volume := filepath.VolumeName(absolute) + string(filepath.Separator)
+	relative, err := filepath.Rel(volume, absolute)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(volume)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.Stat(relative)
 }

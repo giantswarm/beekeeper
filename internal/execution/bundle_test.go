@@ -9,7 +9,10 @@ import (
 
 func bundleFixture(t *testing.T) (string, []BundleSource) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	sources := []BundleSource{{"AGENTS.md", "rules/project/AGENTS.md"}, {"SKILL.md", "skills/review/SKILL.md"}}
 	for _, s := range sources {
 		if err := os.WriteFile(filepath.Join(root, s.Source), []byte("Follow the reviewed process."), 0600); err != nil {
@@ -63,8 +66,8 @@ func TestCoordinatorBundleRefusals(t *testing.T) {
 			b.Artifacts[0].Content = make([]byte, maxArtifactBytes+1)
 			b.Artifacts[0].Digest = Digest(b.Artifacts[0].Content)
 		}},
-		{"missing", func(b *CoordinatorBundle) { b.Artifacts[0].Content = nil }},
-		{"digest", func(b *CoordinatorBundle) { b.Artifacts[0].Digest = "invalid" }},
+		{missingOperation, func(b *CoordinatorBundle) { b.Artifacts[0].Content = nil }},
+		{"digest", func(b *CoordinatorBundle) { b.Artifacts[0].Digest = "invalid-bundle-digest" }},
 		{"traversal", func(b *CoordinatorBundle) { b.Artifacts[0].Artifact = "../escape" }},
 		{"skill entry", func(b *CoordinatorBundle) { b.Artifacts[1].Artifact = "skills/review/other.md" }},
 		{"credential", func(b *CoordinatorBundle) {
@@ -134,7 +137,7 @@ func TestCoordinatorBundlePreparePreservesHost(t *testing.T) {
 	if string(f.s.Rules) != originalRules || string(mustJSON(f.s.Config)) != originalConfig {
 		t.Fatal("host policy mutated")
 	}
-	data, err := os.ReadFile(unrelated)
+	data, err := os.ReadFile(filepath.Clean(unrelated))
 	if err != nil || string(data) != "keep" {
 		t.Fatal("unrelated file changed", err)
 	}
