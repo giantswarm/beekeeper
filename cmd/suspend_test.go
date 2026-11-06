@@ -13,6 +13,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const suspendFixtureTask = "work"
+
 type suspendFixture struct {
 	platform.Machine
 	records []machine.SuspendRecord
@@ -78,7 +80,7 @@ func TestSuspendRespectsDeskStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stopped desk must report gaps without scheduling recovery.
-	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: task}}
+	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: suspendFixtureTask}}
 	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
 	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
 	if len(w.suspendRecovery) != 0 {
@@ -94,9 +96,9 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Agents = []state.Agent{
-		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: task},
+		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: suspendFixtureTask},
 		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
-		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: task},
+		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: suspendFixtureTask},
 	}
 	w.resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
 	if len(w.suspendRecovery) != 1 || w.suspendRecovery[reviewedStoppedCase].party.Name != reviewedStoppedCase {
