@@ -28,6 +28,14 @@ import (
 // cluster-api-events writes (its Available condition's transition time).
 var phases = []string{"0820-before", "0821-changed", "0827-during", "0843-after"}
 
+const (
+	nsCluster  = "dev"
+	nsSecond   = "ns-b"
+	orgCluster = "org-mc/mc"
+)
+
+const nsFirst = "ns-a"
+
 func objects(t *testing.T, phase string) []Object {
 	t.Helper()
 	var objs []Object
@@ -85,8 +93,8 @@ func TestReplay(t *testing.T) {
 		}
 	}
 	want := []string{
-		"0821-changed UPGRADE prod/mc 35.0.1 → 35.1.1",
-		"0843-after UPGRADE ENDED prod/mc 35.0.1 → 35.1.1 (since " + at.Local().Format("15:04") + ")",
+		"0821-changed UPGRADE prod/org-mc/mc 35.0.1 → 35.1.1",
+		"0843-after UPGRADE ENDED prod/org-mc/mc 35.0.1 → 35.1.1 (since " + at.Local().Format("15:04") + ")",
 	}
 	if !slices.Equal(lines, want) {
 		t.Errorf("lines\n%q\nwant\n%q", lines, want)
@@ -114,7 +122,7 @@ func TestRolling(t *testing.T) {
 			objs[i].Metadata.Annotations[upgradingMark] = "false"
 		}
 	}
-	if ups := Detect(objs, at, func(c string) bool { return c == "mc" }); len(ups) != 1 || !ups[0].Rolling {
+	if ups := Detect(objs, at, func(c string) bool { return c == orgCluster }); len(ups) != 1 || !ups[0].Rolling {
 		t.Errorf("a held upgrade whose control plane rolls ended: %+v", ups)
 	}
 	if ups := Detect(objs, at, func(string) bool { return false }); len(ups) != 0 {
@@ -247,7 +255,7 @@ func TestRead(t *testing.T) {
 	if len(ss) != 2 || len(ss[0].Upgrades) != 1 || ss[0].Upgrades[0].From != "35.0.1" {
 		t.Fatalf("statuses %+v", ss)
 	}
-	if w := ss[0].Words(at); w != "prod/mc 35.0.1 → 35.1.1 for 9m (control plane 3/4, node pools 15/15)" {
+	if w := ss[0].Words(at); w != "prod/org-mc/mc 35.0.1 → 35.1.1 for 9m (control plane 3/4, node pools 15/15)" {
 		t.Errorf("words %q", w)
 	}
 	if !ss[1].NoContext || ss[1].Err == "" || ss[1].Words(at) != "far no kube context" {
@@ -259,7 +267,7 @@ func TestRead(t *testing.T) {
 		t.Errorf("kubectl calls %q", c)
 	}
 	// A held upgrade's from is in its hold's reason: the events are not read.
-	held := func(i, c string) bool { return i == prod && c == "mc" }
+	held := func(i, c string) bool { return i == prod && c == orgCluster }
 	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, held); ss[0].Upgrades[0].From != "" {
 		t.Errorf("the events of a held upgrade were read: %+v", ss[0])
 	}
@@ -271,7 +279,7 @@ func TestRead(t *testing.T) {
 	}
 	t.Setenv(fakeDir, dir)
 	t.Setenv("FAIL", "Unauthorized")
-	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized" || ss[0].NoContext || len(ss[0].Upgrades) != 0 {
+	if ss = r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, none); ss[0].Err != "error: Unauthorized (deadline 10s per attempt; up to 2 attempts)" || ss[0].NoContext || len(ss[0].Upgrades) != 0 {
 		t.Errorf("an unreadable installation: %+v", ss[0])
 	}
 	// A context the kubeconfig lacks is no kube context, not unreadable.
@@ -317,8 +325,8 @@ func TestLiftSticks(t *testing.T) {
 	st := &state.State{}
 	stuck := []Upgrade{{Cluster: "wc", To: stuckTo}}
 	Reconcile(st, prod, stuck, at, watch)
-	timo := state.Party{Name: "Supervisor"}
-	if !Lift(st, HoldTarget(prod, "wc"), timo, at) || Lift(st, HoldTarget(prod, "wc"), timo, at) {
+	alex := state.Party{Name: "Supervisor"}
+	if !Lift(st, HoldTarget(prod, "wc"), alex, at) || Lift(st, HoldTarget(prod, "wc"), alex, at) {
 		t.Fatal("lift: want the first to lift and the second to find nothing held")
 	}
 	for tick := range 3 {
@@ -343,7 +351,7 @@ func TestLiftSticks(t *testing.T) {
 	if len(begun) != 1 || st.Holds[0].LiftedBy != nil || st.Holds[0].UpgradeTo != "36.1.0" {
 		t.Errorf("a different upgrade must hold again: begun %+v holds %+v", begun, st.Holds)
 	}
-	Lift(st, HoldTarget(prod, "wc"), timo, at)
+	Lift(st, HoldTarget(prod, "wc"), alex, at)
 	if _, ended := Reconcile(st, prod, nil, at, watch); len(ended) != 1 || len(st.Holds) != 0 {
 		t.Errorf("the upgrade's end must remove the lifted hold: ended %+v holds %+v", ended, st.Holds)
 	}
@@ -386,7 +394,7 @@ func TestStaleMark(t *testing.T) {
 	if ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return false }); len(ups) != 1 || ups[0].Rolling {
 		t.Errorf("a marked upgrade within its grace: %+v", ups)
 	}
-	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
+	st := &state.State{Holds: []state.Hold{{Target: HoldTarget(prod, orgCluster), Reason: "upgrade prod/org-mc/mc ? → " + to, At: at.Add(-50 * time.Hour), UpgradeTo: to}}}
 	mark[upgradeStartTime] = stamp(50 * time.Hour)
 	ups := Detect(withMC(t, "0843-after", mark), at, func(string) bool { return true })
 	if len(ups) != 0 {
@@ -420,11 +428,11 @@ func TestRollingAfterMarkCleared(t *testing.T) {
 	for i := range objs {
 		delete(objs[i].Metadata.Annotations, upgradeStartTime)
 	}
-	ups := Detect(objs, at, func(c string) bool { return c == "mc" })
+	ups := Detect(objs, at, func(c string) bool { return c == orgCluster })
 	if len(ups) != 1 || !ups[0].Rolling {
 		t.Fatalf("a held rollout ended with the mark: %+v", ups)
 	}
-	h := state.Hold{Target: HoldTarget(prod, "mc"), Reason: "upgrade prod/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
+	h := state.Hold{Target: HoldTarget(prod, orgCluster), Reason: "upgrade prod/org-mc/mc 35.0.1 → " + to, At: at.Add(-2 * time.Hour), UpgradeTo: to}
 	st := &state.State{Holds: []state.Hold{h}}
 	if begun, ended := Reconcile(st, prod, ups, at, watch); len(begun)+len(ended) != 0 {
 		t.Errorf("a young rollout: begun %+v ended %+v", begun, ended)
@@ -456,9 +464,60 @@ func TestStaleMarkKeepsDueSchedule(t *testing.T) {
 }
 
 func TestStale(t *testing.T) {
-	h := state.Hold{Target: HoldTarget(prod, "mc"), At: at.Add(-StallAfter)}
+	h := state.Hold{Target: HoldTarget(prod, orgCluster), At: at.Add(-StallAfter)}
 	if !Stale(h, at) || Stale(state.Hold{Target: h.Target, At: at.Add(-time.Hour)}, at) || Stale(state.Hold{Target: "lane:x", At: h.At}, at) {
 		t.Error("stale")
+	}
+}
+
+func TestNamespacedHolds(t *testing.T) {
+	a := Upgrade{Namespace: nsFirst, Cluster: nsCluster, To: "2"}
+	b := Upgrade{Namespace: nsSecond, Cluster: nsCluster, To: "2"}
+	st := &state.State{}
+	Reconcile(st, prod, []Upgrade{a}, at, watch)
+	if !Lift(st, HoldTarget(prod, "ns-a/dev"), watch, at) {
+		t.Fatal("first cluster did not lift")
+	}
+	begun, ended := Reconcile(st, prod, []Upgrade{a, b}, at, watch)
+	if len(begun) != 1 || begun[0].Target != HoldTarget(prod, "ns-b/dev") || len(ended) != 0 || !st.Holds[1].Active(at) {
+		t.Fatalf("second cluster inherited lift: begun %+v ended %+v holds %+v", begun, ended, st.Holds)
+	}
+	if !Lift(st, HoldTarget(prod, "ns-b/dev"), watch, at) {
+		t.Fatal("second cluster did not lift independently")
+	}
+	_, ended = Reconcile(st, prod, []Upgrade{b}, at, watch)
+	if len(ended) != 1 || ended[0].Target != HoldTarget(prod, "ns-a/dev") || len(st.Holds) != 1 || st.Holds[0].LiftedBy == nil {
+		t.Fatalf("ending first cluster affected second: %+v %+v", ended, st.Holds)
+	}
+	Reconcile(st, prod, nil, at, watch)
+	if len(st.Holds) != 0 {
+		t.Fatal("ended cluster retained hold")
+	}
+	begun, _ = Reconcile(st, prod, []Upgrade{a, b}, at, watch)
+	if len(begun) != 2 || begun[0].Target == begun[1].Target {
+		t.Fatalf("simultaneous upgrades share identity: %+v", begun)
+	}
+}
+
+func TestLegacyHoldDoesNotTransferLift(t *testing.T) {
+	for _, lifted := range []bool{false, true} {
+		t.Run(fmt.Sprint(lifted), func(t *testing.T) {
+			h := state.Hold{Target: "upgrade:prod/dev", At: at, UpgradeTo: "2"}
+			if lifted {
+				h.LiftedBy = &watch
+			}
+			st := &state.State{Holds: []state.Hold{h}}
+			held := HeldClusters(st, at)
+			if held(prod, "ns-a/dev") || held(prod, "ns-b/dev") {
+				t.Fatal("legacy target matched a namespaced cluster")
+			}
+			// Even a single currently observed cluster cannot establish the
+			// namespace of a persisted bare-name target.
+			begun, ended := Reconcile(st, prod, []Upgrade{{Namespace: nsSecond, Cluster: nsCluster, To: "2"}}, at, watch)
+			if len(ended) != 1 || len(begun) != 1 || !begun[0].Active(at) || begun[0].Target != "upgrade:prod/ns-b/dev" {
+				t.Fatalf("legacy hold migration: begun %+v ended %+v", begun, ended)
+			}
+		})
 	}
 }
 
@@ -506,6 +565,70 @@ func TestWithHoldVersions(t *testing.T) {
 				t.Fatal("changed shared reading")
 			}
 		})
+	}
+}
+
+func duplicateClusters() []Object {
+	var objs []Object
+	for _, ns := range []string{nsFirst, nsSecond} {
+		c := Object{Kind: kindCluster}
+		c.Metadata.Namespace, c.Metadata.Name = ns, nsCluster
+		c.Metadata.Labels = map[string]string{releaseLabel: "2"}
+		c.Metadata.Annotations = map[string]string{upgradingMark: "true"}
+		c.Status.Conditions = []Condition{{Type: rollingOut, Status: "True"}}
+		objs = append(objs, c)
+	}
+	return objs
+}
+
+func TestNamespacedRolloutLookup(t *testing.T) {
+	objs := duplicateClusters()
+	for i := range objs {
+		objs[i].Metadata.Annotations = nil
+	}
+	st := &state.State{}
+	Reconcile(st, prod, []Upgrade{{Namespace: nsFirst, Cluster: nsCluster, To: "2"}}, at, watch)
+	Lift(st, HoldTarget(prod, "ns-a/dev"), watch, at)
+	held := HeldClusters(st, at)
+	ups := Detect(objs, at, func(c string) bool { return held(prod, c) })
+	if len(ups) != 1 || ups[0].Namespace != nsFirst || !ups[0].Rolling {
+		t.Fatalf("rollout attributed to wrong namespace: %+v", ups)
+	}
+}
+
+func TestNamespacedReaderEventLookup(t *testing.T) {
+	dir := t.TempDir()
+	for i, k := range Kinds {
+		var items []Object
+		if i == 0 {
+			items = duplicateClusters()
+		}
+		raw, err := json.Marshal(struct{ Items []Object }{items})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, kindFile(k)+".json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events := `{"items":[{"reason":"Upgrading","message":"from release 1 to 2"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "events.json"), []byte(events), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exe, log := fakeKubectl(t, dir)
+	st := &state.State{}
+	Reconcile(st, prod, []Upgrade{{Namespace: nsFirst, Cluster: nsCluster, To: "2"}}, at, watch)
+	r := Reader{Kubectl: exe, Timeout: 10 * time.Second}
+	ss := r.Read(context.Background(), []Target{{Name: prod, Context: prod}}, at, HeldClusters(st, at))
+	if len(ss[0].Upgrades) != 2 {
+		t.Fatalf("reading %+v", ss)
+	}
+	ups := ss[0].Upgrades
+	if ups[0].From != "" || ups[1].From != "1" {
+		t.Fatalf("event lookup confused namespaces: %+v", ups)
+	}
+	if c := calls(t, log); len(c) != 2 || c[1] != "events" {
+		t.Fatalf("event calls: %v", c)
 	}
 }
 

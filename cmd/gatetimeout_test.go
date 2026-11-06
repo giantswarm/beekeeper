@@ -41,7 +41,7 @@ func TestACallersTimeoutCutsTheCallNotTheWait(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"sh", "sleep"} {
+	for _, tool := range []string{"sh", sleepComm} {
 		p, err := exec.LookPath(tool)
 		if err != nil {
 			t.Skipf("no %s", tool)

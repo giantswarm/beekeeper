@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -421,4 +422,58 @@ func TestKubeGuardOffWithoutProduction(t *testing.T) {
 	if KubeGuardOff("") == "" || KubeGuardOff("gazelle") != "" {
 		t.Error("KubeGuardOff reports the guard wrong")
 	}
+}
+
+func TestKubeProtectedContexts(t *testing.T) {
+	contexts := []string{"production", "full-test", "full-test-operations"}
+	h := kubeHook(machineKC)
+	h.Production = ""
+	h.ProtectedContexts = contexts
+	for _, context := range contexts {
+		t.Run(context, func(t *testing.T) {
+			for _, verb := range []string{"delete", "apply", "patch", "replace", "scale", verbEdit, "annotate", "label"} {
+				wantRefused(t, h, "kubectl --context "+context+" "+verb+" storageclass example", "rule: kube production write gate")
+			}
+			for _, verb := range []string{"get", "describe", "logs", "top"} {
+				wantPassed(t, h, "kubectl --context "+context+" "+verb+" pods")
+			}
+			wantPassed(t, h, "platformctl --context "+context+" apply example")
+		})
+	}
+	wantPassed(t, h, "kubectl --context kind-lab delete storageclass example")
+	wantPassed(t, h, "kubectl --context full-test-extra delete storageclass example")
+	if KubeGuardOff("", contexts...) != "" {
+		t.Fatal("protected contexts must enable the guard")
+	}
+}
+
+func TestKubeProtectedContextResolution(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "config")
+	err := os.WriteFile(kc, []byte(`apiVersion: v1
+kind: Config
+current-context: full-test
+contexts:
+- name: full-test
+  context:
+    cluster: shared-test
+- name: alias
+  context:
+    cluster: shared-test
+`), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := kubeHook(kc)
+	h.Production = ""
+	h.ProtectedContexts = []string{"full-test"}
+	for _, cmd := range []string{
+		"kubectl delete storageclass example",
+		"kubectl --context alias delete storageclass example",
+		"kubectl --cluster shared-test delete storageclass example",
+		"bash -c 'kubectl --context full-test delete storageclass example'",
+		`K="kubectl --context full-test"; $K delete storageclass example`,
+	} {
+		wantRefused(t, h, cmd, "rule: kube production write gate")
+	}
+	wantPassed(t, h, "kubectl get storageclasses")
 }

@@ -27,7 +27,7 @@ func TestNonClaudeDryRunProjectInstructions(t *testing.T) {
 		t.Run(h.Name(), func(t *testing.T) {
 			var out bytes.Buffer
 			a := &app{cfg: &config.Config{}, out: &out}
-			sp := agentStart{dir: dir, name: "instruction-proof-worker", brief: "TASK ONLY", model: "test-model"}
+			sp := agentStart{dir: dir, name: "instruction-proof-worker", brief: "TASK ONLY", model: litTestModel}
 			if err := h.DryRun(context.Background(), a, sp, nil); err != nil {
 				t.Fatal(err)
 			}

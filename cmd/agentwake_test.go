@@ -117,7 +117,7 @@ func TestWakeStartsBesideAStillLoadedWake(t *testing.T) {
 		t.Errorf("a dead wake unit counts as running: %q", u)
 	}
 	next := wakeUnit(id)
-	if err := launch(next, t.TempDir(), "", nil, []string{"sleep", "60"}); err != nil {
+	if err := launch(next, t.TempDir(), "", nil, []string{sleepComm, "60"}); err != nil {
 		t.Fatalf("the next wake beside a loaded one: %v", err)
 	}
 	stop(next)

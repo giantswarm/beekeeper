@@ -77,7 +77,7 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 	if len(got) != 2 || !strings.HasPrefix(got[0], "GUIDE SAVE REFUSED: pid ") ||
 		!strings.Contains(got[0], "runs beekeeper v0.1.0, older than the v0.2.0 that wrote the state: its save is refused") ||
 		!strings.HasSuffix(got[0], "; re-arm this watch: stop it, then run `beekeeper guide watch`") ||
-		!strings.HasPrefix(got[1], "GUIDE DECISION: #1 for Timo") {
+		!strings.HasPrefix(got[1], "GUIDE DECISION: #1 for Alex") {
 		t.Fatalf("the refused save's poll: %q", got)
 	}
 
@@ -94,7 +94,7 @@ func TestGuideWatchReportsARefusedSave(t *testing.T) {
 	}
 	feed, err = a.guideFeed(t.Context())
 	got = g.lines(t.Context(), feed, err)
-	if len(got) != 3 || !strings.HasPrefix(got[0], "GUIDE SAVE REFUSED: ") || !strings.HasPrefix(got[2], "GUIDE DECISION: #2 for Timo") {
+	if len(got) != 3 || !strings.HasPrefix(got[0], "GUIDE SAVE REFUSED: ") || !strings.HasPrefix(got[2], "GUIDE DECISION: #2 for Alex") {
 		t.Fatalf("a refused save of a new decision: %q", got)
 	}
 

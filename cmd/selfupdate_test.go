@@ -16,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
+const selfUpdateCheckFlag = "--check"
+
 // An update names the beekeeper processes it leaves on the old binary, pid
 // and command each, every watch with the command that re-arms it, and says
 // nothing when there are none.
@@ -117,7 +119,7 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 
 	// Subsequent --check skips the failed release.
 	root = New()
-	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, "--check"})
+	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, selfUpdateCheckFlag})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -139,6 +141,30 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
+	}
+}
+
+func TestSelfUpdateVersionFlag(t *testing.T) {
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	const tag = "v0.125.0-rc.3"
+	called := false
+	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
+		called = true
+		if !check || update.OptionsFrom(ctx).Version != tag {
+			t.Fatalf("check=%v options=%+v", check, update.OptionsFrom(ctx))
+		}
+		return update.Result{Current: tag, Latest: tag}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, "--version", tag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("update not called")
 	}
 }
 
