@@ -90,7 +90,7 @@ func TestJournalBootstrapPromotionAndRollback(t *testing.T) {
 		t.Fatal("replaced during probation")
 	}
 	i.close()
-	guard := func(version string, restore func() error) error {
+	guard := func(version, _ string, restore func() error) error {
 		if version != "v1.0.0" {
 			t.Fatal(version)
 		}
@@ -123,7 +123,7 @@ func TestRecoveryRejectsModifiedBackupAndStateGuardFailure(t *testing.T) {
 				}
 			}
 			i.close()
-			err := Rollback(context.Background(), i.target, "failed", func(string, func() error) error { return errors.New("state incompatible") })
+			err := Rollback(context.Background(), i.target, "failed", func(string, string, func() error) error { return errors.New("state incompatible") })
 			if err == nil {
 				t.Fatal("unsafe recovery accepted")
 			}
@@ -190,7 +190,7 @@ func TestRollbackCrashBoundaries(t *testing.T) {
 				return original(from, to)
 			}
 			t.Cleanup(func() { journalRename = original })
-			guard := func(_ string, restore func() error) error { return restore() }
+			guard := func(_, _ string, restore func() error) error { return restore() }
 			if err := Rollback(context.Background(), i.target, "failed", guard); err == nil {
 				t.Fatal("missing crash")
 			}
@@ -276,7 +276,7 @@ func TestBootstrapHasNoRollbackAndFutureJournalIsFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	i.close()
-	if err := Rollback(context.Background(), i.target, "failed", func(_ string, f func() error) error { return f() }); err == nil {
+	if err := Rollback(context.Background(), i.target, "failed", func(_, _ string, f func() error) error { return f() }); err == nil {
 		t.Fatal("unverified bootstrap recovery")
 	}
 	j := readRecovery(t, i)

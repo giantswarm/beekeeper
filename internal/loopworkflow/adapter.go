@@ -1,5 +1,7 @@
-//go:build integration
-
+// Package loopworkflow is a scratch GitHub and Git origin that exercises a real
+// beekeeper binary across the loop, parser and merge boundary: the integration
+// tests drive every scenario, and a recovery controller's probe drives one on
+// an idle desk. Nothing here touches a real desk, account or network.
 package loopworkflow
 
 import (
@@ -11,21 +13,22 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"testing"
 	"time"
 )
 
-// The test executable doubles only as the external GitHub CLI and a Git
-// tracing wrapper. Beekeeper itself is always a separately built binary.
-func TestMain(m *testing.M) {
+// Serve runs this process as the fixture's GitHub CLI or Git wrapper and returns
+// its exit code. Only a process started by that name inside a fixture is one.
+func Serve() (int, bool) {
+	if os.Getenv("FIXTURE_DIR") == "" {
+		return 0, false
+	}
 	switch filepath.Base(os.Args[0]) {
 	case "gh":
-		os.Exit(serveGitHub())
+		return serveGitHub(), true
 	case "git":
-		os.Exit(traceGit())
-	default:
-		os.Exit(m.Run())
+		return traceGit(), true
 	}
+	return 0, false
 }
 
 func trace(args []string) {
