@@ -2292,6 +2292,13 @@ type Guide struct {
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
 type Supervisor struct {
+	// ReviewModel overrides reviewer model selection. The review command
+	// defaults to opus, the strongest Claude review model alias.
+	ReviewModel string `yaml:"reviewModel"`
+	// ReviewLightLines selects diff-only review below this changed-line count.
+	// Zero defaults to 150; negative disables the size shortcut.
+	ReviewLightLines int `yaml:"reviewLightLines"`
+
 	// Effort is the default for sessions started by the supervisor loop.
 	Effort string `yaml:"effort"`
 	// ReviewRounds caps the review rounds that ask for changes (default 1);
@@ -2464,6 +2471,10 @@ const DefaultQueueTTL = 15 * time.Minute
 
 // Merge configures the gate on devctl pr merge.
 type Merge struct {
+	// RequireReview requires a fixed desk approval covering the merge head;
+	// an explicit supervisor go alone cannot substitute for that review.
+	RequireReview bool `yaml:"requireReview"`
+
 	// Methods selects squash, rebase or merge for each repository. Empty: squash.
 	// Rebase also makes the ordinary devctl gate add --rebase automatically.
 	Methods map[string]string `yaml:"methods"`

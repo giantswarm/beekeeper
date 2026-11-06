@@ -166,6 +166,25 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+To prove a candidate's secret verbs before installing it, run a command under
+its temporary broker (Linux):
+
+```sh
+./beekeeper --config /tmp/test-config.yaml sandbox scratch -- sh -c '
+  ./beekeeper secret fingerprint "file:///tmp/test-input.json#password"
+'
+```
+
+`sandbox scratch` copies the selected configuration and replaces its state,
+lease and runtime directories with private temporary directories. The child
+inherits `BEEKEEPER_CONFIG`; secret calls use the candidate's broker, including
+when `secret.session` is off. Use the candidate binary explicitly in the child.
+The broker does not start an egress proxy or install sandbox mounts. Its spool
+and vault socket are separate from the installed broker's. On command exit,
+failure or interrupt, the runner stops and reaps the broker before removing the
+temporary directories. Run outside the agent sandbox and use test secret sources
+and destinations: the configured sources and any requested writes remain real.
+
 The doctor releases a local lease when its session is no longer running,
 preserving any lab configuration drift for the next claimant. Person-held
 leases and remote holders are left alone. Each release is logged once as
@@ -1003,6 +1022,38 @@ and restarts do not repost them. An incoming webhook has no transactional
 idempotency receipt: a process crash after Slack accepts a message but before
 its local checkpoint can produce a duplicate. A failed poll should be retried;
 it does not claim that unreconciled repositories are covered.
+
+### Session worktree placement
+
+Configure clone discovery and session placement with:
+
+```yaml
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees]
+```
+
+`projects.worktrees` supplies ordered external roots; session hooks use the first root.
+Run `beekeeper install` to register Claude Code's `WorktreeCreate` and
+`WorktreeRemove` hooks. Creation uses
+`<projects.worktrees>/<repo>/worktree-<session-name>`, starting at the
+session's HEAD. Existing branches or paths cause an error rather than reuse.
+The worktree hook owns creation even outside the normal tool-hook scope,
+because Claude's creation hook replaces its default worktree implementation.
+The Bash guard rejects nested `.claude/worktrees` targets, including targets
+reached through symlinks, and names the configured external root.
+
+`beekeeper free --only worktrees` reports linked worktrees nested in clones
+under `projects.dir`. Add `--apply` to remove clean trees integrated into the
+default branch and move other trees into the external root. Git's merge
+simulation recognizes squash merges; conflicts or uncertain results retain
+the tree. The default branch is origin's default ref, falling back to local
+main or master. Refresh remote refs before cleanup when they are stale.
+Branches are always retained, including squash-merged branches. Locked trees
+and destination collisions are left for manual resolution. Migration refuses
+live worktrees and stops if process or roster information cannot be read.
+The removal hook similarly retains dirty or unmerged work and never forces
+removal.
 
 ### Envtest assets for local runs
 

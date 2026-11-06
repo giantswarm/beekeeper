@@ -471,8 +471,12 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 					return false
 				}
 			}
-			if len(args) > 0 && args[0] == executionRunCommand {
+			scratch := scratchWords(words[1:]) > 0
+			if scratch || len(args) > 0 && args[0] == executionRunCommand {
 				target := executionRunTarget(args[1:])
+				if scratch {
+					target = executionRunTarget(args[2:])
+				}
 				if len(target) > 0 {
 					unwrapped, err := executionUnwrap(target)
 					if err != nil {

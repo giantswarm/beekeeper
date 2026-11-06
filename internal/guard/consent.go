@@ -39,6 +39,7 @@ import (
 // App is an App the person owns and asked a consent, or one permission
 // change, for.
 type App struct {
+	Drift string
 	// Name is the App's name as GitHub's consent page titles it.
 	Name string
 	// ClientID is the OAuth client id the consent URL carries, "" for a
@@ -255,6 +256,10 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
+		matches := (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name))
+		if matches && a.Drift != "" && !slices.Contains(a.Callbacks, callback) {
+			return Decision{Deny, "Refused: " + a.Drift}
+		}
 		if a.Google || a.GitLab != "" || a.OAuth != "" || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}

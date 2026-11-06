@@ -128,7 +128,7 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 			if err != nil || (h == nil) != tc.wantRelease {
 				t.Fatalf("holder: %v, %v", h, err)
 			}
-			evs, err := a.store.Events(100, func(e state.Event) bool { return e.Verb == "lease.release-gone" })
+			evs, err := a.store.Events(100, func(e state.Event) bool { return e.Verb == leaseReleaseGoneVerb })
 			want := 0
 			if tc.wantRelease {
 				want = 1
@@ -143,7 +143,7 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 func TestLabLifecycleFailureAndRefusal(t *testing.T) {
 	a := claimApp(t)
 	_, starts, stops := lifecycleDocker(t, a)
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	if _, err := runLease(a, "claim", labOne, "-p", "not mine"); Code(err) != ExitRefused || *starts != 0 || *stops != 0 {
 		t.Fatalf("refused claim touched Docker: %v", err)
 	}

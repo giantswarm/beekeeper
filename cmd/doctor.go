@@ -266,9 +266,10 @@ type doctorRun struct {
 
 // doctorReport is what a run of the doctor found and did, a line each.
 type doctorReport struct {
-	chores []string
-	faults []faultFinding
-	notes  []string
+	appDrifts []string
+	chores    []string
+	faults    []faultFinding
+	notes     []string
 	// unagreed counts the finished workers whose archive waits on
 	// agents.archiveAgreement, said once for all, not per agent.
 	unagreed int
@@ -312,6 +313,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	rep.appDrifts = driftLines(a.appDrifts(ctx, st.Apps))
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
@@ -831,6 +833,7 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
+			lines = append(lines, rep.appDrifts...)
 			if rep.unagreed > 0 {
 				lines = append(lines, unagreedLine(rep.unagreed))
 			}

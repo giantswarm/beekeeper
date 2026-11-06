@@ -172,6 +172,9 @@ func logs(args []string) (state.Event, bool) {
 
 func newLoopRig(t *testing.T) *loopRig {
 	t.Helper()
+	oldParents := reviewParents
+	t.Cleanup(func() { reviewParents = oldParents })
+	reviewParents = func(context.Context, []string) ([]string, error) { return nil, nil }
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -972,6 +975,9 @@ func TestLoopReviewersWithoutPlacementStayOnCoordinator(t *testing.T) {
 						return "", 0
 					}
 					act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "local-review", SelfHosted: selfHosted}
+					p := r.pull
+					p.Ref, p.URL = act.Ref, act.URL
+					r.pulls[act.Ref] = p
 					_, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act)
 					if !room {
 						if !errors.Is(err, errLoopLater) {
@@ -3707,6 +3713,9 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 							return "", 0
 						}
 						act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "remote-review", SelfHosted: selfHosted}
+						p := r.pull
+						p.Ref, p.URL = act.Ref, act.URL
+						r.pulls[act.Ref] = p
 						if _, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act); err != nil {
 							t.Fatal(err)
 						}

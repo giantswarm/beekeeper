@@ -1269,9 +1269,11 @@ type State struct {
 	Writer *Writer `json:"writer,omitempty"`
 	// WorkerReports are mid-task findings and idle reports that the
 	// supervisor's watch has not printed yet.
-	WorkerReports []WorkerReport `json:"workerReports,omitempty"`
-	DeskReviews   []DeskReview   `json:"deskReviews,omitempty"`
-	ReviewParks   []ReviewPark   `json:"reviewParks,omitempty"`
+	WorkerReports   []WorkerReport   `json:"workerReports,omitempty"`
+	ReviewNitChecks []ReviewNitCheck `json:"reviewNitChecks,omitempty"`
+	ReviewRequests  []ReviewRequest  `json:"reviewRequests,omitempty"`
+	DeskReviews     []DeskReview     `json:"deskReviews,omitempty"`
+	ReviewParks     []ReviewPark     `json:"reviewParks,omitempty"`
 	// Urgent are the merges marked urgent (lanes urgent): waiting for their
 	// gate, or run under the GitHub budget floor in a reset window that has
 	// not ended.
