@@ -21,13 +21,13 @@ const (
 	// controller's minute between evaluations.
 	ProbeTimeout = 25 * time.Second
 
-	gitAdd        = "add"
-	gitRemote     = "remote"
-	envLang       = "LANG=C.UTF-8"
-	envTZ         = "TZ=UTC"
-	envGitGlobal  = "GIT_CONFIG_GLOBAL=/dev/null"
-	envGitSystem  = "GIT_CONFIG_NOSYSTEM=1"
-	envGitPrompt  = "GIT_TERMINAL_PROMPT=0"
+	gitAdd          = "add"
+	gitRemote       = "remote"
+	envLang         = "LANG=C.UTF-8"
+	envTZ           = "TZ=UTC"
+	envGitGlobal    = "GIT_CONFIG_GLOBAL=/dev/null"
+	envGitSystem    = "GIT_CONFIG_NOSYSTEM=1"
+	envGitPrompt    = "GIT_TERMINAL_PROMPT=0"
 	partyLoop       = "supervisor loop"
 	verbLoop        = "supervisor.loop"
 	verbBudgetState = "watch.budget-state"
