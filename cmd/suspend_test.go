@@ -31,7 +31,7 @@ func TestSuspendRecoveryAcrossPolls(t *testing.T) {
 	supervisor := state.Party{Name: "fixture-supervisor", Session: "fixture-supervisor-session"}
 	supervisedBy(t, w, supervisor, entry.Add(-time.Minute))
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished", Done: true}}
+		st.Agents = []state.Agent{{Party: worker, Task: "continue fixture"}, {Party: state.Party{Name: stateIdle}}, {Party: state.Party{Name: paramDone}, Task: "finished suspend fixture", Done: true}}
 		st.Timers = []state.Timer{{ID: 1, Due: entry.Add(time.Hour), What: "fixture timer"}, {ID: 2, Due: exit.Add(time.Hour), What: "later suspend timer"}}
 		return nil, nil
 	})
@@ -78,7 +78,7 @@ func TestSuspendRespectsDeskStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stopped desk must report gaps without scheduling recovery.
-	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: "work"}}
+	st.Agents = []state.Agent{{Party: state.Party{Name: remoteMCPFixture}, Task: task}}
 	st.Stop = &state.Stop{Reason: "suspend fixture stop"}
 	w.resumed(st, nil, w.now, w.now.Add(time.Hour))
 	if len(w.suspendRecovery) != 0 {
@@ -94,9 +94,9 @@ func TestSuspendOnlyWakesStoppedBusyWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Agents = []state.Agent{
-		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: "work"},
+		{Party: state.Party{Name: holderLive, Session: "live-id"}, Task: task},
 		{Party: state.Party{Name: "suspend parked worker"}, Task: "wait", Park: &state.Park{}},
-		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: "work"},
+		{Party: state.Party{Name: reviewedStoppedCase, Session: "stopped-id"}, Task: task},
 	}
 	w.resumed(st, []*claude.Session{{Name: holderLive, ID: "live-id", PID: 123}}, w.now, w.now.Add(time.Hour))
 	if len(w.suspendRecovery) != 1 || w.suspendRecovery[reviewedStoppedCase].party.Name != reviewedStoppedCase {
