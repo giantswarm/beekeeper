@@ -72,7 +72,7 @@ func TestRedactNamesATokenPatternWithoutAnIndex(t *testing.T) {
 	if strings.Contains(out, tok) || !strings.Contains(out, "[redacted: github-pat]") {
 		t.Fatalf("the token survived: %q", out)
 	}
-	if rule := tokenRules[0].id; len(found) != 1 || found[0].Rule != rule || found[0].Name() != "pattern "+rule {
+	if rule := tokenRules[0].ID; len(found) != 1 || found[0].Rule != rule || found[0].Name() != "pattern "+rule {
 		t.Fatalf("findings = %+v", found)
 	}
 	allowedLine := "fixture " + tok + " // " + allowMarker
