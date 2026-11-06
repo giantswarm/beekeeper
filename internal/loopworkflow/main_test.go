@@ -11,8 +11,5 @@ func TestMain(m *testing.M) {
 	if code, served := Serve(); served {
 		os.Exit(code)
 	}
-	if code, served := serveTestCandidate(); served {
-		os.Exit(code)
-	}
 	os.Exit(m.Run())
 }

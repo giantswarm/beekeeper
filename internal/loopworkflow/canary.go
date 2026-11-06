@@ -408,7 +408,7 @@ func (p *probe) prepareCanary(server, scenario string) (err error) {
 		return err
 	}
 	cfgText := fmt.Sprintf(
-		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: fixture\n  project: 1\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 2\n  availMinMiB: -1\n  swapGrowthMaxMiB: -1\nwatch:\n  loadMax: 1000\nidentity:\n  host: fixture\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [fixture]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [fixture-bot]\n  reviewRounds: 1\n",
+		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: fixture\n  project: 1\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 1\n  reviewHeadroom: 1\n  availMinMiB: 1\n  swapGrowthMaxMiB: 100000\nwatch:\n  loadMax: 1000\n  availMinMiB: 1\nidentity:\n  host: fixture\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [fixture]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [fixture-bot]\n  reviewRounds: 1\n",
 		p.path(checkout), p.path("state"), p.path(checkout), briefPath,
 	)
 	if err := write("config.yaml", cfgText); err != nil {
@@ -549,12 +549,15 @@ func containsExactLine(text, want string) bool {
 	return false
 }
 
-func isOwnedCanaryPR(repo, runID, headRefName, body string) bool {
-	headRefName = strings.TrimSpace(headRefName)
-	if !strings.HasPrefix(headRefName, canaryBranchPrefix(runID)) {
+func isOwnedCanaryPR(pr sandboxOpenPR, repo, runID string) bool {
+	if pr.Head.Repo == nil || pr.Head.Repo.Fork || !strings.EqualFold(strings.TrimSpace(pr.Head.Repo.FullName), strings.TrimSpace(repo)) {
 		return false
 	}
-	return containsExactLine(body, canaryOwnershipMarker(repo, runID, headRefName))
+	headRefName := strings.TrimSpace(pr.headRef())
+	if !isOwnedCanaryBranch(runID, headRefName) {
+		return false
+	}
+	return containsExactLine(pr.Body, canaryOwnershipMarker(repo, runID, headRefName))
 }
 
 func isOwnedCanaryBranch(runID, branch string) bool {
@@ -564,7 +567,17 @@ func isOwnedCanaryBranch(runID, branch string) bool {
 		return false
 	}
 	rest := strings.TrimPrefix(branch, prefix)
-	return strings.HasPrefix(rest, "cand-") && !strings.Contains(rest, "/")
+	hexSuffix, ok := strings.CutPrefix(rest, "cand-")
+	if !ok || len(hexSuffix) < 12 || strings.Contains(hexSuffix, "/") {
+		return false
+	}
+	for i := 0; i < len(hexSuffix); i++ {
+		c := hexSuffix[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type canaryPRMeta struct {
@@ -642,7 +655,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return "", err
 	}
-	for name, target := range map[string]string{ghCmd: ghBin, gitCmd: gitBin, claudeCmd: serverBin} {
+	for name, target := range map[string]string{ghCmd: ghBin, gitCmd: serverBin, claudeCmd: serverBin} {
 		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
 			return "", err
 		}
@@ -654,12 +667,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 
 	sandboxToken := strings.TrimSpace(os.Getenv("BEEKEEPER_CANARY_GITHUB_TOKEN"))
 	if sandboxToken == "" {
-		tokenCmd := exec.CommandContext(ctx, ghBin, "auth", "token") //nolint:gosec // verifies sandbox credentials
-		out, terr := tokenCmd.CombinedOutput()
-		if terr != nil || strings.TrimSpace(string(out)) == "" {
-			return "", fmt.Errorf("sandbox credentials unavailable: gh auth token failed: %w (%s)", terr, tail(out))
-		}
-		sandboxToken = strings.TrimSpace(string(out))
+		return "", errors.New("live sandbox canary requires explicit BEEKEEPER_CANARY_GITHUB_TOKEN")
 	}
 
 	viewerLogin := "canary-bot"
@@ -698,6 +706,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
 	env = append(env,
 		"PATH="+binDir+":/usr/bin:/bin",
+		"BEEKEEPER_CONFIG="+filepath.Join(dir, "config.yaml"),
 		"GH_TOKEN="+sandboxToken,
 		"BEEKEEPER_GITHUB_API="+apiURL,
 		"GIT_ALLOW_PROTOCOL=file:https",
@@ -709,12 +718,13 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		"CANARY_CHECKOUT_DIR="+checkout,
 		"CANARY_CANDIDATE_BIN="+candidatePath,
 		"CANARY_CANDIDATE_SHA256="+candidateDigest,
+		"CANARY_REAL_GIT="+gitBin,
 		"CANARY_REPO="+cfg.Repo,
 		"CANARY_PROJECT="+strconv.Itoa(cfg.Project),
 		"CANARY_RUN_ID="+runID,
 		"CANARY_BRANCH="+branch,
 	)
-	for _, passthrough := range []string{"BEEKEEPER_CANARY_ORIGIN", "SANDBOX_DIR"} {
+	for _, passthrough := range []string{"BEEKEEPER_CANARY_ORIGIN", "SANDBOX_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"} {
 		if val := os.Getenv(passthrough); val != "" {
 			env = append(env, passthrough+"="+val)
 		}
@@ -757,7 +767,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		return "", err
 	}
 	cfgText := fmt.Sprintf(
-		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: %s\n  project: %d\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 2\n  availMinMiB: -1\n  swapGrowthMaxMiB: -1\nwatch:\n  loadMax: 1000\nidentity:\n  host: canary\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [%s]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [%s]\n  reviewRounds: 1\n",
+		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: %s\n  project: %d\n  tidyEvery: -1s\n  order:\n  - name: ready\ncapacity:\n  ceiling: 1\n  reviewHeadroom: 1\n  availMinMiB: 1\n  swapGrowthMaxMiB: 100000\nwatch:\n  loadMax: 1000\n  availMinMiB: 1\nidentity:\n  host: canary\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [%s]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [%s]\n  reviewRounds: 1\n",
 		checkout, cfg.AllowOrg, cfg.Project, stateDir, checkout, cfg.AllowOrg, briefPath, viewerLogin,
 	)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfgText), 0o600); err != nil {
@@ -771,12 +781,23 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
 		st.AutoInstallPaused = true
-		st.Budget = &state.Budget{
+		gql := &state.GraphQL{Identity: "gh", Remaining: 5000, Limit: 5000, Reset: now.Add(time.Hour), At: now}
+		entry := state.Budget{
+			Identity:  "gh",
 			Remaining: 5000,
 			Limit:     5000,
 			Reset:     now.Add(time.Hour),
 			At:        now,
-			GraphQL:   &state.GraphQL{Remaining: 5000, Limit: 5000, Reset: now.Add(time.Hour), At: now},
+			GraphQL:   gql,
+		}
+		st.Budget = &state.Budget{
+			Identity:   "gh",
+			Remaining:  5000,
+			Limit:      5000,
+			Reset:      now.Add(time.Hour),
+			At:         now,
+			GraphQL:    gql,
+			Identities: map[string]state.Budget{"gh": entry},
 		}
 		return nil, nil
 	}); err != nil {
@@ -825,7 +846,8 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 
 	// Pass 1: candidate's supervisor loop must admit the ready board item and
 	// start the deterministic worker via `agents start` -> `claude --bg`.
-	if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
+	pass1Out, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once")
+	if err != nil {
 		if turnErr, rerr := os.ReadFile(filepath.Join(dir, "worker-turn-error.txt")); rerr == nil && len(turnErr) > 0 { //nolint:gosec // isolated sandbox error log
 			return "", fmt.Errorf("starting deterministic worker: %s (%w)", strings.TrimSpace(string(turnErr)), err)
 		}
@@ -836,7 +858,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		if turnErr, rerr := os.ReadFile(filepath.Join(dir, "worker-turn-error.txt")); rerr == nil && len(turnErr) > 0 { //nolint:gosec // isolated sandbox error log
 			return "", fmt.Errorf("deterministic worker turn failed: %s", strings.TrimSpace(string(turnErr)))
 		}
-		return "", errors.New("candidate supervisor loop did not start deterministic worker")
+		return "", fmt.Errorf("candidate supervisor loop did not start deterministic worker (loop output: %s)", pass1Out)
 	}
 	var prMeta canaryPRMeta
 	if err := json.Unmarshal(prMetaRaw, &prMeta); err != nil {
@@ -890,9 +912,14 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 
 	// Passes 3 & 4: candidate's supervisor loop validates the merge worktree,
 	// checks statusCheckRollup and the exact-head review, and merges the PR.
+	var mergeOut []string
 	for range 3 {
-		if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
+		out, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once")
+		if err != nil {
 			return "", fmt.Errorf("running candidate supervisor loop (merge): %w", err)
+		}
+		if out != "" {
+			mergeOut = append(mergeOut, out)
 		}
 	}
 
@@ -929,7 +956,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if !slices.ContainsFunc(events, func(e state.Event) bool {
 		return (e.Verb == "supervisor.merge" || e.Verb == "merged") && (e.Subject == prRef || strings.Contains(e.Detail, prRef) || strings.Contains(e.Detail, prMeta.HeadSHA))
 	}) {
-		return "", fmt.Errorf("candidate state lacks merge event for %s", prRef)
+		return "", fmt.Errorf("candidate state lacks merge event for %s (loop outputs: %s)", prRef, strings.Join(mergeOut, " | "))
 	}
 
 	// Verify the fresh PR created by this run was reviewed on headSHA, passed
@@ -962,7 +989,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if observed.Number != prMeta.PRNum || observed.HeadRefName != branch || observed.HeadRefOid != prMeta.HeadSHA {
 		return "", fmt.Errorf("sandbox PR %s head mismatch: got #%d ref=%s oid=%s, want #%d ref=%s oid=%s", prRef, observed.Number, observed.HeadRefName, observed.HeadRefOid, prMeta.PRNum, branch, prMeta.HeadSHA)
 	}
-	if !isOwnedCanaryPR(cfg.Repo, runID, observed.HeadRefName, observed.Body) || !containsExactLine(observed.Body, digestLine) || !containsExactLine(observed.Body, projectLine) || !containsExactLine(observed.Body, marker) {
+	if !isOwnedCanaryBranch(runID, observed.HeadRefName) || !containsExactLine(observed.Body, digestLine) || !containsExactLine(observed.Body, projectLine) || !containsExactLine(observed.Body, marker) {
 		return "", fmt.Errorf("sandbox PR %s ownership or candidate digest marker mismatch", prRef)
 	}
 	hasExactReview := slices.ContainsFunc(observed.Reviews, func(r struct {
@@ -986,6 +1013,26 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		return "", fmt.Errorf("sandbox PR %s was not merged (state=%s mergeCommit=%s)", prRef, observed.State, observed.MergeCommit.OID)
 	}
 	return observed.MergeCommit.OID, nil
+}
+
+func serveCanaryGit() int {
+	args := os.Args[1:]
+	if slices.Contains(args, "get-url") && slices.Contains(args, originRemote) {
+		fmt.Printf("https://github.com/%s.git\n", os.Getenv("CANARY_REPO"))
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, os.Getenv("CANARY_REAL_GIT"), args...) //nolint:gosec // isolated sandbox git wrapper
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		return 1
+	}
+	return 0
 }
 
 func serveCanaryClaude() int {
@@ -1219,12 +1266,21 @@ func cleanupSandboxRunWithEnv(ctx context.Context, ghBin string, env []string, r
 	if runID == "" {
 		return errors.New("sandbox cleanup requires a non-empty run ID")
 	}
+	if len(env) == 0 {
+		token := strings.TrimSpace(os.Getenv("BEEKEEPER_CANARY_GITHUB_TOKEN"))
+		if token == "" {
+			return errors.New("sandbox cleanup requires explicit BEEKEEPER_CANARY_GITHUB_TOKEN")
+		}
+		env = []string{
+			"PATH=" + filepath.Dir(ghBin) + ":/usr/local/bin:/usr/bin:/bin",
+			"GH_TOKEN=" + token,
+			"GITHUB_TOKEN=" + token,
+		}
+	}
 
 	runGH := func(args ...string) ([]byte, error) {
 		c := exec.CommandContext(ctx, ghBin, args...) //nolint:gosec // allowlisted sandbox cleanup
-		if len(env) > 0 {
-			c.Env = env
-		}
+		c.Env = env
 		return c.CombinedOutput()
 	}
 
@@ -1241,8 +1297,7 @@ func cleanupSandboxRunWithEnv(ctx context.Context, ghBin string, env []string, r
 		return err
 	}
 	for _, pr := range prs {
-		ref := pr.headRef()
-		if !isOwnedCanaryPR(repo, runID, ref, pr.Body) {
+		if !isOwnedCanaryPR(pr, repo, runID) {
 			continue
 		}
 		if closeOut, cerr := runGH("pr", "close", strconv.Itoa(pr.Number), "--repo", repo, "--delete-branch"); cerr != nil {
@@ -1256,7 +1311,7 @@ func cleanupSandboxRunWithEnv(ctx context.Context, ghBin string, env []string, r
 		return fmt.Errorf("verifying sandbox PR cleanup: %w", err)
 	}
 	for _, pr := range remaining {
-		if isOwnedCanaryPR(repo, runID, pr.headRef(), pr.Body) {
+		if isOwnedCanaryPR(pr, repo, runID) {
 			return fmt.Errorf("sandbox PR #%d for run %s remained open after cleanup", pr.Number, runID)
 		}
 	}
@@ -1308,7 +1363,11 @@ type sandboxOpenPR struct {
 	HeadRefName string `json:"headRefName"`
 	Body        string `json:"body"`
 	Head        struct {
-		Ref string `json:"ref"`
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+			Fork     bool   `json:"fork"`
+		} `json:"repo"`
 	} `json:"head"`
 }
 

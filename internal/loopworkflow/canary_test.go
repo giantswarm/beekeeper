@@ -15,13 +15,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
 )
 
@@ -267,10 +265,12 @@ func TestCanaryRequiresAndVerifiesCandidateAndSiblingBundlesBeforeExecution(t *t
 	}
 }
 
-// Finding 6 & Re-review Finding 3: Cleanup ownership matching is delimited and
-// bound to (repo, runID, branch), leaving prefix-colliding runs (run-42 vs
-// run-420) and copied markers untouched, while paginating through open PRs and
-// deleting orphaned owned branches independently of PR existence.
+// Finding 6 & Re-review Findings 1 & 3: Cleanup requires explicit sandbox
+// credentials, ownership matching is delimited and bound to (repo, runID,
+// branch) and head.repo (non-fork matching repository), leaving prefix-colliding
+// runs (run-42 vs run-420), fork PRs, cross-repo PRs, null-repo PRs, non-hex
+// cand- branches, and copied markers untouched, while paginating through open
+// PRs and deleting orphaned owned branches independently of PR existence.
 func TestCleanupSandboxRunDelimitedOwnership(t *testing.T) {
 	dir := t.TempDir()
 	closedFile := filepath.Join(dir, "closed.txt")
@@ -282,36 +282,49 @@ func TestCleanupSandboxRunDelimitedOwnership(t *testing.T) {
 	ownedMarker := canaryOwnershipMarker(testSandboxRepo, "run-42", ownedBranch)
 	collidingBranch := canaryBranchName("run-420", "abcdef1234567890")
 	collidingMarker := canaryOwnershipMarker(testSandboxRepo, "run-420", collidingBranch)
+	nonHexBranch := "canary/run-42/cand-nothexzzzzzz"
+	nonHexMarker := canaryOwnershipMarker(testSandboxRepo, "run-42", nonHexBranch)
 
 	// Emit two concatenated JSON pages as `gh api --paginate` does, then after
 	// PR #11 is closed and orphanBranch is deleted, omit them on verification.
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
+if [ -z "${GH_TOKEN:-}" ]; then
+  echo "missing GH_TOKEN" >&2
+  exit 1
+fi
 if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then
   case "$3" in
     */pulls*)
       if [ -f %q ]; then
         printf '[
-          {"number":12,"head":{"ref":%q},"body":%q},
-          {"number":13,"head":{"ref":"feat/unrelated"},"body":%q}
+          {"number":12,"head":{"ref":%q,"repo":{"full_name":%q,"fork":false}},"body":%q},
+          {"number":13,"head":{"ref":"feat/unrelated","repo":{"full_name":%q,"fork":false}},"body":%q},
+          {"number":14,"head":{"ref":%q,"repo":{"full_name":%q,"fork":false}},"body":%q},
+          {"number":15,"head":{"ref":%q,"repo":{"full_name":"attacker/beekeeper-Stage-Canary","fork":true}},"body":%q},
+          {"number":16,"head":{"ref":%q,"repo":{"full_name":"giantswarm/other-repo","fork":false}},"body":%q},
+          {"number":17,"head":{"ref":%q,"repo":null},"body":%q}
         ]'
         exit 0
       fi
       printf '[
-        {"number":11,"head":{"ref":%q},"body":%q},
-        {"number":12,"head":{"ref":%q},"body":%q}
+        {"number":11,"head":{"ref":%q,"repo":{"full_name":%q,"fork":false}},"body":%q},
+        {"number":12,"head":{"ref":%q,"repo":{"full_name":%q,"fork":false}},"body":%q}
       ][
-        {"number":13,"head":{"ref":"feat/unrelated"},"body":%q},
-        {"number":14,"head":{"ref":"canary/run-42/cand-other"},"body":%q}
+        {"number":13,"head":{"ref":"feat/unrelated","repo":{"full_name":%q,"fork":false}},"body":%q},
+        {"number":14,"head":{"ref":%q,"repo":{"full_name":%q,"fork":false}},"body":%q},
+        {"number":15,"head":{"ref":%q,"repo":{"full_name":"attacker/beekeeper-Stage-Canary","fork":true}},"body":%q},
+        {"number":16,"head":{"ref":%q,"repo":{"full_name":"giantswarm/other-repo","fork":false}},"body":%q},
+        {"number":17,"head":{"ref":%q,"repo":null},"body":%q}
       ]'
       exit 0
       ;;
     */git/matching-refs/heads/*)
       if [ -f %q ]; then
-        printf '[{"ref":"refs/heads/%s"},{"ref":"refs/heads/canary/run-42/not-cand"}]'
+        printf '[{"ref":"refs/heads/%s"},{"ref":"refs/heads/%s"},{"ref":"refs/heads/canary/run-42/not-cand"}]'
         exit 0
       fi
-      printf '[{"ref":"refs/heads/%s"}][{"ref":"refs/heads/%s"},{"ref":"refs/heads/canary/run-42/not-cand"}]'
+      printf '[{"ref":"refs/heads/%s"}][{"ref":"refs/heads/%s"},{"ref":"refs/heads/%s"},{"ref":"refs/heads/canary/run-42/not-cand"}]'
       exit 0
       ;;
   esac
@@ -325,17 +338,35 @@ if [ "$1" = "api" ] && [ "$2" = "-X" ] && [ "$3" = "DELETE" ]; then
   exit 0
 fi
 exit 1
-`, closedFile, collidingBranch, collidingMarker, ownedMarker,
-		ownedBranch, ownedMarker, collidingBranch, collidingMarker,
-		ownedMarker, ownedMarker,
-		deletedBranchesFile, collidingBranch,
-		orphanBranch, collidingBranch,
+`, closedFile,
+		collidingBranch, testSandboxRepo, collidingMarker,
+		testSandboxRepo, ownedMarker,
+		nonHexBranch, testSandboxRepo, nonHexMarker,
+		ownedBranch, ownedMarker,
+		ownedBranch, ownedMarker,
+		ownedBranch, ownedMarker,
+		ownedBranch, testSandboxRepo, ownedMarker,
+		collidingBranch, testSandboxRepo, collidingMarker,
+		testSandboxRepo, ownedMarker,
+		nonHexBranch, testSandboxRepo, nonHexMarker,
+		ownedBranch, ownedMarker,
+		ownedBranch, ownedMarker,
+		ownedBranch, ownedMarker,
+		deletedBranchesFile, collidingBranch, nonHexBranch,
+		orphanBranch, collidingBranch, nonHexBranch,
 		closedFile, deletedBranchesFile)
 
 	if err := os.WriteFile(ghStub, []byte(script), 0o700); err != nil { //nolint:gosec // test stub executable
 		t.Fatal(err)
 	}
 
+	// Missing BEEKEEPER_CANARY_GITHUB_TOKEN fails closed without invoking gh.
+	t.Setenv("BEEKEEPER_CANARY_GITHUB_TOKEN", "")
+	if err := CleanupSandboxRun(t.Context(), ghStub, testSandboxRepo, testOrg, "run-42"); err == nil || !strings.Contains(err.Error(), "requires explicit BEEKEEPER_CANARY_GITHUB_TOKEN") {
+		t.Fatalf("expected missing token error, got: %v", err)
+	}
+
+	t.Setenv("BEEKEEPER_CANARY_GITHUB_TOKEN", "sandbox-cleanup-token")
 	if err := CleanupSandboxRun(t.Context(), ghStub, testSandboxRepo, testOrg, "run-42"); err != nil {
 		t.Fatalf("CleanupSandboxRun failed: %v", err)
 	}
@@ -516,7 +547,7 @@ func (h *sandboxHarness) installTools(t *testing.T, repo, gitBin string) {
 	}
 
 	ghScript := fmt.Sprintf(`#!/usr/bin/env python3
-import json, os, subprocess, sys
+import datetime, json, os, re, subprocess, sys
 
 state_path = %q
 origin_path = %q
@@ -526,6 +557,18 @@ fail_close = os.environ.get("SANDBOX_FAIL_CLOSE") == "1"
 fail_pr_create = os.environ.get("SANDBOX_FAIL_PR_CREATE") == "1"
 fail_branch_delete = os.environ.get("SANDBOX_FAIL_BRANCH_DELETE") == "1"
 
+if os.environ.get("SECRET_SENTINEL"):
+    sys.stderr.write("leaked SECRET_SENTINEL into gh\n")
+    sys.exit(1)
+sentinel_home = os.environ.get("TEST_SENTINEL_HOME")
+if sentinel_home and os.environ.get("HOME") == sentinel_home:
+    sys.stderr.write("inherited live HOME in gh\n")
+    sys.exit(1)
+sentinel_cfg = os.environ.get("TEST_SENTINEL_CFG")
+if sentinel_cfg and os.environ.get("BEEKEEPER_CONFIG") == sentinel_cfg:
+    sys.stderr.write("inherited live BEEKEEPER_CONFIG in gh\n")
+    sys.exit(1)
+
 with open(state_path, "r") as f:
     prs = json.load(f)
 
@@ -533,22 +576,44 @@ def save():
     with open(state_path, "w") as f:
         json.dump(prs, f)
 
+def now_iso(offset_sec=0):
+    dt = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=offset_sec)
+    return dt.strftime("%%Y-%%m-%%dT%%H:%%M:%%SZ")
+
 args = sys.argv[1:]
 if args[:2] == ["auth", "token"]:
-    print("sandbox-gh-token")
-    sys.exit(0)
+    with open(state_path + ".gh-auth-token-called", "w") as f:
+        f.write("1")
+    sys.stderr.write("unexpected call to gh auth token\n")
+    sys.exit(1)
+
+if not os.environ.get("GH_TOKEN"):
+    sys.stderr.write("missing GH_TOKEN in gh invocation\n")
+    sys.exit(1)
 
 if args[:2] == ["api", "user"]:
-    print("canary-bot")
+    if "--jq" in args:
+        print("canary-bot")
+    else:
+        print(json.dumps({"login": "canary-bot"}))
+    sys.exit(0)
+
+if args[:2] == ["search", "prs"]:
+    print("[]")
+    sys.exit(0)
+
+if args[:2] == ["api", "-i"]:
+    sys.stdout.write("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n[]\n")
     sys.exit(0)
 
 if args[:2] == ["api", "--paginate"]:
     endpoint = args[2]
-    if "/pulls" in endpoint:
+    if "/pulls" in endpoint and "/reviews" not in endpoint and "/comments" not in endpoint:
         open_prs = []
         for p in prs:
             if p["state"] == "OPEN":
-                open_prs.append({"number": p["number"], "head": {"ref": p["headRefName"]}, "body": p["body"]})
+                head_repo = p.get("headRepo", {"full_name": repo, "fork": False})
+                open_prs.append({"number": p["number"], "head": {"ref": p["headRefName"], "repo": head_repo}, "body": p["body"]})
         print(json.dumps(open_prs))
         sys.exit(0)
     if "/git/matching-refs/heads/" in endpoint:
@@ -560,6 +625,9 @@ if args[:2] == ["api", "--paginate"]:
         refs = [{"ref": line} for line in out.splitlines() if line.strip()]
         print(json.dumps(refs))
         sys.exit(0)
+    if "/reviews" in endpoint or "/comments" in endpoint:
+        print("[]")
+        sys.exit(0)
 
 if len(args) >= 4 and args[:3] == ["api", "-X", "DELETE"] and "/git/refs/heads/" in args[3]:
     if fail_branch_delete or os.path.exists(state_path + ".fail-branch-delete"):
@@ -569,24 +637,187 @@ if len(args) >= 4 and args[:3] == ["api", "-X", "DELETE"] and "/git/refs/heads/"
     subprocess.check_call([git_bin, "--git-dir=" + origin_path, "update-ref", "-d", "refs/heads/" + branch])
     sys.exit(0)
 
+if args[:2] == ["api", "graphql"]:
+    joined_args = " ".join(args)
+    if "fields(first:50)" in joined_args:
+        project_obj = {
+            "id": "PVT_canary",
+            "fields": {"nodes": [{
+                "id": "PVTF_status",
+                "name": "Status",
+                "options": [
+                    {"id": "OPT_todo", "name": "Todo"},
+                    {"id": "OPT_in_progress", "name": "In Progress"},
+                    {"id": "OPT_done", "name": "Done"},
+                ],
+            }]},
+        }
+        print(json.dumps({"data": {
+            "organization": {"projectV2": project_obj},
+            "repositoryOwner": {"projectV2": project_obj},
+        }}))
+        sys.exit(0)
+    if "items(first:" in joined_args:
+        if os.path.exists(state_path + ".empty-board"):
+            empty_items = {"pageInfo": {"hasNextPage": False, "endCursor": ""}, "nodes": []}
+            print(json.dumps({"data": {
+                "organization": {"projectV2": {"items": empty_items}},
+                "repositoryOwner": {"projectV2": {"items": empty_items}},
+            }}))
+            sys.exit(0)
+        nodes = [{
+            "id": "PVTI_1",
+            "fieldValueByName": {"name": "Todo", "optionId": "OPT_todo"},
+            "status": {"name": "Todo", "updatedAt": "2026-01-01T00:00:00Z"},
+            "content": {
+                "typename": "Issue",
+                "id": "I_1",
+                "number": 1,
+                "title": "Canary sandbox validation issue",
+                "state": "OPEN",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "url": f"https://github.com/{repo}/issues/1",
+                "repository": {"nameWithOwner": repo},
+                "labels": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": ""}},
+                "assignees": {"nodes": []},
+                "SubIssues": {"nodes": []},
+                "subIssuesSummary": {"total": 0, "completed": 0},
+                "blockedBy": {"totalCount": 0, "nodes": []},
+                "parent": None,
+            },
+        }]
+        items_obj = {"pageInfo": {"hasNextPage": False, "endCursor": ""}, "nodes": nodes}
+        print(json.dumps({"data": {
+            "organization": {"projectV2": {"items": items_obj}},
+            "repositoryOwner": {"projectV2": {"items": items_obj}},
+        }}))
+        sys.exit(0)
+    if "projectItems(first:50)" in joined_args:
+        owner_login = repo.split("/")[0]
+        print(json.dumps({"data": {"repository": {"issue": {
+            "id": "I_1",
+            "body": "Canary sandbox validation issue",
+            "parent": None,
+            "projectItems": {"nodes": [{
+                "id": "PVTI_1",
+                "isArchived": False,
+                "project": {"id": "PVT_canary", "number": 7, "owner": {"login": owner_login}},
+                "status": {"name": "Todo", "updatedAt": "2026-01-01T00:00:00Z"},
+            }]},
+        }}}}))
+        sys.exit(0)
+    if "updateProjectV2ItemFieldValue" in joined_args:
+        print(json.dumps({"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}}))
+        sys.exit(0)
+    if "issueOrPullRequest(number:" in joined_args:
+        data = {}
+        for m in re.finditer(r'(i\d+|r\d+):repository\([^)]*\)\{issueOrPullRequest\(number:(\d+)\)', joined_args):
+            alias, num_s = m.group(1), int(m.group(2))
+            state = "OPEN"
+            typename = "Issue"
+            for p in prs:
+                if p["number"] == num_s:
+                    state = p["state"]
+                    typename = "PullRequest"
+            data[alias] = {
+                "issueOrPullRequest": {
+                    "__typename": typename,
+                    "state": state,
+                    "closingIssuesReferences": {"nodes": []},
+                    "timelineItems": {"nodes": []},
+                    "author": {"login": "canary-bot"},
+                    "reviews": {"nodes": []},
+                    "comments": {"nodes": []},
+                },
+            }
+        if not data:
+            data["repository"] = {"issueOrPullRequest": {"__typename": "Issue", "state": "OPEN"}}
+        print(json.dumps({"data": data}))
+        sys.exit(0)
+    if "mergeQueue(" in joined_args:
+        if os.path.exists(state_path + ".unreadable-queue"):
+            sys.stderr.write("simulated unreadable merge queue\n")
+            sys.exit(1)
+        print(json.dumps({"data": {"repository": {"mergeQueue": None}}}))
+        sys.exit(0)
+    if "issue(number:" in joined_args:
+        print(json.dumps({"data": {"repository": {"issue": {"parent": None}}}}))
+        sys.exit(0)
+    print(json.dumps({"data": {}}))
+    sys.exit(0)
+
+if args[0] == "api" and len(args) >= 2:
+    ep = args[1]
+    if ep.startswith("repos/" + repo + "/pulls/"):
+        num = int(ep.rsplit("/", 1)[1])
+        for p in prs:
+            if p["number"] == num:
+                head_repo = p.get("headRepo", {"full_name": repo, "fork": False})
+                print(json.dumps({
+                    "head": {"sha": p["headRefOid"], "ref": p["headRefName"], "repo": head_repo},
+                    "user": {"login": "canary-bot"},
+                }))
+                sys.exit(0)
+        sys.exit(1)
+    if "/commits/" in ep and "--jq" in args:
+        print("2026-01-01T00:00:00Z")
+        sys.exit(0)
+    if "/compare/" in ep and "--jq" in args:
+        print("0")
+        sys.exit(0)
+    if "/rules/branches/" in ep:
+        if os.path.exists(state_path + ".unreadable-queue"):
+            sys.exit(1)
+        print("[]")
+        sys.exit(0)
+    if ep == "repos/" + repo:
+        if os.path.exists(state_path + ".unreadable-queue"):
+            sys.exit(1)
+        if "--jq" in args and ".default_branch" in args:
+            print("main")
+        else:
+            print(json.dumps({"default_branch": "main", "allow_squash_merge": True, "owner": {"type": "Organization"}}))
+        sys.exit(0)
+
 if args[:2] == ["pr", "create"]:
     if fail_pr_create or os.path.exists(state_path + ".fail-pr-create"):
         sys.stderr.write("simulated pr create failure after branch push\n")
         sys.exit(1)
     head = args[args.index("--head") + 1]
     body = args[args.index("--body") + 1]
+    title = args[args.index("--title") + 1] if "--title" in args else "chore(canary): stage"
     oid = subprocess.check_output([git_bin, "--git-dir=" + origin_path, "rev-parse", "refs/heads/" + head], text=True).strip()
     num = max(p["number"] for p in prs) + 1
     subprocess.check_call([git_bin, "--git-dir=" + origin_path, "update-ref", f"refs/pull/{num}/head", oid])
+    is_draft = os.path.exists(state_path + ".draft-pr")
+    rollup = (
+        [{"name": "test", "status": "IN_PROGRESS", "conclusion": ""}]
+        if is_draft
+        else [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    )
     prs.append({
         "number": num,
+        "url": f"https://github.com/{repo}/pull/{num}",
         "state": "OPEN",
+        "isDraft": is_draft,
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+        "baseRefName": "main",
         "headRefName": head,
         "headRefOid": oid,
+        "headRepository": {"name": repo.split("/")[1]},
+        "headRepositoryOwner": {"login": repo.split("/")[0]},
+        "headRepo": {"full_name": repo, "fork": False},
+        "title": title,
         "body": body,
+        "author": {"login": "canary-bot"},
+        "commits": [{"oid": oid, "parents": [{"oid": "0000000000000000000000000000000000000000"}]}],
+        "files": [{"path": ".beekeeper-canary"}],
         "mergeCommit": {"oid": ""},
         "reviews": [],
-        "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        "comments": [],
+        "statusCheckRollup": rollup,
     })
     save()
     print(f"https://github.com/{repo}/pull/{num}")
@@ -597,7 +828,15 @@ if args[:2] == ["pr", "review"]:
     body = args[args.index("--body") + 1]
     for p in prs:
         if p["number"] == num:
-            p["reviews"].append({"body": body})
+            p["reviews"].append({
+                "id": f"PRR_{num}_{len(p['reviews']) + 1}",
+                "state": "COMMENTED",
+                "body": body,
+                "submittedAt": now_iso(2),
+                "author": {"login": "canary-bot"},
+                "authorAssociation": "MEMBER",
+                "commit": {"oid": p["headRefOid"]},
+            })
     save()
     sys.exit(0)
 
@@ -608,8 +847,29 @@ if args[:2] == ["pr", "merge"]:
         if p["number"] == num:
             if p["headRefOid"] != match_oid:
                 sys.exit(1)
+            tree_oid = subprocess.check_output(
+                [git_bin, "--git-dir=" + origin_path, "rev-parse", match_oid + "^{tree}"],
+                text=True,
+            ).strip()
+            main_oid = subprocess.check_output(
+                [git_bin, "--git-dir=" + origin_path, "rev-parse", "refs/heads/main"],
+                text=True,
+            ).strip()
+            env = dict(os.environ)
+            env.update({
+                "GIT_AUTHOR_NAME": "Canary Merger",
+                "GIT_AUTHOR_EMAIL": "canary@example.invalid",
+                "GIT_COMMITTER_NAME": "Canary Merger",
+                "GIT_COMMITTER_EMAIL": "canary@example.invalid",
+            })
+            merge_oid = subprocess.check_output(
+                [git_bin, "--git-dir=" + origin_path, "commit-tree", tree_oid, "-p", main_oid, "-m", f"Merge PR #{num}"],
+                text=True,
+                env=env,
+            ).strip()
+            subprocess.check_call([git_bin, "--git-dir=" + origin_path, "update-ref", "refs/heads/main", merge_oid])
             p["state"] = "MERGED"
-            p["mergeCommit"] = {"oid": "9999999999999999999999999999999999999999"}
+            p["mergeCommit"] = {"oid": merge_oid}
             if "--delete-branch" in args:
                 subprocess.call([git_bin, "--git-dir=" + origin_path, "update-ref", "-d", "refs/heads/" + p["headRefName"]])
             if os.path.exists(state_path + ".leave-open"):
@@ -618,6 +878,7 @@ if args[:2] == ["pr", "merge"]:
                     "state": "OPEN",
                     "headRefName": p["headRefName"],
                     "headRefOid": p["headRefOid"],
+                    "headRepo": {"full_name": repo, "fork": False},
                     "body": p["body"],
                     "mergeCommit": {"oid": ""},
                     "reviews": [],
@@ -657,6 +918,9 @@ sys.exit(1)
 	t.Setenv("PATH", binDir+":/usr/bin:/bin")
 	t.Setenv("BEEKEEPER_CANARY_ORIGIN", tlsServer.URL+"/"+repo+".git")
 	t.Setenv("BEEKEEPER_CANARY_SSL_CAINFO", caPath)
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
 }
 
 func (h *sandboxHarness) hasRemoteBranch(t *testing.T, branch string) bool {
@@ -669,244 +933,62 @@ func (h *sandboxHarness) hasRemoteBranch(t *testing.T, branch string) bool {
 	return c.Run() == nil
 }
 
-func serveTestCandidate() (int, bool) {
-	mode := os.Getenv("TEST_CANDIDATE_MODE")
-	if mode == "" {
-		return 0, false
-	}
-	if os.Getenv("SECRET_SENTINEL") != "" {
-		fmt.Fprintln(os.Stderr, "leaked SECRET_SENTINEL")
-		return 1, true
-	}
-	if sentinelHome := os.Getenv("TEST_SENTINEL_HOME"); sentinelHome != "" && os.Getenv("HOME") == sentinelHome {
-		fmt.Fprintln(os.Stderr, "inherited live HOME")
-		return 1, true
-	}
-	if sentinelCfg := os.Getenv("TEST_SENTINEL_CFG"); sentinelCfg != "" && os.Getenv("BEEKEEPER_CONFIG") == sentinelCfg {
-		fmt.Fprintln(os.Stderr, "inherited live BEEKEEPER_CONFIG")
-		return 1, true
-	}
+var (
+	compiledCandidateOnce  sync.Once
+	compiledCandidateBytes []byte
+	compiledCandidateErr   error
+)
 
-	args := os.Args[1:]
-	joined := strings.Join(args, " ")
-	sandboxDir := os.Getenv("CANARY_SANDBOX_DIR")
-	stateDir := filepath.Join(sandboxDir, "state")
-
-	switch {
-	case joined == "version":
-		fmt.Println("beekeeper v1.2.3 (commit 0123456789abcdef0123456789abcdef01234567)")
-		return 0, true
-	case joined == "supervisor status":
-		return 0, true
-	case slices.Contains(args, "park") && slices.Contains(args, "--on"):
-		idx := slices.Index(args, "--on")
-		asIdx := slices.Index(args, "--as")
-		if idx < 0 || idx+1 >= len(args) || asIdx < 0 || asIdx+1 >= len(args) {
-			fmt.Fprintln(os.Stderr, "missing --on or --as")
-			return 1, true
-		}
-		ref := args[idx+1]
-		worker := args[asIdx+1]
-		c := exec.CommandContext(context.Background(), "git", "rev-parse", "HEAD")
-		out, err := c.CombinedOutput()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "git rev-parse HEAD: %v: %s\n", err, out)
-			return 1, true
-		}
-		head := strings.TrimSpace(string(out))
-		store, err := state.Open(stateDir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-		now := time.Now().UTC()
-		if err := store.Update(func(st *state.State) ([]state.Event, error) {
-			st.ReviewParks = append(st.ReviewParks, state.ReviewPark{
-				On:         ref,
-				At:         now,
-				ReviewHead: head,
-				Agent:      worker,
-			})
-			return []state.Event{{
-				At:      now,
-				By:      state.Party{Name: worker, Session: os.Getenv("CLAUDE_CODE_SESSION_ID")},
-				Verb:    "agents.park",
-				Subject: ref,
-				Detail:  fmt.Sprintf("%s parked on %s at %s", worker, ref, head),
-			}}, nil
-		}); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-		return 0, true
-	case joined == "supervisor loop --once":
-		store, err := state.Open(stateDir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-		st, err := store.Read()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-		events, err := store.Events(0, nil)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-
-		// Pass 1: admit board work and start deterministic worker via claude --bg.
-		if len(st.Starts) == 0 {
-			if mode == "skip-worker" {
-				return 0, true
-			}
-			workerName := filepath.Base(os.Getenv("CANARY_REPO")) + " 2"
-			c := exec.CommandContext(context.Background(), "claude", "--bg", "-n", workerName, "--", "work") //nolint:gosec // test candidate invoking sandbox claude
-			if out, cerr := c.CombinedOutput(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "claude --bg worker: %v: %s\n", cerr, out)
-				return 1, true
-			}
-			sessionID := "a1b2c301-0000-0000-0000-000000000001"
-			now := time.Now().UTC()
-			if err := store.Update(func(s *state.State) ([]state.Event, error) {
-				s.Starts = append(s.Starts, state.Start{
-					Party:      state.Party{Name: workerName, Session: sessionID},
-					At:         now,
-					Background: true,
-				})
-				s.Agents = append(s.Agents, state.Agent{
-					Party: state.Party{Name: workerName, Session: sessionID},
-					Task:  "canary worker task",
-				})
-				return []state.Event{{
-					At:     now,
-					By:     state.Party{Name: partyLoop},
-					Verb:   "agents.start",
-					Detail: workerName + ": started deterministic worker",
-				}}, nil
-			}); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1, true
-			}
-			return 0, true
-		}
-
-		if len(st.ReviewParks) == 0 {
-			return 0, true
-		}
-		park := st.ReviewParks[len(st.ReviewParks)-1]
-		hasReviewEvent := slices.ContainsFunc(events, func(e state.Event) bool {
-			return e.Verb == "supervisor.review" && e.Subject == park.On && strings.Contains(e.Detail, park.ReviewHead)
-		})
-
-		// Pass 2: dispatch independent exact-head reviewer via claude --bg.
-		if !hasReviewEvent {
-			if mode == "skip-reviewer" {
-				return 0, true
-			}
-			_, numStr, _ := strings.Cut(park.On, "#")
-			revName := fmt.Sprintf("Review %s %s r1", filepath.Base(os.Getenv("CANARY_REPO")), numStr)
-			c := exec.CommandContext(context.Background(), "claude", "--bg", "-n", revName, "--", "review") //nolint:gosec // test candidate invoking sandbox claude
-			if out, cerr := c.CombinedOutput(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "claude --bg reviewer: %v: %s\n", cerr, out)
-				return 1, true
-			}
-			revSession := "a1b2c302-0000-0000-0000-000000000001"
-			now := time.Now().UTC()
-			if err := store.Update(func(s *state.State) ([]state.Event, error) {
-				s.Starts = append(s.Starts, state.Start{
-					Party:      state.Party{Name: revName, Session: revSession},
-					At:         now,
-					Background: true,
-				})
-				s.Agents = append(s.Agents, state.Agent{
-					Party: state.Party{Name: revName, Session: revSession},
-					Task:  "canary review task",
-				})
-				return []state.Event{
-					{
-						At:     now,
-						By:     state.Party{Name: partyLoop},
-						Verb:   "agents.start",
-						Detail: revName + ": started independent reviewer",
-					},
-					{
-						At:      now,
-						By:      state.Party{Name: partyLoop},
-						Verb:    "supervisor.review",
-						Subject: park.On,
-						Detail:  fmt.Sprintf("[review %s@%s] %s", park.On, park.ReviewHead, revName),
-					},
-				}, nil
-			}); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1, true
-			}
-			return 0, true
-		}
-
-		// Pass 3+: validate and merge exact head.
-		if mode == "no-merge" {
-			return 0, true
-		}
-		hasMergeEvent := slices.ContainsFunc(events, func(e state.Event) bool {
-			return e.Verb == "supervisor.merge" && e.Subject == park.On
-		})
-		if hasMergeEvent {
-			return 0, true
-		}
-		repo, numStr, _ := strings.Cut(park.On, "#")
-		c := exec.CommandContext(context.Background(), "gh", "pr", "merge", numStr, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", park.ReviewHead) //nolint:gosec // test candidate merge command
-		if out, cerr := c.CombinedOutput(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "gh pr merge: %v: %s\n", cerr, out)
-			return 1, true
-		}
-		now := time.Now().UTC()
-		if err := store.Record(state.Event{
-			At:      now,
-			By:      state.Party{Name: partyLoop},
-			Verb:    "supervisor.merge",
-			Subject: park.On,
-			Detail:  fmt.Sprintf("[merge %s@%s] merged", park.On, park.ReviewHead),
-		}); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1, true
-		}
-		return 0, true
-	}
-	return 0, true
-}
-
-func writeFakeCandidate(t *testing.T, dir, name, mode, sentinelHome, sentinelCfg string) string {
+// buildActualCandidate compiles the real beekeeper binary from the repository
+// root with release version/gitSHA ldflags so live canary tests exercise the
+// actual candidate supervisor, worker, park, reviewer, and merge code paths.
+func buildActualCandidate(t *testing.T, dir, name string) string {
 	t.Helper()
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+	compiledCandidateOnce.Do(func() {
+		tmpDir, err := os.MkdirTemp("", "beekeeper-canary-cand-*")
+		if err != nil {
+			compiledCandidateErr = err
+			return
+		}
+		defer func() { _ = os.RemoveAll(tmpDir) }()
+		outBin := filepath.Join(tmpDir, "beekeeper")
+		goBin, err := exec.LookPath("go")
+		if err != nil {
+			compiledCandidateErr = err
+			return
+		}
+		ldflags := "-X github.com/giantswarm/beekeeper/pkg/project.version=v1.2.3 -X github.com/giantswarm/beekeeper/pkg/project.gitSHA=0123456789abcdef0123456789abcdef01234567"
+		c := exec.CommandContext(context.Background(), goBin, "build", "-ldflags", ldflags, "-o", outBin, "../..") //nolint:gosec // test compilation of actual candidate binary
+		if out, berr := c.CombinedOutput(); berr != nil {
+			compiledCandidateErr = fmt.Errorf("go build candidate: %w: %s", berr, out)
+			return
+		}
+		compiledCandidateBytes, compiledCandidateErr = os.ReadFile(outBin) //nolint:gosec // reading compiled test candidate
+	})
+	if compiledCandidateErr != nil {
+		t.Fatal(compiledCandidateErr)
 	}
 	candPath := filepath.Join(dir, name)
-	script := fmt.Sprintf(`#!/bin/sh
-set -eu
-export TEST_CANDIDATE_MODE=%q
-export TEST_SENTINEL_HOME=%q
-export TEST_SENTINEL_CFG=%q
-exec %q "$@"
-`, mode, sentinelHome, sentinelCfg, exe)
-
-	if err := os.WriteFile(candPath, []byte(script), 0o700); err != nil { //nolint:gosec // test candidate executable
+	if err := os.WriteFile(candPath, compiledCandidateBytes, 0o700); err != nil { //nolint:gosec // writing compiled test candidate
 		t.Fatal(err)
 	}
 	return candPath
 }
 
 // Findings 1, 2, 3, & 7 + Re-review Findings 1, 2, & 3:
-// Live sandbox canary authenticates Git HTTPS via an isolated credential helper,
-// drives worker start and a separately dispatched exact-head reviewer through
-// the candidate's paths, rejects candidates that skip worker start or reviewer
-// dispatch or merge, cleans up owned branches when PR creation fails after push
-// or after an interrupted run, and fails closed if exit cleanup fails.
+// Live sandbox canary requires explicit BEEKEEPER_CANARY_GITHUB_TOKEN without
+// falling back to host gh auth token, authenticates Git HTTPS via an isolated
+// credential helper, drives the actual compiled candidate binary through worker
+// admission/start, PR park, independent exact-head reviewer dispatch, review,
+// and merge, fails closed when admission/review/merge boundaries do not
+// advance, cleans up owned branches when PR creation fails after push or after
+// an interrupted run, and fails closed if exit cleanup fails.
 func TestLiveSandboxCanaryFreshWorkflowIsolationAndCleanupGate(t *testing.T) {
 	acceptTestBundles(t)
+	dir := t.TempDir()
+	goodCand := buildActualCandidate(t, dir, "beekeeper-linux-amd64")
+	goodBundle := writeBundle(t, goodCand)
+
 	h := newSandboxHarness(t, testSandboxRepo)
 
 	// Set sentinel live desk environment variables to prove the candidate never
@@ -918,14 +1000,33 @@ func TestLiveSandboxCanaryFreshWorkflowIsolationAndCleanupGate(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", sentinelHome)
 	t.Setenv("BEEKEEPER_CONFIG", sentinelCfg)
 	t.Setenv("SECRET_SENTINEL", "top-secret-live-value")
+	t.Setenv("TEST_SENTINEL_HOME", sentinelHome)
+	t.Setenv("TEST_SENTINEL_CFG", sentinelCfg)
 
-	dir := t.TempDir()
-	goodCand := writeFakeCandidate(t, dir, "beekeeper-linux-amd64", "full", sentinelHome, sentinelCfg)
-	goodBundle := writeBundle(t, goodCand)
+	// 0. Missing BEEKEEPER_CANARY_GITHUB_TOKEN fails closed without invoking
+	// host `gh auth token` (R3 Finding 1).
+	t.Setenv("BEEKEEPER_CANARY_GITHUB_TOKEN", "")
+	noTokenEv, err := StageCanary(t.Context(), CanaryConfig{
+		Candidate: goodCand,
+		Bundle:    goodBundle,
+		Repo:      testSandboxRepo,
+		AllowOrg:  testOrg,
+		Project:   7,
+		Run:       "run-no-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires explicit BEEKEEPER_CANARY_GITHUB_TOKEN") || noTokenEv.Status != update.CanaryStatusFailed {
+		t.Fatalf("missing BEEKEEPER_CANARY_GITHUB_TOKEN: got ev=%+v err=%v", noTokenEv, err)
+	}
+	if _, statErr := os.Stat(h.statePath + ".gh-auth-token-called"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("StageCanary invoked host `gh auth token` fallback")
+	}
 
-	// 1. Fresh run authenticates Git HTTPS fetch & push via the isolated helper
-	// and completes worker start -> PR park -> independent reviewer dispatch ->
-	// exact-head review -> loop merge -> observed merge commit.
+	t.Setenv("BEEKEEPER_CANARY_GITHUB_TOKEN", "sandbox-gh-token")
+
+	// 1. Fresh run executes the actual compiled candidate binary, authenticates
+	// Git HTTPS fetch & push via the isolated helper, and completes worker
+	// start -> PR park -> independent reviewer dispatch -> exact-head review ->
+	// loop merge -> observed merge commit on origin/main.
 	ev, err := StageCanary(t.Context(), CanaryConfig{
 		Candidate: goodCand,
 		Bundle:    goodBundle,
@@ -937,11 +1038,14 @@ func TestLiveSandboxCanaryFreshWorkflowIsolationAndCleanupGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StageCanary(live fresh) failed: %v", err)
 	}
-	if ev.Status != update.CanaryStatusSuccess || ev.MergeCommit != "9999999999999999999999999999999999999999" {
+	if ev.Status != update.CanaryStatusSuccess || ev.MergeCommit == "" || ev.MergeCommit == "2222222222222222222222222222222222222222" {
 		t.Fatalf("unexpected fresh evidence (should not use historical 2222...): %+v", ev)
 	}
 	if h.authUploadPack.Load() < 1 || h.authReceivePack.Load() < 1 {
 		t.Fatalf("expected authenticated HTTPS git fetch and push, got uploadPack=%d receivePack=%d", h.authUploadPack.Load(), h.authReceivePack.Load())
+	}
+	if _, statErr := os.Stat(h.statePath + ".gh-auth-token-called"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("StageCanary invoked `gh auth token` during live run")
 	}
 
 	// 2. HTTPS Git authentication boundary (Re-review Finding 1): if the isolated
@@ -960,28 +1064,33 @@ func TestLiveSandboxCanaryFreshWorkflowIsolationAndCleanupGate(t *testing.T) {
 		t.Fatalf("expected HTTPS git auth failure to fail StageCanary: ev=%+v err=%v", authFailEv, err)
 	}
 
-	// 3. Candidate that skips worker start or independent reviewer dispatch is
-	// rejected even when its loop command exits 0 (Re-review Finding 2).
+	// 3. Lifecycle boundary failures against the actual compiled candidate binary
+	// when board admission, reviewer dispatch, or merge validation cannot advance
+	// (R3 Finding 2).
 	for _, tc := range []struct {
-		mode    string
+		marker  string
+		runID   string
 		wantSub string
 	}{
-		{mode: "skip-worker", wantSub: "did not start deterministic worker"},
-		{mode: "skip-reviewer", wantSub: "did not dispatch independent reviewer"},
-		{mode: "no-merge", wantSub: "candidate state lacks merge event"},
+		{marker: ".empty-board", runID: "run-empty-board", wantSub: "did not start deterministic worker"},
+		{marker: ".draft-pr", runID: "run-draft-pr", wantSub: "did not dispatch independent reviewer"},
+		{marker: ".unreadable-queue", runID: "run-unreadable-queue", wantSub: "candidate state lacks merge event"},
 	} {
-		cand := writeFakeCandidate(t, dir, "beekeeper-"+tc.mode, tc.mode, sentinelHome, sentinelCfg)
-		bundle := writeBundle(t, cand)
+		markerPath := h.statePath + tc.marker
+		if err := os.WriteFile(markerPath, []byte("1"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		failedEv, cerr := StageCanary(t.Context(), CanaryConfig{
-			Candidate: cand,
-			Bundle:    bundle,
+			Candidate: goodCand,
+			Bundle:    goodBundle,
 			Repo:      testSandboxRepo,
 			AllowOrg:  testOrg,
 			Project:   7,
-			Run:       "run-fresh",
+			Run:       tc.runID,
 		})
+		_ = os.Remove(markerPath)
 		if cerr == nil || !strings.Contains(cerr.Error(), tc.wantSub) || failedEv.Status != update.CanaryStatusFailed || failedEv.MergeCommit != "" {
-			t.Fatalf("mode %s: got ev=%+v err=%v, want failure containing %q", tc.mode, failedEv, cerr, tc.wantSub)
+			t.Fatalf("boundary %s: got ev=%+v err=%v, want failure containing %q", tc.marker, failedEv, cerr, tc.wantSub)
 		}
 	}
 
@@ -1151,6 +1260,7 @@ fi
 		"BEEKEEPER_CANARY_REPO=" + testSandboxRepo,
 		"BEEKEEPER_CANARY_ALLOW_ORG=" + testOrg,
 		"BEEKEEPER_CANARY_PROJECT=7",
+		"BEEKEEPER_CANARY_GITHUB_TOKEN=sandbox-token",
 	}
 	if out, cerr := runPublisher(fullEnv...); cerr == nil || !strings.Contains(out, "signature bundle") {
 		t.Fatalf("missing candidate bundle should fail closed: err=%v out=%s", cerr, out)

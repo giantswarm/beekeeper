@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -z "${BEEKEEPER_CANARY_REPO:-}" ] || [ -z "${BEEKEEPER_CANARY_ALLOW_ORG:-}" ] || [ -z "${BEEKEEPER_CANARY_PROJECT:-}" ]; then
-  echo "publish-canary-evidence: BEEKEEPER_CANARY_REPO, BEEKEEPER_CANARY_ALLOW_ORG, and BEEKEEPER_CANARY_PROJECT are required; refusing to fall back to recorded fixture mode" >&2
+if [ -z "${BEEKEEPER_CANARY_REPO:-}" ] || [ -z "${BEEKEEPER_CANARY_ALLOW_ORG:-}" ] || [ -z "${BEEKEEPER_CANARY_PROJECT:-}" ] || [ -z "${BEEKEEPER_CANARY_GITHUB_TOKEN:-}" ]; then
+  echo "publish-canary-evidence: BEEKEEPER_CANARY_REPO, BEEKEEPER_CANARY_ALLOW_ORG, BEEKEEPER_CANARY_PROJECT, and BEEKEEPER_CANARY_GITHUB_TOKEN are required; refusing to fall back to recorded fixture mode" >&2
   exit 1
 fi
 

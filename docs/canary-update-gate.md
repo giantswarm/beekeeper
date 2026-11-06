@@ -55,11 +55,13 @@ verified candidate binary in an isolated temporary environment (`HOME`,
 `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `TMPDIR`, `BEEKEEPER_CONFIG`, and a
 restricted `PATH` isolated from live desk state and credentials) from its first
 invocation (`version`) onward, and refuses if `<path>` resolves to the running
-executable. When a sandbox GitHub token is present, the isolated environment
-provisions a sandbox-scoped Git credential helper (`git-credential-canary` and
-`GIT_ASKPASS`) inside its isolated `GIT_CONFIG_GLOBAL` that reads `GH_TOKEN` from
-the subprocess runtime environment without restoring host Git config or embedding
-tokens into files or remote URLs. In live sandbox mode, `--canary-bundle <bundle>`
+executable. Live sandbox runs require an explicit `BEEKEEPER_CANARY_GITHUB_TOKEN`
+(never falling back to host `gh auth token` or personal desk credentials); the
+isolated environment provisions a sandbox-scoped Git credential helper
+(`git-credential-canary` and `GIT_ASKPASS`) inside its isolated
+`GIT_CONFIG_GLOBAL` that reads `GH_TOKEN` from the subprocess runtime
+environment without restoring host Git config or embedding tokens into files or
+remote URLs. In live sandbox mode, `--canary-bundle <bundle>`
 is required and the candidate binary (plus any `--canary-sibling <sibling>` and
 `<sibling>.bundle`) is verified against its Sigstore bundle before any candidate
 subprocess runs. Recorded fixture runs (`--canary-recorded`) prefix `run` with
@@ -120,7 +122,9 @@ Required sandbox repository settings:
   merge enabled.
 - Automatic branch deletion or cleanup enabled; `CleanupSandboxRun` enumerates
   open pull requests with pagination (`gh api --paginate`) on entry and exit,
-  closes and deletes only branches with the delimited prefix `canary/<run>/` and
+  closes and deletes only non-fork branches originating from `<repo>`
+  (`head.repo.full_name == <repo>` and `head.repo.fork == false`) with the
+  delimited prefix `canary/<run>/cand-<hex>` (lowercase hex, >=12 chars) and
   matching `beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>` line,
   enumerates and deletes any remaining owned refs under
   `repos/<repo>/git/matching-refs/heads/canary/<run>/` matching
@@ -128,7 +132,7 @@ Required sandbox repository settings:
   verifies zero owned open pull requests or branches remain, and propagates any
   cleanup error into a failed canary verdict.
 - Credentials (`BEEKEEPER_CANARY_REPO`, `BEEKEEPER_CANARY_ALLOW_ORG`,
-  `BEEKEEPER_CANARY_PROJECT`, and the sandbox GitHub App credentials) are held in
+  `BEEKEEPER_CANARY_PROJECT`, and `BEEKEEPER_CANARY_GITHUB_TOKEN`) are held in
   the protected CircleCI `architect` context on tag builds (`/v.*/`) and are
   never exposed to untrusted fork pull requests.
 
