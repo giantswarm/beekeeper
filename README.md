@@ -970,6 +970,8 @@ The agent shell prelude (`beekeeper hook sessionstart`) also drops `OP_SESSION_*
 aliases and shell functions of `secret.unlockCommands`, so a vault credential in the environment never
 reaches an agent's command.
 
+For short-lived read-only API calls through `grpcurl`, see [API reads](docs/api-reads.md).
+
 ## Secret operations
 
 `beekeeper secret` is how an agent gets a credential job done without reading a value: sops and op
