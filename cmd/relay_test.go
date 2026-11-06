@@ -34,7 +34,7 @@ var (
 func pendingState() *state.State {
 	return &state.State{
 		Notes: []state.Note{
-			{ID: 1, Kind: noteDecision, For: "Timo", Text: "pick a threshold", Due: relayNow.Add(-time.Minute), Default: "the alert stays as is"},
+			{ID: 1, Kind: noteDecision, For: "Alex", Text: "pick a threshold", Due: relayNow.Add(-time.Minute), Default: "the alert stays as is"},
 			{ID: 2, Kind: noteDecision, Text: "later", Due: relayNow.Add(time.Hour)},
 			{ID: 3, Kind: noteDecision, Text: "no deadline"},
 		},
@@ -58,7 +58,7 @@ func TestFirePendingReportsEachOnce(t *testing.T) {
 		t.Fatalf("got %d lines, %d events:\n%s", len(lines), len(evs), got)
 	}
 	for _, want := range []string{
-		"NOTE DUE: #1 for Timo", "if unanswered: the alert stays as is",
+		"NOTE DUE: #1 for Alex", "if unanswered: the alert stays as is",
 		"TIMER: #1", rollout,
 		`SESSION ENDED: "Continue #37639", which serves ` + issue + ", waiting on a GPU node: re-query " + issue,
 	} {
@@ -95,7 +95,7 @@ func TestSessionChangesLeavesARecordedEndToItsLine(t *testing.T) {
 
 func TestIssueRef(t *testing.T) {
 	for in, want := range map[string]bool{
-		issue: true, "giantswarm/giantswarm#37639": true, "teemow/klaus-lab#1": true,
+		issue: true, "giantswarm/giantswarm#37639": true, "fixture-person/fixture-lab#1": true,
 		"#682": false, "agent-platform#682": false, "giantswarm/agent-platform": false, "https://github.com/a/b/issues/1": false,
 	} {
 		if got := issueRef.MatchString(in); got != want {

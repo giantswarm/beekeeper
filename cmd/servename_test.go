@@ -11,12 +11,14 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const exampleToolRepo = "example/tool"
+
 const (
 	untitledPID    = 1<<23 + 34
 	unrosteredPID  = 1<<23 + 35
-	untitledName   = "klaus-lab-34"
+	untitledName   = "fixture-lab-34"
 	rosterName     = "BK worker"
-	unrosteredName = "klaus-lab-35"
+	unrosteredName = "fixture-lab-35"
 	servesRoster   = `"BK worker" serves`
 	servesPark     = `"BK park" serves`
 )
@@ -65,7 +67,7 @@ func TestServeRecordsTheRosterName(t *testing.T) {
 	if out, err := serve(a, untitledName, "giantswarm/beekeeper#1027"); err != nil || !strings.Contains(out, `"BK worker" serves giantswarm/beekeeper#1027`) {
 		t.Fatalf("serve the roster's session: %q, %v", out, err)
 	}
-	if out, err := serve(a, unrosteredName, "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"klaus-lab-35" serves giantswarm/beekeeper#1026`) {
+	if out, err := serve(a, unrosteredName, "giantswarm/beekeeper#1026"); err != nil || !strings.Contains(out, `"fixture-lab-35" serves giantswarm/beekeeper#1026`) {
 		t.Fatalf("serve the session off the roster: %q, %v", out, err)
 	}
 	st, _ := store.Read()
@@ -99,7 +101,7 @@ func TestServeResolvesTheSession(t *testing.T) {
 		{name: "session off the roster", q: unrosteredName, want: strconv.Quote(unrosteredName) + " serves"},
 		{name: "whole name before a part", q: "BK park", want: servesPark},
 		{name: "roster agent without a CLI", q: "BK parked worker", want: `"BK parked worker" serves giantswarm/beekeeper#789; no CLI of "BK parked worker" runs`},
-		{name: "part of several names", q: "klaus-lab", refusal: `"klaus-lab" matches 2 sessions: "klaus-lab-34" (s` + strconv.Itoa(untitledPID) + `), "klaus-lab-35"`},
+		{name: "part of several names", q: "fixture-lab", refusal: `"fixture-lab" matches 2 sessions: "fixture-lab-34" (s` + strconv.Itoa(untitledPID) + `), "fixture-lab-35"`},
 		{name: "task title", q: "BK park (opus, builds)", want: servesPark},
 		{name: "task title, any case", q: "bk PARK (Opus, Builds)", want: servesPark},
 		{name: "roster name and a suffix", q: "BK parked worker (sonnet, no build)", want: `"BK parked worker" serves`},
@@ -179,7 +181,7 @@ func TestServeAWorkerRecordsAndClearsOnlyItsOwn(t *testing.T) {
 
 func TestServeAcceptsItems(t *testing.T) {
 	const waits = "fixture review"
-	for _, item := range []string{"example/tool", "investigate build failures", "example/tool#42"} {
+	for _, item := range []string{exampleToolRepo, "investigate build failures", "example/tool#42"} {
 		t.Run(item, func(t *testing.T) {
 			a, store := serveApp(t)
 			out, err := serve(a, rosterName, item, "--waits", waits)
@@ -227,7 +229,7 @@ func TestServedOpenSkipsItemsWithoutAState(t *testing.T) {
 	a, store := serveApp(t)
 	me := state.Party{Session: "free-text-session"}
 	if err := store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: "example/tool"}}
+		st.Records = []state.Record{{Session: me, Issue: "investigate build failures"}, {Session: me, Issue: exampleToolRepo}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/execution"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 const executionRerun = execution.CIRerun
@@ -33,7 +34,7 @@ func (a *app) executionCIRerun(ctx context.Context, host string, req execution.C
 	if err != nil {
 		return nil, err
 	}
-	r, _ := executionRecord(st, req.Ref)
+	r, i := executionRecord(st, req.Ref)
 	if r == nil || req.Protocol != execution.Protocol || req.RequestID == "" || req.Ref.Validate() != nil || string(req.Ref.Host) != host || !execution.VerifyCallback(req, r.Request.ControlKey) {
 		return nil, errors.New("unauthenticated execution callback")
 	}
@@ -49,9 +50,21 @@ func (a *app) executionCIRerun(ctx context.Context, host string, req execution.C
 	if executionReviewHead(ctx, r, on, "") == "" {
 		return nil, refused("CI rerun requires the execution's own pull request")
 	}
+	// Record the request before starting CI. Keep credentials, command output
+	// and external errors out of the audit trail.
+	actor := st.Starts[i].Party
+	if err := a.store.Update(func(*state.State) ([]state.Event, error) {
+		return []state.Event{event(actor, "execution.ci-rerun-requested", "%s", on)}, nil
+	}); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	return runExecutionCIRerun(ctx, a.cfg.Sandbox.Devctl, repository, request.PR)
+	result, runErr := runExecutionCIRerun(ctx, a.cfg.Sandbox.Devctl, repository, request.PR)
+	logErr := a.store.Update(func(*state.State) ([]state.Event, error) {
+		return []state.Event{event(actor, "execution.ci-rerun-result", "%s: code=%d command-error=%t", on, result.Code, runErr != nil)}, nil
+	})
+	return result, errors.Join(runErr, logErr)
 }
 
 // devctlBinary is devctl's default command name.

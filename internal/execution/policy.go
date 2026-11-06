@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -42,6 +43,18 @@ type HostConfig struct {
 	// Tools pins the worker toolchain (go, gh) a worker calls by bare name.
 	// Omitted, it leaves the configuration digest of a host without it as is.
 	Tools map[string]ToolConfig `yaml:"tools,omitempty" json:"tools,omitempty"`
+	// Retention is how long a retired execution's moved-aside resources are
+	// kept, a Go duration. Omitted, it is DefaultRetention and leaves the
+	// configuration digest of a host without it as is.
+	Retention string `yaml:"retention,omitempty" json:"retention,omitempty"`
+}
+
+// retention is the validated Retention, DefaultRetention when unset.
+func (c HostConfig) retention() time.Duration {
+	if d, err := time.ParseDuration(c.Retention); err == nil && d > 0 {
+		return d
+	}
+	return DefaultRetention
 }
 
 // The adapter relies on restricted settings and auth status's configDirectory
@@ -60,6 +73,11 @@ const AgyVersions = ">= 1.4.7, < 2.0.0"
 func (c HostConfig) Validate() error {
 	if !ValidIdentity(string(c.Identity)) || !HostPath(c.WorkspaceRoot) || c.WorkspaceRoot == "/" || !HostPath(c.RulesFile) || c.MaxBusy < 1 || len(c.Repositories) == 0 && len(c.RepositoryOrgs) == 0 || len(c.Coordinators) == 0 || len(c.Harnesses) == 0 {
 		return errors.New("execution host requires identity, workspace root, repositories, coordinators, maxBusy and harness claude, codex, agy or omp")
+	}
+	if c.Retention != "" {
+		if d, err := time.ParseDuration(c.Retention); err != nil || d <= 0 {
+			return errors.New("execution host retention must be a positive duration")
+		}
 	}
 	if err := validateRepositoryOrgs(c.RepositoryOrgs); err != nil {
 		return err
@@ -343,7 +361,7 @@ func (s *Server) Prepare(p Policy) (string, error) {
 	if err := ownedDirectory(s.Config.WorkspaceRoot); err != nil {
 		return "", err
 	}
-	for name, b := range map[string][]byte{"settings.json": s.settings(), "CLAUDE.md": s.Rules} {
+	for name, b := range map[string][]byte{claudeSettingsFile: s.settings(), claudeRulesFile: s.Rules} {
 		if err := atomicFile(filepath.Join(s.Root, name), b); err != nil {
 			return "", err
 		}
@@ -406,7 +424,7 @@ func (s *Server) InstalledPolicy() (Policy, error) {
 	if p != s.Policy() {
 		return p, errors.New("installed execution policy is stale; prepare the matching bundle")
 	}
-	for name, digest := range map[string]string{"settings.json": p.SettingsDigest, "CLAUDE.md": p.RulesDigest} {
+	for name, digest := range map[string]string{claudeSettingsFile: p.SettingsDigest, claudeRulesFile: p.RulesDigest} {
 		b, err := readRegular(filepath.Join(s.Root, name), MaxWire)
 		if err != nil || Digest(b) != digest {
 			return p, errors.New("installed execution rules or hooks do not match the policy")
@@ -474,7 +492,7 @@ func (s *Server) probe(ctx context.Context, name string, h HarnessConfig, readin
 	if name == HarnessOmp {
 		return s.probeOmp(ctx, h, readiness)
 	}
-	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, "settings.json"), "--version")
+	version, err := s.command(ctx, "", cleanEnvironment(h.ConfigDir, s.Executable), h.Executable, "--restricted", "--settings", filepath.Join(s.Root, claudeSettingsFile), "--version")
 	parts := strings.Fields(string(version))
 	if err != nil || len(parts) == 0 || parts[0] != h.Version {
 		readiness.VersionCheck = probeFailed
@@ -529,7 +547,8 @@ func (s *Server) probeCodex(ctx context.Context, h HarnessConfig, readiness *Har
 }
 
 // agyEnvironment runs agy against the managed agy home only while keeping the
-// host account's Go build and module caches for worker build commands.
+// host account's Go build and module caches for its probes; a worker's run
+// replaces them with its owned paths (ownedEnvironment).
 func (s *Server) agyEnvironment() []string {
 	return s.agyEnvironmentWithHome(s.agyHomeDir())
 }

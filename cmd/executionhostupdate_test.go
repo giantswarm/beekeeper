@@ -723,7 +723,7 @@ func TestHostReleaseInputReadsWhatTheCoordinatorSends(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		"a device":    {null, "", true},
+		litADevice:    {null, "", true},
 		"no input":    {strings.NewReader(""), "", true},
 		"a lookup":    {strings.NewReader(" {\"tag\":\"v0.6.0\"}\n"), `{"tag":"v0.6.0"}`, true},
 		"over limits": {strings.NewReader(strings.Repeat(" ", execution.MaxWire+1)), "", false},

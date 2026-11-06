@@ -43,7 +43,7 @@ Without a subcommand, lists the open notes.`,
 	var refs []string
 	var draft noteDraft
 	add := &cobra.Command{
-		Use:   "add <text>",
+		Use:   "add <question>",
 		Short: "Add a note",
 		Long: `Add a note for a person (--for). --kind is decision, the default, or
 login. A decision is refused without --due and a --default that is an
@@ -145,7 +145,12 @@ A decision that asks whether to merge a pull request (to approve, confirm
 or authorise its merge) is refused from anyone, logged as note.redirected:
 the supervisor loop merges a pull request after its desk review and the
 fixes of its findings, once its checks are green, and asks nobody.`,
-		Args: cobra.MinimumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageErr("a note needs a question as its first argument; flags provide its context\nUsage: %s", cmd.UseLine())
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := untilTime(a.now, due)
 			if err != nil {

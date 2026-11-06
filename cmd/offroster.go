@@ -103,7 +103,8 @@ func (a *app) callerAgent(st *state.State, me state.Party) int {
 	if i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }); i >= 0 || a.as == "" {
 		return i
 	}
+	// An explicit --as compares names and ownership without session identity.
 	return slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
-		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(me)
+		return ag.Execution == nil && strings.EqualFold(ag.Name, me.Name) && state.Party{Name: me.Name, Person: ag.Person, Host: ag.Host}.Is(state.Party{Name: me.Name, Person: me.Person, Host: me.Host})
 	})
 }
