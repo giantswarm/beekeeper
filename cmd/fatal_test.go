@@ -26,7 +26,7 @@ func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 }
 
 func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
-	for _, status := range []string{fatalDisabledState, "masked", "not-found", "enabled", "unavailable"} {
+	for _, status := range []string{fatalDisabledState, "masked", "not-found", fatalEnabledState, "unavailable"} {
 		t.Run(status, func(t *testing.T) {
 			fakeFatalRun(t, func(args []string) (string, int) {
 				if slices.Contains(args, "is-enabled") {
@@ -35,7 +35,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 				return "", 3
 			})
 			o := fatalService(t.Context(), "beekeeper-supervisor-loop.service")
-			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == "enabled") || o.Unknown != (status == "unavailable") {
+			if o.Disabled != (status == fatalDisabledState || status == "masked" || status == "not-found") || o.Failed != (status == fatalEnabledState) || o.Unknown != (status == "unavailable") {
 				t.Fatalf("%+v", o)
 			}
 		})
@@ -43,7 +43,7 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 }
 
 func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
-	for _, hold := range []string{ghNone, "stop", "starts"} {
+	for _, hold := range []string{ghNone, "stop", holdStarts} {
 		t.Run(hold, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
@@ -56,7 +56,7 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				if hold == "stop" {
 					st.Stop = &state.Stop{Reason: "person stopped", At: time.Now()}
 				}
-				if hold == "starts" {
+				if hold == holdStarts {
 					st.Holds = []state.Hold{{Target: holdStarts, Reason: "person held", At: time.Now()}}
 				}
 				return nil, nil
@@ -250,7 +250,7 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 			return "", 0
 		}
 		if slices.Contains(args, "is-enabled") {
-			return "enabled", 0
+			return fatalEnabledState, 0
 		}
 		if slices.Contains(args, "start") {
 			restarts++

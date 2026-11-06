@@ -58,7 +58,7 @@ func TestFatalRecoveryOnlyInstallLeavesDisabledComponentsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{e.Settings, e.AgyHooks} {
-		b, err := os.ReadFile(path)
+		b, err := os.ReadFile(path) //nolint:gosec // synthetic hook fixtures inside t.TempDir()
 		if err != nil || string(b) != "{" {
 			t.Fatal("touched deliberately disabled hooks", path, err)
 		}

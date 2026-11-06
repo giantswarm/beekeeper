@@ -28,6 +28,7 @@ const (
 	fatalStatusError       = "error"
 	fatalInstallationGuard = "guard:installation"
 	fatalDisabledState     = "disabled"
+	fatalEnabledState      = "enabled"
 )
 
 var fatalRun = runArgv
@@ -117,7 +118,7 @@ func fatalService(ctx context.Context, unit string) fatal.Observation {
 	case fatalDisabledState, "masked", "not-found":
 		o.Disabled = true
 		return o
-	case "enabled", "enabled-runtime":
+	case fatalEnabledState, "enabled-runtime":
 	default:
 		loaded, _, _, loadErr := fatalRun(ctx, "", []string{"systemctl", "--user", "show", unit, "--property=LoadState", "--value"})
 		if loadErr == nil && strings.TrimSpace(loaded) == "not-found" {
@@ -357,7 +358,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err
 	}
-	args := []string{"--config", path, fatalAsFlag, fatalSentinelName, "agents", "start", "--name", x.Owner}
+	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, "agents", "start", "--name", x.Owner}
 	checkout := cfg.Fatal.Checkouts[repo]
 	if checkout == "" {
 		checkout = filepath.Join(cfg.Projects.Dir, repoName(repo))
@@ -408,7 +409,7 @@ func fatalMain(ctx context.Context, repo, path string) fatal.Observation {
 		o.Unknown = true
 		return o
 	}
-	_, _, code, err := fatalRun(ctx, "", []string{bin, "--config", path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, "--gate"})
+	_, _, code, err := fatalRun(ctx, "", []string{bin, workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, fatalBudgetCommand, "--gate"})
 	if err != nil || code != 0 {
 		o.Unknown = true
 		return o
