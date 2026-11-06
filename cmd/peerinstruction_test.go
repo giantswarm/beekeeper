@@ -80,7 +80,7 @@ echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"s
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o700); err != nil {
+	if err := os.Chmod(path, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
