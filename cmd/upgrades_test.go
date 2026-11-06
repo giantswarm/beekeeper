@@ -483,7 +483,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			observed, release := make(chan struct{}), make(chan struct{})
 			doneFirst, doneSecond := make(chan struct{}), make(chan struct{})
 			status := func(running bool) []upgrade.Status {
-				s := upgrade.Status{Installation: "prod"}
+				s := upgrade.Status{Installation: snapshotInstallation}
 				if running {
 					s.Upgrades = []upgrade.Upgrade{{Cluster: "mc", To: "2"}}
 				}
@@ -502,7 +502,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			go func() {
 				defer close(doneSecond)
 				second.upgradeCycleRead(context.Background(), func(_ context.Context, st *state.State, now time.Time, _ upgrade.Readings, _ func(string) time.Duration) []upgrade.Status {
-					_, held := upgrade.Held(st, "prod", now)
+					_, held := upgrade.Held(st, snapshotInstallation, now)
 					seen <- held
 					return status(!firstRunning)
 				})
@@ -527,7 +527,7 @@ func TestUpgradeWatchesSerializeObservationAndReconciliation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, held := upgrade.Held(st, "prod", time.Now())
+			_, held := upgrade.Held(st, snapshotInstallation, time.Now())
 			if held != !firstRunning {
 				t.Errorf("final held=%t, want %t", held, !firstRunning)
 			}
@@ -545,9 +545,9 @@ func TestDelayedUpgradeCachePublicationMergesLatest(t *testing.T) {
 	b.store = other
 	now := time.Now()
 	older := upgrade.Readings{}
-	older.Keep([]upgrade.Status{{Installation: "prod"}, {Installation: "old-only"}}, now)
+	older.Keep([]upgrade.Status{{Installation: snapshotInstallation}, {Installation: "old-only"}}, now)
 	newer := upgrade.Readings{}
-	newer.Keep([]upgrade.Status{{Installation: "prod", Upgrades: []upgrade.Upgrade{{Cluster: "mc"}}}, {Installation: "new-only"}}, now.Add(time.Minute))
+	newer.Keep([]upgrade.Status{{Installation: snapshotInstallation, Upgrades: []upgrade.Upgrade{{Cluster: "mc"}}}, {Installation: "new-only"}}, now.Add(time.Minute))
 	if err := b.publishUpgrades(context.Background(), newer); err != nil {
 		t.Fatal(err)
 	}
@@ -559,8 +559,8 @@ func TestDelayedUpgradeCachePublicationMergesLatest(t *testing.T) {
 	if _, err := other.ReadFile(upgrade.ReadingsFile, &disk); err != nil {
 		t.Fatal(err)
 	}
-	for name, got := range map[string]upgrade.Readings{"caller": older, "disk": disk} {
-		if len(got) != 3 || !got["prod"].At.Equal(now.Add(time.Minute)) || !got.Running("prod") {
+	for name, got := range map[string]upgrade.Readings{"caller": older, loopDiskKind: disk} {
+		if len(got) != 3 || !got[snapshotInstallation].At.Equal(now.Add(time.Minute)) || !got.Running(snapshotInstallation) {
 			t.Errorf("%s lost newer or disjoint readings: %+v", name, got)
 		}
 	}
