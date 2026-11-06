@@ -53,7 +53,7 @@ func TestTranscriptPolicy(t *testing.T) {
 	}{
 		{transcriptGranted, own, false}, {"personal-session", filepath.Join(store, "past.jsonl"), false}, {"transcript-outsider", own, true}, {transcriptGranted, filepath.Join(store, "other.jsonl"), true},
 	} {
-		raw, err := json.Marshal(map[string]any{"session_id": tc.session, transcriptToolName: "Read", transcriptInputKey: map[string]any{"file_path": tc.p}})
+		raw, err := json.Marshal(map[string]any{executionOmpSession: tc.session, transcriptToolName: "Read", transcriptInputKey: map[string]any{"file_path": tc.p}})
 		if err != nil {
 			t.Fatal(err)
 		}

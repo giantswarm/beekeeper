@@ -134,7 +134,7 @@ func (f *fakeInstallation) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var list []map[string]any
 		for _, n := range reached {
-			list = append(list, map[string]any{"name": n})
+			list = append(list, map[string]any{remoteMCPNameKey: n})
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": len(reached), "repositories": list})
 	case p == "/installation/token" && asInst:
@@ -171,7 +171,7 @@ func installationApp(t *testing.T) (*app, *secrettest.Tools) {
 	t.Helper()
 	a, tools, repo := secretApp(t)
 	_, keyPEM := fixtureKey()
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: github-app\n  namespace: team-agents\nstringData:\n  private-key: |\n    " +
 		strings.ReplaceAll(strings.TrimSpace(keyPEM), "\n", "\n    ") + "\n"
 	if err := os.WriteFile(file, secrettest.Encrypt(plain), 0o600); err != nil {

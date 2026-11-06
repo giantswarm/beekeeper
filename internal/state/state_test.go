@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -534,7 +535,7 @@ func TestStaleWriterDoesNotInvokeUpdateCallback(t *testing.T) {
 			if err := newer.Update(func(*State) ([]Event, error) { return nil, nil }); err != nil {
 				t.Fatal(err)
 			}
-			before, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			before, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -567,7 +568,7 @@ func TestStaleWriterDoesNotInvokeUpdateCallback(t *testing.T) {
 			if _, err := os.Stat(holder); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("holder stat = %v, want no side file", err)
 			}
-			after, err := os.ReadFile(filepath.Join(dir, "state.json"))
+			after, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "state.json")))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -774,5 +775,83 @@ func TestAStateANewerReleaseWroteLoadsOrNamesTheSkew(t *testing.T) {
 	write(`{"writer":{"version":"v0.81.0"},"nextNote":"three"}`)
 	if _, err := s.Read(); err == nil || errors.As(err, &stale) {
 		t.Errorf("err = %v, want a plain decode error", err)
+	}
+}
+
+// An event-log open failure must leave a note available for a later answer.
+func TestUpdateEventLogOpenFailureKeepsNoteAnswerable(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(st *State) ([]Event, error) {
+		st.Notes = []Note{{ID: 1, Text: "Proceed?"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.path("state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory fails the append open even when the test runs as root.
+	if err := os.Mkdir(s.path("events.jsonl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	answer := func(st *State) ([]Event, error) {
+		if len(st.Notes) != 1 || st.Notes[0].ID != 1 {
+			return nil, errors.New("note is no longer answerable")
+		}
+		st.Notes = nil
+		return []Event{{Verb: "answer.recorded", Detail: "#1: proceed"}}, nil
+	}
+	if err := s.Update(answer); err == nil {
+		t.Fatal("expected event-log open failure")
+	}
+	after, err := os.ReadFile(s.path("state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed update changed state.json")
+	}
+	// Reopen to verify the persisted note, rather than callback-local state.
+	s, err = Open(filepath.Dir(s.path("state.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].ID != 1 {
+		t.Fatalf("note unavailable after failure: %+v", st.Notes)
+	}
+	if err := os.Remove(s.path("events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("failed update retained events: %+v", events)
+	}
+	if err := s.Update(answer); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 0 {
+		t.Fatalf("answered note still open: %+v", st.Notes)
+	}
+	events, err = s.Events(0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Verb != "answer.recorded" || events[0].Detail != "#1: proceed" {
+		t.Fatalf("retained answers = %+v", events)
 	}
 }

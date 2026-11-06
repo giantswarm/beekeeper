@@ -236,16 +236,10 @@ func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
 	}
 }
 
-func TestExecutionPublicationSyncBaseBundleAndMerge(t *testing.T) {
-	rig := newPublicationRig(t)
-	rig.commit(t, "upstream.txt", "upstream change\n")
-	if _, err := publishGit(context.Background(), rig.workspace, "push", rig.remote, "HEAD:main"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := publishGit(context.Background(), rig.workspace, "reset", "--hard", rig.base); err != nil {
-		t.Fatal(err)
-	}
-	rig.commit(t, "worker.txt", "worker change\n")
+// syncBase runs the --sync-base round trip: it downloads the bundle of the
+// default branch through the coordinator and merges it into the workspace.
+func (rig *publicationRig) syncBase(t *testing.T) string {
+	t.Helper()
 	var result executionPublicationResult
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, executionPublication{Head: rig.base, SyncBase: true}, &result, false); err != nil {
 		t.Fatal(err)
@@ -275,12 +269,70 @@ func TestExecutionPublicationSyncBaseBundleAndMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return head
+}
+
+func TestExecutionPublicationSyncBaseBundleAndMerge(t *testing.T) {
+	rig := newPublicationRig(t)
+	rig.commit(t, "upstream.txt", "upstream change\n")
+	if _, err := publishGit(context.Background(), rig.workspace, "push", rig.remote, "HEAD:main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishGit(context.Background(), rig.workspace, "reset", "--hard", rig.base); err != nil {
+		t.Fatal(err)
+	}
+	rig.commit(t, "worker.txt", "worker change\n")
+	head := rig.syncBase(t)
 	p := rig.publication(t, head)
+	var result executionPublicationResult
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(rig.workspace, "upstream.txt")); err != nil {
 		t.Fatal("upstream change missing", err)
+	}
+}
+
+// A head after --sync-base holds default-branch commits the worker did not
+// write. Their content and messages are not the worker's to answer for; the
+// worker's own commits on the same head stay under the outbound rules.
+func TestExecutionPublicationScanAfterSyncBaseSkipsBaseCommits(t *testing.T) {
+	const finding = "publication-fixture-upstream-finding"
+	for _, tt := range []struct {
+		name, worker string
+		refused      bool
+	}{
+		{name: "upstream finding only", worker: "worker change\n"},
+		{name: "worker finding too", worker: finding + "\n", refused: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rig := newPublicationRig(t)
+			rig.a.cfg.Outbound.Phrases = []string{finding}
+			ctx := context.Background()
+			rig.commit(t, "upstream.txt", finding+"\n")
+			if _, err := publishGit(ctx, rig.workspace, "commit", "--amend", "-m", "upstream change\n\n"+finding); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := publishGit(ctx, rig.workspace, "push", rig.remote, "HEAD:main"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := publishGit(ctx, rig.workspace, "reset", "--hard", rig.base); err != nil {
+				t.Fatal(err)
+			}
+			rig.commit(t, "worker.txt", tt.worker)
+			p := rig.publication(t, rig.syncBase(t))
+			var result executionPublicationResult
+			err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+			if tt.refused {
+				if err == nil || rig.created {
+					t.Fatalf("worker finding escaped behind the base: err=%v created=%t", err, rig.created)
+				}
+				return
+			}
+			if err != nil || !rig.created {
+				t.Fatalf("upstream finding stopped the publication: err=%v created=%t", err, rig.created)
+			}
+		})
 	}
 }
 
@@ -505,7 +557,7 @@ func TestExecutionPublicationOwnedHostCommand(t *testing.T) {
 	// Remove those overrides so this fixture exercises global configuration.
 	t.Setenv("GIT_CONFIG_COUNT", "0")
 	t.Setenv("GIT_CONFIG_PARAMETERS", "")
-	for _, key := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+	for _, key := range []string{"GIT_AUTHOR_NAME", litGitAuthorEmail, "GIT_COMMITTER_NAME", litGitCommitterEmail} {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)

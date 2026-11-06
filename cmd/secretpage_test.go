@@ -99,6 +99,8 @@ func fakePageClaude(args []string) int {
 func capturePageApp(t *testing.T, value string) (*app, *clipboardTools, string, string) {
 	t.Helper()
 	a, c, downloads := storeApp(t)
+	a.cfg.LeaseDir = t.TempDir()
+	holdLease(t, a, browserResource, state.Party{Name: a.as})
 	dir := t.TempDir()
 	a.cfg.Claude.ProjectsDir = filepath.Join(dir, "projects")
 	self, err := os.Executable()
@@ -271,6 +273,54 @@ func TestSecretPageTakesTheDownload(t *testing.T) {
 	}
 	if _, ok := c.Vault[ref]; ok {
 		t.Error("an old download was stored")
+	}
+}
+
+func TestSecretPageGitHubClientSecretNavigation(t *testing.T) {
+	pc, err := pagePreset("example-org/my-app", "", "", "", pageCapture{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// These are browser-agent instructions, so verify the ordered navigation,
+	// bounded recovery and distinct failure reports in the turn's prompt.
+	rest := pc.steps
+	for _, step := range []string{
+		`Open the "Credentials" tab`,
+		`if the page shows "Uh oh! There was an error while loading"`,
+		`reload the page at most once during this turn`,
+		`open the "Credentials" tab again if needed`,
+		`If the load error remains or returns, stop and report "GitHub App settings load error after one reload"; do not report a missing control`,
+		`Only after the Credentials page has loaded`,
+		`click "Generate a new client secret" once`,
+		`If that control is absent on the loaded page, stop and report "GitHub App client-secret generator control not found"`,
+		readerStep,
+	} {
+		_, after, ok := strings.Cut(rest, step)
+		if !ok {
+			t.Fatalf("missing or out-of-order instruction %q in %q", step, rest)
+		}
+		rest = after
+	}
+	for _, permission := range []string{`Opening the "Credentials" tab (including after the reload)`, `reloading this App settings page at most once on "Uh oh! There was an error while loading"`} {
+		if !strings.Contains(pc.rule, permission) {
+			t.Errorf("capture rule lacks %q", permission)
+		}
+	}
+
+	value := strings.Repeat("a1", 20)
+	a, c, _, dir := capturePageApp(t, value)
+	if out, err := runSecret(a, pageOp, pageRef, "--github-client-secret", "example-org/my-app"); err != nil {
+		t.Fatalf("capture: %v\n%s", err, out)
+	}
+	if c.Vault[pageRef] != value {
+		t.Fatal("client secret was not captured")
+	}
+	argv, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // the fake turn's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(argv), pc.steps) {
+		t.Error("capture turn did not receive the preset navigation")
 	}
 }
 

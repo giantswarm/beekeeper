@@ -366,3 +366,37 @@ func TestWatchSaysAnImportWaits(t *testing.T) {
 		t.Errorf("watch line:\n%s", l)
 	}
 }
+
+// A desktop CLI can carry a different name from its roster entry. Both
+// entry points must describe its discovered process, including its route.
+func TestDesktopAndSendHookAgreeOnRunMode(t *testing.T) {
+	a, out := stubApp(t)
+	// Only the desktop CLI runs; there is no headless turn unit.
+	runLive(t, a, map[int]string{40: "Desktop worker"})
+	ag := state.Agent{Party: state.Party{Session: "s40", HostSession: "local_desktop", Name: "Roster worker"}}
+	sessions, _, err := a.sessions()
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("sessions = %v, %v", sessions, err)
+	}
+	st := &state.State{Agents: []state.Agent{ag}}
+	hook := absentAgent(st, sessions, ag.Name, a.now)
+	want := `Roster worker runs a CLI (messages by name use "Desktop worker")`
+	if !strings.HasPrefix(hook, want) || strings.Contains(hook, "no CLI") {
+		t.Fatalf("send hook = %q, want prefix %q", hook, want)
+	}
+	if err := a.desktopTurn(t.Context(), ag); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("desktop = %q, want %q", out.String(), want)
+	}
+	// The same identity remains live when discovery has only its desktop id.
+	sessions[0].HostID = ag.HostSession
+	sessions[0].ID = "different-cli-id"
+	if got := absentAgent(st, sessions, ag.Name, a.now); !strings.HasPrefix(got, want) {
+		t.Fatalf("desktop identity = %q", got)
+	}
+	if got := absentAgent(st, nil, ag.Name, a.now); !strings.Contains(got, "no CLI") {
+		t.Fatalf("stopped session = %q", got)
+	}
+}

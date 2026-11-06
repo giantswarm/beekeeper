@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/merge"
@@ -23,14 +24,17 @@ import (
 // laneView is one lane's queue with its installation and hold.
 type laneView struct {
 	merge.Lane
-	Installation string      `json:"installation,omitempty"`
-	Hold         *state.Hold `json:"hold,omitempty"`
+	Installation   string            `json:"installation,omitempty"`
+	Hold           *state.Hold       `json:"hold,omitempty"`
+	ToolWaiting    map[string]bool   `json:"toolWaiting,omitempty"`
+	WaitingReasons map[string]string `json:"waitingReasons,omitempty"`
 	// Stall is set when the lane's first arrived merge has waited longer
 	// than merge.stallAfter behind places whose merges are not in the gate.
 	Stall *merge.Stall `json:"stall,omitempty"`
 	// Pairs say, by key, what each of the lane's paired merges lands with
 	// (the gate's --pair): its sibling and where that is.
 	Pairs map[string]string `json:"pairs,omitempty"`
+	Stale string            `json:"stale,omitempty"`
 	// Pace is how long one place has held the lane of late (lanePace), Drain
 	// how long its queue takes at that pace: its waiting places and the
 	// running one.
@@ -318,9 +322,9 @@ func prArgs(args []string) (int, error) {
 }
 
 func (a *app) settleCmd() *cobra.Command {
-	var forName string
+	var forName, release string
 	c := &cobra.Command{
-		Use:   "settle <owner/repo> <n> [--for <session>]",
+		Use:   "settle <owner/repo> <n> [--for <session>] [--release <version>]",
 		Short: "Register a merge run outside the gate as its lane's head",
 		Long: `settle registers a merge the gate did not wrap (one in flight when the gate
 went live, one run without the hook) in its lane. Until the pull request is
@@ -333,7 +337,12 @@ for merge.settle from the merge.
 
 settle asks GitHub for the pull request's state once; while the entry waits
 without its merge, a merge waiting behind it asks again at most once a minute.
-The entry is kept for merge.seedTTL; lanes drop takes it out.`,
+The entry is kept for merge.seedTTL; lanes drop takes it out.
+A running gate and its devctl have up to 30s to exit before settle refuses.
+
+--release names the release of an already settling merge whose release is
+unknown. It then settles once that release rolls or no range admits it.
+A known release cannot be replaced.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := prArgs(args)
@@ -343,6 +352,12 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 			me, err := a.caller()
 			if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("release") {
+				if !semver.IsValid("v" + strings.TrimPrefix(release, "v")) {
+					return usageErr("--release must be a semantic version")
+				}
+				return a.nameSettlingRelease(me, args[0], pr, release)
 			}
 			by := me
 			if strings.TrimSpace(forName) != "" {
@@ -356,10 +371,14 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 				return refused("%s#%d is closed without a merge: nothing settles", args[0], pr)
 			}
 			lane := a.cfg.LaneOf(args[0]).Name
+			if err := a.waitSettleRun(cmd.Context(), args[0], pr, 30*time.Second); err != nil {
+				return err
+			}
 			busy := ""
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				for _, m := range st.Merges {
-					if m.Repo == args[0] && m.PR == pr && m.Phase != state.Waiting {
+					if m.Repo == args[0] && m.PR == pr && m.Phase != state.Waiting &&
+						(m.Phase != state.Running || merge.Runs(m, proc.Alive)) {
 						busy = m.Phase
 						return nil, nil
 					}
@@ -370,6 +389,10 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 					i = len(st.Merges) - 1
 				}
 				m := &st.Merges[i]
+				// A dead running entry can be registered outside the gate.
+				if m.Phase == state.Running {
+					*m = state.Merge{Repo: m.Repo, PR: m.PR, Lane: m.Lane, By: m.By, Phase: state.Waiting, Joined: m.Joined, Seen: a.now.UTC()}
+				}
 				m.Seeded, m.Outside, m.Checked = true, true, a.now.UTC()
 				if strings.TrimSpace(forName) != "" {
 					m.By = by
@@ -395,7 +418,61 @@ The entry is kept for merge.seedTTL; lanes drop takes it out.`,
 		},
 	}
 	c.Flags().StringVar(&forName, "for", "", "the session whose merge this is (default: you)")
+	c.Flags().StringVar(&release, "release", "", "name the unknown release of an already settling merge")
 	return c
+}
+
+// waitSettleRun leaves the store unlocked while a gate finishes its signal
+// cleanup. Re-read each time: the gate can record or remove its own entry.
+func (a *app) waitSettleRun(ctx context.Context, repo string, pr int, bound time.Duration) error {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		st, err := a.store.Read()
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.Repo == repo && m.PR == pr && m.Phase == state.Running })
+		if i < 0 || !merge.Runs(st.Merges[i], proc.Alive) {
+			return nil
+		}
+		m := st.Merges[i]
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return refused("%s: gate (pid %d) or devctl (pid %d) is still exiting after waiting %s; retry: beekeeper lanes settle %s %d", m.Key(), m.PID, m.Child, bound, repo, pr)
+		case <-tick.C:
+		}
+	}
+}
+
+// nameSettlingRelease changes only an unknown release, atomically with its event.
+func (a *app) nameSettlingRelease(by state.Party, repo string, pr int, release string) error {
+	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Merges {
+			m := &st.Merges[i]
+			if m.Repo != repo || m.PR != pr {
+				continue
+			}
+			if m.Phase != state.Settling || m.Release != "" || m.ReleaseFailed || m.Releasing {
+				return nil, refused("%s must be settling with an unknown release", m.Key())
+			}
+			m.Release, m.Outside = release, false
+			return []state.Event{event(by, "merge.release", "%s: release %s named, lane %s settles by its release", m.Key(), release, m.Lane)}, nil
+		}
+		return nil, refused("%s#%d is not settling", repo, pr)
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.out, "%s#%d now settles on release %s\n", repo, pr, release)
+	return err
 }
 
 // laneViews are the configured lanes, then every other lane with a merge or
@@ -416,6 +493,21 @@ func (a *app) laneViews(st *state.State) []laneView {
 		}
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
+		if v.Running != nil {
+			v.Stale = staleMerge(st, *v.Running)
+		}
+		for _, m := range v.Waiting {
+			if h, held := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, a.cfg.LaneOf(m.Repo)); held && h.Tool != "" {
+				if v.ToolWaiting == nil {
+					v.ToolWaiting = map[string]bool{}
+				}
+				v.ToolWaiting[m.Key()] = true
+			}
+			if v.WaitingReasons == nil {
+				v.WaitingReasons = map[string]string{}
+			}
+			v.WaitingReasons[m.Key()] = a.mergeWaitReason(st, m)
+		}
 		for _, m := range st.Merges {
 			if t := pairs[m.Key()]; m.Lane == name && t != "" {
 				if v.Pairs == nil {
@@ -455,6 +547,55 @@ func (a *app) laneViews(st *state.State) []laneView {
 		add(f.Lane, a.cfg.LaneOf(f.Repo).Installation)
 	}
 	return out
+}
+
+// mergeWaitReason explains the locally observable start constraints without
+// polling GitHub or changing a gate's state.
+func (a *app) mergeWaitReason(st *state.State, m state.Merge) string {
+	lane := a.cfg.LaneOf(m.Repo)
+	lane.Name = m.Lane
+	if h, ok := merge.BlockingFor(st, a.now, m.By.Name, m.Repo, m.PR, lane); ok {
+		return fmt.Sprintf("gate hold (%s) by %s until %s: %s", holdTarget(h), quotedOwner(h.By), untilText(a, h), h.Reason)
+	}
+	q := merge.Queue(st, m.Lane)
+	if q.Running != nil {
+		return "lane running " + q.Running.Key()
+	}
+	if ahead, behind := q.Ahead(m.Repo, m.PR, merge.Unheld(st, a.now, lane, a.present)); behind {
+		return "lane waits for " + ahead.Key()
+	}
+	if !proc.Alive(m.PID) {
+		return "gate not running; waiting for arrival"
+	}
+	g := &gateRun{app: a, repo: m.Repo, pr: m.PR, lane: lane, me: m.By}
+	need := 1
+	if i := st.PairOf(m.Key()); i >= 0 {
+		p := st.Pairs[i]
+		if p.Started == p.Sibling(m.Key()) {
+			need = 0
+		} else {
+			need = 2
+			if a.now.Sub(p.Ready[p.Sibling(m.Key())]) > pairFresh {
+				return "paired merge not ready: " + p.Sibling(m.Key())
+			}
+		}
+	}
+	if why := g.sessionWaitFor(st, need); why != "" {
+		return why
+	}
+	if why := g.capWaitFor(st, m, need); why != "" {
+		var holders []string
+		for _, run := range st.Merges {
+			if run.Phase == state.Running {
+				holders = append(holders, fmt.Sprintf("%s by %s", run.Key(), quotedOwner(run.By)))
+			}
+		}
+		return why + "; slots held by " + strings.Join(holders, ", ")
+	}
+	if q.Settling != nil && lane.Installation != "" {
+		return a.settlingText(*q.Settling)
+	}
+	return "no local blocker; gate may be checking GitHub, release readiness or its central lane"
 }
 
 // present says whether a waiting merge holds its place against the merges
@@ -530,6 +671,9 @@ func (a *app) printLanes(views []laneView) {
 		switch {
 		case v.Running != nil:
 			status = fmt.Sprintf("running %s by %s since %s%s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started), v.paired(v.Running.Key()))
+			if v.Stale != "" {
+				status += ", STALE: " + v.Stale
+			}
 		case v.Settling != nil:
 			status = a.settlingText(*v.Settling)
 		}
@@ -566,6 +710,8 @@ func (a *app) printLanes(views []laneView) {
 			}
 			how := "waiting"
 			switch {
+			case v.ToolWaiting[m.Key()]:
+				how = "waiting for the devctl window"
 			case proc.Alive(m.PID):
 			case m.Outside:
 				how = fmt.Sprintf("settled outside the gate, not merged at %s, heads the lane", clock(a.now, m.Checked))
@@ -577,6 +723,7 @@ func (a *app) printLanes(views []laneView) {
 				how = "not arrived, queued"
 			}
 			p("%s %d. %s by %s, %s since %s%s", label, i+1, m.Key(), quotedOwner(m.By), how, clock(a.now, m.Joined), v.paired(m.Key()))
+			p("        start: %s", v.WaitingReasons[m.Key()])
 		}
 		for _, f := range v.Failed {
 			p("  failed %s by %s at %s, %s, %s; shown until its next attempt", f.Key(), quotedOwner(f.By), clock(a.now, f.At),
@@ -586,7 +733,7 @@ func (a *app) printLanes(views []laneView) {
 }
 
 // checkPlaces asks GitHub, at now, about the waiting places of lane (every lane for
-// "") whose merge is not in the gate, other than repo#pr, last checked more
+// ""), including live waiting gates, other than repo#pr, last checked more
 // than every ago: a merged pull request settles its lane as a merge outside
 // the gate, a closed one leaves it, each with an event naming it. It
 // returns GitHub's error for a place settled with lanes settle, which heads
@@ -598,7 +745,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 	}
 	pulls := map[string]github.Pull{}
 	for _, m := range st.Merges {
-		if m.Phase != state.Waiting || m.PR == 0 || proc.Alive(m.PID) || (lane != "" && m.Lane != lane) ||
+		if m.Phase != state.Waiting || m.PR == 0 || (lane != "" && m.Lane != lane) ||
 			(m.Repo == repo && m.PR == pr) || now.Sub(m.Checked) < every {
 			continue
 		}
@@ -618,7 +765,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 		var ev []state.Event
 		st.Merges = slices.DeleteFunc(st.Merges, func(m state.Merge) bool {
 			p, ok := pulls[m.Key()]
-			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) || p.State != github.Closed {
+			if !ok || m.Phase != state.Waiting || p.State != github.Closed {
 				return false
 			}
 			ev = append(ev, event(by, "merge.dropped", "%s: closed without a merge, its place in lane %s is dropped", m.Key(), m.Lane))
@@ -627,7 +774,7 @@ func (a *app) checkPlaces(ctx context.Context, by state.Party, now time.Time, la
 		for i := range st.Merges {
 			m := &st.Merges[i]
 			p, ok := pulls[m.Key()]
-			if !ok || m.Phase != state.Waiting || proc.Alive(m.PID) {
+			if !ok || m.Phase != state.Waiting {
 				continue
 			}
 			if p.State != github.Merged {
@@ -668,7 +815,7 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		return m.Phase == state.Running && !proc.Alive(m.PID) && (!proc.Alive(m.Child) || exited(mergeBase(a.store.Dir(), m.Repo, m.PR)))
 	}
 	isCut := func(m state.Merge) bool { return cutRun(a.store.Dir(), m, proc.Alive) }
-	var cutBases []string
+	var cutBases, recordedBases []string
 	runs := map[string]runOutcome{}
 	for _, m := range st.Merges {
 		if !gone(m) {
@@ -678,7 +825,9 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 		doc, rc := finishedRun(base)
 		r := runOutcome{rc: rc, reason: runFailure(doc, lastLine(base+".log"), m.HandCut)}
 		var ok bool
-		if r.out, ok = parseOutcome(m.PR, doc); merge.NeedsJudging(ok, rc) {
+		r.out, ok, rc = parseRunOutcome(m.PR, doc, rc)
+		r.rc = rc
+		if merge.NeedsJudging(ok, rc) {
 			r.out, r.unanswered = judgeRun(ctx, m.Repo, m.PR, 1)
 			if r.unanswered != nil && !workerStopped {
 				continue
@@ -704,7 +853,12 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			st.Merges[i].Run = ""
 			e := event(watchParty, "merge.cut", "%s in lane %s: %s", m.Key(), m.Lane, cutText(m))
 			if m.By.Session != "" || m.By.HostSession != "" {
-				st.Owed = append(st.Owed, cutOwed(m, now))
+				o := cutOwed(m, now)
+				o.Cancelled = readStopped(mergeBase(a.store.Dir(), m.Repo, m.PR)) != (state.Party{})
+				if o.Cancelled {
+					o.Line = fmt.Sprintf("%s was cancelled on request: do not rerun it", o.Command)
+				}
+				st.Owed = append(st.Owed, o)
 				e.Detail += fmt.Sprintf("; its outcome is owed to %q", m.By.Name)
 			}
 			evs = append(evs, e)
@@ -721,18 +875,18 @@ func (a *app) recordGateExits(ctx context.Context, workerStopped bool) (recorded
 			ev := recordRun(st, i, lane, watchParty, r, now, fmt.Sprintf(" (for %q, whose gate, pid %d, is gone)", m.By.Name, m.PID))
 			evs = append(evs, ev...)
 			recorded = append(recorded, ev[len(ev)-1].Detail)
-			removeMergeFiles(mergeBase(a.store.Dir(), m.Repo, m.PR))
+			recordedBases = append(recordedBases, mergeBase(a.store.Dir(), m.Repo, m.PR))
 		}
 		lost = merge.Lost(st, a.now, proc.Alive)
 		for _, m := range lost {
 			evs = append(evs, event(watchParty, "merge.lost", "%s in lane %s: its gate (pid %d) and devctl are gone", m.Key(), m.Lane, m.PID))
 		}
-		return evs, nil
+		return a.mergeEvents(evs)
 	})
 	if err != nil {
 		return nil, nil, nil
 	}
-	for _, base := range cutBases {
+	for _, base := range append(cutBases, recordedBases...) {
 		removeMergeFiles(base)
 	}
 	return recorded, cut, lost
