@@ -368,8 +368,14 @@ type watcher struct {
 	dirty    bool
 	// feedID is the id of the last central feed event the watch printed,
 	// kept in its mark.
-	feedID   string
-	lastPoll time.Time
+	feedID          string
+	lastPoll        time.Time
+	suspendEntry    time.Time
+	suspendChecked  time.Time
+	suspendThrough  time.Time
+	suspendRecovery map[string]suspendWake
+	suspendResults  chan map[string]suspendWake
+	suspendDeliver  func(context.Context, suspendWake) error
 	// Hung checks get a fresh grace period on startup and after a suspend
 	// (or a long gap in observations). These times stay in memory so their
 	// monotonic readings can exclude time spent asleep.
@@ -1417,6 +1423,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 		owners[s.PID] = s.Name
 	}
 	w.owners.Store(&owners)
+	w.suspends(ctx, since, sessions)
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.tendFeedback(ctx)
