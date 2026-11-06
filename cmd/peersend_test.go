@@ -61,7 +61,7 @@ func TestPeerSendDeliversBroadcastsAndStewardAsks(t *testing.T) {
 	agents := []state.Agent{{Party: four}, {Party: state.Party{Session: "s5", Name: agentFive}}}
 	sessions := []*claude.Session{{ID: "s4", HostID: hostFour, Name: agentFour}, {ID: "s5", Name: agentFive}}
 	s := steward{host: "local_steward", sock: "/run/user/1000/cc-socks/1.sock"}
-	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor", "agreed")
+	ask := archiveRequest(s, []string{"local_finished"}, "beekeeper doctor")
 	done := func() bool { return true }
 
 	sent := fakeRelay(t, false)
