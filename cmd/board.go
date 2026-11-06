@@ -41,7 +41,11 @@ func (a *app) boardClient() *board.Client {
 			return out, err
 		}
 	}
-	return &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	cl := &board.Client{GH: gh, Board: a.cfg.Board, Plans: a.cfg.Plans.Repositories}
+	if a.store != nil {
+		cl.CacheDir = a.store.Dir()
+	}
+	return cl
 }
 
 func (a *app) boardCmd() *cobra.Command {
@@ -50,7 +54,9 @@ func (a *app) boardCmd() *cobra.Command {
 		Short: "Pick the next item of work from the project board, move items",
 		Long: `The project board of board.owner and board.project, the items of board.team.
 next applies the configured order (board.order) to the board's open items
-and the roster and prints the first free item with why it is picked; move
+and the roster and prints the first free item with why it is picked; add
+puts an issue on the board with Team, Status and Kind; show reads an issue's
+board fields without reading the whole board; move
 sets an item's Status by the board's canonical names; rank (or order) sets
 an item's position on the board, which is the order next reads the items of
 each step in; block and unblock record and remove a hold on an item, a GitHub
@@ -58,7 +64,7 @@ blocked-by dependency on another issue, which next reads; tidy moves closed
 items to Done and archives them after board.archiveAfter, which the supervisor
 loop runs every board.tidyEvery.`,
 	}
-	c.AddCommand(a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
+	c.AddCommand(a.boardFieldsCmd(true), a.boardFieldsCmd(false), a.boardNextCmd(), a.boardMoveCmd(), a.boardRankCmd(), a.boardHoldCmd(true), a.boardHoldCmd(false), a.boardTidyCmd(), a.boardEscalateCmd())
 	return c
 }
 

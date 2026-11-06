@@ -346,12 +346,11 @@ func TestUploadExistingBranchRetries(t *testing.T) {
 	}
 }
 
-// A repository that is not public, or a name that is not owner/repo, gets
-// nothing written.
+// An unknown visibility, or a name that is not owner/repo, gets nothing written.
 func TestUploadRefused(t *testing.T) {
 	for _, c := range []struct{ repo, vis, want string }{
-		{repo, "private", "not public"},
-		{repo, "internal", "not public"},
+		{repo, "", "unknown visibility"},
+		{repo, "unexpected", "unknown visibility"},
 		{"o/r/x", public, "not owner/repo"},
 		{"o", public, "not owner/repo"},
 	} {
@@ -364,6 +363,31 @@ func TestUploadRefused(t *testing.T) {
 			if !strings.HasPrefix(call, http.MethodGet) {
 				t.Errorf("%s %s: wrote %s", c.repo, c.vis, call)
 			}
+		}
+	}
+}
+
+// Private and internal images stay in the target repository. The returned
+// link uses the authenticated repository route, never a raw access token.
+func TestUploadRestrictedRepository(t *testing.T) {
+	for _, visibility := range []string{"private", "internal"} {
+		for _, head := range []string{"", "existing"} {
+			t.Run(visibility+"/"+head, func(t *testing.T) {
+				f := &fakeGH{visibility: visibility, head: head}
+				res, err := (Upload{GH: f.run, Repo: repo, Alt: "proof", Now: at}).Run(context.Background(), testPNG(t))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "https://github.com/o/r/blob/" + res.Commit + "/" + res.Path + "?raw=true"
+				if res.URL != want || res.Markdown != "![proof](../../../o/r/blob/"+res.Commit+"/"+res.Path+"?raw=true)" {
+					t.Fatalf("result = %+v, want %s", res, want)
+				}
+				for _, call := range f.calls {
+					if !strings.Contains(call, "repos/o/r") {
+						t.Errorf("call escaped repository: %s", call)
+					}
+				}
+			})
 		}
 	}
 }

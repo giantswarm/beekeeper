@@ -86,6 +86,14 @@ kube:
 # SSO session completes it), swapped into the profile directory in one step.
 # watch and snapshot show the expiry. Unset, no keeper runs.
 teleport:
+  # Machine ID replaces SSO when bot.config is set. Ask the Teleport
+  # administrators for a scoped bot role, join token and tbot configuration.
+  # Keep the token in the private tbot config; paths must match its outputs.
+  # bot:
+  #   config: ~/.config/teleport/tbot.yaml
+  #   binary: tbot
+  #   certificate: ~/.local/share/teleport/identity/tlscert
+  #   kubeconfig: ~/.local/share/teleport/kubernetes/kubeconfig.yaml
   proxy: login.example.com:443   # tsh login --proxy
   auth: github              # tsh login --auth, the SSO connector; default: the cluster's
   # tsh: tsh                # the default
