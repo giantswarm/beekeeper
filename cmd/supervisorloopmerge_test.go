@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -51,6 +53,36 @@ func TestLoopMergesReviewedHeadWithoutWorkerWake(t *testing.T) {
 	r.pass(t)
 	if len(r.logged(t, "supervisor.merge")) != 1 {
 		t.Fatal("merge decision repeated")
+	}
+}
+
+func TestLoopDoesNotAuthorizeOverANewerReviewOfTheEarlierHead(t *testing.T) {
+	r := newLoopRig(t)
+	r.park(t, loopPR, time.Now())
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nfix the handler")
+	r.pass(t)
+	r.pull.Head = loopFixed
+	r.park(t, loopPR, time.Now().Add(time.Minute))
+	read := readLoopPull
+	reads := 0
+	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
+		p, err := read(ctx, ref)
+		reads++
+		if reads > 1 {
+			p.Reviews = append(slices.Clone(p.Reviews), superloop.Review{ID: "R2", Author: loopDesk, Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Now()})
+		}
+		return p, err
+	}
+	r.pass(t)
+	if reads < 2 {
+		t.Fatal("did not exercise the executor's live review read")
+	}
+	if r.called(gateCmdName) != nil || len(r.logged(t, "merge.authorized")) != 0 {
+		t.Fatalf("new findings were overwritten by a fresh authorization: %v", r.calls)
+	}
+	if !strings.Contains(r.out.String(), "requested changes") {
+		t.Fatalf("new review refusal was not reported: %s", r.out)
 	}
 }
 
@@ -111,44 +143,49 @@ func TestLoopMergeEndDeclaresRemainingWork(t *testing.T) {
 }
 
 func TestReviewedMergeRefusesUnclaimedMovedRedAndStoppedHeads(t *testing.T) {
-	for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, "conflict", "changes-requested"} {
-		t.Run(scenario, func(t *testing.T) {
-			r := newLoopRig(t)
-			r.park(t, loopPR, time.Now())
-			if scenario != "unclaimed" {
-				if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
-					t.Fatal(err)
+	for _, configured := range []bool{false, true} {
+		for _, scenario := range []string{"unclaimed", "moved", reviewedRedCase, reviewedStoppedCase, reviewedHeldCase, litConflict, "changes-requested"} {
+			t.Run(fmt.Sprintf("%s/devctl=%t", scenario, configured), func(t *testing.T) {
+				r := newLoopRig(t)
+				if configured {
+					r.a.cfg.Merge.DevctlOwners = []string{"o"}
 				}
-			}
-			switch scenario {
-			case "conflict":
-				r.pull.Mergeable = mergeableConflicting
-			case "moved":
-				r.pull.Head = loopFixed
-			case reviewedRedCase:
-				r.pull.Green = false
-			case "changes-requested":
-				r.pull.Reviews = []superloop.Review{
-					{ID: "r1", Head: loopHead, Verdict: superloop.Approved, At: time.Unix(100, 0)},
-					{ID: "r2", Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+				r.park(t, loopPR, time.Now())
+				if scenario != "unclaimed" {
+					if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+						t.Fatal(err)
+					}
 				}
-			case reviewedStoppedCase:
-				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
-					t.Fatal(err)
+				switch scenario {
+				case "conflict":
+					r.pull.Mergeable = mergeableConflicting
+				case "moved":
+					r.pull.Head = loopFixed
+				case reviewedRedCase:
+					r.pull.Green = false
+				case "changes-requested":
+					r.pull.Reviews = []superloop.Review{
+						{ID: "r1", Head: loopHead, Verdict: superloop.Approved, At: time.Unix(100, 0)},
+						{ID: "r2", Head: loopHead, Verdict: superloop.ChangesRequested, At: time.Unix(200, 0)},
+					}
+				case reviewedStoppedCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
+						t.Fatal(err)
+					}
+				case reviewedHeldCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
 				}
-			case reviewedHeldCase:
-				if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
-					st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
-					return nil, nil
-				}); err != nil {
-					t.Fatal(err)
+				doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+				if doc.ExitCode == 0 || len(r.cmds) > 0 {
+					t.Fatalf("unsafe mutation: doc %+v commands %v", doc, r.cmds)
 				}
-			}
-			doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
-			if doc.ExitCode == 0 || len(r.cmds) > 0 {
-				t.Fatalf("unsafe mutation: doc %+v commands %v", doc, r.cmds)
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -199,39 +236,6 @@ func TestReviewedRebaseMergeRefusesABehindBase(t *testing.T) {
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
 	if doc.ExitCode != github.SquashNotApplicable || len(r.cmds) != 0 || !strings.Contains(doc.Reason, "behind") {
 		t.Fatalf("behind rebase merge: %+v %v", doc, r.cmds)
-	}
-}
-
-func TestLoopExhaustedReviewsRequireApprovalWithoutEscalation(t *testing.T) {
-	r := newLoopRig(t)
-	// Refuse the mechanical merge to keep the pull request open as the
-	// worker publishes heads requiring additional reviews.
-	r.command = func([]string) (string, int) { return "branch behind base", 1 }
-	r.park(t, loopPR, time.Now())
-	r.pass(t)
-	r.verdict("R1", loopHead, superloop.Approved, "")
-	r.pass(t)
-	r.pull.Head = loopFixed
-	r.park(t, loopPR, time.Now().Add(time.Minute))
-	r.pass(t)
-	r.verdict("R2", loopFixed, superloop.Approved, "")
-	r.pass(t)
-	const third = "3333333333333333333333333333333333333333"
-	r.pull.Head = third
-	r.park(t, loopPR, time.Now().Add(2*time.Minute))
-	r.pass(t)
-	if r.called("note", loopAdd) != nil || r.called(gateCmdName) != nil {
-		t.Fatalf("unreviewed third head escalated or got a go: %v", r.calls)
-	}
-	if r.called(agentsName, agentStartName, superloop.ReviewerName(loopPR, 3)) == nil {
-		t.Fatalf("no independent review for third head: %v", r.calls)
-	}
-	r.verdict("R3", third, superloop.Approved, "")
-
-	r.pass(t)
-	call := r.called(gateCmdName)
-	if call == nil || !slices.Contains(call, third) {
-		t.Fatalf("independent approval did not release its head: %v\n%s", r.calls, r.out)
 	}
 }
 
@@ -838,5 +842,106 @@ func TestReviewedMergeAdmitsExplicitExactHeadSupervisorGo(t *testing.T) {
 	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
 	if doc.ExitCode != 0 || len(r.cmds) != 1 {
 		t.Fatalf("expected merge with explicit supervisor.go, got %+v cmds=%v", doc, r.cmds)
+	}
+}
+
+// A review or supervisor go can be withdrawn while merge-result checks run.
+// Refresh both public reviews and durable desk policy before invoking gh.
+func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
+	const revokedGoCase = "revoked go"
+	const changesRequestedCase = "changes requested"
+	const unreadableCase = "unreadable authority"
+	for _, scenario := range []string{litUnchanged, changesRequestedCase, "dismissed approval", revokedGoCase, "moved head", overrideClosed, "red CI", litDraft, conflictingWord, unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
+		t.Run(scenario, func(t *testing.T) {
+			r := newLoopRig(t)
+			r.verdict("R1", loopHead, superloop.Approved, loopApproved)
+			if scenario == revokedGoCase {
+				r.pull.Reviews = nil
+				if err := r.a.store.Record(about(event(loopParty, loopGoVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.a.store.Record(about(event(loopParty, loopClaimVerb, "[go %s@%s] %s", loopPR, loopHead, loopWorker), loopPR)); err != nil {
+				t.Fatal(err)
+			}
+			// The queue lookup is the last read after merge-result validation,
+			// including runs that skip local checks because no checkout exists.
+			readReviewedMergeQueue = func(context.Context, superloop.Pull) (bool, error) {
+				switch scenario {
+				case changesRequestedCase:
+					r.verdict("R2", loopHead, superloop.ChangesRequested, "Review: changes requested")
+				case "dismissed approval":
+					r.pull.Reviews = nil
+				case revokedGoCase:
+					if err := r.a.store.Record(about(event(loopParty, loopClaimEndVerb, "[go %s@%s] withdrawn", loopPR, loopHead), loopPR)); err != nil {
+						t.Fatal(err)
+					}
+				case "moved head":
+					r.pull.Head = loopFixed
+				case overrideClosed:
+					r.pull.State = superloop.Closed
+				case "red CI":
+					r.pull.Green = false
+				case "draft":
+					r.pull.Draft = true
+				case conflictingWord:
+					r.pull.Mergeable = mergeableConflicting
+				case unreadableCase:
+					readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+						return superloop.Pull{}, errors.New("reviews unavailable")
+					}
+				case reviewedStoppedCase, reviewedHeldCase:
+					if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+						if scenario == reviewedStoppedCase {
+							st.Stop = &state.Stop{}
+						} else {
+							st.Holds = append(st.Holds, state.Hold{Target: loopMergeRepo, Reason: reviewedHeldCase})
+						}
+						return nil, nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return true, nil
+			}
+			doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopHead)
+			if scenario == "unchanged" {
+				if doc.ExitCode != 0 || len(r.cmds) != 1 {
+					t.Fatalf("approved merge: %+v commands=%v", doc, r.cmds)
+				}
+				return
+			}
+			want := github.SquashRefused
+			if scenario == unreadableCase {
+				want = github.SquashTooling
+			}
+			if doc.ExitCode != want || len(r.cmds) != 0 {
+				t.Fatalf("stale authority: %+v commands=%v; want exit %d without mutation", doc, r.cmds, want)
+			}
+		})
+	}
+}
+
+// Reopened episode keys must retain both the claim and exact-head authority;
+// ending that episode must revoke the go again.
+func TestReopenedPullMergeAuthority(t *testing.T) {
+	r := newLoopRig(t)
+	r.verdict("R1", loopHead, superloop.Approved, "Review: approved")
+	r.pull.Head = loopFixed
+	suffix := " reopened " + time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	for _, verb := range []string{loopGoVerb, loopClaimVerb} {
+		if err := r.a.store.Record(about(event(loopParty, verb, "[go %s@%s%s] %s", loopPR, loopFixed, suffix, loopWorker), loopPR)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := r.a.reviewedMerge(t.Context(), loopMergeRepo, 7, loopFixed)
+	if doc.ExitCode != 0 || len(r.cmds) != 1 {
+		t.Fatalf("reopened go refused: %+v cmds=%v", doc, r.cmds)
+	}
+	if err := r.a.store.Record(about(event(loopParty, loopEndVerb, "[end %s%s] closed", loopPR, suffix), loopPR)); err != nil {
+		t.Fatal(err)
+	}
+	if why, explicit, err := r.a.checkMergeHeadAuthority(t.Context(), nil, r.pull, loopFixed); err != nil || why == "" || explicit {
+		t.Fatalf("closed episode retained authority: why=%q explicit=%v err=%v", why, explicit, err)
 	}
 }

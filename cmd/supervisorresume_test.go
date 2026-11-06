@@ -25,7 +25,7 @@ func stubGonePark(t *testing.T) {
 const recoveryTask = "Work https://github.com/o/r/issues/12"
 
 func TestLoopRecoversEndedSettledPark(t *testing.T) {
-	for _, mode := range []string{"successful recovery", "release", "partial start"} {
+	for _, mode := range []string{"successful recovery", workerGitHubReleaseGroup, "partial start"} {
 		failure := mode != "successful recovery"
 		t.Run(mode, func(t *testing.T) {
 			r, _ := fillRig(t)

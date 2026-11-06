@@ -159,9 +159,15 @@ func InspectBuildDirs(ctx context.Context, git Git, dir string, extra []string) 
 	if out, err := git(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
 		t.Branch = strings.TrimSpace(string(out))
 	}
-	if out, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
-		if b, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "origin/"); ok {
-			t.Pushed = b
+	// Tracking configuration survives pruning and identifies the source
+	// branch independently of origin's fetch destination namespace.
+	if t.Branch != "" {
+		if remote, err := git(ctx, dir, "config", "--get", "branch."+t.Branch+".remote"); err == nil && strings.TrimSpace(string(remote)) == "origin" {
+			if merge, err := git(ctx, dir, "config", "--get", "branch."+t.Branch+".merge"); err == nil {
+				if b, ok := strings.CutPrefix(strings.TrimSpace(string(merge)), "refs/heads/"); ok {
+					t.Pushed = b
+				}
+			}
 		}
 	}
 	status, err := git(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignored=matching")
@@ -196,7 +202,9 @@ func classifyBuildDirs(status []byte, extra []string) (work, build []string) {
 		code, path := e[:2], e[3:]
 		switch code {
 		case "!!", "??":
-			if regenerableWith(path, extra) {
+			// Status directories end in /; a file named build is still work.
+			dirs := path[:strings.LastIndex(path, "/")+1]
+			if regenerableWith(dirs, extra) {
 				build = append(build, path)
 			} else if code == "??" {
 				work = append(work, path)

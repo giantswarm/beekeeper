@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -88,6 +89,13 @@ func TestStalePlugins(t *testing.T) {
 func fakePlugins(t *testing.T, ps []installedPlugin) *[]string {
 	t.Helper()
 	var ran []string
+	prevPin, prevUnder, prevInstalled := pinMarketplace, syncsUnder, runsInstalled
+	t.Cleanup(func() { pinMarketplace, syncsUnder, runsInstalled = prevPin, prevUnder, prevInstalled })
+	pinMarketplace = func(string, string) error { return nil }
+	syncsUnder = func(string) bool { return true }
+	// Keep the installed-binary decision made by asBinary, when present.
+	installed := runsInstalled
+	runsInstalled = func() bool { return installed() || binaryIdentity() == "" }
 	prevList, prevRun := listPlugins, claudePlugin
 	t.Cleanup(func() { listPlugins, claudePlugin = prevList, prevRun })
 	listPlugins = func(context.Context) ([]installedPlugin, error) { return slices.Clone(ps), nil }
@@ -123,22 +131,18 @@ func selfUpdate(t *testing.T, res update.Result) string {
 	return out.String()
 }
 
-// A self-update that installs a new binary which does not run (no path
-// here) refreshes the marketplace and updates every installed beekeeper
-// plugin itself, so the role skills the plugin serves are the ones the new
-// binary embeds, and says so.
-func TestSelfUpdateRefreshesPlugin(t *testing.T) {
+// A self-update whose new binary cannot run leaves the plugin alone until
+// that binary runs; the old binary must not pin it to the old release.
+func TestSelfUpdateDefersPluginWhenNewBinaryCannotRun(t *testing.T) {
 	ran := fakePlugins(t, []installedPlugin{
 		{ID: beekeeperID, Version: oldPlugin, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t, "worker-rules")},
-		{ID: "other@beekeeper", Version: "1", Enabled: true},
 	})
 	out := selfUpdate(t, update.Result{Current: oldRelease, Latest: latestRelease, Newer: true, Updated: true})
-	want := []string{refreshMarketplace, updateUserScope}
-	if !slices.Equal(*ran, want) {
-		t.Errorf("self-update ran claude plugin %q, want %q", *ran, want)
+	if len(*ran) != 0 {
+		t.Fatalf("old binary synced plugin: %v", *ran)
 	}
-	if !strings.Contains(out, "beekeeper@beekeeper 50e1b9d0aaaa → 2b8a6d5b0000") {
-		t.Errorf("self-update did not say the plugin's update:\n%s", out)
+	if !strings.Contains(out, "its next command will retry") {
+		t.Fatalf("missing retry explanation: %s", out)
 	}
 }
 
@@ -241,6 +245,37 @@ func TestNewBinarySyncsPluginAfterAnOldSelfUpdate(t *testing.T) {
 	beekeeper(t, "timer")
 	if len(*ran) != 0 {
 		t.Errorf("a second command synced again: %q", *ran)
+	}
+}
+
+// The first run records a successful sync but only announces a changed revision.
+func TestFirstRunSyncReportsOnlyChangedPlugin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		changed bool
+	}{
+		{name: litUnchanged, version: newPlugin},
+		{name: "changed", version: oldPlugin, changed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := asBinary(t, newBinary)
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: tc.version, Scope: userScope, Enabled: true, InstallPath: pluginCopy(t)}})
+			out := beekeeper(t, "timer")
+			if want := []string{refreshMarketplace, updateUserScope}; !slices.Equal(*ran, want) {
+				t.Errorf("ran claude plugin %q, want %q", *ran, want)
+			}
+			if tc.changed {
+				if want := "Updated the plugin " + beekeeperID + " " + oldPlugin + " → " + newPlugin; !strings.Contains(out, want) {
+					t.Errorf("output %q lacks %q", out, want)
+				}
+			} else if strings.Contains(out, "Updated the plugin") {
+				t.Errorf("unchanged plugin reported an update: %q", out)
+			}
+			if got := recordedSync(dir); got != newBinary {
+				t.Errorf("recorded sync %q, want %q", got, newBinary)
+			}
+		})
 	}
 }
 
@@ -362,10 +397,85 @@ func TestSelfUpdateHandsPluginSyncToTheNewBinary(t *testing.T) {
 	ran = fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, Enabled: true, InstallPath: pluginCopy(t, "lease")}})
 	runInstalled = func(context.Context, io.Writer, string, ...string) error { return os.ErrPermission }
 	out = selfUpdate(t, res)
-	if want := []string{refreshMarketplace, updateNoScope}; !slices.Equal(*ran, want) {
-		t.Errorf("a new binary that does not run: ran %q, want %q", *ran, want)
+	if len(*ran) != 0 {
+		t.Errorf("a new binary that does not run: old binary synced %q", *ran)
 	}
 	if !strings.Contains(out, "did not sync its plugin") {
 		t.Errorf("self-update did not say the new binary failed:\n%s", out)
+	}
+}
+
+func TestPluginSyncPinsReleaseTag(t *testing.T) {
+	for _, version := range []string{"v0.142.0", "v0.142.1-rc.1"} {
+		t.Run(version, func(t *testing.T) {
+			realPin := pinMarketplace
+			asBinary(t, version+" (commit abcdef0)")
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, Version: oldPlugin, InstallPath: pluginCopy(t)}})
+			dir := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			path := filepath.Join(dir, "plugins", "known_marketplaces.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			original := []byte(`{"beekeeper":{"source":{"source":"github","repo":"giantswarm/beekeeper","ref":"main","sha":"newer-candidate"},"installLocation":"unchanged"},"other":{"source":{"source":"git","ref":"main"}}}`)
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			pinMarketplace = realPin
+			run := claudePlugin
+			claudePlugin = func(ctx context.Context, args ...string) error {
+				raw, err := os.ReadFile(filepath.Clean(path))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var entries map[string]struct {
+					Source          struct{ Ref, Repo, SHA string }
+					InstallLocation string
+				}
+				if err := json.Unmarshal(raw, &entries); err != nil {
+					t.Fatal(err)
+				}
+				got := entries["beekeeper"]
+				if got.Source.Ref != version || got.Source.SHA != "" || got.Source.Repo != sshTestRepository || got.InstallLocation != litUnchanged || entries["other"].Source.Ref != mainBranch {
+					t.Fatalf("registry at sync: %s", raw)
+				}
+				return run(ctx, args...)
+			}
+			syncListed(context.Background(), io.Discard, []installedPlugin{{ID: beekeeperID, InstallPath: dir}}, true)
+			if len(*ran) != 2 {
+				t.Fatalf("commands = %v", *ran)
+			}
+		})
+	}
+}
+
+func TestScratchDirectoriesLeavePluginUntouched(t *testing.T) {
+	realUnder := syncsUnder
+	for _, key := range []string{xdgStateHomeEnv, xdgConfigHomeEnv} {
+		t.Run(key, func(t *testing.T) {
+			dir := asBinary(t, newBinary)
+			ran := fakePlugins(t, []installedPlugin{{ID: beekeeperID, InstallPath: pluginCopy(t)}})
+			t.Setenv("BEEKEEPER_CONFIG", "")
+			t.Setenv("XDG_STATE_HOME", "")
+			t.Setenv("XDG_CONFIG_HOME", "")
+			syncsUnder = realUnder
+			if !syncsUnder("") {
+				t.Fatal("default directories should sync")
+			}
+			t.Setenv(key, t.TempDir())
+			prev := listPlugins
+			listPlugins = func(context.Context) ([]installedPlugin, error) {
+				t.Fatal("scratch run accessed live plugins")
+				return nil, nil
+			}
+			t.Cleanup(func() { listPlugins = prev })
+			syncOnce(context.Background(), io.Discard, dir)
+			syncPlugins(context.Background(), io.Discard, true)
+			beekeeper(t, selfUpdateCmdName, "--"+syncPluginsFlag)
+			selfUpdate(t, update.Result{Current: latestRelease, Latest: latestRelease})
+			if len(*ran) != 0 || recordedSync(dir) != "" {
+				t.Fatal("scratch run synced")
+			}
+		})
 	}
 }

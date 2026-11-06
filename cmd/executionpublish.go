@@ -352,11 +352,13 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if _, err = publishGit(ctx, repo, "merge-base", "--is-ancestor", r.Handle.Commit, p.Head); err != nil {
 			return result, refused("publication does not descend from the execution's pinned commit")
 		}
-		messages, messageErr := publishGit(ctx, repo, "log", "--no-patch", "--format=%B", r.Handle.Commit+".."+p.Head, "--")
+		// Scan only what this publication adds: commits a synced base brought in
+		// are already public on the default branch and are not the worker's.
+		messages, messageErr := publishGit(ctx, repo, "log", "--no-patch", "--format=%B", r.Handle.Commit+".."+p.Head, "^refs/heads/base", "--")
 		if messageErr != nil {
 			return result, messageErr
 		}
-		patch, patchErr := publishGit(ctx, repo, "log", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "--format=", r.Handle.Commit+".."+p.Head, "--")
+		patch, patchErr := publishGit(ctx, repo, "log", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "--format=", r.Handle.Commit+".."+p.Head, "^refs/heads/base", "--")
 		if patchErr != nil {
 			return result, patchErr
 		}

@@ -78,7 +78,11 @@ func (rl role) start(st *state.State, me state.Party, prevLive, takeOver bool, n
 	prev := r.Holder
 	how := ""
 	switch {
-	case prev == nil || prev.Is(me):
+	case prev == nil:
+		if r.Relay != nil && r.Relay.From == (state.Party{}) && takesRelay(r.Relay.To, me) {
+			r.Relay = nil
+		}
+	case prev.Is(me):
 		// A restart of the same holder keeps an open relay.
 	case r.Relay.Open(now) && r.Relay.From.Is(prev.Party) && takesRelay(r.Relay.To, me):
 		// The start runs in my headless first turn, which knows no desktop
@@ -301,8 +305,9 @@ func (rl role) observeCLI(st *state.State, sessions []*claude.Session, now time.
 }
 
 // renameHolder gives sup the title its running session carries now: a
-// holder renamed after its start is known by its current name, not the one
-// recorded at the start. It reports whether the name changed.
+// holder with a numbered run ignores desktop fallback names across imports
+// and CLI restarts. A new run title can still replace an older one. It
+// reports whether the name changed.
 func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 	if sup == nil {
 		return false
@@ -312,6 +317,12 @@ func renameHolder(sup *state.Supervisor, sessions []*claude.Session) bool {
 	// PID only: no rename.
 	if !live || s.Name == "" || s.Name == sup.Name || s.Name == "pid "+strconv.Itoa(s.PID) {
 		return false
+	}
+	for _, title := range []string{"Guide", "Supervisor"} {
+		rl := role{title: title}
+		if rl.runOf(sup.Name) > 0 && rl.runOf(s.Name) == 0 {
+			return false
+		}
 	}
 	sup.Name = s.Name
 	return true
@@ -352,7 +363,9 @@ func roleContext(r state.Role, sessions []*claude.Session, now time.Time, relayA
 	return 0
 }
 
-// relayDues is what one watch process said of the relay dues: when it said
+const relayDueRepeat = 5 * time.Minute
+
+// relayDues is what one watch process said of the relay dues: when it last said
 // each, by relayDueKey. A process that did not say a standing relay due
 // says it once more; nil keeps no memory, and the state's record alone
 // decides (a watch --once).
@@ -369,7 +382,8 @@ func relayDueKey(sup *state.Supervisor, relayAt config.Tokens) string {
 
 // said reports whether the relay due to r's holder's term at relayAt is
 // said: the state records it at relayAt, and this process said it before
-// the poll at now. Within one poll it is not said yet, so the poll's write
+// the poll at now, less than relayDueRepeat ago. Within one poll it is
+// not said yet, so the poll's write
 // under the lock says what its read found.
 func (d relayDues) said(r state.Role, relayAt config.Tokens, now time.Time) bool {
 	if !r.RelayDue.At(r.Holder, int64(relayAt)) {
@@ -379,7 +393,7 @@ func (d relayDues) said(r state.Role, relayAt config.Tokens, now time.Time) bool
 		return true
 	}
 	at, ok := d[relayDueKey(r.Holder, relayAt)]
-	return ok && at.Before(now)
+	return ok && at.Before(now) && now.Sub(at) < relayDueRepeat
 }
 
 // say records that this process said the relay due to sup's term at
@@ -389,9 +403,7 @@ func (d relayDues) say(sup *state.Supervisor, relayAt config.Tokens, now time.Ti
 		return
 	}
 	k := relayDueKey(sup, relayAt)
-	if _, ok := d[k]; !ok {
-		d[k] = now
-	}
+	d[k] = now
 }
 
 // sessionContext is the context in tokens of p's running session, read from
@@ -419,8 +431,8 @@ type quietness struct {
 
 // fireRelayDue reports rl's relay due once its holder's context reached
 // q.relayAt, or a new line arrives after an idle hour above half of it:
-// once per term and relayAt in the
-// state, and once more in a watch process that did not say it yet. The
+// once per term and relayAt in the state, and every relayDueRepeat in a
+// continuous watch until a relay opens. The
 // record keeps when it was first reported at that relayAt.
 func (rl role) fireRelayDue(st *state.State, q quietness, said relayDues, now time.Time) (lines []string, evs []state.Event) {
 	rl.update(st, func(r *state.Role) {
