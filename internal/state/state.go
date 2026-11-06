@@ -1496,6 +1496,10 @@ type WorkerReport struct {
 	Task     string    `json:"task,omitempty"`
 	Text     string    `json:"text"`
 	Problems []string  `json:"problems,omitempty"`
+	// TellTo is who started the desk review this report gives the verdict
+	// of: the watch wakes it with the report. GitHub may record the verdict
+	// as a plain comment, which nothing reading the review state sees.
+	TellTo Party `json:"tellTo,omitzero"`
 
 	rest rest
 }
@@ -2023,12 +2027,11 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
-	_, ok := release(s.version)
-	if !ok {
-		return nil
-	}
 	if err := s.checkWriter(st, now); err != nil {
 		return err
+	}
+	if _, ok := release(s.version); !ok {
+		return nil
 	}
 	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
 	// Releases before the refusal recorded their stale saves here instead.
@@ -2039,6 +2042,9 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 // checkWriter refuses an older release before an update can have side effects.
 // The caller holds the state lock.
 func (s *FileStore) checkWriter(st *State, now time.Time) error {
+	if err := s.checkRecoveryFence(); err != nil {
+		return err
+	}
 	own, ok := release(s.version)
 	if !ok {
 		return nil

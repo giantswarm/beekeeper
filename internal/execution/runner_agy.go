@@ -95,6 +95,9 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 			},
 		},
 	})
+	if !j.Request.MCP {
+		mcp = mustJSON(map[string]any{mcpServersKey: map[string]any{}})
+	}
 	if err := atomicFile(filepath.Join(cfgDir, "mcp_config.json"), mcp); err != nil {
 		return "", err
 	}
@@ -109,13 +112,9 @@ func (s *Server) runAgy(ctx context.Context, ref Ref, j Journal) error {
 	if err := s.linkAgyLogin(); err != nil {
 		return errors.New("agy login link in the managed home is unavailable")
 	}
-	home := s.agyHomeDir()
-	if j.Request.MCP {
-		var err error
-		home, err = s.prepareAgyMCPHome(ref, j)
-		if err != nil {
-			return err
-		}
+	home, err := s.prepareAgyMCPHome(ref, j)
+	if err != nil {
+		return err
 	}
 	log, err := s.openLog(ref)
 	if err != nil {

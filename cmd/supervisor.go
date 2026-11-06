@@ -128,6 +128,10 @@ type supervisorView struct {
 	Loop    bool   `json:"loop"`
 	PID     int    `json:"pid,omitempty"`
 	Version string `json:"version,omitempty"`
+	// Held says what the loop holds of its GitHub reads, Pulls the open
+	// pull requests nobody owns: both for whoever waits on the loop.
+	Held  string `json:"held,omitempty"`
+	Pulls string `json:"pulls,omitempty"`
 }
 
 // supervisorStatus says whether the supervisor loop runs: exit 3 when not.
@@ -141,8 +145,9 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 	if pid > 0 {
 		ver = a.loopVersion(c, pid)
 	}
+	held, pulls := a.loopWaitLines()
 	if a.json {
-		_ = a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver})
+		_ = a.printJSON(supervisorView{Loop: pid > 0, PID: pid, Version: ver, Held: held, Pulls: pulls})
 	}
 	if pid == 0 {
 		return refused("the supervisor loop does not run (%s)", loopServiceHint())
@@ -150,12 +155,37 @@ func (a *app) supervisorStatus(ctx ...context.Context) error {
 	if a.json {
 		return nil
 	}
+	line := fmt.Sprintf("the supervisor loop runs (PID %d)", pid)
 	if ver != "" {
-		_, err := fmt.Fprintf(a.out, "the supervisor loop runs (PID %d, %s)\n", pid, ver)
-		return err
+		line = fmt.Sprintf("the supervisor loop runs (PID %d, %s)", pid, ver)
 	}
-	_, err := fmt.Fprintf(a.out, "the supervisor loop runs (PID %d)\n", pid)
-	return err
+	for _, l := range []string{line, held, pulls} {
+		if l == "" {
+			continue
+		}
+		if _, err := fmt.Fprintln(a.out, l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loopWaitLines are what the loop holds of its GitHub reads and how many
+// open pull requests have no owner, "" for each with nothing to say. Unread
+// side files say nothing: the status of the loop itself stands.
+func (a *app) loopWaitLines() (held, pulls string) {
+	if a.store == nil {
+		return "", ""
+	}
+	var spend loopGraphQLSpend
+	if found, err := a.store.ReadFile(loopGraphQLFile, &spend); err == nil && found {
+		held = a.heldLine(spend)
+	}
+	var count loopSweepCount
+	if found, err := a.store.ReadFile(loopSweepFile, &count); err == nil && found {
+		pulls = count.line(a)
+	}
+	return held, pulls
 }
 
 // loopVersion returns the running supervisor loop's binary version.

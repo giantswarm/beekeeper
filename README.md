@@ -2275,7 +2275,9 @@ and a crash both start a fresh session.
   extra subscription sessions above a positive worker ceiling for `--review` starts, and as
   many above a positive `capacity.local.ceiling`.
   Reviews run before new workers within a supervisor pass. Memory, swap, load, lab
-  and build guards, usage window stops and weekly pace still apply. `capacity` and
+  and build guards, usage window stops and weekly pace still apply; disk holds a
+  review only under half of the worker floor, since a review builds little and the
+  watch prunes from the full floor on. `capacity` and
   its JSON show the reserve, occupancy above the worker ceiling and busy sessions.
   Filing findings starts no filer session.
 - **Capacity:** the supervisor keeps up to `capacity.ceiling` agents busy (10
@@ -2641,6 +2643,13 @@ its item again, and logs its unfinished task and latest hand-over note as an
 new activity restores its slot. Setting `agents.staleAfter` negative disables
 stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
+
+`beekeeper agents review <owner/repo>#<n> --verdict` prints the pull request's desk
+verdicts as the loop and the merge gate read them, with the head each judged (exit 3
+when there is none): GitHub refuses APPROVE and REQUEST_CHANGES on a pull request of the
+reviewer's own login, so a verdict there is a COMMENT review with no review state. The
+session that started a review gets its verdict: the watch wakes it with the reviewer's
+final report.
 
 `beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
 in a checkout of that repository. It requires green CI at the pinned head and
