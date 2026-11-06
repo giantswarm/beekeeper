@@ -209,6 +209,12 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 	}
 	path, pathErr := config.Path(a.cfgPath)
+	if pathErr == nil {
+		path, pathErr = filepath.Abs(path)
+	}
+	if pathErr == nil && path == recoveryPath {
+		path, pathErr = config.RecoverySource(recoveryPath)
+	}
 	var cfg *config.Config
 	if pathErr == nil {
 		cfg, pathErr = config.Load(path)

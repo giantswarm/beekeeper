@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // RecoverySnapshot validates the exact bytes persisted for independent fatal
@@ -53,4 +54,27 @@ func LoadRecovery(source, snapshot string) (*Config, error) {
 		return nil, fmt.Errorf("recovery state directory differs from configuration")
 	}
 	return c, nil
+}
+
+// RecoverySource identifies and validates the original source when a repair
+// worker inherits the snapshot as BEEKEEPER_CONFIG. A scan must observe that
+// source, never count loading the fallback itself as verified recovery.
+func RecoverySource(snapshot string) (string, error) {
+	raw, err := os.ReadFile(filepath.Clean(snapshot))
+	if err != nil {
+		return "", err
+	}
+	header, _, _ := strings.Cut(string(raw), "\n")
+	quoted, ok := strings.CutPrefix(header, "# fatal recovery source: ")
+	if !ok {
+		return "", fmt.Errorf("missing recovery source")
+	}
+	source, err := strconv.Unquote(quoted)
+	if err != nil || !filepath.IsAbs(source) || filepath.Clean(source) == filepath.Clean(snapshot) {
+		return "", fmt.Errorf("invalid recovery source")
+	}
+	if _, err := LoadRecovery(source, snapshot); err != nil {
+		return "", err
+	}
+	return source, nil
 }

@@ -26,6 +26,9 @@ func TestRecoverySnapshotRetainsValidatedSettingsAndSource(t *testing.T) {
 	if err != nil || c.Capacity.Ceiling != 2 {
 		t.Fatalf("settings lost: %v", err)
 	}
+	if got, err := RecoverySource(snapshot); err != nil || got != source {
+		t.Fatalf("original source: %q %v", got, err)
+	}
 	if _, err := LoadRecovery(source+"other", snapshot); err == nil {
 		t.Fatal("accepted another source")
 	}

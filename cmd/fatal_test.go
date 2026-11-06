@@ -524,6 +524,13 @@ func TestFatalMalformedConfigurationAdmitsOneRecoveryOwner(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// A repair worker inherits the snapshot path. Its scan must still
+			// fail the original file, and must not launch a second owner.
+			a.cfgPath = filepath.Join(dir, "fatal-recovery.yaml")
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			a.cfgPath = path
 			want := 0
 			if hold == ghNone {
 				want = 1
