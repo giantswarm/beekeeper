@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/proc"
 )
 
 const (
@@ -169,5 +171,28 @@ func TestParseTurn(t *testing.T) {
 		if ok != c.ok || turn.Role != c.role || turn.Text != c.text {
 			t.Errorf("parseTurn(%s) = %+v, %v", c.line, turn, ok)
 		}
+	}
+}
+
+// The daemon is claude daemon run (or a bare claude daemon), never one of
+// its clients nor another claude process.
+func TestIsDaemon(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{cliComm, daemonCmd, "run", "--origin", "transient"}, true},
+		{[]string{cliComm, daemonCmd}, true},
+		{[]string{cliComm, daemonCmd, "status"}, false},
+		{[]string{cliComm, daemonCmd, "stop", "--any"}, false},
+		{[]string{"claude bg-pty-host"}, false},
+		{[]string{"claude", "--bg", "--resume", "x"}, false},
+	} {
+		if got := IsDaemon(&proc.Process{Comm: cliComm, Args: c.args}); got != c.want {
+			t.Errorf("IsDaemon(%q) = %v, want %v", c.args, got, c.want)
+		}
+	}
+	if IsDaemon(&proc.Process{Comm: "node", Args: []string{"node", daemonCmd, "run"}}) {
+		t.Error("a process of another binary is no claude daemon")
 	}
 }
