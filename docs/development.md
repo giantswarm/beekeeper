@@ -200,6 +200,48 @@ EOF
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 ```
 
+### GitHub App dry run with a built binary
+
+`BEEKEEPER_GITHUB_API_URL` and `BEEKEEPER_GITHUB_WEB_URL` override the
+in-process GitHub API and web base URLs at startup. Empty or unset values keep
+the public GitHub defaults; trailing slashes are removed. These apply to manifest
+conversion, App sign-in and the gate's in-process GitHub reads. They do not
+configure the separate `gh` executable: put a fake `gh` first on `PATH` for
+commands that invoke it (including App discovery and account lookup).
+
+To exercise the binary's wiring, build with `go build .`, start a local fake
+GitHub, and set both variables to its base URL. Use a scratch configuration and
+state, a disposable manifest and SOPS target, and fake vault/SOPS tools on `PATH`
+so the whole exercise uses test credentials. For example, with the fake server's
+base URL in `FAKE_GITHUB_URL` and the scratch configuration in `BEEKEEPER_CONFIG`:
+
+```bash
+export BEEKEEPER_GITHUB_API_URL="$FAKE_GITHUB_URL"
+export BEEKEEPER_GITHUB_WEB_URL="$FAKE_GITHUB_URL"
+./beekeeper app create example --manifest /tmp/manifest.json --org example --no-open --timeout 30s
+```
+
+The scratch configuration's `apps.secrets.example` must name the disposable
+SOPS target. Have the fake `gh` report the App absent and answer the account ID
+lookup. Open the loopback page printed by the command and submit its manifest
+form. The form must target the fake server's
+`/organizations/example/settings/apps/new`, including the state query parameter.
+The fake web handler reads the submitted manifest's `redirect_url` and redirects
+to it with `code=example-code` and the unchanged state. Its API handler must see
+an unauthenticated `POST /app-manifests/example-code/conversions` and return HTTP
+201 with a JSON object containing `id`, `slug`, `client_id`, `client_secret` and
+`pem` (dummy values suffice for the conversion; use a fixture private key for
+subsequent sign-in). The browser then reaches the fake server's installation
+page, and only the disposable SOPS target receives the dummy credentials.
+`--no-open` lets the test driver control the browser; it still performs the
+conversion and write. `secret github-app --dry-run` only validates metadata and
+does not exercise HTTP wiring.
+
+The fresh-process regression test can also be run without vault or SOPS tools:
+`go test ./cmd -run '^TestGitHubURLsFromEnvironment$' -count=1`. It verifies the
+public defaults, the manifest form action, conversion against a local fake API
+and the device flow against a local fake web endpoint.
+
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
 reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
