@@ -222,7 +222,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			code, err := fatalProbe(ctx, c.Probe...)
 			o := fatalResult("check:"+c.Name, code, err)
 			observe(o)
-			if (o.Failed || o.Unknown) && c.Harness != "" {
+			if (o.Failed || o.Unknown || o.Disabled) && c.Harness != "" {
 				broken = append(broken, c.Harness)
 			}
 		}

@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	fatalUnavailable = "unavailable"
-	fatalRepairTask  = "repair"
+	fatalUnavailable   = "unavailable"
+	fatalRepairTask    = "repair"
+	fatalCriticalProbe = "critical-probe"
 )
 
 func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
@@ -75,7 +76,7 @@ func TestFatalRepairOwnerUsesProcessLiveness(t *testing.T) {
 				if slices.Contains(args, "is-enabled") {
 					return fatalDisabledState, 1
 				}
-				if args[0] == "critical-probe" {
+				if args[0] == fatalCriticalProbe {
 					return "", 1
 				}
 				return "", 0
@@ -124,12 +125,17 @@ func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
 }
 
 func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
-	for _, hold := range []string{ghNone, bgStopCmd, holdStarts} {
+	const harnessOff = "harness intentionally disabled"
+	for _, hold := range []string{ghNone, bgStopCmd, holdStarts, harnessOff} {
 		t.Run(hold, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(fmt.Sprintf("stateDir: %q\nfatal:\n  checks:\n    - name: startup\n      probe: [critical-probe]\n", dir)), 0600); err != nil {
+			extra := ""
+			if hold == harnessOff {
+				extra = "    - name: disabled-harness\n      probe: [disabled-probe]\n      harness: claude\n"
+			}
+			if err := os.WriteFile(path, []byte(fmt.Sprintf("stateDir: %q\nfatal:\n  checks:\n    - name: startup\n      probe: [critical-probe]\n", dir)+extra), 0600); err != nil {
 				t.Fatal(err)
 			}
 			a.cfgPath = path
@@ -149,7 +155,10 @@ func TestFatalScanOwnsOneRepairAndRespectsStop(t *testing.T) {
 				if slices.Contains(args, "is-enabled") {
 					return fatalDisabledState, 1
 				}
-				if args[0] == "critical-probe" && failed {
+				if args[0] == "disabled-probe" {
+					return "", 2
+				}
+				if args[0] == fatalCriticalProbe && failed {
 					return "discard sensitive output", 1
 				}
 				return "", 0
@@ -293,7 +302,7 @@ func TestFatalAdmissionRefusalDoesNotExhaustRepairBudget(t *testing.T) {
 		if slices.Contains(args, "is-enabled") {
 			return fatalDisabledState, 1
 		}
-		if args[0] == "critical-probe" {
+		if args[0] == fatalCriticalProbe {
 			return "", 1
 		}
 		return "", 0
