@@ -1110,8 +1110,8 @@ not an edit to Beekeeper's generated workflow files.
 
 ### Resource audit and bounded retention
 
-`beekeeper agents hosts check <host>` prints capabilities followed by the
-read-only resource inventory. Each entry has an execution ref and coordinator
+`beekeeper agents hosts check <host>` prints capabilities with the read-only
+resource inventory in `resourceAudit`. Each entry has an execution ref and coordinator
 when ownership can be verified, a state (`active`, `parked`, `terminal`,
 `unknown`, or `shared`), reason and retry action. The desk joins this with its registered execution inventory
 to flag owned orphan resources without changing their observed state. Managed

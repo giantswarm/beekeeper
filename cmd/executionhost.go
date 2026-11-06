@@ -484,9 +484,6 @@ func (a *app) executionHostsCmd() *cobra.Command {
 		caps, probeErr := a.probeExecution(cmd.Context(), h)
 		// Audit independently of readiness so a policy/tool failure does not
 		// hide leftovers. An unreachable audit is explicitly unknown.
-		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
-			return err
-		}
 		var audit []execution.ResourceFinding
 		auditErr := (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-audit", execution.Ref{}, nil, &audit)
 		if auditErr != nil {
@@ -505,7 +502,8 @@ func (a *app) executionHostsCmd() *cobra.Command {
 			}
 			execution.ReportOrphans(audit, a.cfg.Identity.Host, registered)
 		}
-		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(audit); err != nil {
+		caps.ResourceAudit = audit
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}
 		if probeErr != nil || auditErr != nil {
