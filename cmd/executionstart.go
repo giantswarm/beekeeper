@@ -85,6 +85,16 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if a.cfg.GitHub.WorkerApp != nil && !caps.GitHub {
 		return refused("execution host lacks the per-worker GitHub adapter; update and check the host before starting")
 	}
+	task := strings.TrimSpace(o.Task)
+	if task == "" {
+		task = briefTask(brief)
+	}
+	// Before any admission: this start already holds its slot.
+	if !o.DryRun {
+		if ref, ok := a.unactivatedExecution(name, host.Identity, task); ok {
+			return a.activateExecution(ctx, ref)
+		}
+	}
 
 	readings := a.executionReadings(ctx, k)
 	var legacy *usageView
@@ -131,10 +141,6 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	control, err := execution.NewControlKey()
 	if err != nil {
 		return err
-	}
-	task := strings.TrimSpace(o.Task)
-	if task == "" {
-		task = briefTask(brief)
 	}
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
@@ -423,7 +429,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		r.RegistrationReceipt = execution.Sign(r, key, time.Now().UTC())
 		if _, err := client.Start(ctx, r); err != nil {
 			a.executionFailure(ref, err)
-			return fmt.Errorf("activation outcome unconfirmed: %w; inspect or recover this execution", err)
+			if err := a.activationOutcome(ctx, client, ref, err); err != nil {
+				return err
+			}
 		}
 	}
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -458,6 +466,60 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// activationOutcome settles a failed activation by the host's journal, in time
+// of its own: the failure may have spent ctx. Nil: the start took, and the
+// caller waits for it as usual. Otherwise the error says whether the execution
+// exists and how a retry finds it.
+func (a *app) activationOutcome(ctx context.Context, client execution.Transport, ref execution.Ref, failure error) error {
+	look, cancel := context.WithTimeout(context.WithoutCancel(ctx), activationLookTimeout)
+	defer cancel()
+	observation, err := client.Inspect(look, ref)
+	if err != nil {
+		a.executionFailure(ref, err)
+		return fmt.Errorf("activation outcome unconfirmed: %w; the host did not answer the check either (%v), so whether execution %s runs is unknown: the same start or agents recover reconciles it once the host answers", failure, err, ref.Execution)
+	}
+	if err := a.saveExecutionObservation(ref, observation); err != nil {
+		return err
+	}
+	if observation.ProcessState == execution.Prepared {
+		return fmt.Errorf("activation failed: %w; execution %s exists on its host, prepared, and no process runs: the same start or agents recover activates it, and the host sync stops it %s after its start", failure, ref.Execution, unstartedReleaseAfter)
+	}
+	return nil
+}
+
+// activationLookTimeout bounds the check after a failed activation.
+const activationLookTimeout = 20 * time.Second
+
+// unactivatedExecution finds the execution a repeated start of the same task
+// on the same host left unactivated, to carry on with instead of refusing the
+// name or reserving a second one.
+func (a *app) unactivatedExecution(name string, host execution.HostID, task string) (execution.Ref, bool) {
+	st, err := a.store.Read()
+	if err != nil {
+		return execution.Ref{}, false
+	}
+	for _, ag := range st.Agents {
+		if !strings.EqualFold(ag.Name, name) || ag.Execution == nil {
+			continue
+		}
+		r, _ := executionRecord(st, *ag.Execution)
+		if r != nil && r.Handle.Ref.Host == host && r.Request.Task == task && unactivated(r) {
+			return r.Handle.Ref, true
+		}
+	}
+	return execution.Ref{}, false
+}
+
+// unactivated says a start ran no process as far as the coordinator knows: a
+// record that has not reached Running, with no stop and no end.
+func unactivated(r *state.ExecutionRecord) bool {
+	switch r.Phase {
+	case executionPending, execution.Preparing, execution.Prepared, execution.Activating:
+		return !r.Released() && !r.Terminal() && r.StopRequest == nil && !r.Observation.Ready
+	}
+	return false
 }
 
 func (a *app) executionFailure(ref execution.Ref, failure error) {
