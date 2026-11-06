@@ -363,9 +363,9 @@ func TestKillReport(t *testing.T) {
 			[]string{"slot 1's cap (" + o.SlotSlice(1) + ") killed systemd-run before the command started: 8 (systemd-run) 0 MiB", "not this command"}, ownAdvice},
 		{"systemd-run in a joined slot", true, []machine.OOMKill{{PID: 9, Task: "systemd-run", Memcg: slice, TaskMemcg: scope}},
 			[]string{"before the command started"}, ownAdvice},
-		{"the command at a joined slot's cap", true, []machine.OOMKill{{PID: 10, Task: "node", AnonMiB: 900, Memcg: slice, TaskMemcg: scope}},
+		{"the command at a joined slot's cap", true, []machine.OOMKill{{PID: 10, Task: testNodeCommand, AnonMiB: 900, Memcg: slice, TaskMemcg: scope}},
 			[]string{"slot 1's shared cap", "together filled it"}, ownAdvice},
-		{"the command at its own cap in a joined slot", true, []machine.OOMKill{{PID: 11, Task: "node", AnonMiB: 6100, Memcg: scope}},
+		{"the command at its own cap in a joined slot", true, []machine.OOMKill{{PID: 11, Task: testNodeCommand, AnonMiB: 6100, Memcg: scope}},
 			[]string{"the 6G cap killed", "MemoryMax=6G", ownAdvice}, sharedCap},
 	} {
 		what, advice, _ := killReport(o, unit, 1, c.shared, c.kills)

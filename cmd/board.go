@@ -248,6 +248,9 @@ alone, until exit 3 says none is left.`,
 			if sc.closes, err = cl.Closes(cmd.Context(), offBoard(boardOwners(st, sc), cands)); err != nil {
 				return err
 			}
+			if sc.prReferences, err = sessionPRReferences(cmd.Context(), cl.GH, st, sessions, me); err != nil {
+				return err
+			}
 			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
@@ -487,13 +490,14 @@ func nextSkip(skip []string, pick *board.Candidate) []string {
 // task or note names belongs to, and what the running sessions work on
 // (servingWork).
 type pickScope struct {
-	me     state.Party
-	alive  func(state.Party) bool
-	gone   func(state.Agent) bool
-	listed time.Time
-	closes map[string][]string
-	owner  string
-	works  []sessionWork
+	me           state.Party
+	alive        func(state.Party) bool
+	gone         func(state.Agent) bool
+	listed       time.Time
+	closes       map[string][]string
+	prReferences map[string]string
+	owner        string
+	works        []sessionWork
 }
 
 // sessionWork is the issues and pull requests a running session works on
@@ -584,7 +588,7 @@ const (
 // turns it away.
 func skipKind(reason string) string {
 	switch {
-	case strings.HasPrefix(reason, "served by "):
+	case strings.HasPrefix(reason, "served by "), strings.HasPrefix(reason, "referenced by open PR "):
 		return kindServed
 	case strings.HasPrefix(reason, "assigned to "):
 		return kindAssigned
@@ -663,7 +667,7 @@ func nextFree(st *state.State, cands []board.Candidate, sc pickScope) nextResult
 		}
 		c.Skip = cmp.Or(incidentStartReason(st, sc.listed, c.Ref), heldByDecision(st.Notes, c.Item), c.Skip)
 		if c.Skip == "" {
-			c.Skip = owned(c.Ref)
+			c.Skip = cmp.Or(owned(c.Ref), sc.prReferences[strings.ToLower(c.Ref)])
 		}
 		if c.Skip == "" && c.Epic != "" {
 			if o := owned(c.Epic); o != "" {

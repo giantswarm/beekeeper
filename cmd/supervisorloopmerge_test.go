@@ -851,7 +851,7 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 	const revokedGoCase = "revoked go"
 	const changesRequestedCase = "changes requested"
 	const unreadableCase = "unreadable authority"
-	for _, scenario := range []string{litUnchanged, changesRequestedCase, "dismissed approval", revokedGoCase, "moved head", "closed", "red CI", litDraft, conflictingWord, unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
+	for _, scenario := range []string{litUnchanged, changesRequestedCase, "dismissed approval", revokedGoCase, "moved head", overrideClosed, "red CI", litDraft, conflictingWord, unreadableCase, reviewedStoppedCase, reviewedHeldCase} {
 		t.Run(scenario, func(t *testing.T) {
 			r := newLoopRig(t)
 			r.verdict("R1", loopHead, superloop.Approved, loopApproved)
@@ -878,7 +878,7 @@ func TestReviewedMergeRefreshesAuthorityBeforeMutation(t *testing.T) {
 					}
 				case "moved head":
 					r.pull.Head = loopFixed
-				case "closed":
+				case overrideClosed:
 					r.pull.State = superloop.Closed
 				case "red CI":
 					r.pull.Green = false

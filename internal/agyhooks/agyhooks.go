@@ -18,9 +18,9 @@ import (
 var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 
 // EntryRejects is why agy refuses the named hook entry raw, an object of
-// event lists and optional enabled metadata, or "" when agy accepts it.
+// event lists (or null) and optional enabled metadata, or "" when agy accepts it.
 // Unknown fields are ignored. A tool event's items are matchers
-// with at least one hook, a lifecycle event's items are command hooks, and
+// with optional hooks, a lifecycle event's items are command hooks, and
 // every hook of type "command" (or of no type) names its command.
 func EntryRejects(raw json.RawMessage) string {
 	var events *struct {
@@ -38,7 +38,7 @@ func EntryRejects(raw json.RawMessage) string {
 		return "not an object of hook lists: " + err.Error()
 	}
 	if events == nil {
-		return "not an object of hook lists"
+		return ""
 	}
 	if why := fieldTypesRejects(raw); why != "" {
 		return why
@@ -81,9 +81,6 @@ func itemRejects(event string, item json.RawMessage) string {
 	if err := json.Unmarshal(item, &e); err != nil {
 		return event + ": " + err.Error()
 	}
-	if len(e.Hooks) == 0 {
-		return event + ": a matcher without hooks"
-	}
 	for _, h := range e.Hooks {
 		if why := commandRejects(event, h); why != "" {
 			return why
@@ -97,7 +94,7 @@ func commandRejects(event string, item json.RawMessage) string {
 	if err := json.Unmarshal(item, &h); err != nil {
 		return event + ": " + err.Error()
 	}
-	if strings.TrimSpace(h.Command) == "" {
+	if h.Command == "" {
 		return event + ": command hook must specify 'command'"
 	}
 	return ""

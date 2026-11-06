@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -108,10 +109,11 @@ it landed) is rebased onto its base on GitHub's side (Update with rebase,
 never a base merge into the branch), the new head awaited, and devctl runs
 on it, waiting for its checks; one that conflicts by then, or that GitHub
 does not rebase, is refused (77) with nothing merged, naming the
-replacement PR. Under the budget floor the merge is
-queued for the reset (exit 76, as below): a run of its own waits for the
-budget and merges as below, and for merge.resetFirst from the reset the
-merges queued for it go first, the oldest queued first: only the running
+replacement PR. A one-PR merge keeps a reserve of 200 GitHub calls and
+can run below the budget floor while that reserve remains. Other work and
+merges below that reserve are queued for the reset (exit 76, as below):
+a run of its own waits for the budget and merges as below, and for
+merge.resetFirst from the reset the merges queued for it go first, the oldest queued first: only the running
 merges count against merge.cap for them, and the waits below start after
 them; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
@@ -692,6 +694,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 	return &exitError{code: ExitGateQueued}
 }
 
+// mergeBudgetReserve leaves room for the reads and writes of one gated PR.
+const mergeBudgetReserve = 200
+
 // step joins or refreshes the merge's queue entry and starts devctl when it
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
@@ -711,13 +716,16 @@ func (g *gateRun) step() (string, error) {
 		return liveWait, nil
 	}
 	if liveWait == "" {
+		if done, err := g.takeover(); done || err != nil {
+			return "", err
+		}
 		g.pollToolWindow(g.ctx, g.me)
 		// Recover an ended devctl before pruning its place as lost. A
 		// queued handoff behind a live gate only registers its new PID;
 		// its predecessor still owns these checks.
 		g.recordGone(g.ctx)
-		if why := g.checkOutside(); why != "" {
-			return why, nil
+		if why, err := g.checkOutside(); err != nil || why != "" {
+			return why, err
 		}
 	}
 	var q merge.Lane
@@ -757,6 +765,7 @@ func (g *gateRun) step() (string, error) {
 				g.me = m.By
 			}
 			m.PID, m.By, m.Seen, m.Output, m.Run = g.pid, g.me, g.now.UTC(), g.output, g.queuedRun()
+			m.Version = project.Version()
 			g.seeded = m.Seeded
 			if g.candidateRead {
 				m.Candidate = g.candidate
@@ -801,6 +810,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("%s is held (%s) by %q until %s: %s; park until it lifts (beekeeper agents park --on %s%s \"<what>\"), merge then, do not poll",
 			g.repo, holdTarget(hold), hold.By.Name, untilText(g.app, hold), hold.Reason, holdParkFlag, hold.Target)
 	case dup != nil && dup.Phase == state.Waiting:
+		if dup.By.Is(g.me) {
+			gateLine("%s reuses its existing place in lane %s (pid %d); its outcome reaches the owning session", g.key(), g.lane.Name, dup.PID)
+			return "", exitCode(ExitGateQueued)
+		}
 		why := fmt.Sprintf("%s is already queued in lane %s: since %s for %q (pid %d); its outcome reaches %q, do not merge again",
 			g.key(), g.lane.Name, clock(g.now, dup.Joined), dup.By.Name, dup.PID, dup.By.Name)
 		_ = g.store.Log(event(g.me, "merge.refused", "%s", why))
@@ -861,7 +874,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}
 	urgent := false
-	if b.Remaining < g.cfg.GitHub.Floor {
+	// One PR has a bounded budget, unlike readers. Keep a conservative
+	// reserve for its checks and merge, without admitting other work.
+	boundedMerge := g.pr > 0 && b.Remaining >= mergeBudgetReserve
+	if b.Remaining < g.cfg.GitHub.Floor && !boundedMerge {
 		if urgent, why, err = g.urgentTurn(b); err != nil {
 			return "", g.stateRefused(err)
 		}
@@ -1003,12 +1019,16 @@ const (
 // checkOutside settles or drops the lane's places that wait without their
 // merge and whose pull request merged or closed (checkPlaces). It returns
 // what the merge waits for when GitHub does not answer for a place that
-// heads the lane.
-func (g *gateRun) checkOutside() string {
-	if err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck); err != nil {
-		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err)
+// heads the lane, or a StaleWriterError when a newer release wrote the state.
+func (g *gateRun) checkOutside() (string, error) {
+	err := g.checkPlaces(g.ctx, g.me, g.now, g.lane.Name, g.repo, g.pr, outsideCheck)
+	if stale := (*state.StaleWriterError)(nil); errors.As(err, &stale) {
+		return "", stale
 	}
-	return ""
+	if err != nil {
+		return fmt.Sprintf("lane %s waits for a place settled outside the gate, and GitHub does not answer for it (%v)", g.lane.Name, err), nil
+	}
+	return "", nil
 }
 
 // readRelease reads the pull request's release tree once before merging.
@@ -1571,6 +1591,7 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 		g.drop(st)
 		if code == ExitGateRefused {
 			g.refusePair(st, why)
+			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
 		}
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
 	})
@@ -1706,7 +1727,7 @@ func (g *gateRun) start(settling string, hrs []merge.HelmRelease) (string, error
 		passed := q.Passed(g.repo, g.pr)
 		m := &st.Merges[i]
 		m.Phase, m.Started, m.Roll, m.Seeded, m.Outside = state.Running, g.now.UTC(), merge.RollSet(hrs, g.repo), false, false
-		m.HandCut = g.handCut()
+		m.HandCut, m.Version = g.handCut(), project.Version()
 		m.Finished, m.Exit, m.Reset = time.Time{}, 0, time.Time{}
 		ev := []state.Event{g.startEvent()}
 		if passed != "" {
@@ -1922,6 +1943,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	}
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
+		argv = append(slices.Clone(argv), "--progress")
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
@@ -2422,6 +2444,17 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
 	var ev []state.Event
+	// The detached gate, rather than its submitting loop, owns the actual
+	// merge outcome. Record it atomically with the merge's terminal event.
+	if m.By.Name == loopParty.Name && pr > 0 && (out.Merged || r.unanswered != nil || st.Stop == nil && rc != github.SquashRed && rc != github.SquashNotApplicable && rc != github.SquashRefused && rc != ExitGateRefused && rc != ExitGateUnread) {
+		reason := fmt.Sprintf("merge-command-exit-%d", rc)
+		if out.Merged {
+			reason = ""
+		}
+		o := throughputOutcome{At: now, Operation: runMerge, Reason: reason, Candidate: normalizeLoopVersion(loopRunningVersion()), URL: publicPullURL(fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr)), Success: out.Merged, Unknown: r.unanswered != nil}
+		b, _ := json.Marshal(o)
+		ev = append(ev, event(loopParty, throughputOutcomeVerb, "%s", b))
+	}
 	switch {
 	case out.Merged:
 		merge.Retry(st, repo, pr)

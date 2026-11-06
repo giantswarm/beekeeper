@@ -215,3 +215,38 @@ func TestLanesDropEndsAHungRun(t *testing.T) {
 		t.Errorf("merges: %+v", st.Merges)
 	}
 }
+
+// A long post-merge CircleCI wait stays alive while devctl reports progress,
+// even after the watch's historical hung threshold has elapsed.
+func TestWatchKeepsActiveReleasePipeline(t *testing.T) {
+	w, _, out := notifyingWatch(t, t.TempDir(), false)
+	now := relayNow
+	after := w.cfg.Merge.HungAfter.Duration
+	started := now.Add(-3 * after)
+	// Model continuous watch observations, without a suspend grace reset.
+	w.hungGrace = started
+	w.lastHungCheck = now.Add(-time.Second)
+	stubPulls(t, map[int]github.Pull{1: {State: github.Merged, MergedAt: started}})
+	child := hungChild(t, w.store.Dir(), hungRepo, 1)
+	base := mergeBase(w.store.Dir(), hungRepo, 1)
+	p := newMergeProgress(base, []string{"--release-timeout=30m"}, started)
+	p.observe("release: waiting for the release of abc\n", started.Add(time.Minute))
+	p.observe("pipeline 123: workflow build running\n", now.Add(-time.Minute))
+	if err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: hungRepo, PR: 1, Lane: hungLane, Child: child, Phase: state.Running, Started: started}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.hungMerges(context.Background(), now)
+	if !proc.Alive(child) || strings.Contains(out.String(), "MERGE HUNG") {
+		t.Fatalf("active release ended: %s", out.String())
+	}
+	// Once devctl has been silent for its release timeout, the same watch
+	// still recovers a stuck child.
+	w.lastHungCheck = now.Add(30*time.Minute - time.Second)
+	w.hungMerges(context.Background(), now.Add(30*time.Minute))
+	if !strings.Contains(out.String(), "MERGE HUNG") {
+		t.Fatalf("silent release not ended: %s", out.String())
+	}
+}

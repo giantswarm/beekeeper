@@ -1108,6 +1108,9 @@ func TestTheGateBoundsDevctlsCIWaitByItsOwnTimeout(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !strings.Contains(string(raw), "--progress") {
+				t.Errorf("merge lacks progress: %s", raw)
+			}
 			if n := strings.Count(string(raw), "--timeout"); n != 1 {
 				t.Errorf("devctl ran with %d --timeout: %s", n, raw)
 			}

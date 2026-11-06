@@ -338,6 +338,9 @@ func TestCheckReviewedMergeResultStopsWhenDeskStoppedMeanwhile(t *testing.T) {
 	if code != github.SquashNotApplicable || reason != reasonDeskStopped {
 		t.Fatalf("got (%q, %d), want (%q, %d)", reason, code, reasonDeskStopped, github.SquashNotApplicable)
 	}
+}
+
+func TestCmdPackageHasNoGoConstFindings(t *testing.T) {
 	if finding := checkPackageGoConst("..", "./cmd"); finding != "" {
 		t.Fatalf("goconst in ./cmd: %s", finding)
 	}

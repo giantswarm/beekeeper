@@ -494,8 +494,9 @@ type watcher struct {
 	lastServing time.Time
 	// teleporting is set while the Teleport login is read, lastTeleport
 	// when it began.
-	teleporting  atomic.Bool
-	lastTeleport time.Time
+	teleporting     atomic.Bool
+	lastTeleport    time.Time
+	lastClaudeLogin string
 	// centraling is set while the roster is published to the central
 	// instance, lastCentral when that last started and centralChecked when
 	// the central instance was last called.
@@ -1502,6 +1503,7 @@ func (w *watcher) poll(ctx context.Context) {
 		w.clear("proc")
 		w.pollSessions(ctx, since, t)
 	}
+	w.staleMerges()
 	w.lostMerges(ctx)
 	w.owedOutcomes(ctx)
 	w.pollToolWindow(ctx, watchParty)
@@ -1530,6 +1532,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
+		w.claudeLogin()
 		w.inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
 	}
 	if now.Sub(w.lastServing) >= w.readEvery(th.Interval.Duration) {
@@ -2329,6 +2332,14 @@ const loopRestartEvery = time.Minute
 // DOWN and notifies (no-supervisor) until it runs again. No session is
 // ever started or relayed for it.
 func (w *watcher) checkLoop(ctx context.Context, st *state.State) bool {
+	if line, err := w.checkThroughput(w.now, false); err != nil {
+		w.fail(watchThroughputKey, "release throughput unknown: cannot read durable health")
+	} else {
+		w.clear(watchThroughputKey)
+		if line != "" {
+			w.emitNow(watchThroughputKey, "%s", line)
+		}
+	}
 	if w.loopRunning() {
 		if w.stand.loopDown {
 			w.emitNow("supervisor", "SUPERVISOR LOOP BACK: the supervisor loop runs again (down since %s)", clock(w.now, w.stand.loopSince))
@@ -2593,6 +2604,11 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 	}
 	found := map[string]bool{}
 	for _, h := range holders {
+		if h.Damaged != "" {
+			found["lease-damaged:"+h.Env] = true
+			w.emit("lease-damaged:"+h.Env, "DAMAGED LEASE: %s's holder record cannot be read (%s): it stays held until beekeeper lease release %s --force", h.Env, h.Damaged, h.Env)
+			continue
+		}
 		v := w.leaseView(sessions, h)
 		key := h.Env + "@" + h.Since
 		if overrun := w.leaseOverrun(h); overrun != "" {
@@ -2607,4 +2623,5 @@ func (w *watcher) staleLeases(ctx context.Context, sessions []*claude.Session) {
 		}
 	}
 	w.clearMissing("lease-round:", found)
+	w.clearMissing("lease-damaged:", found)
 }
