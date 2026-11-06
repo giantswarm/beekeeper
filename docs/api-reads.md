@@ -1,6 +1,6 @@
 # Short-lived API reads
 
-`beekeeper api-read ate-api <service>/<method> --data '{}'` runs `grpcurl`
+`beekeeper api-read example-api <service>/<method> --data '{}'` runs `grpcurl`
 with a private, audience-bound service-account token. The default lifetime
 is ten minutes; `--duration` accepts 10m through 15m (Kubernetes requires
 at least ten minutes). Direct production
@@ -18,7 +18,7 @@ Add a named entry under `kube.apiReads` in the machine configuration:
 ```yaml
 kube:
   apiReads:
-    ate-api:
+    example-api:
       context: <production-context>
       namespace: <api-namespace>
       serviceAccount: <dedicated-reader>

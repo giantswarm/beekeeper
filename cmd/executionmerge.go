@@ -44,6 +44,12 @@ var runExecutionMerge = func(ctx context.Context, use execution.MergeUse) error 
 }
 
 func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execution.MergeUse) error {
+	return a.executionMergeDecisionLive(ctx, st, use, false)
+}
+
+// loopDecision is set only by the supervisor planner; the executor separately
+// requires its durable pending exact-head claim before performing the merge.
+func (a *app) executionMergeDecisionLive(ctx context.Context, st *state.State, use execution.MergeUse, loopDecision bool) error {
 	r, _ := executionRecord(st, use.Ref)
 	if r == nil || (!r.Request.GitHub && !strings.EqualFold(r.Request.Repository, use.Repository)) || !execution.SupportedHarness(r.Request.Harness) || !r.Request.LeaseRequired || st.Stop != nil {
 		return refused("execution merge authority stopped or mismatched")
@@ -101,7 +107,7 @@ func (a *app) executionMergeLive(ctx context.Context, st *state.State, use execu
 	if pull.State != superloop.Open || pull.Head != use.Head || !pull.Green {
 		return refused("merge head moved or current CI is not green")
 	}
-	return a.authenticateExecutionReview(ctx, st, use, pull)
+	return a.authenticateReviewResult(ctx, st, use, pull, loopDecision)
 }
 
 func (a *app) issueExecutionMerge(ctx context.Context, ref execution.Ref, repository string, pr int, head string, issuer state.Party) (execution.MergeAuthorization, error) {
@@ -185,7 +191,7 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 					if json.Unmarshal(out, &pull) != nil {
 						return nil, errors.New("invalid merge reconciliation")
 					}
-					grant.Outcome = "unconfirmed"
+					grant.Outcome = verdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {
 						grant.Outcome = execution.MergeSucceeded
 					}

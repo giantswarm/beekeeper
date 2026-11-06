@@ -92,7 +92,7 @@ func TestAPIReadCommand(t *testing.T) {
 	defer server.Close()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "kubeconfig")
-	kc := clientapi.Config{Clusters: map[string]*clientapi.Cluster{"cluster": {Server: server.URL, CertificateAuthorityData: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})}}, Contexts: map[string]*clientapi.Context{"production": {Cluster: "cluster"}}}
+	kc := clientapi.Config{Clusters: map[string]*clientapi.Cluster{"cluster": {Server: server.URL, CertificateAuthorityData: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})}}, Contexts: map[string]*clientapi.Context{"example-context": {Cluster: "cluster"}}}
 	if err := clientcmd.WriteToFile(kc, path); err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +101,10 @@ func TestAPIReadCommand(t *testing.T) {
 	}
 	t.Setenv("PATH", dir)
 	var out bytes.Buffer
-	a := &app{cfg: &config.Config{Kube: config.Kube{Kubeconfig: []string{path}, APIReads: map[string]config.APIRead{"ate-api": {Context: "production", Namespace: "api", ServiceAccount: "reader", Audience: "api", Endpoint: "<endpoint>", Methods: []string{"Reader/List"}}}}}, out: &out}
+	a := &app{cfg: &config.Config{Kube: config.Kube{Kubeconfig: []string{path}, APIReads: map[string]config.APIRead{"example-api": {Context: "example-context", Namespace: "api", ServiceAccount: "reader", Audience: "api", Endpoint: "<endpoint>", Methods: []string{"Reader/List"}}}}}, out: &out}
 	for _, method := range []string{"Reader/Delete", "Reader/List"} {
 		command := a.apiReadCmd()
-		command.SetArgs([]string{"ate-api", method})
+		command.SetArgs([]string{"example-api", method})
 		err := command.Execute()
 		if method == "Reader/Delete" {
 			if err == nil || minted {

@@ -41,6 +41,8 @@ func TestExecutionGuardFailsClosedAndRefusesRemoteAuthority(t *testing.T) {
 		"env gh pr merge 7 --repo giantswarm/beekeeper",
 		"beekeeper run -- gh pr merge 7 --repo giantswarm/beekeeper",
 		"beekeeper --request-id fixture run --class build -- env gh pr merge 7 --repo giantswarm/beekeeper",
+		"beekeeper sandbox scratch -- gh pr merge 7 --repo giantswarm/beekeeper",
+		"beekeeper --request-id fixture sandbox scratch -- env gh pr merge 7 --repo giantswarm/beekeeper",
 		"beekeeper run -- systemctl --user stop personal.service",
 		"beekeeper --config /srv/workspace/other.yaml agents idle",
 		"beekeeper agents execution-run fixture",

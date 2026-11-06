@@ -196,6 +196,7 @@ func restoreInflight(path string) error {
 		}
 		q.reconcile("")
 		q.StreamInputs = 0
+		q.ConfirmedInputs = 0
 		var inflight []QueuedMessage
 		if q.Inflight != nil {
 			q.Inflight.InputSeq = 0
@@ -231,11 +232,14 @@ func withLock(path string, fn func() error) error {
 
 func readQueue(path string) (queue, error) {
 	b, err := os.ReadFile(queuePath(path)) //nolint:gosec // beside the agent's inbox under the state folder
-	if errors.Is(err, os.ErrNotExist) || len(b) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
 		return queue{}, nil
 	}
 	if err != nil {
 		return queue{}, err
+	}
+	if len(b) == 0 {
+		return queue{}, nil
 	}
 	var q queue
 	if err := json.Unmarshal(b, &q); err != nil {

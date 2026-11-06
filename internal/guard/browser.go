@@ -93,7 +93,7 @@ func noBrowserArgs(args string) bool {
 		switch {
 		case w == "--":
 			return noBrowser
-		case w == "-h" || w == "--help":
+		case w == "-h" || w == litHelp:
 			return true
 		case w == "--no-browser":
 			noBrowser = true

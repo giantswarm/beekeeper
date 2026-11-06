@@ -103,6 +103,14 @@ creation rule's recipient and where its identity is, no value read.`,
 					// A dry check creates no state directory or audit files.
 					load = a.loadConfig
 				}
+				if scratch := os.Getenv(scratchBrokerEnv); scratch != "" {
+					if err := a.loadConfig(); err != nil {
+						return err
+					}
+					if scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+						return refused("a scratch secret call must use its scratch configuration")
+					}
+				}
 				if err := load(); err != nil {
 					return err
 				}
@@ -168,11 +176,15 @@ anything is not equal.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
+			scratch := os.Getenv(scratchBrokerEnv)
+			if scratch != "" && scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+				return refused("a scratch secret call must use its scratch configuration")
+			}
 			beforeConsumer := args
 			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
 				beforeConsumer = args[:dash]
 			}
-			if inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
+			if scratch != "" || inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -419,6 +431,11 @@ top-level or line keys, for other text each line's head before its first
   beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#CLIENT_SECRET \
     values.sops.yaml#connectors.0.config.clientSecret
 
+A vault field may also be the destination. This silently copies an existing
+item's password into its labelled field, preserving the source and other fields:
+
+  beekeeper secret copy op://<vault>/<item>/password op://<vault>/<item>/client-secret
+
 The source may also be one value of a plain file on the host,
 file://<absolute path>#<path>, under a directory of secret.fileRoots: a
 dotted key of its JSON or YAML mapping or a line of its dotenv lines. The
@@ -528,8 +545,13 @@ ssh's stdin alone, never on a command line: the remote command is a fixed
 script that writes a temp file next to the path under umask 077, checks
 its length against what was sent (a dropped connection ends the stream
 early), sets --owner user[:group] and then --mode (default 0600), and
-moves it into place; a path that is a directory is refused. A failure or a signal removes the temp file and leaves the
-path as it was; a source that resolves to nothing, or to an empty value,
+moves it into place; a symlink target is replaced with a regular file,
+leaving its referent unchanged; a path that is a directory is refused.
+A remote script failure or a signal removes the temp file and leaves the
+path as it was. SSH exit 255 means the target state is unknown; use
+secret fingerprint to check it. Each part of user[:group] accepts a name
+or numeric id; an omitted --owner keeps the writing user's (root under
+--sudo). A source that resolves to nothing, or to an empty value,
 fails before ssh runs. --sudo runs the script under sudo -n, for a path
 only root writes, by the host's own sudo rules. --template '<content>'
 writes a file whose other lines are public, the value at {{value}} (once);
@@ -677,6 +699,9 @@ failing or answering nothing within a minute) exits 78.`,
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
 				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
+				}
+				if dst[0].Op != "" {
+					return nil
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
 			}
@@ -1240,11 +1265,14 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 			if err != nil {
 				return err
 			}
-			ops, ix, err := a.secretOpsIndexed()
+			files, err := a.scanFiles()
 			if err != nil {
 				return err
 			}
-			files, err := a.scanFiles()
+			if err := a.sandboxPaths(files, files); err != nil {
+				return err
+			}
+			ops, ix, err := a.secretOpsIndexed()
 			if err != nil {
 				return err
 			}
@@ -1354,7 +1382,7 @@ func parseRefs(args ...string) ([]secret.Ref, error) {
 // from secret.tokenFile when the shared vault is configured.
 func (a *app) secretOps() (*secret.Ops, error) {
 	ops := &secret.Ops{Run: secretRun, Apply: secretApply, Read: secretRead, Kubeconfig: a.kubeconfigFiles(), Vault: a.cfg.Secret.Vault, Vaults: a.cfg.Secret.Vaults, Session: a.cfg.Secret.Session, Ages: a.ageIdentities(),
-		AgeVaults: a.cfg.Secret.AgeVaults, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots, SecretEnv: a.cfg.Secret.Env}
+		AgeVaults: a.cfg.Secret.AgeVaults, AgeCache: a.store, Store: secret.Store{Read: a.cfg.Secret.Store.Read, Search: a.cfg.Secret.Store.Search}, Installations: a.installationNames(), FileRoots: a.cfg.Secret.FileRoots, SecretEnv: a.cfg.Secret.Env}
 	if ops.Vault == "" || ops.Session || a.cfg.Secret.TokenFile == "" {
 		return ops, nil
 	}

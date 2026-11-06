@@ -36,6 +36,7 @@ type executionNote struct {
 	Note  state.Note `json:"note"`
 }
 type executionPark struct {
+	Checks    bool    `json:"checks,omitempty"`
 	PostMerge *string `json:"postMerge,omitempty"`
 	// Head is the HEAD of the execution's workspace when it parked. The
 	// coordinator checks it against the pull request itself (a host's own
@@ -199,6 +200,19 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			result, transferErr := a.transferPublication(st, req.Ref, chunk)
 			if transferErr != nil {
 				return nil, transferErr
+			}
+			touchActive()
+			value = result
+		case executionReviewRelay:
+			var request executionReviewRequest
+			if execution.Decode(req.Payload, &request) != nil {
+				return nil, errors.New("invalid review relay request")
+			}
+			reviewCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, reviewErr := a.relayExecutionReview(reviewCtx, st, req.Ref, request)
+			if reviewErr != nil {
+				return nil, reviewErr
 			}
 			touchActive()
 			value = result
@@ -384,8 +398,32 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
+		if err := validateParkWait(v.On, v.Waits); err != nil {
+			return "", nil, err
+		}
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
+		}
+		if v.Checks {
+			ref, ok := parseRef(v.On)
+			if !ok || ag.Execution == nil || v.PostMerge != nil {
+				return "", nil, refused("CI park requires --on owner/repo#n and no post-merge work")
+			}
+			r, _ := executionRecord(st, *ag.Execution)
+			if r == nil || !strings.EqualFold(ref.Repo, r.Request.Repository) {
+				return "", nil, refused("CI park must name the execution repository")
+			}
+			if !r.Request.Messaging {
+				return "", nil, refused("execution has no CI wake route; start a worker with messaging support")
+			}
+			on := refName(ref)
+			// Record the park and its wake atomically. No host-local timer or
+			// devctl is required, and this is not a completed review handoff.
+			ag.Park = &state.Park{By: me, At: a.now.UTC(), On: on, Waits: oneLine(v.Waits), Checks: true}
+			st.NextTimer++
+			t := state.Timer{ID: st.NextTimer, By: me, At: a.now.UTC(), Due: a.now.UTC(), When: "pr-checks " + on, Every: timerEvery, Wake: ag.Name, WakeParkAt: ag.Park.At, What: "CI settled for " + on + ": read the result, fix failures or park for desk review"}
+			st.Timers = append(st.Timers, t)
+			return "CI park and wake timer recorded on coordinator; end your turn now", []state.Event{event(me, parkEvent, "%s: %s", ag.Name, parkedText(ag.Park, a.now)), event(me, "timer.add", "#%d %s", t.ID, t.When)}, nil
 		}
 		if id, ok := parkNote(v.On); ok {
 			if !slices.ContainsFunc(st.Notes, func(n state.Note) bool { return n.ID == id }) {
@@ -396,7 +434,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("hold is not active")
 			}
 		} else if v.On != "" {
-			if _, ok := parseRef(v.On); !ok {
+			_, _, release := parseReleaseTarget(v.On)
+			if _, ok := parseRef(v.On); !ok && !release {
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
@@ -412,19 +451,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
-			pm := ""
-			if v.PostMerge != nil {
-				pm = *v.PostMerge
-			}
-			if pm == "" && ag.Park != nil && strings.EqualFold(ag.Park.On, v.On) && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
-				pm = *ag.Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
-					pm = *rp.PostMerge
-				}
-			}
-			v.PostMerge = &pm
+			v.PostMerge = reviewPostMerge(st, v.On, ag.Park, v.PostMerge)
 			if ag.Execution != nil {
 				if r, _ := executionRecord(st, *ag.Execution); r != nil {
 					r.Completed = true
@@ -491,7 +518,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				r.Completed = true
 			}
 		}
-		verb := "agents.idle"
+		verb := litAgentsIdle
 		if v.Finished {
 			verb = executionDone
 			clearRecords(st, me)

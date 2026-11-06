@@ -152,3 +152,28 @@ func TestWatchSettlesALaneReadyAfterTheSettleTimeout(t *testing.T) {
 		t.Errorf("the stuck lane's end is not said:\n%s", out.String())
 	}
 }
+
+func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	lane := config.Lane{Name: "app", Installation: installCmd, Repositories: []string{scratchRepo}}
+	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{Settle: config.Duration{Duration: time.Hour}, SettleTimeout: config.Duration{Duration: time.Minute}}}
+	err = store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: lane.Name, Phase: state.Settling, Finished: now.Add(-2 * time.Minute)}}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	w := &watcher{app: &app{cfg: cfg, store: store, out: &out, now: now}, last: map[string]time.Time{}, readHRs: func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }}
+	w.settled(context.Background(), now)
+	for _, want := range []string{"LANE STUCK", "devctl release wait o/r --pr 7", "beekeeper lanes settle o/r 7 --release <version>"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q: %s", want, out.String())
+		}
+	}
+}

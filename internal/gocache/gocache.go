@@ -7,10 +7,12 @@ package gocache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -119,12 +121,12 @@ func Hold(ctx context.Context, dir string, waiting func()) (release func(), err 
 
 // ModDir is the module cache the go command uses: $GOMODCACHE, else pkg/mod
 // in the first $GOPATH entry, else in go under the home directory; "" when
-// unknown.
+// unknown. Settings saved by go env -w apply unless the process overrides them.
 func ModDir() string {
-	if d := os.Getenv("GOMODCACHE"); d != "" {
+	if d := goEnv("GOMODCACHE"); d != "" {
 		return d
 	}
-	if p := filepath.SplitList(os.Getenv("GOPATH")); len(p) > 0 && p[0] != "" {
+	if p := filepath.SplitList(goEnv("GOPATH")); len(p) > 0 && p[0] != "" {
 		return filepath.Join(p[0], "pkg", "mod")
 	}
 	home, err := os.UserHomeDir()
@@ -139,10 +141,11 @@ func ModDir() string {
 const busyEvery = 256
 
 // Dir is the build cache the go command uses: $GOCACHE, else go-build in
-// the user's cache directory; "" when it is off or unknown.
+// the user's cache directory; "" when it is off, invalid or unknown. Settings saved
+// by go env -w apply unless the process overrides them.
 func Dir() string {
-	if d := os.Getenv("GOCACHE"); d != "" {
-		if d == "off" {
+	if d := goEnv("GOCACHE"); d != "" {
+		if d == "off" || !filepath.IsAbs(d) {
 			return ""
 		}
 		return d
@@ -154,12 +157,13 @@ func Dir() string {
 	return filepath.Join(d, "go-build")
 }
 
-// Entry is one file of the cache: an action or an output.
+// Entry is one file of the cache: an action, an output or an executable.
 type Entry struct {
 	Path string
 	Size int64
 	// Used is its modification time, which the go command moves on when it
-	// uses an entry last touched over an hour before.
+	// uses an entry last touched over an hour before. For an executable it
+	// is the enclosing output directory's modification time.
 	Used time.Time
 }
 
@@ -169,17 +173,30 @@ type Usage struct {
 	Dir     string
 	Entries []Entry
 	Bytes   int64
+
+	// rootInfo identifies the directory actually scanned, even if Dir is replaced.
+	rootInfo fs.FileInfo
 }
 
 // Scan reads the cache's entries: the files of its 256 two-hex-digit
-// subdirectories. Everything else (its README, trim.txt, fuzz corpora) is
-// left out, and a missing cache is empty.
+// subdirectories, including executable files inside hash-d directories.
+// Everything else (its README, trim.txt, fuzz corpora) is left out, and a
+// missing cache is empty.
 func Scan(dir string) (Usage, error) {
 	u := Usage{Dir: dir}
-	subs, err := os.ReadDir(dir)
+	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return u, nil
 	}
+	if err != nil {
+		return u, err
+	}
+	defer func() { _ = root.Close() }()
+	u.rootInfo, err = root.Stat(".")
+	if err != nil {
+		return u, err
+	}
+	subs, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return u, err
 	}
@@ -187,17 +204,33 @@ func Scan(dir string) (Usage, error) {
 		if !s.IsDir() || !hexByte(s.Name()) {
 			continue
 		}
-		files, err := os.ReadDir(filepath.Join(dir, s.Name()))
+		files, err := fs.ReadDir(root.FS(), s.Name())
 		if err != nil {
 			return u, err
 		}
 		for _, f := range files {
+			if f.IsDir() && executableDir(f.Name()) {
+				info, err := f.Info()
+				if errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return u, err
+				}
+				if err := scanExecutable(&u, filepath.Join(dir, s.Name(), f.Name()), info.ModTime()); err != nil {
+					return u, err
+				}
+				continue
+			}
 			if !f.Type().IsRegular() {
 				continue
 			}
 			info, err := f.Info()
-			if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
 				continue // removed since the directory was read
+			}
+			if err != nil {
+				return u, err
 			}
 			u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, s.Name(), f.Name()), Size: info.Size(), Used: info.ModTime()})
 			u.Bytes += info.Size()
@@ -205,6 +238,37 @@ func Scan(dir string) (Usage, error) {
 	}
 	slices.SortFunc(u.Entries, func(a, b Entry) int { return a.Used.Compare(b.Used) })
 	return u, nil
+}
+
+// Go stores an executable in a directory named for its output hash. Its
+// cache hits update that directory's mtime rather than the binary's.
+func executableDir(name string) bool {
+	return len(name) == 66 && strings.HasSuffix(name, "-d") && strings.Trim(name[:64], "0123456789abcdef") == ""
+}
+
+func scanExecutable(u *Usage, dir string, used time.Time) error {
+	files, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if !f.Type().IsRegular() {
+			continue
+		}
+		info, err := f.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		u.Entries = append(u.Entries, Entry{Path: filepath.Join(dir, f.Name()), Size: info.Size(), Used: used})
+		u.Bytes += info.Size()
+	}
+	return nil
 }
 
 func hexByte(name string) bool {
@@ -223,8 +287,25 @@ func hexByte(name string) bool {
 // most target bytes, and returns the bytes and entries it removed. It asks
 // busy before it starts and every few hundred removals, and stops with
 // ErrBusy once a build runs. An entry gone already is skipped; the go
-// command takes a missing entry for a miss and builds it again.
+// command takes a missing entry for a miss and builds it again. Removals
+// are confined to the opened root even when paths change concurrently. For
+// Usage returned by Scan, the root must still identify the scanned directory.
 func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, err error) {
+	if u.Bytes <= target || len(u.Entries) == 0 {
+		return 0, 0, nil
+	}
+	root, err := os.OpenRoot(u.Dir)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(".")
+	if err != nil {
+		return 0, 0, err
+	}
+	if u.rootInfo != nil && !os.SameFile(u.rootInfo, info) {
+		return 0, 0, errors.New("cache root changed since scan")
+	}
 	left := u.Bytes
 	for i, e := range u.Entries {
 		if left <= target {
@@ -233,8 +314,24 @@ func Trim(u Usage, target int64, busy func() bool) (freed int64, removed int, er
 		if i%busyEvery == 0 && busy() {
 			return freed, removed, ErrBusy
 		}
+		// Detect replacement since opening as well as between Scan and Trim.
+		// The open root confines Remove even if paths change after this check.
+		current, err := os.Stat(u.Dir)
+		if err != nil {
+			return freed, removed, err
+		}
+		if !os.SameFile(info, current) {
+			return freed, removed, errors.New("cache root changed since scan")
+		}
+		name, err := filepath.Rel(u.Dir, e.Path)
+		if err != nil {
+			return freed, removed, err
+		}
+		if !filepath.IsLocal(name) || name == "." {
+			return freed, removed, fmt.Errorf("invalid cache entry %q", name)
+		}
 		left -= e.Size
-		if err := os.Remove(e.Path); err != nil {
+		if err := root.Remove(name); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}

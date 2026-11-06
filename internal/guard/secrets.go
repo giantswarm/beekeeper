@@ -162,7 +162,7 @@ var (
 	// codeFile: a file name that holds code or prose, not a secret's values.
 	codeFile = regexp.MustCompile(`(?i)\.(?:go|md|ts|tsx|js|mjs|py|sh|rs|java|kt|rb|tf|html|css|tpl|snap|golden|mod|sum)$`)
 	dataWord = regexp.MustCompile(`(?i)\b(?:string)?data\b`)
-	shells   = map[string]bool{"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
+	shells   = map[string]bool{"sh": true, bashCmd: true, "zsh": true, litKsh: true, "dash": true, "ssh": true, evalCmd: true, watchCmd: true}
 	hashCmds = map[string]bool{"sha256sum": true, "sha1sum": true, "sha224sum": true, "sha384sum": true, "sha512sum": true, "md5sum": true, "b2sum": true, "cksum": true, "shasum": true}
 	diffCmds = map[string]bool{"diff": true, "cmp": true, "colordiff": true, "sdiff": true, "diff3": true, "vimdiff": true, "delta": true, "difft": true}
 	// wrapperValues: the options of wrappers that take a value.
@@ -220,6 +220,8 @@ type secretGuard struct {
 	// feeds: the simple command's output is piped on or substituted, so a
 	// path a metadata command prints is read by the command consuming it.
 	feeds bool
+	// runtimeProgram marks text consumed as interpreter code rather than shell.
+	runtimeProgram bool
 	// inTest: the simple command is the rest of a [[ … ]] expression that
 	// its && or || split off, operands of the test.
 	inTest bool
@@ -249,12 +251,11 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		return nil
 	}
 	sc := scanShell(cmd)
-	// Check executable script text before shell segmentation discards path
-	// construction context. Here-document data is masked in plain; interpreter
-	// input is checked when inputLeak recursively scans its body.
-	if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(sc.plain) {
+	// Only interpreter program text has runtime environment lookup semantics.
+	if g.runtimeProgram && len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(cmd) {
 		return &leak{never: true, transcript: true, unresolvedTranscript: true}
 	}
+	g.runtimeProgram = false
 	if len(g.transcripts.roots) > 0 {
 		for _, doc := range sc.heredocs {
 			if doc.quoted {
@@ -286,7 +287,8 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 		}
 		dirs = append(dirs, d)
 	}
-	for _, st := range walkSegments(sc, g.cwd, false) {
+	states := walkSegments(sc, g.cwd, false)
+	for _, st := range states {
 		if st.dir != "" && !slices.Contains(dirs, st.dir) {
 			dirs = append(dirs, st.dir)
 		}
@@ -316,6 +318,16 @@ func (g secretGuard) scan(cmd string, depth int) *leak {
 			exp = g.linkAllowance.resolve(exp)
 			if l := g.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
 				return l
+			}
+			// Shell invocations make the directory tracker conservative, but
+			// its directory candidate still resolves scripts after a literal
+			// cd. Keep checking the initial directory too for ambiguous paths.
+			if dir := states[i].dir; dir != "" && dir != g.cwd {
+				nested := g
+				nested.cwd = dir
+				if l := nested.nested(cmd, sc, segs, i, exp, copied, depth); l != nil {
+					return l
+				}
 			}
 			g.feeds = feedsOutput(sc, segs, i)
 			g.inTest = (sg.before == "&&" || sg.before == "||") && inTestExpr(sc.masked[:sg.start])
@@ -456,7 +468,7 @@ func (g secretGuard) copiedUnlocks(sc shellScan, segs []segment, vars map[string
 			name := path.Base(words[c])
 			readSearchStage := isReadOnlyUnlockSearch(srcStageCmd, srcStageArgs)
 			switch name {
-			case "cp", "mv", "ln", "install":
+			case "cp", "mv", "ln", litInstall:
 				staged = true
 				if non := nonFlags(words[c+1:]); len(non) >= 2 {
 					dst := non[len(non)-1]
@@ -558,7 +570,7 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			if l := g.gitConfigLeak(args, copied, depth); l != nil {
 				return l
 			}
-		case name == "sed" || name == "gsed":
+		case name == litSed || name == "gsed":
 			if l := g.sedExecLeak(args, copied, depth); l != nil {
 				return l
 			}
@@ -577,13 +589,9 @@ func (g secretGuard) nested(cmd string, sc shellScan, segs []segment, segIdx int
 			}
 		case interpreters[name].code != nil || len(interpreters[name].file) > 0:
 			ip := interpreters[name]
+			g.runtimeProgram = true
 			switch p := readProgram(args, ip); p.kind {
 			case programCode:
-				// Classify unresolved interpreter paths before the shell scanner
-				// splits assignments and loses their construction context.
-				if len(g.transcripts.roots) > 0 && unresolvedTranscriptPath(p.arg) {
-					return &leak{never: true, transcript: true, unresolvedTranscript: true}
-				}
 				if l := g.scan(p.arg, depth+1); l != nil {
 					return l
 				}
@@ -779,18 +787,25 @@ func (g secretGuard) script(p string, depth int) *leak {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(g.cwd, p)
 	}
-	if lfi, err := os.Lstat(p); err == nil && lfi.Mode()&os.ModeSymlink != 0 && !slices.Contains(g.unlock, filepath.Base(p)) {
+	if lfi, err := os.Lstat(p); err == nil && lfi.Mode()&os.ModeSymlink != 0 && !slices.Contains(g.unlock, filepath.Base(p)) { //nolint:gosec // a path of this tool's own state
 		if target, err := filepath.EvalSymlinks(p); err == nil && slices.Contains(g.unlock, filepath.Base(target)) {
 			return nil
 		}
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Stat(p) //nolint:gosec // a path of this tool's own state
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxScript {
 		return nil
 	}
 	raw, err := os.ReadFile(p) //nolint:gosec // a script the command line runs, read to scan it
 	if err != nil || bytes.IndexByte(raw, 0) >= 0 {
 		return nil
+	}
+	if first, _, _ := strings.Cut(string(raw), "\n"); strings.HasPrefix(first, "#!") {
+		for _, word := range strings.Fields(strings.TrimPrefix(first, "#!")) {
+			if _, ok := interpreters[filepath.Base(word)]; ok {
+				g.runtimeProgram = true
+			}
+		}
 	}
 	if l := g.scan(string(raw), depth+1); l != nil {
 		l.what += ", run from " + filepath.Base(p)
@@ -810,7 +825,7 @@ func pipelineBefore(cmd string, segs []segment, i int) string {
 
 // sourceLeak returns the leak when the simple command exposes secret values.
 func (g secretGuard) sourceLeak(words []string, before string, aliases map[string]bool, dirs []string, copied map[string]string) *leak {
-	if l := g.transcripts.fileLeak(words, dirs, g.metadata); l != nil {
+	if l := g.transcripts.fileLeak(words, dirs, g.metadata, g.inTest); l != nil {
 		return l
 	}
 	if l := procFileLeak(words); l != nil {
@@ -867,11 +882,22 @@ var unmodeledWrappers = map[string]bool{
 
 // commandAt returns the index of the word the simple command runs, past its
 // assignments, wrappers (sudo, env, timeout, nice, stdbuf, ionice, chrt,
-// flock, taskset, xargs, beekeeper run, …), the shell's keywords and a
-// function definition's head.
+// flock, taskset, xargs, beekeeper run, beekeeper sandbox scratch, …), the
+// shell's keywords and a function definition's head.
 func commandAt(words []string) int {
 	rest, _ := unwrapWords(words)
 	return len(words) - len(rest)
+}
+
+// scratchWords counts the words of args, the arguments of a beekeeper call,
+// up to and including "sandbox scratch", whose command runs on the host: 0
+// when it is another call.
+func scratchWords(args []string) int {
+	verb := executionVerb(args)
+	if len(verb) < 2 || verb[0] != "sandbox" || verb[1] != "scratch" {
+		return 0
+	}
+	return len(args) - len(verb) + 2
 }
 
 // unwrapWords strips leading assignments, keywords, redirections and modeled
@@ -901,6 +927,8 @@ func unwrapWords(words []string) (rest []string, unsure string) {
 			}
 		case name == selfCmd && i+1 < len(words) && words[i+1] == executionRunCommand:
 			i += 2
+		case name == selfCmd && scratchWords(words[i+1:]) > 0:
+			i += 1 + scratchWords(words[i+1:])
 		case name == "nohup" || name == "setsid" || name == "time":
 			i++
 			for i < len(words) && strings.HasPrefix(words[i], "-") {
@@ -1360,7 +1388,7 @@ func isReadOnlyUnlockSearch(cmdName string, args []string) bool {
 			return false
 		}
 		switch sub[0] {
-		case "di" + "ff", "log", "st" + "atus", "blame", "grep", "add", "commit", "branch", "rev-parse":
+		case "di" + "ff", "log", "st" + "atus", "blame", "grep", worktreeAdd, "commit", "branch", "rev-parse":
 			return true
 		}
 	}
@@ -1835,7 +1863,7 @@ func flowsSafely(sc shellScan, segs []segment, i int, l *leak) bool {
 			if safeSink(words, l) {
 				return true
 			}
-			if k := commandAt(words); k < len(words) && path.Base(words[k]) == "tee" {
+			if k := commandAt(words); k < len(words) && path.Base(words[k]) == teeCmd {
 				return false
 			}
 		}

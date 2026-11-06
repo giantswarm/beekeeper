@@ -396,10 +396,12 @@ func (f *fakeGH) run(ctx context.Context, args ...string) ([]byte, error) {
 	case strings.HasPrefix(q, "query=mutation"):
 		f.mutations = append(f.mutations, vars["i"]+"="+vars["v"])
 		return []byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"I"}}}}`), nil
+	case strings.Contains(q, "closedByPullRequestsReferences"):
+		return []byte(`{"data":{}}`), nil
 	case strings.Contains(q, "fields(first:50)"):
 		return []byte(metaJSON), nil
 	case strings.Contains(q, boardItemsQuery):
-		if vars["q"] != `is:open team:"X" status:"In Progress ⛏️","Up Next ➡️"` {
+		if vars["q"] != `is:open team:"X"` {
 			f.t.Errorf("board query %q", vars["q"])
 		}
 		page := 0
@@ -558,7 +560,7 @@ func TestMoveAddsAnIssueMissingFromTheBoard(t *testing.T) {
 
 // labIssue7 is an issue of a personal account's repository, outside the
 // board's owner o.
-const labIssue7 = "teemow/lab#7"
+const labIssue7 = "fixture-person/lab#7"
 
 // homeItem is an item of the issue on project number of owner.
 func homeItem(id, project, owner string, number int, status string) string {
@@ -571,12 +573,12 @@ func homeItem(id, project, owner string, number int, status string) string {
 
 func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 	for _, owner := range []string{"o", personalOwner} {
-		for _, nodes := range []string{"", homeItem("U1", "Q", "teemow", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "teemow", 2, "Backlog")} {
+		for _, nodes := range []string{"", homeItem("U1", "Q", "fixture-person", 1, "Backlog"), homeItem("U1", "Q", "other", 1, "Backlog") + "," + homeItem("U2", "R", "fixture-person", 2, "Backlog")} {
 			t.Run(owner+nodes, func(t *testing.T) {
 				f := &fakeGH{t: t, item: `{"data":{"repository":{"issue":{"id":"I7","projectItems":{"nodes":[` + nodes + `]}}}}}`,
 					added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`}
 				c := &Client{GH: f.run, Board: config.Board{Owner: owner, Project: 7, Team: "X"}}
-				mv, err := c.Move(context.Background(), "https://github.com/teemow/lab/issues/7", "progress")
+				mv, err := c.Move(context.Background(), "https://github.com/fixture-person/lab/issues/7", "progress")
 				if err != nil || *mv != (Moved{Ref: labIssue7, To: inProgress, Added: true, Team: teamX}) || !slices.Equal(f.mutations, []string{addIssue7, "I3=t1", "I3=s3"}) {
 					t.Fatalf("Move = %+v, %v; mutations %v", mv, err, f.mutations)
 				}
@@ -585,6 +587,33 @@ func TestMoveAddsAnIssueOutsideTheBoardOwner(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// GitHub can omit a cross-owner board from projectItems even for the
+// issue owner's login. Adding again returns that existing item and its fields.
+func TestMovePersonalIssueToItsCurrentStatusWithHiddenBoardItem(t *testing.T) {
+	for _, ref := range []string{"personal/private#7", "https://github.com/personal/private/issues/7"} {
+		t.Run(ref, func(t *testing.T) {
+			f := &fakeGH{t: t, item: issue7OffBoard,
+				added: `{"data":{"addProjectV2ItemById":{"item":{"id":"I3","project":{"id":"P"},"status":{"name":"Backlog 📦"},"team":{"name":"X 🐝"}}}}}`}
+			c := &Client{GH: f.run, Board: config.Board{Owner: "o", Project: 7, Team: "X"}}
+			mv, err := c.Move(context.Background(), ref, "backlog")
+			if err != nil || *mv != (Moved{Ref: "personal/private#7", From: backlog, To: backlog}) {
+				t.Fatalf("Move = %+v, %v", mv, err)
+			}
+			if !slices.Equal(f.mutations, []string{addIssue7}) {
+				t.Errorf("same-status proof changed fields: %v", f.mutations)
+			}
+			for _, repo := range f.repos {
+				if repo != "personal/private" {
+					t.Errorf("call acts on %q, want issue repository", repo)
+				}
+			}
+			if readsItems(f.queries) {
+				t.Errorf("move read the board's items: %q", f.queries)
+			}
+		})
 	}
 }
 
@@ -615,7 +644,7 @@ func TestMoveCrossOwnerUsesGitHubPermissions(t *testing.T) {
 // personal account's repository.
 const (
 	issue9  = "o/r#9"
-	labRepo = "teemow/lab"
+	labRepo = "fixture-person/lab"
 )
 
 // item9 is the issue the ranks place an item against: its item I9 is on
@@ -636,14 +665,14 @@ func TestRankMovesTheItemByItsPosition(t *testing.T) {
 	}
 	f.mutations, f.moved = nil, ""
 	rk, err = c.Rank(ctx, issue5, Place{After: "https://github.com/o/r/issues/9"})
-	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Above: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine}) {
 		t.Errorf("Rank after = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	// Before is the item after the other one, then the other one after the
 	// item: the other one's predecessor is never read.
 	f.mutations = nil
 	rk, err = c.Rank(ctx, issue5, Place{Before: issue9})
-	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{`I1 after "I9"`, `I9 after "I1"`}) {
+	if err != nil || *rk != (Ranked{Ref: issue5, Below: issue9}) || !slices.Equal(f.mutations, []string{rankAfterNine, `I9 after "I1"`}) {
 		t.Errorf("Rank before = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 	if readsItems(slices.DeleteFunc(slices.Clone(f.queries), func(q string) bool { return strings.Contains(q, "items(first:2)") })) {
@@ -726,7 +755,7 @@ func TestOpenActsOnTheRepository(t *testing.T) {
 		f.repos = append(f.repos, github.Repo(ctx))
 		return []byte(`{"data":{"repository":{"issueOrPullRequest":{"state":"OPEN"}}}}`), nil
 	}}
-	if open, err := c.Open(context.Background(), "teemow/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{labRepo}) {
+	if open, err := c.Open(context.Background(), "fixture-person/lab#7"); err != nil || !open || !slices.Equal(f.repos, []string{labRepo}) {
 		t.Errorf("Open = %v, %v acting on %q", open, err, f.repos)
 	}
 }
@@ -753,28 +782,28 @@ func TestClosesReadsTheClosingReferencesInOneRequestPerOwner(t *testing.T) {
 	gh := func(ctx context.Context, args ...string) ([]byte, error) {
 		queries = append(queries, args[3])
 		acting = append(acting, github.Repo(ctx))
-		if strings.Contains(args[3], `owner:"teemow"`) {
+		if strings.Contains(args[3], `owner:"fixture-person"`) {
 			// A personal account's repository resolves only on the login
 			// that reaches it: acting on it (github.ActingOn).
-			if github.Repo(ctx) != "teemow/lab" {
-				return []byte(`{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'teemow/lab'."}]}`), errors.New("exit status 1")
+			if github.Repo(ctx) != "fixture-person/lab" {
+				return []byte(`{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository with the name 'fixture-person/lab'."}]}`), errors.New("exit status 1")
 			}
-			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":3,"repository":{"nameWithOwner":"teemow/lab"}}]}}}}}`), nil
+			return []byte(`{"data":{"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":3,"repository":{"nameWithOwner":"fixture-person/lab"}}]}}}}}`), nil
 		}
 		return []byte(`{"data":{
 			"r0":{"issueOrPullRequest":{"closingIssuesReferences":{"nodes":[{"number":1,"repository":{"nameWithOwner":"O/R"}},{"number":2,"repository":{"nameWithOwner":"other/x"}}]}}},
 			"r1":{"issueOrPullRequest":{}}}}`), nil
 	}
-	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "teemow/lab#9", issue5, "not a ref"})
+	got, err := (&Client{GH: gh}).Closes(t.Context(), []string{"O/R#100", "fixture-person/lab#9", issue5, "not a ref"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "teemow/lab#9": {"teemow/lab#3"}}
+	want := map[string][]string{"o/r#100": {ref1, "other/x#2"}, "fixture-person/lab#9": {"fixture-person/lab#3"}}
 	if len(queries) != 2 || !strings.Contains(queries[0], `r1:repository(owner:"o",name:"r")`) || len(got) != len(want) ||
-		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["teemow/lab#9"], want["teemow/lab#9"]) {
+		!slices.Equal(got["o/r#100"], want["o/r#100"]) || !slices.Equal(got["fixture-person/lab#9"], want["fixture-person/lab#9"]) {
 		t.Errorf("closes %v, queries %q", got, queries)
 	}
-	if !slices.Equal(acting, []string{"O/R", "teemow/lab"}) {
+	if !slices.Equal(acting, []string{"O/R", "fixture-person/lab"}) {
 		t.Errorf("requests acted on %q, want one per owner", acting)
 	}
 	queries = nil
@@ -834,7 +863,7 @@ func TestStatusThenBoardOrderDecide(t *testing.T) {
 	snap := &Snapshot{Order: o, Statuses: statuses, Items: []Item{
 		it(30, backlog), it(20, upNext), it(11, inProgress), it(31, backlog), it(21, upNext), it(10, inProgress),
 	}}
-	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", "o/r#30", "o/r#31"}
+	want := []string{"o/r#11", "o/r#10", "o/r#20", "o/r#21", searchedFreeRef, "o/r#31"}
 	cands := Rank(snap, config.Board{People: []string{"me"}}, now)
 	var got []string
 	for _, c := range cands {
@@ -943,8 +972,8 @@ func TestIntakeAddsMissingIssueUnlessWorkedOnAnotherBoard(t *testing.T) {
 
 func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing.T) {
 	// GitHub omits another owner's project from issue.projectItems, so
-	// placing an item after a cross-owner anchor on a personal board probes
-	// addProjectV2ItemById to resolve the anchor's existing item ID.
+	// placing an item after a cross-owner anchor on a personal board reads
+	// project membership to resolve the anchor's existing item ID.
 	f := &fakeGH{t: t,
 		byIssue: map[string]string{
 			"7": issue7OffBoard,
@@ -955,15 +984,19 @@ func TestRankPlacesAgainstCrossOwnerItemWhoseProjectItemsOmitTheBoard(t *testing
 	origRun := f.run
 	c := &Client{Board: config.Board{Owner: personalOwner, Project: 1, Team: "X"}}
 	c.GH = func(ctx context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[3], "node(id:$p)") {
+			checkSelectionSchema(t, args)
+			return []byte(`{"data":{"node":{"items":{"nodes":[{"id":"I9","content":{"id":"ISSUE9"}}]}}}}`), nil
+		}
 		if strings.Contains(args[3], "addProjectV2ItemById") && slices.Contains(args, "c=I7") {
 			f.mutations = append(f.mutations, addIssue7)
 			return []byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"I71","project":{"id":"P"},"status":null,"kind":null,"team":null}}}}`), nil
 		}
 		return origRun(ctx, args...)
 	}
-	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: "org/engine#9"})
-	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: "org/engine#9", Added: true, Team: teamX}) ||
-		!slices.Equal(f.mutations, []string{"add ISSUE9 to P", addIssue7, "I71=t1", `I71 after "I9"`}) {
+	rk, err := c.Rank(context.Background(), engineIssue7, Place{After: crossOwnerAnchor})
+	if err != nil || *rk != (Ranked{Ref: engineIssue7, Above: crossOwnerAnchor, Added: true, Team: teamX}) ||
+		!slices.Equal(f.mutations, []string{addIssue7, "I71=t1", `I71 after "I9"`}) {
 		t.Fatalf("Rank after cross-owner item = %+v, %v; mutations %v", rk, err, f.mutations)
 	}
 }
@@ -975,7 +1008,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 		t.Run(fmt.Sprintf("open=%t", open), func(t *testing.T) {
 			state, summary := stateClosed, 1
 			if open {
-				state, summary = "OPEN", 0
+				state, summary = stateOpen, 0
 			}
 			deps := fmt.Sprintf(`,"issueDependenciesSummary":{"blockedBy":%d,"totalBlockedBy":%d},"blockedBy":{"totalCount":1,"nodes":[{"number":9,"state":%q,"repository":{"nameWithOwner":"o/r"}}]}`, summary, summary, state)
 			f := &fakeGH{t: t, pages: []string{
@@ -994,7 +1027,7 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 			for _, c := range Rank(snap, b, now) {
 				got[c.Ref] = c
 			}
-			for _, ref := range []string{ref4, partialSubIssue, "o/r#30"} {
+			for _, ref := range []string{ref4, partialSubIssue, searchedFreeRef} {
 				c, ok := got[ref]
 				if !ok {
 					t.Fatalf("missing candidate %s: %+v", ref, got)
@@ -1007,8 +1040,12 @@ func TestReadCountsCurrentBlockersForEveryCandidateSource(t *testing.T) {
 					t.Errorf("%s: blockers=%d open=%d skip=%q", ref, c.Blockers, c.OpenBlockers, c.Skip)
 				}
 			}
-			if len(f.queries) != 3 {
-				t.Errorf("read made %d requests, want metadata, board page and extras only", len(f.queries))
+			wantQueries := 3
+			if open {
+				wantQueries++
+			}
+			if len(f.queries) != wantQueries {
+				t.Errorf("read made %d requests, want %d", len(f.queries), wantQueries)
 			}
 			for _, q := range f.queries {
 				if strings.Contains(q, "issueDependenciesSummary") {
@@ -1027,5 +1064,16 @@ func TestUnreadBlockerKeepsTheItemHeld(t *testing.T) {
 	it := j.item()
 	if it.Blockers != 2 || it.OpenBlockers != 1 || !it.BlockersClosed.IsZero() {
 		t.Fatalf("incomplete blockers: %+v", it)
+	}
+}
+
+func TestFollowUpNeverBecomesBoardCandidate(t *testing.T) {
+	snap := snapshot(t)
+	snap.Items = []Item{{Ref: ref1, OnBoard: true, Status: backlog, Labels: []string{"FOLLOW-UP"}, Updated: days(1)}}
+	snap.Search = nil
+	snap.Order = []config.BoardStep{{Name: "all"}}
+	candidates := Rank(snap, config.Board{}, now)
+	if len(candidates) != 1 || !strings.Contains(candidates[0].Skip, "follow-up") {
+		t.Fatalf("follow-up not skipped: %+v", candidates)
 	}
 }

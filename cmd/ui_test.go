@@ -26,7 +26,7 @@ const (
 	uiLab1      = "kind-1"
 	uiLab2      = "kind-2"
 	uiPurpose   = "e2e"
-	uiPerson    = "teemow@lab"
+	uiPerson    = "fixture-person@lab"
 	uiNoteText  = "merge the bump?"
 )
 
@@ -61,7 +61,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 		st.Guide.CLI = &state.CLI{Supervisor: sup, Since: since, Gone: now.Add(-2 * time.Hour)}
 		st.Holds = []state.Hold{{Target: uiRepo, Reason: "the release window", By: sup, At: now.Add(-time.Hour)}}
 		st.Notes = []state.Note{{ID: 7, Kind: noteDecision, For: pat, Text: uiNoteText, Due: now.Add(-30 * time.Minute), By: sup, At: now.Add(-time.Hour)}}
-		st.Timers = []state.Timer{{ID: 3, Due: now.Add(-3 * time.Minute), What: "check", By: sup, At: now.Add(-time.Hour)}}
+		st.Timers = []state.Timer{{ID: 3, Due: now.Add(-3 * time.Minute), What: appCheck, By: sup, At: now.Add(-time.Hour)}}
 		st.Agents = []state.Agent{{Party: agent, Registered: now.Add(-2 * time.Hour), Task: "count", IdleSince: now.Add(-time.Hour)}}
 		st.Records = []state.Record{{Session: agent, Issue: uiIssue, Waits: "CI", By: sup, At: now}}
 		st.Merges = []state.Merge{{Repo: uiRepo, PR: 1, Lane: "ap", By: sup,
@@ -73,8 +73,8 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 	}
 	// One lease held by a gone session, one by a person.
 	for res, raw := range map[string]string{
-		uiLab1: `{"env":"kind-1","holder":"teemow@lab","session":"gone-session","name":"gone-session","purpose":"e2e","since":"2026-09-26T09:00:00Z"}`,
-		uiLab2: `{"env":"kind-2","holder":"teemow@lab","purpose":"by hand","since":"2026-09-26T10:00:00Z"}`,
+		uiLab1: `{"env":"kind-1","holder":"fixture-person@lab","session":"gone-session","name":"gone-session","purpose":"e2e","since":"2026-09-26T09:00:00Z"}`,
+		uiLab2: `{"env":"kind-2","holder":"fixture-person@lab","purpose":"by hand","since":"2026-09-26T10:00:00Z"}`,
 	} {
 		if err := os.MkdirAll(filepath.Join(cfg.LeaseDir, res), 0o700); err != nil {
 			t.Fatal(err)
@@ -138,7 +138,7 @@ func TestUICollectorReadsTheMachineState(t *testing.T) {
 		case uiLab1:
 			gone = l.State == holderGone && l.Name == "gone-session" && l.Purpose == uiPurpose && !l.Since.IsZero()
 		case uiLab2:
-			person = l.State == "person" && l.Name == uiPerson
+			person = l.State == holderPerson && l.Name == uiPerson
 		}
 	}
 	if !gone || !person || len(d.Leases.Held) != 2 {
@@ -197,7 +197,7 @@ func TestUICommandIsTheWatchingScreen(t *testing.T) {
 	if !strings.Contains(ui.Long, "it reads only") || !strings.Contains(ui.Long, "writes it a\nmessage") {
 		t.Errorf("the help does not say the screen reads only, besides its messages:\n%s", ui.Long)
 	}
-	if err := ui.Args(ui, []string{"extra"}); err == nil {
+	if err := ui.Args(ui, []string{litExtra}); err == nil {
 		t.Error("ui takes arguments")
 	}
 }

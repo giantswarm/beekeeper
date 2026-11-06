@@ -14,6 +14,7 @@ After=graphical-session.target
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/beekeeper --as "teleport keeper" teleport renew --keeper
-# Past teleport.loginTimeout: the renewal bounds its own login.
+# Install extends this bound for both configured login attempts plus status
+# reads and cleanup. A hung status command must still end.
 TimeoutStartSec=15min
 MemoryMax=512M
