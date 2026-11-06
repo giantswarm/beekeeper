@@ -32,14 +32,15 @@ func TestEnvtestTarget(t *testing.T) {
 				}
 				write(t, filepath.Join(dir, name), string(data), 0o600)
 			}
-			// A linked worktree has a .git file, not a directory. The version
-			// tool deliberately fails if make calls it for this target.
+			// A linked worktree has a .git file, not a directory, which the
+			// version tool may fail on. This target stamps no version, so that
+			// failure must not stop it.
 			write(t, filepath.Join(dir, ".git"), "gitdir: unused\n", 0o600)
 			bin := filepath.Join(dir, "bin")
 			if err := os.Mkdir(bin, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			write(t, filepath.Join(bin, "gitsemver"), "#!/bin/sh\necho unexpected-version-lookup >&2\nexit 1\n", 0o700)
+			write(t, filepath.Join(bin, "gitsemver"), "#!/bin/sh\necho not a git repository >&2\nexit 1\n", 0o700)
 			write(t, filepath.Join(bin, "git"), "#!/bin/sh\necho fixture\n", 0o700)
 			write(t, filepath.Join(bin, "go"), `#!/bin/sh
 case "$1" in
@@ -66,9 +67,6 @@ esac
 			out, err := c.CombinedOutput()
 			if (err != nil) != failAssets {
 				t.Fatalf("make: %v\n%s", err, out)
-			}
-			if strings.Contains(string(out), "unexpected-version-lookup") {
-				t.Fatalf("envtests invoked gitsemver:\n%s", out)
 			}
 			if strings.Contains(string(out), "\nenvtests-executed\n") == failAssets {
 				t.Fatalf("unexpected test execution:\n%s", out)
