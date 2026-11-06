@@ -1201,6 +1201,9 @@ func (w *watcher) emitNow(key string, format string, args ...any) {
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *watcher) sample(ctx context.Context) {
 	now := time.Now()
+	if st, err := w.store.Peek(); err == nil {
+		w.sayAppDrifts(w.appDrifts(ctx, st.Apps))
+	}
 	th := w.cfg.Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
