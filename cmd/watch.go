@@ -494,8 +494,9 @@ type watcher struct {
 	lastServing time.Time
 	// teleporting is set while the Teleport login is read, lastTeleport
 	// when it began.
-	teleporting  atomic.Bool
-	lastTeleport time.Time
+	teleporting     atomic.Bool
+	lastTeleport    time.Time
+	lastClaudeLogin string
 	// centraling is set while the roster is published to the central
 	// instance, lastCentral when that last started and centralChecked when
 	// the central instance was last called.
@@ -1531,6 +1532,7 @@ func (w *watcher) poll(ctx context.Context) {
 	}
 	if now.Sub(w.lastTeleport) >= w.readEvery(th.Interval.Duration) {
 		w.lastTeleport = now
+		w.claudeLogin()
 		w.inFlight(ctx, th.Interval.Duration, &w.teleporting, w.teleport)
 	}
 	if now.Sub(w.lastServing) >= w.readEvery(th.Interval.Duration) {

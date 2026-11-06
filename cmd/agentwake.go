@@ -266,6 +266,10 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 		_, err = fmt.Fprintf(a.out, "wake: %s: its desktop CLI %d runs: sent the message to it instead of resuming the session headless beside it\n", w.name, pid)
 		return err
 	}
+
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
 	unit := wakeUnit(w.id)
 	bin, err := exec.LookPath("claude")
 	if err != nil {

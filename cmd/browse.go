@@ -719,6 +719,10 @@ func (a *app) browseLease() error {
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	if permanentDeletionSteps.MatchString(steps) {
 		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
 	}
