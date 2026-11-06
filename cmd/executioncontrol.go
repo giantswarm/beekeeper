@@ -203,6 +203,19 @@ func (a *app) serveExecutionCoordinator(ctx context.Context, host string, input 
 			}
 			touchActive()
 			value = result
+		case executionReviewRelay:
+			var request executionReviewRequest
+			if execution.Decode(req.Payload, &request) != nil {
+				return nil, errors.New("invalid review relay request")
+			}
+			reviewCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, reviewErr := a.relayExecutionReview(reviewCtx, st, req.Ref, request)
+			if reviewErr != nil {
+				return nil, reviewErr
+			}
+			touchActive()
+			value = result
 		case executionPublish:
 			var publication executionPublication
 			if execution.Decode(req.Payload, &publication) != nil {
@@ -385,6 +398,9 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		if ag.Task == "" || ag.Done || strings.TrimSpace(v.Waits) == "" {
 			return "", nil, refused("park requires an unfinished task and wait reason")
 		}
+		if err := validateParkWait(v.On, v.Waits); err != nil {
+			return "", nil, err
+		}
 		if err := validateOverlapPark(v.On, v.Waits); err != nil {
 			return "", nil, err
 		}
@@ -418,7 +434,8 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				return "", nil, refused("hold is not active")
 			}
 		} else if v.On != "" {
-			if _, ok := parseRef(v.On); !ok {
+			_, _, release := parseReleaseTarget(v.On)
+			if _, ok := parseRef(v.On); !ok && !release {
 				return "", nil, refused("unsupported remote park target")
 			}
 		}
@@ -434,19 +451,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 		}
 		if reviewHead != "" {
 			kind = github.RefPullRequest
-			pm := ""
-			if v.PostMerge != nil {
-				pm = *v.PostMerge
-			}
-			if pm == "" && ag.Park != nil && strings.EqualFold(ag.Park.On, v.On) && ag.Park.PostMerge != nil && *ag.Park.PostMerge != "" {
-				pm = *ag.Park.PostMerge
-			}
-			if pm == "" {
-				if rp, ok := st.ReviewParkFor(v.On); ok && rp.PostMerge != nil && *rp.PostMerge != "" {
-					pm = *rp.PostMerge
-				}
-			}
-			v.PostMerge = &pm
+			v.PostMerge = reviewPostMerge(st, v.On, ag.Park, v.PostMerge)
 			if ag.Execution != nil {
 				if r, _ := executionRecord(st, *ag.Execution); r != nil {
 					r.Completed = true
@@ -513,7 +518,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 				r.Completed = true
 			}
 		}
-		verb := "agents.idle"
+		verb := litAgentsIdle
 		if v.Finished {
 			verb = executionDone
 			clearRecords(st, me)

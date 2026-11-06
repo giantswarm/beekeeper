@@ -54,11 +54,11 @@ kind create and delete cluster there and names this command instead.`,
 			if op == labDown || os.Getenv(sandbox.Brokered) != "" {
 				return nil
 			}
-			line, err := a.labKubeconfigLine(cmd.Context(), res)
+			path, err := a.labKubeconfigPath(cmd.Context(), res)
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(a.out, line)
+			_, err = fmt.Fprintln(a.out, "export KUBECONFIG="+path)
 			return err
 		},
 	}
@@ -82,7 +82,7 @@ func (a *app) labRun(op, res string) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(exe, append([]string{"run", "--"}, argv...)...) //nolint:gosec // this binary running agentlab with checked arguments
+	c := exec.Command(exe, append([]string{workerGitHubRunGroup, "--"}, argv...)...) //nolint:gosec // this binary running agentlab with checked arguments
 	c.Stdout, c.Stderr = a.out, os.Stderr
 	var exit *exec.ExitError
 	if err := c.Run(); errors.As(err, &exit) {

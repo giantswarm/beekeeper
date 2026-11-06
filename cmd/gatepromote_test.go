@@ -89,7 +89,7 @@ exec sleep 30`)
 
 // promoteArgv is devctl release promote o/r with extra flags.
 func promoteArgv(extra ...string) []string {
-	return append([]string{merge.Tool, "release", promoteArg, scratchRepo}, extra...)
+	return append([]string{merge.Tool, workerGitHubReleaseGroup, promoteArg, scratchRepo}, extra...)
 }
 
 // stubCandidate answers promoteCandidate with *newest.

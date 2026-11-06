@@ -29,10 +29,11 @@ const (
 // runInfo is what gate runs shows of a detached run: the command (never its
 // environment, which carries tokens), its owner, its gate and its start.
 type runInfo struct {
-	Command string      `json:"command"`
-	Owner   state.Party `json:"owner,omitzero"`
-	Gate    int         `json:"gate,omitempty"`
-	Started time.Time   `json:"started"`
+	Command        string      `json:"command"`
+	Owner          state.Party `json:"owner,omitzero"`
+	Gate           int         `json:"gate,omitempty"`
+	Started        time.Time   `json:"started"`
+	ProcessStarted time.Time   `json:"processStarted,omitzero"`
 }
 
 // writeRunInfo leaves i for gate runs in base.run, written whole.
@@ -91,12 +92,13 @@ type detachedRun struct {
 const (
 	// runLeft is a wait its call left to run on outside it (leftExt).
 	runLeft = "left"
+	runDead = "dead"
 )
 
 // detachedRuns lists the detached runs of the state directory dir: the
 // running merges whose merge-child runs and the waiting merges with a
 // queued run of their own whose gate runs, from st, then the waits under
-// runs/ whose merge-child runs without an exit code, the oldest first. t
+// runs/ without an exit code, including dead children, the oldest first. t
 // finds each run's devctl; nil leaves it out.
 func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 	var runs []detachedRun
@@ -131,7 +133,7 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 	for _, f := range pids {
 		base := strings.TrimSuffix(f, ".pid")
 		pid := readPID(base)
-		if covered[base] || pid == 0 || !proc.Alive(pid) {
+		if covered[base] || pid == 0 {
 			continue
 		}
 		if _, err := os.Stat(base + ".rc"); err == nil {
@@ -145,6 +147,9 @@ func detachedRuns(dir string, st *state.State, t *proc.Table) []detachedRun {
 			r.Command, r.Owner, r.Session, r.Since = i.Command, i.Owner.Name, i.Owner.Session, i.Started
 		} else if info, err := os.Stat(f); err == nil {
 			r.Since = info.ModTime().UTC()
+		}
+		if !runProcessAlive(base, pid, t) {
+			r.Phase, r.Devctl = runDead, 0
 		}
 		if r.Command == "" && t != nil && t.ByPID[r.Devctl] != nil {
 			r.Command, _ = masked(t.ByPID[r.Devctl].Args)
@@ -184,7 +189,8 @@ func (a *app) gateRunsCmd() *cobra.Command {
 killed shell does not end: a merge or promotion whose devctl runs (its
 merge-child) or that waits for its turn in a queued run of its own (exit
 76), and a devctl pr wait, release wait or rollout wait, also one its call
-left to run on (phase left). Each row is its id, which gate stop takes, the
+left to run on (phase left). A wait whose merge-child is gone or whose pid
+was reused has phase dead; the watch moves its files aside after a day. Each row is its id, which gate stop takes, the
 kind and phase, the owning session, the command, since when it runs or
 waits, its pid (the merge-child, or a queued merge's waiting gate) and its
 devctl's. End one with gate stop, never a kill by pid.`,
@@ -294,7 +300,11 @@ func (a *app) gateStop(by state.Party, id string) (string, error) {
 // stopWait later. It signals only the pid the run recorded, and the devctl
 // processes under it.
 func (a *app) stopWait(by state.Party, r detachedRun) (string, error) {
-	if readPID(r.base) != r.PID || !proc.Alive(r.PID) {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return "", err
+	}
+	if readPID(r.base) != r.PID || !runProcessAlive(r.base, r.PID, t) {
 		return "", refused("%s ended before the stop: beekeeper gate runs lists what runs", r.ID)
 	}
 	raw, _ := json.Marshal(by)
@@ -323,4 +333,64 @@ func (a *app) stopWait(by state.Party, r detachedRun) (string, error) {
 	owner := cmp.Or(r.Owner, "nobody")
 	_ = a.store.Record(event(by, "devctl.stopped", "%s: %s (owner %s) stopped (gate stop), its merge-child (pid %d) %s", r.ID, r.Command, owner, r.PID, how))
 	return fmt.Sprintf("stopped %s: %s (owner %s), its merge-child (pid %d) %s; nothing waits for it any more", r.ID, r.Command, owner, r.PID, how), nil
+}
+
+// runProcessAlive checks identity as well as liveness. Old records predate
+// processStarted: require the merge-child command for this exact base and
+// reject processes started after the record was written.
+func runProcessAlive(base string, pid int, t *proc.Table) bool {
+	if t == nil {
+		var err error
+		t, err = plat.Machine.Processes()
+		if err != nil {
+			return proc.Alive(pid)
+		} // do not retire work on a failed scan
+	}
+	p := t.Process(pid)
+	if p == nil {
+		return false
+	}
+	i, _ := readRunInfo(base)
+	if !i.ProcessStarted.IsZero() {
+		return p.Start.Equal(i.ProcessStarted)
+	}
+	since := i.Started
+	if since.IsZero() {
+		if f, err := os.Stat(base + ".pid"); err == nil {
+			since = f.ModTime()
+		}
+	}
+	if !since.IsZero() && p.Start.After(since) {
+		return false
+	}
+	for n, arg := range p.Args {
+		if arg == mergeChildCmd && n+1 < len(p.Args) && p.Args[n+1] == base {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanupDeadRuns moves old dead waits aside, preserving their files for
+// inspection. A failed process scan leaves everything in place.
+func cleanupDeadRuns(dir string, st *state.State, now time.Time) {
+	t, err := plat.Machine.Processes()
+	if err != nil {
+		return
+	}
+	for _, r := range detachedRuns(dir, st, t) {
+		if r.Phase != runDead || r.Since.IsZero() || now.Sub(r.Since) <= 24*time.Hour {
+			continue
+		}
+		if runProcessAlive(r.base, r.PID, nil) {
+			continue
+		}
+		target := filepath.Join(dir, keptOutputs, r.ID+"-dead-"+now.UTC().Format("20060102T150405Z"))
+		if os.MkdirAll(target, 0o700) != nil {
+			continue
+		}
+		for _, ext := range mergeExts {
+			_ = os.Rename(r.base+ext, filepath.Join(target, r.ID+ext))
+		}
+	}
 }

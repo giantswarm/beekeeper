@@ -29,7 +29,7 @@ const (
 func TestBrowseReactAriaCoordinateClick(t *testing.T) {
 	for name, guidance := range map[string]string{
 		"prompt": browsePrompt("Click the Dev Portal's 'Sign in' button by coordinate.", "", nil, false, nil),
-		"help":   (&app{}).browseCmd().Long,
+		litHelp:  (&app{}).browseCmd().Long,
 	} {
 		for _, want := range []string{
 			"React-aria Buttons (bui components)", "need a coordinate click",
@@ -122,12 +122,12 @@ func TestBrowseTurn(t *testing.T) {
 	}
 	// Every prompt has the connection words: the check before each step,
 	// the one reconnect in the turn, the lost line and the steps not done.
-	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
+	if p := browsePrompt("steps", "", nil, false, nil); p != browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+"steps" ||
 		!strings.Contains(connectionWords, "list_connected_browsers before each step") || !strings.Contains(connectionWords, "select_browser") ||
 		!strings.Contains(connectionWords, "'"+lostLine+"' followed by the steps not done") {
 		t.Errorf("browsePrompt without a deploy = %q", p)
 	}
-	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
+	if p := browsePrompt("steps", deploy, nil, false, nil); !strings.HasPrefix(p, browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+"The person's task covers one deploy: "+deploy+".") ||
 		!strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a deploy = %q", p)
 	}
@@ -391,7 +391,7 @@ const (
 // lost error naming the steps the report lists; a connection the turn got
 // back by itself runs no reconnect.
 func TestBrowseReconnects(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, reportFile, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "report"), filepath.Join(bin, "count")
 	// The fake claude counts its runs, records each run's arguments, appends
@@ -449,7 +449,7 @@ func TestBrowseReconnects(t *testing.T) {
 	first, second := argvOf("1"), argvOf("2")
 	id := first[slices.Index(first, sessionIDFlag)+1]
 	if i := slices.Index(second, resumeFlag); i < 0 || second[i+1] != id || slices.Contains(second, sessionIDFlag) ||
-		second[len(second)-1] != fmt.Sprintf(reconnectWords, deployCall) || !slices.Contains(second, chromeFlag) ||
+		second[len(second)-1] != fmt.Sprintf(reconnectWords, deployCall)+" "+sitePermissionWords || !slices.Contains(second, chromeFlag) ||
 		!slices.Equal(second[:i], first[:slices.Index(first, sessionIDFlag)]) {
 		t.Errorf("the reconnect ran with %q, the first turn with %q", second, first)
 	}
@@ -502,7 +502,7 @@ func TestBrowseReconnects(t *testing.T) {
 // allows it and a prompt that names it; the report and the lines below it
 // come from the turn's output and its transcript.
 func TestBrowseRunsTheTurn(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl")
 	// The fake claude records its arguments NUL-separated (a prompt holds
@@ -621,7 +621,7 @@ func TestBrowseConsentPromptProviders(t *testing.T) {
 
 // Steps that name an App on record, by name or one of its callback hosts, give the turn
 // that App's auto mode rule and prompt words; steps that name a loopback
-// host give it the lab's; the rules stand after the shipped ones beside a
+// host and a sign-in give it the lab's; the rules stand after the shipped ones beside a
 // declared deploy's; the report says what was allowed, and a grant refusal
 // under a record says the record did not cover it.
 func TestBrowseConsent(t *testing.T) {
@@ -702,7 +702,7 @@ func TestBrowseConsent(t *testing.T) {
 		t.Errorf("--settings with a deploy and a record = %q", argv)
 	}
 	p := browsePrompt("steps", "", consents, true, nil)
-	if !strings.HasPrefix(p, browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
+	if !strings.HasPrefix(p, browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+"The person's own App "+recordedApp+" is declared and on record (callback "+recordedCallback+" or "+recordedCallback+":8443):") ||
 		!strings.Contains(p, labWords) || !strings.HasSuffix(p, browseSteps+"steps") {
 		t.Errorf("browsePrompt with a record and the lab = %q", p)
 	}
@@ -729,8 +729,8 @@ func TestBrowseConsent(t *testing.T) {
 func TestBrowseLocalhostLabSignIn(t *testing.T) {
 	const steps = "Open https://localhost:32000/dex/auth?client_id=kubernetes&redirect_uri=http%3A%2F%2F127.0.0.1%3A5555%2Fcallback" +
 		"&response_type=code. Sign in as viewer@lab.local with the fixture password 'password' and press Login."
-	if !namesLoopback(steps) {
-		t.Fatalf("namesLoopback(%q) = false", steps)
+	if !namesLabSignIn(steps) {
+		t.Fatalf("namesLabSignIn(%q) = false", steps)
 	}
 	if rules := browseRules("", nil, true); len(rules) != 1 || rules[0] != labRule {
 		t.Errorf("browseRules of the lab = %q", rules)
@@ -751,7 +751,7 @@ func TestBrowseLocalhostLabSignIn(t *testing.T) {
 // has the hook act in the turn wherever it runs, exists while the turn runs
 // and is gone after it, the turn logged.
 func TestBrowseTurnWithARecord(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, startsFile := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "starts")
 	// The fake claude records its arguments, copies the state's starts as it
@@ -780,8 +780,8 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 		t.Fatalf("browse: %v\n%s", err, out.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 5 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") ||
-		!strings.HasPrefix(got[2], "allowed lab sign-in: ") || !strings.HasPrefix(got[3], "transcript: ") || got[4] != noShots {
+	if len(got) != 4 || got[0] != turnReport || !strings.HasPrefix(got[1], "allowed consent: "+recordedApp+" (callback "+recordedCallback+" or "+recordedCallback+":8443, declared in "+recordedDeclared+"): ") ||
+		!strings.HasPrefix(got[2], "transcript: ") || got[3] != noShots {
 		t.Errorf("browse with a record printed %q", got)
 	}
 	b, err := os.ReadFile(argvFile) //nolint:gosec // the test's own file
@@ -790,7 +790,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 	}
 	argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
 	i := slices.Index(argv, settingsFlag)
-	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person's organisation declares the App "+recordedApp) || !strings.Contains(argv[i+1], "Lab Identity Provider:") ||
+	if i < 0 || !strings.Contains(argv[i+1], "Own App Consent: The person's organisation declares the App "+recordedApp) || strings.Contains(argv[i+1], "Lab Identity Provider:") ||
 		!strings.Contains(argv[len(argv)-1], "The person's own App "+recordedApp+" is declared and on record") {
 		t.Errorf("the turn with a record ran with %q", argv)
 	}
@@ -815,7 +815,7 @@ func TestBrowseTurnWithARecord(t *testing.T) {
 // keeps no file tool and no settings; the copy goes with the turn, and a line
 // below the report names the file.
 func TestBrowseSharesFiles(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, seen := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "seen")
 	// The fake claude records its arguments and what it finds under the stage
@@ -876,7 +876,7 @@ func TestBrowseSharesFiles(t *testing.T) {
 		!strings.Contains(p, "file_upload refuses every other path") || !strings.Contains(p, guard.UploadTargetScript) || !strings.HasSuffix(p, browseSteps+steps) {
 		t.Errorf("the prompt with shared files = %q", p)
 	}
-	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
+	if browsePrompt(steps, "", nil, false, nil) != browsePreamble+connectionWords+sitePermissionWords+frontWords+drawWords+leaveWords+windowWords+browseSteps+steps {
 		t.Error("a prompt without shared files names uploads")
 	}
 
@@ -899,12 +899,12 @@ func TestBrowseSharesFiles(t *testing.T) {
 		files []string
 		want  string
 	}{
-		"missing":  {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
-		"dir":      {[]string{files}, files + ": not a regular file"},
-		"too big":  {[]string{big}, "over file_upload's 10485760"},
-		"together": {[]string{shot, big}, "over file_upload's 10485760"},
-		"outside":  {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
-		"a link":   {[]string{link}, link + ": outside the worker's directories"},
+		workerGitHubMissingRef: {[]string{shot, filepath.Join(files, "gone.png")}, "gone.png: no such file"},
+		"dir":                  {[]string{files}, files + " is a directory, not a file"},
+		"too big":              {[]string{big}, "over file_upload's 10485760"},
+		"together":             {[]string{shot, big}, "over file_upload's 10485760"},
+		"outside":              {[]string{shot, elsewhere}, elsewhere + ": outside the worker's directories"},
+		"a link":               {[]string{link}, link + ": outside the worker's directories"},
 	} {
 		if err := os.Remove(argvFile); err != nil {
 			t.Fatal(err)
@@ -917,6 +917,27 @@ func TestBrowseSharesFiles(t *testing.T) {
 			t.Errorf("browse --file %s started the turn", name)
 		}
 		writeFile(t, argvFile, "")
+	}
+}
+
+func TestUploadFileKind(t *testing.T) {
+	for _, tc := range []struct {
+		mode os.FileMode
+		want string
+	}{
+		{os.ModeDir | 0o700, "a directory"},
+		{os.ModeDevice, litADevice},
+		{os.ModeDevice | os.ModeCharDevice, "a device"},
+		{os.ModeSocket, "a socket"},
+		{os.ModeNamedPipe, "a named pipe"},
+		{os.ModeSymlink, "a symbolic link"},
+		{os.ModeIrregular, "an irregular file"},
+	} {
+		t.Run(tc.want+tc.mode.String(), func(t *testing.T) {
+			if got := uploadFileKind(tc.mode); got != tc.want {
+				t.Errorf("uploadFileKind(%v) = %q, want %q", tc.mode, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1270,7 +1291,7 @@ func TestReadFindingsNotDrawn(t *testing.T) {
 func TestBrowseCleansUpAfterTimeout(t *testing.T) {
 	// Leave room for shell startup under race instrumentation on a busy runner.
 	const turnTimeout = 3 * time.Second
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	argvFile, transcript, count := filepath.Join(bin, "argv"), filepath.Join(bin, "transcript"), filepath.Join(bin, "count")
 	// The fake claude counts its runs, records each run's arguments, appends
@@ -1345,7 +1366,7 @@ func TestShotLines(t *testing.T) {
 // writes no file, and the saved shot's path; a turn that took none prints no
 // shot path.
 func TestBrowseReportsSavedShots(t *testing.T) {
-	a, out := stubApp(t)
+	a, out := browseApp(t)
 	bin := t.TempDir()
 	transcript, reportFile := filepath.Join(bin, "transcript.jsonl"), filepath.Join(bin, "report")
 	script := "#!/bin/sh\nid=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n" +
@@ -1390,6 +1411,75 @@ func TestBrowseReportsSavedShots(t *testing.T) {
 	got = strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(got) != 6 || got[0] != unsaved || got[5] != noShots || strings.Contains(out.String(), "shot-") || strings.Contains(out.String(), shotsSaved) {
 		t.Errorf("browse without a screenshot printed %q", got)
+	}
+}
+
+// Local navigation must not grant the fixture-credential exception.
+func TestBrowseLabSignInSelection(t *testing.T) {
+	for steps, want := range map[string]bool{
+		"Open http://localhost:8080/ and report the title.":              false,
+		"Open http://127.0.0.1:8080/ and take a screenshot.":             false,
+		"Open https://portal.127.0.0.2.nip.io/ and read the page.":       false,
+		"Open https://localhost:32000/dex/auth":                          true,
+		"Open http://localhost:8080/login":                               true,
+		"Open http://localhost:8080/sign-in":                             true,
+		"Open http://localhost:8080/ and sign in with the fixture user.": true,
+		"Open http://localhost:8080/ and enter the fixture password.":    true,
+		"Open https://example.org/login and enter a password.":           false,
+		"Open http://localhost:8080/catalog and inspect the loginCount.": false,
+	} {
+		t.Run(steps, func(t *testing.T) {
+			lab := namesLabSignIn(steps)
+			if lab != want {
+				t.Fatalf("namesLabSignIn = %v, want %v", lab, want)
+			}
+			rules := browseRules("", nil, lab)
+			if slices.Contains(rules, labRule) != want {
+				t.Errorf("lab rule presence = %v, want %v", rules, want)
+			}
+			if strings.Contains(browsePrompt(steps, "", nil, lab, nil), labWords) != want {
+				t.Errorf("unexpected lab prompt")
+			}
+			lines := (browseFindings{}).lines(steps, "", nil, lab)
+			if strings.Contains(strings.Join(lines, "\n"), "allowed lab sign-in:") != want {
+				t.Errorf("unexpected lab findings: %v", lines)
+			}
+		})
+	}
+}
+
+func TestBrowseLocalPageRunsWithSignInOnlyWhenNeeded(t *testing.T) {
+	for _, signIn := range []bool{false, true} {
+		t.Run(strconv.FormatBool(signIn), func(t *testing.T) {
+			a, out := browseApp(t)
+			bin := t.TempDir()
+			argsFile := filepath.Join(bin, "args")
+			t.Setenv("BROWSE_ARGV", argsFile)
+			t.Setenv("BROWSE_PROJECT", filepath.Join(a.cfg.Claude.ProjectsDir, "p"))
+			writeFile(t, filepath.Join(bin, "claude"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BROWSE_ARGV\"\n"+
+				"id=; prev=\nfor a in \"$@\"; do\n  [ \"$prev\" = --session-id ] && id=$a\n  prev=$a\ndone\n"+
+				"mkdir -p \"$BROWSE_PROJECT\"\nprintf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}' > \"$BROWSE_PROJECT/$id.jsonl\"\necho done\n")
+			if err := os.Chmod(filepath.Join(bin, "claude"), 0o700); err != nil { //nolint:gosec // a test fixture
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			steps := "Open http://localhost:8080/ and report the title."
+			if signIn {
+				steps += " Sign in with the fixture password."
+			}
+			if err := a.browse(t.Context(), steps, bin, "", time.Minute, "", nil, nil); err != nil {
+				t.Fatalf("browse: %v", err)
+			}
+			args, err := os.ReadFile(argsFile) //nolint:gosec // a test fixture
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(args), "Lab Identity Provider:") != signIn ||
+				strings.Contains(string(args), labWords) != signIn ||
+				strings.Contains(out.String(), "allowed lab sign-in:") != signIn {
+				t.Fatalf("unexpected lab exception for signIn=%v", signIn)
+			}
+		})
 	}
 }
 

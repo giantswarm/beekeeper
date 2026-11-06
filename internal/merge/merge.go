@@ -144,6 +144,28 @@ func NoReleaseWait(argv []string) []string {
 // rebaseFlag makes devctl pr merge a rebase merge, the upstream-line forks'.
 const rebaseFlag = "--rebase"
 
+// RequireRebase applies a repository's linear-history policy before the
+// gate checks or queues the merge. Replace explicit false values too, so
+// the caller cannot accidentally squash a configured fork line.
+func RequireRebase(argv []string) []string {
+	i := slices.Index(argv, "merge")
+	if i < 1 || argv[i-1] != "pr" {
+		return argv
+	}
+	out := slices.Clone(argv[:i+1])
+	out = append(out, rebaseFlag)
+	for j := i + 1; j < len(argv); j++ {
+		a := argv[j]
+		if a == "--" {
+			return append(out, argv[j:]...)
+		}
+		if a != rebaseFlag && !strings.HasPrefix(a, rebaseFlag+"=") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // Rebase says whether a devctl pr merge argument vector is a rebase merge:
 // --rebase (or --rebase=true) among its flags, before any --.
 func Rebase(argv []string) bool { return mergeFlag(argv, rebaseFlag) }

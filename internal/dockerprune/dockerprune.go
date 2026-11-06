@@ -350,9 +350,13 @@ type Trimmed struct {
 // image Docker refuses to remove (a container started on it since, a child
 // image built on it) is skipped; while the images stay over target the
 // refused ones are tried again, the newest first so a child goes before
-// its parent, as long as a pass removes one.
+// its parent, as long as a pass removes one. A failed removal can already
+// have untagged references; retries read the remaining ones first.
 func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target int64, size func() (int64, error), busy func() bool) (Trimmed, error) {
 	var t Trimmed
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	left := total
 	over := func() (bool, error) {
 		if left > target || size == nil {
@@ -365,31 +369,61 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 		left = n
 		return left > target, nil
 	}
-	pass := func(images []Image) ([]Blocker, error) {
+	pass := func(images []Image, refresh bool) ([]Blocker, error) {
 		var refused []Blocker
 		for _, img := range images {
-			if more, err := over(); err != nil || !more {
+			if err := ctx.Err(); err != nil {
 				return refused, err
+			}
+			if more, err := over(); err != nil || !more {
+				return refused, errors.Join(err, ctx.Err())
 			}
 			if busy() {
 				return refused, ErrBusy
 			}
-			args := []string{imageCommand, "rm"}
-			if len(img.Refs) == 0 {
+			removal := img
+			if refresh && len(img.Refs) > 0 {
+				raw, err := d(ctx, imageCommand, "inspect", "--format", "{{json .RepoTags}}", img.ID)
+				var refs []string
+				if err == nil {
+					err = json.Unmarshal(raw, &refs)
+				}
+				if err != nil {
+					if canceled := ctx.Err(); canceled != nil {
+						return refused, canceled
+					}
+					refused = append(refused, Blocker{Image: img, Why: "Cannot read remaining references: " + err.Error()})
+					continue
+				}
+				if slices.ContainsFunc(refs, func(ref string) bool { return !slices.Contains(img.Refs, ref) }) {
+					refused = append(refused, Blocker{Image: img, Why: "Image has references outside the removal snapshot"})
+					continue
+				}
+				removal.Refs = refs
+				if busy() {
+					return refused, ErrBusy
+				}
+			}
+			// Parents must pass the candidate policy and be removed explicitly.
+			args := []string{imageCommand, "rm", "--no-prune"}
+			if len(removal.Refs) == 0 {
 				args = append(args, img.ID)
 			} else {
-				args = append(args, img.Refs...)
+				args = append(args, removal.Refs...)
 			}
 			if _, err := d(ctx, args...); err != nil {
+				if canceled := ctx.Err(); canceled != nil {
+					return refused, canceled
+				}
 				refused = append(refused, Blocker{Image: img, Why: "Docker refused its removal: " + err.Error()})
 				continue
 			}
 			left -= max(img.Size, img.Unique)
-			t.Removed = append(t.Removed, img.Name())
+			t.Removed = append(t.Removed, removal.Name())
 		}
 		return refused, nil
 	}
-	refused, err := pass(candidates)
+	refused, err := pass(candidates, false)
 	slices.Reverse(refused)
 	for removed := len(t.Removed); err == nil && len(refused) > 0 && removed > 0; {
 		retry := make([]Image, len(refused))
@@ -397,7 +431,7 @@ func TrimImages(ctx context.Context, d Docker, candidates []Image, total, target
 			retry[i] = b.Image
 		}
 		before := len(t.Removed)
-		refused, err = pass(retry)
+		refused, err = pass(retry, true)
 		removed = len(t.Removed) - before
 	}
 	t.Refused = refused
@@ -465,12 +499,16 @@ type CacheTrim struct {
 // best-effort pass of the daemon's GC policy and frees nothing while the
 // policy's reserved or min-free-space floor sits above the target, which
 // on a nearly full disk is always. A record Docker does not call
-// reclaimable is never touched and is counted in Kept.
-func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, error) {
-	var t CacheTrim
+// reclaimable is never touched and is counted in Kept. A successful prune
+// can remove nothing, so fresh records confirm progress and remaining size.
+// Records blocked by children are retried while a pass removes a record.
+func PruneBuildCache(ctx context.Context, d Docker, keep int64) (t CacheTrim, err error) {
+	if err := ctx.Err(); err != nil {
+		return t, err
+	}
 	records, err := CacheRecords(ctx, d)
 	if err != nil {
-		return t, err
+		return t, errors.Join(err, ctx.Err())
 	}
 	var total int64
 	for _, r := range records {
@@ -486,24 +524,55 @@ func PruneBuildCache(ctx context.Context, d Docker, keep int64) (CacheTrim, erro
 		return cmp.Or(cmp.Compare(b.UsedAgo, a.UsedAgo), cmp.Compare(a.ID, b.ID))
 	})
 	var refused []error
-	removed := map[string]bool{}
-	for _, r := range candidates {
-		if total-t.Freed <= keep {
-			break
-		}
-		if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
-			refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
-			continue
-		}
-		t.Freed += r.Size
-		t.Removed++
-		removed[r.ID] = true
-	}
-	for _, r := range records {
-		if !removed[r.ID] {
+	var canceled error
+	defer func() {
+		for _, r := range records {
 			t.Kept++
 			t.KeptBytes += r.Size
 		}
+	}()
+	for len(candidates) > 0 && total > keep && canceled == nil {
+		var retry []CacheRecord
+		before := t.Removed
+		for _, r := range candidates {
+			if canceled = ctx.Err(); canceled != nil {
+				break
+			}
+			if total <= keep {
+				break
+			}
+			if _, err := d(ctx, builderCommand, "prune", "--force", "--filter", "id="+r.ID); err != nil {
+				if canceled = ctx.Err(); canceled != nil {
+					break
+				}
+				refused = append(refused, fmt.Errorf("%s: %w", r.ID, err))
+				continue
+			}
+			current, err := CacheRecords(ctx, d)
+			if err != nil {
+				return t, errors.Join(err, ctx.Err())
+			}
+			records, total = current, 0
+			for _, remaining := range records {
+				total += remaining.Size
+			}
+			if slices.ContainsFunc(records, func(remaining CacheRecord) bool { return remaining.ID == r.ID }) {
+				retry = append(retry, r)
+				continue
+			}
+			t.Freed += r.Size
+			t.Removed++
+		}
+		if t.Removed == before {
+			break
+		}
+		candidates = retry
+	}
+	if canceled != nil {
+		return t, canceled
+	}
+	if canceled != nil {
+		return t, canceled
 	}
 	if len(refused) > 0 && t.Removed == 0 {
 		return t, errors.Join(refused...)

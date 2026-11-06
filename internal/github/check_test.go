@@ -16,8 +16,8 @@ func TestPullCheck(t *testing.T) {
 			switch {
 			case strings.HasPrefix(call, "pr view 7 --repo o/plans --json state,statusCheckRollup"):
 				return []byte(`{"state":"OPEN","statusCheckRollup":[` + rollup + `]}`), nil
-			case call == `api repos/o/plans/check-runs/42/annotations --jq [.[] | select(.title == "plan-stages") | .message]`:
-				return []byte(`["p: contrarian missing: no p/contrarian"]`), nil
+			case call == `api --paginate repos/o/plans/check-runs/42/annotations`:
+				return []byte(`[{"title":"plan-stages","message":"p: contrarian missing: no p/contrarian"},{"title":"runner","message":"Process completed with exit code 1"}]`), nil
 			}
 			return nil, errors.New("unexpected gh " + call)
 		}

@@ -65,10 +65,13 @@ func clock(t time.Time, now time.Time) string {
 	}
 	l, n := t.Local(), now.Local()
 	day := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
-	switch d := l.Sub(day); {
-	case d >= 0 && d < 24*time.Hour:
+	// Calendar days can be 23 or 25 hours across daylight saving changes.
+	tomorrow := day.AddDate(0, 0, 1)
+	following := day.AddDate(0, 0, 2)
+	switch {
+	case !l.Before(day) && l.Before(tomorrow):
 		return l.Format("15:04")
-	case d >= 24*time.Hour && d < 48*time.Hour:
+	case !l.Before(tomorrow) && l.Before(following):
 		return "+1d " + l.Format("15:04")
 	default:
 		return l.Format("Jan 2 15:04")
@@ -105,18 +108,26 @@ func cost(c *float64) string {
 	return fmt.Sprintf("$%.2f", *c)
 }
 
+// lineSeparators flattens CRLF as one separator and also accepts bare CR and LF.
+var lineSeparators = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+
+// singleLine changes only the display, leaving the original message intact.
+func singleLine(s string) string { return lineSeparators.Replace(s) }
+
 // fit shortens s to w terminal columns, ending with an ellipsis when it
-// cut; SGR sequences and wide runes survive the cut. w <= 0 yields "".
+// cut; line separators become spaces. SGR sequences and wide runes
+// survive the cut. w <= 0 yields "".
 func fit(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	return ansi.Truncate(s, w, ellipsis)
+	return ansi.Truncate(singleLine(s), w, ellipsis)
 }
 
 // fitLeft keeps the right end of s within w columns, for values whose
 // tail matters more than their head.
 func fitLeft(s string, w int) string {
+	s = singleLine(s)
 	if w <= 0 {
 		return ""
 	}
@@ -171,6 +182,7 @@ func bar(frac float64, n int) string {
 // trimWord shortens s to w columns, cutting at the last word, slash or
 // dash where it can, so a truncated name stays readable.
 func trimWord(s string, w int) string {
+	s = singleLine(s)
 	if ansiWidth(s) <= w {
 		return s
 	}
