@@ -72,7 +72,7 @@ func feedbackWatch(t *testing.T) (*watcher, *slackStandIn, *[]string, *bytes.Buf
 		return nil
 	}
 	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: "Guide run 1", Session: "sup"}}}
+		st.Guide = &state.Role{Holder: &state.Supervisor{Party: state.Party{Name: firstRun, Session: "sup"}}}
 		st.Agents = []state.Agent{{Party: state.Party{Name: "Board pull 9", Session: "bp9"}}}
 		st.ReportThreads = []state.ReportThread{
 			{Report: "Status report 15:00", Channel: "C1", TS: reportTS, Posted: w.now.Add(-time.Hour)},

@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+const (
+	upstreamOutside     = "outside github.allowedOrgs"
+	upstreamLiteralPath = "literal repos/<owner>/<repo>/..."
+)
+
 // The worktrees of the upstream tests: a fork clone with an upstream remote,
 // a clone of ours, a clone of theirs, a fork clone whose gh default is the
 // fork (gh repo set-default), a clone of a repository off GitHub.
@@ -66,7 +71,7 @@ func fakeGit(dir string, args ...string) ([]byte, error) {
 
 func upstreamHook(record func(session, command, repo string)) Hook {
 	h := hook()
-	h.Upstream = Upstream{Orgs: []string{"giantswarm", "teemow"}, Review: reviewList, Git: fakeGit, Getenv: func(string) string { return "" }}
+	h.Upstream = Upstream{Orgs: []string{"giantswarm", "fixture-person"}, Review: reviewList, Git: fakeGit, Getenv: func(string) string { return "" }}
 	h.Refused = record
 	return h
 }
@@ -158,7 +163,7 @@ func TestUpstreamPassesReadsAndOurWrites(t *testing.T) {
 		// writes to the orgs, any case, our fork's upstream/<slug> branch
 		{oursDir, prFill},
 		{oursDir, "gh pr create -R giantswarm/kagent --body 'from https://github.com/kagent-dev/kagent/issues/1'"},
-		{oursDir, "gh issue create -R teemow/notes -t t -b b"},
+		{oursDir, "gh issue create -R fixture-person/notes -t t -b b"},
 		{oursDir, "gh issue comment 3 -R GiantSwarm/beekeeper -b x"},
 		{oursDir, "gh api -X POST repos/giantswarm/beekeeper/issues -f title=x"},
 		{oursDir, `gh api graphql -f query='mutation { addComment(input:{}) { clientMutationId } }' -f owner=giantswarm`},
@@ -202,4 +207,39 @@ func TestUpstreamRefusesConnectorPosts(t *testing.T) {
 		map[string]any{ownerKey: "giantswarm", repoKey: theirName, "title": "t"})), "connector to ours")
 	passed(t, decideEvent(t, h, toolEvent("mcp__github__get_pull_request",
 		map[string]any{ownerKey: "kagent-dev", repoKey: theirName})), "connector read")
+}
+
+func TestUpstreamAPIRepositoryVariables(t *testing.T) {
+	t.Setenv("BEEKEEPER_TEST_REPO", "giantswarm/x")
+	t.Setenv("BEEKEEPER_TEST_EXTERNAL", "outside/x")
+	t.Setenv("BEEKEEPER_TEST_EMPTY", "")
+	tests := []struct {
+		name, command, reason string
+	}{
+		{"literal allowed", `gh api -X POST repos/giantswarm/x/issues/1/comments`, ""},
+		{"literal external", `gh api -X POST repos/outside/x/issues/1/comments`, upstreamOutside},
+		{"assignment allowed", `R=giantswarm/x; gh api -X POST "repos/$R/issues/1/comments"`, ""},
+		{"assignment external", `R=outside/x; gh api -X POST "repos/$R/issues/1/comments"`, upstreamOutside},
+		{"environment allowed", `gh api -X POST "repos/$BEEKEEPER_TEST_REPO/issues/1/comments"`, ""},
+		{"environment external", `gh api -X POST "repos/${BEEKEEPER_TEST_EXTERNAL}/issues/1/comments"`, upstreamOutside},
+		{"multiple variables", `O=giantswarm; R=x; gh api -X POST "repos/$O/$R/issues/1/comments"`, ""},
+		{"variable name boundary", `R=outside/x; REPO=giantswarm/x; gh api -X POST "repos/$REPO/issues/1/comments"`, ""},
+		{"loop allowed", `for R in giantswarm/x giantswarm/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, ""},
+		{"loop external", `for R in giantswarm/x outside/y; do gh api -X POST "repos/$R/issues/1/comments"; done`, upstreamOutside},
+		{"unknown", `gh api -X POST "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1/comments"`, upstreamLiteralPath},
+		{"empty", `gh api -X POST "repos/$BEEKEEPER_TEST_EMPTY/issues/1/comments"`, upstreamLiteralPath},
+		{"expanded away", `gh api -X POST "repos//issues/1/comments"`, upstreamLiteralPath},
+		{"suffix unknown", `R=giantswarm/x; gh api -X POST "repos/$R/issues/$1/dependencies/blocked_by"`, ""},
+		{"unknown read", `gh api "repos/$BEEKEEPER_TEST_UNRESOLVED/issues/1"`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := decide(t, upstreamHook(nil), oursDir, tt.command, nil)
+			if tt.reason == "" {
+				passed(t, d, tt.command)
+			} else {
+				refused(t, d, tt.command, tt.reason)
+			}
+		})
+	}
 }

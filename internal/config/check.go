@@ -238,14 +238,14 @@ func localInput(key string) bool {
 	switch key {
 	case "supervisor.reviewBrief", "supervisor.workerBrief", "guide.instructions", "reporter.brief",
 		"omp.modelsFile", "codex.authFile", "codex.configFile", "run.remote.kubeconfig", "agents.execution.rulesFile",
-		"secret.tokenFile", "serve.gateway.tokenFile":
+		"secret.tokenFile", "serve.gateway.tokenFile", "serve.identity.tokenFile":
 		return true
 	}
 	return strings.HasPrefix(key, "kube.kubeconfig[") || strings.HasPrefix(key, "alerts.kubeconfig[")
 }
 
 func checkInput(path, key string, findings *[]string) {
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		*findings = append(*findings, key+": cannot resolve home directory")
 		return

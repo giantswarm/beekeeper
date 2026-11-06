@@ -9,6 +9,12 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
+const (
+	probeToolsRepo = "example/tools"
+	probeUserType  = "User"
+	probeOrgType   = "Organization"
+)
+
 func TestDoctorRepository(t *testing.T) {
 	old := github.RunGH
 	t.Cleanup(func() { github.RunGH = old })
@@ -16,9 +22,9 @@ func TestDoctorRepository(t *testing.T) {
 	github.RunGH = func(ctx context.Context, _ ...string) ([]byte, error) {
 		repo := github.Repo(ctx)
 		owners = append(owners, repo)
-		kind := "User"
+		kind := probeUserType
 		if strings.HasPrefix(repo, "giantswarm/") {
-			kind = "Organization"
+			kind = probeOrgType
 		}
 		return []byte(`{"data":{"r0":{"nameWithOwner":"` + repo + `","owner":{"__typename":"` + kind + `"}}}}`), nil
 	}
@@ -26,11 +32,11 @@ func TestDoctorRepository(t *testing.T) {
 		var out bytes.Buffer
 		a := &app{out: &out, json: jsonOutput}
 		c := a.doctorCmd()
-		c.SetArgs([]string{"repository", "example/tools", "giantswarm/beekeeper"})
+		c.SetArgs([]string{"repository", probeToolsRepo, "giantswarm/beekeeper"})
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"example/tools", "giantswarm/beekeeper", "User", "Organization"} {
+		for _, want := range []string{probeToolsRepo, "giantswarm/beekeeper", probeUserType, probeOrgType} {
 			if !strings.Contains(out.String(), want) {
 				t.Fatalf("output missing %s: %s", want, out.String())
 			}

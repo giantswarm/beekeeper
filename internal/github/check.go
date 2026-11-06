@@ -35,9 +35,9 @@ type Check struct {
 var checkJob = regexp.MustCompile(`/job/(\d+)`)
 
 // PullCheck reads repo#n's state and the newest check run named name on its
-// head (one GraphQL request); a failed one's annotations titled name take a
-// second, which leaves out the runner's own ("Process completed with exit
-// code 1").
+// head (one GraphQL request); a failed one's annotations titled name take
+// another read (all pages), which leaves out the runner's own
+// ("Process completed with exit code 1").
 func PullCheck(ctx context.Context, run GH, repo string, n int, name string) (Check, error) {
 	out, err := run(ctx, "pr", "view", strconv.Itoa(n), "--repo", repo, "--json", "state,statusCheckRollup")
 	if err != nil {
@@ -80,12 +80,17 @@ func PullCheck(ctx context.Context, run GH, repo string, n int, name string) (Ch
 	if m == nil {
 		return c, nil
 	}
-	out, err = run(ctx, "api", fmt.Sprintf("repos/%s/check-runs/%s/annotations", repo, m[1]), "--jq", fmt.Sprintf("[.[] | select(.title == %s) | .message]", strconv.Quote(name)))
+	annotations, err := listAll[struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	}](ctx, run, fmt.Sprintf("repos/%s/check-runs/%s/annotations", repo, m[1]))
 	if err != nil {
 		return Check{}, err
 	}
-	if err := json.Unmarshal(out, &c.Annotations); err != nil {
-		return Check{}, fmt.Errorf("check run %s annotations: %w", m[1], err)
+	for _, a := range annotations {
+		if a.Title == name {
+			c.Annotations = append(c.Annotations, a.Message)
+		}
 	}
 	return c, nil
 }

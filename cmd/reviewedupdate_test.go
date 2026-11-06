@@ -109,7 +109,8 @@ func TestReviewedMergeUpdatesABehindBranchAndMergesTheCoveredHead(t *testing.T) 
 	if len(m) != 1 || !slices.Contains(m[0], "--match-head-commit") || !slices.Contains(m[0], loopFixed) {
 		t.Fatalf("merge of the updated head: %v", b.cmds)
 	}
-	if !slices.Equal(b.baseReads, []string{loopHead + ".." + loopFixed}) {
+	// Revalidate coverage immediately before merging, after the queue read.
+	if !slices.Equal(b.baseReads, []string{loopHead + ".." + loopFixed, loopHead + ".." + loopFixed}) {
 		t.Fatalf("approval coverage read %v", b.baseReads)
 	}
 }
@@ -141,6 +142,12 @@ func TestReviewedMergeOfAnUpdatedBranchStopsShort(t *testing.T) {
 				if err := b.a.store.Update(func(st *state.State) ([]state.Event, error) { st.Stop = &state.Stop{}; return nil, nil }); err != nil {
 					t.Fatal(err)
 				}
+			}
+		}},
+		"changes requested on source head meanwhile": {github.SquashRefused, "requested changes", func(b *behindRig) {
+			b.onPause = func(int) {
+				b.pull.Green, b.pull.Checks = true, []string{behindBuild, behindUnit}
+				b.verdict("R2", loopHead, superloop.ChangesRequested, "Review: changes requested\n\nThe source head still needs its guard fixed")
 			}
 		}},
 	} {
