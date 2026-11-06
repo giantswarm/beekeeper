@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,12 +36,12 @@ func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
 	listed := readOpenPulls
 	t.Cleanup(func() { readOpenPulls = listed })
 	readOpenPulls = func(context.Context, func() ([]string, error), []string) ([]string, error) { return open, nil }
-	reads := 0
+	var reads atomic.Int32
 	read := readLoopPull
 	t.Cleanup(func() { readLoopPull = read })
 	readLoopPull = func(ctx context.Context, ref string) (superloop.Pull, error) {
 		if slices.Contains(open, ref) {
-			reads++
+			reads.Add(1)
 		}
 		return read(ctx, ref)
 	}
@@ -48,9 +49,15 @@ func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	settled := func() {
+		l.passActions.Wait()
+		l.mergeActions.Wait()
+		l.timerActs.Wait()
+	}
 	r.loopPass(t, l)
-	if reads != sweepReadsPerPass {
-		t.Fatalf("first pass read %d, want %d", reads, sweepReadsPerPass)
+	settled()
+	if n := reads.Load(); n != sweepReadsPerPass {
+		t.Fatalf("first pass read %d, want %d", n, sweepReadsPerPass)
 	}
 	var count loopSweepCount
 	if found, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil || !found {
@@ -69,10 +76,11 @@ func TestSweepBoundsItsReadsAndCountsThePile(t *testing.T) {
 		t.Errorf("the pile went unsaid:\n%s", r.out)
 	}
 	// The next pass reads the ten left over; the fresh ones cost nothing.
-	reads = 0
+	reads.Store(0)
 	r.loopPass(t, l)
-	if reads != 10 {
-		t.Fatalf("second pass read %d, want the 10 left over", reads)
+	settled()
+	if n := reads.Load(); n != 10 {
+		t.Fatalf("second pass read %d, want the 10 left over", n)
 	}
 	count = loopSweepCount{}
 	if _, err := r.a.store.ReadFile(loopSweepFile, &count); err != nil {
