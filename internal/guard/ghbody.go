@@ -417,7 +417,9 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 	var pos []string
 	var bodyTokens, fileTokens, titleTokens, headTokens []ghToken
 	isDraft := false
+	hasFillOrWeb := false
 	incompleteFlag := ""
+	incompletePRFlag := ""
 
 	for i := 0; i < len(argTokens); i++ {
 		a := argStrs[i]
@@ -427,6 +429,10 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 		}
 		if a == "-d" || a == "--draft" {
 			isDraft = true
+			continue
+		}
+		if a == "-f" || a == "--fill" || a == "--fill-first" || a == "--fill-verbose" || a == "-w" || a == "--web" || strings.HasPrefix(a, "--fill=") || strings.HasPrefix(a, "--web=") {
+			hasFillOrWeb = true
 			continue
 		}
 		if _, ok := strings.CutPrefix(tok.raw, "--title="); ok {
@@ -485,6 +491,8 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 			if i+1 >= len(argTokens) {
 				if isBodyFlag || isFileFlag {
 					incompleteFlag = a
+				} else if isTitleFlag || isHeadFlag {
+					incompletePRFlag = a
 				}
 				break
 			}
@@ -550,16 +558,29 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 		}
 	}
 	if checkPRCreate {
+		if incompletePRFlag != "" {
+			return uninspectableGHBodyReason(what, incompletePRFlag+" has no value")
+		}
+		if hasFillOrWeb {
+			return uninspectableGHBodyReason(what, "--fill/--web generates pull request metadata outside the guard")
+		}
+		if len(titleTokens) == 0 || (len(bodyTokens) == 0 && len(fileTokens) == 0) {
+			return uninspectableGHBodyReason(what, "non-draft gh pr create requires explicit --title and --body or --body-file")
+		}
 		var titles, heads []string
 		for _, tt := range titleTokens {
-			if val, ok := st.evalRawToken(tt, dir, known, segVars, true); ok {
-				titles = append(titles, val)
+			val, ok := st.evalRawToken(tt, dir, known, segVars, true)
+			if !ok {
+				return uninspectableGHBodyReason(what, "an unresolved variable or command substitution in --title")
 			}
+			titles = append(titles, val)
 		}
 		for _, ht := range headTokens {
-			if val, ok := st.evalRawToken(ht, dir, known, segVars, true); ok {
-				heads = append(heads, val)
+			val, ok := st.evalRawToken(ht, dir, known, segVars, true)
+			if !ok {
+				return uninspectableGHBodyReason(what, "an unresolved variable or command substitution in --head")
 			}
+			heads = append(heads, val)
 		}
 		if reason := st.hook.PRCreate(st.hook.mergeSession, repoSlug(repo), strings.Join(heads, ""), strings.Join(titles, "\n"), body); reason != "" {
 			return "Refused: " + reason

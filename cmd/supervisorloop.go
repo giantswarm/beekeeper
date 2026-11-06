@@ -3197,10 +3197,10 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		return "", errLoopLater
 	}
 	r, _ := parseRef(act.Ref)
-	branch := ""
+	rawBranch := ""
 	l.mu.Lock()
 	if cached, ok := l.pulls[act.Ref]; ok {
-		branch = cached.pull.Branch
+		rawBranch = cached.pull.Branch
 	}
 	l.mu.Unlock()
 	if act.Message == "" {
@@ -3209,7 +3209,7 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			return "", err
 		}
 		l.cachePull(act.Ref, p)
-		branch = p.Branch
+		rawBranch = p.Branch
 		if p.State != "" && p.State != superloop.Open {
 			return "", errLoopLater
 		}
@@ -3226,8 +3226,13 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 		if err != nil {
 			return "", err
 		}
+	} else if rawBranch == "" {
+		if p, err := readLoopPull(ctx, act.Ref); err == nil {
+			l.cachePull(act.Ref, p)
+			rawBranch = p.Branch
+		}
 	}
-	branch = cmp.Or(branch, fmt.Sprintf("pr-%d", r.N))
+	branch := cmp.Or(rawBranch, fmt.Sprintf("pr-%d", r.N))
 	brief, err := l.brief(l.a.cfg.Supervisor.ReviewBrief, defaultReviewBrief, act.Key, briefData{URL: act.URL, Repo: r.Repo, Number: r.N, Head: act.Head, Branch: branch, Round: act.Round, Worker: act.Agent, Context: act.Message})
 	if err != nil {
 		return "", err
@@ -3256,6 +3261,9 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 			return "", errLoopLater
 		}
 		return "", err
+	}
+	if place.remote() {
+		place.Ref = branch
 	}
 	args := []string{agentsName, agentStartName, name, brief, "--review"}
 	if l.reviewDir != "" {

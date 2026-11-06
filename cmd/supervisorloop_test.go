@@ -3721,7 +3721,7 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 						}
 						act := superloop.Action{Ref: sshTestRepository + "#7", URL: "https://github.com/" + sshTestRepository + "/pull/7", Head: loopHead, Round: 1, Key: "remote-review", SelfHosted: selfHosted}
 						p := r.pull
-						p.Ref, p.URL = act.Ref, act.URL
+						p.Ref, p.URL, p.Branch = act.Ref, act.URL, "feat/pr-7"
 						r.pulls[act.Ref] = p
 						if _, err := (&supervisorLoop{a: r.a, said: map[string]bool{}}).startReviewer(context.Background(), act); err != nil {
 							t.Fatal(err)
@@ -3734,7 +3734,7 @@ func TestLoopPlacesRelayedReviewersOnExecutionHosts(t *testing.T) {
 							t.Fatalf("wrong placement: %v", start)
 						}
 						if first || !localRoom {
-							for _, want := range []string{sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, mainBranch} {
+							for _, want := range []string{sshTestSelector, loopRepoFlag, sshTestRepository, loopRefFlag, "feat/pr-7"} {
 								if !slices.Contains(start, want) {
 									t.Fatalf("missing %s: %v", want, start)
 								}
@@ -3862,5 +3862,122 @@ func TestCombinedPullInheritsClosingKeywordsAndMergeClosesNamedIssues(t *testing
 	}
 	if want := []string{"o/r#53", "o/r#54"}; !slices.Equal(parsed.Closes, want) {
 		t.Fatalf("parseLoopPull Closes = %v, want %v", parsed.Closes, want)
+	}
+}
+
+func TestReview3325ClosureFailureRetriesDurably(t *testing.T) {
+	r := newLoopRig(t)
+	const (
+		origA    = "o/r#401"
+		issueA   = "o/r#50"
+		issueURL = "https://github.com/o/r/issues/50"
+	)
+	r.pulls[origA] = superloop.Pull{
+		Ref:    origA,
+		URL:    "https://github.com/o/r/pull/401",
+		State:  superloop.Open,
+		Head:   loopHead,
+		Author: loopDesk,
+		Closes: []string{issueA},
+	}
+	noPost := ""
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.UpsertReviewPark(state.ReviewPark{
+			On:         origA,
+			At:         r.a.timeNow(),
+			ReviewHead: loopHead,
+			Agent:      loopSecondWorker,
+			Party:      state.Party{Name: loopSecondWorker, Session: "session-a"},
+			Serves:     issueA,
+			PostMerge:  &noPost,
+		})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pull.Body = "Combines https://github.com/o/r/pull/401"
+	r.pull.Absorbs = []string{origA}
+
+	failEditOnce := true
+	editPullBody = func(_ context.Context, _ github.PR, _ string) error {
+		if failEditOnce {
+			failEditOnce = false
+			return errors.New("transient editPullBody failure")
+		}
+		return nil
+	}
+	failClose := true
+	closedIssues := map[string]string{}
+	closePullIssue = func(_ context.Context, iss github.PR, pullURL string) error {
+		if failClose {
+			return errors.New("transient closePullIssue failure")
+		}
+		closedIssues[refName(iss)] = pullURL
+		return nil
+	}
+	refStates = func(_ context.Context, refs []github.PR) (map[github.PR]github.RefState, error) {
+		out := map[github.PR]github.RefState{}
+		for _, ref := range refs {
+			if ref.N == 7 || ref.N == 401 {
+				out[ref] = github.RefState{Kind: github.RefPullRequest, State: github.Open}
+				continue
+			}
+			st := github.Open
+			if closedIssues[refName(ref)] != "" {
+				st = github.Closed
+			}
+			out[ref] = github.RefState{Kind: github.RefIssue, State: st}
+		}
+		return out, nil
+	}
+
+	r.park(t, loopPR, time.Now())
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Agents {
+			if st.Agents[i].Name == loopWorker && st.Agents[i].Park != nil {
+				st.Agents[i].Park.PostMerge = &noPost
+			}
+		}
+		for i := range st.ReviewParks {
+			if st.ReviewParks[i].On == loopPR {
+				st.ReviewParks[i].PostMerge = &noPost
+				st.ReviewParks[i].Serves = issueA
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.pass(t)
+	r.verdict("R1", loopHead, superloop.Approved, "")
+
+	// Pass 1: editPullBody fails transiently, so the combining PR is not merged yet.
+	r.pass(t)
+	if r.pull.State == superloop.Merged {
+		t.Fatal("combining PR should not merge when ensureCombinedPullCloses fails")
+	}
+
+	// Pass 2: editPullBody succeeds and PR merges, but closePullIssue fails once,
+	// so ReviewParks remain present for retry on the next pass.
+	r.pass(t)
+	if r.pull.State != superloop.Merged {
+		t.Fatal("expected combining PR to merge once editPullBody succeeded")
+	}
+	if closedIssues[issueA] != "" {
+		t.Fatalf("expected first closePullIssue attempt to fail, got %v", closedIssues)
+	}
+	stMid, err := r.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stMid.ReviewParkFor(origA); !ok {
+		t.Fatal("absorbed PR ReviewPark was deleted before closeMergedPullIssues succeeded")
+	}
+
+	// Pass 3: endMerged / endAbsorbed retries closeMergedPullIssues and closes issueA.
+	failClose = false
+	r.pass(t)
+	if closedIssues[issueA] != loopURL {
+		t.Fatalf("issue %s was not closed on retry (closedIssues=%v, url=%s)", issueA, closedIssues, issueURL)
 	}
 }

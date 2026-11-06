@@ -1709,7 +1709,7 @@ var (
 	absorbNextGap     = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
 	absorbBulletLead  = regexp.MustCompile(`^(?:[-*+]|\d+\.)\s+`)
 	commitPrefixLead  = regexp.MustCompile(`(?i)^[a-z]+(?:\([^)]*\))?!?:\s*`)
-	affirmativeClause = regexp.MustCompile(`(?i)^[\s*]*(?:(?:this(?:\s+(?:pr|pull\s+request|change|commit|batch|work))?|also|and)\s+)*[\s*]*$`)
+	affirmativeClause = regexp.MustCompile(`(?i)^[\s()*]*(?:(?:this(?:\s+(?:pr|pull\s+request|change|commit|batch|work))?|also|and)\s+[\s()*]*)*[\s()*]*$`)
 	shortPullMention  = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
 	closingLead       = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b`)
 	closingHeader     = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?:\s+issues?)?\s*:?\s*(?:\*\*)?$`)
@@ -1793,6 +1793,63 @@ func stripInlineCodeSpans(line string) string {
 	return b.String()
 }
 
+func sanitizeMarkdownBody(body string) string {
+	var out []string
+	var paragraph []string
+	flushParagraph := func() {
+		if len(paragraph) == 0 {
+			return
+		}
+		joined := stripInlineCodeSpans(strings.Join(paragraph, "\n"))
+		out = append(out, strings.Split(joined, "\n")...)
+		paragraph = paragraph[:0]
+	}
+	fenceMarker := ""
+	inBlockquote := false
+	for rawLine := range strings.Lines(body) {
+		line := strings.TrimRight(rawLine, "\r\n")
+		trimmed := strings.TrimSpace(line)
+		if fenceMarker != "" {
+			flushParagraph()
+			if closesMarkdownFence(trimmed, fenceMarker) {
+				fenceMarker = ""
+			}
+			out = append(out, "")
+			continue
+		}
+		if fence := leadingMarkdownFence(trimmed); fence != "" {
+			flushParagraph()
+			fenceMarker = fence
+			inBlockquote = false
+			out = append(out, "")
+			continue
+		}
+		if trimmed == "" {
+			flushParagraph()
+			inBlockquote = false
+			out = append(out, "")
+			continue
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			flushParagraph()
+			inBlockquote = true
+			out = append(out, "")
+			continue
+		}
+		if inBlockquote {
+			if strings.HasPrefix(trimmed, "#") {
+				inBlockquote = false
+			} else {
+				out = append(out, "")
+				continue
+			}
+		}
+		paragraph = append(paragraph, line)
+	}
+	flushParagraph()
+	return strings.Join(out, "\n")
+}
+
 func normalizeDeclarationLine(trimmed string) string {
 	s := stripInlineCodeSpans(trimmed)
 	if m := absorbBulletLead.FindStringIndex(s); m != nil {
@@ -1808,7 +1865,7 @@ func normalizeDeclarationLine(trimmed string) string {
 
 func isAffirmativeLead(line string, leadStart int) bool {
 	before := line[:leadStart]
-	if i := strings.LastIndexAny(before, ".;()"); i >= 0 {
+	if i := strings.LastIndexAny(before, ".;"); i >= 0 {
 		before = before[i+1:]
 	}
 	return affirmativeClause.MatchString(before)
@@ -1876,22 +1933,10 @@ func ParseClosingIssues(selfRef, body string) []string {
 		}
 	}
 	inCloseList := false
-	fenceMarker := ""
-	for rawLine := range strings.Lines(body) {
+	for rawLine := range strings.Lines(sanitizeMarkdownBody(body)) {
 		line := strings.TrimRight(rawLine, "\r\n")
 		trimmed := strings.TrimSpace(line)
-		if fenceMarker != "" {
-			if closesMarkdownFence(trimmed, fenceMarker) {
-				fenceMarker = ""
-			}
-			continue
-		}
-		if fence := leadingMarkdownFence(trimmed); fence != "" {
-			fenceMarker = fence
-			inCloseList = false
-			continue
-		}
-		if trimmed == "" || strings.HasPrefix(trimmed, ">") {
+		if trimmed == "" {
 			inCloseList = false
 			continue
 		}
@@ -2005,22 +2050,10 @@ func ParseAbsorbedPulls(selfRef, title, body string) []string {
 	}
 	scanLine(strings.TrimSpace(title))
 	inCombineList := false
-	fenceMarker := ""
-	for rawLine := range strings.Lines(body) {
+	for rawLine := range strings.Lines(sanitizeMarkdownBody(body)) {
 		line := strings.TrimRight(rawLine, "\r\n")
 		trimmed := strings.TrimSpace(line)
-		if fenceMarker != "" {
-			if closesMarkdownFence(trimmed, fenceMarker) {
-				fenceMarker = ""
-			}
-			continue
-		}
-		if fence := leadingMarkdownFence(trimmed); fence != "" {
-			fenceMarker = fence
-			inCombineList = false
-			continue
-		}
-		if trimmed == "" || strings.HasPrefix(trimmed, ">") {
+		if trimmed == "" {
 			inCombineList = false
 			continue
 		}

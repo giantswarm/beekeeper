@@ -220,4 +220,19 @@ func TestGHPRCreateRefusesDuplicateIssuePullRequest(t *testing.T) {
 	if d := decide(t, h, dir, ownCmd, nil); d != nil && d.PermissionDecision == decisionDeny {
 		t.Fatalf("own-branch PR create should not be refused: %+v", d)
 	}
+	for _, bypassCmd := range []string{
+		`gh pr create --repo o/r --fill`,
+		`gh pr create --repo o/r --fill-first`,
+		`gh pr create --repo o/r --fill-verbose`,
+		`gh pr create --repo o/r -f`,
+		`gh pr create --repo o/r --web`,
+		`gh pr create --repo o/r --title "fix: issue 7"`,
+		`gh pr create --repo o/r --body "Closes https://github.com/o/r/issues/7"`,
+		`gh pr create --repo o/r --title "$UNRESOLVED_TITLE" --body "See https://github.com/o/r/issues/7"`,
+		`gh pr create --repo o/r --head "$UNRESOLVED_HEAD" --title "fix: issue 7" --body "Closes https://github.com/o/r/issues/7"`,
+	} {
+		if d := decide(t, h, dir, bypassCmd, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot inspect the body") {
+			t.Fatalf("bypass command %q should be refused as uninspectable, got %+v", bypassCmd, d)
+		}
+	}
 }

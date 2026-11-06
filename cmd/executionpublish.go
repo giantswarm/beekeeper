@@ -75,20 +75,44 @@ func executionBranch(ref execution.Ref) string {
 	return execution.GitHubBranch(ref)
 }
 
+func nonDefaultGitRef(raw string) string {
+	if g := strings.TrimSpace(raw); g != "" && g != workerGitHubHead && g != "main" && g != "master" && !publicationCommit(g) {
+		return g
+	}
+	return ""
+}
+
 func executionOwnedBranch(r *state.ExecutionRecord) string {
 	if r != nil {
-		if r.Request.GitHub {
-			return execution.GitHubBranch(r.Handle.Ref)
-		}
 		if r.Published != nil && r.Published.Branch != "" {
 			return r.Published.Branch
 		}
-		if g := strings.TrimSpace(r.Request.GitRef); g != "" && g != "HEAD" && g != "main" && g != "master" && !publicationCommit(g) {
+		if g := nonDefaultGitRef(r.Request.GitRef); g != "" {
 			return g
+		}
+		if r.Request.GitHub {
+			return execution.GitHubBranch(r.Handle.Ref)
 		}
 		return executionBranch(r.Handle.Ref)
 	}
 	return ""
+}
+
+func assignedExecutionReviewRound(st *state.State, ref execution.Ref) *state.DeskReview {
+	if st == nil {
+		return nil
+	}
+	_, i := executionRecord(st, ref)
+	if i < 0 || i >= len(st.Starts) {
+		return nil
+	}
+	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
+		candidate := &st.DeskReviews[n]
+		if sameReviewSession(candidate.Reviewer, st.Starts[i].Party) {
+			return candidate
+		}
+	}
+	return nil
 }
 func publicationCommit(s string) bool {
 	b, err := hex.DecodeString(s)
@@ -359,6 +383,10 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if p.SyncBase && (p.BundleDigest != "" || p.Title != "" || p.Body != "") {
 		return result, refused("base synchronization cannot publish a PR")
 	}
+	reviewRound := assignedExecutionReviewRound(st, ref)
+	if reviewRound != nil && (strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Body) != "") {
+		return result, refused("reviewers may push self-fix commits to the assigned pull request branch, not create or edit pull request metadata")
+	}
 	write := func() (context.Context, context.CancelFunc, error) {
 		if _, err := checkAuthority(st, ref); err != nil {
 			return nil, nil, err
@@ -524,13 +552,26 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, messages+"\n"+added.String()); reason != "" {
 			return result, refused("%s", reason)
 		}
+		if reviewRound != nil && result.Branch == executionBranch(r.Handle.Ref) {
+			if revPull, pullErr := readLoopPull(ctx, reviewRound.Ref); pullErr == nil && revPull.Branch != "" {
+				result.Branch = revPull.Branch
+			}
+		}
 		// Reconcile a lost create response by the exact owned branch. An existing
 		// PR takes only the title and body this publication names.
 		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
 		if listErr != nil {
 			return result, listErr
 		}
-		if len(pulls) == 1 && pulls[0].State != "OPEN" {
+		if reviewRound != nil {
+			if len(pulls) != 1 || pulls[0].State != github.Open {
+				return result, refused("reviewer publication requires the assigned open pull request")
+			}
+			if prRef, ok := parseRef(pulls[0].URL); !ok || !strings.EqualFold(refName(prRef), reviewRound.Ref) {
+				return result, refused("reviewer publication must target the assigned pull request")
+			}
+		}
+		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")
 		}
 		if len(pulls) == 0 && (strings.TrimSpace(p.Title) == "" || strings.TrimSpace(p.Body) == "") {
@@ -540,7 +581,11 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if len(pulls) == 0 {
 			absorbs = superloop.ParseAbsorbedPulls(r.Request.Repository+"#0", p.Title, p.Body)
 			if len(absorbs) > 0 {
-				p.Body = superloop.AppendClosingKeywords(r.Request.Repository+"#0", p.Body, absorbedClosingIssues(ctx, st, absorbs))
+				absorbedIssues, absorbErr := absorbedClosingIssues(ctx, st, absorbs)
+				if absorbErr != nil {
+					return result, absorbErr
+				}
+				p.Body = superloop.AppendClosingKeywords(r.Request.Repository+"#0", p.Body, absorbedIssues)
 			}
 			closing = superloop.ParseClosingIssues(r.Request.Repository+"#0", p.Title+"\n"+p.Body)
 			if len(closing) > 0 {

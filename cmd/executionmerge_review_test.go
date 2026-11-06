@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	installationA = "installation-a"
-	testReviewID  = "100"
+	installationA  = "installation-a"
+	testReviewID   = "100"
+	testReviewHost = "review-host"
 )
 
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
@@ -552,12 +553,12 @@ func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.DeskReviews = nil
 		start := &st.Starts[len(st.Starts)-1]
-		start.Host = "review-host"
+		start.Host = testReviewHost
 		start.Session = "remote-codex-review-session"
 		start.Harness = execution.HarnessCodex
 		record := *st.Starts[0].Execution
 		record.Handle.Ref.Execution = "independent-review-execution"
-		record.Handle.Ref.Host = "review-host"
+		record.Handle.Ref.Host = testReviewHost
 		record.Request.Harness = execution.HarnessCodex
 		record.Request.Ref = record.Handle.Ref
 		start.Execution = &record
@@ -629,5 +630,64 @@ func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T
 	use.ID = grant.ID
 	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
 		t.Fatalf("executionMergeLive on reviewer-fixed head failed: %v", err)
+	}
+}
+
+func TestReview3325RemoteReviewerAuthorBranchSelfFix(t *testing.T) {
+	a, use, _ := mergeReviewRig(t)
+	const authorBranch = "feat/author-branch-7"
+
+	rec := &state.ExecutionRecord{
+		Handle:  execution.Handle{Ref: use.Ref, Commit: use.Head},
+		Request: execution.StartRequest{GitHub: true, GitRef: authorBranch, Repository: use.Repository},
+	}
+	if got := executionOwnedBranch(rec); got != authorBranch {
+		t.Fatalf("executionOwnedBranch() = %q, want %q", got, authorBranch)
+	}
+	j := execution.Journal{
+		Handle:  rec.Handle,
+		Request: rec.Request,
+	}
+	if got := executionGitHubTargetBranch(j); got != authorBranch {
+		t.Fatalf("executionGitHubTargetBranch() = %q, want %q", got, authorBranch)
+	}
+	if err := execution.ValidateWorkerPush([]string{workerGitHubPush, workerGitHubOrigin, "HEAD:refs/heads/" + authorBranch}, executionGitHubTargetBranch(j)); err != nil {
+		t.Fatalf("ValidateWorkerPush on assigned PR branch failed: %v", err)
+	}
+
+	reviewerRef := execution.Ref{Host: testReviewHost, Execution: "review-exec-7", Generation: 1}
+	now := time.Now()
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		for i := range st.Starts {
+			if st.Starts[i].Name == superloop.ReviewerName(fmt.Sprintf("%s#%d", use.Repository, use.PR), 1) {
+				st.Starts[i].Execution = &state.ExecutionRecord{
+					Handle: execution.Handle{Ref: reviewerRef, Commit: use.Head},
+					Request: execution.StartRequest{
+						Ref:           reviewerRef,
+						Harness:       execution.HarnessCodex,
+						Repository:    use.Repository,
+						GitRef:        authorBranch,
+						LeaseRequired: true,
+					},
+					Lease: &execution.LeaseGrant{ExpiresAt: now.Add(time.Minute)},
+				}
+			}
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if round := assignedExecutionReviewRound(st, reviewerRef); round == nil {
+		t.Fatal("assignedExecutionReviewRound did not match assigned reviewer execution")
+	}
+	if _, err := a.publishExecutionWithMode(context.Background(), st, reviewerRef, executionPublication{
+		Head:  strings.Repeat("d", 40),
+		Title: "feat: attempt metadata change",
+	}, false); err == nil || !strings.Contains(err.Error(), "not create or edit pull request metadata") {
+		t.Fatalf("reviewer publication with --title should be refused, got %v", err)
 	}
 }

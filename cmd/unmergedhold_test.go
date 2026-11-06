@@ -257,6 +257,9 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 			if i == 7 {
 				body = "Closes https://github.com/o/r/issues/70"
 			}
+			if i == 8 {
+				body = "Closes https://github.com/o/r/issues/88"
+			}
 			pulls = append(pulls, unmergedPull{
 				Number:    i,
 				URL:       fmt.Sprintf("https://github.com/o/r/pull/%d", i),
@@ -267,23 +270,52 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 		return pulls, nil
 	}
 
-	// 1. Existing-PR fixer whose brief includes both the PR URL and served issue URL
-	// passes openPullStartGate on a clogged repo and does not self-conflict.
+	// Unauthenticated callers spoofing PullWorkerName(loopPR), citing someone else's
+	// parked PR, or passing a PR-only brief without an owned park or supervisor claim are refused.
 	fixerBrief := "Fix CI on https://github.com/o/r/pull/7\nServes: https://github.com/o/r/issues/70"
 	fixerIssues := briefIssues(fixerBrief)
+	if err := r.a.openPullStartGate(context.Background(), superloop.PullWorkerName(loopPR), fixerBrief, fixerIssues, false, false, false); err == nil {
+		t.Fatal("unauthenticated PullWorkerName start should be refused")
+	}
+	prOnlyBrief := "Fix review findings on https://github.com/o/r/pull/7"
+	prOnlyIssues := briefIssues(prOnlyBrief)
+	if err := r.a.openPullStartGate(context.Background(), "custom fixer", prOnlyBrief, prOnlyIssues, false, false, false); err == nil {
+		t.Fatal("unauthenticated PR-only brief should be refused")
+	}
+	if err := r.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.ReviewParks = append(st.ReviewParks, state.ReviewPark{
+			On:     loopPR,
+			Agent:  "custom fixer",
+			Serves: "o/r#70",
+		})
+		return []state.Event{
+			about(event(loopParty, loopClaimVerb, "[red %s@%s] %s", loopPR, loopHead, superloop.PullWorkerName(loopPR)), loopPR),
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.a.openPullStartGate(context.Background(), "unrelated worker", fixerBrief, fixerIssues, false, false, false); err == nil {
+		t.Fatal("unrelated worker citing another agent's parked PR should be refused")
+	}
+
+	// 1. Authenticated existing-PR fixer whose brief includes both the PR URL and served issue URL
+	// passes openPullStartGate on a clogged repo and does not self-conflict.
 	if err := r.a.openPullStartGate(context.Background(), superloop.PullWorkerName(loopPR), fixerBrief, fixerIssues, false, false, false); err != nil {
 		t.Fatalf("fixer start for existing PR with served issue failed: %v", err)
 	}
+	// Bundling an unrelated issue in the same clogged repo is still refused.
+	mixedBrief := "Fix CI on https://github.com/o/r/pull/7\n- https://github.com/o/r/issues/70\n- https://github.com/o/r/issues/71"
+	if err := r.a.openPullStartGate(context.Background(), superloop.PullWorkerName(loopPR), mixedBrief, briefIssues(mixedBrief), false, false, false); err == nil {
+		t.Fatal("fixer brief bundling unrelated issue o/r#71 should be refused by unmerged hold")
+	}
 
-	// 2. PR-only repair brief (where briefIssues falls back to o/r#7) also passes.
-	prOnlyBrief := "Fix review findings on https://github.com/o/r/pull/7"
-	prOnlyIssues := briefIssues(prOnlyBrief)
+	// 2. Authenticated PR-only repair brief (where custom fixer owns ReviewPark on o/r#7) passes.
 	if err := r.a.openPullStartGate(context.Background(), "custom fixer", prOnlyBrief, prOnlyIssues, false, false, false); err != nil {
 		t.Fatalf("PR-only repair brief failed: %v", err)
 	}
 
 	// 3. Named incident repair (--incident --except o/r#88) passes skipUnmergedBacklog,
-	// l.unmergedStart, and openPullStartGate even while o/r has 10 unmerged PRs.
+	// l.unmergedStart, and openPullStartGate even while o/r has 10 unmerged PRs and an open PR for #88.
 	const (
 		incidentRef = "o/r#88"
 		incidentURL = "https://github.com/o/r/issues/88"
@@ -327,6 +359,9 @@ func TestExistingPullFixerAndIncidentRepairBypassUnmergedBacklogAndSelfDuplicate
 	}
 	if err := r.a.openPullStartGate(context.Background(), "r 88", incidentURL, []string{incidentRef}, false, false, false); err != nil {
 		t.Fatalf("openPullStartGate for named incident repair = %v, want nil", err)
+	}
+	if err := r.a.openPullStartGate(context.Background(), "r 88", incidentURL+"\nhttps://github.com/o/r/issues/89", []string{incidentRef, "o/r#89"}, false, false, false); err == nil {
+		t.Fatal("incident repair bundled with non-exempt issue o/r#89 should be refused")
 	}
 }
 
@@ -492,5 +527,49 @@ func TestServingWorkClaimsWorkerCreatedIssues(t *testing.T) {
 	sw := servingWork(st, sessions, work, now.Add(-time.Hour))
 	if len(sw) != 1 || !slices.Contains(sw[0].refs, "o/r#321") {
 		t.Fatalf("servingWork did not include created issue o/r#321: %+v", sw)
+	}
+}
+
+func TestReview3325PaginationStalls(t *testing.T) {
+	r := newLoopRig(t)
+	now := r.a.timeNow()
+	const (
+		issueRef = "o/r#55"
+		issueURL = "https://github.com/o/r/issues/55"
+	)
+	sameTS := now.Add(-200 * time.Hour).UTC().Format(time.RFC3339)
+	var fullSameTSPage strings.Builder
+	fullSameTSPage.WriteByte('[')
+	for i := 1; i <= 100; i++ {
+		if i > 1 {
+			fullSameTSPage.WriteByte(',')
+		}
+		fmt.Fprintf(&fullSameTSPage, `{"number":%d,"url":"https://github.com/o/r/pull/%d","state":"OPEN","createdAt":%q,"headRefName":"worker-%d","body":""}`, i, i, sameTS, i)
+	}
+	fullSameTSPage.WriteByte(']')
+
+	// Even when 100 open PRs share the exact same createdAt timestamp and PR #140
+	// shares that timestamp (so created:<= and created:< cannot reach it),
+	// findOpenPullClosingIssues falls back to per-issue search "draft:false 55".
+	unmergedGH = func(_ context.Context, args ...string) ([]byte, error) {
+		cmdLine := strings.Join(args, " ")
+		if strings.Contains(cmdLine, "draft:false 55") {
+			return []byte(fmt.Sprintf(`[{"number":140,"url":"https://github.com/o/r/pull/140","state":"OPEN","createdAt":%q,"headRefName":"worker-140","body":"Closes %s"}]`,
+				sameTS, issueURL)), nil
+		}
+		if strings.Contains(cmdLine, "created:<") && !strings.Contains(cmdLine, "created:<=") {
+			return []byte(`[]`), nil
+		}
+		return []byte(fullSameTSPage.String()), nil
+	}
+	readRepoOpenPulls = func(ctx context.Context, targetRepo string) ([]unmergedPull, error) {
+		return readRepoOpenPullsWithGH(ctx, unmergedGH, targetRepo)
+	}
+
+	if err := r.a.openPullStartGate(context.Background(), "r 55", issueURL, []string{issueRef}, false, false, false); err == nil || !strings.Contains(err.Error(), "https://github.com/o/r/pull/140") {
+		t.Fatalf("openPullStartGate did not find duplicate PR #140 when 100 open PRs share one timestamp: %v", err)
+	}
+	if reason := r.a.hookPRCreate("sess-1", repo, "branch-dup", "fix: issue 55", "Closes "+issueURL); !strings.Contains(reason, "https://github.com/o/r/pull/140") {
+		t.Fatalf("hookPRCreate did not refuse duplicate PR #140 when 100 open PRs share one timestamp: %q", reason)
 	}
 }

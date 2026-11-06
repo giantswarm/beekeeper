@@ -84,8 +84,16 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 			all = append(all, p)
 			added++
 		}
-		if len(page) < unmergedPullPageLimit || added == 0 || oldest.IsZero() {
+		if len(page) < unmergedPullPageLimit || oldest.IsZero() {
 			break
+		}
+		if added == 0 {
+			strictSearch := "draft:false created:<" + oldest.UTC().Format(time.RFC3339)
+			if search == strictSearch {
+				break
+			}
+			search = strictSearch
+			continue
 		}
 		search = "draft:false created:<=" + oldest.UTC().Format(time.RFC3339)
 	}
@@ -99,23 +107,13 @@ var readRepoOpenPulls = func(ctx context.Context, repo string) ([]unmergedPull, 
 }
 
 // findOpenPullClosingIssues checks pulls for an open non-draft pull request
-// closing any of closingIssues, and when pulls hit the single-page limit
-// without timestamps to paginate, queries gh per issue number.
+// closing any of closingIssues, and when pulls hit the single-page limit,
+// queries gh per issue number so timestamp ties cannot hide an older open PR.
 func findOpenPullClosingIssues(ctx context.Context, gh github.GH, repo string, pulls []unmergedPull, ownBranch string, closingIssues, absorbedPulls []string) (issue, prURL string, err error) {
 	if matched, url := openPullClosingIssue(repo, pulls, ownBranch, closingIssues, absorbedPulls); matched != "" {
 		return matched, url, nil
 	}
 	if len(pulls) < unmergedPullPageLimit || gh == nil {
-		return "", "", nil
-	}
-	hasTimestamps := true
-	for _, p := range pulls {
-		if p.CreatedAt.IsZero() {
-			hasTimestamps = false
-			break
-		}
-	}
-	if hasTimestamps {
 		return "", "", nil
 	}
 	for _, want := range closingIssues {
@@ -208,36 +206,66 @@ func incidentExempt(st *state.State, now time.Time, refs ...string) bool {
 	return false
 }
 
-// isTrackedRepairPull reports whether prRef is an existing pull request on
-// the desk or whether agent name is an authenticated fixer/continuation for it.
+// isTrackedRepairPull reports whether agent name is an authenticated parked
+// owner of prRef on the desk.
 func isTrackedRepairPull(st *state.State, name, prRef string) bool {
-	if strings.EqualFold(name, superloop.PullWorkerName(prRef)) {
-		return true
-	}
-	if st == nil {
+	if st == nil || name == "" || prRef == "" {
 		return false
 	}
-	if _, ok := st.ReviewParkFor(prRef); ok {
+	if rp, ok := st.ReviewParkFor(prRef); ok && strings.EqualFold(rp.Agent, name) {
 		return true
 	}
-	if slices.ContainsFunc(st.Parks, func(p state.Park) bool { return strings.EqualFold(p.On, prRef) }) {
-		return true
-	}
-	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-		return (ag.Park != nil && strings.EqualFold(ag.Park.On, prRef)) ||
-			(strings.EqualFold(ag.Name, name) && (ag.Task != "" || ag.Park != nil))
+	if slices.ContainsFunc(st.Parks, func(p state.Park) bool {
+		return strings.EqualFold(p.On, prRef) && strings.EqualFold(p.By.Name, name)
 	}) {
 		return true
 	}
-	return false
+	return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+		return strings.EqualFold(ag.Name, name) && ag.Park != nil && strings.EqualFold(ag.Park.On, prRef)
+	})
 }
 
-// startGateExemptions determines which repositories and pull requests are
+func servedIssuesForPull(st *state.State, prRef string) []string {
+	if st == nil || prRef == "" {
+		return nil
+	}
+	var out []string
+	add := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok || strings.EqualFold(refName(r), prRef) {
+			return
+		}
+		ref := refName(r)
+		if !slices.ContainsFunc(out, func(e string) bool { return strings.EqualFold(e, ref) }) {
+			out = append(out, ref)
+		}
+	}
+	if rp, ok := st.ReviewParkFor(prRef); ok && rp.Serves != "" {
+		add(rp.Serves)
+	}
+	for _, ag := range st.Agents {
+		if ag.Park != nil && strings.EqualFold(ag.Park.On, prRef) {
+			if s := cmp.Or(loopServes(st, ag), loopTaskServes(ag, prRef)); s != "" {
+				add(s)
+			}
+		}
+	}
+	return out
+}
+
+// startGateExemptions determines which specific targets and pull requests are
 // exempt from the unmerged-backlog hold and self-duplicate PR refusal because
 // the start is the named incident repair or an authenticated repair/fixer
 // continuation of an existing open pull request.
-func (a *app) startGateExemptions(name, brief string, issues []string, now time.Time) (exemptRepos map[string]bool, exemptPulls []string) {
-	exemptRepos = map[string]bool{}
+func (a *app) startGateExemptions(name, brief string, issues []string, now time.Time) (exemptTargets map[string]bool, repairPulls, exemptPulls []string) {
+	exemptTargets = map[string]bool{}
+	addExemptTarget := func(raw string) {
+		r, ok := parseRef(raw)
+		if !ok {
+			return
+		}
+		exemptTargets[strings.ToLower(refName(r))] = true
+	}
 	addPull := func(raw string) {
 		r, ok := parseRef(raw)
 		if !ok {
@@ -248,18 +276,27 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 			exemptPulls = append(exemptPulls, ref)
 		}
 	}
+	var st *state.State
+	if a.store != nil {
+		st, _ = a.store.Read()
+	}
 	addRepairPull := func(raw string) {
 		r, ok := parseRef(raw)
 		if !ok {
 			return
 		}
-		exemptRepos[strings.ToLower(r.Repo)] = true
-		addPull(raw)
+		ref := refName(r)
+		addExemptTarget(ref)
+		addPull(ref)
+		if !slices.ContainsFunc(repairPulls, func(e string) bool { return strings.EqualFold(e, ref) }) {
+			repairPulls = append(repairPulls, ref)
+		}
+		for _, served := range servedIssuesForPull(st, ref) {
+			addExemptTarget(served)
+		}
 	}
 
-	var st *state.State
 	if a.store != nil {
-		st, _ = a.store.Read()
 		if evs, err := a.store.Events(0, func(e state.Event) bool {
 			return e.By.Name == loopParty.Name && (e.Verb == loopClaimVerb || e.Verb == loopClaimEndVerb)
 		}); err == nil {
@@ -279,37 +316,21 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 				}
 				if !strings.HasPrefix(key, "next") && !strings.HasPrefix(key, "fill ") && !strings.HasPrefix(key, "review ") {
 					addRepairPull(e.Subject)
-					for _, iss := range issues {
-						if ir, ok := parseRef(iss); ok {
-							exemptRepos[strings.ToLower(ir.Repo)] = true
-						}
-					}
 				}
 			}
 		}
 	}
 
 	pullsInBrief := briefPulls(brief)
-	hasIssueURL := briefIssueURL.MatchString(brief)
 	allRefs := append(slices.Clone(issues), pullsInBrief...)
-	if incidentExempt(st, now, allRefs...) {
-		for _, ref := range allRefs {
-			if r, ok := parseRef(ref); ok {
-				exemptRepos[strings.ToLower(r.Repo)] = true
-			}
-		}
-		for _, pr := range pullsInBrief {
-			addRepairPull(pr)
+	for _, ref := range allRefs {
+		if incidentExempt(st, now, ref) {
+			addRepairPull(ref)
 		}
 	}
 	for _, pr := range pullsInBrief {
-		if !hasIssueURL || isTrackedRepairPull(st, name, pr) {
+		if isTrackedRepairPull(st, name, pr) {
 			addRepairPull(pr)
-			for _, iss := range issues {
-				if ir, ok := parseRef(iss); ok {
-					exemptRepos[strings.ToLower(ir.Repo)] = true
-				}
-			}
 		}
 	}
 	for _, iss := range issues {
@@ -319,7 +340,7 @@ func (a *app) startGateExemptions(name, brief string, issues []string, now time.
 			}
 		}
 	}
-	return exemptRepos, exemptPulls
+	return exemptTargets, repairPulls, exemptPulls
 }
 
 // openPullStartGate refuses an implementation worker start when the target
@@ -331,17 +352,20 @@ func (a *app) openPullStartGate(ctx context.Context, name, brief string, issues 
 	}
 	limit, window := a.unmergedPolicy()
 	now := a.timeNow()
-	exemptRepos, exemptPulls := a.startGateExemptions(name, brief, issues, now)
+	exemptTargets, repairPulls, exemptPulls := a.startGateExemptions(name, brief, issues, now)
 	byRepo := map[string][]unmergedPull{}
+	checkedHold := map[string]bool{}
 	for _, issue := range issues {
 		r, ok := parseRef(issue)
 		if !ok {
 			continue
 		}
 		target := refName(r)
+		targetKey := strings.ToLower(target)
 		key := strings.ToLower(r.Repo)
+		isExemptTarget := exemptTargets[targetKey]
 		skipDup := slices.ContainsFunc(exemptPulls, func(p string) bool { return strings.EqualFold(p, target) })
-		if exemptRepos[key] && skipDup {
+		if isExemptTarget && skipDup {
 			continue
 		}
 		pulls, seen := byRepo[key]
@@ -358,14 +382,32 @@ func (a *app) openPullStartGate(ctx context.Context, name, brief string, issues 
 				continue
 			}
 			byRepo[key] = pulls
-			if !exemptRepos[key] {
-				if why := unmergedHoldReason(r.Repo, recentUnmergedPulls(r.Repo, pulls, now, window), limit, window); why != "" {
-					if !force {
-						return refused("%s; --force starts anyway", why)
-					}
-					if dryRun {
-						_, _ = fmt.Fprintf(a.out, "dry run over %s (--force)\n", why)
-					}
+		}
+		if !isExemptTarget && len(repairPulls) > 0 {
+			var authorizedPulls []unmergedPull
+			for _, p := range pulls {
+				prRef := ""
+				if p.Number > 0 {
+					prRef = fmt.Sprintf("%s#%d", r.Repo, p.Number)
+				} else if pr, ok := parseRef(p.URL); ok {
+					prRef = refName(pr)
+				}
+				if prRef != "" && slices.ContainsFunc(repairPulls, func(rp string) bool { return strings.EqualFold(rp, prRef) }) {
+					authorizedPulls = append(authorizedPulls, p)
+				}
+			}
+			if matched, _ := openPullClosingIssue(r.Repo, authorizedPulls, "", []string{target}, nil); matched != "" {
+				isExemptTarget = true
+			}
+		}
+		if !isExemptTarget && !checkedHold[key] {
+			checkedHold[key] = true
+			if why := unmergedHoldReason(r.Repo, recentUnmergedPulls(r.Repo, pulls, now, window), limit, window); why != "" {
+				if !force {
+					return refused("%s; --force starts anyway", why)
+				}
+				if dryRun {
+					_, _ = fmt.Fprintf(a.out, "dry run over %s (--force)\n", why)
 				}
 			}
 		}
