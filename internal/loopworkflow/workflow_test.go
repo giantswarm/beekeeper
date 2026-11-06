@@ -250,7 +250,7 @@ func runWorkflow(t *testing.T, binary, scenario string) {
 		// Force bypasses incidental runner capacity; it cannot manufacture a
 		// registration when production cannot launch a worker.
 		write("worker.md", "Perform fixture maintenance.\n")
-		start := exec.CommandContext(ctx, binary, "--as", "fixture-supervisor", "agents", "start", "fixture-worker", filepath.Join(dir, "worker.md"), "--harness", "codex", "--model", "fixture-model", "--force", "--dir", filepath.Join(dir, "server"))
+		start := exec.CommandContext(ctx, binary, "--as", "fixture-supervisor", "agents", "start", "fixture-worker", filepath.Join(dir, "worker.md"), "--branch", "fixture-task", "--harness", "codex", "--model", "fixture-model", "--force", "--dir", filepath.Join(dir, "server"))
 		start.Env = env
 		start.Dir = dir
 		started, startErr := start.CombinedOutput()
