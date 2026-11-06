@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/envtestassets"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
@@ -306,6 +307,13 @@ machine's files stay untouched.`,
 					}
 					return nil
 				}
+			}
+			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
+			if err != nil {
+				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
+			}
+			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				return err
 			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {

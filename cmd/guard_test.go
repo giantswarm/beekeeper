@@ -247,6 +247,7 @@ func capped(t *testing.T) (state string, env []string) {
 	}
 	state = t.TempDir()
 	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(state, "config.yaml")),
+		"KUBEBUILDER_ASSETS=/test/envtest-assets",
 		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
@@ -294,6 +295,15 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 		t.Fatal(err)
 	}
 	return o.D.UpdatedInput.Command
+}
+
+// The command inherits the caller's explicit envtest assets unchanged.
+func TestRunExportsEnvtestAssets(t *testing.T) {
+	_, env := capped(t)
+	out, errOut, rc := zsh(t, env, rewrite(t, `printf '%s' "$KUBEBUILDER_ASSETS"; if false; then go test; fi`))
+	if rc != 0 || out != "/test/envtest-assets" {
+		t.Fatalf("rc %d, stdout %q, stderr %q", rc, out, errOut)
+	}
 }
 
 func TestRunKeepsTheCallersShellSemantics(t *testing.T) {

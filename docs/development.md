@@ -924,6 +924,18 @@ wakes and handovers; no user settings file is changed.
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
 
+### Envtest assets for local runs
+
+`beekeeper run --local -- go test ./path/to/package` automatically provisions
+Kubernetes 1.37.0 envtest binaries using `setup-envtest` (release-0.25) into
+`<stateDir>/envtest` and exports `KUBEBUILDER_ASSETS` to the command. Local
+runs reuse the cached binaries; concurrent first runs share a setup lock.
+An explicit `KUBEBUILDER_ASSETS` takes precedence. First-time setup requires
+Go and network access; failures stop the run with a setup error. Commands
+that only print help or a version, and trivial commands, skip provisioning.
+Remote builder images must supply their own envtest assets and environment;
+use `--local` for tests that need the managed assets.
+
 ## Supervisor workflow regression
 
 Issue #2255's `test-loop-workflow` CircleCI job runs on every branch and PR,
