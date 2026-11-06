@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
+const searchSandbox = "sandbox"
+
 func sandboxHook(t *testing.T) (Hook, string) {
 	t.Helper()
 	home := testHome(t)
@@ -64,6 +66,95 @@ func TestSandboxHoldsFileTools(t *testing.T) {
 	}
 }
 
+// Both hook entry points must confine recursive tools without relying on a
+// later Read call. All fixture contents are public canaries.
+func TestSandboxRecursiveSearchConfinement(t *testing.T) {
+	h, home := sandboxHook(t)
+	base := filepath.Dir(home)
+	runtime := filepath.Join(base, "runtime", "user")
+	state := filepath.Join(home, ".local/state/beekeeper")
+	scan := filepath.Join(state, "scan")
+	checkout := filepath.Join(home, "projects/repo")
+	h.Sandbox.Runtime = runtime
+	h.Sandbox.Deny = []string{scan}
+	for _, dir := range []string{runtime, scan, checkout, filepath.Join(home, ".private")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "canary.txt"), []byte("public search canary"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range []string{"normal", searchSandbox} {
+		t.Run(entry, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, root string
+				deny       bool
+			}{
+				{"above-home", base, true},
+				{"above-runtime", filepath.Dir(runtime), true},
+				{"state-deny-child", state, true},
+				{"checkout", checkout, false},
+				{"default-checkout", "", false},
+			} {
+				for _, tool := range []string{grepTool, globTool, "absolute-glob"} {
+					t.Run(tc.name+"/"+tool, func(t *testing.T) {
+						input := map[string]any{pathKey: tc.root, patternKey: "canary"}
+						if tool == globTool {
+							input[patternKey] = "**/*"
+						}
+						toolName := tool
+						if tool == "absolute-glob" {
+							toolName = globTool
+							root := tc.root
+							if root == "" {
+								root = checkout
+							}
+							input = map[string]any{patternKey: filepath.Join(root, "**/*")}
+						}
+						ev := toolEvent(toolName, input)
+						ev["cwd"] = checkout
+						raw, err := json.Marshal(ev)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var out []byte
+						if entry == searchSandbox {
+							out = h.DecideSandbox(raw)
+						} else {
+							out = h.Decide(raw)
+						}
+						if denied := strings.Contains(string(out), `"permissionDecision":"deny"`); denied != tc.deny {
+							t.Fatalf("denied = %v, want %v: %s", denied, tc.deny, out)
+						}
+					})
+				}
+			}
+			for _, tc := range []struct {
+				path string
+				deny bool
+			}{
+				{filepath.Join(state, "public.txt"), false},
+				{filepath.Join(checkout, "canary.txt"), false},
+				{filepath.Join(scan, "canary.txt"), true},
+			} {
+				ev := toolEvent(readTool, map[string]any{filePathKey: tc.path})
+				ev["cwd"] = checkout
+				raw, _ := json.Marshal(ev)
+				var out []byte
+				if entry == searchSandbox {
+					out = h.DecideSandbox(raw)
+				} else {
+					out = h.Decide(raw)
+				}
+				if denied := strings.Contains(string(out), `"permissionDecision":"deny"`); denied != tc.deny {
+					t.Fatalf("single-file read denied = %v, want %v: %s", denied, tc.deny, out)
+				}
+			}
+		})
+	}
+}
+
 func TestNoSandboxPassesFileTools(t *testing.T) {
 	ev := toolEvent(readTool, map[string]any{filePathKey: "/home/u/.kube/config"})
 	if d := decideEvent(t, hook(), ev); d != nil {
@@ -110,7 +201,7 @@ func testHome(t *testing.T) string {
 func TestLabProxyRefreshesHeldLabs(t *testing.T) {
 	h, home := sandboxHook(t)
 	h.Labs = func() []lease.Holder {
-		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+		return []lease.Holder{{Env: "lab-b", Session: "s7"}, {Env: "lab-a", HostSession: "local_s7"}, {Env: "lab-c", Session: litOther}}
 	}
 	refresh := self + " lease kubeconfig --refresh lab-a lab-b >/dev/null 2>&1; "
 	run := func(h Hook, session, cmd string) *decision {
@@ -143,7 +234,7 @@ func TestFreshLabsBeforeAHoldersCommand(t *testing.T) {
 	var got [][]string
 	h := hook()
 	h.Labs = func() []lease.Holder {
-		return []lease.Holder{{Env: labB, Session: "s7"}, {Env: labA, HostSession: "local_s7"}, {Env: "lab-c", Session: "other"}}
+		return []lease.Holder{{Env: labB, Session: "s7"}, {Env: labA, HostSession: "local_s7"}, {Env: "lab-c", Session: litOther}}
 	}
 	h.FreshLabs = func(labs []string) { got = append(got, labs) }
 	run := func(tool, session string) {

@@ -21,6 +21,9 @@ import (
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 )
 
+// sshTool is the program the remote copy runs.
+const sshTool = "ssh"
+
 const (
 	remoteHost  = "host.example"
 	remoteOwner = "app:app"
@@ -41,7 +44,7 @@ func remoteOps(t *testing.T, calls *[]sshCall, fail error) *secret.Ops {
 	tools := secrettest.New(map[string]string{vaultRef: token})
 	o := ops(tools)
 	o.Run = func(ctx context.Context, dir string, env []string, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if name != "ssh" {
+		if name != sshTool {
 			return tools.Run(ctx, dir, env, stdin, name, args...)
 		}
 		in, _ := io.ReadAll(stdin)
@@ -98,6 +101,7 @@ func TestRemoteFileCheck(t *testing.T) {
 	f, _ := secret.ParseRemoteFile(remoteSpec)
 	for _, ok := range []secret.RemoteFile{
 		{}, {Mode: "0640", Owner: remoteOwner}, {Mode: "600", Owner: "1000:1000"},
+		{Owner: "app:0"}, {Owner: "0:app"}, {Owner: "app"}, {Owner: "0"},
 		{Template: "URL=https://api.example/push\nTOKEN={{value}}\n"},
 	} {
 		g := f
@@ -108,6 +112,7 @@ func TestRemoteFileCheck(t *testing.T) {
 	}
 	for _, bad := range []secret.RemoteFile{
 		{Mode: "0800"}, {Mode: "u+rw"}, {Mode: "0600; id"},
+		{Owner: "app:"}, {Owner: ":app"}, {Owner: "app:-1"}, {Owner: "0:app;id"},
 		{Owner: "app:app:x"}, {Owner: "app;id"}, {Owner: "-R"},
 		{Template: "no placeholder"}, {Template: "{{value}}{{value}}"},
 		{Template: "OTHER=" + "ghp_" + strings.Repeat("a1B2", 9) + "\nTOKEN={{value}}"},
@@ -143,7 +148,7 @@ func TestCopyToRemoteValueOnStdinAlone(t *testing.T) {
 	if strings.Contains(argv, token) {
 		t.Errorf("the value is on ssh's command line: %q", c.argv)
 	}
-	want := []string{"ssh", "-T", "-o", "BatchMode=yes", "--", remoteHost}
+	want := []string{sshTool, "-T", "-o", "BatchMode=yes", "--", remoteHost}
 	if !slices.Equal(c.argv[:len(want)], want) || len(c.argv) != len(want)+1 {
 		t.Errorf("argv %q, want %q and the script", c.argv, want)
 	}
@@ -205,6 +210,33 @@ func TestCopyToRemoteRefusesBeforeSSH(t *testing.T) {
 		}
 		if len(calls) != 0 {
 			t.Errorf("%s: ssh ran: %+v", name, calls)
+		}
+	}
+}
+
+func TestCopyToRemoteRejectsBlankBeforeEncoding(t *testing.T) {
+	f, err := secret.ParseRemoteFile(remoteSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, enc := range []secret.Encoding{{Base64: true}, {Base64: true, User: "example"}} {
+		for _, blank := range []string{"", " \n", "\t"} {
+			var calls []sshCall
+			o := remoteOps(t, &calls, nil)
+			o.Encode = enc
+			run := o.Run
+			o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+				if name == "op" {
+					return []byte(blank), nil
+				}
+				return run(ctx, dir, env, in, name, args...)
+			}
+			if _, err := o.CopyToRemote(context.Background(), secret.Ref{Op: vaultRef}, f); !errors.Is(err, secret.ErrEmptyValue) {
+				t.Errorf("blank source in %s: %v, want ErrEmptyValue", enc, err)
+			}
+			if len(calls) != 0 {
+				t.Errorf("blank source in %s reached ssh", enc)
+			}
 		}
 	}
 }
@@ -373,10 +405,11 @@ func TestRemoteScriptHangupCleansUp(t *testing.T) {
 	if err := syscall.Kill(-c.Process.Pid, syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
+	// Closing the connection also ends cat if SIGHUP was inherited as ignored.
+	_ = in.Close()
 	if err := c.Wait(); err == nil {
 		t.Error("a hangup exits 0")
 	}
-	_ = in.Close()
 	if l := leftovers(t, dir, "token"); l != nil {
 		t.Errorf("a hangup left %v", l)
 	}
@@ -444,4 +477,63 @@ func TestStoreSourceToRemoteUsesStdinOnly(t *testing.T) {
 		t.Fatal("remote value was not confined to stdin")
 	}
 	noValue(t, "store remote result", res)
+}
+
+// Exercise the real runner so the SSH status survives its error formatting.
+func TestCopyToRemoteConnectionFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, sshTool), []byte("#!/bin/sh\ncat >&2\nexit 255\n"), 0o700); err != nil { //nolint:gosec // an executable test ssh
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var calls []sshCall
+	o := remoteOps(t, &calls, nil)
+	next := o.Run
+	o.Run = func(ctx context.Context, dir string, env []string, in io.Reader, name string, args ...string) ([]byte, error) {
+		if name == sshTool {
+			return secret.Exec(ctx, dir, env, in, name, args...)
+		}
+		return next(ctx, dir, env, in, name, args...)
+	}
+	f, _ := secret.ParseRemoteFile(remoteSpec)
+	_, err := o.CopyToRemote(context.Background(), secret.Ref{Op: vaultRef}, f)
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, want := range []string{"target state unknown", "secret fingerprint"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "target kept") {
+		t.Errorf("unsafe error: %v", err)
+	}
+}
+
+func TestRemoteScriptReplacesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	referent := filepath.Join(dir, "original")
+	target := filepath.Join(dir, "link")
+	if err := os.WriteFile(referent, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(referent, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := runScript(t, secret.RemoteFile{Path: target}, len(token), token); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatal("target is not a regular file")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != token { //nolint:gosec // the test's scratch file
+		t.Fatal("target content differs")
+	}
+	if got, err := os.ReadFile(referent); err != nil || string(got) != "original" { //nolint:gosec // the test's scratch file
+		t.Fatal("referent changed")
+	}
 }

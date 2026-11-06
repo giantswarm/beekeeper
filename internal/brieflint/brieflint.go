@@ -38,9 +38,11 @@ const versionRe = `v\d+\.\d+(\.\d+)?`
 var rules = []rule{
 	{"date", "a dated line: say what holds now, the date belongs in the log",
 		// A date on its own, not one inside a file name or a version.
-		regexp.MustCompile(`(^|[\s(\[])(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])($|[\s).,;:\]])`)},
+		// A period is punctuation only when it does not introduce an extension.
+		regexp.MustCompile(`(^|[\s(\[])(19|20)\d\d-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])($|[\s),;:\]]|\.($|[^\pL\pM\pN_-]))`)},
 	{"until-ships", `a wait on something to ship: say what to do now, and change the line when it ships`,
-		regexp.MustCompile(`(?i)\buntil\b[^.;\n]{1,120}?\b(ships|shipped|lands|landed|merges|is merged|is released|is fixed|is installed|is out|is live|goes live)\b`)},
+		// A period before a word character belongs to a version or dotted name.
+		regexp.MustCompile(`(?i)\buntil\b(?:[^.;\n]|\.\b){1,120}?\b(ships|shipped|lands|landed|merges|is merged|is released|is fixed|is installed|is out|is live|goes live)\b`)},
 	{"fixed-in", "a note on the release that changed something: describe the behaviour, not its history",
 		regexp.MustCompile(`(?i)\(\s*(beekeeper |devctl )?` + versionRe + `\s*:|\b(since|as of|starting with|fixed in) (beekeeper |devctl )?` + versionRe)},
 	{"workaround", "a workaround: once the fix ships the line is wrong; describe the way that works",
@@ -62,8 +64,6 @@ var (
 	// fence opens a fenced code block; its info string names the language.
 	fence      = regexp.MustCompile("^\\s*(```+|~~~+)\\s*([A-Za-z]*)\\s*(.*)$")
 	fenceClose = regexp.MustCompile("^\\s*(```+|~~~+)\\s*$")
-	// codeSpan is one inline code span.
-	codeSpan = regexp.MustCompile("`+[^`]+`+")
 	// placeholder is a <word> to fill in, which closes with > and is no redirect.
 	placeholder = regexp.MustCompile(`<[^<>\s][^<>]*[^<>\s]>|<[^<>\s]>`)
 	// redirect is a > into a target: not >>, >|, >&, >=, -> or =>.
@@ -97,6 +97,8 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	text := string(raw)
 	here := post.SingleRepo(text)
 	unlinked := post.UnlinkedLines(text, here)
+	inline := post.InlineCodeRanges(text)
+	offset := 0
 	var out []Finding
 	var inFence, shellFence bool
 	var fenceMark string
@@ -104,6 +106,12 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		line := sc.Text()
+		lineStart := offset
+		if nl := strings.IndexByte(text[offset:], '\n'); nl >= 0 {
+			offset += nl + 1
+		} else {
+			offset = len(text)
+		}
 		add := func(rule, why string) {
 			out = append(out, Finding{Path: name, Line: n, Rule: rule, Why: why, Text: strings.TrimSpace(line)})
 		}
@@ -128,7 +136,18 @@ func Lint(name string, r io.Reader) ([]Finding, error) {
 		case inFence && shellFence:
 			code = line
 		case !inFence:
-			code = strings.Join(codeSpan.FindAllString(line, -1), " ")
+			// Intersect document-wide spans with this original source line.
+			for len(inline) > 0 && inline[0][1] <= lineStart {
+				inline = inline[1:]
+			}
+			var parts []string
+			for _, span := range inline {
+				if span[0] >= lineStart+len(line) {
+					break
+				}
+				parts = append(parts, text[max(span[0], lineStart):min(span[1], lineStart+len(line))])
+			}
+			code = strings.Join(parts, " ")
 		}
 		if clobbers(code) {
 			add(clobberRule, clobberWhy)

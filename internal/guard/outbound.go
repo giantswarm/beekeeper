@@ -326,7 +326,7 @@ func outbound(words []string, cwd string) (sends, bool) {
 	}
 	name, args := path.Base(words[k]), words[k+1:]
 	switch name {
-	case "gh", "devctl":
+	case "gh", litDevctl:
 		return sends{what: strings.Join(words[k:min(len(words), k+3)], " "), dir: cwd, files: sentFiles(args)}, true
 	case "curl", "wget", "http", "https", "xh":
 		// Only the body: a header or URL carries the client's own credential
@@ -381,7 +381,7 @@ func sentFiles(args []string) []string {
 }
 
 // gitValue are git's global options that take a value.
-var gitValue = map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true}
+var gitValue = map[string]bool{"-C": true, "-c": true, litGitDir: true, litWorkTree: true, "--namespace": true}
 
 // gitSends: a commit (its message), a tag, a remote's URL, a push (the
 // commits it publishes).
