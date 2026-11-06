@@ -11,6 +11,11 @@ import (
 	"unicode"
 )
 
+const (
+	upstreamAPIHost = "api.github.com"
+	upstreamGitHost = "github.com"
+)
+
 // githubWrite checks the actual request before any broker token is attached.
 // Unknown write targets fail closed; GraphQL mutations identify their targets
 // by opaque node IDs, so clients must use the owner-scoped REST endpoints.
@@ -22,7 +27,7 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 		return fmt.Errorf("write refused: target must belong to github.allowedOrgs (%s); use an owner-scoped REST endpoint for mutations", strings.Join(e.AllowedOrgs, ", "))
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if host == "api.github.com" && len(parts) == 1 && parts[0] == "graphql" {
+	if host == upstreamAPIHost && len(parts) == 1 && parts[0] == "graphql" {
 		// Check even GET: a query string must not smuggle a mutation.
 		query := r.URL.Query().Get("query")
 		if r.Method == http.MethodPost {
@@ -63,7 +68,7 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 	}
 	owner := ""
 	switch host {
-	case "api.github.com", "uploads.github.com":
+	case upstreamAPIHost, "uploads.github.com":
 		if len(parts) >= 2 && (parts[0] == "repos" || parts[0] == "orgs") {
 			owner = parts[1]
 		}
@@ -71,7 +76,7 @@ func (e *Egress) githubWrite(r *http.Request, host string) error {
 		if r.Method == http.MethodPost && (r.URL.Path == "/markdown" || r.URL.Path == "/markdown/raw") {
 			return nil
 		}
-	case "github.com":
+	case upstreamGitHost:
 		// Git's smart HTTP protocol uses POST for both fetch and push.
 		if len(parts) == 3 && parts[2] == "git-upload-pack" {
 			return nil

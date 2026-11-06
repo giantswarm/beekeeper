@@ -6,8 +6,8 @@ import (
 )
 
 func TestUpstreamRepoShortFlagClusters(t *testing.T) {
-	u := Upstream{Orgs: []string{"giantswarm"}, Git: fakeGit, Getenv: func(string) string { return "" }}
-	for _, owner := range []string{"giantswarm", "outside"} {
+	u := Upstream{Orgs: []string{allowedOrg}, Git: fakeGit, Getenv: func(string) string { return "" }}
+	for _, owner := range []string{allowedOrg, "outside"} {
 		for _, flags := range []string{"-R %s/repo", "-R%s/repo", "-xR %s/repo", "-xR%s/repo", "--repo=%s/repo", "-xR=%s/repo"} {
 			cmd := "gh pr create " + fmt.Sprintf(flags, owner) + " --title fixture --body fixture"
 			t.Run(cmd, func(t *testing.T) {

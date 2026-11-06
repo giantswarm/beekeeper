@@ -365,7 +365,7 @@ func (e *Egress) injector() http.Handler {
 // Authorization is the header value the token goes to host with: git's
 // endpoint on github.com takes Basic only, the API a token.
 func Authorization(host, token string) string {
-	if host == "github.com" {
+	if host == upstreamGitHost {
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
 	}
 	return "token " + token

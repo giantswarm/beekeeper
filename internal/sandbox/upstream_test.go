@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+const (
+	policyPack    = "pack"
+	policyGraphQL = "/graphql"
+)
+
 type policyTransport func(*http.Request) (*http.Response, error)
 
 func (f policyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -18,26 +23,26 @@ func TestEgressOrganizationWritePolicy(t *testing.T) {
 		name, host, method, path, body string
 		allow                          bool
 	}{
-		{"foreign REST", hostAPI, "POST", "/repos/outside/repo/issues", `{}`, false},
-		{"path traversal", hostAPI, "POST", "/repos/team/../outside/issues", `{}`, false},
-		{"encoded separator", hostAPI, "POST", "/repos/team%2f..%2foutside/issues", `{}`, false},
-		{"encoded traversal", hostAPI, "POST", "/repos/team/%2e%2e/outside/issues", `{}`, false},
-		{"allowed REST", hostAPI, "POST", "/repos/TEAM/repo/issues", `{}`, true},
+		{"foreign REST", hostAPI, http.MethodPost, "/repos/outside/repo/issues", `{}`, false},
+		{"path traversal", hostAPI, http.MethodPost, "/repos/team/../outside/issues", `{}`, false},
+		{"encoded separator", hostAPI, http.MethodPost, "/repos/team%2f..%2foutside/issues", `{}`, false},
+		{"encoded traversal", hostAPI, http.MethodPost, "/repos/team/%2e%2e/outside/issues", `{}`, false},
+		{"allowed REST", hostAPI, http.MethodPost, "/repos/TEAM/repo/issues", `{}`, true},
 		{"foreign org", hostAPI, "PATCH", "/orgs/outside", `{}`, false},
 		{"allowed org", hostAPI, "PATCH", "/orgs/team", `{}`, true},
-		{"foreign push", hostGitHub, "POST", "/outside/repo.git/git-receive-pack", "pack", false},
-		{"allowed push", hostGitHub, "POST", "/team/repo.git/git-receive-pack", "pack", true},
-		{"foreign fetch", hostGitHub, "POST", "/outside/repo.git/git-upload-pack", "pack", true},
+		{"foreign push", hostGitHub, http.MethodPost, "/outside/repo.git/git-receive-pack", policyPack, false},
+		{"allowed push", hostGitHub, http.MethodPost, "/team/repo.git/git-receive-pack", policyPack, true},
+		{"foreign fetch", hostGitHub, http.MethodPost, "/outside/repo.git/git-upload-pack", policyPack, true},
 		{"foreign read", hostAPI, "GET", "/repos/outside/repo/issues", "", true},
-		{"allowed upload", "uploads.github.com", "POST", "/repos/team/repo/releases/1/assets", "asset", true},
-		{"foreign upload", "uploads.github.com", "POST", "/repos/outside/repo/releases/1/assets", "asset", false},
-		{"unknown write", hostAPI, "POST", "/user/repos", `{}`, false},
-		{"markdown", hostAPI, "POST", "/markdown", `{}`, true},
-		{"GraphQL read", hostAPI, "POST", "/graphql", `{"query":"query { viewer { login } }"}`, true},
-		{"GraphQL mutation", hostAPI, "POST", "/graphql", `{"query":"mutation { addComment(input: {subjectId: \"opaque\", body: \"x\"}) { clientMutationId } }"}`, false},
+		{"allowed upload", "uploads.github.com", http.MethodPost, "/repos/team/repo/releases/1/assets", "asset", true},
+		{"foreign upload", "uploads.github.com", http.MethodPost, "/repos/outside/repo/releases/1/assets", "asset", false},
+		{"unknown write", hostAPI, http.MethodPost, "/user/repos", `{}`, false},
+		{"markdown", hostAPI, http.MethodPost, "/markdown", `{}`, true},
+		{"GraphQL read", hostAPI, http.MethodPost, policyGraphQL, `{"query":"query { viewer { login } }"}`, true},
+		{"GraphQL mutation", hostAPI, http.MethodPost, policyGraphQL, `{"query":"mutation { addComment(input: {subjectId: \"opaque\", body: \"x\"}) { clientMutationId } }"}`, false},
 		{"GraphQL GET mutation", hostAPI, "GET", "/graphql?query=mutation%7Bwrite%7D", "", false},
-		{"GraphQL malformed", hostAPI, "POST", "/graphql", `{`, false},
-		{"GraphQL oversize", hostAPI, "POST", "/graphql", strings.Repeat("x", (1<<20)+1), false},
+		{"GraphQL malformed", hostAPI, http.MethodPost, policyGraphQL, `{`, false},
+		{"GraphQL oversize", hostAPI, http.MethodPost, policyGraphQL, strings.Repeat("x", (1<<20)+1), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
