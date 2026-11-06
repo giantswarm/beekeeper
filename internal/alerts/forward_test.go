@@ -2,9 +2,7 @@ package alerts
 
 import (
 	"context"
-	"k8s.io/client-go/rest"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-	"k8s.io/client-go/transport/spdy"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +13,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/transport/spdy"
 )
+
+const forwardTestApp = "alerts"
 
 func TestServicePod(t *testing.T) {
 	for _, tt := range []struct {
@@ -29,9 +32,9 @@ func TestServicePod(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: plain.service, Namespace: plain.namespace},
-				Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "alerts"}, Ports: []corev1.ServicePort{{Port: 9093, TargetPort: tt.target}}}}
+				Spec: corev1.ServiceSpec{Selector: map[string]string{"app": forwardTestApp}, Ports: []corev1.ServicePort{{Port: 9093, TargetPort: tt.target}}}}
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: plain.namespace, Labels: svc.Spec.Selector},
-				Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "alerts", Ports: []corev1.ContainerPort{{Name: "web", ContainerPort: 9095}}}}},
+				Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: forwardTestApp, Ports: []corev1.ContainerPort{{Name: "web", ContainerPort: 9095}}}}},
 				Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
 			unready := pod.DeepCopy()
 			unready.Name = "a-unready"
@@ -60,7 +63,7 @@ func TestServicePodRejectsMissingSelectorAndPort(t *testing.T) {
 	if _, _, err := servicePod(context.Background(), client.CoreV1(), plain); err == nil {
 		t.Fatal("accepted missing selector")
 	}
-	svc.Spec.Selector = map[string]string{"app": "alerts"}
+	svc.Spec.Selector = map[string]string{"app": forwardTestApp}
 	if _, err := client.CoreV1().Services(plain.namespace).Update(context.Background(), svc, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +75,19 @@ func TestServicePodRejectsMissingSelectorAndPort(t *testing.T) {
 // Separate API and SPDY transports, including a replacement forward, must
 // share the credential until the exec plugin's advertised expiration.
 func TestForwardTransportsShareExecCredential(t *testing.T) {
-	calls := filepath.Join(t.TempDir(), "calls")
-	plugin := filepath.Join(t.TempDir(), "credentials")
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	calls := filepath.Join(dir, "calls")
+	plugin := filepath.Join(dir, "credentials")
 	script := "#!/bin/sh\necho called >> '" + calls + "'\necho '{\"apiVersion\":\"client.authentication.k8s.io/v1\",\"kind\":\"ExecCredential\",\"status\":{\"token\":\"test-token\",\"expirationTimestamp\":\"2099-01-01T00:00:00Z\"}}'\n"
-	if err := os.WriteFile(plugin, []byte(script), 0700); err != nil {
+	if err := root.WriteFile("credentials", []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Chmod("credentials", 0700); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +120,12 @@ func TestForwardTransportsShareExecCredential(t *testing.T) {
 			_ = resp.Body.Close()
 		}
 	}
-	raw, err := os.ReadFile(calls)
+	f, err := root.Open("calls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatal(err)
 	}

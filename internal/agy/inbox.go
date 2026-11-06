@@ -84,6 +84,11 @@ type queue struct {
 	// StreamInputs is the number of user_input step_update events the
 	// current agy-run process has seen on stdout.
 	StreamInputs int `json:"streamInputs,omitempty"`
+	// ConfirmedInputs is the highest input sequence acknowledged by either
+	// the stream or the transcript in this runner. Keep it when a transcript
+	// acknowledgement arrives before its stream event, so later messages do
+	// not reuse that sequence and get acknowledged by the delayed event.
+	ConfirmedInputs int `json:"confirmedInputs,omitempty"`
 	// Transcript is the conversation's transcript.jsonl path, and
 	// TranscriptInputs is the number of USER_INPUT steps in that
 	// transcript before the current Inflight/Injected messages were sent.
@@ -187,7 +192,8 @@ func (q *queue) reconcile(transcriptPath string) int {
 	if transcriptPath != "" {
 		q.Transcript = transcriptPath
 	}
-	highSeq := q.StreamInputs
+	highSeq := max(q.StreamInputs, q.ConfirmedInputs)
+	defer func() { q.ConfirmedInputs = highSeq }()
 	if q.Inflight != nil && q.Inflight.InputSeq > 0 && q.Inflight.InputSeq <= q.StreamInputs {
 		q.markDelivered(q.Inflight.ID)
 		q.Inflight = nil

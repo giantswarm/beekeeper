@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ const gibMiB = 1024
 func diskWatcher(out *bytes.Buffer, writes map[int]int64) *watcher {
 	cfg := &config.Config{Watch: config.Watch{DiskFillWithin: config.Duration{Duration: 2 * time.Hour}}}
 	w := &watcher{app: &app{out: out, cfg: cfg}, last: map[string]time.Time{}}
+	w.disk.readPaths = func(context.Context) []diskPath { return nil }
 	w.disk.readWrites = func(pid int) (int64, error) {
 		b, ok := writes[pid]
 		if !ok {
@@ -37,6 +39,11 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 	var out bytes.Buffer
 	writes := map[int]int64{20: 0}
 	w := diskWatcher(&out, writes)
+	scans := int64(0)
+	w.disk.readPaths = func(context.Context) []diskPath {
+		scans++
+		return []diskPath{{Path: "/cache/build", Bytes: scans << 30}}
+	}
 	tab := named(table(
 		&proc.Process{PID: 10, Args: []string{claudeComm}, StartTicks: 1},
 		&proc.Process{PID: 20, PPID: 10, Args: []string{"crane", "export"}, StartTicks: 7},
@@ -56,6 +63,7 @@ func TestSampleDiskSaysTheFillAndItsWriter(t *testing.T) {
 		"LOW DISK: / 24 GiB free",
 		"DISK FILLING: / loses 2.4 GiB/min, 19 GiB free, full in ~7 min; written over the last 2m0s: top: crane 4.8 GiB; sessions: \"Board pull 210\" 4.8 GiB",
 		"DISK NEARLY FULL: / 17 GiB free of 1900 GiB",
+		`fastest-growing path: "/cache/build"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("watch output lacks %q:\n%s", want, got)

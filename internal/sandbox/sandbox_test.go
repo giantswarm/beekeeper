@@ -10,6 +10,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 )
 
+const resolveLoop = "loop"
+
 // policy is a policy for a home directory in a temporary directory, with a
 // checkout configured and a credential beside it.
 func policy(t *testing.T) (Policy, string) {
@@ -185,6 +187,51 @@ func TestHomeAsWorkingDirectoryOpensNothing(t *testing.T) {
 	}
 }
 
+func TestAncestorWorkingDirectoryDoesNotOpenClosedTrees(t *testing.T) {
+	p, home := policy(t)
+	p.Runtime = filepath.Join(filepath.Dir(home), "runtime-parent", "runtime")
+	p.Write = append(p.Write, filepath.Join(p.Runtime, "writable"))
+	p.ToolWrite = append(p.ToolWrite, filepath.Join(p.Runtime, "tool-writable"))
+	p.Deny = append(p.Deny, filepath.Join(p.Runtime, "writable", "scan"))
+	for _, cwd := range []string{"/", filepath.Dir(home), filepath.Dir(p.Runtime)} {
+		t.Run(cwd, func(t *testing.T) {
+			for _, path := range []string{
+				home, filepath.Join(home, "private", "canary"),
+				p.Runtime, filepath.Join(p.Runtime, "private", "canary"),
+				filepath.Join(home, ".local/state/beekeeper/scan/canary"),
+				filepath.Join(p.Runtime, "writable", "scan", "canary"),
+			} {
+				if p.Writable(path, cwd) || p.Readable(path, cwd) {
+					t.Errorf("ancestor cwd opened %s", path)
+				}
+			}
+			for _, path := range []string{
+				filepath.Join(home, "go/pkg/mod/cache"),
+				filepath.Join(home, ".claude/projects/p/memory/note.md"),
+				filepath.Join(p.Runtime, "writable", "file"),
+				filepath.Join(p.Runtime, "tool-writable", "file"),
+			} {
+				if !p.Writable(path, cwd) || !p.Readable(path, cwd) {
+					t.Errorf("ancestor cwd lost explicit grant for %s", path)
+				}
+			}
+			path := filepath.Join(home, "projects/repo/go.mod")
+			if !p.Readable(path, cwd) || p.Writable(path, cwd) {
+				t.Error("ancestor cwd changed a read-only grant")
+			}
+		})
+	}
+	checkout := filepath.Join(home, "projects/repo")
+	if !p.Writable("new/file", checkout) || !p.Readable("new/file", checkout) {
+		t.Error("ordinary checkout lost its working-directory grant")
+	}
+	// A readable checkout outside the closed trees retains its implicit grant too.
+	checkout = filepath.Join(filepath.Dir(home), "checkout")
+	if !p.Writable("new/file", checkout) || !p.Readable("new/file", checkout) {
+		t.Error("external checkout lost its working-directory grant")
+	}
+}
+
 func TestTheScannersDirectoryIsDeniedInsideTheState(t *testing.T) {
 	p, home := policy(t)
 	state := filepath.Join(home, ".local/state/beekeeper")
@@ -316,6 +363,70 @@ func TestASymlinkedPathIsListedAtItsTarget(t *testing.T) {
 	}
 }
 
+func TestAnIndividuallySymlinkedConfigIsReadableAtItsTarget(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	source := filepath.Join(home, ".config/beekeeper")
+	targetDir := filepath.Join(home, ".dotfiles")
+	for _, dir := range []string{source, targetDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(targetDir, "beekeeper.yaml")
+	neighbor := filepath.Join(targetDir, "neighbor.yaml")
+	for _, path := range []string{target, neighbor} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(source, "config.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	p := New(config.Sandbox{}, Paths{Home: home, ConfigFile: link,
+		StateDir: filepath.Join(home, ".local/state/beekeeper")})
+	if got := p.Vars["BEEKEEPER_CONFIG"]; got != target || !p.Readable(got, home) {
+		t.Errorf("BEEKEEPER_CONFIG = %q, want readable target %q", got, target)
+	}
+	if !slices.Contains(p.Read, target) {
+		t.Error("read policy lacks the individual config target")
+	}
+	if p.Writable(target, home) {
+		t.Error("the config target is writable")
+	}
+	for _, path := range []string{targetDir, neighbor} {
+		if p.Readable(path, home) || p.Writable(path, home) {
+			t.Errorf("config target's parent or neighbor opened: %s", path)
+		}
+	}
+	b, err := p.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Sandbox struct {
+			Filesystem struct{ AllowRead, AllowWrite []string }
+		}
+	}
+	if err := json.Unmarshal(b, &settings); err != nil {
+		t.Fatal(err)
+	}
+	fs := settings.Sandbox.Filesystem
+	if !slices.Contains(fs.AllowRead, p.setting(target)) {
+		t.Error("managed allowRead lacks the individual config target")
+	}
+	for _, path := range []string{targetDir, neighbor} {
+		if slices.Contains(fs.AllowRead, p.setting(path)) {
+			t.Errorf("managed allowRead opens %s", path)
+		}
+	}
+	if slices.Contains(fs.AllowWrite, p.setting(target)) {
+		t.Error("managed allowWrite includes the config target")
+	}
+}
+
 func TestASymlinkedConfigHomeIsNamedByItsTarget(t *testing.T) {
 	home := testHome(t)
 	dotfiles := filepath.Join(home, "projects/dotfiles/.config")
@@ -337,5 +448,64 @@ func TestASymlinkedConfigHomeIsNamedByItsTarget(t *testing.T) {
 	}
 	if p.Readable(filepath.Join(dotfiles, "gh/hosts.yml"), home) {
 		t.Error("the config directory's neighbours of git opened")
+	}
+}
+
+func TestSymlinkParentTraversal(t *testing.T) {
+	p, home := policy(t)
+	cwd := filepath.Join(home, "projects/repo")
+	if err := os.Mkdir(filepath.Join(home, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "private"), filepath.Join(cwd, "link")); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(home, "canary.txt")
+	const public = "public test canary\n"
+	if err := os.WriteFile(canary, []byte(public), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(cwd)
+	for _, prefix := range []string{"", cwd + string(filepath.Separator)} {
+		path := prefix + "link/../canary.txt" // Preserve the spelling passed to the raw read.
+		actual, err := filepath.EvalSymlinks(path)
+		if err != nil || actual != canary {
+			t.Fatalf("actual target = %q, %v; want %q", actual, err, canary)
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != public { //nolint:gosec // a path of this test
+			t.Fatalf("raw read = %q, %v", data, err)
+		}
+		for _, suffix := range []string{"canary.txt", "missing/descendant.txt"} {
+			path := prefix + "link/../" + suffix
+			if got := resolve(path, cwd); got != filepath.Join(home, suffix) {
+				t.Errorf("resolve(%q) = %q", path, got)
+			}
+			if p.Readable(path, cwd) || p.Writable(path, cwd) {
+				t.Errorf("policy allowed %q", path)
+			}
+		}
+	}
+	if err := os.Mkdir(filepath.Join(cwd, "dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"dir/../go.mod", "dir/../missing/file"} {
+		if !p.Readable(path, cwd) || !p.Writable(path, cwd) {
+			t.Errorf("ordinary parent traversal refused: %q", path)
+		}
+	}
+}
+
+func TestUnresolvablePathsAreRefused(t *testing.T) {
+	p, home := policy(t)
+	cwd := filepath.Join(home, "projects/repo")
+	for name, target := range map[string]string{resolveLoop: resolveLoop, "broken": "absent"} {
+		if err := os.Symlink(target, filepath.Join(cwd, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{resolveLoop, "loop/../go.mod", "broken", "broken/child", "go.mod/../new", "missing/../go.mod"} {
+		if p.Readable(path, cwd) || p.Writable(path, cwd) {
+			t.Errorf("unresolvable path allowed: %q", path)
+		}
 	}
 }
