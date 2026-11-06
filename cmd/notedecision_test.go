@@ -31,6 +31,8 @@ const (
 	optWait     = "wait: the release ships Monday"
 )
 
+const alphaTeam = "alpha"
+
 func decisionNote(args ...string) []string {
 	return append(append(slices.Clone(decisionArgs), "--option", optMerge, "--option", optWait), args...)
 }
@@ -138,7 +140,7 @@ const laneQuestion = "Which lane? (a: b)"
 
 func TestAnswerEventsParse(t *testing.T) {
 	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
-	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
+	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: litAgentOne}}
 	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
 	if !ok || an.About != privateThread || an.For != "Kim" || an.Audience != n.For || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
@@ -429,5 +431,23 @@ func TestResolveNoteChoiceUsesStoredOrder(t *testing.T) {
 	}
 	if _, err := resolveNoteChoice(n, "unknown"); err == nil {
 		t.Fatal("accepted an unknown option label")
+	}
+}
+
+func TestDefaultEventsIdentifyTheNotesTeam(t *testing.T) {
+	now := time.Now().UTC()
+	st := &state.State{}
+	for _, team := range []string{alphaTeam, "beta"} {
+		st.Notes = append(st.Notes, state.Note{ID: 3, Kind: noteDecision, By: state.Party{Team: team}, Due: now.Add(-time.Hour), Default: "wait for " + team})
+	}
+	actor := state.Party{Name: "timer", Team: "operations"}
+	_, events, due := closeDefaulted(st, "", actor, now)
+	if len(events) != 2 || len(due) != 2 {
+		t.Fatalf("defaults: %+v %+v", events, due)
+	}
+	for i, e := range events {
+		if e.NoteTeam != due[i].By.Team || e.By != actor || !strings.Contains(e.Detail, due[i].Default) {
+			t.Fatalf("event: %+v, note: %+v", e, due[i])
+		}
 	}
 }

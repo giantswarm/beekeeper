@@ -671,7 +671,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 		time.Sleep(200 * time.Millisecond) // the wake runs meanwhile, and waits
 		mu.Lock()
 		defer mu.Unlock()
-		seq = append(seq, "stopped")
+		seq = append(seq, reviewedStoppedCase)
 		live = nil
 		return "", nil
 	}
@@ -679,7 +679,7 @@ func TestParkedBackgroundWakeDuringTheStop(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{bgStopCmd, "stopped", bgFlag}; !slices.Equal(seq, want) {
+	if want := []string{bgStopCmd, reviewedStoppedCase, bgFlag}; !slices.Equal(seq, want) {
 		t.Errorf("calls %v, want %v", seq, want)
 	}
 

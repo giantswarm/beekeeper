@@ -62,6 +62,14 @@ func TestMentionRefusal(t *testing.T) {
 		{bashTool, bash(`gh api repos/giantswarm/x/pulls -q '.[] | [.number] | @csv'`), false},
 		{bashTool, bash(`gh api repos/giantswarm/x/issues/3/comments --jq='.[].body | @json, @sh, @base64, @uri, @html'`), false},
 		{bashTool, bash(`gh api -X GET repos/giantswarm/x/issues -f state=open --jq '.[] | @tsv'`), false},
+		{bashTool, bash(`cat > values.yaml <<'EOF'
+# @schema
+# @schema type: string
+# @default null
+EOF`), false},
+		{"Write", map[string]any{filePathKey: "values.yaml", contentKey: "# @schema\n# @default null"}, false},
+		{bashTool, bash(`git commit -m "add values annotations @schema @default"`), false},
+		{bashTool, bash(`gh pr comment 12 --body "# @schema type: string"`), false},
 		{bashTool, bash(`git commit -m "fix: thanks @marians"`), false},
 		{"mcp__claude_ai_GitHub_MCP__add_issue_comment", map[string]any{bodyKey: ping}, true},
 		{"mcp__claude_ai_GitHub_MCP__issue_read", map[string]any{bodyKey: ping}, false},

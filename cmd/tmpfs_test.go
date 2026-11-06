@@ -44,6 +44,14 @@ func tmpfsApp(t *testing.T) (*app, func() (free.Machine, error), string) {
 		if err := os.Chtimes(p, now.Add(-5*time.Hour), now.Add(-5*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
+		for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+			if err := os.Chtimes(d, now.Add(-5*time.Hour), now.Add(-5*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if d == tmp {
+				break
+			}
+		}
 	}
 	dir := t.TempDir()
 	store, err := state.Open(dir)

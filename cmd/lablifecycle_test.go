@@ -105,8 +105,8 @@ func TestDoctorReleasesGoneLeaseOnce(t *testing.T) {
 		{"gone local", claimOther, false, true},
 		{"live local", claimOther, true, false},
 		{"gone codex", state.Party{HostSession: "codex_gone", Name: "Codex"}, false, true},
-		{"person-held", state.Party{Name: "operator"}, false, false},
-		{"remote holder", state.Party{Session: "foreign-worker", Host: "other-host"}, false, false},
+		{"person-held", state.Party{Name: litOperator}, false, false},
+		{"remote holder", state.Party{Session: "foreign-worker", Host: otherHostName}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := claimApp(t)
