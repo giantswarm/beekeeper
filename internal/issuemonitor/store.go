@@ -25,7 +25,7 @@ func WithState(ctx context.Context, dir string, fn func(*State, func(*State) err
 	}
 	path := filepath.Join(dir, "state.json")
 	var s State
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -44,7 +44,7 @@ func WithState(ctx context.Context, dir string, fn func(*State, func(*State) err
 		if err != nil {
 			return err
 		}
-		defer os.Remove(f.Name())
+		defer func() { _ = os.Remove(f.Name()) }()
 		if _, err := f.Write(raw); err != nil {
 			_ = f.Close()
 			return err

@@ -14,10 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/issuemonitor"
-	"github.com/spf13/cobra"
 )
+
+// issuesQueueName is the subcommand listing queued issue pointers.
+const issuesQueueName = "queue"
 
 var issueMonitorGH = github.RunGH
 
@@ -59,11 +63,11 @@ func (a *app) issuesCmd() *cobra.Command {
 	poll.Flags().StringVar(&record, "ownership", "giantswarm/github/repositories", "Organisation ownership record")
 	poll.Flags().StringVar(&channels, "channels", `{"team-bumblebee":"BEEKEEPER_BUMBLEBEE_WEBHOOK","team-planeteers":"BEEKEEPER_PLANETEERS_WEBHOOK"}`, "JSON map of team to Slack webhook environment variable")
 	c.AddCommand(poll)
-	for _, kind := range []string{"queue", "contributors", "cleanup"} {
+	for _, kind := range []string{issuesQueueName, "contributors", "cleanup"} {
 		c.AddCommand(&cobra.Command{Use: kind, Short: "Show " + kind + " using pointers and classification only", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			return issuemonitor.WithState(cmd.Context(), a.issueMonitorDir(), func(s *issuemonitor.State, _ func(*issuemonitor.State) error) error {
 				switch kind {
-				case "queue":
+				case issuesQueueName:
 					return a.printJSON(s.Queue)
 				case "contributors":
 					return a.printJSON(s.Contributors)
@@ -98,6 +102,7 @@ func splitTeamRecord(record string) (string, string, bool) {
 	}
 	return strings.Join(parts[:2], "/"), parts[2], true
 }
+
 func postIssueTriage(ctx context.Context, webhook, message string) error {
 	raw, _ := json.Marshal(map[string]any{paramText: message, "mrkdwn": false, "unfurl_links": false, "unfurl_media": false})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(raw))
@@ -110,7 +115,7 @@ func postIssueTriage(ctx context.Context, webhook, message string) error {
 	if err != nil {
 		return errors.New("triage delivery failed")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
 		return errors.New("triage delivery rejected")

@@ -15,18 +15,26 @@ import (
 	"github.com/giantswarm/beekeeper/internal/github"
 )
 
+const (
+	testStaff   = "staff"
+	testVisitor = "visitor"
+	sourceIssue = "issue"
+	keyLogin    = "login"
+	keyNodes    = "nodes"
+)
+
 func TestClassifyLive(t *testing.T) {
 	for _, tc := range []struct {
 		name, author, response string
 		fail                   bool
 		want                   Class
 	}{
-		{"member", "staff", `{"state":"active"}`, false, Employee},
-		{"non-member", "visitor", `{"state":"pending"}`, false, External},
+		{"member", testStaff, `{"state":"active"}`, false, Employee},
+		{"non-member", testVisitor, `{"state":"pending"}`, false, External},
 		{"bot", "renovate[bot]", `{"state":"active"}`, false, Bot},
 		{"align-files", "align-files", `{}`, true, Bot},
-		{"failure", "staff", ``, true, External},
-		{"malformed", "staff", `broken`, false, External},
+		{"failure", testStaff, ``, true, External},
+		{"malformed", testStaff, `broken`, false, External},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -73,7 +81,7 @@ func TestQueueRefusesExternalAndIgnoresCallerClaims(t *testing.T) {
 				t.Fatalf("external admitted: %v %+v", err, s.Queue)
 			}
 		} else {
-			if err != nil || len(s.Queue) != 1 || s.Queue[0].Source != "issue" {
+			if err != nil || len(s.Queue) != 1 || s.Queue[0].Source != sourceIssue {
 				t.Fatalf("employee refused: %v", err)
 			}
 		}
@@ -96,7 +104,7 @@ func TestPollReconcilesAllPagesAndNotifiesOnce(t *testing.T) {
 		switch {
 		case args[0] == "label":
 			return []byte(`{}`), nil
-		case args[0] == "issue" && args[1] == "edit":
+		case args[0] == sourceIssue && args[1] == "edit":
 			labels++
 			return []byte(`{}`), nil
 		case strings.Contains(strings.Join(args, " "), "IssueMonitorIssue"):
@@ -110,17 +118,17 @@ func TestPollReconcilesAllPagesAndNotifiesOnce(t *testing.T) {
 			nodes := []map[string]any{}
 			next := !strings.Contains(text, "cursor=next")
 			if next {
-				nodes = append(nodes, map[string]any{"number": 1, "title": "external title <@all>", "author": map[string]string{"login": "visitor"}, "updatedAt": now.Add(-200 * 24 * time.Hour)})
+				nodes = append(nodes, map[string]any{"number": 1, "title": "external title <@all>", "author": map[string]string{keyLogin: testVisitor}, "updatedAt": now.Add(-200 * 24 * time.Hour)})
 			} else {
-				for n, author := range map[int]string{2: "staff", 3: "renovate[bot]", 4: "owner"} {
-					i := map[string]any{"number": n, "author": map[string]string{"login": author}, "updatedAt": now, "assignees": map[string]any{"nodes": []map[string]string{{"login": "assigned"}}}}
+				for n, author := range map[int]string{2: testStaff, 3: "renovate[bot]", 4: "owner"} {
+					i := map[string]any{"number": n, "author": map[string]string{keyLogin: author}, "updatedAt": now, "assignees": map[string]any{keyNodes: []map[string]string{{keyLogin: "assigned"}}}}
 					if n != 4 {
-						i["assignees"] = map[string]any{"nodes": []any{}}
+						i["assignees"] = map[string]any{keyNodes: []any{}}
 					}
 					nodes = append(nodes, i)
 				}
 			}
-			return json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issues": map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": "next"}}}}})
+			return json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issues": map[string]any{keyNodes: nodes, "pageInfo": map[string]any{"hasNextPage": next, "endCursor": "next"}}}}})
 		}
 		return nil, fmt.Errorf("unexpected call %v", args)
 	}
@@ -143,7 +151,7 @@ func TestPollReconcilesAllPagesAndNotifiesOnce(t *testing.T) {
 	if len(s.Queue) != 1 || s.Queue[0].Ref != "org/repo#2" {
 		t.Fatal(s.Queue)
 	}
-	if !slices.Contains(s.Contributors["org/repo"], "visitor") {
+	if !slices.Contains(s.Contributors["org/repo"], testVisitor) {
 		t.Fatal(s.Contributors)
 	}
 	for ref, r := range s.Issues {
@@ -164,11 +172,11 @@ func TestPollReconcilesAllPagesAndNotifiesOnce(t *testing.T) {
 }
 
 func TestReclassificationRevokesQueue(t *testing.T) {
-	s := State{Queue: []Pointer{{Ref: "org/repo#1", Source: "issue"}}}
+	s := State{Queue: []Pointer{{Ref: "org/repo#1", Source: sourceIssue}}}
 	s.Init()
 	m := Monitor{GH: github.GH(func(context.Context, ...string) ([]byte, error) { return []byte(`{}`), nil }), Save: func(*State) error { return nil }, Notify: func(context.Context, string, string) error { return nil }}
 	i := Issue{Number: 1}
-	i.Author.Login = "visitor"
+	i.Author.Login = testVisitor
 	if err := m.reconcile(context.Background(), &s, "org/repo", "team", i, false); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +189,7 @@ func TestStorePersists(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	if err := WithState(ctx, dir, func(s *State, save func(*State) error) error {
-		s.Contributors["org/repo"] = []string{"visitor"}
+		s.Contributors["org/repo"] = []string{testVisitor}
 		return save(s)
 	}); err != nil {
 		t.Fatal(err)
@@ -217,7 +225,7 @@ func TestReopenedEmployeeIssueReturnsToQueue(t *testing.T) {
 		return []byte(`{"state":"active"}`), nil
 	}, Save: func(*State) error { return nil }}
 	i := Issue{Number: 1, ReopenedAt: time.Now()}
-	i.Author.Login = "staff"
+	i.Author.Login = testStaff
 	if err := m.reconcile(context.Background(), &s, "org/repo", "team", i, false); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +247,7 @@ func TestFailedNotificationIsRetriedWithoutAdmittingExternal(t *testing.T) {
 		return nil
 	}}
 	i := Issue{Number: 1}
-	i.Author.Login = "visitor"
+	i.Author.Login = testVisitor
 	if err := m.reconcile(context.Background(), &s, "org/repo", "team", i, false); err == nil {
 		t.Fatal("delivery failure hidden")
 	}
