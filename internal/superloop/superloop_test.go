@@ -1506,12 +1506,17 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 }
 
 func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
+	const (
+		origA    = "o/r#401"
+		origB    = "o/r#402"
+		combined = "o/r#400"
+	)
 	got := ParseAbsorbedPulls(
-		"o/r#400",
+		combined,
 		"fix: combine #401 and #402",
 		"Supersedes https://github.com/o/r/pull/401 and o/r#402.\nCloses https://github.com/o/r/issues/50\nFixes #51\n",
 	)
-	if want := []string{"o/r#401", "o/r#402"}; !slices.Equal(got, want) {
+	if want := []string{origA, origB}; !slices.Equal(got, want) {
 		t.Fatalf("ParseAbsorbedPulls = %v, want %v", got, want)
 	}
 	for _, tc := range []struct {
@@ -1536,28 +1541,23 @@ func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 			name:  "combine clause stops before related clause on same line",
 			title: "fix: cleanup",
 			body:  "Combines https://github.com/o/r/pull/401 and #402. Related: https://github.com/o/r/pull/403",
-			want:  []string{"o/r#401", "o/r#402"},
+			want:  []string{origA, origB},
 		},
 		{
 			name:  "explicit bullet list under Combines heading",
 			title: "fix: rollup",
 			body:  "Combines:\n- https://github.com/o/r/pull/401\n- o/r#402\n\nRelated:\n- https://github.com/o/r/pull/403",
-			want:  []string{"o/r#401", "o/r#402"},
+			want:  []string{origA, origB},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if actual := ParseAbsorbedPulls("o/r#400", tc.title, tc.body); !slices.Equal(actual, tc.want) {
+			if actual := ParseAbsorbedPulls(combined, tc.title, tc.body); !slices.Equal(actual, tc.want) {
 				t.Fatalf("ParseAbsorbedPulls(%q, %q) = %v, want %v", tc.title, tc.body, actual, tc.want)
 			}
 		})
 	}
 
 	t0 := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC)
-	const (
-		origA    = "o/r#401"
-		origB    = "o/r#402"
-		combined = "o/r#400"
-	)
 	in := Input{
 		Now:  t0.Add(OrphanWait + time.Minute),
 		Desk: Desk{Authors: []string{deskAuthor}},
