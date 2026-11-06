@@ -348,3 +348,25 @@ func TestTailExpandsBeyondInitialWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestTailPastLargePartialTrailingRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.jsonl")
+	complete := `{"type":"user","message":{"role":"user","content":"recover the earlier goal"}}` + "\n"
+	partial := `{"type":"assistant","message":{"content":"` + strings.Repeat("x", 3*tailWindow)
+	if err := os.WriteFile(path, []byte(complete+partial), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, read := range []struct {
+		name string
+		fn   func(string, int) ([]Turn, error)
+	}{{"Tail", Tail}, {"Follow", Follow}} {
+		t.Run(read.name, func(t *testing.T) {
+			for _, n := range []int{1, 3000, 0} {
+				turns, err := read.fn(path, n)
+				if err != nil || len(turns) != 1 || turns[0].Text != "recover the earlier goal" {
+					t.Fatalf("n=%d: expected earlier complete turn, got %v, error %v", n, turns, err)
+				}
+			}
+		})
+	}
+}

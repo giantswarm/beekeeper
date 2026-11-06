@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -177,5 +179,56 @@ func TestGuideTurnHookRequiresAWorkCheckAndResetsItOnANewPrompt(t *testing.T) {
 	}
 	if got := run(guideStopEvent); !strings.Contains(got, `"decision":"block"`) || !strings.Contains(got, "guide work check") {
 		t.Fatalf("unchecked work not flagged: %s", got)
+	}
+}
+
+func TestGuidePeerTurnInvalidatesWorkCheck(t *testing.T) {
+	for _, event := range []string{guideStopEvent, guard.PreToolUseEvent, "guard-context"} {
+		t.Run(event, func(t *testing.T) {
+			a, out := stubApp(t)
+			a.cfgPath = filepath.Join(a.cfg.StateDir, "config.yaml")
+			check := func() {
+				t.Helper()
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Guide.WorkChecked = &state.Party{Session: "s1"}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run := func(event string) string {
+				t.Helper()
+				out.Reset()
+				c := a.relayHookCmd()
+				c.SetIn(strings.NewReader(`{"session_id":"s1","hook_event_name":"` + event + `"}`))
+				if err := c.Execute(); err != nil {
+					t.Fatal(err)
+				}
+				return out.String()
+			}
+			check()
+			if got := run("Stop"); got != "" {
+				t.Fatalf("checked turn blocked: %s", got)
+			}
+			if _, err := peer.QueueInstruction(a.cfg.StateDir, "s1", "file the new problem"); err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if event == "guard-context" {
+				got = string(peer.WithInstructionContext(a.cfg.StateDir, []byte(`{"session_id":"s1"}`), nil))
+			} else {
+				got = run(event)
+			}
+			if !strings.Contains(got, "file the new problem") {
+				t.Fatalf("instruction not delivered: %s", got)
+			}
+			if got := run("Stop"); !strings.Contains(got, `"decision":"block"`) || !strings.Contains(got, "guide work check") {
+				t.Fatalf("peer turn ended without fresh work check: %s", got)
+			}
+			check()
+			if got := run("Stop"); got != "" {
+				t.Fatalf("freshly checked turn blocked: %s", got)
+			}
+		})
 	}
 }

@@ -71,6 +71,9 @@ func readTail(f *os.File, off int64, tools bool, onDialog func(Dialog)) ([]Turn,
 	r := bufio.NewReaderSize(f, 1<<20)
 	if off > 0 {
 		if _, err := r.ReadBytes('\n'); err != nil { // a partial first line
+			if err == io.EOF {
+				return nil, nil // no complete boundary yet; expand the window
+			}
 			return nil, err
 		}
 	}

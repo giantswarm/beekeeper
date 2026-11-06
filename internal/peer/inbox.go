@@ -13,6 +13,8 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // QueueInstruction stores a relay independently of Claude's peer notification.
@@ -107,6 +109,20 @@ func InstructionHook(stateDir, session, event string) ([]byte, error) {
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
+		return nil, err
+	}
+	// A relay starts new work just as a user prompt does. Reset the guide's
+	// per-turn check before consuming the instructions on either hook path.
+	store, err := state.Open(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.UpdateWithin(time.Second, func(st *state.State) ([]state.Event, error) {
+		if st.Guide != nil && st.Guide.Holder != nil && st.Guide.Holder.Is(state.Party{Session: session}) {
+			st.Guide.WorkChecked = nil
+		}
+		return nil, nil
+	}); err != nil {
 		return nil, err
 	}
 	for _, path := range paths {
