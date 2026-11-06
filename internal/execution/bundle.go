@@ -3,7 +3,6 @@ package execution
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -16,14 +15,16 @@ import (
 
 const BundleSchema = 1
 const bundleRulesKind = "rules"
-const maxBundleBytes = 2 << 20
+
+// maxBundleBytes leaves a bundle room inside the one wire request that carries it.
+const maxBundleBytes = MaxWire - 64<<10
 const maxArtifactBytes = 256 << 10
 
 // BundleSource explicitly approves one file. Directories are never harvested.
 // Rules use rules/<name>/AGENTS.md or CLAUDE.md; skills use skills/<name>/... .
 type BundleSource struct {
-	Source   string `json:"source"`
-	Artifact string `json:"artifact"`
+	Source   string `yaml:"source" json:"source"`
+	Artifact string `yaml:"artifact" json:"artifact"`
 }
 type BundleArtifact struct {
 	BundleSource
@@ -33,8 +34,8 @@ type BundleArtifact struct {
 
 // BundleCapability declares a dependency, never connector configuration or credentials.
 type BundleCapability struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required"`
+	Name     string `yaml:"name" json:"name"`
+	Required bool   `yaml:"required" json:"required"`
 }
 type CoordinatorBundle struct {
 	Schema       int                `json:"schema"`
@@ -137,46 +138,4 @@ func (b CoordinatorBundle) Validate() error {
 		}
 	}
 	return nil
-}
-
-// SetCoordinatorBundle snapshots the validated bundle; callers cannot mutate it.
-// Installation still requires Prepare with the resulting operator-pinned Policy.
-func (s *Server) SetCoordinatorBundle(b CoordinatorBundle) error {
-	if err := b.Validate(); err != nil {
-		return err
-	}
-	if _, ok := s.Config.Harnesses[HarnessCodex]; !ok {
-		return errors.New("coordinator bundle requires Codex")
-	}
-	totalRules := len(s.Rules)
-	for _, a := range b.Artifacts {
-		if strings.HasPrefix(a.Artifact, "rules/") {
-			totalRules += len("\n\nCoordinator rules:\n") + len(a.Content)
-		}
-	}
-	if totalRules > maxArtifactBytes {
-		return errors.New("combined host and coordinator rules exceed Codex document limit")
-	}
-	var snapshot CoordinatorBundle
-	if err := Decode(mustJSON(b), &snapshot); err != nil {
-		return err
-	}
-	s.coordinatorBundle = &snapshot
-	return nil
-}
-
-// LoadCoordinatorBundle restores the prepared snapshot for host guard invocations.
-func (s *Server) LoadCoordinatorBundle() error {
-	data, err := readRegular(filepath.Join(s.Root, "coordinator-bundle.json"), maxBundleBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var b CoordinatorBundle
-	if err := Decode(data, &b); err != nil {
-		return err
-	}
-	return s.SetCoordinatorBundle(b)
 }

@@ -7,12 +7,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 )
 
 const LogRetention = 30 * 24 * time.Hour
+
+// homeLeftoverBound caps the home state entries one audit names.
+const homeLeftoverBound = 256
 
 const claudeSettingsFile = "settings.json"
 const claudeRulesFile = "CLAUDE.md"
@@ -88,7 +92,8 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 	for _, e := range entries {
 		paths[filepath.Join(s.Root, e.Name())] = e
 	}
-	roots := []string{s.Config.WorkspaceRoot, filepath.Join(s.Root, "sources"), filepath.Join(s.Root, "control"), filepath.Join(s.Root, "github-bin")}
+	retiredRoots := []string{filepath.Join(s.Config.WorkspaceRoot, retiredWorkspaces), filepath.Join(s.Root, retiredResources), filepath.Join(s.Root, recoveryBundles)}
+	roots := append([]string{s.Config.WorkspaceRoot, filepath.Join(s.Root, "sources"), filepath.Join(s.Root, "control"), filepath.Join(s.Root, "github-bin"), filepath.Join(s.Root, bundlesDir)}, retiredRoots...)
 	for _, root := range roots {
 		if root == "" {
 			continue
@@ -123,9 +128,13 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 	}
 	sort.Strings(names)
 	states := map[string]string{}
+	live := map[string]bool{}
 	for id, j := range owners {
 		if s.Launcher != nil {
 			states[id] = s.Launcher.State(ctx, j.Handle.Unit)
+		}
+		if j.Retirement == nil && j.Request.BundleDigest != "" {
+			live[j.Request.BundleDigest] = true
 		}
 	}
 	for _, path := range names {
@@ -148,6 +157,8 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 					}
 				}
 			}
+		} else if slices.Contains(retiredRoots, filepath.Dir(path)) {
+			id = retiredOwner(name, owners)
 		} else if e.IsDir() {
 			id = name
 		}
@@ -183,17 +194,26 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 					}
 				}
 			}
+			if name != id+".log" {
+				retirementRow(&row, j, s.now())
+			}
 		}
 		// These are shared policy/runtime roots, never per-execution garbage.
 		if filepath.Dir(path) == s.Root {
 			switch name {
-			case "policy.json", claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock: //nolint:goconst // Explicit inventory of shared on-disk names.
+			case "policy.json", claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock, bundlesDir, retiredResources, recoveryBundles: //nolint:goconst // Explicit inventory of shared on-disk names.
 				if e.Type()&os.ModeSymlink == 0 {
 					row.State = "shared"
 					row.Reason = "shared policy, toolchain or retained recovery container"
 					row.Retry = "host owner reviews contents; no recursive deletion"
 				}
 			}
+		}
+		if path == retiredRoots[0] && e.Type()&os.ModeSymlink == 0 {
+			row.State, row.Reason, row.Retry = "shared", "retired workspace container", "host owner reviews contents; no recursive deletion"
+		}
+		if filepath.Dir(path) == filepath.Join(s.Root, bundlesDir) {
+			s.bundleRow(&row, e, live)
 		}
 		findings = append(findings, row)
 		if filepath.Dir(path) == s.Config.WorkspaceRoot && e.IsDir() && e.Type()&os.ModeSymlink == 0 {
@@ -237,6 +257,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 	for path, reason := range sharedPaths {
 		findings = append(findings, ResourceFinding{Path: path, State: "shared", Reason: reason, Retry: "host owner manages shared lifetime; no execution cleanup"})
 	}
+	findings = append(findings, s.homeLeftovers()...)
 	if len(findings) > 4096 {
 		return nil, errors.New("resource inventory exceeds audit bound")
 	}
@@ -244,10 +265,89 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 	return findings, nil
 }
 
+// retiredOwner names the execution a moved-aside entry belongs to. Entries are
+// labelled <execution>-<generation>, a recovery bundle with a .bundle suffix; a
+// name that matches no journal proves no ownership.
+func retiredOwner(name string, owners map[string]Journal) string {
+	label := strings.TrimSuffix(name, ".bundle")
+	for id, j := range owners {
+		if label == retiredLabel(j.Handle.Ref) {
+			return id
+		}
+	}
+	return ""
+}
+
+// retirementRow overrides row with the retirement j entered: what moved aside is
+// accounted for by its stage and retention, and a retirement that stopped halfway
+// is overdue under its recorded error.
+func retirementRow(row *ResourceFinding, j Journal, now time.Time) {
+	x := j.Retirement
+	if x == nil {
+		return
+	}
+	retry := fmt.Sprintf("beekeeper agents hosts reconcile <host> %s %d", j.Handle.Ref.Execution, j.Handle.Ref.Generation)
+	if !x.Finished() {
+		row.State, row.Reason, row.Retry = "terminal", "overdue lifecycle cleanup: retirement stopped at "+x.Stage, retry
+		if x.LastError != "" {
+			row.Reason += ": " + x.LastError
+		}
+		return
+	}
+	if j.RevocationFailed {
+		row.State, row.Reason, row.Retry = "terminal", "failed credential revocation", retry
+		return
+	}
+	row.State, row.RetainedAt, row.EligibleAt = "retired", x.RetiredAt, time.Time{}
+	switch {
+	case !j.PurgedAt.IsZero():
+		row.Reason, row.Retry = "retired evidence kept after its resources were removed", "desk reviews evidence; no automatic removal"
+	case x.Recovery != nil:
+		row.Reason, row.Retry = "retained recovery work", "publish or recover the work; it has no expiry"
+	case !j.Disposable:
+		row.Reason, row.Retry = "retained without a disposal proof", "desk reviews it; it has no expiry"
+	case now.Before(x.RetainUntil):
+		row.Reason, row.Retry, row.EligibleAt = "managed retention", "none: a later retirement removes it", x.RetainUntil
+	default:
+		row.Reason, row.Retry, row.EligibleAt = "past retention; removal pending", "the next retirement or "+retry+" removes it", x.RetainUntil
+	}
+}
+
+// homeLeftovers lists by name the immediate children of the account's XDG state
+// directory, where a worker that wrote a literal ~ path leaves what no execution
+// root holds. Nothing proves their owner, so they are reported and never touched,
+// and neither their contents nor anything else under home is read.
+func (s *Server) homeLeftovers() []ResourceFinding {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	root := filepath.Join(home, ".local", "state")
+	dir, err := os.Open(filepath.Clean(root)) //nolint:gosec // fixed location under the host account's home
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = dir.Close() }()
+	entries, err := dir.ReadDir(homeLeftoverBound)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil
+	}
+	rows := []ResourceFinding{}
+	for _, e := range entries {
+		path := filepath.Join(root, e.Name())
+		if within(path, s.Root) {
+			continue
+		}
+		rows = append(rows, ResourceFinding{Path: path, State: Unknown, Reason: "unclassified home state; no execution owns it", Retry: "host owner establishes provenance; no automatic removal"})
+	}
+	return rows
+}
+
 // ReconcileResource is intentionally one execution per call. The execution lock
-// serializes with starts; Stop performs lifecycle cleanup before retention.
-// ReleaseEvidence is an explicit desk attestation that this log is no longer
-// needed for publication review or recovery. Workspaces, refs and sources remain.
+// serializes with starts. It enters the one retirement every terminal path uses,
+// so unpublished work is preserved before anything moves aside, then removes what
+// earlier retirements proved disposable. ReleaseEvidence is an explicit desk
+// attestation that this log is no longer needed for publication review or recovery.
 func (s *Server) ReconcileResource(ctx context.Context, ref Ref, releaseEvidence bool) error {
 	j, err := s.Read(ref)
 	if err != nil {
@@ -301,6 +401,11 @@ func (s *Server) ReconcileResource(ctx context.Context, ref Ref, releaseEvidence
 	if revokeErr != nil {
 		return errors.Join(err, errors.New("credential revocation failed; retry reconciliation"))
 	}
+	if err != nil {
+		return err
+	}
+	// Last, so work that cannot be preserved never holds back a revocation.
+	_, err = s.Retire(ctx, ref, RetireRequest{ID: "resource-retention", Trigger: RetireTriggerStop, Reason: "terminal resource reconciliation"})
 	return err
 }
 

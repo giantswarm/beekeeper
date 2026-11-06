@@ -10,7 +10,7 @@ Inputs are sorted and JSON map keys canonicalized. There are no timestamps.
 The caller must review the approved source list; a digest is not a signature or
 permission to install.
 
-Schema 1 supports Codex:
+Schema 1 maps content to harnesses as follows; settings apply to Codex only:
 
 | Content | Mapping |
 | --- | --- |
@@ -24,22 +24,66 @@ than silently disappear. Optional capabilities are explicitly unavailable, not
 installed. Connector endpoints, credentials, plugin installation commands and
 arbitrary harness configuration have no representation in this schema.
 
-Bundles are bounded to 256 artifacts, 256 KiB per artifact and 2 MiB serialized.
+Bundles are bounded to 256 artifacts, 256 KiB per artifact and 960 KiB serialized,
+so one wire request carries a bundle.
 Validation checks canonical relative paths, ordering, duplicate paths, skill
 entrypoints, schema, digests, UTF-8 and the shared safe-rules credential shapes
 (with no fixture exemption). Capture rejects symlinks and configured secret
 stores. Use the coordinator's secret-file exclusions when building a bundle.
 Do not include secrets even when their format has no known credential shape.
 
-`Server.SetCoordinatorBundle` makes a validated private snapshot. `Policy()`
-binds its digest alongside the existing host configuration and security digest;
-`Prepare` still requires that exact policy. Codex files live in a directory
-named by the content digest, preventing removed skills from leaking into a new
-bundle. Prepare generates the host's guard hooks and restrictive feature table,
-then writes the policy manifest last. InstalledPolicy verifies every artifact;
-hostRuntime restores the snapshot for subsequent guard invocations. Old bundle
-homes remain available for operator cleanup; this API does not perform garbage
-collection. Do not prepare or replace policy while workers are active.
+## Reaching the next start
+
+Name the approved files on the coordinator:
+
+```yaml
+agents:
+  policyBundle:
+    root: /srv/desk
+    sources:
+      - source: AGENTS.md
+        artifact: rules/desk/AGENTS.md
+      - source: skills/review/SKILL.md
+        artifact: skills/review/SKILL.md
+    settings:
+      model_reasoning_effort: medium
+```
+
+Every remote start reads these files anew, so an edit reaches the next worker
+with no change on the host. The list in this configuration is the operator's
+approval; a digest is not a signature. With no `policyBundle`, a worker has the
+host's prepared policy alone.
+
+Before a start is reserved, the coordinator asks the host about the bundle's
+digest and transfers it only if the host lacks it. A coordinator or transfer
+failure, an oversized bundle, a required capability or a changed installed bundle
+refuses the start: no reservation, no worker, and no local fallback. The start
+request binds the digest, and the host verifies every managed file against it at
+admission and again before the harness runs.
+
+The bundle is not part of the host's pinned policy. A rule change moves no pin,
+and `Prepare` covers host configuration and guards only. Each bundle has its own
+directory, `bundles/<digest>` under the host's managed state, staged whole and
+published with one rename under the host's admission lock, so a concurrent start
+sees all of it or none. Installing only adds: an active or parked worker keeps the
+rules, skills and Codex home it was admitted under, and its thread with them. A
+prepare rewrites the managed files of every bundle for the new release's host
+rules, leaving what workers wrote there.
+
+| Harness | What it reads |
+| --- | --- |
+| Codex | The bundle's own `CODEX_HOME`: rules in `AGENTS.md`, skills as files, settings in `config.toml` |
+| Claude, omp | The bundle's `CLAUDE.md`: host rules, then bundle rules and skill files inline |
+| agy | The same file, linked as `GEMINI.md` in its per-execution home |
+
+`hosts check` adds `policyBundle`: the expected and installed digests, whether
+the host is current, the artifacts that differ and any problem. A host behind the
+coordinator still passes, since its next start receives the bundle. A changed
+installed bundle is never repaired by a sync, because a worker may be bound to it;
+it stays a reported problem and refuses starts of that digest.
+
+A bundle no unretired execution is bound to goes once it is past the host's
+retention, a few per sync. Until then it appears in `resourceAudit` as `shared`.
 
 Operator-managed exclusions include coordinator trust keys, repository admission,
 security guards, authentication, executable/version pins, host environment,
@@ -49,7 +93,5 @@ in the prompt and portable settings cannot disable hooks, enable plugins or
 relax execution guards. Prompt rules themselves are untrusted text; the host's
 security boundary is its pinned guard configuration, not prompt precedence.
 
-This is a packaging and materialization API. Per-start transfer, admission and
-installer orchestration are separate work. Existing `agents hosts bundle` and
-`prepare` commands retain their host-policy contract; a future coordinator
-consumer calls this API and obtains explicit operator approval of the new digest.
+Existing `agents hosts bundle` and `prepare` commands retain their host-policy
+contract and carry no coordinator bundle.

@@ -929,10 +929,22 @@ func ValidEffort(level string) bool {
 	return slices.Contains([]string{"", "low", "medium", "high", "xhigh", "max"}, level)
 }
 
+// PolicyBundle lists explicitly approved files below Root. Each start reads
+// them anew, so an edit reaches the next remote worker; no directory is harvested.
+type PolicyBundle struct {
+	Root         string                       `yaml:"root"`
+	Sources      []execution.BundleSource     `yaml:"sources"`
+	Settings     map[string]string            `yaml:"settings,omitempty"`
+	Capabilities []execution.BundleCapability `yaml:"capabilities,omitempty"`
+}
+
 // Agents configures the hand-over of registered agents.
 type Agents struct {
 	// RemoteMCP exposes only explicitly named coordinator tools to SSH workers.
 	RemoteMCP map[string]execution.MCPServer `yaml:"remoteMCP,omitempty"`
+	// PolicyBundle names the coordinator's rules and skills every remote start
+	// carries to its host. Unset, a remote worker has the host's policy alone.
+	PolicyBundle *PolicyBundle `yaml:"policyBundle,omitempty"`
 	// Hosts are explicit SSH execution hosts. No entry or --host local keeps
 	// the existing local launch path. Execution configures this machine only
 	// when it is itself an execution host; authentication is provisioned there.
@@ -4046,6 +4058,9 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	if err := execution.ValidateMCP(c.Agents.RemoteMCP); err != nil {
 		report(fmt.Errorf("agents.remoteMCP: %w", err))
+	}
+	if b := c.Agents.PolicyBundle; b != nil && (!filepath.IsAbs(b.Root) || len(b.Sources) == 0) {
+		report(fmt.Errorf("agents.policyBundle: an absolute root and at least one source are required"))
 	}
 	identities := map[execution.HostID]bool{}
 	for selector, host := range c.Agents.Hosts {
