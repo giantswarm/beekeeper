@@ -324,6 +324,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	})
 	rep.sameTitles = sameTitles(sessions)
 	rep.ungated = ungatedLines(sessions, t)
+	rep.chores = append(rep.chores, a.daemonsOutOfUnits(liveDaemonsInUnits(t), proc.Cgroup, r.dryRun, r.by, a.now)...)
 	record := func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }
 	inFlight := func(p state.Party) bool { return mergeInFlight(st, p, proc.Alive) }
 	waits := sleepingWaits(st, sessions, t, inFlight, a.now)
@@ -786,6 +787,16 @@ line:
   of one repository, with no beekeeper gate among its ancestors (one a
   script ran, say), which runs outside the lanes, the holds and the budget
   floor; the watch says UNGATED MERGE while it runs;
+- moves a claude daemon (claude daemon run) found in the cgroup of a
+  beekeeper unit (beekeeper-*), named with the unit's limits, into a
+  transient scope of its own under app.slice
+  (claude-daemon-<time>-<pid>.scope), with the processes under it there
+  (each read again right before the move): its background sessions then
+  share none of the unit's limits, and a stop or restart of the unit no
+  longer ends them; no session stops (daemon.move in the log). A capped
+  run's scope keeps what runs in it. beekeeper starts every claude --bg in
+  such a scope, so this is a daemon an older release, or a command
+  beekeeper does not wrap, started;
 - reports a title more than one live session carries, each session by PID
   and id: a message by that name reaches neither for sure (a message to a
   role still reaches its holder by its own socket); the watch says SAME

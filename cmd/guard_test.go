@@ -78,6 +78,9 @@ func TestMain(m *testing.M) {
 	// gives it a machine.
 	liveWorktrees = func(*app) (worktreeMachine, error) { return worktreeMachine{}, nil }
 	liveDisk = func(*app) (diskMachine, error) { return diskMachine{}, errors.New("no disk machine in a test") }
+	// Nor does a doctor move the machine's claude daemon: it finds none in
+	// a beekeeper unit; a test of the move names its own.
+	liveDaemonsInUnits = func(*proc.Table) []daemonUnit { return nil }
 	liveHolders = func(*app) (holderMachine, error) { return holderMachine{}, errors.New("no holder machine in a test") }
 	// Nor does a command sync the machine's Claude Code plugins, stamped
 	// release build or not: a test that wants the sync names its binary.
