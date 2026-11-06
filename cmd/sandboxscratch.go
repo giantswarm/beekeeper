@@ -65,7 +65,7 @@ inputs and outputs in the selected configuration.`,
 			if err != nil {
 				return err
 			}
-			raw, err := os.ReadFile(source)
+			raw, err := os.ReadFile(source) //nolint:gosec // the configuration the caller selected
 			if err != nil && !os.IsNotExist(err) {
 				return err
 			}

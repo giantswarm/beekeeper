@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	scratchSuccess   = "success"
-	scratchUnchanged = "unchanged"
+	scratchSuccess     = "success"
+	scratchUnchanged   = "unchanged"
+	scratchVaultSocket = "vault-socket"
 )
 
 func TestScratchSecretBrokerLifecycle(t *testing.T) {
-	for _, outcome := range []string{scratchSuccess, "failure", "interrupt", "vault-socket"} {
+	for _, outcome := range []string{scratchSuccess, "failure", "interrupt", scratchVaultSocket} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
 			installed := filepath.Join(dir, "installed")
@@ -41,12 +42,16 @@ func TestScratchSecretBrokerLifecycle(t *testing.T) {
 			}
 			producer := filepath.Join(dir, "read-entry")
 			// A local fallback would fail this check. The value never reaches output.
-			if err := os.WriteFile(producer, []byte("#!/bin/sh\n[ \"$BEEKEEPER_SANDBOX_BROKERED\" = 1 ] || exit 19\nprintf 'scratch-test-value\\n'\n"), 0o700); err != nil {
+			if err := os.WriteFile(producer, []byte("#!/bin/sh\n[ \"$BEEKEEPER_SANDBOX_BROKERED\" = 1 ] || exit 19\nprintf 'scratch-test-value\\n'\n"), 0o700); err != nil { //nolint:gosec // the test's own secret producer
 				t.Fatal(err)
 			}
 			cfg := map[string]any{scratchStateKey: installed, "leaseDir": installed, ghSecret: map[string]any{"store": map[string]any{"read": []string{producer}}}}
-			if outcome == "vault-socket" {
-				cfg[ghSecret] = map[string]any{"session": true, "fileRoots": []string{dir}, "signinCommand": []string{"false"}}
+			if outcome == scratchVaultSocket {
+				var secret map[string]any
+				if err := yaml.Unmarshal(fmt.Appendf(nil, "{session: true, fileRoots: [%q], signinCommand: [\"false\"]}", dir), &secret); err != nil {
+					t.Fatal(err)
+				}
+				cfg[ghSecret] = secret
 				if err := os.WriteFile(filepath.Join(dir, "input.json"), []byte(`{"value":"scratch-test-value"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -86,7 +91,7 @@ esac
 `
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			call := exec.CommandContext(ctx, exe, "sandbox", "scratch", "--", "sh", "-c", script, "sh", record, exe, outcome, dir)
+			call := exec.CommandContext(ctx, exe, "sandbox", "scratch", "--", "sh", "-c", script, "sh", record, exe, outcome, dir) //nolint:gosec // the test's own binary and script
 			call.Env = append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+path, "XDG_RUNTIME_DIR="+runtimeDir, sandbox.Env+"=", sandbox.Brokered+"=", scratchBrokerEnv+"=")
 			var output bytes.Buffer
 			call.Stdout, call.Stderr = &output, &output
@@ -96,7 +101,7 @@ esac
 			if outcome == "interrupt" {
 				deadline := time.Now().Add(15 * time.Second)
 				for {
-					data, _ := os.ReadFile(record)
+					data, _ := os.ReadFile(record) //nolint:gosec // under the test's temporary directory
 					if strings.Contains(string(data), "ready") {
 						break
 					}
@@ -112,10 +117,10 @@ esac
 				}
 			}
 			err = call.Wait()
-			if (outcome == scratchSuccess || outcome == "vault-socket") && err != nil {
+			if (outcome == scratchSuccess || outcome == scratchVaultSocket) && err != nil {
 				t.Fatalf("scratch: %v\n%s", err, output.String())
 			}
-			if outcome != scratchSuccess && outcome != "vault-socket" && err == nil {
+			if outcome != scratchSuccess && outcome != scratchVaultSocket && err == nil {
 				t.Fatal("expected failure")
 			}
 			if outcome == "failure" {
@@ -126,7 +131,7 @@ esac
 			if strings.Contains(output.String(), "scratch-test-value") {
 				t.Fatal("value leaked")
 			}
-			data, err = os.ReadFile(record)
+			data, err = os.ReadFile(record) //nolint:gosec // under the test's temporary directory
 			if err != nil {
 				t.Fatalf("record: %v\n%s", err, output.String())
 			}
@@ -135,7 +140,7 @@ esac
 				t.Fatalf("secret call did not complete: %s", output.String())
 			}
 			for _, path := range lines[:2] {
-				if _, err := os.Stat(path); !os.IsNotExist(err) {
+				if _, err := os.Stat(path); !os.IsNotExist(err) { //nolint:gosec // paths the scratch run recorded in this test
 					t.Errorf("scratch path still exists: %s (%v)", path, err)
 				}
 			}
@@ -153,7 +158,7 @@ esac
 				if err != nil || len(entries) != 1 {
 					t.Fatalf("installed directory changed: %v, %v", entries, err)
 				}
-				data, err := os.ReadFile(filepath.Join(path, "sentinel"))
+				data, err := os.ReadFile(filepath.Join(path, "sentinel")) //nolint:gosec // under the test's temporary directory
 				if err != nil || string(data) != scratchUnchanged {
 					t.Fatal(fmt.Sprint("installed sentinel changed: ", err))
 				}
