@@ -2158,6 +2158,17 @@ DOWN` once and the standby sends a critical `no-supervisor` notification, again 
 `notify.repeat` while the gap lasts; the loop back is `SUPERVISOR LOOP BACK`, once. A watch under
 a scratch configuration (`--config`, `BEEKEEPER_CONFIG`) restarts no service.
 
+The loop's service can be alive while release work makes no progress. Both watches also
+evaluate durable merge and worker-start outcomes, at most once a minute. Three consecutive
+failures with the same normalized reason for one operation file one incident for the guide;
+a successful corresponding operation resets that streak, including across restarts.
+An approved, exact-head, green PR selected by the loop's merge policy also files an incident
+once it has waited `watch.throughputAfter` (default `2h`). The report includes the running
+candidate version, oldest eligible wait and public PR URLs. Recovery is filed once.
+Capacity and budget refusals, stops, red CI and pending review do not add failures.
+Missing observations get one minute for initialization; unreadable observations, or a snapshot
+older than three minutes, report unknown rather than healthy. Retry backoff is independent.
+
 ### Fresh successors (the guide)
 
 Every run of the guide is numbered: "Guide run N", N one above the highest run recorded (the
