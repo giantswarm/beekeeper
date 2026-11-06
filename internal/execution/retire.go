@@ -403,7 +403,7 @@ func (s *Server) preserveWork(ctx context.Context, j Journal) (*Recovery, error)
 	if err != nil {
 		return nil, errors.New("cannot snapshot the worker's tree; its work is preserved in place")
 	}
-	args := []string{"-c", "user.name=beekeeper", "-c", "user.email=beekeeper@execution.invalid", "commit-tree", tree, "-p", head}
+	args := []string{"-c", "user.name=" + WorkerGitName, "-c", "user.email=" + WorkerGitEmail, "commit-tree", tree, "-p", head}
 	if branch != "" && branch != head {
 		args = append(args, "-p", branch)
 	}

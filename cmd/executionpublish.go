@@ -25,6 +25,11 @@ import (
 const executionPublish = "publish"
 const publishBundleLimit = 64 << 20
 
+// publishCreateTimeout bounds the pull request's creation and the read that
+// settles its outcome, each on its own: the transfer before them may have
+// spent the attempt's time, and a retry would spend it the same way.
+const publishCreateTimeout = 15 * time.Second
+
 type executionPublication struct {
 	Head         string `json:"head"`
 	BundleDigest string `json:"bundleDigest,omitempty"`
@@ -39,6 +44,17 @@ type executionPublicationResult struct {
 	Head         string `json:"head"`
 	BundleDigest string `json:"bundleDigest,omitempty"`
 	BundleSize   int64  `json:"bundleSize,omitempty"`
+	// Updated names the fields of an existing pull request this publication
+	// changed (title, body).
+	Updated []string `json:"updated,omitempty"`
+}
+
+// publicationPull is the owned pull request as GitHub lists it.
+type publicationPull struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 func executionBranch(ref execution.Ref) string {
@@ -72,7 +88,9 @@ var executionPublishGit = func(ctx context.Context, dir string, args ...string) 
 }
 
 func runPublicationGit(ctx context.Context, dir string, identity []string, args ...string) ([]byte, error) {
-	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
+	// No detached maintenance either: it outlives the command and races the
+	// removal of the transfer directory.
+	prefix := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.file.allow=always", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"}
 	c := exec.CommandContext(ctx, "git", append(prefix, args...)...) //nolint:gosec // fixed Git subcommands, validated commit/repository identities and component-owned paths; no shell
 	c.Dir = dir
 	for _, kv := range os.Environ() {
@@ -137,6 +155,36 @@ var publicationGitReasons = []struct{ match, reason string }{
 
 const publicationMissingHistoryReason = "a required commit or ref is missing from local Git history"
 
+// publicationGHReasons map a known gh or GitHub answer to a fixed diagnosis,
+// as publicationGitReasons do for Git. The first match wins.
+var publicationGHReasons = []struct{ match, reason string }{
+	{"No commits between", "GitHub sees no commits between the default branch and the owned branch"},
+	{"submitted too quickly", "GitHub's secondary rate limit refused it"},
+	{"rate limit", "GitHub's rate limit refused it"},
+	{"HTTP 401", "the coordinator's GitHub credential was not accepted"},
+	{"HTTP 403", "GitHub denied the coordinator's credential write access to the repository"},
+	{"Resource not accessible", "GitHub denied the coordinator's credential write access to the repository"},
+	{"HTTP 404", "GitHub did not find the repository for the coordinator's credential"},
+	{"HTTP 422", "GitHub rejected the request as invalid"},
+	{"HTTP 5", "GitHub answered with a server error"},
+	{"could not connect", "the coordinator could not reach GitHub"},
+	{"connection", "the coordinator could not reach GitHub"},
+	{"timeout", "GitHub did not answer in time"},
+}
+
+// publicationGHReason names why a gh call failed, never its raw output.
+func publicationGHReason(ctx context.Context, err error) string {
+	if ctx.Err() != nil {
+		return "GitHub did not answer in time"
+	}
+	for _, r := range publicationGHReasons {
+		if strings.Contains(err.Error(), r.match) {
+			return r.reason
+		}
+	}
+	return "unclassified GitHub failure"
+}
+
 // publicationGitFailure names the failed stage and a sanitized reason, never
 // the command's raw output, so an operator can tell an authorization barrier
 // from a transfer fault without exposing credentials.
@@ -167,6 +215,65 @@ var executionPublishGH = github.RunGH
 func publishGit(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := executionPublishGit(ctx, dir, args...)
 	return strings.TrimSpace(string(out)), err
+}
+
+// ownedPulls lists the pull requests of the owned branch, in any state.
+func ownedPulls(ctx context.Context, repository, branch string) ([]publicationPull, error) {
+	raw, err := executionPublishGH(ctx, "pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--json", "url,state,title,body")
+	if err != nil {
+		return nil, err
+	}
+	var pulls []publicationPull
+	if json.Unmarshal(raw, &pulls) != nil || len(pulls) > 1 {
+		return nil, errors.New("ambiguous owned pull request")
+	}
+	return pulls, nil
+}
+
+// settleCreatedPull answers a failed gh pr create by the owned branch: a pull
+// request found there is the lost answer's, its URL returned. None found, the
+// failure is GitHub's and said as such; only an unreadable branch stays
+// uncertain. Own timeouts: ctx may have run out, which is why create failed.
+func settleCreatedPull(ctx context.Context, repository, branch, reason string) (string, error) {
+	listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
+	defer cancel()
+	pulls, err := ownedPulls(listCtx, repository, branch)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("PR creation outcome uncertain: %s, and the owned branch's pull request could not be read: %s; retry publication to reconcile the owned branch", reason, publicationGHReason(listCtx, err))
+	case len(pulls) == 1:
+		return pulls[0].URL, nil
+	}
+	return "", fmt.Errorf("GitHub created no pull request for the owned branch: %s; the branch is pushed, and an identical publication creates it once that is resolved", reason)
+}
+
+// updatePublishedPull applies the title and body a republication names to its
+// existing pull request. A flag left out keeps the field; one that matches
+// changes nothing, so an identical retry writes nothing.
+func updatePublishedPull(ctx context.Context, repository, dir string, pull publicationPull, p executionPublication) ([]string, error) {
+	var updated []string
+	args := []string{"pr", "edit", pull.URL, "--repo", repository}
+	if title := strings.TrimSpace(p.Title); title != "" && title != strings.TrimSpace(pull.Title) {
+		args = append(args, "--title", p.Title)
+		updated = append(updated, "title")
+	}
+	if strings.TrimSpace(p.Body) != "" && strings.TrimSpace(p.Body) != strings.TrimSpace(pull.Body) {
+		bodyPath := filepath.Join(dir, "body.md")
+		if err := os.WriteFile(bodyPath, []byte(p.Body), 0o600); err != nil {
+			return nil, err
+		}
+		args = append(args, "--body-file", bodyPath)
+		updated = append(updated, "body")
+	}
+	if len(updated) == 0 {
+		return nil, nil
+	}
+	editCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
+	defer cancel()
+	if _, err := executionPublishGH(editCtx, args...); err != nil {
+		return nil, fmt.Errorf("commits are pushed to %s, but its %s was not updated: %s; retry publication to update it", pull.URL, strings.Join(updated, " and "), publicationGHReason(editCtx, err))
+	}
+	return updated, nil
 }
 
 func (a *app) executionPublicationRecoverable(st *state.State, ref execution.Ref) (*state.ExecutionRecord, error) {
@@ -383,17 +490,10 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			return result, refused("%s", reason)
 		}
 		// Reconcile a lost create response by the exact owned branch. An existing
-		// PR is returned without editing a reviewer's title or discussion.
-		raw, err = executionPublishGH(ctx, "pr", "list", "--repo", r.Request.Repository, "--head", result.Branch, "--state", "all", "--json", "url,state")
-		if err != nil {
-			return result, err
-		}
-		var pulls []struct {
-			URL   string `json:"url"`
-			State string `json:"state"`
-		}
-		if json.Unmarshal(raw, &pulls) != nil || len(pulls) > 1 {
-			return result, errors.New("ambiguous owned pull request")
+		// PR takes only the title and body this publication names.
+		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
+		if listErr != nil {
+			return result, listErr
 		}
 		if len(pulls) == 1 && pulls[0].State != "OPEN" {
 			return result, refused("owned pull request is already closed; a new execution is required")
@@ -410,6 +510,9 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		result.Head = p.Head
 		if len(pulls) == 1 {
 			result.URL = pulls[0].URL
+			if result.Updated, err = updatePublishedPull(ctx, r.Request.Repository, dir, pulls[0], p); err != nil {
+				return result, err
+			}
 		} else {
 			bodyPath := filepath.Join(dir, "body.md")
 			if err = os.WriteFile(bodyPath, []byte(p.Body), 0o600); err != nil {
@@ -418,11 +521,16 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			if _, liveErr := checkAuthority(st, ref); liveErr != nil {
 				return result, liveErr
 			}
-			raw, err = executionPublishGH(ctx, "pr", "create", "--repo", r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
+			createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
+			defer cancelCreate()
+			raw, err = executionPublishGH(createCtx, "pr", "create", "--repo", r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
 			if err != nil {
-				return result, errors.New("PR creation outcome uncertain; retry publication to reconcile the owned branch")
+				if result.URL, err = settleCreatedPull(ctx, r.Request.Repository, result.Branch, publicationGHReason(createCtx, err)); err != nil {
+					return result, err
+				}
+			} else {
+				result.URL = strings.TrimSpace(string(raw))
 			}
-			result.URL = strings.TrimSpace(string(raw))
 		}
 	}
 	success = true
@@ -726,8 +834,8 @@ func (a *app) executionPublishCmd() *cobra.Command {
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 	}}
-	c.Flags().StringVar(&title, "title", "", "Conventional Commit title for the first publication")
-	c.Flags().StringVar(&bodyPath, "body-file", "", "PR body file inside the owned workspace")
+	c.Flags().StringVar(&title, "title", "", "Conventional Commit title; on a republication it updates the existing pull request")
+	c.Flags().StringVar(&bodyPath, "body-file", "", "PR body file inside the owned workspace; on a republication it updates the existing pull request")
 	c.Flags().BoolVar(&syncBase, "sync-base", false, "fetch the default branch through the coordinator and merge it into the workspace")
 	return c
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,10 @@ type publicationRig struct {
 	created                 bool
 	creates                 int
 	dropCreate              bool
+	refuseCreate            error
+	title, body             string
+	edits                   [][]string
+	refuseEdit              error
 }
 
 func newPublicationRig(t *testing.T) *publicationRig {
@@ -85,12 +90,19 @@ func newPublicationRig(t *testing.T) *publicationRig {
 			return []byte(`{"defaultBranchRef":{"name":"main"}}`), nil
 		case "pr list":
 			if rig.created {
-				return []byte(`[{"url":"https://github.com/giantswarm/beekeeper/pull/42","state":"OPEN"}]`), nil
+				return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: "OPEN", Title: rig.title, Body: rig.body}})
 			}
 			return []byte(`[]`), nil
+		case "pr edit":
+			rig.edits = append(rig.edits, args)
+			return nil, rig.refuseEdit
 		case "pr create":
+			if rig.refuseCreate != nil {
+				return nil, rig.refuseCreate
+			}
 			rig.created = true
 			rig.creates++
+			rig.title, rig.body = "fix: fixture change", "Resolve the fixture defect."
 			if rig.dropCreate {
 				return nil, errors.New("fixture lost creation reply")
 			}
@@ -146,8 +158,11 @@ func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
 	p := rig.publication(t, head)
 	var result executionPublicationResult
 	rig.dropCreate = true
-	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err == nil {
-		t.Fatal("lost create response reported success")
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal("lost create response not settled by the owned branch:", err)
+	}
+	if result.URL != publicationFixturePRURL {
+		t.Fatal("settled creation lost its URL", result)
 	}
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, true); err == nil {
 		t.Fatal("lost callback response reported success")
@@ -177,6 +192,152 @@ func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
 	err = coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
 	if err == nil || !strings.Contains(err.Error(), "publication Git push failed: the remote branch moved") {
 		t.Fatal("non-fast-forward publication accepted or undiagnosed", err)
+	}
+}
+
+// A create GitHub refuses leaves no PR: the failure says so and why, and the
+// identical retry creates it once the cause is gone, never an open "uncertain".
+func TestExecutionPublicationNamesARefusedCreateAndRetryCreates(t *testing.T) {
+	rig := newPublicationRig(t)
+	head := rig.commit(t, "change.txt", "one\n")
+	p := rig.publication(t, head)
+	var result executionPublicationResult
+	const raw = "HTTP 403: fixture-credential at example.invalid/remote-detail"
+	rig.refuseCreate = errors.New(raw)
+	err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || !strings.Contains(err.Error(), "GitHub created no pull request") || !strings.Contains(err.Error(), "denied the coordinator's credential") {
+		t.Fatal("refused create not diagnosed:", err)
+	}
+	if strings.Contains(err.Error(), "uncertain") || strings.Contains(err.Error(), "fixture-credential") {
+		t.Fatal("refused create stayed uncertain or leaked raw output:", err)
+	}
+	rig.refuseCreate = nil
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if rig.creates != 1 || result.URL != publicationFixturePRURL {
+		t.Fatal("identical retry did not create the pull request", rig.creates, result)
+	}
+}
+
+// The attempt's time can run out on the transfer, right before the create: the
+// create and the read that settles it keep their own, or every retry ends the
+// same way.
+func TestExecutionPublicationCreateOutlivesTheAttemptsDeadline(t *testing.T) {
+	rig := newPublicationRig(t)
+	head := rig.commit(t, "change.txt", "one\n")
+	p := rig.publication(t, head)
+	original := executionPublishGH
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	executionPublishGH = func(gh context.Context, args ...string) ([]byte, error) {
+		if strings.Join(args[:2], " ") == "pr create" {
+			cancel()
+			if gh.Err() != nil {
+				return nil, gh.Err()
+			}
+		}
+		return original(gh, args...)
+	}
+	var result executionPublicationResult
+	if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+		var err error
+		result, err = rig.a.publishExecution(ctx, st, rig.request.Ref, p)
+		return nil, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rig.creates != 1 || result.URL != publicationFixturePRURL {
+		t.Fatal("create did not run past the attempt's deadline", rig.creates, result)
+	}
+}
+
+func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
+	rig := newPublicationRig(t)
+	p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
+	var result executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.edits) != 0 || len(result.Updated) != 0 {
+		t.Fatal("a first publication edited its pull request", rig.edits, result)
+	}
+
+	// An identical retry writes nothing.
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.edits) != 0 {
+		t.Fatal("an identical retry edited its pull request", rig.edits)
+	}
+
+	// No flags keep what a reviewer sees.
+	p = rig.publication(t, rig.commit(t, "change.txt", "two\n"))
+	p.Title, p.Body = "", ""
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.edits) != 0 {
+		t.Fatal("a publication without flags edited its pull request", rig.edits)
+	}
+
+	// --body-file alone leaves the title.
+	p = rig.publication(t, rig.commit(t, "change.txt", "three\n"))
+	p.Title, p.Body = "", "Corrected body."
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.edits) != 1 || slices.Contains(rig.edits[0], "--title") || !slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{"body"}) {
+		t.Fatal("body update not applied alone", rig.edits, result)
+	}
+
+	// --title alone fixes a title that fails its check.
+	rig.edits, rig.body = nil, p.Body
+	p = rig.publication(t, rig.commit(t, "change.txt", "four\n"))
+	p.Title, p.Body = "fix: conventional title", ""
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.edits) != 1 || !slices.Contains(rig.edits[0], p.Title) || slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{"title"}) {
+		t.Fatal("title update not applied alone", rig.edits, result)
+	}
+}
+
+// A body that did not change must say so, not stay silent.
+func TestExecutionPublicationNamesAFailedUpdate(t *testing.T) {
+	rig := newPublicationRig(t)
+	p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
+	var result executionPublicationResult
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal(err)
+	}
+	rig.refuseEdit = errors.New("HTTP 403: fixture-credential at example.invalid/remote-detail")
+	p.Title, p.Body = "fix: conventional title", "Corrected body."
+	err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false)
+	if err == nil || !strings.Contains(err.Error(), "title and body was not updated") || strings.Contains(err.Error(), "fixture-credential") {
+		t.Fatal("failed update not named:", err)
+	}
+	rig.refuseEdit = nil
+	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
+		t.Fatal("identical retry did not update:", err)
+	}
+	if !slices.Equal(result.Updated, []string{"title", "body"}) {
+		t.Fatal("retry did not update both fields", result)
+	}
+}
+
+// Detached maintenance outlives the command: it failed fixture cleanups with
+// "directory not empty", and would race a transfer's removal the same way.
+func TestPublicationGitRunsNoDetachedMaintenance(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runPublicationGit(t.Context(), dir, nil, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"maintenance.auto": "false", "gc.auto": "0"} {
+		got, err := runPublicationGit(t.Context(), dir, nil, "config", "--get", key)
+		if err != nil || strings.TrimSpace(string(got)) != want {
+			t.Fatalf("%s = %q, %v, want %s", key, got, err, want)
+		}
 	}
 }
 
