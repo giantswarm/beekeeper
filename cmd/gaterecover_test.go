@@ -59,7 +59,7 @@ func TestNameSettlingReleaseUsesNormalRollRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			g.as = "operator"
+			g.as = litOperator
 			c := g.lanesCmd()
 			c.SetArgs([]string{"settle", scratchRepo, "7", "--release", version})
 			if err := c.Execute(); err != nil {

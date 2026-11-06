@@ -17,15 +17,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/envtestassets"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -72,13 +75,15 @@ func (a *app) slotView() (dir string, n int) {
 
 func (a *app) runCmd() *cobra.Command {
 	var maxFlag, swapFlag, waitFlag, classFlag, timeoutFlag string
-	var localFlag bool
+	var localFlag, coreFlag bool
 	c := &cobra.Command{
 		Use:   "run [--local] [--max SIZE] [--wait DURATION] [--class build|benchmark|lab] -- command [args...]",
 		Short: "Run a build, test or lint command in a build slot under a memory cap",
 		Long: `run takes one of the machine's build slots and runs the command in a
 transient systemd user scope in the slot's slice under memcap.slice, both
 with MemoryMax=SIZE and MemorySwapMax=0, the scope with OOMPolicy=continue.
+Local commands disable both core dump limits before starting, including through
+the sandbox broker. --core preserves the session limits and runs locally.
 With run.remote.enabled, eligible Go and Cargo builds first try a reusable
 builder Job in the configured cluster. --local keeps worktree-writing commands
 local; formatters and compound shell commands stay local automatically. Setup
@@ -135,8 +140,16 @@ out exits 75, states the wait it applied and names each slot's holder (its
 session, its process, since when and for how long, its command): run the
 command in the background instead, never poll. The wait is --wait, else
 MEMCAP_WAIT, else 8m, or 60m in a background Bash call: the PreToolUse hook
-exports MEMCAP_BACKGROUND=1 into every background call, so a run reached
-directly, after a cd or export chain or through a script gets the 60m.
+exports MEMCAP_BACKGROUND=1 only for a detected beekeeper run, directly,
+after a cd or export chain, or in a readable shell wrapper. A wrapper
+that cannot be detected needs an explicit --wait 60m.
+
+A shell command containing recognized builds and output commands runs
+without a slot: each build acquires its own slot only when it starts and
+releases it when it ends, even if the shell keeps waiting or tailing.
+Gate-owned devctl waits and merges run through beekeeper gate without a
+build slot. Unknown shell programs retain the whole-command cap; an explicit
+--class also retains the declared cap.
 
 The slots are memcap's flock files, shared with the memcap wrapper. The
 command's arguments reach it verbatim: systemd-run's own ${VAR} expansion is
@@ -217,7 +230,7 @@ machine's files stay untouched.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cpu := a.memcapCPU()
 			o := guard.Options{Max: env("MEMCAP_MAX", a.cfg.MemcapMax(ramMiB())), Swap: env("MEMCAP_SWAP", "0"),
-				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight,
+				CPUQuota: cpu.CPUQuota, CPUWeight: cpu.CPUWeight, Core: coreFlag,
 				Stderr: os.Stderr, Record: a.runRecorder(), Test: os.Getenv("MEMCAP_TEST") == "1",
 				GoCache: goCacheDir(), TmpDir: filepath.Join(a.cfg.StateDir, "tmp"), BuildLock: filepath.Join(a.cfg.StateDir, "build-cache"),
 				Tail: a.runTail(), TailDir: a.runTailsDir(), Redact: a.redactOutput}
@@ -259,6 +272,21 @@ machine's files stay untouched.`,
 				return usageErr("%v", err)
 			}
 			if !f.Changed("class") {
+				// The shell stays slotless; only the nested heavy processes queue.
+				// Forward explicit flags so splitting retains resource overrides.
+				exe, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				runPrefix := []string{exe, workerGitHubRunGroup}
+				f.Visit(func(flag *pflag.Flag) {
+					runPrefix = append(runPrefix, "--"+flag.Name+"="+flag.Value.String())
+				})
+				runPrefix = append(runPrefix, "--")
+				if planned, reason := guard.ProcessRun(args, runPrefix, []string{exe, "gate", "--"}); planned != nil {
+					fmt.Fprintln(os.Stderr, guard.LogPrefix+reason)
+					return &exitError{code: guard.Exec(planned, os.Stderr)}
+				}
 				if guard.BuildsNothing(args) {
 					return &exitError{code: guard.Exec(args, os.Stderr)}
 				}
@@ -268,7 +296,7 @@ machine's files stay untouched.`,
 			o.Repo, o.Head = repo, commit
 			// Per-run local resource/wait overrides retain their existing semantics.
 			// Remote pods use the desk-configured resources and placement bound.
-			if !localFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && !f.Changed("timeout") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
+			if !localFlag && !coreFlag && !f.Changed("max") && !f.Changed("swap") && !f.Changed("wait") && !f.Changed("timeout") && o.Class == guard.ClassBuild && o.StopWith == "" && !inSandbox() {
 				head := guard.CommandHead(args)
 				runner := remotebuild.Runner{Config: a.cfg.Run.Remote, StateDir: a.cfg.StateDir, Stdout: os.Stdout, Stderr: os.Stderr,
 					Record: a.runRecorder(), Name: head, Repo: repo, Head: commit,
@@ -280,6 +308,13 @@ machine's files stay untouched.`,
 					return nil
 				}
 			}
+			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
+			if err != nil {
+				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
+			}
+			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				return err
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -289,6 +324,7 @@ machine's files stay untouched.`,
 	}
 	c.Flags().SetInterspersed(false)
 	c.Flags().StringVar(&timeoutFlag, "timeout", "", "execution deadline after queueing (default 5m for lint, 30m for builds; lab and benchmark have none)")
+	c.Flags().BoolVar(&coreFlag, "core", false, "preserve the session core dump limits (disabled by default)")
 	c.Flags().BoolVar(&localFlag, "local", false, "run in the local slot even when run.remote is enabled")
 	c.Flags().StringVar(&maxFlag, "max", "", "the command's memory cap, a systemd size (default $MEMCAP_MAX or memcap.max)")
 	c.Flags().StringVar(&swapFlag, "swap", "", "the command's swap cap (default $MEMCAP_SWAP or 0)")
@@ -381,6 +417,7 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(a.relayHookCmd())
 	c.AddCommand(&cobra.Command{
 		Use:   "check-scope",
 		Short: "Verify a proof event has a session ID and is in the hook's scope",
@@ -434,8 +471,10 @@ raised to 10 minutes; a background run gets a 60-minute wait instead. A
 command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
-machine kubeconfig. A configuration that does not load refuses every Bash
-call, naming the error.
+machine kubeconfig. A configuration that does not load enables recovery mode:
+literal read-only inspection and beekeeper commands (including config set and
+self-update) still run, with the configuration error named; other Bash calls
+are refused until the file is repaired.
 A merge of a merge.devctlOwners repository is the gate's devctl pr merge
 alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
 naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
@@ -631,10 +670,18 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					_, _ = w.Write(guard.DenyCodex(reason))
 					return nil
 				}
-				if cfgErr != nil {
-					_, _ = w.Write(guard.DenyCodex("Refused: cannot load beekeeper configuration (" + cfgErr.Error() + "); failing closed."))
-					return nil
+			}
+			if cfgErr != nil {
+				h := guard.Hook{ConfigErr: cfgErr}
+				switch {
+				case isCodex:
+					_, _ = w.Write(h.DecideCodex(raw))
+				case isAgy:
+					_, _ = w.Write(h.DecideAgy(raw))
+				default:
+					_, _ = w.Write(h.Decide(raw))
 				}
+				return nil
 			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
@@ -680,6 +727,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 			if h.ConfigErr == nil {
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
+				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
 				h.Outbound = outboundGuard(a.cfg.Outbound)
 				h.Upstream = guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}
@@ -695,6 +743,8 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				h.GuardPersonalSearch = a.cfg.Hooks.GuardPersonalSearch
+				h.ProjectsDir, h.WorktreePlaces, h.HomePlaces = a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places
 				h.Transcripts = a.transcriptPolicy()
 			}
 			if isCodex {
@@ -710,6 +760,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			out := h.Decide(raw)
+			if a.cfg != nil {
+				out = peer.WithInstructionContext(a.cfg.StateDir, raw, out)
+			}
 			a.recordGitHubCalls(raw, formatFlag, out)
 			if out != nil {
 				_, _ = w.Write(out)

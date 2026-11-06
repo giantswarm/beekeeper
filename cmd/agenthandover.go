@@ -440,7 +440,7 @@ func (a *app) handOver(ctx context.Context, h handover) (err error) {
 	if err := a.stopHandoverPredecessor(ctx, ag.Party); err != nil {
 		return err
 	}
-	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
+	sa, err := a.startAgent(ctx, agentStart{name: ag.Name, role: workerRole, brief: a.workerPrompt(p, gaps...), task: h.task(), dir: h.dir, model: h.model, effort: h.effort, replaces: &ag.Party})
 	if err != nil {
 		return err
 	}
@@ -818,6 +818,9 @@ func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	if pid, err := a.toDesktopCLI(ctx, w.id, a.noteRequest(h)); pid != 0 || err != nil {
 		return "", err
 	}
+	if err := a.requireClaudeLogin(); err != nil {
+		return "", err
+	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return "", err
@@ -854,7 +857,7 @@ func (a *app) say(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format
 // noteRequest is the peer message that asks the agent for its note, naming
 // the configuration file the hand-over runs with.
 func (a *app) noteRequest(h handover) string {
-	bin := "beekeeper"
+	bin := pluginName
 	if c := a.explicitConfig(); c != "" {
 		bin += " --config " + c
 	}

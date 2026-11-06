@@ -18,19 +18,51 @@ import (
 var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true}
 
 // EntryRejects is why agy refuses the named hook entry raw, an object of
-// event lists, or "" when agy accepts it: a tool event's items are matchers
-// with at least one hook, a lifecycle event's items are command hooks, and
+// event lists (or null) and optional enabled metadata, or "" when agy accepts it.
+// Unknown fields are ignored. A tool event's items are matchers
+// with optional hooks, a lifecycle event's items are command hooks, and
 // every hook of type "command" (or of no type) names its command.
 func EntryRejects(raw json.RawMessage) string {
-	var events map[string][]json.RawMessage
+	var events *struct {
+		Enabled        bool              `json:"enabled"`
+		SessionStart   []json.RawMessage `json:"SessionStart"`
+		PreInvocation  []json.RawMessage `json:"PreInvocation"`
+		PostInvocation []json.RawMessage `json:"PostInvocation"`
+		Stop           []json.RawMessage `json:"Stop"`
+		PreToolUse     []json.RawMessage `json:"PreToolUse"`
+		PostToolUse    []json.RawMessage `json:"PostToolUse"`
+	}
+	// Decode typed fields before inspecting the final event values. agy
+	// rejects a type error even if a later duplicate field replaces it.
 	if err := json.Unmarshal(raw, &events); err != nil {
 		return "not an object of hook lists: " + err.Error()
 	}
 	if events == nil {
-		return "not an object of hook lists"
+		return ""
+	}
+	if why := fieldTypesRejects(raw); why != "" {
+		return why
 	}
 	for _, event := range ordered(raw) {
-		for _, item := range events[event] {
+		var items []json.RawMessage
+		switch strings.ToLower(event) {
+		case "sessionstart":
+			items = events.SessionStart
+		case "preinvocation":
+			items = events.PreInvocation
+		case "postinvocation":
+			items = events.PostInvocation
+		case "stop":
+			items = events.Stop
+		case "pretooluse":
+			event, items = "PreToolUse", events.PreToolUse
+		case "posttooluse":
+			event, items = "PostToolUse", events.PostToolUse
+		default:
+			// enabled is metadata; all other fields are ignored by agy.
+			continue
+		}
+		for _, item := range items {
 			if why := itemRejects(event, item); why != "" {
 				return why
 			}
@@ -49,9 +81,6 @@ func itemRejects(event string, item json.RawMessage) string {
 	if err := json.Unmarshal(item, &e); err != nil {
 		return event + ": " + err.Error()
 	}
-	if len(e.Hooks) == 0 {
-		return event + ": a matcher without hooks"
-	}
 	for _, h := range e.Hooks {
 		if why := commandRejects(event, h); why != "" {
 			return why
@@ -61,14 +90,11 @@ func itemRejects(event string, item json.RawMessage) string {
 }
 
 func commandRejects(event string, item json.RawMessage) string {
-	var h struct {
-		Type    *string `json:"type"`
-		Command string  `json:"command"`
-	}
+	var h handlerFields
 	if err := json.Unmarshal(item, &h); err != nil {
 		return event + ": " + err.Error()
 	}
-	if (h.Type == nil || *h.Type == "command") && strings.TrimSpace(h.Command) == "" {
+	if h.Command == "" {
 		return event + ": command hook must specify 'command'"
 	}
 	return ""
@@ -88,36 +114,56 @@ func Rejects(raw []byte) string {
 	if top == nil {
 		return "not a JSON object of named hook entries"
 	}
-	for _, name := range ordered(raw) {
-		if why := EntryRejects(top[name]); why != "" {
-			return fmt.Sprintf("the %q entry: %s", name, why)
+	for _, field := range orderedMembers(raw) {
+		// agy decodes every occurrence of a named entry, even if a later
+		// duplicate replaces it. Only command presence uses the final value.
+		if why := fieldTypesRejects(field.value); why != "" {
+			return fmt.Sprintf("the %q entry: %s", field.name, why)
+		}
+		if why := EntryRejects(top[field.name]); why != "" {
+			return fmt.Sprintf("the %q entry: %s", field.name, why)
 		}
 	}
 	return ""
 }
 
+type member struct {
+	name  string
+	value json.RawMessage
+}
+
 // ordered is the keys of the JSON object raw in their order in the text, or
 // nil when raw is no object.
 func ordered(raw []byte) []string {
+	var keys []string
+	for _, field := range orderedMembers(raw) {
+		keys = append(keys, field.name)
+	}
+	return keys
+}
+
+// orderedMembers retains values too, so decoding checks can inspect earlier
+// occurrences of a duplicate name rather than only its final value.
+func orderedMembers(raw []byte) []member {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil
 	}
-	var keys []string
+	var fields []member
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return keys
+			return fields
 		}
 		k, ok := t.(string)
 		if !ok {
-			return keys
+			return fields
 		}
-		keys = append(keys, k)
-		var skip json.RawMessage
-		if dec.Decode(&skip) != nil {
-			return keys
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return fields
 		}
+		fields = append(fields, member{name: k, value: value})
 	}
-	return keys
+	return fields
 }

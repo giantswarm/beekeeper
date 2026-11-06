@@ -87,6 +87,9 @@ func TestHostsCheckPrintsFailedHarnessReadiness(t *testing.T) {
 	if caps.Readiness[execution.HarnessCodex].Login != readinessCheckFailed || len(caps.Harnesses) != 0 {
 		t.Fatalf("wrong readiness diagnostics: %+v", caps)
 	}
+	if len(caps.ResourceAudit) != 1 || caps.ResourceAudit[0].State != execution.Unknown {
+		t.Fatalf("missing unavailable audit diagnostics: %+v", caps.ResourceAudit)
+	}
 }
 
 func TestLegacyHostSourcePreparationRejectedBeforeReservation(t *testing.T) {

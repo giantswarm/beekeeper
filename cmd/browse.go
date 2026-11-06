@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/agy"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -42,10 +43,18 @@ const (
 		"Never type a credential: sign in only through the person's existing session (an SSO or identity provider button). " +
 		"Take a screenshot of each page the steps name as their proof; beekeeper saves each one and prints its path below your report, " +
 		"so your report never says whether a screenshot was saved or where. End with a short plain report of what you saw and did, " +
-		"or of what stopped you. " + controlWords
+		"or of what stopped you. " + controlWords + githubSudoWords
 
 	browseSteps = "The steps:\n\n"
 )
+
+// githubSudoWords stop access confirmation before a short-lived challenge starts.
+const githubSudoWords = "When GitHub shows 'Confirm access', stop the pending steps immediately. " +
+	"Never start or answer a GitHub Mobile, passkey, security key, authenticator or email challenge. " +
+	"Read the tab context so its URL and title are recorded, then report one typed line: " +
+	"'barrier: github_sudo setting=<setting>', using repository_selection for installation Configure, " +
+	"token_expiry,device_flow,callback_urls for App settings, permissions for App permissions, " +
+	"or access_confirmation when the target is unknown. Include no URL, account or challenge value in that line. "
 
 // storageWords keep data discovery in the visible UI, even for read-only tasks.
 const storageWords = "Never read page storage (localStorage, sessionStorage, cookies, IndexedDB) or session tokens, and never call a site's API with them. Work through the visible UI only, including when listing a site's data such as Slack user groups. If the UI cannot complete a step or the hook refuses a call, report that barrier and the steps not completed; never work around it with storage or direct API requests. "
@@ -63,7 +72,29 @@ const controlWords = "Click only the element a step names: a computer click by t
 	"For a UI-only disclosure on an App permissions page, name the effect and role, for example 'Expands the Organization permissions section', " +
 	"'Collapses the Repository permissions section' or 'Switches to the Account permissions tab', without the App or permission name. " +
 	"First read_page or find on the clicked tab so the hook can verify that ref's button or tab role and label; read it again after a page-changing action. " +
-	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. "
+	"Use that description only for the disclosure itself, never for selecting a level or submitting a grant. " + clickSettleWords
+
+// clickSettleWords keep a slow response from becoming a duplicate mutation.
+// A changed page is evidence to inspect, not permission to submit again.
+const clickSettleWords = "Before a state-changing click (rerun, deploy, release, send, create, delete or submit), note the current URL and " +
+	"the relevant result or status, then click once. Do not batch repeated clicks or use a scripted retry loop. " +
+	"Wait for that click to settle: use computer wait in intervals of 2 seconds, re-reading the clicked tab with read_page or find " +
+	"after each interval, for up to 30 seconds. Stop waiting when the expected result appears, the URL changes, or the relevant status " +
+	"changes; inspect that signal to determine whether the action succeeded or is pending. An unchanged page immediately after a click " +
+	"does not mean the click failed. Before any repeated state-changing click, re-read the page and check whether the first click " +
+	"already took effect. If the result exists or the action is pending, do not click again. Only retry after the page has settled or " +
+	"the 30-second timeout has passed AND that fresh read shows no effect and no pending action. If the outcome is uncertain, stop " +
+	"and report it instead of risking a duplicate. After a connection loss at a state-changing click, apply this same wait and fresh " +
+	"check before retrying the step. In a blind capture turn, use find for these checks; never read a secret value. "
+
+// permanentDeletionRule also names the preflight refusal in browse's help.
+const permanentDeletionRule = "A permanent deletion of data is the person's own click: deleting an edit-history revision (Delete revision), a comment, an issue, a repository or a branch, or emptying a trash. No browse turn makes these clicks, even when the owner asks."
+
+// Match the named data deletions, leaving product deletes to the turn's classifier.
+var permanentDeletionSteps = regexp.MustCompile(`(?i)\b(?:delet(?:e|es|ing|ion)|remov(?:e|es|ing|al)|eras(?:e|es|ing))\b[^.!?\n]{0,100}\b(?:revisions?|edit[- ]history|comments?|issues?|repositories|repository|repos?|branches|branch)\b` +
+	`|\b(?:revision|comment|issue|repository|repo|branch)\s+delet(?:e|ion)\b` +
+	`|\bempty(?:ing)?\b[^.!?\n]{0,40}\b(?:trash|recycle bin)\b` +
+	`|\bpermanent(?:ly)?\s+(?:delet(?:e|ion)|eras(?:e|ure))\b`)
 
 // lostLine is the line a turn ends its report with when the Chrome
 // connection is gone, the steps not done after it.
@@ -78,13 +109,22 @@ const connectionWords = "The Chrome connection can drop mid-turn: a call answers
 	"list_connected_browsers again and select_browser on the browser it lists, then retry the step. When it lists none, stop, and end " +
 	"your report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line. "
 
+// sitePermissionWords handle the extension's transient site refusal inside the
+// turn, where the Chrome tools run. Retry before the fresh-tab fallback; a
+// classifier or hook refusal is a different decision and must stay refused.
+const sitePermissionWords = "When a Chrome tool answers 'Permission denied for this action on this domain', before any fresh-tab fallback, " +
+	"wait 1 second with the Chrome computer wait action, then retry that same tool call with identical arguments once. " +
+	"If the retry succeeds, continue the steps and note the site-permission retry in your report. If the retry is refused too, " +
+	"stop that step and report it as refused with the refusal's reason; do not retry it again or work around it in another tab. " +
+	"This retry applies only to that site-permission message, never to a Claude Code auto mode classifier denial or a beekeeper hook refusal. "
+
 // reconnectWords are the reconnect turn's prompt, around the call the
 // connection went at: a fresh CLI resuming the session, with a fresh Chrome
 // connection, goes on with the steps not done or reports them.
 const reconnectWords = "beekeeper browse: the Chrome connection was lost at your call %s and did not come back. This turn is the one " +
 	"reconnect, a fresh connection to the browser: call list_connected_browsers; when it lists a browser, select it and go on with the " +
 	"steps not done, under the same rules, the connection checked before each step; when it lists none, do nothing else and end your " +
-	"report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line."
+	"report with the line '" + lostLine + "' followed by the steps not done, verbatim, one per line. " + clickSettleWords
 
 // deployWords tell a browse turn the one deploy the person's task covers,
 // between the preamble and the steps.
@@ -214,7 +254,7 @@ const (
 const browseStart = "beekeeper browse"
 
 func (a *app) browseCmd() *cobra.Command {
-	var model, dir, deploy string
+	var model, dir, deploy, proofRepo string
 	var files []string
 	var wait time.Duration
 	c := &cobra.Command{
@@ -224,10 +264,19 @@ func (a *app) browseCmd() *cobra.Command {
 CLI's own Claude in Chrome tools and nothing else: "claude -p --chrome
 --tools '' --strict-mcp-config --permission-mode dontAsk --allowedTools
 'mcp__claude-in-chrome__*'", no shell, no file tools, no other MCP server,
-and every call outside the Chrome tools refused rather than asked. The
-CLI's Chrome connection takes the site permissions of the Chrome extension,
+and every call outside the Chrome tools refused rather than asked.
+
+A Chrome tool's "Permission denied for this action on this domain" is retried
+once with the same arguments after a one-second wait. A successful retry is
+noted in the report; a repeated refusal is reported as refused. Classifier
+and hook refusals are not retried under this rule.
+
+The CLI's Chrome connection takes the site permissions of the Chrome extension,
 so a navigate to a site no session was allowed on never waits on a person's
 site approval.
+
+For x.com reads, use beekeeper browse "Read <URL> and report the page text."
+WebFetch returns HTTP 402 for x.com; read the page through beekeeper browse.
 
 It exists for the desktop turns of the sessions beekeeper starts: Claude
 Desktop holds such a session's navigate to a new site for a person's site
@@ -241,7 +290,21 @@ the one record of the screenshots: the turn writes no file, and the line
 heading the paths says a report calling a screenshot not saved speaks for
 the turn alone. The report is printed as the turn wrote it.
 
-The turn shares the person's Chrome: hold the browser lease while it runs.
+With --proof-repo <owner/repo>, saved screenshots are also uploaded through
+the App API to that repository's images-only branch and the report includes
+their Markdown image links. This works for public, private and internal
+repositories; private links require repository read access. Paste the links
+into a comment with gh under the App identity rather than submitting a
+Comment click in the browser. The App needs contents write access even
+when the worker's browser identity has no write access.
+
+` + permanentDeletionRule + `
+Steps asking for one are refused before the turn starts; report the refusal
+to the supervisor at once.
+
+The turn shares the person's Chrome: it refuses to run unless you hold the
+browser lease or have a valid grant for the free browser, which it claims.
+Hold the lease while it runs.
 A turn that does not end within --timeout is stopped and the command fails:
 a page that waits on a person (a sign-in form, a dialog) is the usual cause.
 
@@ -374,8 +437,9 @@ report.
 A sign-in or consent page of the lab's own identity provider on a loopback
 host (*.127.0.0.<n>.nip.io, localhost) is allowed the same way without a
 record: a fixture user's sign-in there is the person's own lab's. Steps
-that name such a host run with the lab's rule, the prompt's exception for
-the fixture user's credential the steps give, and "allowed lab sign-in:"
+that name a sign-in page or credential step on such a host run with the
+lab's rule, the prompt's exception for the fixture user's credential the
+steps give, and "allowed lab sign-in:"
 below the report. Such a page needs no fallback: the lab's certificate
 authority is one Chrome trusts, and a sign-in there whose clicks and keys
 do nothing and whose screenshots fail is a tab behind another or a window
@@ -440,6 +504,12 @@ one the last check marked and its find gave, naming why. For example:
 
   beekeeper browse --file ./shot.png "Open <page>. Attach ./shot.png
   through the comment box's file input. Report the attachment's name."
+
+After a state-changing click, the turn waits in 2-second intervals and
+re-reads the page for up to 30 seconds, watching for the result, a URL
+change or a relevant status change. Before any retry it reads again and
+checks for an existing result or pending action. An uncertain outcome is
+reported instead of risking a duplicate rerun, deploy, release or send.
 
 A click targets only the element its step names. The turn never clicks
 a subscription, watch, star or notification control (GitHub's Subscribe,
@@ -571,9 +641,10 @@ again once the extension is connected.`,
 			if steps == "" {
 				return usageErr("browse needs the steps to run")
 			}
-			return a.browse(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil)
+			return a.browseWithProof(cmd.Context(), steps, dir, model, wait, strings.TrimSpace(deploy), files, nil, proofRepo)
 		},
 	}
+	c.Flags().StringVar(&proofRepo, "proof-repo", "", "upload saved screenshots to this thread repository and report their Markdown links (owner/repo)")
 	c.Flags().StringVar(&model, "model", "", "the turn's model (default: Claude Code's)")
 	c.Flags().StringVar(&dir, "dir", ".", "the turn's working directory")
 	c.Flags().DurationVar(&wait, "timeout", browseWait, "stop the turn and fail after this long")
@@ -610,10 +681,67 @@ for a timer to park on.`,
 	}
 }
 
+// browseLease admits the holder, or atomically claims a free browser for a
+// caller with a valid grant. A grant never overrides an existing holder.
+func (a *app) browseLease() error {
+	me, err := a.caller()
+	if err != nil {
+		return err
+	}
+	dir := lease.Dir(a.cfg.LeaseDir)
+	return a.store.Update(func(st *state.State) ([]state.Event, error) {
+		h, err := dir.Get(browserResource)
+		if err != nil {
+			return nil, err
+		}
+		if h != nil {
+			if h.Party().Is(me) {
+				return nil, nil
+			}
+			name := h.Name
+			if name == "" {
+				name = h.Holder
+			}
+			return nil, refused("browse needs the browser lease: browser is held by %q; claim it first (beekeeper lease claim browser)", name)
+		}
+		idx, err := lease.Check(st, lease.Gate{Resource: browserResource, Caller: me, Now: a.now, TTL: a.cfg.GrantTTL.Duration})
+		if err != nil {
+			return nil, refused("browse needs the browser lease: %v", err)
+		}
+		if idx < 0 {
+			return nil, refused("browse needs the browser lease: held by nobody; claim it first (beekeeper lease claim browser)")
+		}
+		cur, err := dir.Claim(browserResource, lease.Holder{Env: browserResource, Session: me.Session, HostSession: me.HostSession,
+			Name: me.Name, Person: me.Person, Team: me.Team, Host: me.Host, Purpose: "browser steps", UpgradeUnblock: st.Grants[idx].UpgradeUnblock, Since: a.now.UTC().Format(time.RFC3339)})
+		if err != nil {
+			return nil, err
+		}
+		if cur != nil {
+			return nil, refused("browser lease is held by %q", cur.Name)
+		}
+		st.Grants = slices.Delete(st.Grants, idx, idx+1)
+		return []state.Event{event(me, verbLeaseClaim, "browser: browser steps")}, nil
+	})
+}
+
 // browse runs the steps in a headless turn and prints its report and
 // findings; a capture turn (blind) collects them in blind.out instead, for
 // its caller to print once the value is stored and scrubbed.
 func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn) error {
+	return a.browseWithProof(ctx, steps, dir, model, wait, deploy, files, blind, "")
+}
+
+func (a *app) browseWithProof(ctx context.Context, steps, dir, model string, wait time.Duration, deploy string, files []string, blind *blindTurn, proofRepo string) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
+	if permanentDeletionSteps.MatchString(steps) {
+		return refused("%s Report this refusal to the supervisor at once.", permanentDeletionRule)
+	}
+	if err := a.browseLease(); err != nil {
+		return err
+	}
 	// A locked screen, and a file the steps cannot upload, are refused before
 	// anything starts.
 	if err := screenLockedErr(); err != nil {
@@ -639,7 +767,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	if err != nil {
 		return err
 	}
-	consents, lab := appsNamed(guardAppsOf(st), steps), namesLoopback(steps)
+	consents, lab := appsNamed(guardAppsOf(st), steps), namesLabSignIn(steps)
 	id := uuid.NewString()
 	if blind != nil {
 		blind.id = id
@@ -681,6 +809,8 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	}
 	env := append(browseEnv(os.Environ()), guard.SharedEnv+"="+strings.Join(staged, string(os.PathListSeparator)))
 	if stage != "" {
+		// CLAUDE_STAGE_FILE_ROOT is undocumented; the browselive upload check
+		// must pass after upgrading the CLI that consumes this stage root.
 		env = append(env, stageRootEnv+"="+stage)
 	}
 	out := a.out
@@ -742,7 +872,7 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	// a fresh CLI resuming the session has a fresh Chrome connection and goes
 	// on with the steps not done, its findings read with the first turn's.
 	if err == nil && found.lost() {
-		report, err = turn(yctx, browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0]), self, rules, true), wait)
+		report, err = turn(yctx, browseArgv(id, model, fmt.Sprintf(reconnectWords, found.Lost[0])+" "+sitePermissionWords, self, rules, true), wait)
 		found, ferr = readFindings(path)
 		found.Reconnected = true
 	}
@@ -764,10 +894,32 @@ func (a *app) browse(ctx context.Context, steps, dir, model string, wait time.Du
 	lines := append(sharedLines(shared), found.lines(steps, deploy, consents, lab)...)
 	lines = append(lines, "transcript: "+path)
 	lines = append(lines, shotLines(shots, serr)...)
+	proofLines, perr := a.uploadBrowseProofs(ctx, shots, proofRepo)
+	lines = append(lines, proofLines...)
 	if _, werr := fmt.Fprintln(out, strings.Join(lines, "\n")); werr != nil {
 		return werr
 	}
-	return errors.Join(err, ferr, serr, werr, found.lostErr(report), found.drawErr(), found.tabsErr())
+	return errors.Join(err, ferr, serr, werr, perr, found.lostErr(report), found.drawErr(), found.tabsErr())
+}
+
+// uploadBrowseProofs uses the same App API path as proof upload, without
+// submitting a comment through the person's browser identity.
+func (a *app) uploadBrowseProofs(ctx context.Context, shots []string, repo string) ([]string, error) {
+	if repo == "" {
+		return nil, nil
+	}
+	var lines []string
+	var errs []error
+	for _, shot := range shots {
+		res, err := a.uploadProof(ctx, shot, repo, "")
+		if err != nil {
+			lines = append(lines, "proof upload failed: "+err.Error())
+			errs = append(errs, err)
+			continue
+		}
+		lines = append(lines, "proof: "+res.Markdown)
+	}
+	return lines, errors.Join(errs...)
 }
 
 // The turn's classifier names a call it refused in the call's error result:
@@ -895,6 +1047,7 @@ type browseFindings struct {
 	Reconnected bool
 	CleanedUp   bool
 	Left        guard.Tabs
+	Sudo        []string
 }
 
 // lost reports whether the connection is gone at the transcript's end: lost
@@ -964,6 +1117,7 @@ func readFindings(transcript string) (browseFindings, error) {
 	})
 	f.Recovered = len(f.Lost) > 0 && !lost
 	f.Left = guard.ReadTabs(transcript)
+	f.Sudo = guard.GitHubSudoBarriers(transcript)
 	return f, err
 }
 
@@ -1081,7 +1235,7 @@ func (f browseFindings) lostErr(report string) error {
 // line for the tabs and the windows the turn used, and one "connection
 // lost:" line.
 func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bool) []string {
-	var out []string
+	out := slices.Clone(f.Sudo)
 	if deploy != "" {
 		out = append(out, "allowed deploy: "+deploy+": the turn's auto mode allowed that one deploy or create click (--allow-deploy)")
 	}
@@ -1401,7 +1555,7 @@ func browseArgv(id, model, prompt, self string, rules []string, reconnect bool) 
 // when one is declared, the Apps on record and the lab sign-in the steps
 // name, then the steps.
 func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared []sharedFile) string {
-	p := browsePreamble + connectionWords + frontWords + drawWords + leaveWords + windowWords + uploadPrompt(shared)
+	p := browsePreamble + connectionWords + sitePermissionWords + frontWords + drawWords + leaveWords + windowWords + uploadPrompt(shared)
 	if deploy != "" {
 		p += fmt.Sprintf(deployWords, deploy)
 	}
@@ -1442,7 +1596,7 @@ func browsePrompt(steps, deploy string, consents []guard.App, lab bool, shared [
 // browseRules are the auto mode allow rules of a browse turn: the declared
 // deploy's, one per grant on record of each App the steps name (its
 // consent, its permission change), the lab's when the steps name a loopback
-// host; none without any.
+// sign-in; none without any.
 func browseRules(deploy string, consents []guard.App, lab bool) []string {
 	var rules []string
 	if deploy != "" {
@@ -1718,6 +1872,14 @@ func appNames(apps []guard.App) string {
 	return strings.Join(names, ", ")
 }
 
+// namesLabSignIn limits the lab exception to steps that actually describe
+// authentication, rather than any navigation to a local page.
+func namesLabSignIn(steps string) bool {
+	return namesLoopback(steps) && labSignInStep.MatchString(steps)
+}
+
+var labSignInStep = regexp.MustCompile(`(?i)\b(?:sign[ -]?in|log[ -]?in|password|credential|consent)\b|/(?:auth|authorize)(?:[/?#\s.]|$)`)
+
 // namesLoopback reports whether steps name a loopback host, the lab's own,
 // as the hook decides one (guard.Loopback).
 func namesLoopback(steps string) bool {
@@ -1767,6 +1929,8 @@ func browseEnv(env []string) []string {
 // Chrome's file_upload takes without the Read tool. A browse turn has no Read
 // tool, and granting it would let the turn read every path the person's own
 // allow rules cover, so a shared file reaches the turn as a copy there.
+// CLAUDE_STAGE_FILE_ROOT is undocumented and may change with a CLI upgrade.
+// TestBrowseUploadLive exercises this contract against the installed CLI.
 const stageRootEnv = "CLAUDE_STAGE_FILE_ROOT"
 
 // uploadLimit is file_upload's bound on the bytes of the files of one call.
@@ -1792,7 +1956,7 @@ func checkUploads(files, roots []string) error {
 		case err != nil:
 			return usageErr("--file %s: %v", f, err)
 		case !fi.Mode().IsRegular():
-			return usageErr("--file %s: not a regular file (%s), only a file's bytes are uploaded", f, fi.Mode().Type())
+			return usageErr("--file %s is %s, not a file; only a file's bytes are uploaded", f, uploadFileKind(fi.Mode()))
 		case !slices.ContainsFunc(roots, func(r string) bool { return within(f, r) }):
 			return usageErr("--file %s: outside the worker's directories (%s): a file the steps upload lies in the working directory, "+
 				"the turn's --dir, beekeeper's state directory or the session's scratchpad", f, strings.Join(roots, ", "))
@@ -1803,6 +1967,24 @@ func checkUploads(files, roots []string) error {
 		return usageErr("--file: the files hold %d bytes, over file_upload's %d", total, int64(uploadLimit))
 	}
 	return nil
+}
+
+// uploadFileKind names a non-regular file without displaying permission bits.
+func uploadFileKind(mode os.FileMode) string {
+	switch {
+	case mode.IsDir():
+		return "a directory"
+	case mode&os.ModeDevice != 0:
+		return "a device"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSymlink != 0:
+		return "a symbolic link"
+	default:
+		return "an irregular file"
+	}
 }
 
 // stageUploads copies each file into a directory of its own under the stage
@@ -1907,7 +2089,7 @@ const uploadWords = "The caller shares these files with you for upload, and only
 	"file_upload and the path after 'as', the file's copy shared with this session, never the caller's own path; file_upload refuses every other path. " +
 	"A page keeps hidden file inputs (a review-reply box beside the comment box) that take an upload as readily as the intended one, so before " +
 	"each file_upload resolve its input: run this upload-target check with javascript_tool on the tab, scope set to a selector of the " +
-	"intended form or comment box (\"\" for the whole page): %s It marks the one visible, enabled file input there or says why it marked none " +
+	"intended form or comment box (\"\" for the whole page; form[action=\"...\"] matches the destination, ignoring its query): %s It marks the one visible, enabled file input there or says why it marked none " +
 	"(hidden, disabled, several: narrow the scope; none visible: open the intended comment box, or stop and report it). Then find '" +
 	guard.UploadTargetLabel + "' and file_upload to the ref it gives, and only that ref: the hook refuses a file_upload to any other. " +
 	"The hook reads the check and the find from their results, so both answer before the call that holds the file_upload, never in its batch. "
