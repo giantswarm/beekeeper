@@ -140,6 +140,7 @@ type Pull struct {
 	Author, Title, Branch string
 	Files                 []string
 	ChangedFiles          int
+	Additions, Deletions  int
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
@@ -318,6 +319,8 @@ type Input struct {
 	// resolving the merge's conflicts or not, or rebases onto it
 	// (github.ApprovalCovers); nil: never, every new head is a new review.
 	BaseMerged func(p Pull, approved string) bool
+	// NitsChecked is an explicit supervisor attestation against the approved head.
+	NitsChecked func(p Pull, approved string) bool
 	// Open reports whether an issue or pull request (owner/repo#n) is
 	// open; one it cannot read counts as open. nil: none is, so a merged
 	// pull request's worker is retired as before.
@@ -1325,6 +1328,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// change of the worker's. Any other head asks for a park
 		// since the round opened.
 		if !p.Green {
+			return
+		}
+		if in.NitsChecked != nil && in.NitsChecked(p, reviewed) {
+			add(goAction(in, base, fmt.Sprintf("supervisor checked approval nits at head %s against approved head %s", short(p.Head), short(reviewed))))
 			return
 		}
 		if in.baseMerged(p, reviewed) {

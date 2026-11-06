@@ -2626,6 +2626,31 @@ new activity restores its slot. Setting `agents.staleAfter` negative disables
 stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
 
+`beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
+in a checkout of that repository. It requires green CI at the pinned head and
+refuses a second review of a head already reviewed or requested, including after
+a restart. The brief includes closing issues, their parent epic, the round and
+previous findings. The shipped [review skill](plugin/skills/review/SKILL.md)
+checks acceptance criteria and behavioural coverage as well as correctness.
+`--model` overrides `supervisor.reviewModel` (default `opus`).
+`--light-lines` overrides `supervisor.reviewLightLines` (default 150): smaller
+PRs and docs/tests-only PRs use diff, issue and CI without checkout or build.
+Other reviews use an independent detached worktree and trust green CI on that
+head; only the reviewer's own probes need local builds.
+
+The comment's first line is always `Desk review (opus): approved` or
+`Desk review (opus): changes requested`, regardless of model. The next line pins
+`Head reviewed:` to the SHA. Workers fix findings, push and park again; the
+supervisor gives the merge go after approval. For a push fixing only approval
+nits, the supervisor checks its delta against the approved head, then attests
+with `beekeeper --as <supervisor> agents review <owner/repo>#<n> --nits-of <approved-full-sha>`.
+That attestation covers just the new head, and the loop can merge it without a
+second independent review. Workers cannot attest their own fixes.
+`merge.requireReview: true` requires the fixed approval comment covering the
+head (including a supervisor-attested nit delta); a merge go alone is insufficient.
+Review-raised issues use the `follow-up` label, stay unranked in backlog and are
+never attached as epic sub-issues. `board next` skips that label by default.
+
 A park on a pull request requests the supervisor loop's independent review only
 when run from that pull request's worktree branch at its published HEAD. The
 command records and prints the verified head. Other parks, including older parks
