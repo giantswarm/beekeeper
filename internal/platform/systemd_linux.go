@@ -47,6 +47,14 @@ const userManager = "--user"
 // quietRun keeps systemd-run from printing the unit it started.
 const quietRun = "--quiet"
 
+// scopeRun runs the command in a transient scope, as systemd-run's child,
+// instead of a service; collectRun has the unit collected once it ends,
+// failed or not.
+const (
+	scopeRun   = "--scope"
+	collectRun = "--collect"
+)
+
 // cgroupRoot is where cgroup v2 is mounted.
 const cgroupRoot = "/sys/fs/cgroup"
 
@@ -149,7 +157,7 @@ func (l systemdLauncher) Start(u Unit) error {
 // runArgs is systemd-run's command line for u; quiet counts every end of
 // it as success.
 func runArgs(u Unit, quiet bool) []string {
-	args := []string{userManager, "--collect", quietRun, "--unit=" + u.Name}
+	args := []string{userManager, collectRun, quietRun, "--unit=" + u.Name}
 	if u.KeepChildren {
 		args = append(args, "-p", "KillMode=process")
 	} else {
@@ -334,7 +342,7 @@ func (systemdCapper) Command(name string, c Cap, argv []string) (*exec.Cmd, erro
 // the slot's slice, the memory cap, and the command at RunNice, which
 // systemd-run applies itself in --scope mode.
 func scopeArgs(name string, c Cap, argv []string) []string {
-	args := []string{userManager, "--scope", quietRun, "--expand-environment=no", "--unit=" + name,
+	args := []string{userManager, scopeRun, quietRun, "--expand-environment=no", "--unit=" + name,
 		"--slice=" + c.slice(), "--nice=" + strconv.Itoa(RunNice), "-p", "MemoryMax=" + c.Max, "-p", "MemorySwapMax=" + c.Swap,
 		"-p", "OOMPolicy=continue"}
 	if c.StopWith != "" {
@@ -388,31 +396,76 @@ func (systemdCapper) Adopt(pid int, name string, c Cap) error {
 	if err != nil {
 		return err
 	}
+	return startScope(name, []int{pid},
+		scopeProperty{"Slice", dbus.MakeVariant(c.slice())},
+		scopeProperty{"MemoryMax", dbus.MakeVariant(limit)},
+		scopeProperty{"MemorySwapMax", dbus.MakeVariant(swap)},
+		scopeProperty{"OOMPolicy", dbus.MakeVariant("continue")})
+}
+
+// appSlice is the user manager's slice for applications, where the desktop
+// app's scopes sit too.
+const appSlice = "app.slice"
+
+// Move starts the transient scope name under app.slice around the running
+// processes pids, which leave the unit they ran in, collected once it
+// empties, failed or not.
+func (systemdLauncher) Move(pids []int, name string) error {
+	if len(pids) == 0 {
+		return nil
+	}
+	return startScope(name, pids,
+		scopeProperty{"Slice", dbus.MakeVariant(appSlice)},
+		scopeProperty{"CollectMode", dbus.MakeVariant("inactive-or-failed")})
+}
+
+// Scoped wraps argv in systemd-run's scope name under app.slice, collected
+// once it empties; systemd-run's own ${VAR} expansion is off, so argv (a
+// brief, a message) reaches the command verbatim.
+func (systemdLauncher) Scoped(name string, argv []string) []string {
+	if !userSystemd() {
+		return argv
+	}
+	return scopedArgs(name, argv)
+}
+
+// scopedArgs is the command line of Scoped.
+func scopedArgs(name string, argv []string) []string {
+	return append([]string{"systemd-run", userManager, scopeRun, quietRun, collectRun, "--expand-environment=no",
+		"--slice=" + appSlice, "--unit=" + name, "--"}, argv...)
+}
+
+// scopeProperty is one property of a transient unit.
+type scopeProperty struct {
+	Name  string
+	Value dbus.Variant
+}
+
+// startScope starts the transient scope name around the running processes
+// pids (the service manager's StartTransientUnit with PIDs, which
+// systemd-run --scope uses for itself) with props, and waits until the first
+// process is in it.
+func startScope(name string, pids []int, props ...scopeProperty) error {
 	conn, err := connect()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	type property struct {
-		Name  string
-		Value dbus.Variant
+	ids := make([]uint32, 0, len(pids))
+	for _, pid := range pids {
+		ids = append(ids, uint32(pid)) //nolint:gosec // a process id
 	}
-	props := []property{
-		{"PIDs", dbus.MakeVariant([]uint32{uint32(pid)})}, //nolint:gosec // a process id
-		{"Slice", dbus.MakeVariant(c.slice())},
-		{"MemoryMax", dbus.MakeVariant(limit)},
-		{"MemorySwapMax", dbus.MakeVariant(swap)},
-		{"OOMPolicy", dbus.MakeVariant("continue")},
-	}
+	props = append([]scopeProperty{{"PIDs", dbus.MakeVariant(ids)}}, props...)
 	var job dbus.ObjectPath
 	err = conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1").
 		Call("org.freedesktop.systemd1.Manager.StartTransientUnit", 0, name+".scope", "fail", props, []struct {
 			Name  string
-			Props []property
+			Props []scopeProperty
 		}{}).Store(&job)
 	if err != nil {
 		return fmt.Errorf("starting %s.scope: %w", name, err)
 	}
+	pid := pids[0]
 	cgroup := filepath.Join("/proc", strconv.Itoa(pid), "cgroup")
 	for range 250 {
 		if raw, err := os.ReadFile(cgroup); err != nil { //nolint:gosec // the adopted process's cgroup
@@ -504,7 +557,7 @@ func (o systemdOpener) Open(ctx context.Context, url string, running bool) error
 // named like the desktop's own, so its drop-ins apply, and collected
 // whether the app exits zero or not.
 func openArgs(app, url string, now time.Time) []string {
-	return []string{userManager, "--scope", quietRun, "--collect", "--slice=app.slice",
+	return []string{userManager, scopeRun, quietRun, collectRun, "--slice=app.slice",
 		"--unit=app-com.anthropic.Claude-beekeeper-" + strconv.FormatInt(now.UnixNano(), 10), app, url}
 }
 

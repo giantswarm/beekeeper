@@ -309,6 +309,46 @@ func cpuQuota(path string) string {
 	return strconv.Itoa(int(math.Round(q/p*100))) + "%"
 }
 
+// CgroupRoot is where cgroup v2 is mounted: a process's cgroup path
+// ("/user.slice/…") is a directory under it.
+const CgroupRoot = "/sys/fs/cgroup"
+
+// Limits are the resource limits the cgroup directory dir sets, each as the
+// systemd property that sets it ("MemoryMax 256M", "CPUQuota 50%"); none for
+// a cgroup that sets none or cannot be read.
+func Limits(dir string) []string {
+	var out []string
+	for _, l := range []struct{ property, file string }{
+		{"MemoryHigh", "memory.high"}, {"MemoryMax", "memory.max"}, {"MemorySwapMax", "memory.swap.max"},
+	} {
+		raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, l.file)))
+		if err != nil {
+			continue
+		}
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil {
+			out = append(out, l.property+" "+byteSize(n))
+		}
+	}
+	if q := cpuQuota(filepath.Join(dir, "cpu.max")); q != "max" && q != "?" {
+		out = append(out, "CPUQuota "+q)
+	}
+	return out
+}
+
+// byteSize is n bytes in the largest base-1024 unit that holds it whole, as
+// systemd writes a size ("256M", "20G", "0").
+func byteSize(n int64) string {
+	for _, u := range []struct {
+		shift  uint
+		suffix string
+	}{{40, "T"}, {30, "G"}, {20, "M"}, {10, "K"}} {
+		if n >= 1<<u.shift && n%(1<<u.shift) == 0 {
+			return strconv.FormatInt(n>>u.shift, 10) + u.suffix
+		}
+	}
+	return strconv.FormatInt(n, 10)
+}
+
 // ReadScope reads the cgroup at path.
 func ReadScope(path string) *Scope {
 	s := &Scope{

@@ -69,14 +69,14 @@ func stubBackground(t *testing.T, out string, rows ...bgSession) *[]bgCall {
 }
 
 func TestBackgroundArgv(t *testing.T) {
-	got := bgStartArgv("/bin/claude", bgName, bgModel, "the brief", "--tools", tToolBash)
-	want := []string{"/bin/claude", bgFlag, remoteControlFlag, bgName, permissionModeFlag, state.ModeBypass, "-n", bgName, modelFlag, bgModel, "--tools", tToolBash, "--", "the brief"}
+	got := bgStartArgv(claudeTestBin, bgName, bgModel, "the brief", "--tools", tToolBash)
+	want := []string{claudeTestBin, bgFlag, remoteControlFlag, bgName, permissionModeFlag, state.ModeBypass, "-n", bgName, modelFlag, bgModel, "--tools", tToolBash, "--", "the brief"}
 	if !slices.Equal(got, want) {
 		t.Errorf("start argv = %q\nwant %q", got, want)
 	}
 	// A resume passes no flag, which would start a copy: the session keeps
 	// its own Remote Control, mode, name and model.
-	if got := bgResumeArgv("/bin/claude", bgID, "-a message"); !slices.Equal(got, []string{"/bin/claude", bgFlag, resumeFlag, bgID, " -a message"}) {
+	if got := bgResumeArgv(claudeTestBin, bgID, "-a message"); !slices.Equal(got, []string{claudeTestBin, bgFlag, resumeFlag, bgID, " -a message"}) {
 		t.Errorf("resume argv = %q", got)
 	}
 	if got := bgShort("note: woke session 6f1c2a90 with its saved options.\nbackgrounded · 6f1c2a90 · x\n  claude agents  list sessions\n"); got != bgShortID {

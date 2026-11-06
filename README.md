@@ -3343,6 +3343,15 @@ which `claude agents`, `claude attach` and Remote Control show:
 - **A clean identity.** The call runs with none of the caller's `CLAUDE*` or `CCD*` variables, so
   a session started from inside another one never inherits its id or name: its commands, notes
   and holds are booked under its own name.
+- **A daemon of its own.** Every `claude --bg` (a start, a resume) runs in a transient scope of
+  its own under `app.slice` (`systemd-run --user --scope --collect`, `claude-daemon-<time>.scope`):
+  the first one after boot starts the claude daemon as its child, which stays in that scope, never
+  in the calling unit (the standby watch's `beekeeper-notify.service` with its `MemoryMax` and
+  `CPUQuota`, a wake's unit), whose limits every background session would share and whose stop
+  would end them all. `beekeeper doctor`, and so the watch every tick, moves a daemon it finds in a
+  beekeeper unit, with the processes under it there, into a scope of its own
+  (`claude-daemon-<time>-<pid>.scope`) and says so in a `DOCTOR` line naming the unit and its
+  limits (`daemon.move` in the log); no session stops.
 - **On the roster at once.** The daemon chooses the session id (`--bg` ignores `--session-id`);
   `agents start` reads it from `claude agents --json` and records the start (`background: true`)
   and the roster entry, busy with `--task`, before it returns. No `agents assign` follows. The
