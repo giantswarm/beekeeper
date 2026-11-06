@@ -109,7 +109,8 @@ func TestReviewedMergeUpdatesABehindBranchAndMergesTheCoveredHead(t *testing.T) 
 	if len(m) != 1 || !slices.Contains(m[0], "--match-head-commit") || !slices.Contains(m[0], loopFixed) {
 		t.Fatalf("merge of the updated head: %v", b.cmds)
 	}
-	if !slices.Equal(b.baseReads, []string{loopHead + ".." + loopFixed}) {
+	// Revalidate coverage immediately before merging, after the queue read.
+	if !slices.Equal(b.baseReads, []string{loopHead + ".." + loopFixed, loopHead + ".." + loopFixed}) {
 		t.Fatalf("approval coverage read %v", b.baseReads)
 	}
 }
