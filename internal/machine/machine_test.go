@@ -107,3 +107,37 @@ func TestParseOOMAtASlotSlice(t *testing.T) {
 		t.Errorf("kills = %+v", kills)
 	}
 }
+
+// A cgroup's limits read as the systemd properties that set them; an
+// unlimited one, or one that cannot be read, has none.
+func TestLimits(t *testing.T) {
+	dir := t.TempDir()
+	for f, v := range map[string]string{
+		"memory.high": "max\n", "memory.max": "268435456\n", "memory.swap.max": "0\n", "cpu.max": "50000 100000\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := strings.Join(Limits(dir), ", "), "MemoryMax 256M, MemorySwapMax 0, CPUQuota 50%"; got != want {
+		t.Errorf("Limits = %q, want %q", got, want)
+	}
+	open := t.TempDir()
+	for f, v := range map[string]string{"memory.max": "max\n", "cpu.max": "max 100000\n"} {
+		if err := os.WriteFile(filepath.Join(open, f), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := Limits(open); len(got) != 0 {
+		t.Errorf("Limits of an unlimited cgroup = %q, want none", got)
+	}
+	if got := Limits(filepath.Join(dir, "gone")); len(got) != 0 {
+		t.Errorf("Limits of a missing cgroup = %q, want none", got)
+	}
+	if got := byteSize(20 << 30); got != "20G" {
+		t.Errorf("byteSize(20G) = %q", got)
+	}
+	if got := byteSize(1500); got != "1500" {
+		t.Errorf("byteSize(1500) = %q", got)
+	}
+}

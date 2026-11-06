@@ -238,11 +238,14 @@ func Discover(cfg *config.Config, t *proc.Table, now time.Time) []*Session {
 // cliComm is the claude binary's process name.
 const cliComm = "claude"
 
+// daemonCmd is the subcommand of the claude daemon and its clients.
+const daemonCmd = "daemon"
+
 // helpers are the claude subcommands: processes of the claude binary that
 // are no session. daemon, bg-pty-host and bg-spare run the background
 // sessions; attach, logs, stop and the rest are clients.
 var helpers = map[string]bool{
-	"daemon": true, "bg-pty-host": true, "bg-spare": true,
+	daemonCmd: true, "bg-pty-host": true, "bg-spare": true,
 	"agents": true, "attach": true, "auth": true, "auto-mode": true, "doctor": true, "gateway": true,
 	"import": true, "install": true, "kill": true, "logs": true, "mcp": true, "plugin": true,
 	"plugins": true, "project": true, "respawn": true, "rm": true, "setup-token": true,
@@ -308,12 +311,30 @@ func Nested(t *proc.Table, pid int) bool {
 	return n > 1
 }
 
+// IsDaemon reports whether p is the claude daemon (claude daemon run), which
+// runs the background sessions, rather than a client of it (claude daemon
+// status, logs, stop or uninstall).
+func IsDaemon(p *proc.Process) bool {
+	if p.Comm != cliComm || subcommand(p) != daemonCmd {
+		return false
+	}
+	verb := ""
+	if len(p.Args) > 2 {
+		verb = p.Args[2]
+	}
+	switch verb {
+	case "status", "logs", "stop", "uninstall":
+		return false
+	}
+	return true
+}
+
 // underDaemon reports whether the claude daemon runs p: it or one of its
 // ancestors is the daemon or a background session's terminal host.
 func underDaemon(t *proc.Table, p *proc.Process) bool {
 	return slices.ContainsFunc(append(t.Ancestors(p.PID), p), func(a *proc.Process) bool {
 		c := subcommand(a)
-		return a.Comm == cliComm && (c == "daemon" || c == "bg-pty-host")
+		return a.Comm == cliComm && (c == daemonCmd || c == "bg-pty-host")
 	})
 }
 
