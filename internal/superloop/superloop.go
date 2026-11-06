@@ -899,6 +899,36 @@ func Plan(in Input) []Action {
 	}
 	slices.Sort(refs)
 	for _, ref := range refs {
+		by := absorbed[strings.ToLower(ref)]
+		if by == "" {
+			continue
+		}
+		p := in.Pulls[ref]
+		p.Ref = cmp.Or(p.Ref, ref)
+		why := fmt.Sprintf("%s was absorbed by merged combining pull request %s", cmp.Or(p.URL, ref), by)
+		for _, w := range in.Workers {
+			if w.Saved || w.Name == "" {
+				continue
+			}
+			if strings.EqualFold(w.Name, PullWorkerName(ref)) ||
+				(l.reviewer[ref] != "" && strings.EqualFold(w.Name, l.reviewer[ref])) ||
+				(strings.EqualFold(w.ParkedOn, ref) && in.serving(w, ref, in.Now) == "") {
+				retire(ref, retiredWorker, w.Name, why)
+			}
+		}
+		for i := range l.rounds[ref] {
+			retire(ref, fmt.Sprintf("reviewer r%d", i+1), ReviewerName(ref, i+1), why)
+		}
+		if !l.ended[ref] {
+			if _, isParked := parked[ref]; len(l.rounds[ref]) > 0 || isParked {
+				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: "absorbed by " + by})
+			}
+		}
+	}
+	for _, ref := range refs {
+		if absorbed[strings.ToLower(ref)] != "" {
+			continue
+		}
 		p := in.Pulls[ref]
 		p.Ref = cmp.Or(p.Ref, ref)
 		if p.State == Open && l.ended[ref] {
@@ -909,28 +939,6 @@ func Plan(in Input) []Action {
 					delete(swept.sweeps, key)
 				}
 			}
-		}
-		if by := absorbed[strings.ToLower(ref)]; by != "" {
-			why := fmt.Sprintf("%s was absorbed by merged combining pull request %s", cmp.Or(p.URL, ref), by)
-			for _, w := range in.Workers {
-				if w.Saved || w.Name == "" {
-					continue
-				}
-				if strings.EqualFold(w.Name, PullWorkerName(ref)) ||
-					(l.reviewer[ref] != "" && strings.EqualFold(w.Name, l.reviewer[ref])) ||
-					(strings.EqualFold(w.ParkedOn, ref) && in.serving(w, ref, in.Now) == "") {
-					retire(ref, retiredWorker, w.Name, why)
-				}
-			}
-			for i := range l.rounds[ref] {
-				retire(ref, fmt.Sprintf("reviewer r%d", i+1), ReviewerName(ref, i+1), why)
-			}
-			if !l.ended[ref] {
-				if _, isParked := parked[ref]; len(l.rounds[ref]) > 0 || isParked {
-					add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: "absorbed by " + by})
-				}
-			}
-			continue
 		}
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
 			// The end action durably marks when the merge was observed. A
@@ -1695,16 +1703,18 @@ var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d
 var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
 var (
-	combineKeyword   = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing|ation)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?|replac(?:e|es|ed|ing)|batch(?:es|ed|ing)?|merg(?:e|es|ed|ing)\s+together|original\s+(?:pr|pull\s+request)s?)\b`)
-	closingIssueWord = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|issues?)\s*:?\s*$`)
+	absorbLead       = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original\s+(?:pr|pull\s+request)s?)\b`)
+	absorbHeader     = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original)(?:\s+(?:original|pr|prs|pull\s+requests?))*\s*:?\s*(?:\*\*)?$`)
+	absorbFirstGap   = regexp.MustCompile(`(?i)^[\s:]*(?:(?:from|with|in|original|originals|pr|prs|pull\s+requests?)\b[\s:]*)*$`)
+	absorbNextGap    = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
+	absorbBulletLead = regexp.MustCompile(`^(?:[-*+]|\d+\.)\s+`)
 	shortPullMention = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
 )
 
 // ParseAbsorbedPulls extracts the original pull requests (owner/repo#n) that a
-// combining pull request supersedes or folds in from its title and body.
+// combining pull request explicitly supersedes or absorbs from its title and body.
 func ParseAbsorbedPulls(selfRef, title, body string) []string {
 	repo := repoOf(selfRef)
-	titleCombines := combineKeyword.MatchString(title)
 	var out []string
 	addRef := func(r string) {
 		if r == "" || strings.EqualFold(r, selfRef) {
@@ -1714,44 +1724,67 @@ func ParseAbsorbedPulls(selfRef, title, body string) []string {
 			out = append(out, r)
 		}
 	}
-	scanLine := func(line string, inCombineContext bool) {
-		lineCombines := inCombineContext || combineKeyword.MatchString(line)
-		for _, loc := range shortPullMention.FindAllStringSubmatchIndex(line, -1) {
-			if loc[2] >= 0 && loc[3] >= 0 {
-				// Explicit /pull/<n> URL.
-				if lineCombines || titleCombines {
-					addRef(line[loc[2]:loc[3]] + "#" + line[loc[4]:loc[5]])
+	scanList := func(rest string) {
+		cursor := 0
+		first := true
+		for _, loc := range shortPullMention.FindAllStringSubmatchIndex(rest, -1) {
+			matchStart := loc[0]
+			if loc[10] >= 0 && matchStart < loc[10] {
+				if c := rest[matchStart]; c != '#' && c != 'p' && c != 'P' {
+					matchStart++
 				}
-				continue
 			}
-			if !lineCombines {
-				continue
+			gap := rest[cursor:matchStart]
+			if first {
+				if !absorbFirstGap.MatchString(gap) {
+					break
+				}
+			} else if !absorbNextGap.MatchString(gap) {
+				break
 			}
-			prefix := line[:loc[0]]
-			if closingIssueWord.MatchString(prefix) {
-				continue
+			switch {
+			case loc[2] >= 0 && loc[3] >= 0:
+				addRef(rest[loc[2]:loc[3]] + "#" + rest[loc[4]:loc[5]])
+			case loc[6] >= 0 && loc[7] >= 0:
+				addRef(rest[loc[6]:loc[7]] + "#" + rest[loc[8]:loc[9]])
+			case loc[10] >= 0 && loc[11] >= 0:
+				if repo == "" {
+					return
+				}
+				addRef(repo + "#" + rest[loc[10]:loc[11]])
+			default:
+				// An /issues/<n> link is not an absorbed pull request.
+				return
 			}
-			if loc[6] >= 0 && loc[7] >= 0 {
-				addRef(line[loc[6]:loc[7]] + "#" + line[loc[8]:loc[9]])
-			} else if loc[10] >= 0 && loc[11] >= 0 && repo != "" {
-				addRef(repo + "#" + line[loc[10]:loc[11]])
-			}
+			cursor = loc[1]
+			first = false
 		}
 	}
-	scanLine(title, titleCombines)
-	inCombineSection := false
+	scanLine := func(line string) {
+		for _, lead := range absorbLead.FindAllStringIndex(line, -1) {
+			scanList(line[lead[1]:])
+		}
+	}
+	scanLine(title)
+	inCombineList := false
 	for line := range strings.Lines(body) {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
-			inCombineSection = false
+			inCombineList = false
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			inCombineSection = combineKeyword.MatchString(trimmed)
-		} else if combineKeyword.MatchString(trimmed) && strings.HasSuffix(trimmed, ":") {
-			inCombineSection = true
+		if absorbHeader.MatchString(trimmed) {
+			inCombineList = true
+			continue
 		}
-		scanLine(trimmed, inCombineSection || titleCombines)
+		if inCombineList {
+			if m := absorbBulletLead.FindStringIndex(trimmed); m != nil {
+				scanList(trimmed[m[1]:])
+				continue
+			}
+			inCombineList = false
+		}
+		scanLine(trimmed)
 	}
 	return out
 }

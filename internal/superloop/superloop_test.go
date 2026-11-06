@@ -1514,6 +1514,43 @@ func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 	if want := []string{"o/r#401", "o/r#402"}; !slices.Equal(got, want) {
 		t.Fatalf("ParseAbsorbedPulls = %v, want %v", got, want)
 	}
+	for _, tc := range []struct {
+		name  string
+		title string
+		body  string
+		want  []string
+	}{
+		{
+			name:  "generic batch keyword in title does not absorb related PR",
+			title: "fix: batch scheduler",
+			body:  "Related: https://github.com/o/r/pull/401\nSee also o/r#402",
+			want:  nil,
+		},
+		{
+			name:  "combine keyword in title without PRs does not leak to body",
+			title: "fix: combine metrics",
+			body:  "Related: https://github.com/o/r/pull/401\nReplaces old handler from https://github.com/o/r/pull/402",
+			want:  nil,
+		},
+		{
+			name:  "combine clause stops before related clause on same line",
+			title: "fix: cleanup",
+			body:  "Combines https://github.com/o/r/pull/401 and #402. Related: https://github.com/o/r/pull/403",
+			want:  []string{"o/r#401", "o/r#402"},
+		},
+		{
+			name:  "explicit bullet list under Combines heading",
+			title: "fix: rollup",
+			body:  "Combines:\n- https://github.com/o/r/pull/401\n- o/r#402\n\nRelated:\n- https://github.com/o/r/pull/403",
+			want:  []string{"o/r#401", "o/r#402"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := ParseAbsorbedPulls("o/r#400", tc.title, tc.body); !slices.Equal(actual, tc.want) {
+				t.Fatalf("ParseAbsorbedPulls(%q, %q) = %v, want %v", tc.title, tc.body, actual, tc.want)
+			}
+		})
+	}
 
 	t0 := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC)
 	const (

@@ -38,6 +38,9 @@ func (l *supervisorLoop) recoverQuota(ctx context.Context, st *state.State) erro
 			continue
 		}
 		ref := cmp.Or(loopServes(st, ag), agentRef(st, ag.Name))
+		if l.agentUnreadRepo(st, ag, ref) != "" {
+			continue
+		}
 		target := cmp.Or(ref, ag.Task)
 		if l.dryRun {
 			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD QUOTA %s: %s; free slot and re-queue %s on another choice\n", ag.Name, qerr.Error(), target); err != nil {
@@ -179,10 +182,10 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 	if !ok {
 		return fmt.Errorf("no task reference")
 	}
-	if l.unreadRepo(ref) != "" {
+	if l.agentUnreadRepo(st, ag, ref) != "" {
 		return errLoopLater
 	}
-	if (review != nil || superloop.IsPull(ref) && ag.Park != nil && ag.Park.RefKind == github.RefPullRequest) && !l.open(ctx, ref) {
+	if (review != nil || superloop.IsPull(ref) && ag.Park != nil && ag.Park.RefKind == github.RefPullRequest || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 		return errLoopLater
 	}
 	var brief string
@@ -272,6 +275,17 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if alive {
 			continue
 		}
+		ref := agentRef(st, ag.Name)
+		pullPark := ag.Park != nil && ag.Park.RefKind == github.RefPullRequest
+		if pullPark && ag.Park.On != "" {
+			ref = ag.Park.On
+		}
+		if l.agentUnreadRepo(st, ag, ref) != "" {
+			continue
+		}
+		if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
+			continue
+		}
 		if l.dryRun {
 			if _, err := fmt.Fprintf(l.a.out, "SUPERVISOR WOULD RESUME %s: check its harness before restarting a gone session\n", ag.Name); err != nil {
 				return err
@@ -283,7 +297,7 @@ func (l *supervisorLoop) recoverParks(ctx context.Context, st *state.State) erro
 		if err := loopResumePark(l.a, ctx, loopParty, ag.Name); !errors.Is(err, errGone) {
 			continue
 		}
-		if err := l.restartPark(ctx, ag, agentRef(st, ag.Name)); err != nil {
+		if err := l.restartPark(ctx, ag, ref); err != nil {
 			return err
 		}
 	}
@@ -304,9 +318,9 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 	var startErr error
 	if !ok || (!pullPark && l.a.cfg.Supervisor.WorkerBrief == "") {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
-	} else if l.unreadRepo(ref) != "" {
+	} else if l.agentUnreadRepo(nil, ag, ref) != "" {
 		startErr = fmt.Errorf("repository of %s is not owned by supervisor", ref)
-	} else if pullPark && !l.open(ctx, ref) {
+	} else if (pullPark || strings.Contains(strings.ToLower(ref), "/pull/")) && !l.liveOpen(ctx, ref) {
 		startErr = fmt.Errorf("pull request %s is not open", ref)
 	} else {
 		file, def := l.a.cfg.Supervisor.WorkerBrief, ""

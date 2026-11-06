@@ -313,6 +313,12 @@ func (l *supervisorLoop) repairPull(ctx context.Context, st *state.State, act su
 // wakes only tasks with a remaining release, rollout or proof. Older parks
 // retain the existing release-containment and retirement behavior.
 func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
+	if latest, err := l.a.store.Read(); err == nil {
+		st = latest
+	}
+	if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok {
+		return l.endAbsorbed(ctx, st, act, strings.TrimSpace(by))
+	}
 	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
 		return ag.Park != nil && ag.Park.On == act.Ref && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
 	})
@@ -489,6 +495,129 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask), event(worker.Party, superloop.VerbReport, "%s: %s", worker.Name, report)}, nil
 	})
 	return "merged; task closed without waking worker", err
+}
+
+func (l *supervisorLoop) endAbsorbed(ctx context.Context, st *state.State, act superloop.Action, by string) (string, error) {
+	i := slices.IndexFunc(st.Agents, func(ag state.Agent) bool {
+		return ag.Park != nil && strings.EqualFold(ag.Park.On, act.Ref) && ag.Park.ReviewHead != "" && ag.Park.PostMerge != nil
+	})
+	rp, hasRP := st.ReviewParkFor(act.Ref)
+	var (
+		targetAgent string
+		targetParty state.Party
+		postMerge   string
+		serves      string
+	)
+	switch {
+	case i >= 0:
+		ag := st.Agents[i]
+		targetAgent = ag.Name
+		targetParty = ag.Party
+		postMerge = strings.TrimSpace(*ag.Park.PostMerge)
+		serves = cmp.Or(loopServes(st, ag), loopTaskServes(ag, act.Ref))
+	case hasRP && rp.PostMerge != nil:
+		targetAgent = rp.Agent
+		targetParty = rp.Party
+		postMerge = strings.TrimSpace(*rp.PostMerge)
+		serves = rp.Serves
+	default:
+		_ = l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+			return nil, nil
+		})
+		return fmt.Sprintf("%s %s: tracking ends", act.URL, act.Message), nil
+	}
+	if err := l.claim(act, targetAgent); err != nil {
+		return "", err
+	}
+	isRescue := strings.EqualFold(targetAgent, superloop.PullWorkerName(act.Ref))
+	serveOpen := serves != "" && !strings.EqualFold(serves, act.Ref) && l.open(ctx, serves)
+	reconciledToCombining := false
+	err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+		mergePostMerge := func(existing *string, add string) *string {
+			cur := ""
+			if existing != nil {
+				cur = strings.TrimSpace(*existing)
+			}
+			merged := add
+			if cur != "" && !strings.Contains(cur, add) {
+				merged = cur + "; " + add
+			} else if cur != "" {
+				merged = cur
+			}
+			return &merged
+		}
+		for j := range current.ReviewParks {
+			if strings.EqualFold(current.ReviewParks[j].On, by) {
+				reconciledToCombining = true
+				if postMerge != "" {
+					current.ReviewParks[j].PostMerge = mergePostMerge(current.ReviewParks[j].PostMerge, postMerge)
+				}
+				if current.ReviewParks[j].Serves == "" && serves != "" && !strings.EqualFold(serves, act.Ref) {
+					current.ReviewParks[j].Serves = serves
+				}
+			}
+		}
+		for j := range current.Agents {
+			ag := &current.Agents[j]
+			if ag.Park != nil && strings.EqualFold(ag.Park.On, by) && ag.Park.ReviewHead != "" {
+				reconciledToCombining = true
+				if postMerge != "" {
+					ag.Park.PostMerge = mergePostMerge(ag.Park.PostMerge, postMerge)
+				}
+			}
+		}
+		current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool {
+			return strings.EqualFold(p.On, act.Ref)
+		})
+		if isRescue || reconciledToCombining || (postMerge == "" && !serveOpen) {
+			for j := range current.Agents {
+				worker := &current.Agents[j]
+				if worker.Is(targetParty) && (isRescue || (worker.Park != nil && worker.Park.ReviewHead != "")) {
+					reportIdle(worker, l.a.timeNow())
+					worker.Done = true
+				}
+			}
+			endNotes(current, targetParty, l.a.timeNow())
+			clearRecords(current, targetParty)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if !isRescue && !reconciledToCombining {
+		origURL := cmp.Or(act.URL, pullRefURL(act.Ref))
+		byURL := pullRefURL(by)
+		if postMerge != "" {
+			act.Ref = by
+			act.URL = byURL
+			act.Agent = targetAgent
+			act.Message = fmt.Sprintf("Combining pull request %s merged and absorbed %s. Complete the remaining post-merge work: %s. Report the version, proof, live facts and open items with agents idle --done --report and --problem.", byURL, origURL, postMerge)
+			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("absorbed by %s; post-merge work reconciled with combining pull request", by), nil
+		}
+		if serveOpen {
+			act.Ref = by
+			act.URL = byURL
+			act.Agent = targetAgent
+			act.Message = fmt.Sprintf("Combining pull request %s merged and absorbed %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", byURL, origURL, issueURL(serves))
+			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("absorbed by %s; worker woken for remaining open work", by), nil
+		}
+	}
+	return fmt.Sprintf("absorbed by %s; rescue task withdrawn", by), nil
+}
+
+func pullRefURL(ref string) string {
+	if r, ok := parseRef(ref); ok {
+		return fmt.Sprintf("https://github.com/%s/pull/%d", r.Repo, r.N)
+	}
+	return ref
 }
 
 // moveServedDone moves the task ref served to Done. A saved Serves can name a

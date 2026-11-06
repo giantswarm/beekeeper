@@ -771,6 +771,29 @@ func (l *supervisorLoop) open(ctx context.Context, ref string) bool {
 	return open
 }
 
+// liveOpen reports whether the issue or pull request ref is confirmed open by a
+// fresh live read. Unlike open, it never uses the 10-minute cache and fails
+// closed when the live state cannot be read.
+func (l *supervisorLoop) liveOpen(ctx context.Context, ref string) bool {
+	r, ok := parseRef(ref)
+	if !ok {
+		return false
+	}
+	states, err := refStates(ctx, []github.PR{r})
+	st, read := states[r]
+	if err != nil || !read {
+		return false
+	}
+	open := st.State == github.Open
+	l.mu.Lock()
+	if l.opens == nil {
+		l.opens = map[string]loopOpen{}
+	}
+	l.opens[refName(r)] = loopOpen{open: open, at: l.a.timeNow()}
+	l.mu.Unlock()
+	return open
+}
+
 // loopServes is the issue ag's active sessions serve record names, as
 // owner/repo#n: "" without one, once its session ended or once it waits
 // for "done".
@@ -1091,6 +1114,39 @@ func (l *supervisorLoop) unreadRepo(ref string) string {
 	}
 	_, why := (superloop.Desk{Orgs: l.a.cfg.GitHub.AllowedOrgs, Never: l.a.cfg.Supervisor.Ownership.Never}).Unread(refName(r))
 	return why
+}
+
+func (l *supervisorLoop) agentUnreadRepo(st *state.State, ag state.Agent, ref string) string {
+	if why := l.unreadRepo(ref); why != "" {
+		return why
+	}
+	if ag.Park != nil && ag.Park.On != "" {
+		if why := l.unreadRepo(ag.Park.On); why != "" {
+			return why
+		}
+	}
+	if st != nil {
+		for _, r := range st.Records {
+			if r.Session.Is(ag.Party) && r.Issue != "" {
+				if why := l.unreadRepo(r.Issue); why != "" {
+					return why
+				}
+			}
+		}
+	}
+	for _, m := range namedRefs(ag.Task+" "+ag.LastTask, l.a.cfg.Board.Owner) {
+		if why := l.unreadRepo(m); why != "" {
+			return why
+		}
+	}
+	for _, pat := range l.a.cfg.Supervisor.Ownership.Never {
+		if pat = strings.TrimSpace(pat); pat != "" && !strings.ContainsAny(pat, "*?") {
+			if strings.Contains(strings.ToLower(ag.Task+" "+ag.LastTask), strings.ToLower(pat)) {
+				return pat + " is in supervisor.ownership.never"
+			}
+		}
+	}
+	return ""
 }
 
 func (l *supervisorLoop) cachePull(ref string, p superloop.Pull) {
@@ -1790,6 +1846,11 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
 		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
+		if act.Kind == superloop.KindEnd {
+			if by, ok := strings.CutPrefix(act.Message, "absorbed by "); ok && by != "" {
+				key = "transition:" + strings.TrimSpace(by)
+			}
+		}
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
@@ -2844,11 +2905,13 @@ func (l *supervisorLoop) wakeOrStartFixer(ctx context.Context, st *state.State, 
 	}
 	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == act.Agent }) {
 		if act.Kind != superloop.KindEnd && act.Ref != "" {
-			if p, err := readLoopPull(ctx, act.Ref); err == nil {
-				l.cachePull(act.Ref, p)
-				if p.State != "" && p.State != superloop.Open {
-					return errLoopLater
-				}
+			p, err := readLoopPull(ctx, act.Ref)
+			if err != nil {
+				return errLoopLater
+			}
+			l.cachePull(act.Ref, p)
+			if p.State != superloop.Open {
+				return errLoopLater
 			}
 		}
 		return l.wake(ctx, act)
@@ -2896,13 +2959,15 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	}
 	var livePull superloop.Pull
 	if act.Kind != superloop.KindEnd {
-		if p, err := readLoopPull(ctx, act.Ref); err == nil {
-			l.cachePull(act.Ref, p)
-			if p.State != "" && p.State != superloop.Open {
-				return errLoopLater
-			}
-			livePull = p
+		p, err := readLoopPull(ctx, act.Ref)
+		if err != nil {
+			return errLoopLater
 		}
+		l.cachePull(act.Ref, p)
+		if p.State != superloop.Open {
+			return errLoopLater
+		}
+		livePull = p
 	}
 	rp, hasRP := st.ReviewParkFor(act.Ref)
 	var servesURL, postMerge string
