@@ -203,12 +203,10 @@ printf '%s\n' "$line" | sed 's/}$/,"isReplay":true}/'
 	}
 }
 
-func TestContinuedCodexResumesItsThread(t *testing.T) {
-	if runtime.GOOS != messageTestLinux {
-		t.Skip("execution runner uses a Linux user service")
-	}
-	f, dir := codexFixture(t)
-	f.r.Messaging = true
+// runContinuation continues the exited f.r, has one wake accepted and ends the
+// runner as a finished report does.
+func runContinuation(t *testing.T, f fixture) {
+	t.Helper()
 	exitedExecution(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -246,12 +244,51 @@ func TestContinuedCodexResumesItsThread(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestContinuedCodexResumesItsThread(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f, dir := codexFixture(t)
+	f.r.Messaging = true
+	runContinuation(t, f)
 	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(string(calls), f.s.codexHomeDir()+"|") != 1 || !strings.Contains(string(calls), "exec resume") || !strings.Contains(string(calls), fixtureThread) || strings.Contains(string(calls), f.r.Prompt) {
 		t.Fatalf("codex turns: %s", calls)
+	}
+}
+
+func TestContinuedAgyResumesItsConversation(t *testing.T) {
+	if runtime.GOOS != messageTestLinux {
+		t.Skip("execution runner uses a Linux user service")
+	}
+	f, dir := agyFixture(t)
+	f.r.Messaging = true
+	transcript := filepath.Join(f.s.agyAppDir(), "brain", fixtureThread, ".system_generated", "logs", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("mirrored by the last runner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runContinuation(t, f)
+	calls, err := os.ReadFile(filepath.Join(dir, "calls")) //nolint:gosec // test-owned fake harness log
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(calls), f.s.agyMCPHomeDir(f.r.Ref)+"|") != 1 || !strings.Contains(string(calls), "--conversation "+fixtureThread) || strings.Contains(string(calls), f.r.Prompt) {
+		t.Fatalf("agy turns: %s", calls)
+	}
+	log, err := os.ReadFile(filepath.Join(f.s.Root, string(f.r.Ref.Execution)+".log")) //nolint:gosec // test-owned execution log
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(log), "mirrored by the last runner") {
+		t.Fatal("a continuation mirrored the old transcript again")
 	}
 }
 
