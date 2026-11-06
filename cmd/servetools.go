@@ -874,7 +874,7 @@ func (c *call) noteList() ([]state.Note, error) {
 	if err != nil {
 		return nil, err
 	}
-	notes := notesConcerning(st.Notes, c.who)
+	notes := notesConcerning(st.Notes, c.who, c.app.cfg.Serve)
 	c.app.printNotes(notes)
 	return notes, nil
 }

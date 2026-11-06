@@ -87,3 +87,19 @@ func TestNoteToolsScope(t *testing.T) {
 		}
 	}
 }
+
+func TestNotesConcerningPersonAlias(t *testing.T) {
+	cfg := config.Serve{People: map[string]string{"reader": "reader@example.com"}}
+	notes := []state.Note{{ID: 1, For: "READER"}, {ID: 2, For: "unknown"}}
+	for _, tc := range []struct {
+		email string
+		want  []state.Note
+	}{
+		{"reader@example.com", notes[:1]},
+		{"other@example.com", []state.Note{}},
+	} {
+		if got := notesConcerning(notes, identity.Caller{Email: tc.email}, cfg); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("caller %s: got %#v, want %#v", tc.email, got, tc.want)
+		}
+	}
+}
