@@ -66,7 +66,7 @@ func (f *answerGH) run(ctx context.Context, args ...string) ([]byte, error) {
 		var parts []string
 		for i := 0; strings.Contains(q, fmt.Sprintf("p%d:", i)); i++ {
 			nodes := ""
-			if f.plan != "" && strings.Contains(q, fmt.Sprintf(`p%d:search(query:"repo:%s is:pr \"%s\"`, i, answerPlans, strings.Replace(f.plan, "#", "/issues/", 1))) {
+			if f.plan != "" && strings.Contains(q, fmt.Sprintf(`p%d:search(query:"(repo:%s) is:pr (\"%s\"`, i, answerPlans, strings.Replace(f.plan, "#", "/issues/", 1))) {
 				owner, rest, _ := strings.Cut(f.plan, "/")
 				repo, n, _ := strings.Cut(rest, "#")
 				nodes = fmt.Sprintf(`{"id":"ID-o/plans#4","number":4,"url":"https://github.com/o/plans/pull/4","title":"plan","state":"OPEN","isDraft":true,"merged":false,"headRefOid":"abc","body":"Epic: https://github.com/%s/%s/issues/%s","repository":{"nameWithOwner":"o/plans","isPrivate":true}}`, owner, repo, n)
@@ -142,7 +142,7 @@ func TestAnswerWithoutANoteIsLoggedAndToldNotPosted(t *testing.T) {
 	if err != nil || len(got) != 1 {
 		t.Fatalf("answers %+v, %v", got, err)
 	}
-	if an := got[0]; an.About != privateThread || an.Comment != "" || an.For != notePerson || an.Via != channelTerminal || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
+	if an := got[0]; an.About != privateThread || an.Comment != "" || an.For != notePerson || an.Via != viaCLI || an.Answer != "the draft stays; implement at its head" || an.ID != 0 {
 		t.Errorf("answer %+v", an)
 	}
 	// With nobody serving it, the answer is still in the log.

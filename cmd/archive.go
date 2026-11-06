@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -246,11 +248,63 @@ func (a *app) reseed(sessions []*claude.Session) func(*state.State, state.Start)
 	return func(st *state.State, s state.Start) (time.Time, bool) {
 		if done == nil {
 			done = map[string]bool{}
-			evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.done" })
+			evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == executionDone })
 			for _, e := range evs {
 				done[e.By.Session] = true
 			}
 		}
 		return reseedable(st, s, done, live, transcript)
+	}
+}
+
+// retryArchive explicitly renews an archive's budget, including one the
+// doctor previously gave up and removed from Archives.
+func retryArchive(st *state.State, session string, record func(string) (*claude.Record, bool), now time.Time) error {
+	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.Session == session || s.HostSession == session })
+	if i < 0 {
+		return fmt.Errorf("session %q was not started by beekeeper", session)
+	}
+	s := st.Starts[i]
+	if s.HostSession == "" || s.Harness != "" {
+		return fmt.Errorf("session %q has no desktop session", session)
+	}
+	if keepsRole(st, s.Party) || slices.ContainsFunc(st.Agents, func(a state.Agent) bool { return a.Is(s.Party) }) {
+		return fmt.Errorf("session %q is on the roster or keeps a role", session)
+	}
+	r, ok := record(s.HostSession)
+	if !ok {
+		return fmt.Errorf("desktop session %q was not found", session)
+	}
+	if r.IsArchived {
+		return fmt.Errorf("session %q is already archived", session)
+	}
+	st.Archives = slices.DeleteFunc(st.Archives, func(ar state.Archive) bool { return ar.Host == s.HostSession || ar.Is(s.Party) })
+	st.Archives = append(st.Archives, state.Archive{Party: s.Party, Host: s.HostSession, Since: now.UTC(), Why: "archive retry requested"})
+	return nil
+}
+
+func (a *app) retryArchiveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "retry-archive <session>",
+		Short: "Reset a finished desktop session's archive retries for the next doctor run",
+		Long:  "Queue a beekeeper-started desktop session for archiving again, including one the doctor gave up. Accepts the agent session ID or desktop session ID. Resets the five-turn, 24-hour retry budget; the next doctor run applies the usual archive agreement and busy-session checks.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			by, err := a.caller()
+			if err != nil {
+				return err
+			}
+			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if err := retryArchive(st, args[0], func(host string) (*claude.Record, bool) { return claude.ReadRecord(a.cfg, host) }, a.now); err != nil {
+					return nil, err
+				}
+				return []state.Event{event(by, "agents.archive", "archive retry requested for %s", args[0])}, nil
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(a.out, "archive retry queued; run beekeeper doctor")
+			return err
+		},
 	}
 }

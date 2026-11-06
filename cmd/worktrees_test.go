@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,10 +58,10 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	t.Helper()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+	for _, k := range []string{litGitAuthorName, litGitCommitterName} {
 		t.Setenv(k, "test")
 	}
-	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+	for _, k := range []string{litGitAuthorEmail, litGitCommitterEmail} {
 		t.Setenv(k, "test@example.com")
 	}
 	base := t.TempDir()
@@ -72,7 +74,7 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	gitT(t, clone, "remote", "add", "origin", "https://github.com/acme/app.git")
 	gitT(t, clone, "remote", "add", "local", bare)
 	gitT(t, clone, "push", "-q", "local", "main")
-	for _, b := range []string{mergedPR, "work", "unpushed", "open", "nopr", "live", "recent"} {
+	for _, b := range []string{mergedPR, "work", litUnpushed, noteStatusOpen, "nopr", "live", "recent"} {
 		gitT(t, clone, "worktree", "add", "-q", "-b", b, filepath.Join(root, "app", b), "main")
 		writeT(t, filepath.Join(root, "app", b, "node_modules", "pkg", "index.js"), strings.Repeat("x", 4096))
 	}
@@ -90,13 +92,13 @@ func worktreeApp(t *testing.T) (*app, func() (worktreeMachine, error), string) {
 	now := time.Now().Add(7 * time.Hour)
 	long := now.Add(-24 * time.Hour)
 	pulls := map[string]github.HeadPull{
-		mergedPR:   {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"work":     {N: 2, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"unpushed": {N: 3, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"open":     {N: 4, State: github.Open, HeadOid: head},
-		"live":     {N: 5, State: github.Closed, HeadOid: head, ClosedAt: long},
-		"pushedas": {N: 7, State: github.Merged, HeadOid: head, ClosedAt: long},
-		"recent":   {N: 6, State: github.Merged, HeadOid: head, ClosedAt: now.Add(-time.Hour)},
+		mergedPR:       {N: 1, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"work":         {N: 2, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"unpushed":     {N: 3, State: github.Merged, HeadOid: head, ClosedAt: long},
+		noteStatusOpen: {N: 4, State: github.Open, HeadOid: head},
+		"live":         {N: 5, State: github.Closed, HeadOid: head, ClosedAt: long},
+		"pushedas":     {N: 7, State: github.Merged, HeadOid: head, ClosedAt: long},
+		"recent":       {N: 6, State: github.Merged, HeadOid: head, ClosedAt: now.Add(-time.Hour)},
 	}
 	machine := func() (worktreeMachine, error) {
 		return worktreeMachine{
@@ -314,10 +316,98 @@ func TestTrimWorktreesRetiresMergedBuildersEvenWhenWorkIsKept(t *testing.T) {
 	if !slices.Contains(finished, filepath.Join(root, mergedPR)) {
 		t.Fatal(finished)
 	}
-	if slices.Contains(finished, filepath.Join(root, "open")) {
+	if slices.Contains(finished, filepath.Join(root, noteStatusOpen)) {
 		t.Fatal(finished)
 	}
 	if !exists(filepath.Join(root, mergedPR)) {
 		t.Fatal("dry run removed worktree")
+	}
+}
+
+// Exercise the API reader through the automatic cleanup boundary. These
+// old, clean harness checkouts are published and removable if no PR exists.
+func TestTrimHarnessRequiresCompleteHeadPulls(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer         string
+		commandErr           bool
+		wantErr, wantRemoved bool
+	}{
+		{name: "missing alias", wantErr: true},
+		{name: "null alias", answer: `null `, wantErr: true},
+		{name: "null pulls", answer: `{"pullRequests":null}`, wantErr: true},
+		{name: "missing nodes", answer: `{"pullRequests":{}}`, wantErr: true},
+		{name: "null nodes", answer: `{"pullRequests":{"nodes":null}}`, wantErr: true},
+		{name: "malformed nodes", answer: `{"pullRequests":{"nodes":{}}}`, wantErr: true},
+		{name: "command with data", answer: `{"pullRequests":{"nodes":[]}}`, commandErr: true, wantErr: true},
+		{name: "open PR", answer: `{"pullRequests":{"nodes":[{"number":7,"state":"OPEN"}]}}`},
+		{name: "recently closed PR", answer: `{"pullRequests":{"nodes":[{"number":7,"state":"CLOSED","closedAt":%q}]}}`},
+		{name: "explicitly empty", answer: `{"pullRequests":{"nodes":[]}}`, wantRemoved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, machine, root := worktreeApp(t)
+			m, err := machine()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var dirs []string
+			for _, branch := range []string{"harness-one", "harness-two"} {
+				dir := filepath.Join(root, ".claude", "worktrees", branch)
+				gitT(t, filepath.Join(root, "nopr"), "worktree", "add", "-q", "-b", branch, dir, "main")
+				writeT(t, filepath.Join(dir, "node_modules", "pkg", "index.js"), "build output")
+				dirs = append(dirs, dir)
+			}
+			head := gitT(t, dirs[0], "rev-parse", "HEAD")
+			remoteReads := 0
+			m.dirs, m.automatic = dirs, true
+			m.git = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+				if len(args) > 0 && args[0] == "ls-remote" {
+					remoteReads++
+					return []byte(head + "\trefs/heads/harness-one\n" + head + "\trefs/heads/harness-two\n"), nil
+				}
+				return runGit(ctx, dir, args...)
+			}
+			m.retire = func(context.Context, []string, bool) error { return nil }
+			answer := tc.answer
+			if tc.name == "recently closed PR" {
+				answer = fmt.Sprintf(answer, m.now.Add(-time.Hour).Format(time.RFC3339))
+			}
+			response := `{"data":{"h0":{"pullRequests":{"nodes":[]}}`
+			if answer != "" {
+				response += `,"h1":` + answer
+			}
+			response += `}}`
+			m.pulls = func(ctx context.Context, heads []github.Head) (map[github.Head]github.HeadPull, error) {
+				if len(heads) != 2 {
+					t.Fatalf("got heads %v", heads)
+				}
+				return github.HeadPulls(ctx, func(context.Context, ...string) ([]byte, error) {
+					if tc.commandErr {
+						return []byte(response), errors.New("API failed")
+					}
+					return []byte(response), nil
+				}, heads)
+			}
+			r := a.trimWorktrees(false, func() (worktreeMachine, error) { return m, nil })
+			if (r.err != nil) != tc.wantErr || len(r.failed) > 0 {
+				t.Fatalf("err=%v, failed=%v", r.err, r.failed)
+			}
+			if tc.wantErr && (r.acted() || remoteReads != 0) {
+				t.Fatalf("incomplete read allowed cleanup: %+v, remote reads=%d", r, remoteReads)
+			}
+			// The first branch has an explicit empty answer but must also survive
+			// a partial batch failure. The second exercises the protected PR cases.
+			for i, dir := range dirs {
+				removed := tc.wantRemoved || (!tc.wantErr && i == 0)
+				if exists(dir) == removed {
+					t.Errorf("checkout %d exists=%v, want removed=%v", i, exists(dir), removed)
+				}
+				if !removed && !exists(filepath.Join(dir, "node_modules", "pkg", "index.js")) {
+					t.Errorf("checkout %d lost build output", i)
+				}
+			}
+			if tc.wantRemoved && remoteReads != 2 {
+				t.Fatalf("empty answers did not exercise advertised heads: %d", remoteReads)
+			}
+		})
 	}
 }
