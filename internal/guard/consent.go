@@ -334,6 +334,7 @@ func (h Hook) consent(ev event) []byte {
 	var pages map[string]Page
 	var checks map[string]pageCheck
 	allowed := ""
+	undecided := false
 	for i, c := range calls {
 		var d Decision
 		if c.navigate != "" {
@@ -377,8 +378,11 @@ func (h Hook) consent(ev event) []byte {
 				allowed = d.Reason
 			}
 		default:
-			return nil
+			undecided = true
 		}
+	}
+	if undecided {
+		return nil
 	}
 	return answer(hookOutput{PermissionDecision: Allow, Reason: allowed})
 }
@@ -497,8 +501,16 @@ func lastPage(transcript, tab string) (Page, bool) {
 // key, a navigation, another script, such a batch) or a change of its URL
 // followed.
 func lastPages(transcript string) map[string]Page {
+	return observePages(transcript, nil)
+}
+
+// observePages optionally visits every page recorded by the browser tools.
+func observePages(transcript string, observe func(Page)) map[string]Page {
 	pages, flows, forms, picks := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}, map[string]pagePick{}
 	seen := func(tab string, p Page) {
+		if observe != nil {
+			observe(p)
+		}
 		if forms[tab].url != p.URL {
 			delete(forms, tab)
 		}

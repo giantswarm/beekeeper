@@ -8,6 +8,45 @@ import (
 // psForm is the masked read a process-table refusal names.
 const psForm = "beekeeper ps"
 
+func TestHookDockerImageConfigFormats(t *testing.T) {
+	for _, command := range []string{"docker inspect", "docker image inspect"} {
+		for _, flag := range []string{"--format ", "--format=", "-f "} {
+			for _, tc := range []struct {
+				format string
+				deny   bool
+			}{
+				{`{{.Config.Entrypoint}}`, false},
+				{`{{json .Config.Cmd}}`, false},
+				{`{{.Config.User}} {{.Config.WorkingDir}}`, false},
+				{`{{json .Config.ExposedPorts}}`, false},
+				{`{{- json .Config.Entrypoint -}}`, false},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}`, false},
+				{`{{.Config.User}} {{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}`, false},
+				{`{{json .Config.Env}}`, true},
+				{`{{.Config.Env}}`, true},
+				{`{{range .Config.Env}}{{println .}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 1)}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{println .}}{{end}}`, true},
+				{`{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}{{json .Config.Env}}`, true},
+				{`{{.Config.User}} {{json .Config}}`, true},
+				{`{{.Config.User}} {{.Args}}`, true},
+				{`{{.Config.User}} {{json .}}`, true},
+				{`{{index .Config "Env"}}`, true},
+				{`{{$env := .Config.Env}}{{json $env}}`, true},
+			} {
+				cmd := command + " " + flag + "'" + tc.format + "' image"
+				t.Run(cmd, func(t *testing.T) {
+					d := decide(t, hook(), "/", cmd, nil)
+					denied := d != nil && d.PermissionDecision == decisionDeny
+					if denied != tc.deny {
+						t.Fatalf("deny = %v, want %v: %+v", denied, tc.deny, d)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestHookRefusesCommandLineReads(t *testing.T) {
 	for _, cmd := range []string{
 		"ps aux",
@@ -43,6 +82,10 @@ func TestHookRefusesCommandLineReads(t *testing.T) {
 		"cat /proc/1/task/2/cmdline",
 		"docker inspect ollama",
 		"docker container inspect ollama",
+		"docker inspect manifest inspect",
+		"docker --context manifest inspect ollama",
+		"docker manifest inspect sample:latest && docker inspect container",
+		"docker buildx imagetools inspect sample:latest && docker container inspect container",
 		"docker inspect -f '{{json .Config.Env}}' ollama",
 		"docker inspect --format='{{.Args}}' ollama",
 		"docker inspect --format '{{json .}}' ollama",
@@ -80,7 +123,7 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"ps -o pid=,comm= -p 1234",
 		"ps -p 1234",
 		"ps -C claude -o pid,etime",
-		"ps -u teemow -o pid,comm",
+		"ps -u fixture-person -o pid,comm",
 		"ps -eo pid,comm --sort=-rss | head",
 		"ps axc",
 		"ps axo pid,comm",
@@ -102,6 +145,12 @@ func TestHookPassesMaskedProcessReads(t *testing.T) {
 		"docker ps",
 		"docker ps --format '{{.Names}}' --no-trunc",
 		"docker ps -f name=x",
+		"docker manifest inspect sample:latest",
+		"docker manifest inspect --verbose sample:latest",
+		"docker buildx imagetools inspect sample:latest",
+		"docker buildx imagetools inspect --raw sample:latest",
+		"docker buildx imagetools inspect --format '{{json .}}' sample:latest",
+		"docker manifest inspect sample:latest && docker buildx imagetools inspect sample:latest",
 		"beekeeper ps",
 		"beekeeper ps claude 1234",
 		"kill 1234",

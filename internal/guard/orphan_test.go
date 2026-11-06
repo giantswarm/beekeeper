@@ -184,7 +184,7 @@ func TestMemoryShortWaiterRetainsTicketBeforeItsTurn(t *testing.T) {
 // optional event recorder loses run.start.
 func TestLaunchingHolderBoundsRecoveryWithoutEvents(t *testing.T) {
 	o := Options{SlotDir: t.TempDir(), Wait: time.Hour, scope: "memcap-test-launch"}
-	writeHolder(o, 1, []string{"go", "test", "./launch-fixture"})
+	writeHolder(o, 1, []string{"go", testCommand, "./launch-fixture"})
 	read := func() Holder {
 		t.Helper()
 		raw, err := os.ReadFile(filepath.Join(o.SlotDir, "1.holder"))

@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"strings"
@@ -60,6 +61,20 @@ func TestAReviewerHoldsAFreshMerge(t *testing.T) {
 			}
 			if d := lastEventOf(t, a, "merge.refused"); !strings.Contains(d, c.says) {
 				t.Errorf("refusal %q, want %q", d, c.says)
+			}
+			st, readErr := a.store.Read()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var picture bytes.Buffer
+			a.out = &picture
+			a.printLanes(a.laneViews(st))
+			if c.code == ExitGateRefused {
+				if !strings.Contains(picture.String(), "exit 77: "+c.says) {
+					t.Errorf("lane picture omits refusal: %s", picture.String())
+				}
+			} else if len(st.Failed) != 0 {
+				t.Errorf("transient read recorded a failed attempt: %+v", st.Failed)
 			}
 		})
 	}

@@ -25,7 +25,7 @@ func emergencyApp(t *testing.T) *app {
 	oldClock := emergencyNow
 	emergencyNow = func() time.Time { return a.now }
 	t.Cleanup(func() { emergencyNow = oldClock })
-	for _, key := range []string{"BEEKEEPER_CODEX_AGENT", "BEEKEEPER_OMP_AGENT", "BEEKEEPER_AGY_AGENT", "CLAUDE_CODE_HOST_SESSION_ID"} {
+	for _, key := range []string{litBeekeeperCodexAgent, litBeekeeperOmpAgent, litBeekeeperAgyAgent, transcriptHostEnv} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "emergency-guide")
@@ -76,7 +76,7 @@ func TestEmergencyRequiresGuideQuoteAndFutureExpiry(t *testing.T) {
 		t.Fatalf("expiry: %v", err)
 	}
 	a.now = a.now.Add(-time.Minute)
-	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide.Holder.Session = "successor"; return nil, nil }); err != nil {
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) { st.Guide.Holder.Session = successorName; return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.emergencyAction("old guide"); Code(err) != ExitRefused {
@@ -271,5 +271,88 @@ func TestEmergencyMergePreservesStopsAndHolds(t *testing.T) {
 				t.Fatalf("%d GitHub mutations past %s", mutations, target)
 			}
 		})
+	}
+}
+
+func TestEmergencyHostSessionCannotImpersonateGuideOrInheritGrant(t *testing.T) {
+	for _, harness := range []string{"CODEX", "OMP", "AGY"} {
+		t.Run(harness, func(t *testing.T) {
+			a := emergencyApp(t)
+			key := "BEEKEEPER_" + harness + "_AGENT"
+			t.Setenv(key, "original")
+			t.Setenv("BEEKEEPER_AGENT_NAME", guideName)
+			setGuide := func() {
+				t.Helper()
+				me, err := a.caller()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Guide.Holder.Party = me
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			setGuide()
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(key, successorName)
+			if err := emergencyCall(a, "auto-install", "pause", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+				t.Errorf("different session authorized: %v", err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.AutoInstallPaused {
+				t.Error("unauthorized pause persisted")
+			}
+			setGuide()
+			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); Code(err) != ExitRefused {
+				t.Fatalf("successor reused grant: %v", err)
+			}
+			st, err = a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(st.Holds) != 0 {
+				t.Fatal("unauthorized hold persisted")
+			}
+			if err := emergencyCall(a, "on", emergencyReasonFlag, "Wait.", untilFlag, "10m"); err != nil {
+				t.Fatal(err)
+			}
+			if err := emergencyCall(a, "hold", "set", "starts", emergencyReasonFlag, "Wait."); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestEmergencySameSession(t *testing.T) {
+	base := state.Party{Session: "session", HostSession: "host-session", Name: guideName, Person: "owner@example.invalid", Host: installationA}
+	for _, tc := range []struct {
+		name  string
+		other state.Party
+		want  bool
+	}{
+		{"same session", base, true},
+		{"session only", state.Party{Session: base.Session}, true},
+		{"host session only", state.Party{HostSession: base.HostSession}, true},
+		{"display name only", state.Party{Name: base.Name}, false},
+		{"different session", state.Party{Session: successorName, Name: base.Name}, false},
+		{"different host session", state.Party{HostSession: successorName, Name: base.Name}, false},
+		{"different person", state.Party{Session: base.Session, Person: "other@example.invalid"}, false},
+		{"different host", state.Party{HostSession: base.HostSession, Host: "installation-b"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := emergencySameSession(base, tc.other); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if emergencySameSession(state.Party{Name: guideName}, state.Party{Name: guideName}) {
+		t.Fatal("display names matched without sessions")
 	}
 }
