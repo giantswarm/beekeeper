@@ -1507,19 +1507,19 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 
 func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 	got := ParseAbsorbedPulls(
-		"o/r#100",
-		"fix: combine #101 and #102",
-		"Supersedes https://github.com/o/r/pull/101 and o/r#102.\nCloses https://github.com/o/r/issues/50\nFixes #51\n",
+		"o/r#400",
+		"fix: combine #401 and #402",
+		"Supersedes https://github.com/o/r/pull/401 and o/r#402.\nCloses https://github.com/o/r/issues/50\nFixes #51\n",
 	)
-	if want := []string{"o/r#101", "o/r#102"}; !slices.Equal(got, want) {
+	if want := []string{"o/r#401", "o/r#402"}; !slices.Equal(got, want) {
 		t.Fatalf("ParseAbsorbedPulls = %v, want %v", got, want)
 	}
 
 	t0 := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC)
 	const (
-		origA    = "o/r#101"
-		origB    = "o/r#102"
-		combined = "o/r#100"
+		origA    = "o/r#401"
+		origB    = "o/r#402"
+		combined = "o/r#400"
 	)
 	in := Input{
 		Now:  t0.Add(OrphanWait + time.Minute),
@@ -1537,9 +1537,9 @@ func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 			origB: t0,
 		},
 		Pulls: map[string]Pull{
-			origA:    {Ref: origA, URL: "https://github.com/o/r/pull/101", Author: deskAuthor, State: Open, Head: head1, Red: []Check{{Name: "test"}}},
-			origB:    {Ref: origB, URL: "https://github.com/o/r/pull/102", Author: deskAuthor, State: Open, Head: head1, Green: true},
-			combined: {Ref: combined, URL: "https://github.com/o/r/pull/100", Author: deskAuthor, State: Merged, Head: head2, Absorbs: []string{origA, origB}},
+			origA:    {Ref: origA, URL: "https://github.com/o/r/pull/401", Author: deskAuthor, State: Open, Head: head1, Red: []Check{{Name: "test"}}},
+			origB:    {Ref: origB, URL: "https://github.com/o/r/pull/402", Author: deskAuthor, State: Open, Head: head1, Green: true},
+			combined: {Ref: combined, URL: "https://github.com/o/r/pull/400", Author: deskAuthor, State: Merged, Head: head2, Absorbs: []string{origA, origB}},
 		},
 	}
 	if gotOwnerless := Ownerless(in); len(gotOwnerless) != 0 {

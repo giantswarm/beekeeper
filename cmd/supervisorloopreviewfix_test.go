@@ -777,11 +777,11 @@ func TestLoopReloadsOwnershipNeverConfigAndSkipsNeverRepo(t *testing.T) {
 
 	cands := []board.Candidate{
 		{Item: board.Item{Ref: "o/never#1", Status: "Ready"}},
-		{Item: board.Item{Ref: "o/r#2", Status: "Ready"}},
+		{Item: board.Item{Ref: idleRef, Status: "Ready"}},
 	}
 	skipUnread(cands, nil, r.a.cfg.Supervisor.Ownership.Never)
 	if cands[0].Skip == "" || cands[1].Skip != "" {
-		t.Fatalf("skipUnread = [%q, %q], want o/never#1 skipped and o/r#2 free", cands[0].Skip, cands[1].Skip)
+		t.Fatalf("skipUnread = [%q, %q], want o/never#1 skipped and %s free", cands[0].Skip, cands[1].Skip, idleRef)
 	}
 }
 
@@ -798,7 +798,7 @@ func TestLoopMergedCombiningPullWithdrawsAbsorbedOriginal(t *testing.T) {
 	if !slices.Equal(p.Absorbs, []string{origPR}) {
 		t.Fatalf("parseLoopPull Absorbs = %v, want [%s]", p.Absorbs, origPR)
 	}
-	r.pulls[origPR] = superloop.Pull{Ref: origPR, URL: "https://github.com/o/r/pull/41", State: superloop.Open, Head: loopHead, Red: []superloop.Check{{Name: "lint"}}, Author: loopDesk}
+	r.pulls[origPR] = superloop.Pull{Ref: origPR, URL: "https://github.com/o/r/pull/41", State: superloop.Open, Head: loopHead, Red: []superloop.Check{{Name: behindUnit}}, Author: loopDesk}
 	r.pulls[combinedPR] = p
 
 	rescueName := superloop.PullWorkerName(origPR)

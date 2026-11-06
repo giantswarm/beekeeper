@@ -9,6 +9,7 @@ import (
 const (
 	heldBy   = "o/r#99"
 	heldEpic = "o/r#15"
+	heldSub  = "o/r#16"
 )
 
 // A held epic, one with an open recorded blocker, is offered as itself and
@@ -21,7 +22,7 @@ func TestRankHoldsABlockedEpicAndEverythingUnderIt(t *testing.T) {
 		switch snap.Items[i].Ref {
 		case heldEpic:
 			snap.Items[i].Blockers, snap.Items[i].OpenBlockers, snap.Items[i].OpenBlockedBy = 2, 2, []string{heldBy, "O/R#17"}
-		case "o/r#16", "o/r#17":
+		case heldSub, "o/r#17":
 			snap.Items[i].Parent = heldEpic
 		}
 	}
@@ -35,7 +36,7 @@ func TestRankHoldsABlockedEpicAndEverythingUnderIt(t *testing.T) {
 	if c := got[heldEpic]; c.Skip != "held: blocked by o/r#99, O/R#17; 2 of 2 blockers open" {
 		t.Errorf("held epic: skip %q", c.Skip)
 	}
-	if c := got["o/r#16"]; c.Step != backlogStep || c.Skip != "held: sub-issue of o/r#15, blocked by o/r#99, O/R#17; 2 of 2 blockers open" {
+	if c := got[heldSub]; c.Step != backlogStep || c.Skip != "held: sub-issue of o/r#15, blocked by o/r#99, O/R#17; 2 of 2 blockers open" {
 		t.Errorf("sub-issue of the held epic: %s, skip %q", c.Step, c.Skip)
 	}
 	// The sub-issue the hold waits on is not held by it (17 is old for
@@ -69,10 +70,10 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 		switch snap.Items[i].Ref {
 		case heldEpic:
 			snap.Items[i].Assignees = []string{"Me", "pat"}
-		case "o/r#16":
+		case heldSub:
 			snap.Items[i].Parent = heldEpic
 		case "o/r#13":
-			snap.Items[i].Parent = "o/r#16"
+			snap.Items[i].Parent = heldSub
 		}
 	}
 	got := map[string]Candidate{}
@@ -85,7 +86,7 @@ func TestRankSkipsSubIssuesUnderEpicAssignedOutsidePeople(t *testing.T) {
 	if c := got[heldEpic]; c.Skip != "assigned to pat" {
 		t.Errorf("assigned epic: skip %q", c.Skip)
 	}
-	if c := got["o/r#16"]; c.Step != backlogStep || c.Skip != "assigned to pat (sub-issue of o/r#15)" {
+	if c := got[heldSub]; c.Step != backlogStep || c.Skip != "assigned to pat (sub-issue of o/r#15)" {
 		t.Errorf("sub-issue of assigned epic: %s, skip %q", c.Step, c.Skip)
 	}
 	if c := got["o/r#13"]; c.Step != backlogStep || c.Skip != "assigned to pat (sub-issue of o/r#15)" {

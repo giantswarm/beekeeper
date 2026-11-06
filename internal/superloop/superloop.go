@@ -1695,9 +1695,9 @@ var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d
 var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
 var (
-	combineKeyword    = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing|ation)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?|replac(?:e|es|ed|ing)|batch(?:es|ed|ing)?|merg(?:e|es|ed|ing)\s+together|original\s+(?:pr|pull\s+request)s?)\b`)
-	closingIssueWord  = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|issues?)\s*:?\s*$`)
-	shortPullMention  = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
+	combineKeyword   = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing|ation)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?|replac(?:e|es|ed|ing)|batch(?:es|ed|ing)?|merg(?:e|es|ed|ing)\s+together|original\s+(?:pr|pull\s+request)s?)\b`)
+	closingIssueWord = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|issues?)\s*:?\s*$`)
+	shortPullMention = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
 )
 
 // ParseAbsorbedPulls extracts the original pull requests (owner/repo#n) that a
