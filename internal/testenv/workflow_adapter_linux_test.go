@@ -233,6 +233,8 @@ func adapter(args []string) error {
 			return nil
 		case strings.HasPrefix(joined, "search prs "):
 			return emit([]any{})
+		case strings.HasPrefix(joined, "pr list "):
+			return emit([]any{})
 		case len(args) > 2 && args[0] == "pr" && args[1] == "view" && args[2] == "7":
 			return emit(pull(a))
 		case len(args) > 2 && args[0] == "pr" && args[1] == "merge" && args[2] == "7":

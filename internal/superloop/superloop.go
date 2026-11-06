@@ -142,9 +142,9 @@ type Pull struct {
 	// gh may list only in part) are what may name a repository the desk
 	// does no work on.
 	Author, Title, Body, Branch string
-	Files                 []string
-	ChangedFiles          int
-	Additions, Deletions  int
+	Files                       []string
+	ChangedFiles                int
+	Additions, Deletions        int
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string

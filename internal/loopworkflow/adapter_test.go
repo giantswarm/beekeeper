@@ -81,6 +81,8 @@ func serveGitHub() int {
 		return 0
 	case starts("search", "prs"):
 		return emit([]any{})
+	case starts("pr", "list"):
+		return emit([]any{})
 	case starts("api", "user"):
 		fmt.Println("fixture-bot")
 		return 0
