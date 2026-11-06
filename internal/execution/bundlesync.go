@@ -25,8 +25,8 @@ const (
 	bundleManifest  = "bundle.json"
 	bundleStaging   = ".partial"
 	codexBundleHome = "codex-home"
-	// maxInstalledBundles bounds the bundles a host reads for a status or a
-	// prepare; a host past it refuses instead of silently skipping any.
+	// maxInstalledBundles bounds the bundles a host holds. A sync refuses a new
+	// one at it, before publishing, so nothing else ever has to read past it.
 	maxInstalledBundles = 256
 	// bundlePruneBatch bounds the unbound bundles one sync removes.
 	bundlePruneBatch = 8
@@ -136,7 +136,7 @@ func (s *Server) withBundle(b CoordinatorBundle) (*Server, error) {
 	}
 	totalRules := len(s.Rules)
 	for _, a := range b.Artifacts {
-		if strings.HasPrefix(a.Artifact, bundleRulesKind+"/") {
+		if _, skill := codexSkillFile(a.Artifact); !skill {
 			totalRules += len("\n\nCoordinator rules:\n") + len(a.Content)
 		}
 	}
@@ -251,9 +251,6 @@ func (s *Server) installedBundles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) > maxInstalledBundles {
-		return nil, errors.New("installed coordinator bundles exceed their bound")
-	}
 	type installed struct {
 		digest string
 		at     time.Time
@@ -334,10 +331,10 @@ func (s *Server) InstallBundle(ctx context.Context, b CoordinatorBundle) (string
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	stage := dir + bundleStaging
-	if err := worktrees.RemoveAll(stage); err != nil {
+	if err := s.makeBundleRoom(); err != nil {
 		return "", err
 	}
+	stage := dir + bundleStaging
 	if err := ownedDirectory(stage); err != nil {
 		return "", err
 	}
@@ -353,8 +350,38 @@ func (s *Server) InstallBundle(ctx context.Context, b CoordinatorBundle) (string
 	if err := bound.linkCodexLogin(); err != nil {
 		return "", err
 	}
-	s.pruneBundles(digest)
 	return digest, nil
+}
+
+// makeBundleRoom clears what interrupted installs staged, removes unbound
+// bundles and refuses a new one the bound has no room for. It runs before
+// publishing and under the admission, so no staging is live and no start binds
+// what it removes.
+func (s *Server) makeBundleRoom() error {
+	root := filepath.Join(s.Root, bundlesDir)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), bundleStaging) {
+			if err := worktrees.RemoveAll(filepath.Join(root, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	used, usedErr := s.bundlesInUse()
+	digests, err := s.installedBundles()
+	if err != nil {
+		return err
+	}
+	if usedErr == nil {
+		digests = s.pruneBundles(digests, used)
+	}
+	if len(digests) >= maxInstalledBundles {
+		return fmt.Errorf("host holds %d coordinator bundles and none can go: retire the executions bound to them", len(digests))
+	}
+	return nil
 }
 
 // refreshBundles rewrites the managed files of every whole bundle for the rules
@@ -405,28 +432,22 @@ func (s *Server) bundlesInUse() (map[string]bool, error) {
 }
 
 // pruneBundles removes bundles no live execution is bound to once they are past
-// the host's retention, a few per sync. The caller holds the admission, so no
-// start binds one meanwhile; a failure leaves them for the next sync.
-func (s *Server) pruneBundles(keep string) {
-	used, err := s.bundlesInUse()
-	if err != nil {
-		return
-	}
-	digests, err := s.installedBundles()
-	if err != nil {
-		return
-	}
-	slices.Reverse(digests)
+// the host's retention, oldest first and a few per sync, and answers what stays.
+// A host at its bound gives up retention: an unbound bundle has no reader, and a
+// start must not wait a week for room. A failure leaves one for the next sync.
+func (s *Server) pruneBundles(digests []string, used map[string]bool) []string {
+	full := len(digests) >= maxInstalledBundles
+	kept := []string{}
 	pruned := 0
-	for _, digest := range digests {
+	for _, digest := range slices.Backward(digests) {
 		info, err := os.Lstat(s.bundleDir(digest))
-		if pruned == bundlePruneBatch || err != nil || digest == keep || used[digest] || s.now().Before(info.ModTime().Add(s.Config.retention())) {
+		if pruned == bundlePruneBatch || err != nil || used[digest] || !full && s.now().Before(info.ModTime().Add(s.Config.retention())) || worktrees.RemoveAll(s.bundleDir(digest)) != nil {
+			kept = append(kept, digest)
 			continue
 		}
-		if worktrees.RemoveAll(s.bundleDir(digest)) == nil {
-			pruned++
-		}
+		pruned++
 	}
+	return kept
 }
 
 // bundleRow classifies one entry of the bundle container. live holds the bundles
@@ -436,7 +457,7 @@ func (s *Server) bundleRow(row *ResourceFinding, e os.DirEntry, live map[string]
 	if !e.IsDir() || !ValidDigest(digest) {
 		return
 	}
-	row.State, row.Reason, row.Retry = "shared", "coordinator policy bundle bound to a live execution", "leave it: its worker runs under it"
+	row.State, row.Reason, row.Retry = resourceShared, "coordinator policy bundle bound to a live execution", "leave it: its worker runs under it"
 	if live[digest] {
 		return
 	}

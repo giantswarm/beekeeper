@@ -15,13 +15,16 @@ import (
 
 const BundleSchema = 1
 const bundleRulesKind = "rules"
+const bundleSkillsKind = "skills"
+const bundlePluginsKind = "plugins"
 
 // maxBundleBytes leaves a bundle room inside the one wire request that carries it.
 const maxBundleBytes = MaxWire - 64<<10
 const maxArtifactBytes = 256 << 10
 
 // BundleSource explicitly approves one file. Directories are never harvested.
-// Rules use rules/<name>/AGENTS.md or CLAUDE.md; skills use skills/<name>/... .
+// Rules use rules/<name>/AGENTS.md or CLAUDE.md; skills use skills/<name>/... ;
+// plugins use plugins/<name>/skills/<skill>/... and plugins/<name>/commands/<file>.md.
 type BundleSource struct {
 	Source   string `yaml:"source" json:"source"`
 	Artifact string `yaml:"artifact" json:"artifact"`
@@ -89,11 +92,17 @@ func (b CoordinatorBundle) Validate() error {
 	}
 	previous := ""
 	rulesBytes := 0
-	skills := map[string]bool{}
+	skills, plugins := map[string]bool{}, map[string]bool{}
 	for _, a := range b.Artifacts {
 		parts := strings.Split(a.Artifact, "/")
-		if !safeRelative(a.Source) || !safeRelative(a.Artifact) || (a.Artifact <= previous || previous != "" && strings.HasPrefix(a.Artifact, previous+"/")) || len(parts) < 3 || (parts[0] != bundleRulesKind && parts[0] != "skills") {
+		if !safeRelative(a.Source) || !safeRelative(a.Artifact) || (a.Artifact <= previous || previous != "" && strings.HasPrefix(a.Artifact, previous+"/")) || len(parts) < 3 || (parts[0] != bundleRulesKind && parts[0] != bundleSkillsKind && parts[0] != bundlePluginsKind) {
 			return errors.New("invalid or duplicate bundle artifact path")
+		}
+		if parts[0] == bundlePluginsKind {
+			if !pluginDocument(parts) {
+				return fmt.Errorf("unsupported plugin artifact %s: a plugin travels as its skills and commands only", a.Artifact)
+			}
+			plugins[parts[1]] = true
 		}
 		if parts[0] == bundleRulesKind && (len(parts) != 3 || (parts[2] != "AGENTS.md" && parts[2] != claudeRulesFile)) {
 			return errors.New("unsupported rules artifact")
@@ -101,13 +110,8 @@ func (b CoordinatorBundle) Validate() error {
 		if !policycontent.RulesAllowed("/bundle/"+a.Source, nil) || !policycontent.RulesAllowed("/bundle/"+a.Artifact, nil) || len(a.Content) == 0 || len(a.Content) > maxArtifactBytes || !utf8.Valid(a.Content) || strings.IndexByte(string(a.Content), 0) >= 0 || len(policycontent.CredentialShapes(string(a.Content))) > 0 || Digest(a.Content) != a.Digest {
 			return fmt.Errorf("invalid or credential-shaped bundle artifact %s", a.Artifact)
 		}
-		if parts[0] == "skills" {
-			if _, ok := skills[parts[1]]; !ok {
-				skills[parts[1]] = false
-			}
-			if len(parts) == 3 && parts[2] == "SKILL.md" {
-				skills[parts[1]] = true
-			}
+		if skill, entry, ok := bundleSkill(parts); ok {
+			skills[skill] = skills[skill] || entry
 		}
 		if parts[0] == bundleRulesKind {
 			rulesBytes += len(a.Content)
@@ -133,9 +137,50 @@ func (b CoordinatorBundle) Validate() error {
 			return errors.New("invalid or duplicate capability declaration")
 		}
 		previous = c.Name
-		if c.Required {
-			return fmt.Errorf("unsupported required Codex capability %s", c.Name)
+		if plugin, ok := strings.CutPrefix(c.Name, "plugin:"); c.Required && (!ok || !plugins[plugin]) {
+			return fmt.Errorf("unsupported required capability %s", c.Name)
 		}
 	}
 	return nil
+}
+
+// pluginDocument admits the parts of a plugin that are documents: its skills and
+// its commands. Hooks, MCP servers and anything else that would execute on a host
+// have no representation, so the host's guards stay the only ones.
+func pluginDocument(parts []string) bool {
+	switch {
+	case len(parts) >= 5 && parts[2] == bundleSkillsKind:
+		return true
+	case len(parts) == 4 && parts[2] == "commands":
+		return strings.HasSuffix(parts[3], ".md")
+	}
+	return false
+}
+
+// bundleSkill names the skill an artifact belongs to and says whether it is that
+// skill's entry point; ok is false for what is no skill.
+func bundleSkill(parts []string) (skill string, entry, ok bool) {
+	switch {
+	case parts[0] == bundleSkillsKind:
+		return parts[1], len(parts) == 3 && parts[2] == "SKILL.md", true
+	case parts[0] == bundlePluginsKind && parts[2] == bundleSkillsKind:
+		return parts[1] + "-" + parts[3], len(parts) == 5 && parts[4] == "SKILL.md", true
+	}
+	return "", false, false
+}
+
+// codexSkillFile is where codex reads a skill artifact from in its home, a
+// plugin's under skills/<plugin>-<skill>; ok is false for anything else, which
+// goes into its rules.
+func codexSkillFile(artifact string) (string, bool) {
+	parts := strings.Split(artifact, "/")
+	skill, _, ok := bundleSkill(parts)
+	if !ok {
+		return "", false
+	}
+	depth := 2
+	if parts[0] == bundlePluginsKind {
+		depth = 4
+	}
+	return path.Join(append([]string{bundleSkillsKind, skill}, parts[depth:]...)...), true
 }

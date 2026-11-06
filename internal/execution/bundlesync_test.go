@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const bundleRule = "Follow the reviewed process."
@@ -58,14 +61,14 @@ func TestInstallBundleMaterializesForEachHarnessAndLeavesThePin(t *testing.T) {
 		t.Fatal("claude rules miss the bundle", err)
 	}
 	home := bound.codexHomeDir()
-	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	config, err := os.ReadFile(filepath.Join(home, "config.toml")) //nolint:gosec // managed home of the test's own server
 	if err != nil || !strings.Contains(string(config), `model_reasoning_effort = "high"`) || !strings.Contains(string(config), "hooks = true") || !strings.Contains(string(config), "plugins = false") {
 		t.Fatal("supported setting or security feature missing", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "skills/review/SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	hooks, err := os.ReadFile(filepath.Join(home, hooksJSONFile))
+	hooks, err := os.ReadFile(filepath.Join(home, hooksJSONFile)) //nolint:gosec // managed home of the test's own server
 	if err != nil || !strings.Contains(string(hooks), "execution-guard") {
 		t.Fatal("host guard missing", err)
 	}
@@ -281,6 +284,218 @@ func TestSyncPrunesOnlyExpiredUnboundBundles(t *testing.T) {
 	for _, b := range []CoordinatorBundle{bound, fresh} {
 		if _, err := f.s.boundTo(b.Digest()); err != nil {
 			t.Fatal("a bundle in use or in retention went", err)
+		}
+	}
+}
+
+// seedBundles fills the host to its bound with bundles only as old as age.
+func seedBundles(t *testing.T, f fixture, age time.Duration) {
+	t.Helper()
+	base := fixtureBundle(t, bundleRule)
+	at := f.s.now().Add(-age)
+	for i := range maxInstalledBundles {
+		digest := Digest(fmt.Appendf(nil, "seed %d", i))
+		dir := f.s.bundleDir(digest)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, bundleManifest), mustJSON(base), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A full host still answers, prepares and takes a new bundle: no retained
+// inventory may leave it needing an operator.
+func TestBundleBoundMakesRoomBeforePublishing(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	seedBundles(t, f, time.Hour)
+	stale := f.s.bundleDir(Digest([]byte("interrupted"))) + bundleStaging
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b := fixtureBundle(t, "Next rule.")
+	if _, err := f.s.BundleStatus(b.Digest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Prepare(f.s.Policy()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.InstallBundle(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	digests, err := f.s.installedBundles()
+	if err != nil || len(digests) > maxInstalledBundles {
+		t.Fatalf("host passed its bound: %d %v", len(digests), err)
+	}
+	if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("an interrupted install still counts", err)
+	}
+	if _, err := f.s.boundTo(b.Digest()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBundleBoundRefusesWhenEveryBundleIsBound(t *testing.T) {
+	f := testFixture(t)
+	ctx := context.Background()
+	seedBundles(t, f, time.Hour)
+	digests, err := f.s.installedBundles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, digest := range digests {
+		r := f.r
+		r.Ref.Execution = ExecutionID(uuid.NewString())
+		r.BundleDigest = digest
+		if err := os.WriteFile(filepath.Join(f.s.Root, string(r.Ref.Execution)+".json"), mustJSON(Journal{Request: r}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := fixtureBundle(t, "Next rule.")
+	if _, err := f.s.InstallBundle(ctx, b); err == nil || !strings.Contains(err.Error(), "none can go") {
+		t.Fatalf("published past the bound: %v", err)
+	}
+	if _, err := os.Lstat(f.s.bundleDir(b.Digest())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a refused bundle was published", err)
+	}
+	if st, err := f.s.BundleStatus(b.Digest()); err != nil || st.Installed {
+		t.Fatalf("a full host stopped answering: %+v %v", st, err)
+	}
+}
+
+func TestPluginTravelsAsDocumentsOnly(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("Plugin document."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := func(capability []BundleCapability, artifacts ...string) (CoordinatorBundle, error) {
+		var src []BundleSource
+		for _, a := range artifacts {
+			src = append(src, BundleSource{Source: "doc.md", Artifact: a})
+		}
+		return BuildCoordinatorBundle(root, src, nil, capability, nil)
+	}
+	required := []BundleCapability{{Name: "plugin:review", Required: true}}
+	if _, err := build(required, "rules/desk/AGENTS.md"); err == nil {
+		t.Fatal("a required plugin passed without its files")
+	}
+	for _, refused := range []string{"plugins/review/hooks/hooks.json", "plugins/review/.mcp.json", "plugins/review/commands/run.sh", "plugins/review/skills/check/run.sh"} {
+		if _, err := build(nil, refused); err == nil {
+			t.Fatalf("accepted %s", refused)
+		}
+	}
+	b, err := build(required, "plugins/review/commands/check.md", "plugins/review/skills/check/SKILL.md", "plugins/review/skills/check/notes.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := testFixture(t)
+	withCodex(t, f)
+	if _, err := f.s.InstallBundle(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := f.s.boundTo(b.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"skills/review-check/SKILL.md", "skills/review-check/notes.md"} {
+		if _, err := os.Stat(filepath.Join(bound.codexHomeDir(), name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules, err := os.ReadFile(filepath.Join(bound.codexHomeDir(), "AGENTS.md")) //nolint:gosec // managed home of the test's own server
+	if err != nil || !strings.Contains(string(rules), "Plugin document.") {
+		t.Fatal("a plugin command is missing from codex's rules", err)
+	}
+	claude, err := os.ReadFile(filepath.Clean(bound.rulesFile()))
+	if err != nil || strings.Count(string(claude), "Plugin document.") != 3 {
+		t.Fatal("claude rules miss the plugin", err)
+	}
+}
+
+func TestOwnedHomeHoldsWhatAWorkerWritesToTilde(t *testing.T) {
+	f := testFixture(t)
+	account := t.TempDir()
+	if err := os.WriteFile(filepath.Join(account, ".gitconfig"), []byte("[user]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := launched(t, f)
+	j := Journal{Handle: h, Request: f.r}
+	j.Request.Harness = HarnessCodex
+	value := func(env []string, key string) string {
+		for _, kv := range env {
+			if v, ok := strings.CutPrefix(kv, key+"="); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	env, err := f.s.ownedEnvironment(j, []string{"HOME=" + account})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(filepath.Dir(h.Workspace), homeDir)
+	if value(env, "HOME") != home || value(env, EnvHome) != account {
+		t.Fatalf("HOME not routed: %v", env)
+	}
+	if value(env, "GIT_CONFIG_GLOBAL") != filepath.Join(account, ".gitconfig") || value(env, "XDG_CONFIG_HOME") != filepath.Join(account, ".config") {
+		t.Fatalf("account configuration out of reach: %v", env)
+	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		t.Fatal("owned home missing", err)
+	}
+	for name, setup := range map[string]func(*Journal, *Server) []string{
+		"agy keeps its managed home": func(*Journal, *Server) []string { return []string{"HOME=/managed", EnvHome + "=" + account} },
+		"claude without a configDir needs its login": func(j *Journal, s *Server) []string {
+			j.Request.Harness = HarnessClaude
+			c := s.Config.Harnesses[HarnessClaude]
+			c.ConfigDir = ""
+			s.Config.Harnesses = map[string]HarnessConfig{HarnessClaude: c}
+			return []string{"HOME=" + account}
+		},
+		"a shared host": func(_ *Journal, s *Server) []string { s.Config.SharedHome = true; return []string{"HOME=" + account} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, j := *f.s, j
+			given := setup(&j, &s)
+			env, err := s.ownedEnvironment(j, given)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value(env, "HOME") != value(given, "HOME") {
+				t.Fatalf("HOME moved: %v", env)
+			}
+		})
+	}
+}
+
+func TestHomeAuditReportsWhatItCannotList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	f := testFixture(t)
+	state := filepath.Join(home, ".local", "state")
+	for i := range homeLeftoverBound + 1 {
+		if err := os.MkdirAll(filepath.Join(state, fmt.Sprintf("entry-%d", i)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if row := auditRows(t, f)[state]; row.State != Unknown || !strings.Contains(row.Reason, "not listed") {
+		t.Fatalf("overflow: %+v", row)
+	}
+	if err := os.Chmod(state, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(state, 0o700) }) //nolint:gosec // restores the fixture directory for its removal
+	if os.Getuid() != 0 {
+		if row := auditRows(t, f)[state]; row.State != Unknown || !strings.Contains(row.Reason, "unreadable") {
+			t.Fatalf("inaccessible: %+v", row)
 		}
 	}
 }

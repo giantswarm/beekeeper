@@ -17,7 +17,12 @@ Schema 1 maps content to harnesses as follows; settings apply to Codex only:
 | Rules | `rules/<name>/AGENTS.md` or `CLAUDE.md`, appended in manifest order to host AGENTS.md |
 | Skills and resources | `skills/<name>/...`, requiring a SKILL.md per skill |
 | Harness settings | `model_reasoning_effort`: low, medium, high, xhigh |
-| Plugin/tool/connector declarations | Named capabilities (for example `plugin:review` or `tool:search`); all required capabilities currently refuse by name; optional declarations are metadata only |
+| Plugins | `plugins/<name>/skills/<skill>/...`, requiring a SKILL.md per skill, and `plugins/<name>/commands/<file>.md` |
+| Plugin/tool/connector declarations | Named capabilities (for example `plugin:review` or `tool:search`); a required `plugin:<name>` passes when the bundle carries that plugin's files, any other required capability refuses by name; optional declarations are metadata only |
+
+A plugin travels as its documents: its skills and commands. Its hooks, MCP servers
+and anything else that would execute on a host are refused, since the host's
+guards stay the only ones; a plugin that needs them does not work remotely.
 
 Every supplied setting is required: unsupported names or values refuse rather
 than silently disappear. Optional capabilities are explicitly unavailable, not
@@ -84,6 +89,10 @@ it stays a reported problem and refuses starts of that digest.
 
 A bundle no unretired execution is bound to goes once it is past the host's
 retention, a few per sync. Until then it appears in `resourceAudit` as `shared`.
+A host holds at most 256 bundles. At that bound a sync removes the oldest unbound
+ones regardless of retention, before publishing; when every bundle is bound to an
+unretired execution it refuses the new one, and the start with it, until one
+retires. Status and prepare keep working throughout.
 
 Operator-managed exclusions include coordinator trust keys, repository admission,
 security guards, authentication, executable/version pins, host environment,

@@ -47,6 +47,9 @@ type HostConfig struct {
 	// kept, a Go duration. Omitted, it is DefaultRetention and leaves the
 	// configuration digest of a host without it as is.
 	Retention string `yaml:"retention,omitempty" json:"retention,omitempty"`
+	// SharedHome keeps workers on the account's HOME instead of one in their
+	// execution root. Omitted, it leaves the configuration digest as it is.
+	SharedHome bool `yaml:"sharedHome,omitempty" json:"sharedHome,omitempty"`
 }
 
 // retention is the validated Retention, DefaultRetention when unset.
@@ -235,10 +238,10 @@ func (s *Server) codexFiles() map[string][]byte {
 	files := map[string][]byte{"config.toml": []byte(codexConfig), hooksJSONFile: hooks, "AGENTS.md": append([]byte(nil), s.Rules...)}
 	if b := s.coordinatorBundle; b != nil {
 		for _, a := range b.Artifacts {
-			if strings.HasPrefix(a.Artifact, "rules/") {
-				files["AGENTS.md"] = append(files["AGENTS.md"], append([]byte("\n\nCoordinator rules:\n"), a.Content...)...)
+			if name, ok := codexSkillFile(a.Artifact); ok {
+				files[name] = a.Content
 			} else {
-				files[a.Artifact] = a.Content
+				files["AGENTS.md"] = append(files["AGENTS.md"], append([]byte("\n\nCoordinator rules:\n"), a.Content...)...)
 			}
 		}
 		if value, ok := b.Settings["model_reasoning_effort"]; ok {
@@ -265,6 +268,7 @@ func (s *Server) linkCodexLogin() error {
 }
 
 const (
+	agyRulesFile   = "GEMINI.md"
 	agyLoginToken  = "antigravity-oauth-token" //nolint:gosec // OAuth token file basename, not a credential value
 	hooksJSONFile  = "hooks.json"
 	mcpServersKey  = "mcpServers"
@@ -292,7 +296,7 @@ func (s *Server) agyFiles() map[string][]byte {
 	hooks := mustJSON(map[string]any{managedBinary: agyPreToolUse(cmd)})
 	mcp := mustJSON(map[string]any{mcpServersKey: map[string]any{}})
 	skills := mustJSON(map[string]any{"entries": []any{}})
-	return map[string][]byte{"GEMINI.md": s.Rules, hooksJSONFile: hooks, "mcp_config.json": mcp, "skills.json": skills}
+	return map[string][]byte{agyRulesFile: s.Rules, hooksJSONFile: hooks, "mcp_config.json": mcp, "skills.json": skills}
 }
 
 func agyPreToolUse(command string) map[string]any {

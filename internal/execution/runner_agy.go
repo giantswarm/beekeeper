@@ -71,11 +71,11 @@ func (s *Server) prepareAgyMCPHome(ref Ref, j Journal) (string, error) {
 	if err := ownedDirectory(cfgDir); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"GEMINI.md", hooksJSONFile, "skills.json"} {
+	for _, name := range []string{agyRulesFile, hooksJSONFile, "skills.json"} {
 		dst := filepath.Join(cfgDir, name)
 		_ = os.Remove(dst)
 		target := filepath.Join(s.agyConfigDir(), name)
-		if name == "GEMINI.md" && s.coordinatorBundle != nil {
+		if name == agyRulesFile && s.coordinatorBundle != nil {
 			target = s.rulesFile()
 		}
 		if err := os.Symlink(target, dst); err != nil {

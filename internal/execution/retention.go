@@ -18,6 +18,12 @@ const LogRetention = 30 * 24 * time.Hour
 // homeLeftoverBound caps the home state entries one audit names.
 const homeLeftoverBound = 256
 
+// The audit states of what stays on a host past or beside an execution.
+const (
+	resourceShared   = "shared"
+	resourceTerminal = "terminal"
+)
+
 const claudeSettingsFile = "settings.json"
 const claudeRulesFile = "CLAUDE.md"
 const unitReloading = "reloading"
@@ -178,7 +184,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 						row.State = "parked"
 					}
 				case unitInactive, Failed:
-					row.State, row.Reason, row.Retry = "terminal", "recovery artifacts retained; publication is not proven by exit", fmt.Sprintf("review recovery evidence, then beekeeper agents hosts reconcile <host> %s %d", j.Handle.Ref.Execution, j.Handle.Ref.Generation)
+					row.State, row.Reason, row.Retry = resourceTerminal, "recovery artifacts retained; publication is not proven by exit", fmt.Sprintf("review recovery evidence, then beekeeper agents hosts reconcile <host> %s %d", j.Handle.Ref.Execution, j.Handle.Ref.Generation)
 					if !j.StopAcknowledged || name == id+"-agy-home" {
 						row.Reason = "overdue lifecycle cleanup"
 					}
@@ -203,14 +209,14 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 			switch name {
 			case "policy.json", claudeRulesFile, claudeSettingsFile, "omp-guard.mjs", "codex-home", "agy-home", "sources", "control", "github-bin", admissionLock, bundlesDir, retiredResources, recoveryBundles: //nolint:goconst // Explicit inventory of shared on-disk names.
 				if e.Type()&os.ModeSymlink == 0 {
-					row.State = "shared"
+					row.State = resourceShared
 					row.Reason = "shared policy, toolchain or retained recovery container"
 					row.Retry = "host owner reviews contents; no recursive deletion"
 				}
 			}
 		}
 		if path == retiredRoots[0] && e.Type()&os.ModeSymlink == 0 {
-			row.State, row.Reason, row.Retry = "shared", "retired workspace container", "host owner reviews contents; no recursive deletion"
+			row.State, row.Reason, row.Retry = resourceShared, "retired workspace container", "host owner reviews contents; no recursive deletion"
 		}
 		if filepath.Dir(path) == filepath.Join(s.Root, bundlesDir) {
 			s.bundleRow(&row, e, live)
@@ -255,7 +261,7 @@ func (s *Server) AuditResources(ctx context.Context) ([]ResourceFinding, error) 
 		sharedPaths[tool.Executable] = "shared toolchain " + name + "; host owner retains"
 	}
 	for path, reason := range sharedPaths {
-		findings = append(findings, ResourceFinding{Path: path, State: "shared", Reason: reason, Retry: "host owner manages shared lifetime; no execution cleanup"})
+		findings = append(findings, ResourceFinding{Path: path, State: resourceShared, Reason: reason, Retry: "host owner manages shared lifetime; no execution cleanup"})
 	}
 	findings = append(findings, s.homeLeftovers()...)
 	if len(findings) > 4096 {
@@ -288,14 +294,14 @@ func retirementRow(row *ResourceFinding, j Journal, now time.Time) {
 	}
 	retry := fmt.Sprintf("beekeeper agents hosts reconcile <host> %s %d", j.Handle.Ref.Execution, j.Handle.Ref.Generation)
 	if !x.Finished() {
-		row.State, row.Reason, row.Retry = "terminal", "overdue lifecycle cleanup: retirement stopped at "+x.Stage, retry
+		row.State, row.Reason, row.Retry = resourceTerminal, "overdue lifecycle cleanup: retirement stopped at "+x.Stage, retry
 		if x.LastError != "" {
 			row.Reason += ": " + x.LastError
 		}
 		return
 	}
 	if j.RevocationFailed {
-		row.State, row.Reason, row.Retry = "terminal", "failed credential revocation", retry
+		row.State, row.Reason, row.Retry = resourceTerminal, "failed credential revocation", retry
 		return
 	}
 	row.State, row.RetainedAt, row.EligibleAt = "retired", x.RetiredAt, time.Time{}
@@ -318,21 +324,31 @@ func retirementRow(row *ResourceFinding, j Journal, now time.Time) {
 // root holds. Nothing proves their owner, so they are reported and never touched,
 // and neither their contents nor anything else under home is read.
 func (s *Server) homeLeftovers() []ResourceFinding {
+	incomplete := func(path, reason string) ResourceFinding {
+		return ResourceFinding{Path: path, State: Unknown, Reason: reason, Retry: "host owner reviews the directory; a clean audit cannot be claimed"}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		return []ResourceFinding{incomplete("~", "home state unreadable: the account has no home")}
 	}
 	root := filepath.Join(home, ".local", "state")
 	dir, err := os.Open(filepath.Clean(root)) //nolint:gosec // fixed location under the host account's home
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
+	}
+	if err != nil {
+		return []ResourceFinding{incomplete(root, "home state unreadable")}
 	}
 	defer func() { _ = dir.Close() }()
-	entries, err := dir.ReadDir(homeLeftoverBound)
+	entries, err := dir.ReadDir(homeLeftoverBound + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil
+		return []ResourceFinding{incomplete(root, "home state unreadable")}
 	}
 	rows := []ResourceFinding{}
+	if len(entries) > homeLeftoverBound {
+		entries = entries[:homeLeftoverBound]
+		rows = append(rows, incomplete(root, fmt.Sprintf("home state holds more than %d entries; the rest are not listed", homeLeftoverBound)))
+	}
 	for _, e := range entries {
 		path := filepath.Join(root, e.Name())
 		if within(path, s.Root) {

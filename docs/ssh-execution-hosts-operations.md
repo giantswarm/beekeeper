@@ -1133,9 +1133,12 @@ control, dispatch, retired, recovery and bundle containers are included; executi
 contents are not swept. A retirement that stopped halfway is `terminal` with its
 recorded error; a finished one is `retired`, with `eligibleAt` when it can go.
 The audit also names, up to 256, the immediate children of the account's
-`~/.local/state` other than beekeeper's own: a worker that wrote a literal `~` path
-leaves them there, no execution owns them, and they stay `unknown` for the host
-owner. Nothing else under home is read.
+`~/.local/state` other than beekeeper's own: a worker runs on a `HOME` in its
+execution root, but one on the account's home or writing by absolute path leaves
+them there, no execution owns them, and they stay `unknown` for the host owner.
+More entries than that, or a directory that cannot be read, is an `unknown` row
+naming the state directory, so an incomplete listing never reads as clean. Nothing
+else under home is read.
 The inventory refuses more than 4096 entries rather than silently truncating.
 
 An operator can reconcile **one established execution owner** with:

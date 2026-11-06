@@ -14,11 +14,20 @@ toolchains, `XDG_CACHE_HOME`, `XDG_STATE_HOME` and `CARGO_HOME` all point inside
 it, so they retire with it. An agy worker always runs on a home of its own beside
 its journal, with no MCP server configured unless the request asks for one.
 
-`HOME` is not routed: harness logins, Git identity and SSH configuration stay
-where the host provisioned them. A worker that writes to a literal path under
-`~` leaves that behind. `hosts check` names what is in the account's
-`~/.local/state`, where such downloads land, but no audit can attribute it to an
-execution, and a write elsewhere under `~` goes unseen.
+`HOME` points inside it too, so what a worker writes to a literal `~` path retires
+with it. The account's home stays where the host provisioned it: harness logins
+live in each harness's configured directory, Git and GitHub configuration are
+reached by explicit path (`GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`), beekeeper finds
+its own state through `BEEKEEPER_EXECUTION_HOME`, and ssh reads the account
+database, not `HOME`.
+
+Two workers keep the account's `HOME`: a claude worker on a host with no
+`configDir`, whose login lives there, and every worker on a host with
+`sharedHome: true`, the way back if a tool on that host needs the account's home.
+Both change the audit's reach, not its rules: a worker can also still write to the
+account's home by absolute path. `hosts check` names what is in the account's
+`~/.local/state`, where such downloads land, but cannot attribute it to an
+execution, and a write elsewhere there goes unseen.
 
 ## What removes a retired resource
 
