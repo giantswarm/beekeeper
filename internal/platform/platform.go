@@ -136,6 +136,16 @@ type Launcher interface {
 	Failed(ctx context.Context, patterns ...string) []string
 	// ResetFailed clears the failed state of the units.
 	ResetFailed(ctx context.Context, units ...string) error
+	// Scoped is the command line that runs argv in a transient scope of
+	// its own, name, under app.slice, collected once it empties: what argv
+	// leaves running (the claude daemon a claude --bg starts) stays there,
+	// outside the caller's unit, its limits and its stop. argv itself
+	// where no user service manager runs.
+	Scoped(name string, argv []string) []string
+	// Move moves the running processes pids into a new transient scope
+	// name under app.slice, out of the unit they run in, and returns once
+	// the first of them is there.
+	Move(pids []int, name string) error
 }
 
 // RunNice is the nice level a capped run's command starts at: among the

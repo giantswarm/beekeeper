@@ -65,6 +65,8 @@ func (f *fakeLauncher) Resume(context.Context, string) error              { retu
 func (f *fakeLauncher) Running(context.Context, bool, ...string) []string { return nil }
 func (f *fakeLauncher) Failed(context.Context, ...string) []string        { return nil }
 func (f *fakeLauncher) ResetFailed(context.Context, ...string) error      { return nil }
+func (f *fakeLauncher) Scoped(_ string, argv []string) []string           { return argv }
+func (f *fakeLauncher) Move([]int, string) error                          { return nil }
 
 type fixture struct {
 	s        *Server

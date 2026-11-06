@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Every `claude --bg` beekeeper runs (a background start, handover, wake, role successor or resume) runs in a transient scope of its own under `app.slice`, so the claude daemon it starts never stays in the calling unit: background sessions no longer share `beekeeper-notify.service`'s 256 MiB and half a CPU, nor end with its stop. `beekeeper doctor`, and so the watch, moves a daemon it finds in a beekeeper unit, with the processes under it, into a scope of its own without stopping a session, naming the unit and its limits ([#3337](https://github.com/giantswarm/beekeeper/issues/3337))
 - `beekeeper disk prune`, `disk holders` and the worktree trim resolve live process references once per scan instead of once per candidate, and each measured disk root and directory has its own read budget, so a large state directory cannot hide the user cache (https://github.com/giantswarm/beekeeper/issues/3244).
 - `note add --for` files a note for another name of the guide's person for that person, and refuses a name nobody on the desk goes by, so a decision never lands where no guide sees it ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
 - A central instance that answers "tool not found" is named as a version mismatch, not as unreachable ([#3205](https://github.com/giantswarm/beekeeper/issues/3205))

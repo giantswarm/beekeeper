@@ -85,6 +85,8 @@ func (stubLauncher) Failed(context.Context, ...string) []string        { return 
 func (stubLauncher) ResetFailed(context.Context, ...string) error {
 	return missing("Launcher.ResetFailed")
 }
+func (stubLauncher) Scoped(_ string, argv []string) []string { return argv }
+func (stubLauncher) Move([]int, string) error                { return missing("Launcher.Move") }
 
 type stubCapper struct{}
 
