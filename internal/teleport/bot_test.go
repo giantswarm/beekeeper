@@ -51,7 +51,7 @@ func TestBotRunning(t *testing.T) {
 	path := filepath.Join(dir, "systemctl")
 	for _, exit := range []string{"0", "1"} {
 		script := "#!/bin/sh\n[ \"$*\" = '--user is-active --quiet beekeeper-teleport.service' ] || exit 2\nexit " + exit + "\n"
-		if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // an executable test fixture
 			t.Fatal(err)
 		}
 		err := BotRunning(context.Background())

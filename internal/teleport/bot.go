@@ -7,12 +7,13 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // BotStatus reads only the public certificate emitted by tbot. It never reads
 // the bot's private key or onboarding configuration.
 func BotStatus(certificate string) (Profile, error) {
-	raw, err := os.ReadFile(certificate)
+	raw, err := os.ReadFile(filepath.Clean(certificate))
 	if err != nil {
 		return Profile{}, errors.New("bot certificate unavailable")
 	}
