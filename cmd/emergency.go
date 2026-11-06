@@ -328,6 +328,9 @@ func (a *app) emergencyAdminMerge(ctx context.Context, repo string, number int, 
 	if why != "" {
 		return refused("admin merge of %s: %s", ref, why)
 	}
+	if err := github.ReviewOnlyBypass(ctx, github.RunGH, repo, p.Base, p.Head); err != nil {
+		return refused("admin merge of %s: %v", ref, err)
+	}
 	if err := a.emergencyMergePolicy(repo, number); err != nil {
 		return err
 	}

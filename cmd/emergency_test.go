@@ -374,6 +374,12 @@ func adminMergeCall(t *testing.T, words string, p superloop.Pull, behind int, au
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return p, nil }
 	var calls [][]string
 	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "api" {
+			if args[1] == "graphql" {
+				return []byte(`{"data":{"repository":{"ref":{"branchProtectionRule":null}}}}`), nil
+			}
+			return []byte(`[[]]`), nil
+		}
 		calls = append(calls, slices.Clone(args))
 		return nil, nil
 	}
@@ -433,5 +439,48 @@ func TestEmergencyAdminNeedsItsHead(t *testing.T) {
 	a := emergencyApp(t)
 	if err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin"); Code(err) != ExitUsage {
 		t.Fatalf("no head: %v", err)
+	}
+}
+
+// Exercise the real pull parser and behind reader: green reported checks do
+// not prove that the required security scan ever ran on the authorized head.
+func TestEmergencyAdminRefusesAbsentRequiredScan(t *testing.T) {
+	a := emergencyApp(t)
+	if err := emergencyCall(a, "on", emergencyReasonFlag, "Admin merge o/r#7 now.", untilFlag, "10m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.Record(about(event(loopParty, "merge.authorized", "https://github.com/o/r/pull/7 at %s: go", emergencyAdminHead), "o/r#7")); err != nil {
+		t.Fatal(err)
+	}
+	old := github.RunGH
+	t.Cleanup(func() { github.RunGH = old })
+	requiredRead, merged := false, false
+	github.RunGH = func(_ context.Context, args ...string) ([]byte, error) {
+		call := strings.Join(args, " ")
+		switch {
+		case args[0] == "pr" && args[1] == emergencyViewCommand:
+			return []byte(`{"state":"OPEN","headRefOid":"abc1234","baseRefName":"main","reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"lint","status":"COMPLETED","conclusion":"SUCCESS"}]}`), nil
+		case strings.Contains(call, "/compare/"):
+			return []byte("0"), nil
+		case args[1] == "graphql":
+			return []byte(`{"data":{"repository":{"ref":{"branchProtectionRule":null}}}}`), nil
+		case strings.Contains(call, "rules/branches/"):
+			requiredRead = true
+			return []byte(`[[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"security-scan"}]}}]]`), nil
+		case strings.Contains(call, "/check-runs"):
+			return []byte(`[{"check_runs":[{"id":1,"name":"lint","status":"completed","conclusion":"success"}]}]`), nil
+		case strings.Contains(call, "/statuses"):
+			return []byte(`[[]]`), nil
+		case args[0] == "pr" && args[1] == gitMerge:
+			merged = true
+			return nil, nil
+		default:
+			t.Fatalf("unexpected request: %v", args)
+			return nil, nil
+		}
+	}
+	err := emergencyCall(a, gitMerge, emergencyTestRepo, "7", "--admin", "--head", emergencyAdminHead)
+	if Code(err) != ExitRefused || !strings.Contains(err.Error(), "security-scan") || !requiredRead || merged {
+		t.Fatalf("err %v; requirements read %v; merged %v", err, requiredRead, merged)
 	}
 }

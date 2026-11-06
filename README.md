@@ -115,7 +115,10 @@ GitHub branch protection still applies. `emergency merge owner/repo 123 --admin
 --head <sha>` is the person's exception for a pull request GitHub keeps at
 REVIEW_REQUIRED: their quoted words name it, and it must be green, mergeable and
 up to date with its base at that exact head, with an approved desk review or the
-loop's go. `emergency hold set/lift`, `emergency
+loop's go. It reads the base's effective rules and requires every required
+context on that head, including any required App identity. It refuses unreadable
+requirements, classic protection, and non-review rules it cannot verify.
+`emergency hold set/lift`, `emergency
 start` (forced capacity admission), and `emergency capacity capacity.ceiling 4`
 use the same expiring grant. Every action and result records the quoted reason.
 `beekeeper emergency off` ends it early; a successor guide needs a new grant.
