@@ -34,8 +34,8 @@ const (
 var (
 	// deleteValues: the options of the delete commands that take a value.
 	deleteValues = map[string]map[string]bool{
-		shredCmd:   {"-n": true, "-s": true, "--iterations": true, "--size": true, "--random-source": true},
-		"truncate": {"-s": true, "-r": true, "--size": true, "--reference": true},
+		shredCmd:    {"-n": true, "-s": true, "--iterations": true, "--size": true, "--random-source": true},
+		litTruncate: {"-s": true, "-r": true, "--size": true, litReference: true},
 	}
 	// findValues: find's leading options that take a value.
 	findValues = map[string]bool{"-D": true}
@@ -369,7 +369,8 @@ func (st *deleteState) expansion(token string, at int) expansion {
 		e.value, e.maybeEmpty = "", true
 	case st.nounset:
 		if v, ok := st.assigned[name]; ok {
-			e.value = v
+			// Nounset stops unset variables, but permits an assigned empty value.
+			e.value, e.maybeEmpty = v, v == ""
 		} else if v := st.environ(name); v != "" {
 			e.value = v
 		}

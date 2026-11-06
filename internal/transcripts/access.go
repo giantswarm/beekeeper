@@ -75,15 +75,18 @@ func isOwnTranscript(caller Caller, meta Meta) bool {
 
 // GrantAppliesTo reports whether grant g was issued to caller.
 func GrantAppliesTo(g state.TranscriptGrant, caller Caller) bool {
-	if (caller.Party.Session != "" || caller.Party.HostSession != "") && g.To.Is(caller.Party) {
-		return true
+	if g.To.Session != "" || g.To.HostSession != "" {
+		// Concrete recipients cannot fall back to reusable names or aliases.
+		// Require a session or desktop match as well as Party.Is's exclusions;
+		// Party.Is alone can match names when both sessions are empty.
+		matchesID := (g.To.Session != "" && g.To.Session == caller.Party.Session) ||
+			(g.To.HostSession != "" && g.To.HostSession == caller.Party.HostSession)
+		return matchesID && g.To.Is(caller.Party)
 	}
-	for _, target := range []string{g.To.Name, g.To.Session, g.To.HostSession} {
-		if target == "" {
-			continue
-		}
+	// Explicit name-only grants retain their historical alias compatibility.
+	if g.To.Name != "" {
 		for _, own := range []string{caller.RosterName, caller.Party.Name, caller.Party.Session, caller.Party.HostSession, caller.Execution} {
-			if own != "" && strings.EqualFold(target, own) {
+			if own != "" && strings.EqualFold(g.To.Name, own) {
 				return true
 			}
 		}
@@ -98,8 +101,22 @@ func grantCovers(g state.TranscriptGrant, meta Meta, metaRepo string) bool {
 	if g.Repo != "" && metaRepo != "" && strings.EqualFold(g.Repo, metaRepo) {
 		return true
 	}
-	if g.Session != "" && meta.Matches(g.Session) {
-		return true
+	if g.Session != "" {
+		// Search accepts substrings, but an authorization must not expand a
+		// grant for guide-1 to guide-10 or another similarly named session.
+		if meta.ExactMatch(g.Session) {
+			return true
+		}
+		if ref := NormalizeRef(g.Session); ref != "" {
+			if strings.EqualFold(meta.Ref, ref) {
+				return true
+			}
+			for _, r := range meta.Refs {
+				if strings.EqualFold(r, ref) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }

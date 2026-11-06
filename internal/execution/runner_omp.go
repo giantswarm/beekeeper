@@ -19,7 +19,7 @@ const (
 func (s *Server) probeOmpGuard(ctx context.Context, h HarnessConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	c := exec.CommandContext(ctx, h.Executable, append(s.ompArgs(""), "--no-session")...) //nolint:gosec // pinned harness and typed flags
+	c := exec.CommandContext(ctx, h.Executable, append(s.ompArgs("", ""), "--no-session")...) //nolint:gosec // pinned harness and typed flags
 	c.Dir, c.Env, c.Stderr = s.Root, s.ompEnvironment(), io.Discard
 	in, err := c.StdinPipe()
 	if err != nil {
@@ -71,11 +71,14 @@ func (s *Server) runOmp(ctx context.Context, ref Ref, j Journal) error {
 	}
 	defer stream.Close()
 	stream.encode = ompMessage
-	env, err := s.GitHubEnvironment(j, append(s.toolPath(s.ompEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath))
+	env, err := s.ownedEnvironment(j, append(s.toolPath(s.ompEnvironment()), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath))
 	if err != nil {
 		return err
 	}
-	c := exec.CommandContext(ctx, h.Executable, s.ompArgs(j.Request.Model)...) //nolint:gosec // pinned harness and typed arguments
+	if env, err = s.GitHubEnvironment(j, env); err != nil {
+		return err
+	}
+	c := exec.CommandContext(ctx, h.Executable, s.ompArgs(j.Request.Model, j.Request.Effort)...) //nolint:gosec // pinned harness and typed arguments
 	c.Dir, c.Env, c.Stdin, c.Stderr = j.Handle.Workspace, env, stream.reader, io.Discard
 	log, err := s.openLog(ref)
 	if err != nil {

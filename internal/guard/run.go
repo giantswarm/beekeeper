@@ -223,7 +223,7 @@ func commandHead(argv []string, n int) string {
 // shellCommand is the command argv runs: a shell's -c script rather than the
 // shell (the hook wraps every build in zsh -c), else argv joined.
 func shellCommand(argv []string) string {
-	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, "zsh"}, filepath.Base(argv[0])) {
+	if len(argv) >= 3 && argv[1] == "-c" && slices.Contains([]string{"sh", bashCmd, zshCmd}, filepath.Base(argv[0])) {
 		return argv[2]
 	}
 	return strings.Join(argv, " ")
@@ -234,6 +234,8 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Options configure one capped run.
 type Options struct {
+	// Core preserves the session core dump limits; by default commands disable both.
+	Core bool
 	// scope is assigned before slot acquisition, so setup stalls are recoverable.
 	scope string
 	// StopWith is a verified managed execution service, never a CLI flag.
@@ -391,19 +393,39 @@ func ParseWait(s string) (time.Duration, error) {
 
 // Run runs argv in a capped scope and returns its exit code: the command's,
 // 128+signal when a signal ended it, ExitBusy when the wait ran out.
+// A direct go build killed with exit 137 is retried once with -p=2 and
+// GOMAXPROCS=4 to reduce peak compiler memory.
 // Without a user systemd, or inside a capped scope already, it execs argv.
 // In the agent sandbox (o.Sandbox), which keeps the user systemd out of
 // reach, the host's broker caps it; without a broker it refuses, 1.
 // A run of a session that holds a slot already joins that slot at once: its
 // scope goes into the slot's slice and shares the slot's cap.
 func Run(o Options, argv []string) int {
+	rc := run(o, argv, false)
+	if rc == 137 && len(argv) > 1 && filepath.Base(argv[0]) == "go" && argv[1] == "build" {
+		return run(o, argv, true)
+	}
+	return rc
+}
+
+// run completes cleanup, including releasing the slot, before Run retries.
+func run(o Options, argv []string, boundedGo bool) int {
 	logf := func(format string, a ...any) { _, _ = fmt.Fprintf(o.Stderr, LogPrefix+format+"\n", a...) }
+	if !o.Core && coreDumpsOn() {
+		logf("core dumps off")
+	}
+	kubeEnv, cleanupKube, err := runKubeconfig()
+	if err != nil {
+		logf("scratch kubeconfig: %v", err)
+		return 1
+	}
+	defer cleanupKube()
 	capper := plat.Capper
 	switch {
 	case capper.Available():
 	case o.Sandbox == nil:
 		logf("no user systemd here, running uncapped: %s", argv[0])
-		return execve(argv, logf)
+		return runDirect(coreCommand(argv, o.Core), kubeEnv, logf)
 	case !o.Sandbox.Available():
 		logf("refused: the agent sandbox keeps the user systemd out of reach and no sandbox broker answers; " +
 			"the host runs it as beekeeper-sandbox.service (beekeeper install), an uncapped build would put the machine at risk")
@@ -412,7 +434,7 @@ func Run(o Options, argv []string) int {
 		capper = o.Sandbox
 	}
 	if capper.Capped() {
-		return execve(argv, logf)
+		return runDirect(coreCommand(argv, o.Core), kubeEnv, logf)
 	}
 	needKiB, err := ParseSize(o.Max)
 	if err != nil {
@@ -466,7 +488,14 @@ func Run(o Options, argv []string) int {
 	}
 	env, cleanup := runTmp(o.TmpDir, logf)
 	defer cleanup()
+	env = append(env, kubeEnv...)
 	env = append(env, cpuEnv(o)...)
+	if boundedGo {
+		// Keep unrelated caller flags; Go uses the last occurrence of -p.
+		flags := strings.TrimSpace(os.Getenv("GOFLAGS") + " -p=2")
+		env = append(env, "GOFLAGS="+flags, "GOMAXPROCS=4")
+		logf("retrying go build once after exit 137 with GOFLAGS=-p=2 and GOMAXPROCS=4")
+	}
 	if o.GoCache != "" {
 		release, ok := holdGoCache(o, logf)
 		if !ok {
@@ -487,6 +516,11 @@ func Run(o Options, argv []string) int {
 	case shared:
 		how = "shared " + how
 	}
+	if lock != nil {
+		if err := launchingHolder(o, slot); err != nil {
+			logf("updating the slot's startup deadline: %v", err)
+		}
+	}
 	o.record(VerbStart, fmt.Sprintf("%s.scope%s %s max %s: %s", unit, runrecord.Facts(o.Repo, o.Head), how, o.Max, head))
 	start := time.Now()
 	rc, drain := scope(capper, unit, o, slot, argv, env, logf)
@@ -503,6 +537,10 @@ func Run(o Options, argv []string) int {
 			what, advice, detail := killReport(o, unit, slot, shared, kills)
 			logf("%s (exit %d) — %s", what, rc, advice)
 			end += ", " + detail
+		} else if rc == 128+int(syscall.SIGKILL) {
+			why := "SIGKILL (exit 137): no cap kill confirmed in the kernel log; external signal or session end possible (OOM evidence may be unavailable)"
+			logf("%s", why)
+			end += ", " + why
 		}
 		if at := o.keepTail(unit, head, rc, logf); at != "" {
 			end += ", tail " + at
@@ -828,6 +866,39 @@ func writeHolder(o Options, slot int, argv []string, scope ...string) {
 		Since: time.Now().UTC().Format("2006-01-02T15:04:05Z"), Name: os.Getenv("CLAUDE_CODE_SESSION_NAME"), Scope: unit, Started: holderStarted(), StartDeadline: time.Now().Add(2*max(o.Wait, time.Second) + scopeStartWait)})
 }
 
+// launchingHolder ends the setup allowance once memory and cache waits have
+// finished. Recovery must not depend on the optional run.start event, nor wait
+// twice the background queue timeout after a launcher fails to start its scope.
+// Replace the record atomically so the watch never reads a partial update.
+func launchingHolder(o Options, slot int) error {
+	path := filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	var h holderRecord
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return err
+	}
+	if h.PID != os.Getpid() || h.Scope != o.scope {
+		return errors.New("slot holder changed before launch")
+	}
+	h.StartDeadline = time.Now().Add(scopeStartWait)
+	f, err := os.CreateTemp(o.SlotDir, ".holder-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	writeErr := enc.Encode(h)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
 // drainWait bounds the wait for the last bytes of a run's output after the
 // scope was reaped: a process the reap cannot stop (none on a capped run,
 // whose scope holds every one of the command's processes) would otherwise
@@ -859,7 +930,7 @@ var (
 // record is written.
 func scope(capper platform.Capper, unit string, o Options, slot int, argv, env []string, logf func(string, ...any)) (int, func()) {
 	noop := func() {}
-	c, err := capper.Command(unit, o.cap(slot), argv)
+	c, err := capper.Command(unit, o.cap(slot), coreCommand(argv, o.Core))
 	if err != nil {
 		logf("%v", err)
 		return ExitNotFound, noop
@@ -1067,6 +1138,18 @@ func killReport(o Options, unit string, slot int, shared bool, kills []machine.O
 		started = started || k.Task != "systemd-run"
 	}
 	names := strings.Join(v, "; ")
+	limit := o.Max
+	if shared && atSlice {
+		limit = "unknown"
+		if raw, err := os.ReadFile(filepath.Join(o.SlotDir, strconv.Itoa(slot)+".holder")); err == nil {
+			var h holderRecord
+			if json.Unmarshal(raw, &h) == nil && h.Max != "" {
+				limit = h.Max
+			}
+		}
+	}
+	// The slot's holder, rather than this joining run, chose its limit.
+	names += " (scope " + unit + ".scope, MemoryMax=" + limit + ")"
 	switch {
 	case !started:
 		return fmt.Sprintf("slot %d's cap (%s) killed systemd-run before the command started: %s", slot, o.SlotSlice(slot), names),
@@ -1127,3 +1210,13 @@ func execve(argv []string, logf func(string, ...any)) int {
 }
 
 func holderStarted() time.Time { started, _ := proc.Started(os.Getpid()); return started }
+
+// coreCommand lowers both limits in the command payload inside either the
+// local or brokered scope. Every descendant of the command inherits them.
+// A fixed shell program preserves argument boundaries and fails closed.
+func coreCommand(argv []string, core bool) []string {
+	if core {
+		return argv
+	}
+	return append([]string{"sh", "-c", "ulimit -S -H -c 0 || exit 1; exec \"$@\"", "beekeeper-run"}, argv...)
+}

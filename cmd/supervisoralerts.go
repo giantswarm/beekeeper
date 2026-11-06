@@ -125,7 +125,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 			return err
 		}
 		owned := slices.ContainsFunc(st.AlertOwners, func(o state.AlertOwner) bool {
-			if o.Alert != f.Key || !o.Ended.IsZero() {
+			if alertOwnerKey(o) != f.ScopedKey() || !o.Ended.IsZero() {
 				return false
 			}
 			_, live := claude.Live(sessions, o.By)
@@ -141,7 +141,7 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 				continue
 			}
 			waiting = true
-			key := "alert wake " + f.Installation + "/" + f.Key + " " + ag.Name
+			key := "alert wake " + f.ScopedKey() + " " + ag.Name
 			if done[key] || pendingKeys[key] || l.holdingStarts() {
 				continue
 			}
@@ -155,10 +155,10 @@ func (l *supervisorLoop) watchAlerts(ctx context.Context) error {
 		}
 		// Existing firing pages are included: taking over from a watch must
 		// not lose an unowned NEW event already written into its baseline.
-		key := "alert page " + f.Installation + "/" + f.Key
+		key := "alert page " + f.ScopedKey()
 		staffed := false
 		for k := range done {
-			if strings.HasPrefix(k, "alert wake "+f.Installation+"/"+f.Key+" ") {
+			if strings.HasPrefix(k, "alert wake "+f.ScopedKey()+" ") {
 				staffed = true
 				break
 			}

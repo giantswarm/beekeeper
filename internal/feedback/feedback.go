@@ -49,13 +49,11 @@ type Thread struct {
 }
 
 var (
-	// header opens the parent ("=== THREAD PARENT MESSAGE ===") or a reply
-	// ("--- Reply 1 of 2 ---").
-	header = regexp.MustCompile(`(?m)^(?:=== THREAD PARENT MESSAGE ===|--- Reply \d+ of \d+ ---)\n`)
-	from   = regexp.MustCompile(`(?m)^From: .*\((\w+)\)$`)
-	ts     = regexp.MustCompile(`(?m)^Message TS: (\d+\.\d+)$`)
-	// replies closes the parent: the header of the replies' list.
-	replies = regexp.MustCompile(`(?m)^=== THREAD REPLIES \(\d+ total\) ===\n?`)
+	// boundary includes every structural marker. Message text is unescaped,
+	// so extra markers must make the thread ambiguous rather than invent
+	// another message with an author supplied by that text.
+	boundary = regexp.MustCompile(`(?m)^(?:=== THREAD PARENT MESSAGE ===|=== THREAD REPLIES \(\d+ total\) ===|--- Reply \d+ of \d+ ---)(?:\n|$)`)
+	metadata = regexp.MustCompile(`^From: [^\n]*\((\w+)\)\nTime: [^\n]+\nMessage TS: (\d+\.\d+)(?:\n|$)`)
 	// trailer is what the server and the connector append to a message's
 	// text: its reactions, and the "Sent using Claude" attribution of a
 	// message posted through the claude.ai connector.
@@ -65,6 +63,8 @@ var (
 // ParseThread reads slack_read_thread's result: a JSON object whose
 // messages are the thread as text, the parent first, each message a header,
 // From, Time and Message TS lines, then its text.
+// Inconsistent boundaries are rejected: text quoting a message header must
+// never be delivered as a separate reply by the quoted author.
 func ParseThread(result string) (Thread, error) {
 	var v struct {
 		Messages string `json:"messages"`
@@ -72,24 +72,50 @@ func ParseThread(result string) (Thread, error) {
 	if err := json.Unmarshal([]byte(result), &v); err != nil {
 		return Thread{}, fmt.Errorf("the thread: %w", err)
 	}
-	text := replies.ReplaceAllString(v.Messages, "")
-	idx := header.FindAllStringIndex(text, -1)
-	if len(idx) == 0 {
+	text := v.Messages
+	idx := boundary.FindAllStringIndex(text, -1)
+	if len(idx) == 0 || idx[0][0] != 0 {
 		return Thread{}, fmt.Errorf("the thread names no parent message")
 	}
-	var t Thread
+	count := len(idx) - 2 // parent and replies-list markers are not replies
 	for i, at := range idx {
+		var want string
+		switch i {
+		case 0:
+			want = "=== THREAD PARENT MESSAGE ==="
+		case 1:
+			want = fmt.Sprintf("=== THREAD REPLIES (%d total) ===", count)
+		default:
+			want = fmt.Sprintf("--- Reply %d of %d ---", i-1, count)
+		}
+		if strings.TrimSuffix(text[at[0]:at[1]], "\n") != want {
+			return Thread{}, fmt.Errorf("the thread has inconsistent message boundaries")
+		}
+	}
+	parentEnd := len(text)
+	if len(idx) > 1 {
+		parentEnd = idx[1][0]
+		listEnd := len(text)
+		if len(idx) > 2 {
+			listEnd = idx[2][0]
+		}
+		if strings.TrimSpace(text[idx[1][1]:listEnd]) != "" {
+			return Thread{}, fmt.Errorf("the thread has text before its first reply")
+		}
+	}
+	parent, err := parseMessage(text[idx[0][1]:parentEnd])
+	if err != nil {
+		return Thread{}, err
+	}
+	t := Thread{Parent: parent}
+	for i := 2; i < len(idx); i++ {
 		end := len(text)
 		if i+1 < len(idx) {
 			end = idx[i+1][0]
 		}
-		m, err := parseMessage(text[at[1]:end])
+		m, err := parseMessage(text[idx[i][1]:end])
 		if err != nil {
 			return Thread{}, err
-		}
-		if i == 0 {
-			t.Parent = m
-			continue
 		}
 		t.Replies = append(t.Replies, m)
 	}
@@ -99,11 +125,11 @@ func ParseThread(result string) (Thread, error) {
 // parseMessage reads one message: its From, Time and Message TS lines, then
 // its text without the trailer.
 func parseMessage(s string) (Message, error) {
-	f, n := from.FindStringSubmatch(s), ts.FindStringSubmatchIndex(s)
-	if f == nil || n == nil {
+	n := metadata.FindStringSubmatchIndex(s)
+	if n == nil {
 		return Message{}, fmt.Errorf("a message of the thread names no author or ts: %q", firstLine(s))
 	}
-	return Message{User: f[1], TS: s[n[2]:n[3]], Text: strings.TrimSpace(trailer.ReplaceAllString(strings.TrimSpace(s[n[1]:]), ""))}, nil
+	return Message{User: s[n[2]:n[3]], TS: s[n[4]:n[5]], Text: strings.TrimSpace(trailer.ReplaceAllString(strings.TrimSpace(s[n[1]:]), ""))}, nil
 }
 
 // Later reports whether Slack ts a is after b; an empty b is before all.
@@ -126,18 +152,23 @@ func Later(a, b string) bool {
 // "<name>: <message>" (the longest, without regard to case), with the rest;
 // none, "" and the whole text.
 func Route(text string, names []string) (to, msg string) {
-	for _, n := range names {
-		if len(n) <= len(to) || len(text) <= len(n) || !strings.EqualFold(text[:len(n)], n) {
+	// Try the longest text prefix first. EqualFold can match names with
+	// different UTF-8 byte lengths, so the colon defines the prefix's end.
+	for i := len(text) - 1; i >= 0; i-- {
+		if text[i] != ':' {
 			continue
 		}
-		if rest, ok := strings.CutPrefix(text[len(n):], ":"); ok && strings.TrimSpace(rest) != "" {
-			to, msg = n, strings.TrimSpace(rest)
+		rest := strings.TrimSpace(text[i+1:])
+		if rest == "" {
+			continue
+		}
+		for _, n := range names {
+			if n != "" && strings.EqualFold(text[:i], n) {
+				return n, rest
+			}
 		}
 	}
-	if to == "" {
-		return "", text
-	}
-	return to, msg
+	return "", text
 }
 
 func firstLine(s string) string {

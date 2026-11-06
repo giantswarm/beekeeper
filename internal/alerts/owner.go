@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Key is a firing alert's identity in the baseline: its fingerprint and its
-// start, so an alert that resolves and fires again is a new one, owned by
-// nobody.
+// Key is a firing alert's identity within one installation: its fingerprint
+// and start. Firing also scopes it to the installation, so identical label
+// sets from different Alertmanagers have distinct ownership and reminders.
 func Key(fingerprint string, a Alert) string { return fingerprint + "@" + a.Since }
 
 // Firing is one alert of the baseline with its key.
@@ -20,12 +20,21 @@ type Firing struct {
 	Alert
 }
 
+// ScopedKey is the installation-qualified identity, including for a firing
+// value saved by an older watch whose key was only fingerprint@start.
+func (f Firing) ScopedKey() string {
+	if strings.HasPrefix(f.Key, f.Installation+"/") {
+		return f.Key
+	}
+	return f.Installation + "/" + f.Key
+}
+
 // Name is the alert as alerts own takes it: <installation>/<alertname>.
 func (f Firing) Name() string { return f.Installation + "/" + f.Alertname }
 
 // Fingerprint is the alert's fingerprint in the baseline.
 func (f Firing) Fingerprint() string {
-	fp, _, _ := strings.Cut(f.Key, "@")
+	fp, _, _ := strings.Cut(strings.TrimPrefix(f.Key, f.Installation+"/"), "@")
 	return fp
 }
 
@@ -44,7 +53,9 @@ func (st *State) Firing(severity string) []Firing {
 		}
 		for fp, a := range in.Alerts {
 			if severity == "" || a.Severity == severity {
-				out = append(out, Firing{Installation: name, Key: Key(fp, a), Alert: a})
+				f := Firing{Installation: name, Key: Key(fp, a), Alert: a}
+				f.Key = f.ScopedKey()
+				out = append(out, f)
 			}
 		}
 	}
