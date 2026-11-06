@@ -65,12 +65,18 @@ type Result struct {
 // executable in place.
 type Canary func(ctx context.Context, path, version string) error
 
+// Health checks the executable at path, the installed candidate of version.
+type Health func(ctx context.Context, path, version string) error
+
 // Options configures a Run call through its context.
 type Options struct {
 	// Version selects an exact release tag, including pre-releases.
 	Version string
 	Canary  Canary
-	Skip    func(tag string) bool
+	// Health checks the installed candidate before an update promotes it. Nil,
+	// that the candidate runs the update is its evidence.
+	Health Health
+	Skip   func(tag string) bool
 }
 
 type optionsKey struct{}
@@ -124,8 +130,8 @@ func (s *skipSource) ListReleases(ctx context.Context, repository selfupdate.Rep
 //
 // The binary is renamed over the executable in one step, symbolic links
 // resolved: a beekeeper watch that runs keeps running the old binary, every
-// process started afterwards runs the new one, and several updates may run
-// at once. A development build, a release without a bundle for this
+// process started afterwards runs the new one. Concurrent updates serialize
+// through a durable journal lock. A development build, a release without a bundle for this
 // platform's binary and a download that does not verify are refused, and the
 // executable stays as it is.
 func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
@@ -184,7 +190,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path); err != nil {
-		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s to %s.\n", res.Path, res.Latest)
@@ -227,7 +233,8 @@ func prerelease(current string) bool {
 // over the running executable once its bundle verifies, as Run installs the
 // latest: an execution host follows its coordinator's release, never a newer
 // one. The verified download is staged beside the destination and renamed
-// over it atomically, with no backup or ownership-dependent hard link.
+// over it atomically, retaining a verified recovery target once probation has
+// succeeded. First installation has no trusted recovery target.
 func InstallVersion(ctx context.Context, w io.Writer, version string) (Result, error) {
 	return installVersion(ctx, w, version, func() (selfupdate.Source, error) { return newTagSource(version) })
 }
@@ -296,7 +303,7 @@ func selectVersion(ctx context.Context, w io.Writer, version string, checkOnly b
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
 	if err := installRelease(ctx, up, rel, res.Path); err != nil {
-		return res, fmt.Errorf("updating %s failed, it is unchanged: %w", res.Path, err)
+		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true
 	_, _ = fmt.Fprintf(w, "Verified the signature and updated %s from %s to %s.\n", res.Path, res.Current, version)
