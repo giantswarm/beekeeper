@@ -1452,6 +1452,8 @@ The repository is the one the command names: `--repo`/`-R` (`OWNER/REPO`, `HOST/
 
 The refusal is one line: `Refused: a human decides what goes upstream: patches land on our fork and as a row on <github.upstreamReview>. `<verb>` writes to <owner/repo>, outside github.allowedOrgs (<orgs>).` Each refusal is a `hook.refused` event in `beekeeper log` with the session, the repository and the command (a command a token pattern matches is withheld, naming the rule), and the supervisor's watch says it once: `REFUSED <session>: upstream write to <owner/repo>: <command>`. `github.allowedOrgs: []` turns the guard off.
 
+The sandbox broker also checks writes before attaching its App token. REST writes, release uploads and Git pushes must name an allowed owner; reads and Git fetches remain available for other owners. Unknown write targets and GraphQL mutations are refused because an opaque node ID does not establish an allowed owner; use an owner-scoped REST endpoint for those writes. GraphQL reads are inspected within a 1 MiB body limit and forwarded unchanged. The hook recognizes repository flags in short-flag clusters, including an attached or separate value after `-R`.
+
 ## What leaves the machine
 
 The same holds for what a session sends out: an issue body, a commit, a chat post, a plan. The
