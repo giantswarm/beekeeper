@@ -86,7 +86,7 @@ func ReadRoster(ctx context.Context, client *http.Client, token, org string, now
 // so both are ErrPermission, never an empty team.
 func ReadTeam(ctx context.Context, client *http.Client, token, org, slug string) ([]string, error) {
 	logins := []string{}
-	next := apiURL() + "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members?per_page=100"
+	next := APIURL() + "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members?per_page=100"
 	for next != "" {
 		var page []struct {
 			Login string `json:"login"`
