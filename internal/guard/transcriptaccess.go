@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -235,9 +236,13 @@ func unresolvedTranscriptPath(code string) bool {
 
 const transcriptUnresolved = "Refused: the guard cannot resolve a constructed harness path in this script. Use explicit file paths so transcript access can be checked, or ask the supervisor for an explicit fixture grant."
 
+// transcriptTextTools take a regex or script, which reads like a path, among
+// their arguments; grepCmds are the others.
+var transcriptTextTools = map[string]bool{"sed": true, gsedCmd: true, "awk": true, "gawk": true, "mawk": true}
+
 var transcriptLiteralPath = regexp.MustCompile(`(?:~|\$\{?[A-Z_]+\}?|/)[^\s'"` + "`" + `(){};,<>|]+`)
 
-func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]string) *leak {
+func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]string, inTest bool) *leak {
 	if a.failed {
 		return &leak{never: true, transcript: true}
 	}
@@ -252,6 +257,9 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 	text := k < len(words) && isBeekeeperTextSubcommand(name, words[k+1:])
 	// Exempt only content-free utilities whose names are not shadowed.
 	metadata := name == "ls" || name == statCommand || name == transcriptReadlink || name == transcriptRealpath || name == "dirname" || name == transcriptBasename || name == "rm" || name == transcriptRmdir || name == transcriptChmod || name == transcriptTouch || name == shredCmd
+	// A test compares its operands or stats them; a pattern in [[ ]] is not
+	// even expanded. Substitutions inside it have their own segments.
+	metadata = metadata || inTest || name == "[[" || name == "[" || name == testCommand
 	if name == findCmd {
 		metadata = true
 		for _, arg := range words {
@@ -282,43 +290,120 @@ func (a transcriptAccess) fileLeak(words, dirs []string, helpers map[string]stri
 		if ((name == echoCommand || name == printfCommand || name == "cd") && !shadow || k == len(words)) && !input {
 			continue
 		}
-		// A program that constructs a harness home from a quoted component
-		// has no statically provable transcript target: fail closed.
-		if ip, ok := interpreters[name]; ok && ip.code != nil && unresolvedTranscriptPath(word) {
-			return &leak{never: true, transcript: true, unresolvedTranscript: true}
-		}
 		word = strings.TrimPrefix(strings.TrimPrefix(word, "0<"), "<>")
 		if _, value, ok := strings.Cut(word, "="); ok {
 			word = value
 		}
-		candidates := []string{word}
+		var candidates []string
 		for _, component := range transcriptHomeComponent.FindAllString(word, -1) {
 			candidates = append(candidates, strings.Trim(component, `"'`))
 		}
-		for _, literal := range transcriptLiteralPath.FindAllString(word, -1) {
-			// A slash in a jq operator or a shell parameter is not an absolute path.
-			if strings.Trim(literal, "/") != "" && !strings.Contains(word, "${") {
-				candidates = append(candidates, literal)
-			}
+		// The shell does not expand a word it has quoted, and whitespace shows
+		// this one was; a text tool's pattern or script is quoted as a rule.
+		quoted := grepCmds[name] || transcriptTextTools[name] || strings.ContainsAny(word, " \t\n")
+		if a.candidateDenied(word, dirs, recursive, quoted) {
+			return &leak{never: true, transcript: true}
 		}
 		for _, candidate := range candidates {
-			for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
-				if home := os.Getenv(env); home != "" {
-					candidate = strings.ReplaceAll(candidate, "${"+env+"}", home)
-					candidate = strings.ReplaceAll(candidate, "$"+env, home)
-				}
+			if a.candidateDenied(candidate, dirs, recursive, false) {
+				return &leak{never: true, transcript: true}
 			}
-			for _, dir := range dirs {
-				p := wordPath(candidate, dir)
-				explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, ".gemini") || strings.HasPrefix(candidate, ".omp")
-				recurse := recursive || explicitHome && !strings.ContainsAny(candidate, "*?[")
-				if a.denied(p, recurse) {
-					return &leak{never: true, transcript: true}
-				}
+		}
+		for _, literal := range transcriptLiteralPath.FindAllString(word, -1) {
+			// A slash in a jq operator or a shell parameter is not an absolute path.
+			if strings.Trim(literal, "/") != "" && !strings.Contains(word, "${") && a.candidateDenied(literal, dirs, recursive, true) {
+				return &leak{never: true, transcript: true}
 			}
 		}
 	}
 	return nil
+}
+
+// candidateDenied checks one path a word may name, from every directory the
+// command may run in. embedded marks text the shell does not expand itself.
+func (a transcriptAccess) candidateDenied(candidate string, dirs []string, recursive, embedded bool) bool {
+	for _, env := range []string{"CODEX_HOME", transcriptClaudeConfig, transcriptGeminiHome, "PI_CODING_AGENT_DIR", "OMP_CONFIG_DIR"} {
+		if home := os.Getenv(env); home != "" {
+			candidate = strings.ReplaceAll(candidate, "${"+env+"}", home)
+			candidate = strings.ReplaceAll(candidate, "$"+env, home)
+		}
+	}
+	explicitHome := strings.Contains(candidate, string(filepath.Separator)+".") || strings.HasPrefix(candidate, ".codex") || strings.HasPrefix(candidate, ".claude") || strings.HasPrefix(candidate, ".gemini") || strings.HasPrefix(candidate, ".omp")
+	recurse := recursive || explicitHome && !strings.ContainsAny(candidate, "*?[")
+	for _, dir := range dirs {
+		p := wordPath(candidate, dir)
+		if embedded && strings.ContainsAny(p, "*?[") {
+			if a.embeddedGlobDenied(p) {
+				return true
+			}
+		} else if a.denied(p, recurse) {
+			return true
+		}
+	}
+	return false
+}
+
+// embeddedGlobDenied decides a glob-shaped path the shell does not expand. It
+// is mostly a regex (s/.*foo/bar/), whose fixed prefix "/" would bound it to
+// the whole filesystem, so it is refused only when its components can reach a
+// store. A word the shell may expand keeps the bound of denied.
+func (a transcriptAccess) embeddedGlobDenied(p string) bool {
+	if a.failed {
+		return true
+	}
+	// A link in the fixed prefix leads the pattern where it really points.
+	prefix := filepath.Dir(p[:strings.IndexAny(p, "*?[")] + "x")
+	patterns := []string{p, filepath.Join(transcriptReal(prefix), strings.TrimPrefix(p, prefix))}
+	for _, root := range a.roots {
+		for _, store := range []string{root, transcriptReal(root)} {
+			for _, pattern := range patterns {
+				if transcriptGlobReaches(pattern, store) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// transcriptVariable is a parameter in a pattern, unlike a regex's end anchor.
+var transcriptVariable = regexp.MustCompile(`\$[A-Za-z_{(]`)
+
+// transcriptGlobReaches reports whether pattern can name store, a path under
+// it or an ancestor of it. Code may build the head of a path at run time, so
+// two or more components matching inside store count as well; a single one
+// does not, or the common regex .* would match every dot directory.
+func transcriptGlobReaches(pattern, store string) bool {
+	split := func(p string) []string {
+		return strings.FieldsFunc(p, func(r rune) bool { return r == filepath.Separator })
+	}
+	components, stored := split(pattern), split(store)
+	if slices.Contains(components, "**") {
+		return true
+	}
+	for offset := range stored {
+		n := min(len(components), len(stored)-offset)
+		if offset > 0 && n < 2 {
+			continue
+		}
+		matched := true
+		for i := 0; i < n && matched; i++ {
+			matched = transcriptComponentMatches(components[i], stored[offset+i])
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// A component the guard cannot evaluate could match anything.
+func transcriptComponentMatches(component, name string) bool {
+	if transcriptVariable.MatchString(component) {
+		return true
+	}
+	matched, err := filepath.Match(strings.TrimRight(component, `\`), name)
+	return matched || err != nil
 }
 
 func (h Hook) transcriptFileRefusal(ev event) string {

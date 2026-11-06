@@ -550,21 +550,26 @@ an adapter for, starts on the coordinator within its local
 room; for the latter the local start excludes the choices a host runs, and
 waits instead when that exclusion alone would make a self-hosted choice the pick
 while a subscription is eligible. A desk
-without `capacity.choices` never places remotely. With `github.workerApp`
-configured, reviewers (including Codex) follow the same host preferences and
-retain review capacity accounting. The per-worker GitHub adapter reads the PR
-and gives `gh pr review` write access to the task repository; the coordinator
-authenticates the reviewer session, exact head and reported review before a
-merge. Without that adapter, reviewers stay on the coordinator and wait when
-coordinator review capacity is full.
+without `capacity.choices` never places remotely. Reviewers (including Codex)
+follow the same host preferences and retain review capacity accounting, even
+without `github.workerApp`. On the execution host, `beekeeper agents review`
+reads the assigned PR and its closing issues, `beekeeper agents review --diff`
+reads its diff, and `beekeeper agents review --body-file <file>` posts a comment
+review through the coordinator. The body must begin with `Review: approved` or
+`Review: changes requested` and include `Head reviewed: <full SHA>` for the
+assigned head. Report the returned review URL in the authenticated completion
+report. If the supervisor has not recorded the assignment yet, retry the read.
+The relay requires a live execution lease and refuses a moved or closed PR;
+retrying an identical review reconciles a lost response. No host GitHub
+credential is needed. The coordinator authenticates the reviewer session,
+exact head and reported review before a merge.
 
 `capacity.local.ceiling` caps the busy agents the coordinator itself runs,
 apart from `capacity.ceiling`: a desk whose ceiling counts the hosts' slots
 too sets it to the coordinator's own share. Remote agents count against
 their host's `maxBusy`, never against it; local self-hosted sessions count.
 Every local start, the loop's and one by hand, is refused at it; a review may
-use `capacity.reviewHeadroom` above it, since reviews run only on the
-coordinator. A retired remote worker is
+use `capacity.reviewHeadroom` above it. A retired remote worker is
 stopped and acknowledged before it leaves the roster.
 
 Preparation creates no model process. The coordinator first records the stable
@@ -605,8 +610,55 @@ a process does not mark its task complete or remove its workspace.
 Inspection, including acknowledgement of a lease-expired unit, also preserves
 the workspace, its execution-owned Git repository and source bundle. Recover
 unpublished commits and local edits at the workspace path printed by `inspect`;
-stopping and repeating a stop do not authorize deletion. These retained files
-continue to consume disk until separately preserved and deliberately removed.
+stopping and repeating a stop do not authorize deletion.
+
+### Retirement
+
+The coordinator ends what an execution left through one resumable retirement.
+A final report, a stop, a failed start and a crash all enter it; the watch
+advances it, each execution on its own backoff, and records it under the
+execution's `retirement`. A parked worker, an open desk review or a finished
+round of an unfinished task does not enter it: the worktree and thread stay.
+
+The execution's inventory is in its host journal under `resources`, recorded
+before the resources exist: the worktree, its repository and branch, scratch,
+temporary files, caches, Go module and toolchain downloads, source bundle and
+credential dispatch directory. Workers run with `TMPDIR`, `XDG_CACHE_HOME`,
+`GOCACHE`, `GOPATH` and `GOMODCACHE` inside `<workspaceRoot>/<execution>`, so
+each build starts from a cold cache and leaves nothing in the host's home. Shared
+provisioned sources and toolchains are never part of an inventory, and an
+inventory naming anything but its own execution's paths refuses.
+
+1. **Revocation** runs first and on its own: neither an unreachable host nor a
+   GitHub outage blocks the other, and only a success records `revokedAt`. A
+   failure keeps `revokeError` and retries with `nextAttempt`.
+2. **Preservation** waits until the owned unit is confirmed ended, the log reached
+   the transcript store and no publication needs the execution. Commits, including
+   those only reflogs still reach, edits and untracked files that the starting
+   commit does not hold become one recovery commit, recorded as `refs/beekeeper/recovery/<execution>/<generation>` and
+   written as a verified bundle to `<state>/recovery/<execution>-<generation>.bundle`.
+   Work that cannot be read fails the step and everything stays in place.
+3. **Moving aside** renames `<workspaceRoot>/<execution>` to
+   `<workspaceRoot>/.retired/<execution>-<generation>`, and the source and
+   credential directories to `retired/<execution>-<generation>` beside the
+   journal. Nothing is deleted. A symlinked resource or parent, or one
+   overlapping a provisioned path, refuses and stays in place.
+
+The journal, log and control receipts stay as evidence, and so does the published
+branch. `retention` under `agents.execution` (a Go duration, default `168h`)
+sets `retainUntil` on the retired resources; nothing removes them yet.
+
+To recover preserved work, fetch the bundle into a clone holding its base commit:
+
+```bash
+git fetch <state>/recovery/<execution>-<generation>.bundle \
+  refs/beekeeper/recovery/<execution>/<generation>:refs/heads/recovered
+```
+
+Files ignored by Git are not in the bundle; they stay in the moved-aside tree. Its
+worktree link is stale after the move: run `git worktree repair` from the moved
+repository before using it. A desk stop holds the host's part until it is lifted
+and never holds revocation.
 
 Capped runs verify their worker identity, installed policy and live coordinator
 authority before taking a slot. Their scopes stop with the verified owned
@@ -1060,6 +1112,66 @@ command output and credentials are excluded.
 The generated CircleCI configuration invokes `architect/go-build`; retrying a
 transient Rekor signing failure inside that job belongs in the architect orb,
 not an edit to Beekeeper's generated workflow files.
+
+### Resource audit and bounded retention
+
+`beekeeper agents hosts check <host>` prints capabilities with the read-only
+resource inventory in `resourceAudit`. Each entry has an execution ref and coordinator
+when ownership can be verified, a state (`active`, `parked`, `terminal`,
+`unknown`, or `shared`), reason and retry action. The desk joins this with its registered execution inventory
+to flag owned orphan resources without changing their observed state. Managed
+worker refs in private execution repositories are listed as metadata; orphan
+refs retain an ownership hold. An unreachable host fails the
+check; it is unknown, never evidence that its resources are safe to remove.
+The audit reads journal metadata and directory entries, never credential values
+or log/workspace contents. Symlinks and malformed or unregistered ownership
+records remain unknown. Immediate children of the managed workspace, source,
+control and dispatch containers are included; execution contents are not swept.
+The inventory refuses more than 4096 entries rather than silently truncating.
+
+An operator can reconcile **one established execution owner** with:
+
+```
+beekeeper agents hosts reconcile <host> <execution-uuid> <generation>
+```
+
+This rechecks terminal supervisor state under the execution lock, reuses stop
+cleanup, retries GitHub revocation and assigns the log to managed retention in
+the journal (`retainedAt`). It does not relocate paths used for recovery. Repeat
+calls preserve the original retention deadline. Unknown or live units refuse
+reconciliation. Failed revocation is recorded for the next audit and retry;
+retention does not advance on that failure. Partial cleanup is retryable.
+
+| Retained class | Duration | Accountable owner / release rule |
+| --- | --- | --- |
+| Execution log | At least 30 days after successful reconciliation | Owning coordinator's desk; review/recovery evidence remains held until explicit release |
+| Workspace, private repository and execution refs, source bundle | Until publication and recovery review establishes a separate disposition | Owning coordinator's desk; this command never deletes them, even if the tree is clean |
+| Journal, control receipts, accepted-message evidence | Held for review/recovery | Owning coordinator's desk; never deleted by retention |
+| Disposable MCP proxy home | Removed by acknowledged lifecycle stop | Execution host owner; existing lifecycle cleanup |
+| Shared sources, policy, toolchains and authentication homes | Host policy lifetime | Execution host owner; no automatic deletion |
+| Unknown ownership, symlinks and unrelated files | Indefinite ownership hold | Execution host owner must establish provenance before any cleanup |
+
+After the desk verifies a log is no longer needed for review, unpublished work
+or recovery, it may explicitly attest that fact:
+
+```
+beekeeper agents hosts reconcile <host> <execution-uuid> <generation> --release-evidence
+```
+
+Only a regular log older than its retention deadline is then eligible for
+removal. The flag does not release workspace or source evidence. Reconciliation
+is bounded to one execution and one log, with no home or global `/tmp` search.
+Recovery holds deliberately override disk reclamation; owners must resolve
+holds rather than rely on automatic expiration to erase unpublished work.
+
+For the end-to-end proof on an explicitly leased host, save `hosts check`
+output before reconciliation, reconcile a terminal execution, and save the
+after inventory showing `managed log retention` and its journal timestamp.
+After 30 days, verify `log past retention`, review evidence, release it, and
+capture the final inventory. Also verify active, parked, unknown, shared and
+recovery resources remain. Epic completion requires all three execution hosts
+to pass this audit after that proof. This procedure does **not** authorize fleet
+cleanup; ownership must be established first.
 
 ## Remote harness acceptance evidence
 

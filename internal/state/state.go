@@ -934,7 +934,38 @@ type ExecutionRecord struct {
 	// given up, ReleaseReason why: it holds no host or desk slot since.
 	ReleasedAt    time.Time `json:"releasedAt,omitzero"`
 	ReleaseReason string    `json:"releaseReason,omitempty"`
-	rest          rest
+	// Retirement is the execution's one retirement, nil until a terminal path
+	// (final report, stop, failed start, crash) enters it.
+	Retirement *ExecutionRetirement `json:"retirement,omitempty"`
+	rest       rest
+}
+
+// ExecutionRetirement is the coordinator's resumable retirement of an
+// execution: its GitHub authorization and its host resources end independently,
+// each confirmed only by its own success, and a failed step keeps its error
+// and its next attempt so that neither outage can stand in for the other.
+type ExecutionRetirement struct {
+	ID          string    `json:"id"`
+	Trigger     string    `json:"trigger"`
+	RequestedAt time.Time `json:"requestedAt"`
+	// RevokedAt is when the worker's GitHub authorization was confirmed
+	// revoked, zero until then; RevokeError is why the last attempt failed.
+	RevokedAt   time.Time `json:"revokedAt,omitzero"`
+	RevokeError string    `json:"revokeError,omitempty"`
+	// RetiredAt is when the host confirmed Stage, zero until then; HostError is
+	// why the last attempt failed.
+	RetiredAt   time.Time           `json:"retiredAt,omitzero"`
+	Stage       string              `json:"stage,omitempty"`
+	HostError   string              `json:"hostError,omitempty"`
+	Recovery    *execution.Recovery `json:"recovery,omitempty"`
+	RetainUntil time.Time           `json:"retainUntil,omitzero"`
+	Attempts    int                 `json:"attempts,omitempty"`
+	NextAttempt time.Time           `json:"nextAttempt,omitzero"`
+}
+
+// Finished says both ends of the retirement are confirmed.
+func (r *ExecutionRetirement) Finished() bool {
+	return r != nil && !r.RevokedAt.IsZero() && !r.RetiredAt.IsZero()
 }
 
 // ExecutionPublication is one publication of an SSH execution's branch.
@@ -1562,6 +1593,8 @@ type Merge struct {
 	Lane string `json:"lane"`
 	By   Party  `json:"by"`
 	PID  int    `json:"pid"`
+	// Version is the binary that owns this place. Older releases may not record it.
+	Version string `json:"version,omitempty"`
 	// Child is a running merge's devctl, in a session of its own: it merges
 	// on when the gate's caller, or the gate, is gone.
 	Child int `json:"child,omitempty"`
@@ -1878,7 +1911,7 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 
 // Update runs fn on the state under the exclusive lock and writes the result
 // back with the events fn returns under the same lock. When fn fails nothing
-// is written, nor when a newer release wrote the state (StaleWriterError).
+// is written. Newer release state refuses the callback with StaleWriterError.
 // Event-log open failures leave state unchanged. Later event write/close failures
 // and crashes can still leave state and events inconsistent; this is not a
 // transaction across the two files.
@@ -1895,6 +1928,9 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	defer unlock()
 	st, err := s.load()
 	if err != nil {
+		return err
+	}
+	if err := s.checkWriter(st, time.Now()); err != nil {
 		return err
 	}
 	events, err := fn(st)
@@ -1978,6 +2014,22 @@ const VerbStaleWriter = "state.stale-writer"
 // stamps nor is judged, and a stamp of one is overwritten by the next
 // release that saves.
 func (s *FileStore) stamp(st *State, now time.Time) error {
+	_, ok := release(s.version)
+	if !ok {
+		return nil
+	}
+	if err := s.checkWriter(st, now); err != nil {
+		return err
+	}
+	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
+	// Releases before the refusal recorded their stale saves here instead.
+	delete(st.rest, "staleWriters")
+	return nil
+}
+
+// checkWriter refuses an older release before an update can have side effects.
+// The caller holds the state lock.
+func (s *FileStore) checkWriter(st *State, now time.Time) error {
 	own, ok := release(s.version)
 	if !ok {
 		return nil
@@ -1987,9 +2039,6 @@ func (s *FileStore) stamp(st *State, now time.Time) error {
 			return s.refuse(st.Writer.Version, now)
 		}
 	}
-	st.Writer = &Writer{Version: s.version, rest: writerRest(st.Writer)}
-	// Releases before the refusal recorded their stale saves here instead.
-	delete(st.rest, "staleWriters")
 	return nil
 }
 

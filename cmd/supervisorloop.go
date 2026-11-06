@@ -431,7 +431,10 @@ its key first in the detail):
             supervisor.hostsFirst, which prefers hosts for what a host
             can run, as for a worker. No host with room and no room
             locally: the start waits. A desk with
-            no capacity.choices never places remotely
+            no capacity.choices never places remotely. Execution reviewers use
+            agents review to read their assigned PR and linked issues and post
+            their exact-head review through the coordinator, without a host
+            GitHub credential
   red       an agent parked from its pull request's worktree at its
             published HEAD (a review request, local or on an execution
             host) whose head has a check that concluded red (failed,
@@ -782,7 +785,7 @@ func loopServes(st *state.State, ag state.Agent) string {
 
 func loopTaskServes(ag state.Agent, parkedOn string) string {
 	for _, task := range []string{ag.Task, ag.LastTask} {
-		if m := refURL.FindString(task); m != "" {
+		if m := refURL.FindString(task); m != "" && !strings.Contains(strings.ToLower(m), "/pull/") {
 			if r, ok := parseRef(m); ok && !strings.EqualFold(refName(r), parkedOn) {
 				return refName(r)
 			}
@@ -1069,12 +1072,20 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	// A budget hold applies to observations too: reading every parked PR
 	// while starts are held still drains the shared GraphQL window.
 	if a.cfg.GitHub.Floor > 0 && loopBudgetUnknownOrLow(st.Budget, a.cfg.GitHub.Floor, a.timeNow()) {
+		if !l.dryRun {
+			if err := l.observeThroughput(superloop.Input{}, nil, false); err != nil {
+				return err
+			}
+		}
 		l.sayOnce("graphql budget", "SUPERVISOR GITHUB HELD: GraphQL budget unknown or under github.floor; no board, ownership or PR reads until a fresh reading recovers")
 		return nil
 	}
 	l.clearSaid("graphql budget")
 	if !l.dryRun {
 		if err := a.loopGitHub(ctx, "pass", func() error { return nil }); err != nil {
+			if saveErr := l.observeThroughput(superloop.Input{}, nil, false); saveErr != nil {
+				return saveErr
+			}
 			l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
 			return nil
 		}
@@ -1112,6 +1123,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		return err
 	}
 	own := a.cfg.Supervisor.Ownership
+	observationUnknown := false
 	in := superloop.Input{Rounds: a.cfg.Supervisor.ReviewRounds, Person: a.cfg.Guide.Person, Now: a.timeNow(), PostMergeWindow: a.cfg.Supervisor.PostMergeWindow.Duration,
 		Desk: superloop.Desk{Since: l.since, Orgs: a.cfg.GitHub.AllowedOrgs, Authors: own.Authors, Team: own.Team,
 			Review: own.Review, Never: own.Never, OwnerWait: own.OwnerWait.Duration},
@@ -1140,27 +1152,6 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			w.Serves = loopTaskServes(ag, w.ParkedOn)
 		}
 		in.Workers = append(in.Workers, w)
-	}
-	for _, rp := range st.ReviewParks {
-		if rp.On == "" || rp.ReviewHead == "" {
-			continue
-		}
-		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
-			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
-		}) {
-			continue
-		}
-		in.Workers = append(in.Workers, superloop.Worker{
-			Name:            rp.Agent,
-			ParkedOn:        rp.On,
-			ParkedAt:        rp.At,
-			ReviewRequested: true,
-			ParkedHead:      rp.ReviewHead,
-			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
-			Started:         false,
-			Serves:          rp.Serves,
-			Saved:           true,
-		})
 	}
 	for _, n := range st.Notes {
 		if n.Kind != noteLogin {
@@ -1243,6 +1234,38 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	for _, e := range evs {
 		in.Events = append(in.Events, superloop.Event{At: e.At, Verb: e.Verb, Agent: loopEventAgent(st, e), Detail: e.Detail})
 	}
+	endedParks := false
+	for _, rp := range st.ReviewParks {
+		if rp.On == "" || rp.ReviewHead == "" {
+			continue
+		}
+		if reviewParkEnded(in.Taken, rp) {
+			endedParks = true
+			continue
+		}
+		if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool {
+			return ag.Park != nil && ag.Park.ReviewHead != "" && strings.EqualFold(loopParkOn(ag.Park), rp.On)
+		}) {
+			continue
+		}
+		in.Workers = append(in.Workers, superloop.Worker{
+			Name:            rp.Agent,
+			ParkedOn:        rp.On,
+			ParkedAt:        rp.At,
+			ReviewRequested: true,
+			ParkedHead:      rp.ReviewHead,
+			SelfHosted:      selfHostedModel(a.cfg.Capacity, rp.Model),
+			Started:         false,
+			Serves:          rp.Serves,
+			Saved:           true,
+		})
+	}
+	if endedParks && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool { return reviewParkEnded(in.Taken, rp) })
+			return nil, nil
+		})
+	}
 	// The person's answers to the loop's own notes: an ownership answer is
 	// the loop's to act on, no session's.
 	answers, err := a.store.Follow("supervisor-loop-answers", func(e state.Event) bool { return e.Verb == answerRecorded })
@@ -1256,6 +1279,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	in.Pulls = map[string]superloop.Pull{}
 	tracked := superloop.Tracked(in.Workers, in.Taken, in.Answers, in.Desk)
+	sortTrackedPulls(in, tracked)
 	// The sweep reads the desk's open pull requests that nothing tracks:
 	// one whose worker ended without a park, or never parked, has no other
 	// way into a pass.
@@ -1265,6 +1289,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	unread := map[string]bool{}
+	unreviewedEnded := map[string]bool{}
+	pullHeld := false
 	for _, ref := range tracked {
 		if !a.parkIsPull(ctx, st, ref) {
 			continue
@@ -1278,12 +1305,19 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			in.Pulls[ref] = mergedPull
 			continue
 		}
+		if pullHeld {
+			unread[ref] = true
+			continue
+		}
 		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
 		if err != nil {
+			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
 				l.sayOnce("graphql allowance", "SUPERVISOR GITHUB HELD: %v", err)
-				return nil
+				pullHeld = true
+				continue
 			}
+			observationUnknown = true
 			l.sayOnce("read "+ref, "SUPERVISOR LOOP cannot read %s: %v", ref, err)
 			continue
 		}
@@ -1294,6 +1328,9 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 		}
 		p.Reviews = deskVerdicts(p.Reviews, in.Desk.Authors)
 		in.Pulls[ref] = p
+		if (p.State == superloop.Merged || p.State == superloop.Closed) && !hasLoopRound(in.Taken, ref) {
+			unreviewedEnded[strings.ToLower(ref)] = true
+		}
 		if p.State == superloop.Merged {
 			l.mu.Lock()
 			if l.merged == nil {
@@ -1302,6 +1339,17 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			l.merged[ref] = p
 			l.mu.Unlock()
 		}
+	}
+	if len(unreviewedEnded) > 0 && !l.dryRun {
+		_ = a.store.Update(func(current *state.State) ([]state.Event, error) {
+			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(rp state.ReviewPark) bool {
+				return unreviewedEnded[strings.ToLower(rp.On)]
+			})
+			return nil, nil
+		})
+	}
+	if pullHeld && len(in.Pulls) == 0 {
+		return nil
 	}
 	// A merge may have landed before its completion record was saved. The
 	// planner sees a merged PR then, so reconcile its pending claim before
@@ -1372,10 +1420,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	if l.pauseForReexec() {
 		return nil
 	}
-	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless); err != nil {
+	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
+	if !l.dryRun {
+		if err := l.observeThroughput(in, actions, observationUnknown); err != nil {
+			return err
+		}
+	}
 	if !l.dryRun {
 		if err := l.stuck(failures, stuckFiled); err != nil {
 			return err
@@ -1603,7 +1656,7 @@ func (l *supervisorLoop) runPassActions(ctx context.Context, st *state.State, cl
 	transitionOrder := []string{}
 	transitions := map[string][]superloop.Action{}
 	for _, act := range otherActs {
-		key := "transition:" + cmp.Or(act.Agent, act.Kind)
+		key := "transition:" + cmp.Or(act.Agent, act.Ref, act.Kind)
 		if _, ok := transitions[key]; !ok {
 			transitionOrder = append(transitionOrder, key)
 		}
@@ -2492,8 +2545,8 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 	if s := loopServes(st, ag); s != "" && !strings.EqualFold(s, on) {
 		return s
 	}
-	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) {
-		if r, ok := parseRef(ref); ok {
+	if ref := agentRef(st, ag.Name); ref != "" && !superloop.IsPull(ref) && !strings.Contains(strings.ToLower(ref), "/pull/") {
+		if r, ok := parseRef(ref); ok && !strings.EqualFold(refName(r), on) {
 			return refName(r)
 		}
 	}
@@ -2501,6 +2554,56 @@ func reviewParkServes(st *state.State, ag state.Agent, on string) string {
 		return rp.Serves
 	}
 	return ""
+}
+
+// reviewParkEnded reports a park whose own pull request the loop already
+// ended. A park is per pull request: nothing about its worker ends it, since a
+// worker finishing one pull request can have others waiting for review.
+func reviewParkEnded(taken []superloop.Taken, rp state.ReviewPark) bool {
+	return slices.ContainsFunc(taken, func(t superloop.Taken) bool {
+		return t.Kind == superloop.KindEnd && strings.EqualFold(t.Ref, rp.On) && !rp.At.After(t.At)
+	})
+}
+
+func hasLoopRound(taken []superloop.Taken, ref string) bool {
+	for _, t := range taken {
+		if (t.Kind == superloop.KindReview || t.Kind == superloop.KindGo) && strings.EqualFold(t.Ref, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortTrackedPulls(in superloop.Input, tracked []string) {
+	type priority struct {
+		tier    int
+		changed time.Time
+	}
+	pri := make(map[string]priority, len(tracked))
+	for _, ref := range tracked {
+		tier := 3
+		for _, w := range in.Workers {
+			if !strings.EqualFold(w.ParkedOn, ref) || !w.ReviewRequested {
+				continue
+			}
+			if !w.Saved {
+				tier = 0
+				break
+			}
+			tier = min(tier, 1)
+		}
+		if tier > 1 && hasLoopRound(in.Taken, ref) {
+			tier = 2
+		}
+		pri[ref] = priority{tier: tier, changed: loopPullChanged(in, ref)}
+	}
+	slices.SortStableFunc(tracked, func(a, b string) int {
+		pa, pb := pri[a], pri[b]
+		if pa.tier != pb.tier {
+			return cmp.Compare(pa.tier, pb.tier)
+		}
+		return pb.changed.Compare(pa.changed)
+	})
 }
 
 func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) error {
@@ -2721,10 +2824,10 @@ func (l *supervisorLoop) startFixer(ctx context.Context, st *state.State, act su
 	if err := l.claim(act, name); err != nil {
 		return err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			if _, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
-				return nil
+				return l.a.operationOutcome(agentStartName, "", act.URL, true)
 			} else if !errors.Is(rerr, errLoopLater) {
 				return rerr
 			}
@@ -2842,12 +2945,15 @@ func (l *supervisorLoop) startReviewer(ctx context.Context, act superloop.Action
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused {
 			if place.remote() {
 				// A refusal of a placed start on a host is either room or
 				// an execution its interrupted start left reserved.
 				if what, rerr := l.remoteStartRefused(ctx, name); rerr == nil {
+					if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+						return "", saveErr
+					}
 					return what, nil
 				} else if !errors.Is(rerr, errLoopLater) {
 					return "", rerr
@@ -3015,7 +3121,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 	return len(l.a.cfg.Supervisor.Hosts) > 0 && len(l.a.cfg.Capacity.Choices) > 0
 }
 
-// startPlacement applies host preferences to workers and GitHub-enabled
+// startPlacement applies host preferences to workers and coordinator-relayed
 // reviewers, retaining their review capacity flags.
 // Without supervisor.hosts, or for a desk with no capacity.choices
 // (a remote start needs a model name from the pick), it stays local (the
@@ -3027,7 +3133,7 @@ func (l *supervisorLoop) placesRemotely() bool {
 // repository takes it, pinned to the repository's default branch; a host
 // that cannot be read, maps no repository or has no room is said once (or
 // passed quietly) and skipped; a host's check weighs only the choices it
-// can run (Claude Code). With supervisor.hostsFirst and no host with room
+// can run. With supervisor.hostsFirst and no host with room
 // a start a host could run waits, as it does on a full machine; a start no
 // host can run starts locally within the local room (capacity.local.
 // ceiling among its guards): one whose repository no host maps, or the
@@ -3045,21 +3151,13 @@ func (l *supervisorLoop) startPlacement(ctx context.Context, name, repo string, 
 		flags = append(flags, modelFlag, model)
 	}
 	flags = append(flags, extra...)
-	// A remote reviewer needs the per-worker GitHub adapter to read the PR
-	// and post its review. Publication-only hosts cannot perform reviews.
-	if review && (l.a.cfg.GitHub.WorkerApp == nil || !l.placesRemotely()) {
-		if !l.capacityRoom(ctx, flags...) {
-			return startHost{}, errLoopLater
-		}
-		return startHost{}, nil
-	}
 	k := l.a.cfg.Supervisor
 	if !l.placesRemotely() {
 		// Nothing to place remotely: the local machine does what it did
 		// before, and the start's own gate makes it wait when it has no
 		// room. When agents.models selects a model, check its room before
 		// claiming the action.
-		if model != "" && !l.capacityRoom(ctx, flags...) {
+		if (review || model != "") && !l.capacityRoom(ctx, flags...) {
 			return startHost{}, errLoopLater
 		}
 		return startHost{}, nil
@@ -3383,7 +3481,7 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 	if err := l.claim(act, name); err != nil {
 		return "", err
 	}
-	if _, err := l.run(ctx, args...); err != nil {
+	if _, err := l.runStart(ctx, act, args...); err != nil {
 		if Code(err) == ExitRefused && place.remote() {
 			// A refusal of a placed start on a host is either room or
 			// an execution its interrupted start left reserved. The
@@ -3393,6 +3491,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			// when the pass dies before the taken line.
 			what, rerr := l.remoteStartRefused(ctx, name)
 			if rerr == nil {
+				if saveErr := l.a.operationOutcome(agentStartName, "", act.URL, true); saveErr != nil {
+					return "", saveErr
+				}
 				return what, nil
 			}
 			if !errors.Is(rerr, errLoopLater) {

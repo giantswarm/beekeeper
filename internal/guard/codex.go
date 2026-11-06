@@ -18,6 +18,7 @@ const (
 	codexViewImageTool  = "view_image"
 	codexUpdatePlanTool = "update_plan"
 	codexWebTool        = "webrun"
+	codexCollaboration  = "collaboration"
 	webSearchTool       = "WebSearch"
 	codexCmdKey         = "cmd"
 	codexCharsKey       = "chars"
@@ -139,6 +140,20 @@ func isCodexWebTool(toolName string) bool {
 	}
 }
 
+// isCodexSubagentTool reports the Codex tools that start a subagent, wait for
+// it, list it or end it, bare or under the collaboration namespace Codex joins
+// to the name. Like a Claude Agent call they go through the shared guard; the
+// subagent's own calls come through this hook. The tools that send a running
+// agent text stay unrecognized.
+func isCodexSubagentTool(toolName string) bool {
+	switch strings.TrimLeft(strings.TrimPrefix(toolName, codexCollaboration), "._") {
+	case "spawn_agent", "wait_agent", "list_agents", "interrupt_agent", "close_agent":
+		return true
+	default:
+		return false
+	}
+}
+
 func extractCodexShellCommand(toolInput map[string]any) (cmd, key string, ok bool) {
 	if s, ok := toolInput[commandKey].(string); ok {
 		return s, commandKey, true
@@ -215,6 +230,8 @@ func validateCodexInput(input []byte, coordinatorMCP bool) string {
 		}
 	// Web tools are read-only and go through the shared guard, like Claude web calls.
 	case toolName == codexUpdatePlanTool || isCodexWebTool(toolName):
+		return ""
+	case isCodexSubagentTool(toolName):
 		return ""
 	case toolName == readTool || toolName == writeTool || toolName == editTool || toolName == multiEditTool:
 		p, ok := toolInput[filePathKey].(string)

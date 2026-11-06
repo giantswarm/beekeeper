@@ -205,7 +205,7 @@ func mergeBase(stateDir, repo string, pr int) string {
 }
 
 // mergeExts are the extensions of a merge's files.
-var mergeExts = []string{".json", ".log", ".rc", ".pid", ".spec", runInfoExt, ".kept", stoppedExt, leftExt}
+var mergeExts = []string{".progress.tmp", ".progress", ".json", ".log", ".rc", ".pid", ".spec", runInfoExt, ".kept", stoppedExt, leftExt}
 
 // removeMergeFiles removes a merge's files.
 func removeMergeFiles(base string) {
@@ -926,7 +926,8 @@ func mergeChild(base string) childResult {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
-	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC()})
+	processStarted, _ := proc.Started(os.Getpid())
+	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC(), ProcessStarted: processStarted})
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
 		return r
 	}
@@ -1017,7 +1018,8 @@ const busySpent = "busy-base budget spent"
 func runSpec(base string, spec childSpec, out, errs *os.File, current *atomic.Pointer[os.Process], stop *atomic.Value, gone *atomic.Bool) int {
 	started := time.Now()
 	c := exec.Command(spec.Argv[0], spec.Argv[1:]...) //nolint:gosec // the gate's command
-	c.Stdout, c.Stderr, c.Env, c.Dir = out, errs, spec.Env, spec.Dir
+	progress := newMergeProgress(base, spec.Argv, time.Now().UTC())
+	c.Stdout, c.Stderr, c.Env, c.Dir = out, io.MultiWriter(errs, progress), spec.Env, spec.Dir
 	if err := c.Start(); err != nil {
 		_, _ = fmt.Fprintln(errs, err)
 		return guard.ExitNotFound

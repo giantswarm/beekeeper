@@ -287,6 +287,7 @@ func (u Upstream) ghWrite(args []string, cwd, env string, known bool) (what, rep
 	if args[0] == ghAPISub {
 		return u.ghAPIWrite(args, cwd, env, known)
 	}
+	args = expandGHShortFlags(args)
 	// The subcommand and verb are the first two positional words: gh's
 	// --repo is a persistent flag, so it may stand between them.
 	var pos []string
@@ -329,6 +330,43 @@ func (u Upstream) ghWrite(args []string, cwd, env string, known bool) (what, rep
 		return what, named
 	}
 	return what, u.baseRepo(cwd, env, known)
+}
+
+// expandGHShortFlags follows gh's short flag rules: boolean flags may be
+// clustered, and a valued flag consumes the rest of its word or the next
+// argument. In particular, a title containing "R" is never a repo flag.
+func expandGHShortFlags(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if len(a) < 2 || a[0] != '-' || a[1] == '-' {
+			out = append(out, a)
+			if ghValued[a] && i+1 < len(args) {
+				i++
+				out = append(out, args[i])
+			}
+			continue
+		}
+		for j := 1; j < len(a); j++ {
+			flag := "-" + a[j:j+1]
+			out = append(out, flag)
+			if !ghValued[flag] {
+				continue
+			}
+			if j+1 < len(a) {
+				out = append(out, strings.TrimPrefix(a[j+1:], "="))
+			} else if i+1 < len(args) {
+				i++
+				out = append(out, args[i])
+			}
+			break
+		}
+	}
+	return out
 }
 
 // repoFlag is the value of a --repo or -R flag written in one word

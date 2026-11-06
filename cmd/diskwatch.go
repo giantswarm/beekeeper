@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -43,7 +44,10 @@ type ioBaseline struct {
 
 // diskWatch is the watch's memory of / between machine samples.
 type diskWatch struct {
-	samples []diskSample
+	samples   []diskSample
+	paths     []diskPath
+	pathsAt   time.Time
+	readPaths func(context.Context) []diskPath
 	// base is the baseline the writers are measured against, next the one
 	// that replaces it once it is a diskWindow old: the writers always span
 	// between one and two windows.
@@ -61,6 +65,16 @@ type diskWatch struct {
 // nothing else: a rate is a forecast, and it is wrong whenever it does
 // not last.
 func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owners map[int]string) {
+	if w.disk.pathsAt.IsZero() || now.Sub(w.disk.pathsAt) >= minDiskSpan {
+		read := w.disk.readPaths
+		if read == nil {
+			read = readDiskPaths
+		}
+		paths := read(context.Background())
+		diskPathGrowth(paths, w.disk.paths)
+		w.disk.paths = paths
+		w.disk.pathsAt = now
+	}
 	th := w.cfg.Watch
 	low := d.FreeMiB < th.DiskMin(d.TotalMiB)
 	w.check("disk", low, "LOW DISK: / %d GiB free", d.FreeMiB/1024)
@@ -133,7 +147,7 @@ const diskNames = 3
 // (a root daemon such as dockerd or containerd), or ones that already ended.
 func (dw *diskWatch) writersLine(now time.Time, freeMiB int, t *proc.Table, owners map[int]string) string {
 	if dw.base == nil || t == nil {
-		return "writers unknown"
+		return "writers unknown" + dw.pathLine()
 	}
 	comms, sessions := map[string]int64{}, map[string]int64{}
 	var total int64
@@ -166,7 +180,7 @@ func (dw *diskWatch) writersLine(now time.Time, freeMiB int, t *proc.Table, owne
 		line += fmt.Sprintf("; %s of the %s lost by processes the watch cannot read (another user's, such as dockerd, or ended ones)",
 			gibStr(lost-total), gibStr(lost))
 	}
-	return line
+	return line + dw.pathLine()
 }
 
 // bytesLine is the n largest of by, largest first, with their sizes.
@@ -183,3 +197,11 @@ func bytesLine(by map[string]int64, n int) string {
 
 // gibStr is a byte count in GiB with one decimal.
 func gibStr(b int64) string { return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30)) }
+
+func (dw *diskWatch) pathLine() string {
+	paths := topDiskPaths(dw.paths, true, 1)
+	if len(paths) == 0 {
+		return ""
+	}
+	return "; fastest-growing path: " + diskPathText(paths[0])
+}

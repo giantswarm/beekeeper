@@ -317,6 +317,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
+	rep.chores = append(rep.chores, a.doctorMCP(ctx, r.dryRun)...)
 	rep.staleLoop = a.staleLoopLine(ctx)
 	loopPID := a.loopPID()
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), func(s staleBinary) bool {
@@ -725,6 +726,8 @@ line:
   transient unit beekeeper-reopen-<id> that gives it its row and warms its
   CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
   such worker meanwhile;
+- stops attached stdio MCP containers whose Docker client ended, naming
+  each container; detached services and containers with a live client stay;
 - releases leases whose local session ended, logging each release once;
 - stops configured kind labs after 15 minutes without a lease, preserving
   their containers and data; the next successful claim starts them again;

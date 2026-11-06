@@ -150,7 +150,7 @@ func TestARebaseableMergeQueuesAsBefore(t *testing.T) {
 			g := &gateRun{app: a, argv: spec.Command, repo: scratchRepo, pr: 7,
 				release: &github.BaseRelease{Base: mainBranch, Auto: true}}
 			run, err := g.mergeArgv()
-			want := merge.NoReleaseWait(argv) // the lane confirms the release itself
+			want := merge.NoReleaseWait(append(slices.Clone(argv), "--progress")) // the lane confirms the release itself
 			if err != nil || !slices.Equal(run, want) {
 				t.Fatalf("merge command %q, error %v, want %q", run, err, want)
 			}
