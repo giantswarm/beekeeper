@@ -43,7 +43,7 @@ func TestBoardReadRefusal(t *testing.T) {
 			if strings.Contains(r, "gh project item-add") {
 				t.Errorf("refusal recommends bare item-add: %q", r)
 			}
-			for _, want := range []string{"GH_REPO=<owner/repo>", "-R <owner/repo>", "current status", "--id <item-id>", "beekeeper board move", "GraphQL 4200 of 5000", "estimated"} {
+			for _, want := range []string{"GH_REPO=<owner/repo>", "-R <owner/repo>", "current status", "--id <item-id>", "beekeeper board add", "beekeeper board show", "beekeeper board move", "GraphQL 4200 of 5000", "estimated"} {
 				if !strings.Contains(r, want) {
 					t.Errorf("the refusal does not name %q: %q", want, r)
 				}
