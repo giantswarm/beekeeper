@@ -128,7 +128,7 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Deny:      []string{e.ScanDir},
 		Harness:   filepath.Clean(claude),
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
-		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
+		Domains:   append([]string{upstreamGitHost, "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		ProxyPort: cfg.ProxyPort,
 		Exe:       e.Exe,
 		Egress:    brokerEgressDir(e),
