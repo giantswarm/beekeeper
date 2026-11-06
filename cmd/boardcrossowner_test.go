@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -109,7 +110,7 @@ func TestLoopStartsCrossOwnerBoardPickWithinCapacity(t *testing.T) {
 					return string(out), 0
 				case agentsName:
 					if args[1] == agentStartName {
-						brief, err := os.ReadFile(args[3])
+						brief, err := os.ReadFile(filepath.Clean(args[3]))
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -230,7 +231,7 @@ func TestLoopIntakesAndRanksCrossOwnerFiledIssueAndBoardNextOffersIt(t *testing.
 			}
 			return string(out), 0
 		case args[0] == agentsName && args[1] == agentStartName:
-			brief, err := os.ReadFile(args[3])
+			brief, err := os.ReadFile(filepath.Clean(args[3]))
 			if err != nil {
 				t.Fatal(err)
 			}

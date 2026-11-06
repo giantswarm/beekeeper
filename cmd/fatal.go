@@ -230,7 +230,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		cfg, pathErr = config.Load(path)
 	}
 	if pathErr == nil && a.cfgPath != "" {
-		_, pathErr = os.Stat(path)
+		_, pathErr = os.Stat(filepath.Clean(path))
 	}
 	if pathErr != nil {
 		cfg = nil
@@ -458,7 +458,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		brief += fmt.Sprintf("The main configuration %q cannot load. Restore it using the validated admission snapshot %q as reference, then verify the original path loads. Do not change the snapshot.\n", mainPath, path)
 	}
 	briefPath := filepath.Join(dir, "fatal-repair-brief.txt")
-	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(briefPath), []byte(brief), 0600); err != nil {
 		return err
 	}
 	args := []string{workerGitHubConfigOption, path, fatalAsFlag, fatalSentinelName, agentsName, agentStartName, fatalNameOption, x.Owner}

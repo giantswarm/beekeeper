@@ -61,7 +61,7 @@ func RecoverySource(dir string) (string, error) {
 	if err != nil || !filepath.IsAbs(source) || filepath.Clean(source) == RecoveryPath(dir) || !bytes.HasPrefix(b, []byte(recoveryHeader(source))) {
 		return "", fmt.Errorf("invalid recovery source")
 	}
-	return source, nil
+	return filepath.Clean(source), nil
 }
 
 func LoadRecoveryForSource(dir, source string) (*Config, error) {

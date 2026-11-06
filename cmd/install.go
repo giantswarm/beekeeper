@@ -286,7 +286,7 @@ func codexConfigPath(home, name string, codexInstalled bool, cfg ...config.Codex
 		return ""
 	}
 	p := filepath.Join(dir, name)
-	if _, err := os.Lstat(p); err == nil || codexInstalled {
+	if _, err := os.Lstat(filepath.Clean(p)); err == nil || codexInstalled {
 		return p
 	}
 	return ""

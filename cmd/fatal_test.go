@@ -126,7 +126,7 @@ func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
 					}
 					return "", ExitRefused, nil
 				}
-				brief, err := os.ReadFile(args[len(args)-1])
+				brief, err := os.ReadFile(filepath.Clean(args[len(args)-1]))
 				if err != nil || !strings.Contains(string(brief), path) {
 					t.Fatal("original config repair path absent", err)
 				}
