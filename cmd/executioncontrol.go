@@ -542,7 +542,7 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			clearRecords(st, me)
 		}
 		events := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
-		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems})
+		st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: v.Finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: v.Text, Problems: problems, TellTo: reviewStarter(st, *ag, v.Text)})
 		if v.Text != "" {
 			events = append(events, event(me, "agents.report", "%s: %s", ag.Name, v.Text))
 		}

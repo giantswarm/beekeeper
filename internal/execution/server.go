@@ -52,6 +52,12 @@ type Journal struct {
 	// that ends them, nil until a terminal path enters it.
 	Resources  []Resource  `json:"resources,omitempty"`
 	Retirement *Retirement `json:"retirement,omitempty"`
+	// Disposable says preservation proved there was nothing to keep: no recovery
+	// and no ignored files. Only then does a purge remove what moved aside, so a
+	// journal retired without it stays. PurgedAt is when it did. Both stay on the
+	// host: a coordinator refuses a Retirement with fields it does not know.
+	Disposable bool      `json:"disposable,omitempty"`
+	PurgedAt   time.Time `json:"purgedAt,omitzero"`
 }
 
 // BoundPolicy is the policy digest the execution's host-side commands require
