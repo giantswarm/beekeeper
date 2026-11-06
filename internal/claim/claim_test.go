@@ -50,7 +50,7 @@ func TestMarkerKeepsItsValuesInside(t *testing.T) {
 		t.Fatalf("body %q", body)
 	}
 	got, ok := claim.Parse(body)
-	if !ok || got.Desk != "a->b" || got.Session != "x <!- y ->" {
+	if !ok || got != m {
 		t.Errorf("Parse = %+v, %v", got, ok)
 	}
 }
@@ -75,7 +75,7 @@ func TestOthersSplitsLiveAndStaleOfOtherDesks(t *testing.T) {
 	now := t0.Add(30 * time.Hour)
 	cs := []claim.Comment{
 		{ID: 5, Marker: claim.Marker{Desk: deskTwo, At: t0, Seen: now.Add(-time.Hour)}},
-		{ID: 3, Marker: claim.Marker{Desk: "three", At: t0, Seen: now.Add(-time.Hour)}},
+		{ID: 3, Marker: claim.Marker{Desk: deskThree, At: t0, Seen: now.Add(-time.Hour)}},
 		{ID: 4, Marker: claim.Marker{Desk: "four", At: t0}}, // 30h unrefreshed
 		{ID: 6, Marker: claim.Marker{Desk: "five", At: t0, Seen: now, Released: now}},
 		{ID: 2, Marker: claim.Marker{Desk: "ONE", At: t0, Seen: now}},
@@ -138,5 +138,43 @@ func TestEditOfAGoneCommentIsErrGone(t *testing.T) {
 	}
 	if _, err := cl.Read(ctx, "not-a-ref"); err == nil {
 		t.Error("Read of no issue succeeded")
+	}
+}
+
+func TestClaimIdentitySurvivesRendering(t *testing.T) {
+	for name, value := range map[string]string{
+		"double hyphens":         "desk--one",
+		"repeated spaces":        "desk  one",
+		"surrounding whitespace": " \tdesk one\r\n ",
+		"newline whitespace":     "desk\none\r\ntwo\tthree",
+		"unicode whitespace":     "desk\u2028one\u00a0two",
+		"quotes":                 `desk"one`,
+		"backslashes":            `desk\one\n`,
+		"terminator":             "desk-->one<!--two-->",
+		"literal escape":         `desk\x2d\x2d>one`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, released := range []time.Time{{}, t0.Add(time.Hour)} {
+				m := claim.Marker{Desk: value, Session: value, At: t0, Seen: t0, Released: released}
+				body := m.Body()
+				got, ok := claim.Parse(body)
+				if !ok || got != m {
+					t.Fatalf("Parse(%q) = %+v, %v; want %+v", body, got, ok, m)
+				}
+				line, _, _ := strings.Cut(body, "\n")
+				inner := strings.TrimSuffix(strings.TrimPrefix(line, "<!-- beekeeper:claim "), " -->")
+				if strings.Contains(inner, "--") || strings.ContainsAny(inner, "\r\n\u2028\u2029") || strings.Count(body, "\n") != 1 {
+					t.Fatalf("unsafe marker body %q", body)
+				}
+				cs := []claim.Comment{{ID: 7, Marker: got}}
+				live, stale := claim.Others(cs, value, t0.Add(30*time.Minute), time.Hour)
+				if len(live) != 0 || len(stale) != 0 {
+					t.Errorf("own claim counted as another desk: live=%+v stale=%+v", live, stale)
+				}
+				if own := claim.Desk(cs, value); own == nil || own.ID != 7 {
+					t.Errorf("Desk = %+v, want own comment", own)
+				}
+			}
+		})
 	}
 }

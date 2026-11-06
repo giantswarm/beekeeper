@@ -105,6 +105,10 @@ func (l launchdSetup) Started(ctx context.Context, path string) bool {
 	return exec.CommandContext(ctx, "launchctl", "print", l.target(path)).Run() == nil //nolint:gosec // the user's domain and the label install writes
 }
 
+func (l launchdSetup) NeedsStop(ctx context.Context, path string) bool {
+	return l.Started(ctx, path)
+}
+
 func (launchdSetup) Reload() []string { return nil }
 
 // Start loads the agent from its plist, which RunAtLoad starts.

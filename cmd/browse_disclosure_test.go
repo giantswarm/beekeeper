@@ -10,7 +10,7 @@ import (
 func TestBrowseDisclosureInstructions(t *testing.T) {
 	for name, text := range map[string]string{
 		"prompt": browsePrompt("inspect permissions", "", nil, false, nil),
-		"help":   (&app{}).browseCmd().Long,
+		litHelp:  (&app{}).browseCmd().Long,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !strings.Contains(text, "Expands the Organization permissions section") ||

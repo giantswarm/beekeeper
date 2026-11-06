@@ -693,6 +693,19 @@ func archiveSteward(ctx context.Context, hosts, exclude []string, find func(excl
 // of the session is its running CLI: none is warmed beside it.
 func (a *app) warmSteward(ctx context.Context, host string) (steward, error) {
 	id := strings.TrimPrefix(host, "local_")
+	st, err := a.store.Read()
+	if err != nil {
+		return steward{}, err
+	}
+	p := state.Party{Session: id, HostSession: host}
+	if by, _ := superseded(st, p, a.now); by != "" {
+		return steward{}, refused("session %s was superseded by %s: its CLI will not be resumed to archive itself; use another steward", id, by)
+	}
+	// superseded answers nothing during a handover, whose own archive step
+	// must not revive the session it just stopped.
+	if slices.ContainsFunc(st.Handovers, func(h state.Handover) bool { return h.Is(p) && proc.Alive(h.PID) }) {
+		return steward{}, refused("session %s is being handed over: its CLI will not be resumed to archive itself; use another steward", id)
+	}
 	if sock := desktopSocketWithin(ctx, id, 0); sock != "" {
 		a.markWarmed(host)
 		return steward{host: host, sock: sock}, nil
@@ -885,6 +898,9 @@ func (a *app) archivable(st *state.State, ag state.Party) (host, why string) {
 	if host, why = a.archivableRecord(st, ag); why != "" {
 		return host, why
 	}
+	if why := a.unfinishedWorker(st, ag); why != "" {
+		return "", "its desktop session stays: " + why
+	}
 	if s, ok := a.runningTurn(ag); ok {
 		return host, fmt.Sprintf("its desktop session stays: its CLI %d is in a turn", s.PID)
 	}
@@ -932,4 +948,58 @@ func turnRunning(sessions []*claude.Session, t *proc.Table, p state.Party, now t
 		}
 	}
 	return nil, false
+}
+
+// unfinishedWorker requires the worker's own completion evidence. Absence
+// from the roster, an ended process or an old report is not completion.
+func (a *app) unfinishedWorker(st *state.State, p state.Party) string {
+	for _, ag := range st.Agents {
+		if ag.Is(p) {
+			if ag.Task != "" {
+				return "it has an open task"
+			}
+		}
+	}
+	for _, r := range st.Records {
+		if r.Session.Is(p) && r.Ended.IsZero() {
+			return "it has an open task record"
+		}
+	}
+	var completed bool
+	var latest time.Time
+	if i := st.StartIndex(p); i >= 0 {
+		latest = st.Starts[i].At
+	}
+	for _, ag := range st.Agents {
+		if ag.Is(p) {
+			if ag.Done {
+				return ""
+			}
+			if ag.AssignedAt.After(latest) {
+				latest = ag.AssignedAt
+			}
+		}
+	}
+	for _, r := range st.WorkerReports {
+		if r.By.Is(p) && !r.At.Before(latest) {
+			completed, latest = r.Finished, r.At
+		}
+	}
+	// Older state can predate WorkerReports; the audit log still records
+	// completion and subsequent idle reports that invalidate it.
+	evs, err := a.store.Events(0, func(e state.Event) bool {
+		return e.By.Is(p) && (e.Verb == executionDone || e.Verb == "agents.idle")
+	})
+	if err != nil {
+		return "its completion history could not be read"
+	}
+	for _, e := range evs {
+		if !e.At.Before(latest) {
+			completed, latest = e.Verb == "agents.done", e.At
+		}
+	}
+	if !completed {
+		return "it has not reported its work done with agents idle --done"
+	}
+	return ""
 }
