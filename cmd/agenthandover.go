@@ -818,6 +818,9 @@ func (a *app) resumeForNote(ctx context.Context, h handover) (string, error) {
 	if pid, err := a.toDesktopCLI(ctx, w.id, a.noteRequest(h)); pid != 0 || err != nil {
 		return "", err
 	}
+	if err := a.requireClaudeLogin(); err != nil {
+		return "", err
+	}
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return "", err

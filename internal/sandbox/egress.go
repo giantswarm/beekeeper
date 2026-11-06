@@ -28,13 +28,17 @@ import (
 // them apart by their first byte. It reaches only the allow list's hosts,
 // tunnels them as they are, and terminates TLS for GitHub's hosts to set
 // the GitHub token's Authorization header itself: the sandbox never holds
-// the token, and no request body is read or rewritten.
+// the token. Owner-scoped writes are checked before injecting the token;
+// GraphQL read bodies are inspected and forwarded unchanged.
 
 // egressDialTimeout bounds a connection to a target.
 const egressDialTimeout = 30 * time.Second
 
 // Egress is the sandbox's egress proxy.
 type Egress struct {
+	// AllowedOrgs are the owners whose repositories may receive writes.
+	// Empty disables the write policy, as for the session hook.
+	AllowedOrgs []string
 	// Allow are the hosts commands reach (the policy's Domains).
 	Allow []string
 	// Inject are the hosts whose requests get the token on port 443.
@@ -326,7 +330,7 @@ func byName(ip net.IP) bool {
 
 // injector is the handler of the TLS-terminated requests: each goes to the
 // host its tunnel named, with the token's Authorization header in place of
-// whatever the request carried, its body untouched.
+// whatever the request carried, after checking the write target.
 func (e *Egress) injector() http.Handler {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -350,6 +354,10 @@ func (e *Egress) injector() http.Handler {
 			http.Error(w, "not through the sandbox's proxy", http.StatusMethodNotAllowed)
 			return
 		}
+		if err := e.githubWrite(r, host); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 		rp.ServeHTTP(w, r)
 	})
 }
@@ -357,7 +365,7 @@ func (e *Egress) injector() http.Handler {
 // Authorization is the header value the token goes to host with: git's
 // endpoint on github.com takes Basic only, the API a token.
 func Authorization(host, token string) string {
-	if host == "github.com" {
+	if host == upstreamGitHost {
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
 	}
 	return "token " + token

@@ -341,6 +341,57 @@ func TestNewGrantFirst(t *testing.T) {
 	}
 }
 
+func TestLeaseQueueAndProofHandoff(t *testing.T) {
+	a := claimApp(t, claimGrant(graveler, claimOther, 2*time.Minute), claimGrant(graveler, claimMe, time.Minute))
+	out, err := runLease(a, "claim", graveler, "-p", "inspect")
+	if Code(err) != ExitRefused || !strings.Contains(out, "number 2") || !strings.Contains(out, claimOther.Name) {
+		t.Fatalf("second bypasses free queue: %q, %v", out, err)
+	}
+	// The head claims a destructive proof and holds the resource.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimOther.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimOther.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "node-restart proof")
+	if err != nil {
+		t.Fatalf("head claim: %q, %v", out, err)
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(graveler)
+	if err != nil || h == nil || !h.DestructiveProof {
+		t.Fatalf("proof not recorded: %+v, %v", h, err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimMe.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimMe.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "inspect")
+	if Code(err) != ExitRefused || !strings.Contains(out, claimOther.Name) || !strings.Contains(out, "number 1") {
+		t.Fatalf("live lease bypassed: %q, %v", out, err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimOther.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimOther.Name)
+	if out, err = runLease(a, "release", graveler); err != nil {
+		t.Fatalf("release: %q, %v", out, err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claimMe.Session)
+	t.Setenv("CLAUDE_CODE_SESSION_NAME", claimMe.Name)
+	out, err = runLease(a, "claim", graveler, "-p", "inspect")
+	if err != nil || !strings.Contains(out, "previous destructive proof") || !strings.Contains(out, "node-restart proof") {
+		t.Fatalf("handoff: %q, %v", out, err)
+	}
+}
+
+func TestLeaseGrantHeldQueuePosition(t *testing.T) {
+	a := claimApp(t, claimGrant(graveler, claimFirst, time.Minute))
+	holdLease(t, a, graveler, claimOther)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Agents = append(st.Agents, state.Agent{Party: claimMe, Registered: relayNow})
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runLease(a, "grant", graveler, claimMe.Name)
+	if err != nil || !strings.Contains(out, "number 2 in its queue") || !strings.Contains(out, claimOther.Name) {
+		t.Fatalf("held grant: %q, %v", out, err)
+	}
+}
+
 // Timer commands must not acquire (or queue) a lease for the watching session.
 func TestLeaseClaimRefusesTimerCommands(t *testing.T) {
 	for _, kind := range []string{"probe", "run"} {

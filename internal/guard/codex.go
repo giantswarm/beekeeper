@@ -460,15 +460,19 @@ func (h Hook) codexSandboxCheck(ev event) string {
 func (h Hook) DecideCodex(input []byte) (out []byte) {
 	h.beginCheck("codex adapter")
 	defer h.recoverDecision(&out, DenyCodex)
-	if h.ConfigErr != nil {
-		return DenyCodex("Refused: cannot load beekeeper configuration (" + h.ConfigErr.Error() + "); failing closed.")
-	}
 	if reason := validateCodexInput(input, h.ExecutionMCP); reason != "" {
 		return DenyCodex(reason)
 	}
 	var ev event
 	if err := json.Unmarshal(input, &ev); err != nil {
 		return DenyCodex(codexFailClosedMsg)
+	}
+	if h.ConfigErr != nil {
+		command, _, ok := extractCodexShellCommand(ev.ToolInput)
+		if isCodexShellTool(ev.ToolName) && ok && recoveryCommand(command) {
+			return answerCodex(codexSpecificOutput{PermissionDecision: decisionAllow, Reason: h.recoveryReason()})
+		}
+		return DenyCodex(h.recoveryReason())
 	}
 	ev.CWD = h.codexCWD(ev.CWD)
 	if h.Project == "" {

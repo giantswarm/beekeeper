@@ -300,6 +300,12 @@ func (e Env) planSetup(ctx context.Context, p *plan, m *Manifest) {
 	states := map[string]fileState{}
 	for _, f := range files {
 		s := e.planFile(p, m, f)
+		// A long-running service can become a timer-triggered oneshot (for
+		// example when switching Teleport from Machine ID back to SSO).
+		if !f.Service && s == fileUpdated && slices.Contains(m.Services, f.Path) {
+			p.command(ctx, e, e.Setup.Stop(f.Path))
+			m.Services = slices.DeleteFunc(m.Services, func(path string) bool { return path == f.Path })
+		}
 		written = written || s == fileNew || s == fileUpdated
 		if f.Service {
 			units, states[f.Path] = append(units, f), s

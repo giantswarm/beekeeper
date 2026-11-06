@@ -154,7 +154,7 @@ func (s *server) tools() []serveTool {
 			mcp.WithString(paramChecked, mcp.Description("where a merged, green, released, rolled or closed claim was checked")),
 			mcp.WithArray(paramRefs, mcp.WithStringItems(), mcp.Description("the issues and pull requests it asks about, owner/repo#n")),
 			mcp.WithNumber(paramFoldInto, mcp.Description("an open note for the same person this one folds into, whatever it asks: that note's default and recommendation stand, and its number is returned"))), toolNoteAdd},
-		{newTool("note_list", "List every open note, whoever it is for or filed it: decisions and sign-ins.", "", hintAuditRead), toolNoteList},
+		{newTool("note_list", "List open notes for you or your team, or filed by you: decisions and sign-ins.", "", hintAuditRead), toolNoteList},
 		{newTool("note_answer", "Answer a decision in the person's words and close it: as the person it is for, or a member of the team it is for.",
 			fmt.Sprintf("A decision its default closed stays answerable for %s: the answer replaces the default.", shortDur(defaultedKeep)), hints{destructive: true, idempotent: true, openWorld: true},
 			mcp.WithNumber(paramNote, mcp.Required(), mcp.Description("the note's number")),
@@ -174,7 +174,7 @@ func (s *server) tools() []serveTool {
 			hints{destructive: true, idempotent: true, identified: true}), toolAgentsLeave},
 		{newTool("list_agents", "List the agent roster you may read: your own local agents, your team's holding a lease, every remote one.", "", hintAuditRead,
 			mcp.WithString("scope", mcp.Description("all (default) or team: only the caller's team"))), toolListAgents},
-		{newTool("snapshot", "Show everything at once: leases, holds, lanes, every open note and the agents you may read.", "", hintAuditRead), toolSnapshot},
+		{newTool("snapshot", "Show leases, holds, lanes, the open notes that concern you and the agents you may read.", "", hintAuditRead), toolSnapshot},
 		{newTool(nameReadFeed, "Read the feed: the most recent events you may read, oldest first, as beekeeper://feed holds them.", "After an id, every event above it the instance still holds; gap set when it no longer holds that event, so events right after it may have aged out.", hintRead,
 			mcp.WithString(paramAfter, mcp.Description("only the events whose id is above this one, all of them the instance still holds"))), toolReadFeed},
 	}
@@ -870,14 +870,13 @@ func toolNoteList(c *call, _ mcp.CallToolRequest) (any, error) {
 }
 
 func (c *call) noteList() ([]state.Note, error) {
-	if err := c.verb(c.app.noteCmd(), "list"); err != nil {
-		return nil, err
-	}
 	st, err := c.app.store.Read()
 	if err != nil {
 		return nil, err
 	}
-	return append([]state.Note{}, st.Notes...), nil
+	notes := notesConcerning(st.Notes, c.who, c.app.cfg.Serve)
+	c.app.printNotes(notes)
+	return notes, nil
 }
 
 func toolNoteAnswer(c *call, req mcp.CallToolRequest) (any, error) {
@@ -1075,7 +1074,7 @@ func (c *call) agentList(team bool) ([]addressedAgent, error) {
 	return agents, nil
 }
 
-// snapshotView is everything the central state holds.
+// snapshotView is the central state visible to the caller.
 type snapshotView struct {
 	Leases *leaseListView   `json:"leases"`
 	Holds  []state.Hold     `json:"holds"`
