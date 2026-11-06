@@ -2529,7 +2529,7 @@ type Merge struct {
 	// call without an exit code. Negative: no limit.
 	ToolLimit Duration `yaml:"toolLimit"`
 	// DevctlOwners are the owners whose repositories devctl pr merge serves
-	// (its GitHub App login reaches its own organisation only); a
+	// with its configured GitHub authentication; a
 	// repository of any other owner, and every repository while it is
 	// empty, takes the plain squash merge as the gh login instead.
 	DevctlOwners []string `yaml:"devctlOwners"`

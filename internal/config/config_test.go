@@ -527,7 +527,7 @@ func TestExampleConfig(t *testing.T) {
 		}
 	}
 	if c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
-		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
+		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || !c.Merge.DevctlServes("teemow/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
