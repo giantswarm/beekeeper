@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/gofrs/flock"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +44,8 @@ func Set(path string, settings []Setting) (*Config, error) {
 
 // Change is Set with the dotted keys of unset removed in the same write,
 // after the settings: a mapping an unset key leaves empty goes with it.
+// Concurrent Change/Set calls serialize the entire read/modify/write transaction
+// for the resolved target. Separate caller Get/Set operations are not atomic.
 func Change(path string, settings []Setting, unset []string) (*Config, error) {
 	if len(settings) == 0 && len(unset) == 0 {
 		return nil, errors.New("no change")
@@ -52,18 +55,31 @@ func Change(path string, settings []Setting, unset []string) (*Config, error) {
 	target, err := filepath.EvalSymlinks(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		target = path
+		// Resolve the parent too when creating a new file, so a directory
+		// alias and a direct path use the same lock from the first edit.
+		parent, resolveErr := filepath.EvalSymlinks(filepath.Dir(path))
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		target = filepath.Join(parent, filepath.Base(path))
 	case err != nil:
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Clean(target))
+	// Lock a persistent sidecar, never the configuration inode: rename replaces
+	// that inode, and removing the sidecar would split waiting editors' locks.
+	lock := flock.New(target+".lock", flock.SetPermissions(0o600))
+	if err := lock.Lock(); err != nil {
+		return nil, fmt.Errorf("lock configuration: %w", err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	raw, err := os.ReadFile(filepath.Clean(target)) //nolint:gosec // the configuration path comes from the user
 	mode := fs.FileMode(0o600)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return nil, err
 	default:
-		if fi, err := os.Stat(target); err == nil {
+		if fi, err := os.Stat(target); err == nil { //nolint:gosec // the configuration path comes from the user
 			mode = fi.Mode().Perm()
 		}
 	}
@@ -262,5 +278,5 @@ func writeAtomic(path string, b []byte, mode fs.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return os.Rename(f.Name(), path) //nolint:gosec // the configuration path comes from the user
 }

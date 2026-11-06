@@ -17,6 +17,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/transcripts"
 )
 
 // sessionView is a session with what the state and its transcript add.
@@ -664,7 +665,7 @@ func servedBy(st *state.State, p state.Party) state.Party {
 func rosterRole(st *state.State, me state.Party) string {
 	switch {
 	case guideRole.get(st).Holder != nil && guideRole.get(st).Holder.Is(me):
-		return "the guide"
+		return guideRoleAlias
 	case slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Is(me) }):
 		return workerRole
 	}
@@ -894,6 +895,16 @@ func (a *app) sessionTail(sessions []*claude.Session, q string, n int, tools boo
 	}
 	if s.Transcript == "" {
 		return nil, fmt.Errorf("no transcript found for %q", s.Name)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	caller, _ := a.resolveTranscriptCaller(st)
+	meta := transcripts.Meta{ID: s.ID, HostSession: s.HostID, Name: s.Name, Repo: s.Repo, Cwd: s.Cwd, Harness: s.Harness}
+	a.enrichMetaFromState(st, &meta, s.Party(), claude.ByCLI(a.cfg))
+	if !transcripts.Allowed(caller, meta, st.TranscriptGrants, now) {
+		return nil, refused("transcript %q is outside your transcript access; request a grant with `beekeeper transcripts request --session %s --reason <why>`", meta.DisplayName(), cmp.Or(meta.ID, meta.HostSession))
 	}
 	h := harnessForSession(s)
 	if tools {

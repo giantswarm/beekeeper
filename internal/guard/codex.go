@@ -18,6 +18,7 @@ const (
 	codexViewImageTool  = "view_image"
 	codexUpdatePlanTool = "update_plan"
 	codexWebTool        = "webrun"
+	codexCollaboration  = "collaboration"
 	webSearchTool       = "WebSearch"
 	codexCmdKey         = "cmd"
 	codexCharsKey       = "chars"
@@ -121,7 +122,7 @@ func parseCodexPatchHeaders(patch string) ([]codexPatchHeader, string) {
 
 func isCodexShellTool(toolName string) bool {
 	switch toolName {
-	case bashTool, "bash", "exec_command", "shell_command", "shell", "local_shell":
+	case bashTool, bashCmd, "exec_command", "shell_command", "shell", "local_shell":
 		return true
 	default:
 		return false
@@ -133,6 +134,20 @@ func isCodexShellTool(toolName string) bool {
 func isCodexWebTool(toolName string) bool {
 	switch toolName {
 	case codexWebTool, "web_run", "web.run", "web__run", "WebFetch", webSearchTool:
+		return true
+	default:
+		return false
+	}
+}
+
+// isCodexSubagentTool reports the Codex tools that start a subagent, wait for
+// it, list it or end it, bare or under the collaboration namespace Codex joins
+// to the name. Like a Claude Agent call they go through the shared guard; the
+// subagent's own calls come through this hook. The tools that send a running
+// agent text stay unrecognized.
+func isCodexSubagentTool(toolName string) bool {
+	switch strings.TrimLeft(strings.TrimPrefix(toolName, codexCollaboration), "._") {
+	case "spawn_agent", "wait_agent", "list_agents", "interrupt_agent", "close_agent":
 		return true
 	default:
 		return false
@@ -215,6 +230,8 @@ func validateCodexInput(input []byte, coordinatorMCP bool) string {
 		}
 	// Web tools are read-only and go through the shared guard, like Claude web calls.
 	case toolName == codexUpdatePlanTool || isCodexWebTool(toolName):
+		return ""
+	case isCodexSubagentTool(toolName):
 		return ""
 	case toolName == readTool || toolName == writeTool || toolName == editTool || toolName == multiEditTool:
 		p, ok := toolInput[filePathKey].(string)
@@ -651,6 +668,9 @@ func (h Hook) checkCodexApplyPatch(ev event, patch, cwd string) (reason, context
 		if r := h.transcriptFileRefusal(writeEv); r != "" {
 			return r, ""
 		}
+		if r := h.labConfigRefusal(writeEv); r != "" {
+			return r, ""
+		}
 		if r := h.folderRefusal(writeEv); r != "" {
 			return r, ""
 		}
@@ -984,8 +1004,8 @@ var (
 	anyRedirRe   = regexp.MustCompile(`(?:^|[\s;|&()])((?:\d+)?(?:>>|\|>|>\||<>|<<-|<<<|<<|>|<)|&>>|&>)\s*([^\s;|&()<>]+)`)
 	writeCmdsMap = map[string]bool{
 		"cp": true, "mv": true, "ln": true, "ins" + "tall": true, "dd": true,
-		"rm": true, "rmdir": true, "unlink": true, "shred": true, trashCmd: true, trashPutCmd: true,
-		teeCmd: true, "trun" + "cate": true, "touch": true, "mkdir": true, "chmod": true, "chown": true,
+		"rm": true, "rmdir": true, unlinkCmd: true, "shred": true, trashCmd: true, trashPutCmd: true,
+		teeCmd: true, "trun" + "cate": true, transcriptTouch: true, litMkdir: true, "chmod": true, "chown": true,
 		codexPatchKey: true,
 	}
 )
@@ -1294,7 +1314,7 @@ func isBeekeeperTextSubcommand(name string, args []string) bool {
 		if a == flagConfig || a == flagAs || a == "--for" || a == "--ref" || a == "--due" ||
 			a == "--default" || a == "--status-quo" || a == "--why" || a == "--on" || a == "--report" ||
 			a == flagRepo || a == "--harness" || a == "--host" || a == "--session" || a == "--since" ||
-			a == "--ttl" || a == "--reason" || a == "-n" || a == "--turns" {
+			a == "--ttl" || a == worktreeReason || a == "-n" || a == "--turns" {
 			i++
 			continue
 		}

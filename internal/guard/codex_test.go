@@ -674,3 +674,21 @@ func TestCodexExecCommandWorkdirBodyFile(t *testing.T) {
 		t.Errorf("non-string workdir: got %+v, want deny", d)
 	}
 }
+
+func TestCodexSubagentTools(t *testing.T) {
+	h := hook()
+	cwd := t.TempDir()
+	for _, tool := range []string{
+		"collaborationspawn_agent", "collaboration.spawn_agent", "collaboration__spawn_agent", "spawn_agent",
+		"collaborationwait_agent", "collaborationlist_agents", "collaborationinterrupt_agent", "collaborationclose_agent",
+	} {
+		if d := decideCodexCall(t, h, cwd, tool, map[string]any{messageKey: "audit the diff read-only"}); d.PermissionDecision == decisionDeny {
+			t.Errorf("%s refused: %s", tool, d.Reason)
+		}
+	}
+	for _, tool := range []string{"collaborationsend_message", "collaborationfollowup_task", "collaborationspawn_agents", "collaboration", "xspawn_agent"} {
+		if d := decideCodexCall(t, h, cwd, tool, map[string]any{}); d.PermissionDecision != decisionDeny {
+			t.Errorf("%s not refused: %+v", tool, d)
+		}
+	}
+}

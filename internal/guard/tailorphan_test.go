@@ -19,7 +19,7 @@ func TestScopeReturnsBeforeItsOrphanEnds(t *testing.T) {
 	savedC, savedM := plat.Capper, plat.Machine
 	plat.Capper, plat.Machine = f, noKills{Machine: savedM}
 	t.Cleanup(func() { plat.Capper, plat.Machine = savedC, savedM })
-	o := Options{Max: "64M", Swap: "0", SlotDir: t.TempDir(), Slots: 1, Wait: time.Second,
+	o := Options{Max: guardTestMax, Swap: "0", SlotDir: t.TempDir(), Slots: 1, Wait: time.Second,
 		Tail: NewTail(1024), TailDir: t.TempDir()}
 	start := time.Now()
 	rc, drain := scope(f, "memcap-test-scope-1", o, 1, []string{"sh", "-c", "sleep 2 & exit 1"}, nil, func(string, ...any) {})

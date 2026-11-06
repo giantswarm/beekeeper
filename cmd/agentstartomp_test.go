@@ -51,7 +51,7 @@ func TestWakeOmp(t *testing.T) {
 	var out bytes.Buffer
 	a := &app{cfg: &config.Config{StateDir: dir}, store: store, out: &out}
 	ag := state.Agent{Party: state.Party{HostSession: omp.HostPrefix + id, Name: "test: omp"}}
-	by := state.Party{Name: "test"}
+	by := state.Party{Name: goTestSubcmd}
 	inbox := omp.InboxPath(dir, id)
 	if err := omp.MakeInbox(inbox); err != nil {
 		t.Fatal(err)

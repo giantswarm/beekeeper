@@ -419,6 +419,11 @@ top-level or line keys, for other text each line's head before its first
   beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#CLIENT_SECRET \
     values.sops.yaml#connectors.0.config.clientSecret
 
+A vault field may also be the destination. This silently copies an existing
+item's password into its labelled field, preserving the source and other fields:
+
+  beekeeper secret copy op://<vault>/<item>/password op://<vault>/<item>/client-secret
+
 The source may also be one value of a plain file on the host,
 file://<absolute path>#<path>, under a directory of secret.fileRoots: a
 dotted key of its JSON or YAML mapping or a line of its dotenv lines. The
@@ -682,6 +687,9 @@ failing or answering nothing within a minute) exits 78.`,
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
 				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
+				}
+				if dst[0].Op != "" {
+					return nil
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
 			}
@@ -1245,11 +1253,14 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 			if err != nil {
 				return err
 			}
-			ops, ix, err := a.secretOpsIndexed()
+			files, err := a.scanFiles()
 			if err != nil {
 				return err
 			}
-			files, err := a.scanFiles()
+			if err := a.sandboxPaths(files, files); err != nil {
+				return err
+			}
+			ops, ix, err := a.secretOpsIndexed()
 			if err != nil {
 				return err
 			}

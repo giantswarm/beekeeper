@@ -68,7 +68,7 @@ func TestPassThrough(t *testing.T) {
 	for _, cmd := range []string{
 		"git status --short && ls -la",
 		"tsc --version",
-		"/home/u/klaus-lab/scripts/memcap -- zsh -c 'go test ./...'",
+		"/home/u/fixture-lab/scripts/memcap -- zsh -c 'go test ./...'",
 		self + " run -- zsh -c 'go test ./...'",
 		"beekeeper run --max 4G -- go test ./...",
 		"cd ~/src/x && CGO_ENABLED=0 ~/bin/memcap -- go build ./...",
@@ -109,7 +109,7 @@ func TestHeavyCommandIsWrappedVerbatim(t *testing.T) {
 	for _, c := range []string{"make build", "timeout 600 go vet ./...", "x=$(yarn tsc)", "if true; then golangci-lint run; fi", "FOO=1 npx jest",
 		"beekeeper scan sweep --json",
 		// the wrapper mentioned, not invoked: the build still needs a slot
-		"cd ~/d && m=$(ls ~/klaus-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
+		"cd ~/d && m=$(ls ~/fixture-lab/scripts/memcap 2>/dev/null); echo $m; go test ./e2e/",
 		"which memcap beekeeper && go vet ./...",
 		// invoked through a variable: wrapped again, the inner run takes no slot
 		`go vet ./... && M=/x/scripts/memcap && "$M" go test ./...`,
@@ -205,7 +205,7 @@ func TestHeavyClassification(t *testing.T) {
 		{"git -C /tmp/amp checkout -q --detach e82d26b", false},
 		{"git checkout -q -b fix-make-test origin/main", false},
 		{"git switch -c go-test-flake", false},
-		{"git worktree add -q ~/.local/state/klaus-lab/worktrees/x/make-build -b make-build origin/main", false},
+		{"git worktree add -q ~/.local/state/beekeeper/worktrees/x/make-build -b make-build origin/main", false},
 		{"cd ~/src/x && git fetch -q origin && git checkout -q -B build origin/main", false},
 		{`S=/tmp/amp; git -C "$S" checkout -q -- . && git -C ~/src/x worktree remove "$S"`, false},
 		// builds, tests and lints keep the slot
@@ -282,19 +282,26 @@ func TestHeavyClassification(t *testing.T) {
 	}
 }
 
-// Every background call exports BackgroundEnv, so that a beekeeper run in
-// it, however reached, waits the background default; a foreground call's
-// run, direct or chained, passes unchanged and waits the foreground default.
+// Detected background runs inherit the longer wait; foreground runs pass unchanged.
 func TestBackgroundRunGetsTheLongWait(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "build.sh"), []byte("#!/bin/sh\nbeekeeper run -- go test ./...\n"), 0o700); err != nil { //nolint:gosec // a test fixture
+		t.Fatal(err)
+	}
 	for _, cmd := range []string{
 		"yarn test --maxWorkers=4",
 		"beekeeper run -- go test ./...",
 		"cd /src/x && export GOFLAGS=-p=2 && beekeeper run -- go test ./...",
-		"./scripts/build.sh",
-		"git status",
+		litBuildSh,
+		"bash build.sh",
+		"cd " + dir + " && ./build.sh",
 	} {
-		d := decide(t, hook(), "/", cmd, map[string]any{backgroundKey: true})
-		if d == nil || !strings.HasPrefix(d.UpdatedInput["command"].(string), "export MEMCAP_BACKGROUND=1; ") {
+		d := decide(t, hook(), dir, cmd, map[string]any{backgroundKey: true})
+		rewritten := ""
+		if d != nil {
+			rewritten, _ = d.UpdatedInput["command"].(string)
+		}
+		if !strings.HasPrefix(rewritten, "export MEMCAP_BACKGROUND=1; ") {
 			t.Errorf("%q in the background: want the background export, got %+v", cmd, d)
 			continue
 		}
@@ -308,6 +315,18 @@ func TestBackgroundRunGetsTheLongWait(t *testing.T) {
 	} {
 		if d := decide(t, hook(), "/", cmd, nil); d != nil {
 			t.Errorf("%q in the foreground: want it unchanged, got %+v", cmd, d)
+		}
+	}
+}
+
+func TestUnrelatedBackgroundCallsPassUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plain.sh"), []byte("#!/bin/sh\nsleep 1\n"), 0o700); err != nil { //nolint:gosec // a test fixture
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"sleep 1", "git status", "gh pr list --repo o/r", "devctl version", "beekeeper lease claim build --wait 1m", "./plain.sh", "bash plain.sh", "./missing.sh", "echo 'beekeeper run'", "cat plain.sh"} {
+		if d := decide(t, hook(), dir, cmd, map[string]any{backgroundKey: true}); d != nil {
+			t.Errorf("%q: want unchanged, got %+v", cmd, d)
 		}
 	}
 }
@@ -418,7 +437,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", g + "devctl pr merge giantswarm/marge 3 --timeout 9m | $L record x", false},
 		{"timeout 600 devctl pr merge o/r 1", "timeout 600 " + g + "devctl pr merge o/r 1", false},
 		{"cd x && devctl pr merge o/r 1", "cd x && " + g + "devctl pr merge o/r 1", false},
-		{"devctl pr merge o/r 1", backgroundExport + self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
+		{"devctl pr merge o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr merge o/r 1", true},
 		{"make && devctl pr merge o/r 1", self + " run -- zsh -c 'make && " + g + "devctl pr merge o/r 1'", false},
 		// The live case: only the devctl invocation is wrapped, the pipeline runs as written.
 		{`flock ~/.local/state/lab/locks/merge-marge.lock devctl pr merge --update-branch o/r 7 | tee "$(scripts/scratch orch merge-7.json)" | ./orchestration/ledger.sh record o/r#7 --agent orchestrator`,
@@ -443,7 +462,7 @@ func TestHookGatesMerges(t *testing.T) {
 		{"devctl pr wait o/r 1", g + "devctl pr wait o/r 1", false},
 		{"devctl release wait o/r --pr 1 | tail -3", g + "devctl release wait o/r --pr 1 | tail -3", false},
 		{"devctl rollout wait inst o/r --pr 1 >| r.json", g + "devctl rollout wait inst o/r --pr 1 >| r.json", false},
-		{"devctl pr wait o/r 1", backgroundExport + self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
+		{"devctl pr wait o/r 1", self + " gate --wait 30m --limit 0 -- devctl pr wait o/r 1", true},
 		// A merge on a line of its own in a multi-line -c string is gated in place.
 		{"bash -c '\ntrap restore EXIT\ndevctl pr merge o/r 7\n'", "bash -c '\ntrap restore EXIT\n" + g + "devctl pr merge o/r 7\n'", false},
 		// An indented line is a command position too.
@@ -1013,6 +1032,37 @@ func TestHookLeavesAssignedTextAlone(t *testing.T) {
 		d := decide(t, h, t.TempDir(), cmd, nil)
 		if d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "the variable ") {
 			t.Errorf("%q: got %+v, want a refusal naming the variable", cmd, d)
+		}
+	}
+}
+
+func TestBackgroundWrapperDetection(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"run.sh":   "#!/bin/sh\nbeekeeper run -- go test ./...\n",
+		"outer.sh": "#!/bin/sh\n./run.sh\n",
+		"cycle.sh": "#!/bin/sh\n./cycle.sh\n",
+		"data.sh":  "#!/bin/sh\necho 'beekeeper run'\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil { //nolint:gosec // a test fixture
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		cmd  string
+		want bool
+	}{
+		{"./outer.sh", true},
+		{"bash -c './run.sh'", true},
+		{"SCRIPT=./run.sh; bash \"$SCRIPT\"", true},
+		{"./cycle.sh", false},
+		{"./data.sh", false},
+		{"cat run.sh", false},
+		{"bash -n run.sh", false},
+		{"bash data.sh run.sh", false},
+	} {
+		if got := backgroundRun(tc.cmd, dir, 0); got != tc.want {
+			t.Errorf("%q: got %v, want %v", tc.cmd, got, tc.want)
 		}
 	}
 }

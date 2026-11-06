@@ -101,3 +101,63 @@ type addr struct{}
 
 func (addr) Network() string { return "tcp" }
 func (addr) String() string  { return "192.0.2.1:22" }
+
+func TestParseableDropsInvalidHostEntries(t *testing.T) {
+	good := hostLine(t, "192.0.2.1")
+	key := good[strings.IndexByte(good, ' '):]
+	cases := map[string]string{
+		"malformed hash":           "|1|bad|bad" + key,
+		"unsupported hash version": strings.Replace(knownhosts.HashHostname("192.0.2.1"), "|1|", "|2|", 1) + key,
+		"broken bracket":           "[broken" + key,
+		"empty negation":           "!" + key,
+		"unknown marker":           "@unknown " + good,
+		"unicode comment prefix":   "\u2003# comment",
+		"oversized entry":          good + " " + strings.Repeat("x", 64*1024),
+		"oversized comment":        "#" + strings.Repeat("x", 1024*1024),
+	}
+	for name, invalid := range cases {
+		for _, extra := range []bool{false, true} {
+			suffix := "/alone"
+			if extra {
+				suffix = "/with unsupported key"
+			}
+			t.Run(name+suffix, func(t *testing.T) {
+				dir := t.TempDir()
+				src, dst := filepath.Join(dir, "source"), filepath.Join(dir, "filtered")
+				lines := []string{good, invalid, "# retained", "", good}
+				wantDropped := 1
+				if extra {
+					lines = append(lines, unknownLine("192.0.2.2"))
+					wantDropped++
+				}
+				write(t, src, lines...)
+				before, err := os.ReadFile(src) //nolint:gosec // a path of this test
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := knownhosts.New(src); err == nil {
+					t.Fatal("consumer accepted the invalid source")
+				}
+				dropped, err := Parseable(dst, src)
+				if err != nil || dropped != wantDropped {
+					t.Fatalf("dropped %d, want %d; error: %v", dropped, wantDropped, err)
+				}
+				if _, err := knownhosts.New(dst); err != nil {
+					t.Fatalf("consumer rejected filtered file: %v", err)
+				}
+				got, err := os.ReadFile(dst) //nolint:gosec // a path of this test
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := strings.Join([]string{good, "# retained", "", good, ""}, "\n")
+				if string(got) != want {
+					t.Fatal("filtered file did not preserve usable lines")
+				}
+				after, err := os.ReadFile(src) //nolint:gosec // a path of this test
+				if err != nil || string(after) != string(before) {
+					t.Fatalf("source changed; error: %v", err)
+				}
+			})
+		}
+	}
+}

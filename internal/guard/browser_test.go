@@ -13,7 +13,7 @@ const musterLoginCmd = "muster auth login"
 func TestBrowserRefusal(t *testing.T) {
 	held := func(session string) func() []lease.Holder {
 		return func() []lease.Holder {
-			return []lease.Holder{{Env: "spidertron", Session: "s1"}, {Env: browserLease, Session: session}}
+			return []lease.Holder{{Env: "fixture-app", Session: "s1"}, {Env: browserLease, Session: session}}
 		}
 	}
 	heldOnDesktop := func() []lease.Holder { return []lease.Holder{{Env: browserLease, HostSession: "local_s1"}} }
@@ -22,12 +22,12 @@ func TestBrowserRefusal(t *testing.T) {
 		leases       func() []lease.Holder
 		refused      bool
 	}{
-		"muster login without the lease":       {"timeout 120 muster auth login --context spidertron --silent", "s1", held("other"), true},
-		"muster login under the lease":         {"muster auth login --context spidertron", "s1", held("s1"), true},
+		"muster login without the lease":       {"timeout 120 muster auth login --context fixture-app --silent", "s1", held("other"), true},
+		"muster login under the lease":         {"muster auth login --context fixture-app", "s1", held("s1"), true},
 		"muster login, no lease at all":        {musterLoginCmd, "s1", func() []lease.Holder { return nil }, true},
 		"muster login without a lease reader":  {musterLoginCmd, "s1", nil, true},
-		"no-browser under the lease":           {"muster auth login --context spidertron --no-browser", "s1", held("s1"), false},
-		"no-browser without the lease":         {"timeout 600 muster auth login --no-browser --context spidertron", "s1", held("other"), false},
+		"no-browser under the lease":           {"muster auth login --context fixture-app --no-browser", "s1", held("s1"), false},
+		"no-browser without the lease":         {"timeout 600 muster auth login --no-browser --context fixture-app", "s1", held("other"), false},
 		"no-browser, no lease at all":          {"muster auth login --no-browser", "s1", func() []lease.Holder { return nil }, false},
 		"no-browser=true":                      {"muster auth login --no-browser=true", "s1", held("other"), false},
 		"no-browser=false opens":               {"muster auth login --no-browser=false", "s1", held("s1"), true},
@@ -58,7 +58,7 @@ func TestBrowserRefusal(t *testing.T) {
 		"gh web login under the lease":         {"gh auth login --web", "s1", held("s1"), false},
 		"gh token login opens nothing":         {"gh auth login --with-token < f", "s1", held("other"), false},
 		"xdg-open after a list":                {"cd x && xdg-open https://example.com", "s1", held("other"), true},
-		"muster status passes":                 {"muster auth status --context spidertron", "s1", held("other"), false},
+		"muster status passes":                 {"muster auth status --context fixture-app", "s1", held("other"), false},
 		"a mention is no command":              {"grep -n 'muster auth login' README.md", "s1", held("other"), false},
 		"xdg-open, lease under the desktop id": {"xdg-open https://example.com", "s1", heldOnDesktop, false},
 		"muster login, lease under desktop id": {musterLoginCmd, "s1", heldOnDesktop, true},

@@ -135,3 +135,75 @@ func TestAgentBrowser(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentsRegisterName(t *testing.T) {
+	const positional = "Findings filer 40"
+	for _, tc := range []struct {
+		label string
+		args  []string
+		want  string
+		code  int
+	}{
+		{label: "positional", args: []string{positional}, want: positional},
+		{label: "flag", args: []string{nameFlag, positional}, want: positional},
+		{label: "matching", args: []string{positional, nameFlag, positional}, want: positional},
+		{label: paramDefault, want: "session title"},
+		{label: litConflict, args: []string{positional, "--name", "Other worker"}, code: ExitRefused},
+		{label: "explicit empty flag", args: []string{positional, "--name", ""}, code: ExitRefused},
+		{label: "too many", args: []string{positional, litExtra}, code: ExitUsage},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			a, out := stubApp(t)
+			a.as = ""
+			plat.Machine = tableMachine{plat.Machine}
+			for _, env := range []string{litBeekeeperOmpAgent, litBeekeeperAgyAgent, litBeekeeperCodexAgent, transcriptHostEnv} {
+				t.Setenv(env, "")
+			}
+			t.Setenv("CLAUDE_CODE_SESSION_ID", "register-session")
+			t.Setenv("CLAUDE_CODE_SESSION_NAME", "session title")
+			c := a.agentsCmd()
+			c.SetOut(out)
+			c.SetErr(out)
+			c.SetArgs(append([]string{"register"}, tc.args...))
+			err := c.Execute()
+			if tc.code == ExitUsage {
+				if err == nil {
+					t.Fatal("extra argument accepted")
+				}
+				return
+			}
+			if (tc.code == 0 && err != nil) || (tc.code != 0 && Code(err) != tc.code) {
+				t.Fatalf("exit = %d, err = %v, want %d", Code(err), err, tc.code)
+			}
+			st, readErr := a.store.Read()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tc.code != 0 {
+				if !strings.Contains(err.Error(), positional) || !strings.Contains(err.Error(), "--name") || (tc.label == "conflict" && !strings.Contains(err.Error(), "Other worker")) {
+					t.Fatalf("conflict does not name both inputs: %v", err)
+				}
+				if len(st.Agents) != 0 {
+					t.Fatalf("refused registration changed roster: %+v", st.Agents)
+				}
+				return
+			}
+			if len(st.Agents) != 1 || st.Agents[0].Name != tc.want {
+				t.Fatalf("roster = %+v, want name %q", st.Agents, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentsRegisterHelp(t *testing.T) {
+	a, out := stubApp(t)
+	c := a.agentsCmd()
+	c.SetOut(out)
+	c.SetArgs([]string{"register", "--help"})
+	if err := c.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "register [name]") {
+		t.Fatalf("help missing positional usage: %s", out)
+	}
+}

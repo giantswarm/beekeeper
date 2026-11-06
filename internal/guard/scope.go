@@ -50,7 +50,7 @@ func hasDirPrefix(p, d string) bool {
 func worktreeMainRepo(dir string) string {
 	for cur := filepath.Clean(dir); ; {
 		dotGit := filepath.Join(cur, ".git")
-		if fi, err := os.Lstat(dotGit); err == nil && fi.Mode().IsRegular() {
+		if fi, err := os.Lstat(dotGit); err == nil && fi.Mode().IsRegular() { //nolint:gosec // a path of this tool's own state
 			raw, err := os.ReadFile(dotGit) //nolint:gosec // reading .git pointer file to resolve worktree root
 			if err != nil {
 				return ""
