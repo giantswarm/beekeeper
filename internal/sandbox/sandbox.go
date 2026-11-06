@@ -128,10 +128,10 @@ func New(cfg config.Sandbox, e Paths) Policy {
 		Deny:      []string{e.ScanDir},
 		Harness:   filepath.Clean(claude),
 		ToolWrite: []string{filepath.Join(claude, "projects", "*", "memory"), filepath.Join(claude, "plans")},
-		Domains:   append([]string{"github.com", "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
+		Domains:   append([]string{upstreamGitHost, "*.github.com", "*.githubusercontent.com"}, cfg.Domains...),
 		ProxyPort: cfg.ProxyPort,
 		Exe:       e.Exe,
-		Egress:    EgressDir(e.RuntimeDir),
+		Egress:    brokerEgressDir(e),
 	}
 	// the home directory is empty inside the sandbox but for the paths it
 	// mounts, at their targets: a symlinked config is named by its target,
@@ -144,6 +144,10 @@ func New(cfg config.Sandbox, e Paths) Policy {
 	for name, path := range map[string]string{"BEEKEEPER_CONFIG": e.ConfigFile, "GIT_CONFIG_GLOBAL": filepath.Join(e.Home, ".gitconfig"), "XDG_CONFIG_HOME": xdg} {
 		if r, err := filepath.EvalSymlinks(path); err == nil && r != filepath.Clean(path) {
 			p.Vars[name] = r
+			if name == "BEEKEEPER_CONFIG" {
+				// A file symlink can leave the allowed config directory.
+				p.Read = append(p.Read, r)
+			}
 		}
 	}
 	for _, ps := range []*[]string{&p.Read, &p.Write, &p.Deny, &p.ToolWrite} {
@@ -243,7 +247,7 @@ func (p Policy) Settings() map[string]any {
 		"hooks": map[string]any{
 			"PreToolUse": []map[string]any{{
 				"matcher": strings.Join(FileTools, "|"),
-				"hooks":   []map[string]any{{"type": "command", "command": p.Exe + " hook pretooluse", "timeout": 10}},
+				"hooks":   []map[string]any{{"type": "command", "command": "'" + strings.ReplaceAll(p.Exe, "'", `'\''`) + "' hook pretooluse", "timeout": 10}},
 			}},
 		},
 	}
@@ -304,23 +308,43 @@ func (p Policy) settings(paths []string) []string {
 // directory, or under a path of Read or Write, or writable.
 func (p Policy) Readable(path, cwd string) bool {
 	path = resolve(path, cwd)
-	return !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
+	return path != "" && !p.denied(path) && (p.listed(path) || p.Writable(path, cwd))
+}
+
+// Searchable reports whether a recursive file tool may search path without
+// exclusions. Readability of the root alone does not authorize descendants:
+// closed directories and explicit denials must remain inaccessible.
+func (p Policy) Searchable(path, cwd string) bool {
+	if !p.Readable(path, cwd) {
+		return false
+	}
+	path = resolve(path, cwd)
+	for _, d := range append(p.closed(), p.Deny...) {
+		if d != "" && under(resolve(d, ""), path) {
+			return false
+		}
+	}
+	return true
 }
 
 // Writable reports whether a file tool may write path: under a path of
 // Write or ToolWrite, the temporary directory, or the session's working
 // directory when that is itself readable (a checkout, never the home
-// directory or a credential's).
+// directory or a credential's), without crossing into a closed directory.
 func (p Policy) Writable(path, cwd string) bool {
 	path = resolve(path, cwd)
-	if p.denied(path) {
+	if path == "" || p.denied(path) {
 		return false
 	}
 	if under(path, resolve(os.TempDir(), "")) || slices.ContainsFunc(p.Write, func(w string) bool { return under(path, resolve(w, "")) }) {
 		return true
 	}
 	if cwd != "" {
-		if dir := resolve(cwd, ""); under(path, dir) && p.listed(dir) {
+		if dir := resolve(cwd, ""); under(path, dir) && p.listed(dir) &&
+			!slices.ContainsFunc(p.closed(), func(d string) bool {
+				closed := resolve(d, "")
+				return under(path, closed) && !under(dir, closed)
+			}) {
 			return true
 		}
 	}
@@ -349,34 +373,73 @@ func (p Policy) listed(path string) bool {
 		slices.ContainsFunc(append(slices.Clone(p.Read), p.Write...), func(r string) bool { return under(path, resolve(r, "")) })
 }
 
-// resolve is path made absolute against cwd with its symlinks resolved; a
-// path that does not exist yet resolves through its nearest existing parent.
+// resolve follows components in filesystem order, including symlinks before
+// parent traversal. Missing descendants are allowed, but an unresolvable
+// path returns the empty string so callers refuse it.
 func resolve(path, cwd string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = home + path[1:]
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
 		}
+		path = home + path[1:]
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(cwd, path)
-	}
-	path = filepath.Clean(path)
-	var rest []string
-	for d := path; ; d = filepath.Dir(d) {
-		r, err := filepath.EvalSymlinks(d)
-		if err == nil {
-			return filepath.Join(append([]string{r}, rest...)...)
+		if cwd == "" {
+			var err error
+			cwd, err = os.Getwd()
+			if err != nil {
+				return ""
+			}
 		}
-		if !errors.Is(err, fs.ErrNotExist) || d == filepath.Dir(d) {
-			return path
-		}
-		rest = append([]string{filepath.Base(d)}, rest...)
+		// Join would erase symlink/.. before the filesystem sees it.
+		path = cwd + string(filepath.Separator) + path
 	}
+	parts := strings.Split(path, string(filepath.Separator))
+	resolved := string(filepath.Separator)
+	missing := false
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if missing {
+			// A missing directory cannot be traversed back out of.
+			if part == ".." {
+				return ""
+			}
+			resolved = filepath.Join(resolved, part)
+			continue
+		}
+		candidate := resolved + string(filepath.Separator) + part
+		info, err := os.Lstat(candidate)
+		if errors.Is(err, fs.ErrNotExist) {
+			missing = true
+			resolved = filepath.Join(resolved, part)
+			continue
+		}
+		if err != nil {
+			return ""
+		}
+		resolved, err = filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return ""
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			info, err = os.Stat(resolved)
+			if err != nil {
+				return ""
+			}
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return ""
+		}
+	}
+	return resolved
 }
 
 // under reports whether path is dir or lies below it.
 func under(path, dir string) bool {
-	return path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+	return path != "" && dir != "" && (path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator)))
 }
 
 // underGlob is under for a dir whose components may be globs.
@@ -388,4 +451,12 @@ func underGlob(path, dir string) bool {
 	}
 	ok, err := filepath.Match(dir, strings.Join(got[:len(parts)], string(filepath.Separator)))
 	return ok && err == nil
+}
+
+func brokerEgressDir(e Paths) string {
+	dir := BrokerDir(e.RuntimeDir, e.StateDir, e.Home)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "egress")
 }

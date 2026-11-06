@@ -179,6 +179,7 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 		e.Spec.TeleportEvery = a.cfg.Teleport.Every.Duration
 		e.Spec.TeleportBotConfig = a.cfg.Teleport.Bot.Config
 		e.Spec.TeleportBotBinary = a.cfg.Teleport.Bot.Binary
+		e.Spec.TeleportLoginTimeout = a.cfg.Teleport.LoginTimeout.Duration
 	}
 	e.Spec.ToolPath = os.Getenv("PATH")
 	if e.Spec.ConfigPath, err = filepath.Abs(e.Config); err != nil {

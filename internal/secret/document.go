@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"slices"
@@ -26,7 +27,8 @@ const (
 // document is a decrypted SOPS file as a YAML tree, kept as nodes so that
 // a copy keeps its keys' order and comments.
 type document struct {
-	root *yaml.Node
+	root     *yaml.Node
+	snapshot *fileSnapshot
 }
 
 // errSeveralDocuments refuses a YAML stream of several documents.
@@ -41,8 +43,10 @@ func parseNode(raw []byte) (*yaml.Node, error) {
 		return nil, errors.New("no YAML document")
 	}
 	var extra yaml.Node
-	if dec.Decode(&extra) == nil {
+	if err := dec.Decode(&extra); err == nil {
 		return nil, errSeveralDocuments
+	} else if !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid trailing YAML content")
 	}
 	return n.Content[0], nil
 }
@@ -57,7 +61,11 @@ func parseDocument(raw []byte) (*document, error) {
 	if n.Kind != yaml.MappingNode {
 		return nil, errors.New("no YAML mapping")
 	}
-	return &document{root: n}, nil
+	doc := &document{root: n}
+	if _, err := doc.checkedLeaves(); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 // topKeys are the mapping's keys in their order.
@@ -87,8 +95,16 @@ func (d *document) encode() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// leaves maps the dotted path of every scalar to its value.
+// leaves maps the dotted path of every scalar in a validated or generated document.
 func (d *document) leaves() map[string]string {
+	out, _ := d.checkedLeaves()
+	return out
+}
+
+// checkedLeaves refuses paths that would hide a scalar behind another scalar.
+// The error contains no path or value from the decrypted document.
+func (d *document) checkedLeaves() (map[string]string, error) {
+	var err error
 	out := map[string]string{}
 	var walk func(n *yaml.Node, path string)
 	walk = func(n *yaml.Node, path string) {
@@ -100,6 +116,9 @@ func (d *document) leaves() map[string]string {
 		}
 		switch n.Kind {
 		case yaml.ScalarNode:
+			if _, exists := out[path]; exists {
+				err = errors.New("ambiguous scalar paths in YAML document")
+			}
 			out[path] = n.Value
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
@@ -114,7 +133,10 @@ func (d *document) leaves() map[string]string {
 		}
 	}
 	walk(d.root, "")
-	return out
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // get is the scalar at a dotted path.
@@ -148,6 +170,26 @@ func (d *document) walk(keys []string) (parent, n *yaml.Node, held []string) {
 		i += width
 	}
 	return parent, n, held
+}
+
+// encryptionKeys follows the same existing dotted keys as putKeys. A
+// missing suffix becomes new mapping keys; an embedded edit is encrypted
+// as the scalar document that holds it.
+func (d *document) encryptionKeys(keys []string) []string {
+	if l, ok := d.inLeaf(keys); ok {
+		return l.held
+	}
+	n := d.root
+	var held []string
+	for i := 0; i < len(keys); {
+		c, width := childAt(n, keys[i:])
+		if c == nil {
+			return append(held, keys[i:]...)
+		}
+		held = append(held, strings.Join(keys[i:i+width], "."))
+		n, i = c, i+width
+	}
+	return held
 }
 
 // splitPath reads a dotted path into its keys: a key in double quotes
@@ -227,6 +269,25 @@ func (d *document) set(path, value string) error {
 		return fmt.Errorf("%q holds a %s, not a value", path, kindName(n.Kind))
 	}
 	return d.put(path, &yaml.Node{Kind: yaml.ScalarNode, Tag: strTag, Value: value})
+}
+
+// destination identifies a scalar node, or a top-level key inside the
+// block scalar that contains an embedded document.
+type destination struct {
+	node  *yaml.Node
+	inner string
+}
+
+// planDestination applies a placeholder to an isolated planning tree. The
+// resulting node identity ignores quoted/escaped aliases of the same path.
+func (d *document) planDestination(path string) (destination, error) {
+	if err := d.set(path, "beekeeper-preflight"); err != nil {
+		return destination{}, err
+	}
+	if l, ok := d.inLeaf(splitPath(path)); ok {
+		return destination{node: l.node, inner: strings.Join(l.rest, ".")}, nil
+	}
+	return destination{node: d.node(path)}, nil
 }
 
 // setKeys puts a string under keys, one key each, a key holding a dot

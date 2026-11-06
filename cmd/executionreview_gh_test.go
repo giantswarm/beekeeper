@@ -36,7 +36,7 @@ func TestExecutionReviewReportReadsReviewUnderItsPullRequest(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	reviewer := state.Party{Name: "reviewer", Session: "reviewer-session"}
+	reviewer := state.Party{Name: litReviewer, Session: "reviewer-session"}
 	st := &state.State{DeskReviews: []state.DeskReview{{
 		ID: "round", Ref: "o/r#12", Head: head, Round: 1,
 		Worker:     state.Party{Name: workerRole, Session: "assigned-worker"},

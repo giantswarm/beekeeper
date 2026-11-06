@@ -208,7 +208,17 @@ func runTurn(ctx context.Context, stateDir, inbox string, logFile *os.File, bin,
 			_ = Confirm(inbox)
 		}
 	}
+	scanErr := sc.Err()
+	if scanErr != nil {
+		// The child may be blocked writing to a pipe we can no longer read.
+		// Use the configured cancellation path before waiting so Unix also
+		// stops the turn's process group.
+		_ = cmd.Cancel()
+	}
 	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return fmt.Errorf("reading codex turn output: %w", scanErr)
+	}
 	if waitErr == nil && (accepted || *threadID != "") {
 		_ = Confirm(inbox)
 	}

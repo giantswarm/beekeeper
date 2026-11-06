@@ -11,6 +11,8 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/giantswarm/beekeeper/internal/policycontent"
 )
 
 const coordinatorMCPPrefix = "mcp__coordinator__"
@@ -102,6 +104,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 		}
 		if p == "" || !executionWithin(workspace, p) {
 			return ExecutionDeny("file tool target is outside its owned workspace")
+		}
+		if ev.ToolName == globTool && !executionWithin(workspace, globRoot(globSearchPath(ev.ToolInput, ev.CWD))) {
+			return ExecutionDeny("glob pattern is outside its owned workspace")
 		}
 	default:
 		return ExecutionDeny("tool is not supported by the managed remote adapter; use component commands for notes and reports")
@@ -497,7 +502,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			}
 		case "systemctl", executionSystemdRun, "loginctl", executionSudo, "claude", "codex", "agy", ompCommand:
 			refusal = errors.New("harness and service lifecycle belongs to the coordinating component")
-		case "gh", "devctl":
+		case "gh", litDevctl:
 			args := executionVerb(words[1:])
 			if len(args) > 1 && (args[0] == "pr" && args[1] == executionMerge || args[0] == "release" && args[1] == "promote") || len(args) > 0 && args[0] == "alias" {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
@@ -515,7 +520,7 @@ func executionShell(command, workspace, cwd string, protected []string, depth in
 			if strings.Contains(args, "mergepullrequest") || strings.Contains(args, "/merge") || strings.Contains(args, "pr merge") {
 				refusal = errors.New("remote merge authorization is unavailable; see https://github.com/giantswarm/beekeeper/issues/1716")
 			}
-		case "git":
+		case gitCmd:
 			for _, a := range words[1:] {
 				if strings.Contains(a, "alias.") || strings.Contains(a, "core.sshCommand") {
 					refusal = errors.New("execution command aliases cannot bypass the remote guard")
@@ -586,6 +591,9 @@ func executionResolve(p string) string {
 // ExecutionRulesAllowed rejects authentication stores before opening a rules
 // file. Rules are an operator-owned document, never provider credentials.
 func ExecutionRulesAllowed(p string, extra []string) bool {
+	if !policycontent.RulesAllowed(p, extra) {
+		return false
+	}
 	if newSecretFiles(extra).match(p) != "" {
 		return false
 	}

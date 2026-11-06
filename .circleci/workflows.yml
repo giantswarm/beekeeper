@@ -31,6 +31,19 @@ workflows:
         # override their own `make test`. See devctl makefile gen and the
         # make-target-ci-interface ADR.
         test_target: test
+        # Repo-specific workaround for #2229 until architect's signing retry
+        # classifier includes Rekor's conflict lookup race. Preserve this
+        # pre-step when regenerating this workflow.
+        pre-steps:
+        - checkout
+        - run:
+            name: Retry transient Rekor conflict lookups during blob signing
+            command: |
+              mkdir -p /tmp/beekeeper-cosign-bin
+              printf 'export BEEKEEPER_COSIGN_BINARY=%q\n' "$(command -v cosign)" >> "$BASH_ENV"
+              cp .circleci/cosign-retry.sh /tmp/beekeeper-cosign-bin/cosign
+              chmod 0755 /tmp/beekeeper-cosign-bin/cosign
+              echo 'export PATH=/tmp/beekeeper-cosign-bin:$PATH' >> "$BASH_ENV"
         # Cross-platform binaries attached to the GitHub Release by the
         # upload-release-assets job below (cli flavour). yamllint disables the
         # line-length rule for the 132-char matrix value.
