@@ -462,8 +462,11 @@ func TestRoleRelayTransfersBrowserLease(t *testing.T) {
 	}
 }
 
+// holderStartingKind is a holder still in its startup window.
+const holderStartingKind = "starting"
+
 func TestClaimKeepsLiveAndStartingHolders(t *testing.T) {
-	for _, kind := range []string{"live", "starting", "registered after snapshot", "person", "remote host", "new claim"} {
+	for _, kind := range []string{testLiveMode, holderStartingKind, "registered after snapshot", "person", "remote host", "new claim"} {
 		t.Run(kind, func(t *testing.T) {
 			a := claimApp(t)
 			holdLease(t, a, graveler, claimOther)
@@ -471,11 +474,11 @@ func TestClaimKeepsLiveAndStartingHolders(t *testing.T) {
 			h, _ := dir.Get(graveler)
 			var sessions []*claude.Session
 			switch kind {
-			case "live":
+			case testLiveMode:
 				sessions = []*claude.Session{{ID: claimOther.Session, Name: claimOther.Name}}
-			case "starting", "registered after snapshot":
+			case holderStartingKind, "registered after snapshot":
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-					if kind == "starting" {
+					if kind == holderStartingKind {
 						st.Starts = []state.Start{{Party: claimOther, At: a.now}}
 					} else {
 						st.Agents = []state.Agent{{Party: claimOther, Registered: a.now.Add(time.Second)}}
