@@ -118,15 +118,15 @@ func TestSendMessageByNameToAnAgentWithoutACLIIsRefused(t *testing.T) {
 func TestSendMessageByAHoldersRunNameGoesToTheHolder(t *testing.T) {
 	absent := false
 	h := Hook{
-		Role:   func(r string) (string, error) { return "klaus-lab-14", nil },
+		Role:   func(r string) (string, error) { return "fixture-lab-14", nil },
 		Holds:  func(name string) string { return map[string]string{"Supervisor run 82": RoleSupervisor}[name] },
 		Absent: func(string) string { absent = true; return "no CLI of it runs" },
 	}
 	d := decideSend(t, h, "Supervisor run 82")
-	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != "klaus-lab-14" || absent {
+	if d == nil || d.PermissionDecision != decisionAllow || d.UpdatedInput["to"] != "fixture-lab-14" || absent {
 		t.Fatalf("want the holder's CLI, got %+v (absent asked %v)", d, absent)
 	}
-	if !strings.Contains(d.Reason, "the supervisor is klaus-lab-14 now") {
+	if !strings.Contains(d.Reason, "the supervisor is fixture-lab-14 now") {
 		t.Errorf("reason %q", d.Reason)
 	}
 	if d := decideSend(t, h, "worker one"); d == nil || d.PermissionDecision != decisionDeny || !absent {

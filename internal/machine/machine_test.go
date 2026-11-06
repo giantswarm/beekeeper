@@ -9,10 +9,10 @@ import (
 )
 
 func TestParseOOM(t *testing.T) {
-	journal := `2026-09-24T19:58:04+0300 demiurg kernel: node invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=200
-2026-09-24T19:58:04+0300 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1370955-031172.scope,task_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1370955-031172.scope,task=MainThread,pid=1376734,uid=1000
-2026-09-24T19:58:04+0300 demiurg kernel: Memory cgroup out of memory: Killed process 1376734 (MainThread) total-vm:4484504kB, anon-rss:962572kB, file-rss:87508kB, shmem-rss:0kB, UID:1000 pgtables:22248kB oom_score_adj:200
-2026-09-24T20:01:00+0300 demiurg kernel: Out of memory: Killed process 42 (jest worker) total-vm:1kB, anon-rss:2048kB, file-rss:0kB`
+	journal := `2026-09-24T19:58:04+0300 host-desk kernel: node invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=200
+2026-09-24T19:58:04+0300 host-desk kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1370955-031172.scope,task_memcg=/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-1370955-031172.scope,task=MainThread,pid=1376734,uid=1000
+2026-09-24T19:58:04+0300 host-desk kernel: Memory cgroup out of memory: Killed process 1376734 (MainThread) total-vm:4484504kB, anon-rss:962572kB, file-rss:87508kB, shmem-rss:0kB, UID:1000 pgtables:22248kB oom_score_adj:200
+2026-09-24T20:01:00+0300 host-desk kernel: Out of memory: Killed process 42 (jest worker) total-vm:1kB, anon-rss:2048kB, file-rss:0kB`
 	kills := ParseOOM(journal)
 	if len(kills) != 2 {
 		t.Fatalf("kills = %+v", kills)
@@ -101,7 +101,7 @@ func TestParseWrittenBack(t *testing.T) {
 
 func TestParseOOMAtASlotSlice(t *testing.T) {
 	const slice = "/user.slice/user-1000.slice/user@1000.service/memcap.slice/memcap-slot2.slice"
-	journal := `2026-10-04T16:00:00+0300 demiurg kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`
+	journal := `2026-10-04T16:00:00+0300 host-desk kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,oom_memcg=` + slice + `,task_memcg=` + slice + `/memcap-42-000001.scope,task=node,pid=43,uid=1000`
 	kills := ParseOOM(journal)
 	if len(kills) != 1 || kills[0].Memcg != slice || kills[0].RunMemcg() != slice+"/memcap-42-000001.scope" || kills[0].Task != "node" || kills[0].PID != 43 {
 		t.Errorf("kills = %+v", kills)

@@ -283,7 +283,7 @@ func desktopRecord(t *testing.T, dir, host, cli string, archived bool) {
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw := `{"sessionId":"` + host + `","cliSessionId":"` + cli + `","isArchived":` + map[bool]string{true: "true", false: "false"}[archived] + `}`
+	raw := `{"sessionId":"` + host + `","cliSessionId":"` + cli + `","isArchived":` + map[bool]string{true: probeHolds, false: "false"}[archived] + `}`
 	if err := os.WriteFile(filepath.Join(d, host+".json"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
