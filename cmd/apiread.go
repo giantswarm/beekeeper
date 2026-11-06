@@ -66,7 +66,7 @@ func (a *app) apiReadCmd() *cobra.Command {
 // Keep tokens out of argv and buffer output to redact across write boundaries.
 // Only fixed grpcurl options are accepted, with TLS verification enabled.
 func runReadRPC(ctx context.Context, endpoint, method, data, token string, out io.Writer) error {
-	c := exec.CommandContext(ctx, "grpcurl", "-expand-headers", "-H", "Authorization: Bearer ${BEEKEEPER_API_READ_TOKEN}", "-d", data, endpoint, method)
+	c := exec.CommandContext(ctx, "grpcurl", "-expand-headers", "-H", "Authorization: Bearer ${BEEKEEPER_API_READ_TOKEN}", "-d", data, endpoint, method) //nolint:gosec // fixed binary and options; the caller checks endpoint and method against the profile
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "BEEKEEPER_API_READ_TOKEN=") {
 			c.Env = append(c.Env, entry)

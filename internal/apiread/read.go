@@ -63,7 +63,7 @@ func Token(ctx context.Context, c kubernetes.Interface, namespace, account, audi
 		}
 		for _, rule := range rules {
 			for _, verb := range rule.Verbs {
-				if verb != "get" && verb != "list" && verb != "watch" && !(verb == "create" && selfReview(rule)) {
+				if verb != "get" && verb != "list" && verb != "watch" && (verb != "create" || !selfReview(rule)) {
 					return fmt.Errorf("service account has non-read permissions")
 				}
 			}
