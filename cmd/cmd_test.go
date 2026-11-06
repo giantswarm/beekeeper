@@ -204,7 +204,7 @@ func TestMinus(t *testing.T) {
 func TestUsageExitCode(t *testing.T) {
 	t.Setenv("BEEKEEPER_CONFIG", emptyTestConfig(t, t.TempDir()+"/config.yaml"))
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", "extra"}, {"--nope"}} {
+	for _, args := range [][]string{{"lease", "claim"}, {"frobnicate"}, {"hold", "frob"}, {"sessions", litExtra}, {"--nope"}} {
 		root := New()
 		root.SetArgs(args)
 		root.SetOut(io.Discard)
@@ -252,12 +252,12 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	a := &app{}
 	sessions := []*claude.Session{{PID: 7, ID: "s-1", Name: agentOne}}
 	hs := []lease.Holder{
-		{Env: "kind-1", Holder: "teemow@lab", Session: "s-1", Purpose: "e2e", Since: "2026-09-25T10:00:00Z"},
-		{Env: "kind-2", Holder: "teemow@lab", Purpose: "by hand", Since: "2026-09-25T11:00:00Z"},
+		{Env: "kind-1", Holder: "fixture-person@lab", Session: "s-1", Purpose: "e2e", Since: "2026-09-25T10:00:00Z"},
+		{Env: "kind-2", Holder: "fixture-person@lab", Purpose: "by hand", Since: "2026-09-25T11:00:00Z"},
 	}
 	h := guard.Hook{Self: "/bin/beekeeper", MaxLabs: func() int { return 2 }, Clusters: func() []string { return []string{"kind-1", "kind-2"} },
 		Leases: func() []lease.Holder { return a.namedHolders(sessions, hs) }}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": "kind create cluster --name third"}, "cwd": "/"})
+	raw, _ := json.Marshal(map[string]any{executionHookTool: tToolBash, executionHookInput: map[string]any{hookTypeCommand: "kind create cluster --name third"}, "cwd": "/"})
 	var o struct {
 		D struct {
 			Reason string `json:"permissionDecisionReason"`
@@ -266,7 +266,7 @@ func TestHookNamesLeaseHoldersAsLeaseList(t *testing.T) {
 	if err := json.Unmarshal(h.Decide(raw), &o); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"kind-1: Agent one since", "kind-2: teemow@lab since"} {
+	for _, want := range []string{"kind-1: Agent one since", "kind-2: fixture-person@lab since"} {
 		if !strings.Contains(o.D.Reason, want) {
 			t.Errorf("refusal lacks %q:\n%s", want, o.D.Reason)
 		}
@@ -307,6 +307,9 @@ func TestCheckExcept(t *testing.T) {
 func stubGitHub(t *testing.T, pullAt string, version string) *int {
 	t.Helper()
 	asked := new(int)
+	release := toolRelease
+	t.Cleanup(func() { toolRelease = release })
+	toolRelease = func(context.Context, string) (string, error) { return devctlTo, nil }
 	pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma := pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority
 	t.Cleanup(func() {
 		pullState, devctlVersion, devctlUpdate, judgeWait, baseChecks, devctlAcceptsRed, infraReds, toolCandidate, reviewGuard, mergeAuthority = pull, ver, upd, wait, bc, accepts, infra, cand, rg, ma
@@ -343,7 +346,7 @@ func TestHoldsLiftWhenTheirProbePasses(t *testing.T) {
 	holds := []state.Hold{
 		{Target: merge.AllMerges, Reason: "devctl window", LiftWhen: green},
 		{Target: "lane:gpu", Reason: "model load", LiftWhen: red},
-		{Target: "o/r", Reason: "no probe"},
+		{Target: repo, Reason: "no probe"},
 		{Target: "o/past", Reason: "past its time", LiftWhen: green, Until: now.Add(-time.Minute)},
 	}
 	passed := probeHoldLifts(context.Background(), holds, now)

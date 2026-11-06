@@ -50,20 +50,22 @@ type ghBodyState struct {
 	files       map[string]ghValue
 	taintedFile bool
 	depth       int
+	prEditOnly  bool
 }
 
 // ghBodyRefusal refuses a gh pr or issue create, edit or comment command
 // whose --body or --body-file names a bare #n or owner/repo#n without its
 // full GitHub URL, or whose body source cannot be statically inspected.
 func (h Hook) ghBodyRefusal(cmd, cwd string) string {
-	return h.scanGHBody(cmd, cwd, false, 0, nil, nil, nil)
+	return h.scanGHBody(cmd, cwd, false, 0, nil, nil, nil, false)
 }
 
-func (h Hook) scanGHBody(cmd, cwd string, forceUnknown bool, depth int, parentVars, parentFiles map[string]ghValue, extraDocs []heredoc) string {
+func (h Hook) scanGHBody(cmd, cwd string, forceUnknown bool, depth int, parentVars, parentFiles map[string]ghValue, extraDocs []heredoc, prEditOnly bool) string {
 	if depth > 4 {
 		return ""
 	}
 	st := h.newGHBodyState(cmd, cwd, forceUnknown, depth, parentVars, parentFiles, extraDocs)
+	st.prEditOnly = prEditOnly
 	for i := range st.segs {
 		if r := st.stepSegment(i, forceUnknown); r != "" {
 			return r
@@ -150,12 +152,12 @@ func (st *ghBodyState) scanNestedShell(segIdx int, words []ghToken, dir string, 
 		evalWords = append(evalWords, v)
 	}
 	if envCmd := envSplitCommand(evalWords); envCmd != "" {
-		if r := st.hook.scanGHBody(envCmd, dir, !known, st.depth+1, segVars, st.files, nil); r != "" {
+		if r := st.hook.scanGHBody(envCmd, dir, !known, st.depth+1, segVars, st.files, nil, st.prEditOnly); r != "" {
 			return r
 		}
 	}
 	if flockCmd := flockCommand(evalWords); flockCmd != "" {
-		if r := st.hook.scanGHBody(flockCmd, dir, !known, st.depth+1, segVars, st.files, nil); r != "" {
+		if r := st.hook.scanGHBody(flockCmd, dir, !known, st.depth+1, segVars, st.files, nil, st.prEditOnly); r != "" {
 			return r
 		}
 	}
@@ -165,7 +167,7 @@ func (st *ghBodyState) scanNestedShell(segIdx int, words []ghToken, dir string, 
 	}
 	base := path.Base(evalWords[k])
 	if base == evalCmd {
-		if r := st.hook.scanGHBody(strings.Join(evalWords[k+1:], " "), dir, !known, st.depth+1, segVars, st.files, nil); r != "" {
+		if r := st.hook.scanGHBody(strings.Join(evalWords[k+1:], " "), dir, !known, st.depth+1, segVars, st.files, nil, st.prEditOnly); r != "" {
 			return r
 		}
 	}
@@ -174,14 +176,14 @@ func (st *ghBodyState) scanNestedShell(segIdx int, words []ghToken, dir string, 
 	}
 	for _, arg := range evalWords[k+1:] {
 		if strings.ContainsAny(arg, " \t\n") {
-			if r := st.hook.scanGHBody(arg, dir, !known, st.depth+1, segVars, st.files, nil); r != "" {
+			if r := st.hook.scanGHBody(arg, dir, !known, st.depth+1, segVars, st.files, nil, st.prEditOnly); r != "" {
 				return r
 			}
 		}
 	}
 	sg := st.segs[segIdx]
 	for _, hd := range st.heredocsFor(sg.start, sg.end) {
-		if r := st.hook.scanGHBody(st.cmd[hd.start:hd.end], dir, !known, st.depth+1, segVars, st.files, nil); r != "" {
+		if r := st.hook.scanGHBody(st.cmd[hd.start:hd.end], dir, !known, st.depth+1, segVars, st.files, nil, st.prEditOnly); r != "" {
 			return r
 		}
 	}
@@ -347,7 +349,7 @@ func (st *ghBodyState) applyCommandFileWrites(segIdx int, words, redirs []ghToke
 		for _, a := range nonFlags(args) {
 			st.recordFileWrite(a, dir, known, "", false, false)
 		}
-	case name == "sed" || name == "perl":
+	case name == litSed || name == "perl":
 		for _, a := range args {
 			if strings.HasPrefix(a, "-i") || a == "--in-place" || strings.HasPrefix(a, "-pi") {
 				for _, f := range nonFlags(args) {
@@ -468,6 +470,12 @@ func (st *ghBodyState) checkGHSegment(segIdx int, words, redirs []ghToken, dir s
 		}
 	}
 
+	if st.prEditOnly {
+		if len(pos) >= 2 && pos[0] == "pr" && pos[1] == verbEdit {
+			return prEditRESTReason
+		}
+		return ""
+	}
 	if len(pos) < 2 || !ghBodyVerbs[pos[0]][pos[1]] {
 		return ""
 	}
@@ -1362,3 +1370,15 @@ func maskSubstitutions(sc shellScan) shellScan {
 	}
 	return shellScan{masked: string(b), plain: sc.plain, heredocs: sc.heredocs}
 }
+
+// ghPREditRefusal gives workers the App-compatible alternative before gh's
+// GraphQL edit queries reviewRequests or attempts organization team lookup.
+func (h Hook) ghPREditRefusal(cmd, cwd string) string {
+	return h.scanGHBody(cmd, cwd, false, 0, nil, nil, nil, true)
+}
+
+const prEditRESTReason = "Refused: gh pr edit can fail under the GitHub App token with Resource not accessible by integration (reviewRequests). " +
+	"Edit titles and bodies with REST: gh api -X PATCH repos/<owner>/<repo>/pulls/<number> -f title='<title>' -f body='<body>'. " +
+	"For a body file use -F body=@<file>; omit fields you are not changing. " +
+	"For team review requests, resolving org/team requires organization Members read permission. " +
+	"Until that permission is granted and accepted on the App installation, route the team request to the supervisor with beekeeper note add; the person must request the team review."

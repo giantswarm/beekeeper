@@ -8,8 +8,8 @@ The person's current priority is Codex on execution hosts first.
 
 ## Outcome and boundaries
 
-A worker on sputnik, spawner or spaceage can take the same board work as one on
-archon: use GitHub, follow the current rules, access approved MCP tools, test in
+A worker on host-a, host-c or host-b can take the same board work as one on
+host-main: use GitHub, follow the current rules, access approved MCP tools, test in
 an isolated repository worktree, publish, wait for CI, receive independent review
 and merge through the coordinator. Terminal executions leave only explicitly
 retained, accountable state. Adding a host is one coordinator command, apart
@@ -63,7 +63,7 @@ Baseline inspected: `d5b2236c` on `origin/main`.
   https://github.com/giantswarm/beekeeper/issues/2113 remains the cleanup umbrella.
 - https://github.com/giantswarm/beekeeper/issues/2115 remains the one-command
   installer owner. https://github.com/giantswarm/beekeeper/issues/1943 owns
-  harness coverage; https://github.com/teemow/desk/issues/115 owns fleet proof.
+  harness coverage; the fleet proof issue owns fleet proof.
 
 ## Delivery order
 
@@ -78,7 +78,7 @@ Baseline inspected: `d5b2236c` on `origin/main`.
    bounded retention. This can progress alongside policy work, with the
    unpublished-work preservation owner consulted before lifecycle changes.
 4. **Repeatable fleet setup and proof:** finish the existing installer issue,
-   then prove Codex across sputnik, spawner and spaceage with current policy and
+   then prove Codex across host-a, host-c and host-b with current policy and
    clean retirement. Only then finish the remaining supported harness proofs
    under the existing adapter umbrella. The original Claude acceptance remains.
 
@@ -179,7 +179,7 @@ setup and a rerun on a leased host. Reuse existing repository/worktree/MCP code.
 
 ### H. Fleet acceptance, then remaining harnesses
 
-https://github.com/teemow/desk/issues/115 and
+the fleet proof issue and
 https://github.com/giantswarm/beekeeper/issues/1943
 
 Reuse these owners after A, C, E and G. Run the acceptance matrix below; link
@@ -200,7 +200,7 @@ risk before desk review; each live proof names the installed release and host.
 | First usable Codex | One leased host | Guarded tools, valid policy after repeated starts, GitHub read/push/PR, same-thread CI park/wake, independent review, coordinator merge |
 | Current configuration | Each configured host | Changed coordinator rule/skill reaches next start; expected manifest matches; approved MCP tool works; unsupported required capability refuses admission |
 | Lifecycle and cleanup | Each configured host | Terminal success/stop/crash, dirty-work recovery, parked-worker retention, bounded revocation retry, before/after resource inventory and clean hosts check |
-| Fleet parity | sputnik, spawner, spaceage | Loop places real Codex board work on each host in a repository beyond desk/beekeeper, repository tests pass, PR reviewed/merged, resources retired |
+| Fleet parity | host-a, host-c, host-b | Loop places real Codex board work on each host in a repository beyond desk/beekeeper, repository tests pass, PR reviewed/merged, resources retired |
 | Epic completion | All configured supported harnesses | Claude acceptance retained, remaining harness proofs linked, installer fresh/rerun proof, workarounds removed only after replacement behavior is proven |
 
 An unreachable host is unknown, never a clean audit. A closed issue, successful

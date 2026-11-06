@@ -142,7 +142,7 @@ func TestDiscover(t *testing.T) {
 	if a.Harness != Harness || a.ID != busyID || a.HostID != HostPrefix+"1234abcd-0000-4000-8000-000000000000" || a.Name != "omp worker" {
 		t.Errorf("agent = harness %q id %q host %q name %q", a.Harness, a.ID, a.HostID, a.Name)
 	}
-	if a.State != StateBusy || a.Model != "local/qwen3-8b" || a.Cwd != repo {
+	if a.State != StateBusy || a.Model != "qwen3-8b" || a.Cwd != repo {
 		t.Errorf("agent state %q model %q cwd %q", a.State, a.Model, a.Cwd)
 	}
 	p := got[300]

@@ -2,7 +2,9 @@ package board
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -28,6 +30,10 @@ type tidyGH struct {
 	query  string
 	writes []string
 }
+
+const tidyWriteI2 = "I2=s9"
+
+const tidyArchiveI2 = "archive I2"
 
 func (f *tidyGH) run(_ context.Context, args ...string) ([]byte, error) {
 	checkSelectionSchema(f.t, args)
@@ -112,7 +118,7 @@ func TestTidyMovesClosedItemsToDoneAndArchivesThemAfterTheGrace(t *testing.T) {
 	if f.query != `is:closed team:"X"` {
 		t.Errorf("query = %q, want the team's closed items", f.query)
 	}
-	want := []string{"I1=s9", "I2=s9", "archive I2", "archive I3", "I7=s9", "archive I7"}
+	want := []string{"I1=s9", tidyWriteI2, tidyArchiveI2, "archive I3", "I7=s9", "archive I7"}
 	if !slices.Equal(f.writes, want) {
 		t.Errorf("writes = %v, want %v", f.writes, want)
 	}
@@ -150,7 +156,7 @@ func TestTidyNeverArchivesWithANegativeGraceAndWithoutTeamReadsEveryItem(t *test
 	if f.query != "is:closed" {
 		t.Errorf("query = %q", f.query)
 	}
-	if !slices.Equal(f.writes, []string{"I2=s9"}) {
+	if !slices.Equal(f.writes, []string{tidyWriteI2}) {
 		t.Errorf("writes = %v, want the move to Done alone", f.writes)
 	}
 }
@@ -163,7 +169,7 @@ func TestTidyArchivesAsTheyAreOnABoardWithoutDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if td.Done != "" || !slices.Equal(f.writes, []string{"archive I2"}) {
+	if td.Done != "" || !slices.Equal(f.writes, []string{tidyArchiveI2}) {
 		t.Errorf("tidy %+v, writes %v", td, f.writes)
 	}
 }
@@ -182,5 +188,109 @@ func TestTidyBoundsItsWrites(t *testing.T) {
 	// Two writes each: half are tidied, half left for the next tidy.
 	if len(f.writes) != tidyBatch || len(td.Items) != tidyBatch/2 || td.Left != tidyBatch/2 {
 		t.Errorf("writes %d, items %d, left %d", len(f.writes), len(td.Items), td.Left)
+	}
+}
+
+// statefulTidyGH keeps the remote state across clients. Failed mutations are
+// recorded as attempts but leave that state unchanged.
+type statefulTidyGH struct {
+	tidyGH
+	statuses []string
+	archived []bool
+	fail     string
+	err      error
+}
+
+func (f *statefulTidyGH) run(ctx context.Context, args ...string) ([]byte, error) {
+	if strings.Contains(args[3], "mutation") {
+		response, err := f.tidyGH.run(ctx, args...)
+		write := f.writes[len(f.writes)-1]
+		if write == f.fail {
+			return nil, f.err
+		}
+		for i := range f.statuses {
+			id := fmt.Sprintf("I%d", i+1)
+			switch write {
+			case id + "=s9":
+				f.statuses[i] = doneValue
+			case "archive " + id:
+				f.archived[i] = true
+			}
+		}
+		return response, err
+	}
+	var nodes []string
+	for i, status := range f.statuses {
+		nodes = append(nodes, closedNode(fmt.Sprintf("I%d", i+1), i+1, status, days(21), f.archived[i]))
+	}
+	f.pages = []string{tidyPage(false, nodes...)}
+	return f.tidyGH.run(ctx, args...)
+}
+
+func TestTidyPartialWritesAndRecovery(t *testing.T) {
+	for _, archiveFails := range []bool{true, false} {
+		name, failure := "status fails", tidyWriteI2
+		if archiveFails {
+			name, failure = "archive fails after status", tidyArchiveI2
+		}
+		t.Run(name, func(t *testing.T) {
+			writeErr := errors.New("injected write failure")
+			f := &statefulTidyGH{
+				tidyGH:   tidyGH{t: t, meta: tidyMetaJSON},
+				statuses: []string{inProgress, inProgress, inProgress},
+				archived: make([]bool, 3), fail: failure, err: writeErr,
+			}
+			item := func(n int, from string, done, archived bool) Tidied {
+				return Tidied{
+					Ref: fmt.Sprintf("o/r#%d", n), URL: fmt.Sprintf("https://github.com/o/r/issues/%d", n),
+					Item: fmt.Sprintf("I%d", n), Closed: days(21), From: from, Done: done, Archived: archived,
+				}
+			}
+			c := &Client{GH: f.run, Board: tidyBoard()}
+			got, err := c.Tidy(context.Background(), now, false)
+			if !errors.Is(err, writeErr) {
+				t.Fatalf("error = %v, want injected failure", err)
+			}
+			want := &Tidy{Done: doneValue, Items: []Tidied{item(1, inProgress, true, true)}}
+			writes := []string{"I1=s9", "archive I1", tidyWriteI2}
+			statuses := []string{doneValue, inProgress, inProgress}
+			if archiveFails {
+				want.Items = append(want.Items, item(2, inProgress, true, false))
+				writes = append(writes, tidyArchiveI2)
+				statuses[1] = doneValue
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("partial tidy = %+v, want %+v", got, want)
+			}
+			if !slices.Equal(f.writes, writes) {
+				t.Errorf("attempted writes = %v, want %v", f.writes, writes)
+			}
+			if !slices.Equal(f.statuses, statuses) || !slices.Equal(f.archived, []bool{true, false, false}) {
+				t.Fatalf("persisted state: statuses %v, archived %v", f.statuses, f.archived)
+			}
+
+			// A fresh client must read the successful effects from the fixture.
+			f.fail, f.writes = "", nil
+			c = &Client{GH: f.run, Board: tidyBoard()}
+			got, err = c.Tidy(context.Background(), now, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want.Items = []Tidied{item(2, inProgress, true, true), item(3, inProgress, true, true)}
+			writes = []string{tidyWriteI2, tidyArchiveI2, "I3=s9", "archive I3"}
+			if archiveFails {
+				want.Items[0] = item(2, doneValue, false, true)
+				writes = writes[1:]
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("recovery tidy = %+v, want %+v", got, want)
+			}
+			if !slices.Equal(f.writes, writes) {
+				t.Errorf("recovery writes = %v, want %v", f.writes, writes)
+			}
+			if !slices.Equal(f.statuses, []string{doneValue, doneValue, doneValue}) || !slices.Equal(f.archived, []bool{true, true, true}) {
+				t.Errorf("recovered state: statuses %v, archived %v", f.statuses, f.archived)
+			}
+		})
 	}
 }

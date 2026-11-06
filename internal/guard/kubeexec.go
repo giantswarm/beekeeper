@@ -3,6 +3,7 @@ package guard
 import (
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // Deliberately a small query language, not a SQL read/write classifier.
@@ -15,6 +16,9 @@ func (h Hook) readOnlyExec(args []string) string {
 	i := slices.Index(args, "--")
 	if i < 0 {
 		return "explicit -- command separator required"
+	}
+	if slices.ContainsFunc(args[:i], interactiveFlag) {
+		return "the exec must be non-interactive, without -i or -t"
 	}
 	cmd := args[i+1:]
 	// A direct binary only. No shell, stdin, scripts, startup files, extra
@@ -45,6 +49,17 @@ func (h Hook) readOnlyExec(args []string) string {
 		return "query is not in kube.readOnlyExecQueries"
 	}
 	return ""
+}
+
+// interactiveFlag: a kubectl flag that asks for stdin or a terminal, alone or
+// in a short cluster. A terminal gives psql a pager and a pager a shell escape.
+// A short flag's attached value can match too; that only refuses.
+func interactiveFlag(a string) bool {
+	name, _, _ := strings.Cut(a, "=")
+	if name == "--stdin" || name == "--tty" {
+		return true
+	}
+	return strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.ContainsAny(name, "it")
 }
 
 var execName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9-]*$`)

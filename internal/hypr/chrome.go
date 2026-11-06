@@ -152,11 +152,14 @@ func query(ctx context.Context, ctl Ctl, v any, args ...string) error {
 }
 
 // browser is Chrome's most recently focused browser window, the one the
-// extension opens a turn's tabs in; nil without one.
+// extension opens a turn's tabs in; nil without one. If none has focus
+// history, the first browser in the client list is the fallback.
 func (l layout) browser() *Window {
 	var b *Window
 	for i, w := range l.windows {
-		if isBrowser(w) && (b == nil || w.FocusHistoryID < b.FocusHistoryID) {
+		// Hyprland uses -1 for windows absent from its focus history.
+		if isBrowser(w) && (b == nil || (w.FocusHistoryID >= 0 &&
+			(b.FocusHistoryID < 0 || w.FocusHistoryID < b.FocusHistoryID))) {
 			b = &l.windows[i]
 		}
 	}
@@ -278,7 +281,7 @@ type Shown struct {
 	Where  string `json:"where"`
 	// Moved says the placement moved the window onto the output.
 	Moved bool `json:"moved"`
-	// Created says the placement created the output, which Restore removes.
+	// Created says the placement created the output.
 	Created bool `json:"created"`
 	// Left says why Restore left the window where it was: closed, or moved
 	// by the person to another workspace; "" when it put it back.
@@ -313,12 +316,14 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 	where := l.where(*w)
 	s := &Shown{Before: *w, Where: where}
 	fail := func(err error) (*Shown, error) {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
 		at := "shown on the person's screen"
 		if where != "" {
 			at = "on " + where
 		}
 		return nil, fmt.Errorf("the shared Chrome window is %s; readying the off-screen output %s failed: %w",
-			at, Output, joinErr(err, run(ctx, ctl, "eval", redirectOff), s.removeOutput(ctx, ctl)))
+			at, Output, joinErr(err, s.rollback(cleanup, ctl)))
 	}
 	if l.output() == nil {
 		if err := rules.run(ctx, ctl); err != nil {
@@ -346,6 +351,34 @@ func Show(ctx context.Context, ctl Ctl, hold time.Duration) (*Shown, error) {
 		s.Moved = true
 	}
 	return s, nil
+}
+
+// rollback reads the actual placement: a command can take effect even when
+// its response is lost. Only remove an output this failed preparation made,
+// after its windows are safely returned and no redirect can refill it.
+func (s *Shown) rollback(ctx context.Context, ctl Ctl) error {
+	offErr := run(ctx, ctl, "eval", redirectOff)
+	var windows []Window
+	if err := query(ctx, ctl, &windows, "clients"); err != nil {
+		return joinErr(offErr, err)
+	}
+	var moves []error
+	for _, w := range windows {
+		if w.Workspace.Name != Surface {
+			continue
+		}
+		if offErr != nil {
+			return offErr
+		}
+		if s.Before.Workspace.Name == Surface {
+			return fmt.Errorf("the output %s stays: the original workspace is still occupied", Output)
+		}
+		moves = append(moves, moveTo(w.Address, s.Before.Workspace).run(ctx, ctl))
+	}
+	if err := joinErr(moves...); err != nil {
+		return fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output)
+	}
+	return joinErr(offErr, s.removeOutput(ctx, ctl))
 }
 
 // Redirect turns the redirect of the windows Chrome opens on, until hold at
@@ -384,6 +417,14 @@ func (s *Shown) Turned(ctx context.Context, ctl Ctl) (string, error) {
 	if m := l.showing(s.Before.Workspace); m != nil {
 		return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, s.Before.Workspace.Name), nil
 	}
+	for _, w := range l.windows {
+		if w.Address == s.Before.Address {
+			if m := l.showing(w.Workspace); m != nil {
+				return fmt.Sprintf("%s shows workspace %s, the shared Chrome window's", m.Name, w.Workspace.Name), nil
+			}
+			break
+		}
+	}
 	return "", nil
 }
 
@@ -404,15 +445,19 @@ func checkOutput(before, after layout) error {
 
 // Restore ends the redirect, then puts the window back on its own
 // workspace, and every other window on the output's workspace with it (one
-// Chrome opened during the turn); then it removes the output, unless a
-// window failed to move off it, which removing the output would put on the
-// person's screen. One closed since, or moved by the person to a third
-// workspace, is left where it is, and Left says so.
+// Chrome opened during the turn). The empty output stays for later turns:
+// Hyprland creates and switches to a numbered fallback workspace when
+// removing a monitor, even when its workspace is empty. One closed since,
+// or moved by the person to a third workspace, is left where it is, and
+// Left says so.
 func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if s == nil {
 		return nil
 	}
 	errs := []error{run(ctx, ctl, "eval", redirectOff)}
+	if err := errs[0]; err != nil {
+		return fmt.Errorf("%w; the output %s stays until the Chrome redirect is stopped", err, Output)
+	}
 	s.redirecting = false
 	l, err := read(ctx, ctl)
 	if err != nil {
@@ -438,10 +483,7 @@ func (s *Shown) Restore(ctx context.Context, ctl Ctl) error {
 	if err := joinErr(moves...); err != nil {
 		return joinErr(append(errs, fmt.Errorf("%w; the output %s stays until its windows are moved off it", err, Output))...)
 	}
-	// The output is beekeeper's by its name: one a died turn left is
-	// removed too.
-	s.Created = l.output() != nil
-	return joinErr(append(errs, s.removeOutput(ctx, ctl))...)
+	return joinErr(errs...)
 }
 
 // removeOutput removes the output the placement created, once.
@@ -493,13 +535,13 @@ func redirectOn(hold time.Duration) string {
 const redirectOff = `if beekeeper_browse_timer then beekeeper_browse_timer:set_enabled(false) end; ` +
 	`for _, r in pairs(beekeeper_browse_windows or {}) do r:set_enabled(false) end;`
 
-// browserPattern matches the class of a browser window and nothing else.
+// browserPattern matches whole browser classes case-insensitively, like isBrowser.
 func browserPattern() string {
 	q := make([]string, len(browserClasses))
 	for i, c := range browserClasses {
 		q[i] = regexp.QuoteMeta(c)
 	}
-	return "^(" + strings.Join(q, "|") + ")$"
+	return "(?i)^(" + strings.Join(q, "|") + ")$"
 }
 
 // setting is runtime configuration in both of Hyprland's syntaxes: a Lua

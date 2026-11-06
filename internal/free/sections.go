@@ -41,14 +41,32 @@ func (r *Run) sessionDirs() {
 		r.say("  every dir kept: beekeeper's state cannot be read, so the sessions the roster and the roles count on are unknown")
 		return
 	}
-	dirs, _ := filepath.Glob(filepath.Join(r.Scratch, "*", "*"))
+	// OpenRoot deliberately permits Scratch itself to be an alias. Every
+	// subsequent scratch operation stays relative to this directory handle,
+	// even if a path component is replaced with a symlink during cleanup.
+	root, err := os.OpenRoot(r.Scratch)
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	dirs, _ := fs.Glob(root.FS(), "*/*")
 	n := 0
 	for _, d := range dirs {
-		sid, slug := filepath.Base(d), filepath.Base(filepath.Dir(d))
-		if !sessionID.MatchString(sid) || !isDir(filepath.Join(d, "scratchpad")) && !isDir(filepath.Join(d, "tasks")) {
+		rel := d
+		sid, slug := filepath.Base(rel), filepath.Base(filepath.Dir(rel))
+		// Lstat rejects aliases at both candidate levels, including aliases
+		// whose targets happen to be inside Scratch.
+		if !sessionID.MatchString(sid) || !rootDir(root, slug) || !rootDir(root, rel) {
 			continue
 		}
-		sc := r.scan(d)
+		if !rootDir(root, rel+"/scratchpad") && !rootDir(root, rel+"/tasks") {
+			continue
+		}
+		sc, err := r.scanFS(root.FS(), rel)
+		if err != nil {
+			continue
+		}
+		d = filepath.Join(r.Scratch, filepath.FromSlash(rel))
 		transcript := filepath.Join(r.Projects, slug, sid+".jsonl")
 		last := sc.newest
 		if fi, err := os.Stat(transcript); err == nil && fi.ModTime().After(last) {
@@ -79,7 +97,14 @@ func (r *Run) sessionDirs() {
 		if sc.kib >= minKiB {
 			r.act("remove %d MiB  %s  (CLI gone, idle %d h)", sc.kib/1024, r.name(slug, sid), int(idle.Hours()))
 		}
-		r.drop(SessionDirs, d, sc.kib)
+		if r.Apply {
+			if err := root.RemoveAll(rel); err != nil {
+				r.say("  failed: %v", err)
+				continue
+			}
+			r.freedKiB += sc.kib
+		}
+		r.tally(SessionDirs, sc.kib)
 	}
 	r.total(SessionDirs, n)
 }
@@ -285,13 +310,12 @@ func (r *Run) orphans() {
 		if !r.Table.Orphaned(p) || p.Elapsed(r.Now) < r.Orphan || r.uid(p.PID) != r.UID {
 			continue
 		}
-		c := p.Cmdline()
-		if !strings.Contains(c, "processChild.js") && !strings.Contains(c, "jest-worker") && !strings.Contains(c, "claude --output-format stream-json") {
+		if !orphanWorker(p) {
 			continue
 		}
 		kib := r.anonKiB(p.PID)
 		r.tally(Orphans, kib)
-		r.act("kill pid %d (%d MiB, up %s): %s", p.PID, kib/1024, uptime(p.Elapsed(r.Now)), truncate(c, 90))
+		r.act("kill pid %d (%d MiB, up %s): %s", p.PID, kib/1024, uptime(p.Elapsed(r.Now)), truncateProcessCommand(processCommand(p), 90))
 		pids = append(pids, p.PID)
 		if r.Apply {
 			r.freedKiB += kib
@@ -303,6 +327,51 @@ func (r *Run) orphans() {
 	}
 	if r.Apply {
 		r.kill(pids)
+	}
+}
+
+// orphanWorker matches executable arguments, never text embedded in a prompt or
+// application argument. For Node, only the entry script identifies the worker.
+// Unknown runtime options fail closed because they may consume the next value.
+func orphanWorker(p *proc.Process) bool {
+	if len(p.Args) == 0 {
+		return false
+	}
+	switch filepath.Base(p.Args[0]) {
+	case "claude":
+		return len(p.Args) >= 3 && p.Args[1] == "--output-format" && p.Args[2] == "stream-json"
+	case "node", "nodejs":
+		args := p.Args[1:]
+		for len(args) > 0 {
+			arg := args[0]
+			args = args[1:]
+			if arg == "--" {
+				break
+			}
+			if !strings.HasPrefix(arg, "-") {
+				return workerScript(arg)
+			}
+			switch {
+			case arg == "--expose-gc", arg == "--no-warnings",
+				arg == "--enable-source-maps", arg == "--experimental-vm-modules":
+			case strings.HasPrefix(arg, "--max-old-space-size="),
+				strings.HasPrefix(arg, "--max_old_space_size="):
+			default:
+				return false
+			}
+		}
+		return len(args) > 0 && workerScript(args[0])
+	default:
+		return false
+	}
+}
+
+func workerScript(arg string) bool {
+	switch filepath.Base(arg) {
+	case "processChild.js", "jest-worker":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -340,7 +409,7 @@ func (r *Run) swap() {
 func (r *Run) inUse(d string) bool {
 	if r.held == nil {
 		r.held = []string{}
-		tmp, scratch := filepath.Clean(r.TmpDir), filepath.Clean(r.Scratch)
+		tmp, scratch := resolvedDir(r.TmpDir), resolvedDir(r.Scratch)
 		for pid := range r.Table.ByPID {
 			for _, p := range r.holds(pid) {
 				if within(p, tmp) || within(p, scratch) {
@@ -349,7 +418,17 @@ func (r *Run) inUse(d string) bool {
 			}
 		}
 	}
+	d = resolvedDir(d)
 	return slices.ContainsFunc(r.held, func(p string) bool { return within(p, d) })
+}
+
+// resolvedDir gives existing cleanup roots and candidates the same spelling as
+// /proc paths. Keep held paths untouched: deleted open files need not exist.
+func resolvedDir(d string) string {
+	if resolved, err := filepath.EvalSymlinks(d); err == nil {
+		return resolved
+	}
+	return filepath.Clean(d)
 }
 
 // within reports whether path p is d or lies under it.
@@ -357,19 +436,33 @@ func within(p, d string) bool { return p == d || strings.HasPrefix(p, d+"/") }
 
 type dirScan struct {
 	kib     int
-	newest  time.Time // newest file mtime; zero when d holds no file
+	newest  time.Time // newest regular-file or directory mtime
 	foreign bool      // something inside belongs to another user
 }
 
 func (r *Run) scan(d string) dirScan {
+	s, _ := r.scanWalk(func(fn fs.WalkDirFunc) error { return filepath.WalkDir(d, fn) })
+	return s
+}
+
+// scanFS reads metadata through the same boundary used for deletion. An
+// incomplete scan must not make a session appear stale or safe to remove.
+func (r *Run) scanFS(tree fs.FS, d string) (dirScan, error) {
+	return r.scanWalk(func(fn fs.WalkDirFunc) error { return fs.WalkDir(tree, d, fn) })
+}
+
+func (r *Run) scanWalk(walk func(fs.WalkDirFunc) error) (dirScan, error) {
 	var s dirScan
 	var bytes int64
-	_ = filepath.WalkDir(d, func(_ string, e fs.DirEntry, err error) error {
+	var scanErr error
+	err := walk(func(_ string, e fs.DirEntry, err error) error {
 		if err != nil {
+			scanErr = err
 			return nil
 		}
 		fi, err := e.Info()
 		if err != nil {
+			scanErr = err
 			return nil
 		}
 		if fileUID(fi) != r.UID {
@@ -377,14 +470,22 @@ func (r *Run) scan(d string) dirScan {
 		}
 		if fi.Mode().IsRegular() {
 			bytes += fi.Size()
-			if fi.ModTime().After(s.newest) {
-				s.newest = fi.ModTime()
-			}
+		}
+		if (fi.Mode().IsRegular() || fi.IsDir()) && fi.ModTime().After(s.newest) {
+			s.newest = fi.ModTime()
 		}
 		return nil
 	})
 	s.kib = int(bytes / 1024)
-	return s
+	if err != nil {
+		return s, err
+	}
+	return s, scanErr
+}
+
+func rootDir(root *os.Root, name string) bool {
+	fi, err := root.Lstat(name)
+	return err == nil && fi.IsDir()
 }
 
 // size renders KiB as MiB, or KiB below one MiB.
@@ -393,9 +494,4 @@ func size(kib int) string {
 		return fmt.Sprintf("%d KiB", kib)
 	}
 	return fmt.Sprintf("%d MiB", kib/1024)
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
