@@ -159,7 +159,7 @@ func TestWatchUnknownReleaseNamesRecoveryAndRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	lane := config.Lane{Name: "app", Installation: "installation", Repositories: []string{scratchRepo}}
+	lane := config.Lane{Name: "app", Installation: installCmd, Repositories: []string{scratchRepo}}
 	cfg := &config.Config{Lanes: []config.Lane{lane}, Merge: config.Merge{Settle: config.Duration{Duration: time.Hour}, SettleTimeout: config.Duration{Duration: time.Minute}}}
 	err = store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Merges = []state.Merge{{Repo: scratchRepo, PR: 7, Lane: lane.Name, Phase: state.Settling, Finished: now.Add(-2 * time.Minute)}}
