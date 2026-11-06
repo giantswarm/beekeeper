@@ -665,7 +665,7 @@ func TestCanaryCannotModifyTheVerifiedCandidate(t *testing.T) {
 	exe, content := installed(t)
 	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
 	ctx := WithOptions(context.Background(), Options{Canary: func(_ context.Context, path, _ string) error {
-		return os.WriteFile(path, []byte("modified after verification"), 0o700)
+		return os.WriteFile(path, []byte("modified after verification"), 0o700) //nolint:gosec // an executable fixture
 	}})
 	if _, err := InstallVersion(ctx, io.Discard, latestV); err == nil {
 		t.Fatal("installed modified candidate")

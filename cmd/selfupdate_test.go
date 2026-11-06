@@ -17,7 +17,12 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
-const selfUpdateCheckFlag = "--check"
+const (
+	selfUpdateCheckFlag    = "--check"
+	selfUpdateRollbackFlag = "--rollback"
+	selfUpdateReasonFlag   = "--rollback-reason"
+	selfUpdateReason       = "candidate unhealthy"
+)
 
 // An update names the beekeeper processes it leaves on the old binary, pid
 // and command each, every watch with the command that re-arms it, and says
@@ -147,11 +152,11 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 
 func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 	for _, args := range [][]string{
-		{"--rollback"},
-		{"--rollback-reason", "failed"},
-		{"--check", "--complete-probation"},
-		{"--complete-probation", "--rollback", "--rollback-reason", "failed"},
-		{"--check", "--rollback", "--rollback-reason", "failed"},
+		{selfUpdateRollbackFlag},
+		{selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, "--complete-probation"},
+		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := New()

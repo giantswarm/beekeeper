@@ -102,7 +102,7 @@ func digest(path string) (string, error) {
 	if err := regularOrMissing(path); err != nil {
 		return "", err
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +139,7 @@ func (i *installation) read() (*Journal, error) {
 	if err := regularOrMissing(p); err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(p)
+	raw, err := os.ReadFile(filepath.Clean(p))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -174,7 +174,7 @@ var journalRename = os.Rename
 var journalWrite = func(f *os.File, raw []byte) error { _, err := f.Write(raw); return err }
 
 func syncDir(path string) error {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func (i *installation) retain(path string, b Binary) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return err
 	}
@@ -342,7 +342,7 @@ func (i *installation) replace(staged, version string) error {
 	if err := i.write(j); err != nil {
 		return err
 	}
-	f, err := os.Open(staged)
+	f, err := os.Open(filepath.Clean(staged))
 	if err != nil {
 		return err
 	}
@@ -442,7 +442,7 @@ func Rollback(ctx context.Context, path, reason string, guard func(string, func(
 		if err := i.write(j); err != nil {
 			return err
 		}
-		raw, err := os.ReadFile(p)
+		raw, err := os.ReadFile(filepath.Clean(p))
 		if err != nil {
 			return err
 		}

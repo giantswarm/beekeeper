@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,7 +16,7 @@ func recoveryFixture(t *testing.T) (*installation, string) {
 	t.Helper()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "beekeeper")
-	if err := os.WriteFile(target, []byte("bootstrap"), 0o750); err != nil {
+	if err := os.WriteFile(target, []byte("bootstrap"), 0o750); err != nil { //nolint:gosec // an executable fixture
 		t.Fatal(err)
 	}
 	i, err := openInstallation(context.Background(), target)
@@ -37,7 +38,7 @@ func stageRecovery(t *testing.T, dir, content string) string {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(f.Name(), 0o750); err != nil {
+	if err := os.Chmod(f.Name(), 0o750); err != nil { //nolint:gosec // an executable fixture
 		t.Fatal(err)
 	}
 	return f.Name()
@@ -52,7 +53,7 @@ func readRecovery(t *testing.T, i *installation) *Journal {
 }
 func assertRecoveryBytes(t *testing.T, path, want string) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil || string(raw) != want {
 		t.Fatalf("bytes %q, error %v; want %q", raw, err, want)
 	}
@@ -75,14 +76,14 @@ func TestJournalBootstrapPromotionAndRollback(t *testing.T) {
 	i, dir := recoveryFixture(t)
 	passedRecovery(t, i, dir)
 	j := readRecovery(t, i)
-	if j.Previous != nil || j.Displaced.Version == "" || j.Displaced.Digest == "" || j.InstalledAt.IsZero() || j.Probation != "passed" {
+	if j.Previous != nil || j.Displaced.Version == "" || j.Displaced.Digest == "" || j.InstalledAt.IsZero() || j.Probation != probationPassed {
 		t.Fatalf("bootstrap %+v", j)
 	}
 	if err := i.replace(stageRecovery(t, dir, "bad"), "v2.0.0"); err != nil {
 		t.Fatal(err)
 	}
 	j = readRecovery(t, i)
-	if j.Previous == nil || j.Previous.Version != "v1.0.0" || j.Probation != "pending" {
+	if j.Previous == nil || j.Previous.Version != "v1.0.0" || j.Probation != probationPending {
 		t.Fatalf("journal %+v", j)
 	}
 	if err := i.replace(stageRecovery(t, dir, "third"), "v3.0.0"); err == nil {
@@ -102,7 +103,7 @@ func TestJournalBootstrapPromotionAndRollback(t *testing.T) {
 	}
 	assertRecoveryBytes(t, i.target, "good")
 	j = readRecovery(t, i)
-	if j.Probation != "rolled-back" || len(j.Quarantine) != 1 {
+	if j.Probation != probationRolledBack || len(j.Quarantine) != 1 {
 		t.Fatalf("journal %+v", j)
 	}
 }
@@ -117,7 +118,7 @@ func TestRecoveryRejectsModifiedBackupAndStateGuardFailure(t *testing.T) {
 			j := readRecovery(t, i)
 			if tamper {
 				p, _ := i.artifact(*j.Previous)
-				if err := os.WriteFile(p, []byte("tampered"), 0o700); err != nil {
+				if err := os.WriteFile(p, []byte("tampered"), 0o700); err != nil { //nolint:gosec // an executable fixture
 					t.Fatal(err)
 				}
 			}
@@ -133,7 +134,7 @@ func TestRecoveryRejectsModifiedBackupAndStateGuardFailure(t *testing.T) {
 func TestJournalCrashBoundaries(t *testing.T) {
 	// Fail each durable rename: retain, prepare, replace, and record probation.
 	for boundary := 1; boundary <= 4; boundary++ {
-		t.Run(string(rune('0'+boundary)), func(t *testing.T) {
+		t.Run(strconv.Itoa(boundary), func(t *testing.T) {
 			i, dir := recoveryFixture(t)
 			staged := stageRecovery(t, dir, "candidate")
 			original := journalRename
@@ -158,7 +159,7 @@ func TestJournalCrashBoundaries(t *testing.T) {
 			}
 			if boundary == 4 {
 				assertRecoveryBytes(t, i.target, "candidate")
-				if j.Probation != "pending" {
+				if j.Probation != probationPending {
 					t.Fatal(j.Probation)
 				}
 			} else {
@@ -172,7 +173,7 @@ func TestJournalCrashBoundaries(t *testing.T) {
 }
 func TestRollbackCrashBoundaries(t *testing.T) {
 	for boundary := 1; boundary <= 4; boundary++ {
-		t.Run(string(rune('0'+boundary)), func(t *testing.T) {
+		t.Run(strconv.Itoa(boundary), func(t *testing.T) {
 			i, dir := recoveryFixture(t)
 			passedRecovery(t, i, dir)
 			if err := i.replace(stageRecovery(t, dir, "bad"), "v2.0.0"); err != nil {
@@ -317,7 +318,7 @@ func TestJournalGarbageCollectionPreservesActiveRecoveryTarget(t *testing.T) {
 }
 func TestDiskFullAtEveryJournalWrite(t *testing.T) {
 	for boundary := 1; boundary <= 3; boundary++ {
-		t.Run(string(rune('0'+boundary)), func(t *testing.T) {
+		t.Run(strconv.Itoa(boundary), func(t *testing.T) {
 			i, dir := recoveryFixture(t)
 			staged := stageRecovery(t, dir, "new")
 			original := journalWrite
@@ -340,7 +341,7 @@ func TestDiskFullAtEveryJournalWrite(t *testing.T) {
 			}
 			if boundary == 3 {
 				assertRecoveryBytes(t, i.target, "new")
-				if j.Probation != "pending" {
+				if j.Probation != probationPending {
 					t.Fatal(j.Probation)
 				}
 			} else {
@@ -378,7 +379,7 @@ func TestJournalRecoveryRejectsUnexpectedInstalledBytes(t *testing.T) {
 	if err := i.write(j); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(i.target, []byte("unexpected"), 0o750); err != nil {
+	if err := os.WriteFile(i.target, []byte("unexpected"), 0o750); err != nil { //nolint:gosec // an executable fixture
 		t.Fatal(err)
 	}
 	if err := i.recover(j); err == nil {

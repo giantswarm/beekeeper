@@ -7,22 +7,28 @@ import (
 	"time"
 )
 
+const (
+	recoveryRelease  = "v1.0.0"
+	recoveryDevBuild = "dev"
+	recoveryNewer    = "v2.0.0"
+)
+
 func TestRecoverVersionFencesLiveStateAndPreservesEveryByte(t *testing.T) {
 	for _, tc := range []struct {
 		name, writer, target string
 		allowed              bool
 	}{
-		{"upgrade", "v1.0.0", "v2.0.0", true},
-		{"same release", "v2.0.0", "v2.0.0", true},
-		{"downgrade after candidate writes", "v2.0.0", "v1.0.0", false},
-		{"downgrade before candidate writes", "v1.0.0", "v1.0.0", true},
-		{"unknown target", "v1.0.0", "dev", false},
-		{"prerelease target", "v1.0.0", "v2.0.0-rc.1", false},
-		{"unknown writer", "dev", "v1.0.0", false},
+		{"upgrade", recoveryRelease, recoveryNewer, true},
+		{"same release", recoveryNewer, recoveryNewer, true},
+		{"downgrade after candidate writes", recoveryNewer, recoveryRelease, false},
+		{"downgrade before candidate writes", recoveryRelease, recoveryRelease, true},
+		{"unknown target", recoveryRelease, recoveryDevBuild, false},
+		{"prerelease target", recoveryRelease, "v2.0.0-rc.1", false},
+		{"unknown writer", recoveryDevBuild, recoveryRelease, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			s, err := OpenVersion(dir, "v2.0.0")
+			s, err := OpenVersion(dir, recoveryNewer)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -62,16 +68,16 @@ func TestRecoverVersionFencesLiveStateAndPreservesEveryByte(t *testing.T) {
 
 func TestRecoveredWriterCeilingSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
-	old, _ := OpenVersion(dir, "v1.0.0")
-	candidate, _ := OpenVersion(dir, "v2.0.0")
+	old, _ := OpenVersion(dir, recoveryRelease)
+	candidate, _ := OpenVersion(dir, recoveryNewer)
 	noop := func(*State) ([]Event, error) { return nil, nil }
 	if err := old.Update(noop); err != nil {
 		t.Fatal(err)
 	}
-	if err := candidate.RecoverVersion("v1.0.0", func() error { return nil }); err != nil {
+	if err := candidate.RecoverVersion(recoveryRelease, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []string{"v2.0.0", "v2.0.0-rc.1", "dev"} {
+	for _, v := range []string{recoveryNewer, "v2.0.0-rc.1", recoveryDevBuild} {
 		restarted, _ := OpenVersion(dir, v)
 		if err := restarted.Update(noop); err == nil {
 			t.Fatalf("%s advanced recovered state", v)
@@ -83,7 +89,7 @@ func TestRecoveredWriterCeilingSurvivesRestart(t *testing.T) {
 	if err := candidate.Record(Event{Verb: "after-recovery"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := candidate.ResumeRecoveredWrites("v2.0.0"); err != nil {
+	if err := candidate.ResumeRecoveredWrites(recoveryNewer); err != nil {
 		t.Fatal(err)
 	}
 	if err := candidate.Update(noop); err != nil {
@@ -103,14 +109,14 @@ func TestRecoveryRefusesExistingUnversionedState(t *testing.T) {
 	if err := os.WriteFile(s.path("state.json"), []byte(`{"notes":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecoverVersion("v1.0.0", func() error { t.Fatal("recovered unknown state"); return nil }); err == nil {
+	if err := s.RecoverVersion(recoveryRelease, func() error { t.Fatal("recovered unknown state"); return nil }); err == nil {
 		t.Fatal("accepted unversioned state")
 	}
 }
 func TestRecoveryWithNoStateFile(t *testing.T) {
 	s, _ := Open(t.TempDir())
 	called := false
-	if err := s.RecoverVersion("v1.0.0", func() error { called = true; return nil }); err != nil || !called {
+	if err := s.RecoverVersion(recoveryRelease, func() error { called = true; return nil }); err != nil || !called {
 		t.Fatalf("called %v error %v", called, err)
 	}
 	if _, err := os.Stat(s.path("state.json")); !errors.Is(err, os.ErrNotExist) {
