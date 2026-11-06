@@ -4,10 +4,20 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+const workerRulesPath = "plugin/skills/worker-rules/SKILL.md"
+
+// Pass fixture data through stdin to a fixed command, without shell evaluation.
+func checkReleaseSubject(title string, paths ...string) ([]byte, error) {
+	command := exec.Command("bash", "-c", `mapfile -t args; exec bash ../.github/check-embedded-skills-release.sh "${args[@]}"`)
+	command.Stdin = strings.NewReader(strings.Join(append([]string{title}, paths...), "\n") + "\n")
+	return command.CombinedOutput()
+}
 
 func TestEmbeddedSkillsReleaseConvention(t *testing.T) {
 	for _, tc := range []struct {
@@ -16,19 +26,18 @@ func TestEmbeddedSkillsReleaseConvention(t *testing.T) {
 		paths []string
 		want  bool
 	}{
-		{"rules docs rejected", "docs(rules): update rules", []string{"plugin/skills/worker-rules/SKILL.md"}, false},
+		{"rules docs rejected", "docs(rules): update rules", []string{workerRulesPath}, false},
 		{"topic docs rejected", "docs: update topic", []string{"plugin/skills/merge/SKILL.md"}, false},
 		{"nested skill file rejected", "test: update fixture", []string{"plugin/skills/example/references/example.md"}, false},
-		{"rules fix releases", "fix(rules): update rules", []string{"plugin/skills/worker-rules/SKILL.md"}, true},
+		{"rules fix releases", "fix(rules): update rules", []string{workerRulesPath}, true},
 		{"skill feature releases", "feat(skills): add behavior", []string{"plugin/skills/new/SKILL.md"}, true},
-		{"breaking rules fix releases", "fix(rules)!: change contract", []string{"plugin/skills/worker-rules/SKILL.md"}, true},
+		{"breaking rules fix releases", "fix(rules)!: change contract", []string{workerRulesPath}, true},
 		{"ordinary docs allowed", "docs: update readme", []string{"README.md", "docs/usage.md"}, true},
-		{"mixed docs rejected", "docs: update guidance", []string{"README.md", "plugin/skills/worker-rules/SKILL.md"}, false},
+		{"mixed docs rejected", "docs: update guidance", []string{"README.md", workerRulesPath}, false},
 		{"no changed files", "docs: update readme", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"../.github/check-embedded-skills-release.sh", tc.title}, tc.paths...)
-			output, err := exec.Command("bash", args...).CombinedOutput()
+			output, err := checkReleaseSubject(tc.title, tc.paths...)
 			if (err == nil) != tc.want {
 				t.Fatalf("allowed = %v, want %v: %s", err == nil, tc.want, output)
 			}
@@ -65,7 +74,7 @@ func TestEmbeddedSkillsReleaseSections(t *testing.T) {
 					break
 				}
 			}
-			output, err := exec.Command("bash", "../.github/check-embedded-skills-release.sh", subject, "plugin/skills/worker-rules/SKILL.md").CombinedOutput()
+			output, err := checkReleaseSubject(subject, workerRulesPath)
 			if (err == nil) != releases {
 				t.Fatalf("convention allows = %v, release section = %v: %s", err == nil, releases, output)
 			}
