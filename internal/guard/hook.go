@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	worktreefs "github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // start is where a command starts: start of line (indented or not), after
@@ -135,8 +136,7 @@ type Hook struct {
 	SecretFiles []string
 	// Transcripts protects private conversation stores and explicit session grants.
 	Transcripts TranscriptAccess
-	// ConfigErr is why the configuration did not load: every Bash call is
-	// refused with it, since the guards it configures cannot run.
+	// ConfigErr enables restricted recovery commands when configuration cannot load.
 	ConfigErr error
 	// Shell is the shell a rewritten command runs in (sh -c semantics).
 	Shell string
@@ -152,6 +152,8 @@ type Hook struct {
 	Production string
 	// ProtectedContexts lists additional contexts protected by the write gate.
 	ProtectedContexts []string
+	// ReadOnlyExecQueries is the exact restricted SELECT allowlist for psql exec.
+	ReadOnlyExecQueries []string
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string
@@ -256,6 +258,8 @@ type Hook struct {
 	// main working tree of a checkout that sits directly in one (folders.go);
 	// empty, the guard is off.
 	PersonFolders []string
+	WorktreePlace string
+
 	// LiveDirs lists the folders live sessions and processes work in,
 	// read only for a command that moves or removes an existing directory
 	// (liveworktrees.go); nil guards no worktree.
@@ -390,6 +394,14 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	if ev.ToolName == bashTool && h.WorktreePlace != "" {
+		cmd, _ := ev.ToolInput[commandKey].(string)
+		for _, p := range walkTargetsMode(cmd, ev.CWD, 0, false, true) {
+			if worktreefs.NestedSessionPath(p) {
+				return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: nested .claude/worktrees copies the checkout. Create worktrees under " + h.WorktreePlace + "/<repo>/<branch>."})
+			}
+		}
+	}
 	h.beginCheck("labConfigRefusal")
 	if r := h.labConfigRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -413,13 +425,18 @@ func (h Hook) decide(ev event) []byte {
 		return nil
 	}
 	cmd, _ := ev.ToolInput["command"].(string)
+	if h.ConfigErr != nil {
+		decision := decisionDeny
+		if recoveryCommand(cmd) {
+			decision = decisionAllow
+		}
+		return answer(hookOutput{PermissionDecision: decision, Reason: h.recoveryReason()})
+	}
+
 	if strings.TrimSpace(cmd) == "" || trivial.MatchString(cmd) {
 		return nil
 	}
-	if h.ConfigErr != nil {
-		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: beekeeper's configuration does not load, so its guards cannot run: " +
-			h.ConfigErr.Error() + ". Fix the file (the Edit tool still works), then rerun."})
-	}
+
 	cwd := ev.CWD
 	if cwd == "" {
 		cwd, _ = os.Getwd()

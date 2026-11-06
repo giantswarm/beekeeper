@@ -185,7 +185,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		endpoint := host.Endpoint
 		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
-		if _, err := recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
+		if _, err := a.recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
 		}
 		ref := r.Ref

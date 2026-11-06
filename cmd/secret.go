@@ -103,6 +103,14 @@ creation rule's recipient and where its identity is, no value read.`,
 					// A dry check creates no state directory or audit files.
 					load = a.loadConfig
 				}
+				if scratch := os.Getenv(scratchBrokerEnv); scratch != "" {
+					if err := a.loadConfig(); err != nil {
+						return err
+					}
+					if scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+						return refused("a scratch secret call must use its scratch configuration")
+					}
+				}
 				if err := load(); err != nil {
 					return err
 				}
@@ -168,11 +176,15 @@ anything is not equal.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
+			scratch := os.Getenv(scratchBrokerEnv)
+			if scratch != "" && scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+				return refused("a scratch secret call must use its scratch configuration")
+			}
 			beforeConsumer := args
 			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
 				beforeConsumer = args[:dash]
 			}
-			if inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
+			if scratch != "" || inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))

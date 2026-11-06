@@ -368,8 +368,14 @@ type watcher struct {
 	dirty    bool
 	// feedID is the id of the last central feed event the watch printed,
 	// kept in its mark.
-	feedID   string
-	lastPoll time.Time
+	feedID          string
+	lastPoll        time.Time
+	suspendEntry    time.Time
+	suspendChecked  time.Time
+	suspendThrough  time.Time
+	suspendRecovery map[string]suspendWake
+	suspendResults  chan map[string]suspendWake
+	suspendDeliver  func(context.Context, suspendWake) error
 	// Hung checks get a fresh grace period on startup and after a suspend
 	// (or a long gap in observations). These times stay in memory so their
 	// monotonic readings can exclude time spent asleep.
@@ -1195,6 +1201,9 @@ func (w *watcher) emitNow(key string, format string, args ...any) {
 // is strained. It keeps its own time: it runs in a loop of its own.
 func (w *watcher) sample(ctx context.Context) {
 	now := time.Now()
+	if st, err := w.store.Peek(); err == nil {
+		w.sayAppDrifts(w.appDrifts(ctx, st.Apps))
+	}
 	th := w.cfg.Watch
 
 	// GTT is RAM the iGPU pins outside every cgroup: above its threshold
@@ -1417,6 +1426,7 @@ func (w *watcher) pollSessions(ctx context.Context, since time.Time, t *proc.Tab
 		owners[s.PID] = s.Name
 	}
 	w.owners.Store(&owners)
+	w.suspends(ctx, since, sessions)
 	w.kills(ctx, since, sessions, t)
 	w.tendReporter(ctx, sessions)
 	w.tendFeedback(ctx)
@@ -2489,10 +2499,24 @@ func reportLines(r state.WorkerReport) []string {
 	return lines
 }
 
-// parkOnPerson reports whether park p waits on a person's word: a note, or
-// waits that name a person's answer, review or reply, or person; waits that
-// name only the supervisor or the guide wait on an operational handoff,
-// including a gate or install chain. A park on a lease never waits on a person.
+// watchParkOnPerson reports whether p names a note or an issue or pull request
+// waiting on a person's word. Operational targets and untargeted waits do
+// not become person waits merely because their descriptions mention a person.
+func watchParkOnPerson(p *state.Park, person string) bool {
+	if _, note := parkNote(p.On); note {
+		return parkOnPerson(p, person)
+	}
+	if _, _, note := parkCentralNote(p.On); note {
+		return parkOnPerson(p, person)
+	}
+	if _, ref := parseRef(p.On); !ref {
+		return false
+	}
+	return parkOnPerson(p, person)
+}
+
+// parkOnPerson conservatively protects human waits from automatic wakes,
+// including waits without a structured target.
 func parkOnPerson(p *state.Park, person string) bool {
 	if p.Checks {
 		return false
@@ -2533,7 +2557,7 @@ func parkedNews(st *state.State, person string, now time.Time) ([]string, []stat
 			evs = append(evs, event(watchParty, "agents.parked-on-lease", "%s: %s", ag.Name, res))
 			continue
 		}
-		if !parkOnPerson(p, person) {
+		if !watchParkOnPerson(p, person) {
 			continue
 		}
 		p.Told = now.UTC()

@@ -22,11 +22,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/envtestassets"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/knownhosts"
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/machine"
+	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -306,6 +308,13 @@ machine's files stay untouched.`,
 					return nil
 				}
 			}
+			assets, err := envtestassets.Ensure(cmd.Context(), a.cfg.StateDir)
+			if err != nil {
+				return fmt.Errorf("prepare envtest assets (requires Go and network access on first run; alternatively set KUBEBUILDER_ASSETS): %w", err)
+			}
+			if err := os.Setenv(envtestassets.Env, assets); err != nil {
+				return err
+			}
 			a.parseableKnownHosts()
 			if rc := guard.Run(o, args); rc != 0 {
 				return &exitError{code: rc}
@@ -408,6 +417,7 @@ that does not load keeps the guards on.`,
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() },
 	}
+	c.AddCommand(a.relayHookCmd())
 	c.AddCommand(&cobra.Command{
 		Use:   "check-scope",
 		Short: "Verify a proof event has a session ID and is in the hook's scope",
@@ -461,8 +471,10 @@ raised to 10 minutes; a background run gets a 60-minute wait instead. A
 command that would start a kind cluster past maxKindClusters is refused with
 the running labs and the held leases. With kube.production set, the kube
 guard refuses writes to that installation and context switches of the
-machine kubeconfig. A configuration that does not load refuses every Bash
-call, naming the error.
+machine kubeconfig. A configuration that does not load enables recovery mode:
+literal read-only inspection and beekeeper commands (including config set and
+self-update) still run, with the configuration error named; other Bash calls
+are refused until the file is repaired.
 A merge of a merge.devctlOwners repository is the gate's devctl pr merge
 alone: gh pr merge, gh api, GraphQL and curl merges there are refused,
 naming the gated command. Elsewhere every gh pr merge and gh api PUT of a
@@ -658,10 +670,18 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 					_, _ = w.Write(guard.DenyCodex(reason))
 					return nil
 				}
-				if cfgErr != nil {
-					_, _ = w.Write(guard.DenyCodex("Refused: cannot load beekeeper configuration (" + cfgErr.Error() + "); failing closed."))
-					return nil
+			}
+			if cfgErr != nil {
+				h := guard.Hook{ConfigErr: cfgErr}
+				switch {
+				case isCodex:
+					_, _ = w.Write(h.DecideCodex(raw))
+				case isAgy:
+					_, _ = w.Write(h.DecideAgy(raw))
+				default:
+					_, _ = w.Write(h.Decide(raw))
 				}
+				return nil
 			}
 			sandboxed := a.sandboxed(cfgErr)
 			if sandboxed == nil && cfgErr == nil && a.cfg.Sandbox.Required {
@@ -697,15 +717,20 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			self, _ := os.Executable()
+			session := guard.CodexSession(raw)
+			if isAgy {
+				session = guard.AgySession(raw)
+			}
 			h := guard.Hook{Panic: func(check string, stack []byte) { a.recordGuardPanic(check+" tool "+hookPanicTool(raw), stack) }, Self: self, Clusters: kindClusterNames, Leases: a.heldLeases, Guide: a.isGuide, CheckQuestion: checkQuestion, Role: a.roleTarget, Holds: a.heldRole, Peer: a.desktopPeer, Absent: a.absentPeer, Agent: a.agentPeer, Inbox: a.inboxPeer,
 				Project: os.Getenv("CLAUDE_PROJECT_DIR"), Reads: a.firstReads,
 				Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(),
 				ModelServer: a.modelServer, ConfigErr: cfgErr, Sandbox: sandboxed,
 				Started: a.startedWorker,
-				Apps:    a.allowedApps, Shared: sharedUploads,
+				Apps:    func() []guard.App { return a.allowedAppsForSession(session) }, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
+				h.ReadOnlyExecQueries = a.cfg.Kube.ReadOnlyExecQueries
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts
 				h.MaxLabs = func() int { return a.cfg.KindClusters(ramMiB()) }
@@ -723,6 +748,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				h.GraphQL = a.graphqlLeft
 				h.StopTask = a.stopTask
 				h.PersonFolders = a.cfg.Hooks.PersonFolders
+				if len(a.cfg.Projects.Worktrees) > 0 {
+					h.WorktreePlace = a.cfg.Projects.Worktrees[0]
+				}
 				h.GuardPersonalSearch = a.cfg.Hooks.GuardPersonalSearch
 				h.ProjectsDir, h.WorktreePlaces, h.HomePlaces = a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places
 				h.Transcripts = a.transcriptPolicy()
@@ -740,6 +768,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				return nil
 			}
 			out := h.Decide(raw)
+			if a.cfg != nil {
+				out = peer.WithInstructionContext(a.cfg.StateDir, raw, out)
+			}
 			a.recordGitHubCalls(raw, formatFlag, out)
 			if out != nil {
 				_, _ = w.Write(out)
@@ -749,6 +780,7 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 	}
 	preCmd.Flags().StringVar(&formatFlag, "format", claudeComm, "hook payload and output format: claude, agy, or codex")
 	c.AddCommand(preCmd)
+	c.AddCommand(a.sessionWorktreeHook(false), a.sessionWorktreeHook(true))
 	c.AddCommand(&cobra.Command{
 		Use:   "posttooluse",
 		Short: "The PostToolUse hook: a tool result carrying a secret value is redacted before the model sees it",

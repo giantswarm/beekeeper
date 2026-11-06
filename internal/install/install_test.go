@@ -1665,6 +1665,33 @@ func TestInstallRevokesPreparationWhenRestartFails(t *testing.T) {
 	}
 }
 
+// timerOnlySetup models a supervised service becoming a timer-triggered oneshot.
+type timerOnlySetup struct{ *fakeSetup }
+
+func (f timerOnlySetup) Files(s platform.SetupSpec) ([]platform.File, []string) {
+	return []platform.File{{Path: filepath.Join(s.ConfigDir, "units", "bot.service"), Content: []byte("oneshot")}}, nil
+}
+
+func TestTeleportServiceBecomesTimerTriggered(t *testing.T) {
+	f := &fakeSetup{started: true}
+	e, _ := env(t, t.TempDir(), f, f.run)
+	e.Setup = timerOnlySetup{f}
+	path := filepath.Join(e.Spec.ConfigDir, "units", "bot.service")
+	write(t, path, "bot service")
+	m := Manifest{Services: []string{path}, Files: map[string]string{path: sum([]byte("bot service"))}}
+	p := &plan{}
+	e.planSetup(context.Background(), p, &m)
+	if err := p.run(e.Out, false); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.ran, []string{"stop bot.service", reload}) {
+		t.Fatalf("commands: %v", f.ran)
+	}
+	if slices.Contains(m.Services, path) {
+		t.Fatal("oneshot remains enabled as a standalone service")
+	}
+}
+
 func TestUninstallStopsPartiallyStartedServices(t *testing.T) {
 	for _, state := range []struct {
 		name             string

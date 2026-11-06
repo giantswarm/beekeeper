@@ -35,22 +35,30 @@ var (
 	}
 )
 
-// No supervisor session gates a claim: a free lease is the caller's, even
-// with grants of it to others queued.
-func TestCheckAdmitsAFreeLease(t *testing.T) {
-	idx, err := Check(&state.State{}, Gate{Resource: lab, Caller: one, Now: now, TTL: ttl})
-	if err != nil || idx != -1 {
-		t.Fatalf("Check = %d, %v", idx, err)
+func TestCheckAdmitsOnlyQueueHead(t *testing.T) {
+	if idx, err := Check(&state.State{}, Gate{Resource: lab, Caller: one, Now: now, TTL: ttl}); err != nil || idx != -1 {
+		t.Fatalf("direct claim: %d, %v", idx, err)
 	}
-	st := &state.State{Grants: []state.Grant{grant(one, now.Add(-5*time.Minute)), grant(two, now.Add(-4*time.Minute))}}
-	for _, who := range []state.Party{alex, {Session: "s9", Name: "Agent nine"}} {
-		if idx, err := Check(st, Gate{Resource: lab, Caller: who, Now: now, TTL: ttl}); err != nil || idx != -1 {
-			t.Errorf("%s behind a grant to %s: %d, %v", who.Name, one.Name, idx, err)
+	st := &state.State{Grants: []state.Grant{grant(one, now), grant(two, now)}}
+	for _, who := range []state.Party{alex, two} {
+		if _, err := Check(st, Gate{Resource: lab, Caller: who, Now: now, TTL: ttl}); err == nil {
+			t.Errorf("%s bypassed queue", who.Name)
 		}
 	}
-	// A queued caller's claim consumes its own grant, second or not.
-	if idx, err := Check(st, Gate{Resource: lab, Caller: two, Now: now, TTL: ttl}); err != nil || idx != 1 {
-		t.Errorf("the second grantee's claim: %d, %v", idx, err)
+	if idx, err := Check(st, Gate{Resource: lab, Caller: one, Now: now, TTL: ttl}); err != nil || idx != 0 {
+		t.Fatalf("head: %d, %v", idx, err)
+	}
+	var refusal *Refusal
+	_, err := Check(st, Gate{Resource: lab, Caller: two, Now: now, TTL: ttl})
+	if !errors.As(err, &refusal) || refusal.Position != 2 || refusal.Ahead != one.Name {
+		t.Fatalf("queue refusal lacks position or predecessor: %v", err)
+	}
+	if idx, err := Check(st, Gate{Resource: browserRes, Caller: two, Now: now, TTL: ttl}); err != nil || idx != -1 {
+		t.Fatalf("unrelated resource blocked: %d, %v", idx, err)
+	}
+	st.Grants = st.Grants[1:]
+	if idx, err := Check(st, Gate{Resource: lab, Caller: two, Now: now, TTL: ttl}); err != nil || idx != 0 {
+		t.Fatalf("successor: %d, %v", idx, err)
 	}
 }
 

@@ -110,6 +110,9 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	if err := s.LoadCoordinatorBundle(); err != nil {
+		return nil, err
+	}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -170,7 +173,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, ProtectedContexts: a.cfg.Kube.ProtectedContexts, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), ProjectsDir: a.cfg.Projects.Dir, WorktreePlaces: a.cfg.Projects.Worktrees, HomePlaces: a.cfg.Home.Places, PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, ProtectedContexts: a.cfg.Kube.ProtectedContexts, ReadOnlyExecQueries: a.cfg.Kube.ReadOnlyExecQueries, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), ProjectsDir: a.cfg.Projects.Dir, WorktreePlaces: a.cfg.Projects.Worktrees, HomePlaces: a.cfg.Home.Places, PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
 // executionGuardDecision picks the guard for the hook's format. A hook in

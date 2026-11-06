@@ -68,6 +68,16 @@ kube:
   production: production
   # Additional production-class contexts, including full test installations.
   protectedContexts: [full-test, full-test-operations]
+  # Exact queries allowed on protected clusters via:
+  # kubectl --context production exec pod/db -- psql -X -d app -c 'select * from conversations limit 5'
+  # Only SELECT *, column lists or count(*) FROM a named relation, optionally
+  # LIMIT, are supported. No expressions, filters, scripts or extra statements.
+  # Use trusted tables/views without side-effecting functions and a read-only
+  # database role. It holds on production and protectedContexts alike, on any
+  # pod the context reaches, never with -i or -t. Empty by default; every
+  # other exec remains refused.
+  readOnlyExecQueries:
+    - select * from conversations limit 5
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
   # refusals name it. Unset: the context named after the installation, else
@@ -86,6 +96,14 @@ kube:
 # SSO session completes it), swapped into the profile directory in one step.
 # watch and snapshot show the expiry. Unset, no keeper runs.
 teleport:
+  # Machine ID replaces SSO when bot.config is set. Ask the Teleport
+  # administrators for a scoped bot role, join token and tbot configuration.
+  # Keep the token in the private tbot config; paths must match its outputs.
+  # bot:
+  #   config: ~/.config/teleport/tbot.yaml
+  #   binary: tbot
+  #   certificate: ~/.local/share/teleport/identity/tlscert
+  #   kubeconfig: ~/.local/share/teleport/kubernetes/kubeconfig.yaml
   proxy: login.example.com:443   # tsh login --proxy
   auth: github              # tsh login --auth, the SSO connector; default: the cluster's
   # tsh: tsh                # the default
@@ -176,7 +194,7 @@ merge:
   ciTimeout: 2h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
   ciTimeouts: {}           # per-repository overrides, e.g. {example-org/slow-repo: 3h}
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
-  devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+  devctlOwners: [giantswarm, teemow]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
   admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
 
 units:

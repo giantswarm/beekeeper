@@ -374,6 +374,10 @@ func span(d time.Duration) string {
 }
 
 func skipReason(it Item, b config.Board, now time.Time) string {
+	if containsFold(it.Labels, "follow-up") {
+		return "follow-up: unranked backlog work"
+	}
+
 	if it.OpenBlockers > 0 {
 		return it.HeldText()
 	}

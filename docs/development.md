@@ -166,6 +166,25 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+To prove a candidate's secret verbs before installing it, run a command under
+its temporary broker (Linux):
+
+```sh
+./beekeeper --config /tmp/test-config.yaml sandbox scratch -- sh -c '
+  ./beekeeper secret fingerprint "file:///tmp/test-input.json#password"
+'
+```
+
+`sandbox scratch` copies the selected configuration and replaces its state,
+lease and runtime directories with private temporary directories. The child
+inherits `BEEKEEPER_CONFIG`; secret calls use the candidate's broker, including
+when `secret.session` is off. Use the candidate binary explicitly in the child.
+The broker does not start an egress proxy or install sandbox mounts. Its spool
+and vault socket are separate from the installed broker's. On command exit,
+failure or interrupt, the runner stops and reaps the broker before removing the
+temporary directories. Run outside the agent sandbox and use test secret sources
+and destinations: the configured sources and any requested writes remain real.
+
 The doctor releases a local lease when its session is no longer running,
 preserving any lab configuration drift for the next claimant. Person-held
 leases and remote holders are left alone. Each release is logged once as
@@ -199,6 +218,48 @@ resources: [kind-1, kind-2]
 EOF
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 ```
+
+### GitHub App dry run with a built binary
+
+`BEEKEEPER_GITHUB_API_URL` and `BEEKEEPER_GITHUB_WEB_URL` override the
+in-process GitHub API and web base URLs at startup. Empty or unset values keep
+the public GitHub defaults; trailing slashes are removed. These apply to manifest
+conversion, App sign-in and the gate's in-process GitHub reads. They do not
+configure the separate `gh` executable: put a fake `gh` first on `PATH` for
+commands that invoke it (including App discovery and account lookup).
+
+To exercise the binary's wiring, build with `go build .`, start a local fake
+GitHub, and set both variables to its base URL. Use a scratch configuration and
+state, a disposable manifest and SOPS target, and fake vault/SOPS tools on `PATH`
+so the whole exercise uses test credentials. For example, with the fake server's
+base URL in `FAKE_GITHUB_URL` and the scratch configuration in `BEEKEEPER_CONFIG`:
+
+```bash
+export BEEKEEPER_GITHUB_API_URL="$FAKE_GITHUB_URL"
+export BEEKEEPER_GITHUB_WEB_URL="$FAKE_GITHUB_URL"
+./beekeeper app create example --manifest /tmp/manifest.json --org example --no-open --timeout 30s
+```
+
+The scratch configuration's `apps.secrets.example` must name the disposable
+SOPS target. Have the fake `gh` report the App absent and answer the account ID
+lookup. Open the loopback page printed by the command and submit its manifest
+form. The form must target the fake server's
+`/organizations/example/settings/apps/new`, including the state query parameter.
+The fake web handler reads the submitted manifest's `redirect_url` and redirects
+to it with `code=example-code` and the unchanged state. Its API handler must see
+an unauthenticated `POST /app-manifests/example-code/conversions` and return HTTP
+201 with a JSON object containing `id`, `slug`, `client_id`, `client_secret` and
+`pem` (dummy values suffice for the conversion; use a fixture private key for
+subsequent sign-in). The browser then reaches the fake server's installation
+page, and only the disposable SOPS target receives the dummy credentials.
+`--no-open` lets the test driver control the browser; it still performs the
+conversion and write. `secret github-app --dry-run` only validates metadata and
+does not exercise HTTP wiring.
+
+The fresh-process regression test can also be run without vault or SOPS tools:
+`go test ./cmd -run '^TestGitHubURLsFromEnvironment$' -count=1`. It verifies the
+public defaults, the manifest form action, conversion against a local fake API
+and the device flow against a local fake web endpoint.
 
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
@@ -923,6 +984,50 @@ wakes and handovers; no user settings file is changed.
 `guide.effort` selects the guide's session effort, ahead of the rules. The
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
+
+### Session worktree placement
+
+Configure clone discovery and session placement with:
+
+```yaml
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees]
+```
+
+`projects.worktrees` supplies ordered external roots; session hooks use the first root.
+Run `beekeeper install` to register Claude Code's `WorktreeCreate` and
+`WorktreeRemove` hooks. Creation uses
+`<projects.worktrees>/<repo>/worktree-<session-name>`, starting at the
+session's HEAD. Existing branches or paths cause an error rather than reuse.
+The worktree hook owns creation even outside the normal tool-hook scope,
+because Claude's creation hook replaces its default worktree implementation.
+The Bash guard rejects nested `.claude/worktrees` targets, including targets
+reached through symlinks, and names the configured external root.
+
+`beekeeper free --only worktrees` reports linked worktrees nested in clones
+under `projects.dir`. Add `--apply` to remove clean trees integrated into the
+default branch and move other trees into the external root. Git's merge
+simulation recognizes squash merges; conflicts or uncertain results retain
+the tree. The default branch is origin's default ref, falling back to local
+main or master. Refresh remote refs before cleanup when they are stale.
+Branches are always retained, including squash-merged branches. Locked trees
+and destination collisions are left for manual resolution. Migration refuses
+live worktrees and stops if process or roster information cannot be read.
+The removal hook similarly retains dirty or unmerged work and never forces
+removal.
+
+### Envtest assets for local runs
+
+`beekeeper run --local -- go test ./path/to/package` automatically provisions
+Kubernetes 1.37.0 envtest binaries using `setup-envtest` (release-0.25) into
+`<stateDir>/envtest` and exports `KUBEBUILDER_ASSETS` to the command. Local
+runs reuse the cached binaries; concurrent first runs share a setup lock.
+An explicit `KUBEBUILDER_ASSETS` takes precedence. First-time setup requires
+Go and network access; failures stop the run with a setup error. Commands
+that only print help or a version, and trivial commands, skip provisioning.
+Remote builder images must supply their own envtest assets and environment;
+use `--local` for tests that need the managed assets.
 
 ## Supervisor workflow regression
 

@@ -14,7 +14,7 @@ jobs:
     # giantswarm/github is private: the App reads the mapping through its
     # single-file permission on the two mapping files, nothing else there.
     - name: Mint App token for the user mapping
-      id: mapping-token
+      id: app-token
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ secrets.PROJECT_AUTOMATION_CLIENT_ID }}
@@ -24,7 +24,7 @@ jobs:
         permission-single-file: read
     - name: Get user-mapping
       env:
-        GH_TOKEN: ${{ steps.mapping-token.outputs.token }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
       run: |
         mkdir -p artifacts
         # The raw media type returns the file itself. No pipe after gh api, so

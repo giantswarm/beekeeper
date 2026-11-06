@@ -53,9 +53,13 @@ func Hooks(exe string) []Hook {
 	}
 	return []Hook{
 		hook("PreToolUse", "Bash|Read|Grep|Edit|Write|NotebookEdit|AskUserQuestion|SendMessage|TaskStop|mcp__.*", "pretooluse", 30),
+		hook("UserPromptSubmit", "", "relay", 10),
+		hook("Stop", "", "relay", 10),
 		hook("PermissionRequest", "*", "permissionrequest", 300),
 		hook("PostToolUse", "*", "posttooluse", 10),
 		hook("SessionStart", "", "sessionstart", 10),
+		hook("WorktreeCreate", "", "worktreecreate", 60),
+		hook("WorktreeRemove", "", "worktreeremove", 60),
 	}
 }
 

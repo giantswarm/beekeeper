@@ -527,7 +527,7 @@ func TestExampleConfig(t *testing.T) {
 		}
 	}
 	if c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
-		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
+		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || !c.Merge.DevctlServes("teemow/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
@@ -1272,6 +1272,41 @@ func TestWatchBatchInterval(t *testing.T) {
 	}
 }
 
+func TestTeleportBotConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "teleport:\n  bot:\n    config: ~/bot.yaml\n    certificate: ~/identity/tlscert\n    kubeconfig: ~/kubernetes/kubeconfig.yaml\nkube:\n  kubeconfig: [/existing]\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Teleport.Enabled() || c.Teleport.Bot.Binary != "tbot" || !filepath.IsAbs(c.Teleport.Bot.Config) {
+		t.Fatalf("bot: %+v", c.Teleport)
+	}
+	if len(c.Kube.Kubeconfig) != 2 || c.Kube.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig || c.Kube.Kubeconfig[1] != "/existing" || c.Alerts.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig {
+		t.Fatalf("kubeconfig selection: %v %v", c.Kube.Kubeconfig, c.Alerts.Kubeconfig)
+	}
+	if err := os.WriteFile(path, []byte("teleport:\n  bot:\n    config: /bot.yaml\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("accepted bot without output paths")
+	}
+}
+
+func TestLoadNamesUnparsableKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "watch.interval") {
+		t.Fatalf("want key in parse error, got %v", err)
+	}
+}
+
 func TestLeasableInstallations(t *testing.T) {
 	c := Config{Resources: []string{leasableShared}}
 	c.Alerts.Installations = []Installation{{Name: leasableCustomer}, {Name: leasableShared}, {Name: leasableCustomer}}
@@ -1330,3 +1365,32 @@ const (
 	leasableShared   = "shared"
 	leasableCustomer = "customer"
 )
+
+func TestProjectsPaths(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("BEEKEEPER_EXECUTION_HOME", base)
+	p := filepath.Join(base, "config.yaml")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != filepath.Join(base, "projects") || !slices.Equal(c.Projects.Worktrees, []string{filepath.Join(base, "projects", "worktrees")}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects:\n  dir: /projects\n  worktrees: [/worktrees]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != "/projects" || !slices.Equal(c.Projects.Worktrees, []string{"/worktrees"}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects: {worktrees: [relative]}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("accepted relative worktree root")
+	}
+}

@@ -148,7 +148,7 @@ func (a *app) authenticateReviewResult(ctx context.Context, st *state.State, use
 		if err != nil {
 			return err
 		}
-		if covered {
+		if covered || st.ReviewNitsChecked(pull.Ref, use.Head, round.Head) {
 			reviewed = round.Head
 		}
 	}
