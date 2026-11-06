@@ -480,10 +480,10 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 		"colleague review":       {parkedIssueRef, "a colleague's review", true},
 		"untargeted answer":      {"", "awaiting the person's answer", false},
 		"queued gate":            {"gate place 12", "queued merge waits for the operator's go", false},
-		"timer":                  {"timer 12", "timer for the person's answer", false},
+		loopTimer:                {"timer 12", "timer for the person's answer", false},
 		workerGitHubReleaseGroup: {"release v1.2.0", "release after the operator's go", false},
-		kindLease:                {leaseParkOn(labOne), "the person's answer", false},
-		verbHold:                 {holdParkOn("merges"), "the person's answer", false},
+		kindLease:                {leaseParkOn(labOne), litThePersonSAnswer, false},
+		verbHold:                 {holdParkOn("merges"), litThePersonSAnswer, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
