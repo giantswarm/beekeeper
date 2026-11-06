@@ -487,7 +487,7 @@ func TestParkOnPersonOperationalHandoffs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &state.Park{On: tc.on, Waits: tc.waits}
-			if got := parkOnPerson(p, "operator"); got != tc.want {
+			if got := watchParkOnPerson(p, "operator"); got != tc.want {
 				t.Errorf("parkOnPerson(%+v) = %v, want %v", p, got, tc.want)
 			}
 		})

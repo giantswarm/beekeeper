@@ -2487,9 +2487,24 @@ func reportLines(r state.WorkerReport) []string {
 	return lines
 }
 
-// parkOnPerson reports whether p names a note or an issue or pull request
+// watchParkOnPerson reports whether p names a note or an issue or pull request
 // waiting on a person's word. Operational targets and untargeted waits do
 // not become person waits merely because their descriptions mention a person.
+func watchParkOnPerson(p *state.Park, person string) bool {
+	if _, note := parkNote(p.On); note {
+		return parkOnPerson(p, person)
+	}
+	if _, _, note := parkCentralNote(p.On); note {
+		return parkOnPerson(p, person)
+	}
+	if _, ref := parseRef(p.On); !ref {
+		return false
+	}
+	return parkOnPerson(p, person)
+}
+
+// parkOnPerson conservatively protects human waits from automatic wakes,
+// including waits without a structured target.
 func parkOnPerson(p *state.Park, person string) bool {
 	if p.Checks {
 		return false
@@ -2505,7 +2520,7 @@ func parkOnPerson(p *state.Park, person string) bool {
 	if _, _, note := parkCentralNote(p.On); note {
 		return true
 	}
-	if _, ref := parseRef(p.On); !ref {
+	if _, lease := parkLease(p.On); lease {
 		return false
 	}
 	return personWaitWords.MatchString(p.Waits) || namesPerson(p.Waits, person)
@@ -2530,7 +2545,7 @@ func parkedNews(st *state.State, person string, now time.Time) ([]string, []stat
 			evs = append(evs, event(watchParty, "agents.parked-on-lease", "%s: %s", ag.Name, res))
 			continue
 		}
-		if !parkOnPerson(p, person) {
+		if !watchParkOnPerson(p, person) {
 			continue
 		}
 		p.Told = now.UTC()
