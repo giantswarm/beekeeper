@@ -20,11 +20,11 @@ func TestBoardNextOpenSessionPRReferences(t *testing.T) {
 	}{
 		{"open pr", github.Open, true, true},
 		{"merged", "MERGED", true, false},
-		{"closed", "CLOSED", true, false},
+		{overrideClosed, "CLOSED", true, false},
 		{"session ended", github.Open, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			worker := &claude.Session{ID: "neighbour", Name: "Worker", Repo: strings.TrimSuffix(refOne, "#1"), Branch: "fix-neighbour"}
+			worker := &claude.Session{ID: "neighbour", Name: litWorker, Repo: strings.TrimSuffix(refOne, "#1"), Branch: "fix-neighbour"}
 			st := &state.State{Records: []state.Record{{Session: worker.Party(), Issue: "o/r#99"}}}
 			var sessions []*claude.Session
 			if tc.running {
