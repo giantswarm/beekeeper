@@ -1274,7 +1274,7 @@ func (f browseFindings) lines(steps, deploy string, consents []guard.App, lab bo
 		}
 		grant = grant || r.Reason == reasonGrant
 		deployed = deployed || (slices.Contains(deployReasons, r.Reason) &&
-			!(r.Reason == "Interfere With Workloads" && productDeleteWords.MatchString(steps)))
+			(r.Reason != "Interfere With Workloads" || !productDeleteWords.MatchString(steps)))
 		unshared = unshared || r.Reason == reasonNotShared
 	}
 	if unshared {

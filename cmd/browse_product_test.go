@@ -36,21 +36,22 @@ func TestBrowseProductDeletionContext(t *testing.T) {
 }
 
 func TestBrowseProductClassifierRefusal(t *testing.T) {
+	const classifierError = "classifier error:"
 	for _, tc := range []struct{ name, reason, want string }{
 		{"category and explanation", "Reason: [Interfere With Workloads]. The requested resource is not identified.", "refused: computer left_click"},
-		{"empty", "Reason: [].", "classifier error:"},
-		{"whitespace", "Reason: [  ].", "classifier error:"},
-		{"missing", "", "classifier error:"},
+		{"no category", "Reason: [].", classifierError},
+		{"whitespace", "Reason: [  ].", classifierError},
+		{"no reason", "", classifierError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			use := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"click","name":"mcp__claude-in-chrome__computer","input":{"action":"left_click","action_summary":"Confirms deletion of the test agent"}}]}}`
-			result := map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": "click", "is_error": true, "content": "Permission for this action was " + classifierDenial + ". " + tc.reason}}}}
-			b, err := json.Marshal(result)
+			text, err := json.Marshal("Permission for this action was " + classifierDenial + ". " + tc.reason)
 			if err != nil {
 				t.Fatal(err)
 			}
+			result := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"click","is_error":true,"content":` + string(text) + `}]}}`
 			path := filepath.Join(t.TempDir(), "transcript.jsonl")
-			if err := os.WriteFile(path, []byte(use+"\n"+string(b)+"\n"), 0600); err != nil {
+			if err := os.WriteFile(path, []byte(use+"\n"+result+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			findings, err := readFindings(path)
