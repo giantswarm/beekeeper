@@ -381,7 +381,7 @@ func TestProtectionInTheSandboxGoesThroughTheBroker(t *testing.T) {
 		t.Fatalf("broker received %+v", got)
 	}
 	c = a.sandboxProtectionCmd()
-	c.SetArgs([]string{dependabotTestRepo, "main", http.MethodDelete})
+	c.SetArgs([]string{dependabotTestRepo, mainBranch, http.MethodDelete})
 	if err := c.Execute(); err == nil {
 		t.Fatal("accepted a write argument")
 	}

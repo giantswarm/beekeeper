@@ -10,7 +10,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
-const protectionTestBranch = "release/v1"
+const (
+	protectionTestBranch = "release/v1"
+	protectionTestRepo   = "acme/repo"
+)
 
 type protectionTransport func(*http.Request) (*http.Response, error)
 
@@ -18,9 +21,9 @@ func (f protectionTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 
 func TestProtectionArgsRefuseWritesAndOtherOwners(t *testing.T) {
 	for _, args := range [][]string{
-		nil, {"acme/repo"}, {"other/repo", "main"}, {"acme/repo", "main", http.MethodDelete},
-		{"acme/repo", "main", "--method=PUT"}, {"acme/repo?x=y", "main"},
-		{"acme/..", "main"}, {"acme/repo", ".."}, {"acme/repo", ""},
+		nil, {protectionTestRepo}, {rebaseOtherRepo, mainBranch}, {protectionTestRepo, mainBranch, http.MethodDelete},
+		{protectionTestRepo, mainBranch, "--method=PUT"}, {"acme/repo?x=y", mainBranch},
+		{"acme/..", mainBranch}, {protectionTestRepo, ".."}, {protectionTestRepo, ""},
 	} {
 		if _, _, err := protectionArgs(args, []string{testOrg}); err == nil {
 			t.Errorf("accepted %q", args)
@@ -46,7 +49,7 @@ func TestProtectionReadOnlyGET(t *testing.T) {
 			}
 			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"required_status_checks":{"strict":true}}`)), Header: make(http.Header)}, nil
 		})}
-		out, err := readProtection(context.Background(), client, "test-token", "acme/repo", protectionTestBranch)
+		out, err := readProtection(context.Background(), client, "test-token", protectionTestRepo, protectionTestBranch)
 		if status == 200 {
 			if err != nil || !strings.Contains(out, `"strict":true`) {
 				t.Fatalf("lost protection: %q %v", out, err)
@@ -59,7 +62,7 @@ func TestProtectionReadOnlyGET(t *testing.T) {
 
 func TestProtectionBrokerRejectsWriteBeforeCredentials(t *testing.T) {
 	a, _, _ := secretApp(t)
-	for _, args := range [][]string{{dependabotTestRepo, "main", http.MethodDelete}, {"other/example", "main"}} {
+	for _, args := range [][]string{{dependabotTestRepo, mainBranch, http.MethodDelete}, {"other/example", mainBranch}} {
 		if _, err := a.brokeredProtection()(context.Background(), 0, sandbox.Request{Args: args}); err == nil {
 			t.Fatalf("broker accepted %q", args)
 		}
