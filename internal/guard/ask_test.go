@@ -8,7 +8,7 @@ import (
 func TestHookLeavesQuestionsToTheGuide(t *testing.T) {
 	const guide = "guide-session"
 	h := hook()
-	h.Guide = func(session string) (bool, string) { return session == guide, "Timo" }
+	h.Guide = func(session string) (bool, string) { return session == guide, "Alex" }
 	askFrom := func(h Hook, session string) *decision {
 		ev := map[string]any{"session_id": session, "questions": []any{"Which one?"}}
 		ev["tool_name"] = AskTool
@@ -21,7 +21,7 @@ func TestHookLeavesQuestionsToTheGuide(t *testing.T) {
 	if d == nil || d.PermissionDecision != decisionDeny {
 		t.Fatalf("a worker's question: want a refusal, got %+v", d)
 	}
-	if !strings.Contains(d.Reason, `beekeeper note add --for Timo --ref <owner/repo#n> "<the question, every issue or PR as its full URL>" --status-quo "<what is true now>" --why`) {
+	if !strings.Contains(d.Reason, `beekeeper note add --for Alex --ref <owner/repo#n> "<the question, every issue or PR as its full URL>" --status-quo "<what is true now>" --why`) {
 		t.Errorf("the refusal does not name the note:\n%s", d.Reason)
 	}
 	// No guide running, or no lookup: still refused.

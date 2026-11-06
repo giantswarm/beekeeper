@@ -90,7 +90,7 @@ func TestEscalateFilesOneNoteAndARecheckTimer(t *testing.T) {
 	}
 	// The timer first: a failed note is retried when it fires.
 	timer, note := r.calls[0], r.calls[1]
-	if !slices.Equal(note[:6], []string{loopNote, loopAdd, "--for", loopPerson, loopRefFlag, refOne}) ||
+	if !slices.Equal(note[:6], []string{loopNote, loopAdd, flagFor, loopPerson, loopRefFlag, refOne}) ||
 		note[len(note)-1] != "What unblocks "+issueOneURL+"?" {
 		t.Errorf("note %q", note)
 	}
