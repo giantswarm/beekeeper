@@ -14,13 +14,25 @@ toolchains, `XDG_CACHE_HOME`, `XDG_STATE_HOME` and `CARGO_HOME` all point inside
 it, so they retire with it. An agy worker always runs on a home of its own beside
 its journal, with no MCP server configured unless the request asks for one.
 
-`HOME` is not routed: harness logins, Git identity and SSH configuration stay
-where the host provisioned them. A worker that writes to a literal path under
-`~` leaves that behind, and no audit attributes it to an execution.
+`HOME` points inside it too, so what a worker writes to a literal `~` path retires
+with it. The account's home stays where the host provisioned it: harness logins
+live in each harness's configured directory, Git and GitHub configuration are
+reached by explicit path (`GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`), beekeeper finds
+its own state through `BEEKEEPER_EXECUTION_HOME`, and ssh reads the account
+database, not `HOME`.
+
+Two workers keep the account's `HOME`: a claude worker on a host with no
+`configDir`, whose login lives there, and every worker on a host with
+`sharedHome: true`, the way back if a tool on that host needs the account's home.
+Both change the audit's reach, not its rules: a worker can also still write to the
+account's home by absolute path. `hosts check` names what is in the account's
+`~/.local/state`, where such downloads land, but cannot attribute it to an
+execution, and a write elsewhere there goes unseen.
 
 ## What removes a retired resource
 
-Only a coordinator's `Retire` does. `Stop` ends the owned process and removes the
+Only a retirement does, whether a coordinator asked for it or an operator ran
+`agents hosts reconcile`. `Stop` ends the owned process and removes the
 disposable MCP home; inspection observes. Neither touches a workspace, a source
 bundle or anything moved aside, retention passed or not.
 
@@ -31,9 +43,10 @@ want:
 - the tree is on its starting commit with no recovery to record, and it holds no
   ignored file beyond the designated scratch directory.
 
-Once `retainUntil` passes, the next retirement on that host removes the moved-aside
-resources of such executions, a few per call. A host that retires nothing further
-keeps them until it does. The journal, log and control receipts stay as evidence.
+Once `retainUntil` passes, the next retirement or reconciliation on that host
+removes the moved-aside resources of such executions, a few per call. A host that
+does neither keeps them until it does. The journal, log and control receipts stay
+as evidence.
 
 Everything else stays moved aside without expiry: a retirement with a recovery,
 one with ignored files, one whose tree could not be read, and every retirement

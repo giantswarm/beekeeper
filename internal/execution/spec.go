@@ -89,6 +89,9 @@ func (r Ref) Validate() error {
 func (r Ref) Key() string { return fmt.Sprintf("%s/%s/%d", r.Host, r.Execution, r.Generation) }
 
 type StartRequest struct {
+	// BundleDigest is the coordinator policy bundle this execution runs under
+	// for its whole life; empty, it runs on the host's prepared policy alone.
+	BundleDigest   string `json:"bundleDigest,omitempty"`
 	Effort         string `json:"effort,omitempty"`
 	GitHub         bool   `json:"github,omitempty"`
 	MCP            bool   `json:"mcp,omitempty"`
@@ -121,6 +124,9 @@ func (r StartRequest) Validate() error {
 		return errors.New("invalid execution effort")
 	}
 
+	if r.BundleDigest != "" && !ValidDigest(r.BundleDigest) {
+		return errors.New("invalid coordinator bundle digest")
+	}
 	if err := r.Ref.Validate(); err != nil {
 		return err
 	}
@@ -342,7 +348,10 @@ type HarnessReadiness struct {
 
 type Capabilities struct {
 	ResourceAudit []ResourceFinding `json:"resourceAudit,omitempty"`
-	CIWait        bool              `json:"ciWait"`
+	// PolicyBundle compares the coordinator's current bundle with what the host
+	// holds. hosts check fills it; the host's own check leaves it empty.
+	PolicyBundle *BundleReport `json:"policyBundle,omitempty"`
+	CIWait       bool          `json:"ciWait"`
 	// SourcePreparation promises source-chunk upload and typed not-found
 	// responses when inspecting an execution whose journal does not exist.
 	SourcePreparation bool              `json:"sourcePreparation"`

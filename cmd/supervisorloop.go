@@ -548,7 +548,7 @@ its key first in the detail):
             the host acknowledged its termination. Each pass also runs the
             doctor's roster and archive step (removing finished, relieved
             and stale entries with no CLI, archiving owed desktop sessions
-            under agents.archiveAgreement and stopping finished or relieved
+            and stopping finished or relieved
             background sessions). A session its person started is never
             retired
   next      after a done, and every pass below capacity.ceiling while capacity
@@ -2739,7 +2739,7 @@ func (l *supervisorLoop) roster(ctx context.Context, planned map[string]bool) er
 	chores := slices.DeleteFunc(planChores(st, sessions, record, busy, a.cfg.Agents.StaleAfter.Duration, a.timeNow(), a.cfg), func(c chore) bool {
 		return c.kind != choreRemove || planned[c.agent.Name]
 	})
-	_, _, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
+	_, err = a.finishRoster(ctx, chores, sessions, record, busy, loopParty, "beekeeper supervisor loop")
 	return err
 }
 
