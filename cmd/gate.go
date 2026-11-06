@@ -108,10 +108,11 @@ it landed) is rebased onto its base on GitHub's side (Update with rebase,
 never a base merge into the branch), the new head awaited, and devctl runs
 on it, waiting for its checks; one that conflicts by then, or that GitHub
 does not rebase, is refused (77) with nothing merged, naming the
-replacement PR. Under the budget floor the merge is
-queued for the reset (exit 76, as below): a run of its own waits for the
-budget and merges as below, and for merge.resetFirst from the reset the
-merges queued for it go first, the oldest queued first: only the running
+replacement PR. A one-PR merge keeps a reserve of 200 GitHub calls and
+can run below the budget floor while that reserve remains. Other work and
+merges below that reserve are queued for the reset (exit 76, as below):
+a run of its own waits for the budget and merges as below, and for
+merge.resetFirst from the reset the merges queued for it go first, the oldest queued first: only the running
 merges count against merge.cap for them, and the waits below start after
 them; a merge marked urgent (lanes urgent)
 runs under the floor instead, once per reset window. Otherwise the merge
@@ -692,6 +693,9 @@ func (g *gateRun) leave(pid int, cut bool) error {
 	return &exitError{code: ExitGateQueued}
 }
 
+// mergeBudgetReserve leaves room for the reads and writes of one gated PR.
+const mergeBudgetReserve = 200
+
 // step joins or refreshes the merge's queue entry and starts devctl when it
 // is the merge's turn. It returns what the merge waits for, or "" and the
 // run's outcome once devctl ran or the merge was refused.
@@ -869,7 +873,10 @@ func (g *gateRun) step() (string, error) {
 		return "", g.refuse("the GitHub budget is unknown (%v): fix that (gh auth status), then run the same command again", err)
 	}
 	urgent := false
-	if b.Remaining < g.cfg.GitHub.Floor {
+	// One PR has a bounded budget, unlike readers. Keep a conservative
+	// reserve for its checks and merge, without admitting other work.
+	boundedMerge := g.pr > 0 && b.Remaining >= mergeBudgetReserve
+	if b.Remaining < g.cfg.GitHub.Floor && !boundedMerge {
 		if urgent, why, err = g.urgentTurn(b); err != nil {
 			return "", g.stateRefused(err)
 		}
