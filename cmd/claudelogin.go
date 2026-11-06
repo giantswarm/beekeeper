@@ -7,10 +7,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/spf13/cobra"
 )
+
+const claudeLoginExpired = "expired"
+const claudeLoginExpiring = "expiring"
 
 const claudeLoginWarnBefore = time.Hour
 const claudeLoginKey = "claude-login"
@@ -56,14 +60,16 @@ func readClaudeLogin(now time.Time) claudeLogin {
 	}
 	v := claudeLogin{State: "logged in", Expires: time.UnixMilli(doc.OAuth.ExpiresAt).UTC(), Refreshable: doc.OAuth.RefreshToken != ""}
 	if !v.Expires.After(now) {
-		v.State = "expired"
+		v.State = claudeLoginExpired
 	} else if v.Expires.Sub(now) <= claudeLoginWarnBefore {
-		v.State = "expiring"
+		v.State = claudeLoginExpiring
 	}
 	return v
 }
 
-func (v claudeLogin) needsLogin() bool { return v.State == "expired" || v.State == "expiring" }
+func (v claudeLogin) needsLogin() bool {
+	return v.State == claudeLoginExpired || v.State == claudeLoginExpiring
+}
 func (v claudeLogin) line() string {
 	line := "CLAUDE CLI LOGIN: " + v.State
 	if !v.Expires.IsZero() {
@@ -80,7 +86,7 @@ func (v claudeLogin) line() string {
 
 func (a *app) requireClaudeLogin() error {
 	v := readClaudeLogin(a.now)
-	if v.State == "expired" && !v.Refreshable {
+	if v.State == claudeLoginExpired && !v.Refreshable {
 		return refused("headless Claude turn refused: %s", v.line())
 	}
 	return nil

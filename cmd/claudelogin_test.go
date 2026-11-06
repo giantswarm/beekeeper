@@ -48,11 +48,11 @@ func TestClaudeLoginStatesAndRefusal(t *testing.T) {
 		refuse  bool
 	}{
 		{"valid", 2 * time.Hour, false, "logged in", false},
-		{"warning boundary", time.Hour, false, "expiring", false},
-		{"expiring", time.Minute, false, "expiring", false},
-		{"expired boundary", 0, false, "expired", true},
-		{"expired", -time.Minute, false, "expired", true},
-		{"refreshable expiry", -time.Minute, true, "expired", false},
+		{"warning boundary", time.Hour, false, claudeLoginExpiring, false},
+		{claudeLoginExpiring, time.Minute, false, claudeLoginExpiring, false},
+		{"expired boundary", 0, false, claudeLoginExpired, true},
+		{claudeLoginExpired, -time.Minute, false, claudeLoginExpired, true},
+		{"refreshable expiry", -time.Minute, true, claudeLoginExpired, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			writeLogin(t, path, now.Add(tt.offset), tt.refresh)
