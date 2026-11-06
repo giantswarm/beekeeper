@@ -64,7 +64,11 @@ func base64Runs(s string) [][2]int {
 // b64Span is the end of the base64 characters from i on, up to two
 // padding characters included.
 func b64Span(s string, i int, url bool) int {
-	for i < len(s) && b64Char(s[i], url) {
+	mask := byte(1)
+	if url {
+		mask = 3
+	}
+	for i < len(s) && b64Alphabet[s[i]]&mask != 0 {
 		i++
 	}
 	for n := 0; n < 2 && i < len(s) && s[i] == '='; n++ {
@@ -73,20 +77,31 @@ func b64Span(s string, i int, url bool) int {
 	return i
 }
 
+// Use a lookup table so large, high-entropy images need only one byte lookup
+// per encoded character, rather than several alphabet range branches.
+var b64Alphabet = func() [256]byte {
+	var table [256]byte
+	for _, c := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" {
+		table[c] = 1
+	}
+	table['-'], table['_'] = 2, 2
+	return table
+}()
+
 func b64Char(c byte, url bool) bool {
-	return 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '+' || c == '/' ||
-		url && (c == '-' || c == '_')
+	return b64Alphabet[c] == 1 || url && b64Alphabet[c] == 2
 }
 
 // encodedSpans are the spans of s whose base64 decoding carries a token
-// pattern or an indexed value, each named by what it carries.
-func (ix *Index) encodedSpans(s string, depth int) []span {
+// pattern or an indexed value, each named by what it carries. Allow markers
+// suppress patterns through nested encodings, but never indexed values.
+func (ix *Index) encodedSpans(s string, depth int, patterns bool) []span {
 	if depth > maxBase64Depth {
 		return nil
 	}
 	var out []span
 	for _, m := range base64Runs(s) {
-		if allowed(s, m[0]) {
+		if imageBase64(s, m) {
 			continue
 		}
 		for _, run := range runs(s, m[0], m[1]) {
@@ -94,7 +109,7 @@ func (ix *Index) encodedSpans(s string, depth int) []span {
 			if !ok {
 				continue
 			}
-			if name, ref, found := ix.carries(d, depth); found {
+			if name, ref, found := ix.carries(d, depth, patterns && !allowed(s, run[0])); found {
 				out = append(out, span{run[0], run[1], name, ref})
 				break
 			}
@@ -144,17 +159,54 @@ func decodeBase64(run string) (string, bool) {
 
 // carries names what the decoded text d holds: an indexed reference, a
 // token pattern's rule, or either within a further encoding.
-func (ix *Index) carries(d string, depth int) (name string, ref, found bool) {
+func (ix *Index) carries(d string, depth int, patterns bool) (name string, ref, found bool) {
 	if m := ix.matches(d); len(m) > 0 {
 		return m[0].name, true, true
 	}
 	for _, r := range tokenRules {
-		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(d, k) }) && r.re.MatchString(d) {
-			return r.id, false, true
+		if !patterns {
+			break
+		}
+		if slices.ContainsFunc(r.Keywords, func(k string) bool { return strings.Contains(d, k) }) && r.RE.MatchString(d) {
+			return r.ID, false, true
 		}
 	}
-	if inner := ix.encodedSpans(d, depth+1); len(inner) > 0 {
+	if inner := ix.encodedSpans(d, depth+1, patterns); len(inner) > 0 {
 		return inner[0].name, inner[0].ref, true
 	}
 	return "", false, false
+}
+
+// imageBase64 examines only a bounded prefix of a run. Image data URLs also
+// identify formats beyond PNG and JPEG without decoding their payloads.
+func imageBase64(s string, run [2]int) bool {
+	start := run[0]
+	if start > 0 && s[start-1] == ',' {
+		header := s[max(0, start-128):start]
+		if prefix := strings.LastIndex(header, "data:image/"); prefix >= 0 &&
+			!strings.ContainsAny(header[prefix:], "\n\r\"' ") && strings.HasSuffix(header, ";base64,") {
+			return true
+		}
+	}
+	var prefix [12]byte
+	n := 0
+	for i := start; i < run[1] && n < len(prefix); i++ {
+		if b64Char(s[i], true) {
+			prefix[n] = s[i]
+			n++
+		}
+	}
+	if n < len(prefix) {
+		return false
+	}
+	var decoded [9]byte
+	enc := base64.RawStdEncoding
+	if strings.ContainsAny(string(prefix[:]), "-_") {
+		enc = base64.RawURLEncoding
+	}
+	if _, err := enc.Decode(decoded[:], prefix[:]); err != nil {
+		return false
+	}
+	return string(decoded[:8]) == "\x89PNG\r\n\x1a\n" ||
+		decoded[0] == 0xff && decoded[1] == 0xd8 && decoded[2] == 0xff
 }

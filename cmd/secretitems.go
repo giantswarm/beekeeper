@@ -13,7 +13,7 @@ import (
 func (a *app) secretItemsCmd() *cobra.Command {
 	var opt secret.ItemsOptions
 	c := &cobra.Command{
-		Use:   "items op://<vault> [<match>] [--fields] [--env-keys]",
+		Use:   "items op://<vault> [<match>] [--fields] [--env-keys] [--key-pattern <substring>]",
 		Short: "The item titles of a vault beekeeper reads, and with --fields or --env-keys their field or KEY names and lengths, never a value",
 		Long: `items lists the items of a vault beekeeper reads (secret.vault,
 secret.vaults or secret.ageVaults): each item's title, category, tags and
@@ -23,12 +23,16 @@ beekeeper's process and answers its fields' labels, sections, types and
 value lengths; --env-keys answers the KEY of each KEY=VALUE line of an
 env-style field, an item's notes for one, with its value's length, the
 key copy and compare take as op://<vault>/<item>/<field>#<KEY>. No value is
-printed, logged or returned. Another vault is refused before op runs,
+printed, logged or returned. --key-pattern requires --env-keys and keeps
+only keys containing its case-insensitive substring, omitting items without
+a matching key. Item reads run in parallel with at most eight op calls.
+Another vault is refused before op runs,
 naming the vaults listed. With secret.session it runs in the broker, like
 every call on the vault.
 
   beekeeper secret items "op://<vault>" openai --fields
   beekeeper secret items "op://<vault>" "environment variables" --env-keys
+  beekeeper secret items "op://<vault>" --env-keys --key-pattern API_KEY
   beekeeper secret copy "op://<vault>/<item>/notesPlain#<KEY>" <file>#<path>`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,5 +70,6 @@ every call on the vault.
 	}
 	c.Flags().BoolVar(&opt.Fields, "fields", false, "also each item's field labels, types and value lengths")
 	c.Flags().BoolVar(&opt.EnvKeys, "env-keys", false, "also the KEY names of each item's KEY=VALUE lines and their value lengths")
+	c.Flags().StringVar(&opt.KeyPattern, "key-pattern", "", "only env keys containing this substring (case-insensitive; requires --env-keys)")
 	return c
 }

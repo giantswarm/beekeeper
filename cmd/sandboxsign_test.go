@@ -21,7 +21,7 @@ func TestGPGSignKey(t *testing.T) {
 		key  string
 	}{
 		{sign(key), key},
-		{sign("Timo <timo@example.com>"), "Timo <timo@example.com>"},
+		{sign("Alex <alex@example.com>"), "Alex <alex@example.com>"},
 		{sign("--export-secret-keys"), ""},
 		{sign("a\nb"), ""},
 		{sign(""), ""},

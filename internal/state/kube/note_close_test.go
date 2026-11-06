@@ -114,10 +114,11 @@ func TestEnvtestNoteCloseAudit(t *testing.T) {
 }
 
 func TestNoteCloseReasons(t *testing.T) {
-	for _, tc := range []struct{ verb, detail string }{
-		{noteDoneEvent, "#1 withdrawn: no longer needed"},
-		{"note.overtaken", "#1 overtaken: settled"},
-		{noteAnsweredEvent, `acme/app#999 answered by "bo" via cli, note #1 asked by "ana": "ship?": yes`},
+	for _, tc := range []struct{ verb, detail, answer string }{
+		{noteDoneEvent, "#1 withdrawn: no longer needed", ""},
+		{"note.overtaken", "#1 overtaken: settled", ""},
+		{noteAnsweredEvent, `acme/app#999 answered by "display name" via cli, note #1 asked by "ana": "ship?": yes`, "yes"},
+		{noteAnsweredEvent, "acme/app#999 answered by \"display name\" via slack, note #1 asked by \"ana\" for \"team:example\": \"ship: \\\"now\\\"?\": first: yes\nthen ship", "first: yes\nthen ship"},
 	} {
 		t.Run(tc.verb, func(t *testing.T) {
 			scheme, err := Scheme()
@@ -163,6 +164,15 @@ func TestNoteCloseReasons(t *testing.T) {
 			if err != nil || len(after) != 1 || after[0].ID != before[0].ID || after[0].Line != before[0].Line {
 				t.Fatalf("feed after expiry: %+v %v", after, err)
 			}
+			if tc.verb == noteAnsweredEvent {
+				raw := &v1alpha1.Note{}
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(NoteObject(team, 1)), raw); err != nil {
+					t.Fatal(err)
+				}
+				if raw.Status.State != noteAnswered || raw.Status.Answer != tc.answer || raw.Status.AnsweredBy != pia.Person || raw.Status.AnsweredAt == nil || !raw.Status.AnsweredAt.Time.Equal(now) {
+					t.Fatalf("retained answer status: %+v", raw.Status)
+				}
+			}
 			st, err := s.Read()
 			if err != nil || len(st.Notes) != 0 {
 				t.Fatalf("closed note listed: %+v %v", st, err)
@@ -188,5 +198,92 @@ func TestLegacyDefaultCloseReason(t *testing.T) {
 	closed, err := s.NoteClosure(1)
 	if err != nil || closed == nil || closed.Verb != noteDefaultedEvent || closed.By.Name != "" || closed.By.Person != "" {
 		t.Fatalf("legacy close attribution: %+v %v", closed, err)
+	}
+}
+
+func TestLegacySameNumberDefaultsKeepTheirOwnClosures(t *testing.T) {
+	scheme, err := Scheme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	teams := []string{"alpha", "beta"}
+	objects := make([]client.Object, 0, len(teams))
+	for _, team := range teams {
+		n := NoteObject(team, 3).(*v1alpha1.Note)
+		n.Spec = v1alpha1.NoteSpec{ID: 3, Kind: state.NoteDecision, Due: apiTime(now.Add(-time.Hour)), Default: "wait for " + team}
+		n.Status = v1alpha1.NoteStatus{State: noteOpen, By: apiParty(state.Party{Team: team}), At: metav1.NewTime(now)}
+		objects = append(objects, n)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha1.Note{}).WithObjects(objects...).Build()
+	s := New(c)
+	actor := state.Party{Name: "timer", Team: "operations"}
+	err = s.Update(func(st *state.State) ([]state.Event, error) {
+		var events []state.Event
+		for _, n := range st.Notes {
+			events = append(events, state.Event{At: now, By: actor, NoteTeam: n.By.Team, Verb: noteDefaultedEvent, Detail: "#3 defaulted: " + n.Default})
+		}
+		st.Defaulted, st.Notes = st.Notes, nil
+		return events, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := &corev1.EventList{}
+	if err := c.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("events: %+v", list.Items)
+	}
+	ids := map[string]bool{}
+	for _, team := range teams {
+		n := &v1alpha1.Note{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(NoteObject(team, 3)), n); err != nil {
+			t.Fatal(err)
+		}
+		closure := n.Status.Closure
+		if closure == nil || closure.Detail != "#3 defaulted: wait for "+team || closure.By.Team != actor.Team || closure.By.Name != actor.Name {
+			t.Fatalf("closure for %s: %+v", team, closure)
+		}
+		if ids[closure.ID] {
+			t.Fatal("duplicate closure ID")
+		}
+		ids[closure.ID] = true
+		matches := 0
+		for _, e := range list.Items {
+			if e.InvolvedObject.Namespace == n.Namespace {
+				matches++
+				if e.InvolvedObject.Name != n.Name || e.Message != closure.Detail || e.Annotations[idAnnotation] != closure.ID {
+					t.Fatalf("event for %s: %+v", team, e)
+				}
+			}
+		}
+		if matches != 1 {
+			t.Fatalf("events for %s: %d", team, matches)
+		}
+	}
+	entries, err := New(c).Feed(0)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("feed: %+v, %v", entries, err)
+	}
+	for _, entry := range entries {
+		if !ids[entry.ID] {
+			t.Fatalf("unexpected feed ID: %s", entry.ID)
+		}
+		delete(ids, entry.ID)
+	}
+	if len(ids) != 0 {
+		t.Fatal("missing closures in feed")
+	}
+}
+
+func TestQualifiedNoteEventWaitsForItsTeam(t *testing.T) {
+	e := state.Event{NoteTeam: "beta", Detail: "#3 defaulted"}
+	written := []client.Object{NoteObject("alpha", 3)}
+	for _, all := range []bool{false, true} {
+		if got := on(written, e, all); got != nil {
+			t.Fatalf("routed to another team: %+v", got)
+		}
 	}
 }

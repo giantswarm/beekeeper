@@ -199,7 +199,7 @@ func findRuns(args []string) (starts, runs []string) {
 
 // findQuiet are commands a find action runs that print no file content: they
 // delete or overwrite, which the delete guard judges, or echo the found path.
-var findQuiet = map[string]bool{"shred": true, "unlink": true, "rmdir": true, echoCommand: true, printfCommand: true}
+var findQuiet = map[string]bool{"shred": true, unlinkCmd: true, "rmdir": true, echoCommand: true, printfCommand: true}
 
 // findReads reports whether find's actions run a command that is neither a
 // metadata command nor quiet. Moving a found file can expose its content
@@ -361,7 +361,7 @@ func printsPaths(name string, args []string) bool {
 }
 
 // pathConsumers take a substituted path as an argument without opening it.
-var pathConsumers = map[string]bool{echoCommand: true, printfCommand: true, testCommand: true, "[": true, "[[": true, "basename": true, dirnameCmd: true, "mkdir": true}
+var pathConsumers = map[string]bool{echoCommand: true, printfCommand: true, testCommand: true, "[": true, "[[": true, "basename": true, dirnameCmd: true, litMkdir: true}
 
 // inTestExpr reports whether the masked text before a substitution ends
 // inside a [[ … ]] expression, which segments split at its && and || so

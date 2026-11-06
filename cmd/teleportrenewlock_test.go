@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestTeleportRenewLockContention(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lock.Unlock() })
 	for _, keeper := range []bool{false, true} {
-		t.Run(map[bool]string{false: "manual", true: "keeper"}[keeper], func(t *testing.T) {
+		t.Run("keeper="+strconv.FormatBool(keeper), func(t *testing.T) {
 			var out bytes.Buffer
 			other := *a
 			other.out = &out
@@ -53,7 +54,7 @@ func TestTeleportRenewLockContention(t *testing.T) {
 			}
 			c := other.teleportRenewCmd()
 			c.SetContext(t.Context())
-			if err := c.Flags().Set("keeper", map[bool]string{false: "false", true: "true"}[keeper]); err != nil {
+			if err := c.Flags().Set("keeper", strconv.FormatBool(keeper)); err != nil {
 				t.Fatal(err)
 			}
 			err = c.RunE(c, nil)
@@ -101,7 +102,7 @@ func TestTeleportRenewLockReleased(t *testing.T) {
 		t.Skip("uses a shell tsh fixture")
 	}
 	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
+		t.Run("failure="+strconv.FormatBool(fail), func(t *testing.T) {
 			a := teleportApp(t)
 			a.as = teleportKeeper
 			a.cfg.StateDir = a.store.Dir()
@@ -110,18 +111,29 @@ func TestTeleportRenewLockReleased(t *testing.T) {
 			a.cfg.Teleport.LoginTimeout.Duration = time.Second
 			a.cfg.Teleport.Tsh = filepath.Join(t.TempDir(), "tsh")
 			status := `{"active":{"valid_until":"` + a.now.Add(12*time.Hour).Format(time.RFC3339) + `"}}`
-			login := "exit 0"
+			// The login itself asks a separate process for the lock: an unlock
+			// before the login would pass the release assertions below alone.
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(teleportLockTestDir, a.cfg.StateDir)
+			held := filepath.Join(t.TempDir(), "held")
+			login := "'" + self + "' -test.run='^TestTeleportRenewLockProcess$' && : > '" + held + "'; exit 0"
 			if fail {
-				login = "exit 1"
+				login = strings.TrimSuffix(login, "0") + "1"
 			}
 			script := "#!/bin/sh\ncase \"$1\" in\nstatus) printf '%s\\n' '" + status + "';;\nlogin) " + login + ";;\n*) exit 2;;\nesac\n"
-			if err := os.WriteFile(a.cfg.Teleport.Tsh, []byte(script), 0o700); err != nil {
+			if err := os.WriteFile(a.cfg.Teleport.Tsh, []byte(script), 0o700); err != nil { //nolint:gosec // a test-owned executable
 				t.Fatal(err)
 			}
 			c := a.teleportRenewCmd()
 			c.SetContext(t.Context())
 			if err := c.RunE(c, nil); (err != nil) != fail {
 				t.Fatalf("renewal error = %v, want failure = %v", err, fail)
+			}
+			if _, err := os.Stat(held); err != nil {
+				t.Fatalf("the login ran without the renewal lock held: %v", err)
 			}
 			lock := flock.New(filepath.Join(a.cfg.StateDir, teleportRenewLock))
 			ok, err := lock.TryLock()
