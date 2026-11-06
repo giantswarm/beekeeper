@@ -6,6 +6,8 @@
 #    ancestor of HEAD, or
 # 2. HEAD is a strict ancestor of any existing release or release-candidate
 #    tag (v*.*.* or v*.*.*-rc.*).
+# Either rule refuses promoting a candidate older than the newest one, before
+# any tag or release exists.
 set -euo pipefail
 
 tag="${1:?missing release tag}"

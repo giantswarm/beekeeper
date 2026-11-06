@@ -103,21 +103,27 @@ func (s *Server) runCodex(ctx context.Context, ref Ref, j Journal) error {
 			return nil
 		})
 	}
-	thread, accepted, turnErr := s.codexTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if !accepted || thread == "" {
-		return s.codexEnd(ctx, ref, Failed, "harness failed or ended before first-task acceptance")
-	}
-	// Acceptance is delivery evidence, not a finished turn: a turn that
-	// fails afterwards ends the execution as failed, so its task is
-	// recovered instead of a silent runner holding the lease and the room.
-	if turnErr != nil {
-		return s.codexEnd(ctx, ref, Failed, codexTurnFailure)
-	}
-	if !j.Request.Messaging {
-		return s.codexEnd(ctx, ref, Exited, "")
+	thread := j.Thread
+	// A continuation has no first turn: its next stored message is the turn.
+	if !j.continuing() {
+		var accepted bool
+		var turnErr error
+		thread, accepted, turnErr = s.codexTurn(ctx, ref, h, env, log, j, j.Request.Prompt, "", first)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !accepted || thread == "" {
+			return s.codexEnd(ctx, ref, Failed, "harness failed or ended before first-task acceptance")
+		}
+		// Acceptance is delivery evidence, not a finished turn: a turn that
+		// fails afterwards ends the execution as failed, so its task is
+		// recovered instead of a silent runner holding the lease and the room.
+		if turnErr != nil {
+			return s.codexEnd(ctx, ref, Failed, codexTurnFailure)
+		}
+		if !j.Request.Messaging {
+			return s.codexEnd(ctx, ref, Exited, "")
+		}
 	}
 	if err := s.update(ctx, ref, func(j *Journal) error {
 		j.InTurn, j.LastActive = false, s.now()

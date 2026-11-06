@@ -224,6 +224,13 @@ until the host runs that release:
   after it, on the updated host, and the coordinator then rebinds that
   execution to the pinned policy as `agents recover` does; an execution it
   cannot rebind is named in the update's line with that retry;
+- an execution whose process exited (a desk-review park closes its input) is
+  not busy; it goes on when `agents wake` or `agents resume` names it, or when
+  the wait it parked on settles. The host runs the same unit in the same
+  workspace and conversation under a fresh coordinator receipt, inside its
+  admission and room. It refuses a stopped or retired execution, one on omp,
+  one with an unresolved delivery, and one whose bound rules are no longer
+  installed: that one is not rebound, because only a running execution is;
 - a host whose update fails (unreachable, no signed release, a prepare or
   check that fails) is held: no start there until an update succeeds. The
   loop hands the hold on once as a finding (`supervisor.file`, delivered by

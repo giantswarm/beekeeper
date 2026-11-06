@@ -62,7 +62,7 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 		return "Refused: " + what + " reads membership with the App's token an agent's `gh` carries, which sees public " +
 			"memberships only: its 404 for a private member reads as \"not a member\", and the team endpoints answer 403. " +
 			"Read membership with `" + person + "`, which answers member, not a member, or permission missing from the " +
-			"person's own login; a team's roster is a question to the supervisor."
+			"person's own login; a team's logins with `beekeeper person --team <slug> --org <org>`, read the same way."
 	}
 	return ""
 }

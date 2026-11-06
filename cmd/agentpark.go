@@ -446,7 +446,8 @@ resumed it by hand. Before retirement, a gone agent can also be resumed:
 its task becomes busy again. After it, a worker off the roster is resumed by
 its exact name as agents wake reaches it: its last task and its own
 conversation come back, or the refusal says its harness cannot continue and
-names its transcript. A recent agent that is not parked is refused:
+names its transcript. A parked SSH worker whose process exited goes on the
+same way (agents wake). A recent agent that is not parked is refused:
 agents wake messages it. While USAGE HIGH holds on the 5-hour window
 (capacity.usage.highPercent), resume refuses until fiveHour.resetsAt
 unless --force is given.
