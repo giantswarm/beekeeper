@@ -7,9 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/giantswarm/beekeeper/internal/codex"
 	"github.com/giantswarm/beekeeper/internal/config"
-	"gopkg.in/yaml.v3"
 )
 
 // fatalHarnessConfig runs in a timeout-bounded child of the sentinel. It uses

@@ -110,10 +110,10 @@ inputs and outputs in the selected configuration.`,
 			defer func() {
 				_ = broker.Process.Signal(syscall.SIGTERM)
 				select {
-				case <-done:
+				case <-done: //nolint:errcheck // only await shutdown; SIGTERM is expected to fail Wait
 				case <-time.After(brokeredStopDelay):
 					_ = broker.Process.Kill()
-					<-done
+					<-done //nolint:errcheck // only reap the killed broker
 				}
 			}()
 			deadline := time.Now().Add(10 * time.Second)

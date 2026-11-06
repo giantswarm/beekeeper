@@ -446,13 +446,13 @@ func TestFatalCodexStartupFailureExcludesHarnessUntilVerified(t *testing.T) {
 }
 
 func TestFatalMalformedConfigurationAdmitsOneRecoveryOwner(t *testing.T) {
-	for _, hold := range []string{ghNone, bgStopCmd, holdStarts, holdGitHub, fatalCoreRepository, "capacity"} {
+	for _, hold := range []string{ghNone, bgStopCmd, holdStarts, holdGitHub, fatalCoreRepository, loopCapacity} {
 		t.Run(hold, func(t *testing.T) {
 			a, _ := stubApp(t)
 			dir := a.store.Dir()
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			ceiling := 1
-			if hold == "capacity" {
+			if hold == loopCapacity {
 				ceiling = 0
 			}
 			valid := []byte(fmt.Sprintf("stateDir: %q\ncapacity: {ceiling: %d}\nfatal: {repositories: []}\n", dir, ceiling))
@@ -476,7 +476,7 @@ func TestFatalMalformedConfigurationAdmitsOneRecoveryOwner(t *testing.T) {
 			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 				if hold == bgStopCmd {
 					st.Stop = &state.Stop{Reason: "configured stop", At: time.Now()}
-				} else if hold != ghNone && hold != "capacity" {
+				} else if hold != ghNone && hold != loopCapacity {
 					st.Holds = []state.Hold{{Target: hold, Reason: "deliberate hold", At: time.Now()}}
 				}
 				return nil, nil
@@ -504,7 +504,7 @@ func TestFatalMalformedConfigurationAdmitsOneRecoveryOwner(t *testing.T) {
 				plat = platform.Stub()
 				plat.Machine = roomyMachine{Machine: plat.Machine}
 				if _, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, forWorker); err != nil {
-					if hold != "capacity" || Code(err) != ExitRefused {
+					if hold != loopCapacity || Code(err) != ExitRefused {
 						t.Fatalf("unexpected admission failure: %v", err)
 					}
 					return "", Code(err), nil
