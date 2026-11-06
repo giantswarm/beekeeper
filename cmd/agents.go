@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -186,7 +187,7 @@ leaves its own park with agents resume, no agent named.`,
 			var reg registration
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var err error
-				reg, err = registerAgent(st, me, live, a.now.UTC())
+				reg, err = a.registerAgent(st, me, live, a.now.UTC())
 				if err != nil {
 					return nil, err
 				}
@@ -804,4 +805,22 @@ func (a *app) printAgents(views []agentView) {
 	if rowless > 0 {
 		_, _ = fmt.Fprintf(a.out, "%s without a desktop row: the desktop never imported the session (at its cap of CLIs, say); the standby watch imports one whose headless turn runs, the doctor reopens one whose CLI does not run, once the desktop has room\n", plural(rowless, "agent"))
 	}
+}
+
+// registerAgent transfers the replaced roster entries' claims under the state lock.
+func (a *app) registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
+	reg, err := registerAgent(st, me, live, now)
+	if err != nil {
+		return reg, err
+	}
+	return reg, a.handRegistration(st, reg, me)
+}
+
+func (a *app) handRegistration(st *state.State, reg registration, to state.Party) error {
+	for _, old := range reg.replaced {
+		if _, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), old.Party, to); err != nil {
+			return err
+		}
+	}
+	return nil
 }

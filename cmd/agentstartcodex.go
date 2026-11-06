@@ -148,7 +148,7 @@ func (a *app) startCodexAgent(ctx context.Context, sp agentStart) error {
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
