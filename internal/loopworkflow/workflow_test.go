@@ -1,7 +1,7 @@
 //go:build integration
 
-// Package loopworkflow exercises the public CLI across the loop/parser/merge
-// boundary. No production function variable is replaced by these tests.
+// These tests exercise the public CLI across the loop/parser/merge boundary. No
+// production function variable is replaced by them.
 package loopworkflow
 
 import (

@@ -68,7 +68,7 @@ func (w *watcher) sampleDisk(now time.Time, d machine.Disk, t *proc.Table, owner
 	if w.disk.pathsAt.IsZero() || now.Sub(w.disk.pathsAt) >= minDiskSpan {
 		read := w.disk.readPaths
 		if read == nil {
-			read = readDiskPaths
+			read = func(ctx context.Context) []diskPath { return readDiskPaths(ctx, w.diskPathRoots()) }
 		}
 		paths := read(context.Background())
 		diskPathGrowth(paths, w.disk.paths)

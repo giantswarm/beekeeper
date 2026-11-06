@@ -76,7 +76,7 @@ func TestCacheRemovalStaysInOpenedRoot(t *testing.T) {
 			}
 			switch operation {
 			case cacheRootTestEntry:
-				err = removeEntry(root, u, nil)
+				err = removeEntry(root, u, Refs{})
 			case "file":
 				err = removeFile(root, dir, u)
 			case cacheRootTestEmpty:
