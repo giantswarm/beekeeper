@@ -114,6 +114,8 @@ func TestRouteBuildsBackground(t *testing.T) {
 	}
 }
 
+const viewerGraphQLCommand = `gh api graphql -f query='{ viewer { login } }'`
+
 func TestGraphQLRoute(t *testing.T) {
 	const query = `gh api graphql -f query='{ repository(owner: "example", name: "notes") { id } }'`
 	for _, tc := range []struct{ name, in, want string }{
@@ -130,7 +132,7 @@ func TestGraphQLRoute(t *testing.T) {
 			`gh api graphql -f query='mutation { x(repository(owner: "example", name: "notes")) { id } }'`},
 		{"two owners", `gh api graphql -f query='{ a: repository(owner: "one", name: "x") { id } b: repository(owner: "two", name: "y") { id } }'`,
 			`gh api graphql -f query='{ a: repository(owner: "one", name: "x") { id } b: repository(owner: "two", name: "y") { id } }'`},
-		{"no repository", `gh api graphql -f query='{ viewer { login } }'`, `gh api graphql -f query='{ viewer { login } }'`},
+		{"no repository", viewerGraphQLCommand, viewerGraphQLCommand},
 		{"a variable no flag sets", `gh api graphql -f query='query($o: String!) { repository(owner: $o, name: "x") { id } }'`,
 			`gh api graphql -f query='query($o: String!) { repository(owner: $o, name: "x") { id } }'`},
 		{"text about a query", `echo 'gh api graphql repository(owner: "example", name: "notes")'`,
