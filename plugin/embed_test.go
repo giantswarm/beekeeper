@@ -372,7 +372,7 @@ func TestTheGuideAsksWaitingDecisionsInItsConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	guide := strings.Join(strings.Fields(Skill("guide")), " ")
-	if !strings.Contains(guide, "in the question dialog of this conversation") || !strings.Contains(guide, "without waiting for them to ask") {
+	if !strings.Contains(guide, "ask it in the conversation") || !strings.Contains(guide, "without waiting for them to ask") {
 		t.Error("the guide skill does not ask waiting decisions in its conversation")
 	}
 }

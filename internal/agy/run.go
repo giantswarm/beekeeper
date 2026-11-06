@@ -555,9 +555,12 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 				_ = cmd.Process.Kill()
 			}
 			drain(events, stderrDone)
-			<-processExited
+			exitErr := <-processExited
 			_ = fifo.Close()
 			qerr := getQuotaErr()
+			if qerr == nil {
+				return exitErr
+			}
 			_ = WriteQuotaError(inbox, qerr)
 			return qerr
 		case err := <-processExited:
@@ -575,12 +578,15 @@ func Run(ctx context.Context, inbox, logPath string, argv []string, stderr io.Wr
 			_ = stdinPipe.Close()
 			_ = cmd.Process.Kill()
 			drain(events, stderrDone)
-			<-processExited
+			exitErr := <-processExited
 			if qerr := getQuotaErr(); qerr != nil {
 				_ = WriteQuotaError(inbox, qerr)
 				return qerr
 			}
-			return ctx.Err()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return exitErr
 		case ev, ok := <-events:
 			if !ok {
 				events = nil

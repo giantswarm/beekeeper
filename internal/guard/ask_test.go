@@ -14,8 +14,8 @@ func TestHookLeavesQuestionsToTheGuide(t *testing.T) {
 		ev["tool_name"] = AskTool
 		return decideEvent(t, h, ev)
 	}
-	if d := askFrom(h, guide); d != nil {
-		t.Errorf("the guide's question is refused: %+v", d)
+	if d := askFrom(h, guide); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "blocking question dialog") {
+		t.Errorf("the guide must keep serving while a question waits: %+v", d)
 	}
 	d := askFrom(h, "worker-session")
 	if d == nil || d.PermissionDecision != decisionDeny {

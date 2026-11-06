@@ -97,6 +97,7 @@ type (
 	plainRelief            Relief
 	plainCLI               CLI
 	plainRelayDue          RelayDue
+	plainGuideWork         GuideWork
 	plainRole              Role
 	plainGrant             Grant
 	plainHold              Hold
@@ -298,3 +299,8 @@ func (v *TranscriptRequest) UnmarshalJSON(b []byte) error {
 func (v TranscriptRequest) MarshalJSON() ([]byte, error) {
 	return encodeKeeping(plainTranscriptRequest(v), v.rest)
 }
+
+func (v *GuideWork) UnmarshalJSON(b []byte) error {
+	return decodeKeeping(b, (*plainGuideWork)(v), &v.rest)
+}
+func (v GuideWork) MarshalJSON() ([]byte, error) { return encodeKeeping(plainGuideWork(v), v.rest) }

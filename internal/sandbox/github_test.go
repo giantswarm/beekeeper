@@ -257,13 +257,14 @@ func TestRuntimeDirClosedButTheEgressDir(t *testing.T) {
 	if deny := fs["denyRead"].([]string); !slices.Contains(deny, "/"+run) || !slices.Contains(deny, "~/") {
 		t.Errorf("denyRead = %v, want the home and the runtime directory", deny)
 	}
-	if allow := fs["allowRead"].([]string); !slices.Contains(allow, "/"+EgressDir(run)) {
+	if allow := fs["allowRead"].([]string); !slices.Contains(allow, "/"+p.Egress) {
 		t.Errorf("allowRead = %v, want the egress directory", allow)
 	}
 	for path, want := range map[string]bool{
 		filepath.Join(run, "containers/auth.json"): false,
 		filepath.Join(run, "beekeeper/vault.sock"): false,
-		filepath.Join(EgressDir(run), EgressCA):    true,
+		filepath.Join(EgressDir(run), EgressCA):    false,
+		filepath.Join(p.Egress, EgressCA):          true,
 	} {
 		if got := p.Readable(path, home); got != want {
 			t.Errorf("Readable(%s) = %v, want %v", path, got, want)

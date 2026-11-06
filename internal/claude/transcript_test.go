@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -316,5 +317,34 @@ func TestTailKeepsDialogAlongsideText(t *testing.T) {
 	dialogs, err := DialogsSince(path, time.Time{})
 	if err != nil || len(dialogs) != 1 || dialogs[0].Text != "Wait — build the button first" {
 		t.Fatalf("DialogsSince = %+v, %v", dialogs, err)
+	}
+}
+
+func TestTailExpandsBeyondInitialWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "long.jsonl")
+	var b strings.Builder
+	for i := 0; i < 700; i++ {
+		raw, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": fmt.Sprintf("turn %d %s", i, strings.Repeat("x", 4096))}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{3, 650, 3000, 0} {
+		turns, err := Tail(path, n)
+		want := min(n, 700)
+		if n <= 0 {
+			want = 700
+		}
+		if err != nil || len(turns) != want {
+			t.Fatalf("Tail(%d) got %d want %d: %v", n, len(turns), want, err)
+		}
+		if want == 700 && !strings.HasPrefix(turns[0].Text, "turn 0 ") {
+			t.Fatal("lost the person's opening goal")
+		}
 	}
 }

@@ -174,11 +174,17 @@ func (r *RelayDue) At(sup *Supervisor, relayAt int64) bool {
 // the holders relays relieved, what beekeeper saw of its CLI and the relay
 // due the watch reported: the guide's, in Guide.
 type Role struct {
-	Holder   *Supervisor `json:"holder,omitempty"`
-	Relay    *Relay      `json:"relay,omitempty"`
-	Relieved []Relief    `json:"relieved,omitempty"`
-	CLI      *CLI        `json:"cli,omitempty"`
-	RelayDue *RelayDue   `json:"relayDue,omitempty"`
+	// WorkChecked records the current guide turn's explicit work review.
+	WorkChecked *Party `json:"workChecked,omitempty"`
+	// WatchSeen is the last successful guide-feed heartbeat.
+	WatchSeen time.Time `json:"watchSeen,omitzero"`
+	// Delivered are independently delivered notices, scoped to their holder.
+	Delivered []string    `json:"delivered,omitempty"`
+	Holder    *Supervisor `json:"holder,omitempty"`
+	Relay     *Relay      `json:"relay,omitempty"`
+	Relieved  []Relief    `json:"relieved,omitempty"`
+	CLI       *CLI        `json:"cli,omitempty"`
+	RelayDue  *RelayDue   `json:"relayDue,omitempty"`
 	// Fed are the keys of what the guide's feed reported: the open notes
 	// for a person and the sessions waiting on one, each said once.
 	Fed []string `json:"fed,omitempty"`
@@ -1179,8 +1185,25 @@ type Handover struct {
 	PID int `json:"pid"`
 }
 
+// GuideWork is work owned by the guide role across session relays.
+// Kind distinguishes tasks, standing goals, and temporary changes to restore.
+type GuideWork struct {
+	ID     int       `json:"id"`
+	Kind   string    `json:"kind"`
+	Text   string    `json:"text"`
+	By     Party     `json:"by"`
+	Due    time.Time `json:"due"`
+	Source string    `json:"source,omitempty"`
+	rest   rest
+}
+
 // State is the whole document.
 type State struct {
+	GuideReports  []string    `json:"guideReports,omitempty"`
+	GuideWork     []GuideWork `json:"guideWork,omitempty"`
+	NextGuideWork int         `json:"nextGuideWork,omitempty"`
+	// EventOutbox retains the exact log append with the state it commits.
+	EventOutbox *EventOutbox `json:"eventOutbox,omitempty"`
 	// ProductionNotes are consumed authorities, retained across hook processes.
 	ProductionNotes   map[int]time.Time `json:"productionNotes,omitempty"`
 	Handovers         []Handover        `json:"handovers,omitempty"`
@@ -1843,8 +1866,17 @@ func (s *FileStore) Read() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	st, err := s.load()
+	unlock()
+	if err != nil || st.EventOutbox == nil {
+		return st, err
+	}
+	unlock, err = s.lock(false, lockWait)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
-	return s.load()
+	return s.recoverEvents()
 }
 
 // lockWait bounds every wait for the state lock but Log's: a holder that
@@ -1927,9 +1959,9 @@ func (s *FileStore) Peek() (*State, error) { return s.load() }
 // Update runs fn on the state under the exclusive lock and writes the result
 // back with the events fn returns under the same lock. When fn fails nothing
 // is written. Newer release state refuses the callback with StaleWriterError.
-// Event-log open failures leave state unchanged. Later event write/close failures
-// and crashes can still leave state and events inconsistent; this is not a
-// transaction across the two files.
+// Event-log open failures leave state unchanged. Once state commits, its durable
+// outbox retains the events until their append is synced. Reads and later writes
+// recover an interrupted append before using the state.
 func (s *FileStore) Update(fn func(*State) ([]Event, error)) error {
 	return s.UpdateWithin(lockWait, fn)
 }
@@ -1941,7 +1973,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 		return err
 	}
 	defer unlock()
-	st, err := s.load()
+	st, err := s.recoverEvents()
 	if err != nil {
 		return err
 	}
@@ -1955,23 +1987,7 @@ func (s *FileStore) UpdateWithin(wait time.Duration, fn func(*State) ([]Event, e
 	if err := s.stamp(st, time.Now()); err != nil {
 		return err
 	}
-	var log *os.File
-	if len(events) > 0 {
-		log, err = s.openEventLog()
-		if err != nil {
-			return err
-		}
-	}
-	if err := writeJSON(s.path("state.json"), st); err != nil {
-		if log != nil {
-			_ = log.Close()
-		}
-		return err
-	}
-	if log == nil {
-		return nil
-	}
-	return appendEvents(log, events)
+	return s.commitEvents(st, events)
 }
 
 // Log appends events that change no state, a build's run for one, under
@@ -1983,6 +1999,9 @@ func (s *FileStore) Log(events ...Event) error {
 		return err
 	}
 	defer unlock()
+	if _, err := s.recoverEvents(); err != nil {
+		return err
+	}
 	return s.append(events)
 }
 
@@ -2003,6 +2022,9 @@ func (s *FileStore) RecordWithin(wait time.Duration, events ...Event) error {
 		return err
 	}
 	defer unlock()
+	if _, err := s.recoverEvents(); err != nil {
+		return err
+	}
 	return s.append(events)
 }
 
@@ -2312,9 +2334,18 @@ func writeJSON(path string, v any) error {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
 }
