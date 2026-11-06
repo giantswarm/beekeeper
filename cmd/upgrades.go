@@ -2,8 +2,12 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
@@ -45,7 +49,7 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		read := r.Read(ctx, targets, now, upgrade.HeldClusters(st, now))
 		if ctx.Err() == nil {
 			rs.Keep(read, now)
-			_ = a.store.WriteFile(upgrade.ReadingsFile, rs)
+			_ = a.publishUpgrades(ctx, rs)
 		}
 	}
 	out := make([]upgrade.Status, 0, len(al.Installations))
@@ -57,6 +61,29 @@ func (a *app) upgradeStatuses(ctx context.Context, st *state.State, now time.Tim
 		out = append(out, upgrade.WithHoldVersions(r.Status, st, now))
 	}
 	return out
+}
+
+// publishUpgrades merges against the latest cache while holding a separate
+// process-shared lock. It also returns that merged view through rs.
+// Never acquire the state lock here: watches publish during a state update.
+func (a *app) publishUpgrades(ctx context.Context, rs upgrade.Readings) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	l := flock.New(filepath.Join(a.store.Dir(), upgrade.ReadingsFile+".lock"))
+	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("upgrade readings lock unavailable")
+	}
+	defer func() { _ = l.Unlock() }()
+	var latest upgrade.Readings
+	if _, err := a.store.ReadFile(upgrade.ReadingsFile, &latest); err != nil {
+		return err
+	}
+	rs.Merge(latest)
+	return a.store.WriteFile(upgrade.ReadingsFile, rs)
 }
 
 // upgradeFresh is how long the watch uses an installation's reading: up to
@@ -100,6 +127,10 @@ func (w *watcher) upgradeWatchLive(now time.Time) bool {
 // named once per watch (sayNoContext). The standby watch runs it only while no
 // supervisor's watch does, and says so once.
 func (w *watcher) upgradeCycle(ctx context.Context) {
+	w.upgradeCycleRead(ctx, w.upgradeStatuses)
+}
+
+func (w *watcher) upgradeCycleRead(ctx context.Context, read func(context.Context, *state.State, time.Time, upgrade.Readings, func(string) time.Duration) []upgrade.Status) {
 	now := w.clk().Now()
 	if w.standby {
 		live := w.upgradeWatchLive(now)
@@ -110,17 +141,17 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 	} else {
 		_ = w.store.WriteFile(upgradeWatchFile, upgradeBeat{At: now})
 	}
-	st, err := w.store.Read()
-	if err != nil {
-		w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
-		return
-	}
-	statuses := w.upgradeStatuses(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
-	if ctx.Err() != nil {
-		return
-	}
-	var begun, ended []state.Hold
-	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
+	var statuses []upgrade.Status
+	var begun, ended, holds []state.Hold
+	// Observation and reconciliation must share the state transaction so another
+	// watch cannot apply an observation between these two steps. Retryable stores
+	// repeat the observation along with reconciliation.
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		now = w.clk().Now()
+		statuses = read(ctx, st, now, w.upgrades, w.upgradeFresh(st, now))
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		begun, ended = nil, nil
 		var ev []state.Event
 		for _, s := range statuses {
@@ -136,8 +167,12 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 			}
 			begun, ended = append(begun, b...), append(ended, e...)
 		}
+		holds = append([]state.Hold(nil), st.Holds...)
 		return ev, nil
 	})
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		w.fail("upgrades", "UPGRADES unknown: the state does not load (%v)", err)
 		return
@@ -150,7 +185,7 @@ func (w *watcher) upgradeCycle(ctx context.Context) {
 	for _, s := range statuses {
 		if s.Err != "" {
 			w.upgradeFailures[s.Installation]++
-			for _, h := range st.Holds {
+			for _, h := range holds {
 				if h.Active(now) && strings.HasPrefix(h.Target, upgrade.HoldPrefix+s.Installation+"/") {
 					w.emitNow("upgrade-reader", "%s held: reader failed %d consecutive ticks: %s", h.Target, w.upgradeFailures[s.Installation], s.Err)
 				}
