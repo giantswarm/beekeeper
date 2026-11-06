@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const fatalUnavailable = "unavailable"
+const (
+	fatalUnavailable = "unavailable"
+	fatalRepairTask  = "repair"
+)
 
 func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 	t.Helper()
@@ -25,6 +29,81 @@ func fakeFatalRun(t *testing.T, run func([]string) (string, int)) {
 		return out, "", code, nil
 	}
 	t.Cleanup(func() { fatalRun = old })
+}
+
+func TestFatalRepairOwnerUsesProcessLiveness(t *testing.T) {
+	for _, tc := range []struct {
+		name                                     string
+		live, unknown, parked, importing, repair bool
+	}{
+		{"dead process can retry", false, false, false, false, true},
+		{"active process retains ownership", true, false, false, false, false},
+		{"unreadable process table retains ownership", false, true, false, false, false},
+		{"parked review retains ownership", false, false, true, false, false},
+		{"pending import retains ownership", false, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := stubApp(t)
+			dir := a.store.Dir()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(fmt.Sprintf("stateDir: %q\nfatal:\n  repositories: []\n  checks:\n    - name: startup\n      probe: [critical-probe]\n", dir)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a.cfgPath = path
+			now := time.Now().UTC()
+			q := fatal.Queue{}
+			q.Observe(fatal.Observation{ID: "check:startup", Failed: true}, now.Add(-time.Hour))
+			x := q.Reserve(now.Add(-20*time.Minute), func(string) bool { return false })
+			owner := x.Owner
+			if err := q.Save(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				ag := state.Agent{Party: state.Party{Name: owner, Session: "synthetic-fatal-repair"}, Task: fatalRepairTask}
+				if tc.parked {
+					ag.Park = &state.Park{At: now}
+				}
+				if tc.importing {
+					ag.Import = &state.ImportWait{Until: now.Add(time.Hour)}
+				}
+				st.Agents = append(st.Agents, ag)
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			fakeFatalRun(t, func(args []string) (string, int) {
+				if slices.Contains(args, "is-enabled") {
+					return fatalDisabledState, 1
+				}
+				if args[0] == "critical-probe" {
+					return "", 1
+				}
+				return "", 0
+			})
+			oldLive := fatalSessionAlive
+			fatalSessionAlive = func(*app, state.Party) (bool, error) {
+				if tc.unknown {
+					return false, errors.New("process snapshot unavailable")
+				}
+				return tc.live, nil
+			}
+			t.Cleanup(func() { fatalSessionAlive = oldLive })
+			oldRun := beekeeperRun
+			starts := 0
+			beekeeperRun = func(context.Context, ...string) (string, int, error) { starts++; return "", 0, nil }
+			t.Cleanup(func() { beekeeperRun = oldRun })
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (starts == 1) != tc.repair || st.Agents[0].Done != tc.repair {
+				t.Fatalf("starts %d; done %v", starts, st.Agents[0].Done)
+			}
+		})
+	}
 }
 
 func TestFatalServiceHonorsDisabledIntent(t *testing.T) {
@@ -268,7 +347,7 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 			t.Fatal("owner missing")
 		}
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: args[i+1]}, Task: "repair"})
+			st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: args[i+1]}, Task: fatalRepairTask})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)

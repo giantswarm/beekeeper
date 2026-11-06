@@ -14,6 +14,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/install"
@@ -38,6 +39,15 @@ const (
 )
 
 var fatalRun = runArgv
+
+var fatalSessionAlive = func(a *app, p state.Party) (bool, error) {
+	sessions, _, err := a.sessions()
+	if err != nil {
+		return false, err
+	}
+	_, live := claude.Live(sessions, p)
+	return live, nil
+}
 
 // fatalCmd deliberately overrides the root's configuration-dependent pre-run.
 // The installed unit supplies the state directory out of band, so malformed
@@ -168,6 +178,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
+	a.store = store
 	st, err := store.Read()
 	if err != nil {
 		return err
@@ -296,9 +307,57 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	var deadOwners []state.Agent
 	x := q.Reserve(now, func(name string) bool {
-		return slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == name && !ag.Done && ag.Task != "" })
+		for _, ag := range st.Agents {
+			if ag.Name != name || ag.Done || ag.Task == "" {
+				continue
+			}
+			// Parked work owns its outage through review/proof. An importing
+			// or remote worker, or an unreadable process table, is not dead.
+			if ag.Park != nil || ag.Import.Pending(now) || ag.Execution != nil {
+				return true
+			}
+			for _, incident := range q.Incidents {
+				if incident.Owner == name && now.Sub(incident.LastAttempt) < 2*time.Minute {
+					return true
+				}
+			}
+			live, err := fatalSessionAlive(a, ag.Party)
+			if err != nil || live {
+				return true
+			}
+			deadOwners = append(deadOwners, ag)
+		}
+		return false
 	})
+	if len(deadOwners) > 0 {
+		if err := store.Update(func(current *state.State) ([]state.Event, error) {
+			if a.noStart(current) != "" {
+				return nil, errLoopLater
+			}
+			var events []state.Event
+			for _, dead := range deadOwners {
+				for i := range current.Agents {
+					ag := &current.Agents[i]
+					if ag.Name != dead.Name {
+						continue
+					}
+					if ag.Done || ag.Task == "" {
+						continue
+					}
+					if !ag.Is(dead.Party) || !ag.ActivityAt.Equal(dead.ActivityAt) || !ag.AssignedAt.Equal(dead.AssignedAt) || ag.Park != nil || ag.Import.Pending(now) || ag.Execution != nil {
+						return nil, errLoopLater
+					}
+					ag.LastTask, ag.Task, ag.Done, ag.IdleSince = ag.Task, "", true, now
+					events = append(events, state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.owner-ended", Detail: dead.Name + ": repair process ended before verified recovery"})
+				}
+			}
+			return events, nil
+		}); err != nil {
+			return err
+		}
+	}
 	if x == nil {
 		return q.Save(dir)
 	}
