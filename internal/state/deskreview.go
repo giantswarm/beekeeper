@@ -98,6 +98,9 @@ type ReviewRequest struct {
 	Ref   string `json:"ref"`
 	Head  string `json:"head"`
 	Round int    `json:"round"`
+	// By is the session that asked for the review by hand (agents review);
+	// the loop's own reviews name none. It gets the verdict.
+	By Party `json:"by,omitzero"`
 }
 
 // ReviewNitCheck is a supervisor's explicit attestation that a new head only

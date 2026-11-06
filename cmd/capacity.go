@@ -867,7 +867,26 @@ func reviewCeiling(ceiling, extra int) int {
 	return ceiling + extra
 }
 
+// reviewDiskShare divides the disk floor for a review start: a review
+// builds little and is what lets work merge and free its worktrees, so a
+// disk just under the floor must not stop every review. The watch prunes
+// from the full floor on, whatever the review's own floor.
+const reviewDiskShare = 2
+
+// forStart is the headroom a start of kind is held to.
+func (h *headroom) forStart(kind startFor) *headroom {
+	if kind == forWorker || h == nil || h.Disk == nil || !h.Disk.Low {
+		return h
+	}
+	review, disk := *h, *h.Disk
+	disk.MinMiB /= reviewDiskShare
+	disk.Low = disk.FreeMiB < disk.MinMiB
+	review.Disk = &disk
+	return &review
+}
+
 func newStartCapacity(c agentCount, k config.Capacity, h *headroom, builds bool, kind startFor) *capacityView {
+	h = h.forStart(kind)
 	base := k.Ceiling
 	if kind != forWorker {
 		k.Ceiling = reviewCeiling(base, k.ReviewHeadroom)
@@ -1166,6 +1185,7 @@ func buildSelfHostedProviderView(name string, pCfg config.Provider, pa providerA
 // self-hosted provider's), the headroom against a start, and the first
 // choice whose provider has room.
 func buildProvidersCapacity(c agentCount, pa map[string]providerAgents, k config.Capacity, readings map[string]providerReadingResult, h *headroom, builds bool, exclude []string, kind startFor, now time.Time) *capacityView {
+	h = h.forStart(kind)
 	baseCeiling := k.Ceiling
 	extra := 0
 	if kind != forWorker {

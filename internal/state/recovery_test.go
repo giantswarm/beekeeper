@@ -163,10 +163,15 @@ func TestRecoveryFenceLetsALaterReleaseWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	noop := func(*State) ([]Event, error) { return nil, nil }
-	for version, allowed := range map[string]bool{recoveryRelease: true, "v1.5.0": false, recoveryNewer: false, "v2.0.1": true, recoveryDevBuild: false} {
-		w, _ := OpenVersion(dir, version)
-		if err := w.Update(noop); (err == nil) != allowed {
-			t.Fatalf("%s: allowed %v, got %v", version, allowed, err)
+	// The later release comes last: its save stamps the writer, which older
+	// versions then fail on for that reason instead of the fence.
+	for _, tc := range []struct {
+		version string
+		allowed bool
+	}{{recoveryRelease, true}, {"v1.5.0", false}, {recoveryNewer, false}, {recoveryDevBuild, false}, {"v2.0.1", true}} {
+		w, _ := OpenVersion(dir, tc.version)
+		if err := w.Update(noop); (err == nil) != tc.allowed {
+			t.Fatalf("%s: allowed %v, got %v", tc.version, tc.allowed, err)
 		}
 	}
 }

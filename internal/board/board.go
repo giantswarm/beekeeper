@@ -211,7 +211,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 			}
 			return snap.Parent(ref)
 		}
-		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now))})
+		out = append(out, Candidate{Item: it, Step: step, Match: match, Epic: epic, Skip: cmp.Or(skip, heldAbove(it.Ref, up, byRef), snap.planning(it, byRef), skipReason(it, b, now), assignedAbove(it.Ref, up, byRef, b.People))})
 	}
 	for i, st := range snap.Order {
 		if st.Search != "" {
@@ -225,7 +225,7 @@ func Rank(snap *Snapshot, b config.Board, now time.Time) []Candidate {
 				continue
 			}
 			m := matched(st, it)
-			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 {
+			if !st.SubIssues || it.OpenSubIssues == 0 || snap.planning(it, byRef) != "" || it.OpenBlockers > 0 || len(assignedOutside(it, b.People)) > 0 || assignedAbove(it.Ref, snap.Parent, byRef, b.People) != "" {
 				offer(it, st.Name, m, "", "")
 				continue
 			}
@@ -384,8 +384,7 @@ func skipReason(it Item, b config.Board, now time.Time) string {
 	if d := b.StaleAfter.Duration; d > 0 && now.Sub(it.Updated) > d {
 		return "no activity since " + it.Updated.Format(time.DateOnly)
 	}
-	others := slices.DeleteFunc(slices.Clone(it.Assignees), func(a string) bool { return containsFold(b.People, a) })
-	if len(others) > 0 {
+	if others := assignedOutside(it, b.People); len(others) > 0 {
 		return "assigned to " + strings.Join(others, ", ")
 	}
 	return ""

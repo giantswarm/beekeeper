@@ -2116,8 +2116,10 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	}
 	var lines []string
 	var due []dueItem
+	var verdicts []state.WorkerReport
 	err = w.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
+		verdicts = slices.DeleteFunc(slices.Clone(st.WorkerReports), func(r state.WorkerReport) bool { return r.TellTo == (state.Party{}) })
 		lines, evs, _ = fire(st)
 		w.records = st.Records
 		due = firedNow(st, w.now)
@@ -2131,6 +2133,7 @@ func (w *watcher) pending(ctx context.Context, sessions []*claude.Session) {
 	for _, l := range lines {
 		w.emitNow("pending", "%s", l)
 	}
+	w.tellReviewVerdicts(ctx, verdicts)
 	for _, n := range defaulted {
 		due = append(due, defaultedItem(&n))
 	}
@@ -2483,6 +2486,19 @@ func firePending(st *state.State, sessions []*claude.Session, now time.Time) ([]
 	}
 	st.WorkerReports = nil
 	return lines, evs
+}
+
+// tellReviewVerdicts wakes who started each review with its verdict: the
+// verdict may be a plain comment on GitHub, which shows no review state. A
+// wake that fails is said: the report above still carries the verdict.
+func (w *watcher) tellReviewVerdicts(ctx context.Context, reports []state.WorkerReport) {
+	for _, r := range reports {
+		to := cmp.Or(r.TellTo.Session, r.TellTo.HostSession, r.TellTo.Name)
+		msg := fmt.Sprintf("The desk review %q reports:\n%s", r.By.Name, r.Text)
+		if err := w.wakeAgent(ctx, watchParty, to, msg, ""); err != nil {
+			w.emitNow("pending", "REVIEW VERDICT NOT DELIVERED to %q from %q: %v", r.TellTo.Name, r.By.Name, err)
+		}
+	}
 }
 
 // reportLines are a worker's final report and each problem it found, a line
