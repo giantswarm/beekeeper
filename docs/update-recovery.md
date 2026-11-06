@@ -27,17 +27,26 @@ preserving both the candidate and the active previous recovery target.
 | Rolled back | Previous digest | Idempotent success; failed candidate stays quarantined |
 | Any phase | Unexpected digest or modified recovery bytes | Refuse without replacing the executable |
 
-After observing successful operation, run `beekeeper self-update
---complete-probation`. This explicitly ends probation, repeats the existing
-local canary checks, and promotes only the journal's matching installed
-candidate. A failed health check quarantines the candidate; it cannot be
-promoted. Another install is refused while probation or recovery is unfinished.
-No elapsed timeout or plugin sync alone counts as successful probation.
+Probation ends by itself at the next update, on every machine and execution
+host. An update run by the installed candidate is the evidence that it works:
+`beekeeper self-update` also repeats the local canary checks on it first, while
+an execution host's update, run over SSH by the candidate, has only that evidence.
+It then promotes the candidate, which becomes the recovery target. A failed check
+quarantines the candidate instead: it is never promoted, the update moves past it
+to the new verified release, and the recovery target stays the last known good.
+
+A process of another version proves nothing about the candidate, so its update is
+refused while probation is pending; run the installed binary instead.
+`beekeeper self-update --complete-probation` ends probation at once, with the same
+checks. No elapsed timeout or plugin sync alone counts as successful probation.
+
+Only `--complete-probation` lifts a recovery fence: an update's promotion leaves it
+in place, so writers stay fenced after a rollback until someone says otherwise.
 
 The first protected installation cannot authenticate a pre-existing executable's
 provenance. Its digest and version are recorded as displaced, but it is not
 advertised as a verified recovery target. Complete probation to establish the
-first last-known-good. If that first candidate fails, use a compatible signed
+first last-known-good; the next update does so too. If that first candidate fails, use a compatible signed
 release through operator recovery; there is no automatic bootstrap rollback.
 Existing pre-protocol executables do not gain protection retroactively.
 
@@ -75,9 +84,16 @@ interval. Pre-protocol processes that ignore this ceiling must be stopped before
 recovery. A caller with multiple state directories must coordinate recovery for
 all of them; the CLI guards the configured state directory.
 
-Installation requires write access to both the executable directory and its
-recovery directory. The former privileged rename fallback is intentionally
-removed because it bypassed the durable transaction. Permission, disk-full,
+An executable directory this account cannot write, a root-owned installation,
+keeps its transaction. Its recovery directory moves to
+`$XDG_STATE_HOME/beekeeper/update/<hash of the path>` (default `~/.local/state`) and
+staging with it. Download, verification, canary checks and the journal run as this
+account, and the journal is durable first; only the atomic replacement, of an
+update or a rollback, takes `sudo -n`. An interruption around it reconciles like
+any other. If sudo refuses, the binary stays, and the journal waits for that same
+release to be retried. A journal keeps its place if directory permissions change later.
+
+Disk-full,
 unknown journal schema and validation failures fail closed. An error after the
 executable rename can mean the candidate is already installed: inspect/reconcile
 the journal rather than assuming every error left the executable unchanged.

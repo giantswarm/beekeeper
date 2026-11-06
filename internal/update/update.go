@@ -65,12 +65,18 @@ type Result struct {
 // executable in place.
 type Canary func(ctx context.Context, path, version string) error
 
+// Health checks the executable at path, the installed candidate of version.
+type Health func(ctx context.Context, path, version string) error
+
 // Options configures a Run call through its context.
 type Options struct {
 	// Version selects an exact release tag, including pre-releases.
 	Version string
 	Canary  Canary
-	Skip    func(tag string) bool
+	// Health checks the installed candidate before an update promotes it. Nil,
+	// that the candidate runs the update is its evidence.
+	Health Health
+	Skip   func(tag string) bool
 }
 
 type optionsKey struct{}

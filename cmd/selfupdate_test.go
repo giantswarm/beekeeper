@@ -150,6 +150,29 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 }
 
+// The update hands the health check to the install, and a failed one is not a
+// skipped release: the installed candidate is judged, not the one on offer.
+func TestSelfUpdateChecksTheInstalledCandidate(t *testing.T) {
+	prev, prevCheck := runUpdate, runCanaryCheck
+	t.Cleanup(func() { runUpdate, runCanaryCheck = prev, prevCheck })
+	runCanaryCheck = func(context.Context, string, ...string) (string, error) { return "no answer", errors.New("exit 1") }
+	var health error
+	runUpdate = func(ctx context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		health = update.OptionsFrom(ctx).Health(ctx, "/installed", "v1.2.3")
+		return update.Result{}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if health == nil || !strings.Contains(health.Error(), "no answer") {
+		t.Fatalf("health = %v", health)
+	}
+}
+
 func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 	for _, args := range [][]string{
 		{selfUpdateRollbackFlag},

@@ -10,6 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -45,7 +48,53 @@ type Journal struct {
 
 type installation struct {
 	target, dir string
-	lock        *flock.Flock
+	// external says the recovery directory lies outside the executable's, which
+	// this account cannot write: the replacement then takes privilege.
+	external bool
+	lock     *flock.Flock
+	ctx      context.Context //nolint:containedctx // bounds the privileged step of this one locked transaction
+}
+
+// externalRecoveryDir is an installation's recovery directory in this account's
+// state, named by the executable's path.
+func externalRecoveryDir(target string) (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if !filepath.IsAbs(base) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	sum := sha256.Sum256([]byte(target))
+	return filepath.Join(base, "beekeeper", "update", hex.EncodeToString(sum[:16])), nil
+}
+
+// recoveryDir is where target's journal lives: beside it where this account can
+// write, else in its state. A journal already recorded keeps its place, so
+// changed directory permissions never lose a recovery target.
+func recoveryDir(target string) (string, bool, error) {
+	beside := target + ".update"
+	if _, err := os.Lstat(beside); err == nil {
+		return beside, false, nil
+	}
+	external, externalErr := externalRecoveryDir(target)
+	if externalErr == nil {
+		if _, err := os.Lstat(external); err == nil {
+			return external, true, nil
+		}
+	}
+	err := os.Mkdir(beside, 0o700)
+	if err == nil || errors.Is(err, os.ErrExist) {
+		return beside, false, nil
+	}
+	if !errors.Is(err, os.ErrPermission) || runtime.GOOS == windowsOS {
+		return "", false, err
+	}
+	if externalErr != nil {
+		return "", false, errors.Join(err, externalErr)
+	}
+	return external, true, os.MkdirAll(external, 0o700)
 }
 
 func openInstallation(ctx context.Context, path string) (*installation, error) {
@@ -57,8 +106,8 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := target + ".update"
-	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+	dir, external, err := recoveryDir(target)
+	if err != nil {
 		return nil, err
 	}
 	info, err := os.Lstat(dir)
@@ -82,7 +131,7 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 	if !ok {
 		return nil, errors.New("update lock unavailable")
 	}
-	return &installation{target: target, dir: dir, lock: l}, nil
+	return &installation{target: target, dir: dir, external: external, lock: l, ctx: ctx}, nil
 }
 func (i *installation) close() { _ = i.lock.Unlock() }
 func regularOrMissing(path string) error {
@@ -278,6 +327,63 @@ func (i *installation) recover(j *Journal) error {
 	return nil
 }
 
+// swap atomically puts source's bytes at the target. Privilege is taken only
+// for an installation this account cannot write.
+func (i *installation) swap(source string) error {
+	if !i.external {
+		return journalRename(source, i.target)
+	}
+	info, err := os.Stat(i.target)
+	if err != nil {
+		return err
+	}
+	return privilegedInstall(i.ctx, source, i.target, strconv.FormatUint(uint64(info.Mode().Perm()), 8))
+}
+
+// promote makes the installed candidate last-known-good. Repeating it is safe.
+func (i *installation) promote(j *Journal) error {
+	j.Probation = probationPassed
+	if err := i.write(j); err != nil {
+		return err
+	}
+	return i.collect(j)
+}
+
+// settleProbation ends a pending probation before an update replaces its
+// candidate, so updates need nobody to run --complete-probation. The installed
+// candidate running this update is the evidence of its health, with health
+// repeating the local checks where given. A failed check quarantines it: it is
+// never promoted, and replace moves past it to the verified release. A process
+// of another version proves nothing about the candidate, which stays pending.
+//
+// This touches the journal alone. A recovery fence on the state stays until
+// self-update --complete-probation lifts it.
+func (i *installation) settleProbation(ctx context.Context, health Health) error {
+	j, err := i.read()
+	if err != nil || j == nil {
+		return err
+	}
+	if err := i.recover(j); err != nil {
+		return err
+	}
+	if j.Probation != probationPending || strings.TrimPrefix(j.Candidate.Version, "v") != strings.TrimPrefix(currentVersion(), "v") {
+		return nil
+	}
+	if _, failed := j.Quarantine[j.Candidate.Digest]; failed {
+		return nil
+	}
+	if health != nil {
+		if err := health(ctx, i.target, j.Candidate.Version); err != nil {
+			if j.Quarantine == nil {
+				j.Quarantine = map[string]string{}
+			}
+			j.Quarantine[j.Candidate.Digest] = "post-install health checks failed: " + err.Error()
+			return i.write(j)
+		}
+	}
+	return i.promote(j)
+}
+
 func (i *installation) replace(staged, version string) error {
 	j, err := i.read()
 	if err != nil {
@@ -293,6 +399,9 @@ func (i *installation) replace(staged, version string) error {
 	candidate := Binary{Version: version, Digest: d}
 	var previous *Binary
 	quarantine := map[string]string{}
+	// movingPast says the installed binary is a quarantined candidate, not the
+	// recovery target, which stays the last known good.
+	movingPast := false
 	if j != nil {
 		quarantine = j.Quarantine
 		if quarantine == nil {
@@ -312,7 +421,10 @@ func (i *installation) replace(staged, version string) error {
 			}
 			previous = j.Previous
 		default:
-			return errors.New("complete or roll back pending probation before another update")
+			if _, failed := quarantine[j.Candidate.Digest]; !failed || j.Probation != probationPending {
+				return errors.New("complete or roll back pending probation before another update")
+			}
+			previous, movingPast = j.Previous, true
 		}
 	}
 	if previous != nil {
@@ -320,7 +432,7 @@ func (i *installation) replace(staged, version string) error {
 		if err != nil {
 			return err
 		}
-		if current != previous.Digest {
+		if current != previous.Digest && !movingPast {
 			return errors.New("installed recovery target was modified")
 		}
 		if _, err := i.verify(*previous); err != nil {
@@ -338,6 +450,9 @@ func (i *installation) replace(staged, version string) error {
 	if previous != nil {
 		displacedVersion = previous.Version
 	}
+	if movingPast {
+		displacedVersion = j.Candidate.Version
+	}
 	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine}
 	if err := i.write(j); err != nil {
 		return err
@@ -351,7 +466,7 @@ func (i *installation) replace(staged, version string) error {
 	if err != nil {
 		return err
 	}
-	if err := journalRename(staged, i.target); err != nil {
+	if err := i.swap(staged); err != nil {
 		return err
 	}
 	if err := syncDir(filepath.Dir(i.target)); err != nil {
@@ -385,11 +500,7 @@ func CompleteProbation(ctx context.Context, path, version string) error {
 	if j.Candidate.Version != version || (j.Probation != probationPending && j.Probation != probationPassed) {
 		return errors.New("running version is not the probation candidate")
 	}
-	j.Probation = probationPassed
-	if err := i.write(j); err != nil {
-		return err
-	}
-	return i.collect(j)
+	return i.promote(j)
 }
 
 // Rollback requires a guard that holds the state lock, verifies the previous
@@ -454,7 +565,12 @@ func Rollback(ctx context.Context, path, reason string, guard func(string, func(
 		if err != nil {
 			return err
 		}
-		if err := durableFile(i.target, raw, info.Mode().Perm()); err != nil {
+		if i.external {
+			err = i.swap(p)
+		} else {
+			err = durableFile(i.target, raw, info.Mode().Perm())
+		}
+		if err != nil {
 			return err
 		}
 		j.Probation = probationRolledBack

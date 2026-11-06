@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -16,13 +17,35 @@ const windowsOS = "windows"
 
 var installVerified = selfupdatecosign.Install
 
+// privilegedInstall atomically replaces target with source for an installation
+// this account cannot write. It is the only privileged step: the journal is
+// durable before it and recovery reconciles either side of it. No shell input is
+// interpolated: source, target and mode are positional arguments.
+var privilegedInstall = func(ctx context.Context, source, target, mode string) error {
+	const script = `set -eu
+source=$1
+target=$2
+mode=$3
+dir=$(mktemp -d "$(dirname "$target")/.beekeeper.update-XXXXXXXX")
+trap 'rm -f -- "$dir/beekeeper"; rmdir -- "$dir"' EXIT
+install -m "$mode" -- "$source" "$dir/beekeeper"
+sync "$dir/beekeeper" 2>/dev/null || sync
+mv -f -- "$dir/beekeeper" "$target"
+`
+	out, err := exec.CommandContext(ctx, "sudo", "-n", "--", "sh", "-c", script, "beekeeper-update", source, target, mode).CombinedOutput() //nolint:gosec // fixed command; the arguments are positional
+	if err != nil {
+		return fmt.Errorf("privileged atomic install: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // installRelease holds the recovery lock through verification, canary checks
-// and durable replacement. Directory permission errors fail closed: the former
-// sudo rename fallback could not preserve a durable recovery transaction.
+// and durable replacement. Download, verification and the journal run as this
+// account; an installation it cannot write takes sudo for the replacement alone.
 func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
 	i, err := openInstallation(ctx, path)
 	if err != nil {
-		return fmt.Errorf("opening durable installation (directory must be writable): %w", err)
+		return fmt.Errorf("opening durable installation: %w", err)
 	}
 	defer i.close()
 	j, err := i.read()
@@ -39,7 +62,11 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 		return err
 	}
 	mode := info.Mode().Perm()
-	stageDir, err := os.MkdirTemp(filepath.Dir(i.target), ".beekeeper-update-*")
+	stageRoot := filepath.Dir(i.target)
+	if i.external {
+		stageRoot = i.dir
+	}
+	stageDir, err := os.MkdirTemp(stageRoot, ".beekeeper-update-*")
 	if err != nil {
 		return err
 	}
@@ -72,6 +99,9 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	}
 	if afterCanary != verifiedDigest {
 		return errors.New("verified candidate changed during canary checks")
+	}
+	if err := i.settleProbation(ctx, optionsFrom(ctx).Health); err != nil {
+		return err
 	}
 	return i.replace(staged, version)
 }

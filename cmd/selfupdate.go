@@ -93,16 +93,19 @@ a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
 
 The installation journal and verified recovery bytes are retained beside the
-executable. After observing healthy operation, --complete-probation runs the
-local health checks again and promotes the candidate to last-known-good.
-Until then another update is refused. The first protected install has no
-verified recovery target. --rollback --rollback-reason restores the previous
+executable, or in this account's state when it cannot write there. The next
+update run by the installed candidate repeats the local health checks and
+promotes it to last-known-good; a failed check quarantines it and the update
+moves past it. --complete-probation does the same at once, and alone lifts a
+recovery fence. The first protected install has no verified recovery target.
+--rollback --rollback-reason restores the previous
 verified binary only when the live state writer is compatible; it never
 restores a state snapshot. Recovery fences newer writers, including processes
 still running the candidate. State already advanced by a newer release needs
 an explicit lossless migration or a compatible signed release instead.
-The executable directory must be writable; installation fails safely rather
-than bypassing the journal with a privileged rename.
+An executable directory this account cannot write takes sudo -n for the final
+replacement alone: the journal is written first, and nothing else runs with
+privilege.
 
 The new binary is renamed over the old one in one step, and every
 beekeeper started afterwards is the new one. A running beekeeper watch (the
@@ -197,6 +200,14 @@ reset. A development build (version dev) is refused.`,
 				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {
 					return a.canaryRelease(ctx, w, path, version)
+				},
+				Health: func(ctx context.Context, path, _ string) error {
+					why := canaryFailure(ctx, a.cfgPath, path)
+					if why == "" {
+						return nil
+					}
+					_, _ = fmt.Fprintf(w, "The installed candidate failed its health check (%s); quarantining it.\n", why)
+					return errors.New(why)
 				},
 				Skip: a.isSkippedRelease,
 			})
@@ -378,11 +389,23 @@ func (a *app) skipRelease(version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
+	why := canaryFailure(ctx, a.cfgPath, path)
+	if why == "" {
+		return nil
+	}
+	a.skipRelease(version, why)
+	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
+	return fmt.Errorf("skipping %s: %s", version, why)
+}
+
+// canaryFailure runs the canary checks on the binary at path and says why the
+// first failed, "" when all passed.
+func canaryFailure(ctx context.Context, cfgPath, path string) string {
 	for _, check := range canaryChecks {
 		name := strings.Join(check, " ")
 		args := check
-		if a.cfgPath != "" {
-			args = append([]string{"--" + configFlag, a.cfgPath}, check...)
+		if cfgPath != "" {
+			args = append([]string{"--" + configFlag, cfgPath}, check...)
 		}
 		out, err := runCanaryCheck(ctx, path, args...)
 		if err != nil {
@@ -390,13 +413,10 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 			if detail == "" {
 				detail = oneLine(err.Error())
 			}
-			why := fmt.Sprintf("canary %s failed: %s", name, detail)
-			a.skipRelease(version, why)
-			_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
-			return fmt.Errorf("skipping %s: %s", version, why)
+			return fmt.Sprintf("canary %s failed: %s", name, detail)
 		}
 	}
-	return nil
+	return ""
 }
 
 // warnUpdateConfig runs before handing control to a newer binary, which may

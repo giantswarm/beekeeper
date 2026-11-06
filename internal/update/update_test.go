@@ -518,64 +518,171 @@ func TestInstallVersionDoesNotTouchBackupPath(t *testing.T) {
 	}
 }
 
-// A refused verification, or a directory this account cannot write, leaves the
-// installed binary as it was. Nothing is retried with privilege: a sudo on PATH
-// would record its call.
-func TestInstallVersionNeverEscalates(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("sudo installation is Unix only")
-	}
-	for _, tc := range []struct {
-		name      string
-		verifyErr error
-	}{
-		{name: "verification lacks permission", verifyErr: &os.PathError{Op: "mkdir", Path: "dir", Err: os.ErrPermission}},
-		{name: "invalid signature", verifyErr: errors.New("invalid signature")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
-			setup(t, running, src)
-			exe, content := installed(t)
-			newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
-			bin := t.TempDir()
-			called := filepath.Join(bin, "called")
-			if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\n: > \""+called+"\"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			original := installVerified
-			t.Cleanup(func() { installVerified = original })
-			installVerified = func(context.Context, *selfupdate.Updater, *selfupdate.Release, string) error { return tc.verifyErr }
-			if _, err := InstallVersion(context.Background(), io.Discard, latestV); !errors.Is(err, tc.verifyErr) {
-				t.Fatalf("error = %v", err)
-			}
-			assertUnchanged(t, exe, content)
-			if _, err := os.Stat(called); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("install called sudo: %v", err)
-			}
-		})
-	}
-}
-
-// An installation directory this account cannot write fails before anything
-// is downloaded, instead of bypassing the journal.
-func TestInstallVersionRefusesAnUnwritableDirectory(t *testing.T) {
+// rootOwned makes the installation's directory unwritable to this account, as
+// a system installation's is, with its recovery in this test's state directory.
+func rootOwned(t *testing.T, exe string) {
+	t.Helper()
 	if runtime.GOOS == windowsOS || os.Geteuid() == 0 {
 		t.Skip("needs directory permissions that bind this account")
 	}
-	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
-	setup(t, running, src)
-	exe, content := installed(t)
-	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := filepath.Dir(exe)
 	if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // a directory of this test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // TempDir cleanup needs it writable
-	if _, err := InstallVersion(context.Background(), io.Discard, latestV); !errors.Is(err, os.ErrPermission) {
-		t.Fatalf("error = %v", err)
+}
+
+// fakeSudo stands in for privilegedInstall on a rootOwned installation: it opens
+// the directory only for the copy, and counts its calls.
+func fakeSudo(t *testing.T, denied error) *int {
+	t.Helper()
+	original := privilegedInstall
+	t.Cleanup(func() { privilegedInstall = original })
+	calls := 0
+	privilegedInstall = func(_ context.Context, source, target, mode string) error {
+		calls++
+		if mode != "750" {
+			t.Fatalf("mode %q", mode)
+		}
+		if denied != nil {
+			return denied
+		}
+		raw, err := os.ReadFile(filepath.Clean(source))
+		if err != nil {
+			return err
+		}
+		dir := filepath.Dir(target)
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory of this test
+			return err
+		}
+		defer func() { _ = os.Chmod(dir, 0o500) }() //nolint:gosec // a directory of this test
+		next := target + ".next"
+		if err := os.WriteFile(next, raw, 0o750); err != nil { //nolint:gosec // an executable fixture
+			return err
+		}
+		return os.Rename(next, target)
 	}
-	assertUnchanged(t, exe, content)
+	return &calls
+}
+
+func acceptRelease(t *testing.T, version, binary string, running string) {
+	t.Helper()
+	src := &fakeSource{releases: []selfupdate.SourceRelease{release(version)}, assets: map[int64][]byte{binaryID: []byte(binary), bundleID: []byte(installBundle)}}
+	setup(t, running, src)
+	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
+}
+
+func installJournal(t *testing.T, exe string) *Journal {
+	t.Helper()
+	i, err := openInstallation(context.Background(), exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer i.close()
+	j, err := i.read()
+	if err != nil || j == nil {
+		t.Fatalf("journal %+v, %v", j, err)
+	}
+	return j
+}
+
+func TestInstallVersionUsesPrivilegeOnlyForVerifiedReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		verifyErr, sudoErr error
+	}{
+		{name: "success"},
+		{name: "invalid signature", verifyErr: errors.New("invalid signature")},
+		{name: "sudo unavailable", sudoErr: errors.New("sudo denied")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			acceptRelease(t, latestV, newBinary, running)
+			exe, content := installed(t)
+			rootOwned(t, exe)
+			calls := fakeSudo(t, tc.sudoErr)
+			original := installVerified
+			t.Cleanup(func() { installVerified = original })
+			installVerified = func(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
+				if tc.verifyErr != nil {
+					return tc.verifyErr
+				}
+				return original(ctx, up, rel, path)
+			}
+			res, err := InstallVersion(context.Background(), io.Discard, latestV)
+			switch {
+			case tc.verifyErr != nil:
+				if !errors.Is(err, tc.verifyErr) || *calls != 0 {
+					t.Fatalf("verification error %v, privileged calls %d", err, *calls)
+				}
+			case tc.sudoErr != nil:
+				if !errors.Is(err, tc.sudoErr) || *calls != 1 {
+					t.Fatalf("sudo error %v, calls %d", err, *calls)
+				}
+			default:
+				if err != nil || !res.Updated || *calls != 1 {
+					t.Fatalf("result %+v, %v, privileged calls %d", res, err, *calls)
+				}
+				if got := installJournal(t, exe); got.Probation != probationPending || got.Candidate.Version != latestV {
+					t.Fatalf("journal %+v", got)
+				}
+				return
+			}
+			assertUnchanged(t, exe, content)
+		})
+	}
+}
+
+// A writable installation never takes privilege.
+func TestInstallVersionWritableInstallationNeverEscalates(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	calls := fakeSudo(t, nil)
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != newBinary || *calls != 0 {
+		t.Fatalf("installed %q, %v, privileged calls %d", got, err, *calls)
+	}
+}
+
+func TestPrivilegedInstallReplacesAtomicallyWithoutBackup(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("sudo installation is Unix only")
+	}
+	dir := t.TempDir()
+	// Exercise the actual installer script without privileges. The fake sudo
+	// accepts only noninteractive invocation and executes its exact argv.
+	sudo := filepath.Join(dir, "sudo")
+	if err := os.WriteFile(sudo, []byte("#!/bin/sh\n[ \"$1\" = -n ] && [ \"$2\" = -- ] || exit 1\nshift 2\nexec \"$@\"\n"), 0o700); err != nil { //nolint:gosec // executable fixture in a test-owned directory
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	target := filepath.Join(dir, "installed binary")
+	source := filepath.Join(dir, "verified binary")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil { //nolint:gosec // executable fixture whose mode the install preserves
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte(newBinary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := privilegedInstall(context.Background(), source, target, "750"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Clean(target)); err != nil || string(got) != newBinary {
+		t.Fatalf("installed %q, %v", got, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0o750 {
+		t.Fatalf("mode %v, %v", info, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("installation left temporary files: %v", entries)
+	}
 }
 
 // The replacement keeps the executable's mode and, beside the update directory,
@@ -584,10 +691,8 @@ func TestInstallVersionReplacesAtomicallyWithoutBackup(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("mode bits are Unix only")
 	}
-	src := &fakeSource{releases: []selfupdate.SourceRelease{release(latestV)}, assets: map[int64][]byte{binaryID: []byte(newBinary), bundleID: []byte(installBundle)}}
-	setup(t, running, src)
+	acceptRelease(t, latestV, newBinary, running)
 	exe, _ := installed(t)
-	newValidator = func() selfupdate.Validator { return &acceptingValidator{} }
 	before, err := os.Stat(exe)
 	if err != nil {
 		t.Fatal(err)
@@ -610,6 +715,145 @@ func TestInstallVersionReplacesAtomicallyWithoutBackup(t *testing.T) {
 		if e.Name() != filepath.Base(exe) && e.Name() != filepath.Base(exe)+".update" {
 			t.Fatalf("installation left %s behind", e.Name())
 		}
+	}
+}
+
+const thirdV, thirdBinary = "v0.9.0", "the third binary"
+
+// The second update needs nobody: run by the installed candidate through
+// InstallVersion alone, as an execution host runs it, it promotes the candidate
+// and installs the next release. A root-owned installation does the same.
+func TestSecondUpdateCompletesProbation(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		t.Run(map[bool]string{false: "writable", true: "root-owned"}[owned], func(t *testing.T) {
+			acceptRelease(t, latestV, newBinary, running)
+			exe, _ := installed(t)
+			if owned {
+				rootOwned(t, exe)
+				fakeSudo(t, nil)
+			}
+			if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+				t.Fatal(err)
+			}
+			first := installJournal(t, exe)
+			acceptRelease(t, thirdV, thirdBinary, latestV)
+			res, err := InstallVersion(context.Background(), io.Discard, thirdV)
+			if err != nil || !res.Updated {
+				t.Fatalf("second update = %+v, %v", res, err)
+			}
+			if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != thirdBinary {
+				t.Fatalf("installed %q, %v", got, err)
+			}
+			j := installJournal(t, exe)
+			if j.Probation != probationPending || j.Candidate.Version != thirdV || j.Previous == nil || *j.Previous != first.Candidate {
+				t.Fatalf("journal %+v", j)
+			}
+		})
+	}
+}
+
+// A process of another version proves nothing about the installed candidate.
+func TestUpdateFromAnotherVersionLeavesProbationPending(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	acceptRelease(t, thirdV, thirdBinary, running)
+	if _, err := InstallVersion(context.Background(), io.Discard, thirdV); err == nil {
+		t.Fatal("promoted a candidate this process is not")
+	}
+	assertUnchanged(t, exe, []byte(newBinary))
+	if j := installJournal(t, exe); j.Probation != probationPending {
+		t.Fatalf("journal %+v", j)
+	}
+}
+
+// Health repeats the local checks on the installed candidate. A failure never
+// promotes it: the update moves past it and keeps the last known good.
+func TestUpdateHealthGatesPromotion(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "healthy", true: "unhealthy"}[failed], func(t *testing.T) {
+			acceptRelease(t, latestV, newBinary, running)
+			exe, _ := installed(t)
+			resolved, err := filepath.EvalSymlinks(exe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+				t.Fatal(err)
+			}
+			first := installJournal(t, exe)
+			checked := ""
+			ctx := WithOptions(context.Background(), Options{Health: func(_ context.Context, path, version string) error {
+				checked = path + " " + version
+				if failed {
+					return errors.New("no answer")
+				}
+				return nil
+			}})
+			acceptRelease(t, thirdV, thirdBinary, latestV)
+			if _, err := InstallVersion(ctx, io.Discard, thirdV); err != nil {
+				t.Fatal(err)
+			}
+			if checked != resolved+" "+latestV {
+				t.Fatalf("checked %q", checked)
+			}
+			if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != thirdBinary {
+				t.Fatalf("installed %q, %v", got, err)
+			}
+			j := installJournal(t, exe)
+			if failed {
+				if j.Previous != nil || !strings.Contains(j.Quarantine[first.Candidate.Digest], "no answer") {
+					t.Fatalf("promoted a failed candidate: %+v", j)
+				}
+				return
+			}
+			if j.Previous == nil || *j.Previous != first.Candidate || len(j.Quarantine) != 0 {
+				t.Fatalf("journal %+v", j)
+			}
+		})
+	}
+}
+
+// A rollback of a root-owned installation restores through the same single
+// privileged step, from recovery bytes this account holds.
+func TestRootOwnedRollbackRestoresThroughPrivilege(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	rootOwned(t, exe)
+	calls := fakeSudo(t, nil)
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	acceptRelease(t, thirdV, thirdBinary, latestV)
+	if _, err := InstallVersion(context.Background(), io.Discard, thirdV); err != nil {
+		t.Fatal(err)
+	}
+	guard := func(_ string, restore func() error) error { return restore() }
+	if err := Rollback(context.Background(), exe, "failed health", guard); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Clean(exe)); err != nil || string(got) != newBinary || *calls != 3 {
+		t.Fatalf("restored %q, %v, privileged calls %d", got, err, *calls)
+	}
+}
+
+// A journal keeps its place when the directory's permissions change, or its
+// recovery target would be lost.
+func TestRecoveryDirKeepsAnExistingJournal(t *testing.T) {
+	acceptRelease(t, latestV, newBinary, running)
+	exe, _ := installed(t)
+	rootOwned(t, exe)
+	fakeSudo(t, nil)
+	if _, err := InstallVersion(context.Background(), io.Discard, latestV); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(exe), 0o700); err != nil { //nolint:gosec // a directory of this test
+		t.Fatal(err)
+	}
+	if j := installJournal(t, exe); j.Candidate.Version != latestV {
+		t.Fatalf("journal %+v", j)
 	}
 }
 
