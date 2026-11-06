@@ -3,6 +3,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +27,10 @@ const releaseWaitCmd = "devctl release wait giantswarm/kagent-upstream v1.11.6"
 // returns its base and the merge-child's pid.
 func detachedWait(t *testing.T, dir string, owner state.Party) (string, int) {
 	t.Helper()
-	c := exec.Command("sleep", "60")
+	was := plat.Machine
+	plat.Machine = orphanProcMachine{Machine: was}
+	t.Cleanup(func() { plat.Machine = was })
+	c := exec.Command(sleepComm, "60")
 	if err := c.Start(); err != nil {
 		t.Skip("no sleep:", err)
 	}
@@ -36,7 +41,8 @@ func detachedWait(t *testing.T, dir string, owner state.Party) (string, int) {
 	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeRunInfo(base, runInfo{Command: releaseWaitCmd, Owner: owner, Gate: 4242, Started: relayNow})
+	processStarted, _ := proc.Started(child)
+	writeRunInfo(base, runInfo{ProcessStarted: processStarted, Command: releaseWaitCmd, Owner: owner, Gate: 4242, Started: relayNow})
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(child)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +201,156 @@ func TestGateRoutesItsSubcommands(t *testing.T) {
 		found, _, err := c.Find(strings.Fields(args))
 		if err != nil || found.Name() != want {
 			t.Errorf("%q reaches %v (%v), want %s", args, found.Name(), err, want)
+		}
+	}
+}
+
+func TestDetachedRunsDeadIdentityAndCleanup(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	dir := w.store.Dir()
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name   string
+		age    time.Duration
+		reused bool
+	}{
+		{"gone", 48 * time.Hour, false},
+		{"reused", 48 * time.Hour, true},
+		{"young", time.Hour, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, pid := detachedWait(t, dir, four)
+			started, err := proc.Started(pid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.reused {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {
+					t.Fatal("child remains alive")
+				}
+			}
+			writeRunInfo(base, runInfo{Started: now.Add(-tc.age), ProcessStarted: started.Add(-time.Second)})
+			st := &state.State{}
+			runs := detachedRuns(dir, st, nil)
+			var found bool
+			for _, r := range runs {
+				if r.base == base {
+					found = true
+					if r.Phase != runDead || r.Devctl != 0 {
+						t.Fatalf("dead row: %+v", r)
+					}
+					raw, err := json.Marshal(r)
+					if err != nil || !strings.Contains(string(raw), `"phase":"dead"`) {
+						t.Fatalf("JSON: %s, %v", raw, err)
+					}
+					if _, err := w.gateStop(four, r.ID); Code(err) != ExitRefused {
+						t.Fatalf("dead stop: %v", err)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("dead run missing")
+			}
+			cleanupDeadRuns(dir, st, now)
+			_, err = os.Stat(base + ".pid")
+			if tc.age > 24*time.Hour {
+				if !os.IsNotExist(err) {
+					t.Fatalf("old files remain: %v", err)
+				}
+				kept, _ := filepath.Glob(filepath.Join(dir, keptOutputs, filepath.Base(base)+"-dead-*", "*.pid"))
+				if len(kept) != 1 {
+					t.Fatalf("archived pid files: %v", kept)
+				}
+				for _, r := range detachedRuns(dir, st, nil) {
+					if r.base == base {
+						t.Fatal("archived run still listed")
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("recent files removed: %v", err)
+			}
+			if tc.reused && !proc.Alive(pid) {
+				t.Fatal("reused PID was signalled")
+			}
+		})
+	}
+}
+
+func TestRunProcessAliveLegacy(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "run")
+	now := time.Now().UTC()
+	writeRunInfo(base, runInfo{Started: now})
+	for _, tc := range []struct {
+		name  string
+		start time.Time
+		args  []string
+		want  bool
+	}{
+		{"original", now.Add(-time.Second), []string{pluginName, mergeChildCmd, base}, true},
+		{"reused", now.Add(time.Second), []string{pluginName, mergeChildCmd, base}, false},
+		{"unrelated", now.Add(-time.Second), []string{sleepComm, "60"}, false},
+		{"other run", now.Add(-time.Second), []string{pluginName, mergeChildCmd, base + "-other"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tab := proc.NewTable(&proc.Process{PID: 123, Start: tc.start, Args: tc.args})
+			if got := runProcessAlive(base, 123, tab); got != tc.want {
+				t.Fatalf("alive = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWatchCleanupRetiresOnlyOldDeadRuns(t *testing.T) {
+	a, machine, _ := tmpfsApp(t)
+	old, pid := detachedWait(t, a.store.Dir(), four)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {
+		t.Fatal("child remains alive")
+	}
+	writeRunInfo(old, runInfo{Started: time.Now().Add(-48 * time.Hour)})
+	live, _ := detachedWait(t, a.store.Dir(), four)
+	recent, pid := detachedWait(t, a.store.Dir(), four)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {
+		t.Fatal("child remains alive")
+	}
+	writeRunInfo(recent, runInfo{Started: time.Now().Add(-time.Hour)})
+	a.freeTmpfs(true, machine)
+	if !exists(old + ".pid") {
+		t.Fatal("dry cleanup moved dead run")
+	}
+	a.freeTmpfs(false, machine)
+	if exists(old+".pid") || !exists(live+".pid") || !exists(recent+".pid") {
+		t.Fatal("cleanup must retire only the old dead run")
+	}
+}
+
+func TestGateRunsRendersDeadWait(t *testing.T) {
+	w, _, _ := notifyingWatch(t, t.TempDir(), false)
+	a := w.app
+	base, pid := detachedWait(t, a.store.Dir(), four)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	if !eventually(5*time.Second, func() bool { return !proc.Alive(pid) }) {
+		t.Fatal("child remains alive")
+	}
+	for _, asJSON := range []bool{false, true} {
+		var out bytes.Buffer
+		a.out, a.json = &out, asJSON
+		c := a.gateRunsCmd()
+		if err := c.RunE(c, nil); err != nil {
+			t.Fatal(err)
+		}
+		if asJSON {
+			var runs []detachedRun
+			if err := json.Unmarshal(out.Bytes(), &runs); err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 || runs[0].Phase != runDead {
+				t.Fatalf("JSON runs: %s", out.String())
+			}
+		} else if !strings.Contains(out.String(), filepath.Base(base)) || !strings.Contains(out.String(), "dead") {
+			t.Fatalf("table: %s", out.String())
 		}
 	}
 }

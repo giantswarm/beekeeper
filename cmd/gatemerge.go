@@ -926,7 +926,8 @@ func mergeChild(base string) childResult {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
-	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC()})
+	processStarted, _ := proc.Started(os.Getpid())
+	writeRunInfo(base, runInfo{Command: r.command(), Owner: spec.Owner, Gate: spec.Gate, Started: time.Now().UTC(), ProcessStarted: processStarted})
 	if err := os.WriteFile(base+".pid", []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil { //nolint:gosec // the gate's own file, named by the gate
 		return r
 	}

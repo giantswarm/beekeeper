@@ -2825,6 +2825,8 @@ type Lemonade struct {
 // (the Default* fractions): its absolute value is read with the method of
 // the same name.
 type Watch struct {
+	// ThroughputAfter bounds how long an eligible PR may wait for a merge (default 2h).
+	ThroughputAfter Duration `yaml:"throughputAfter"`
 	// BatchInterval paces routine stdout notices. Negative disables batching;
 	// --once always prints immediately. Action lines never wait for a batch.
 	BatchInterval Duration `yaml:"batchInterval"`
@@ -3549,6 +3551,7 @@ func (c *Config) defaults() error {
 	setDur(&w.BatchInterval, 5*time.Minute)
 	setDur(&w.Repeat, 10*time.Minute)
 	setDur(&w.BudgetEvery, 5*time.Minute)
+	setDur(&w.ThroughputAfter, 2*time.Hour)
 	setDur(&w.SwapWindow, 10*time.Minute)
 	setDur(&w.OOMDWithin, 30*time.Minute)
 	setDur(&w.DiskFillWithin, 2*time.Hour)
