@@ -133,6 +133,7 @@ func (a *app) diskMachine() (diskMachine, error) {
 	}
 	roots := append(slices.Clone(a.cfg.Doctor.WorktreeRoots), filepath.Join(a.cfg.StateDir, "worktrees"))
 	places := append(slices.Clone(a.cfg.Disk.Checkouts), a.cfg.Hooks.Scope.Dirs...)
+	places = append(places, a.cfg.Projects.Dir)
 	for _, r := range claude.ByCLI(a.cfg) {
 		places = append(places, r.Cwd, r.OriginCwd)
 	}
@@ -458,7 +459,7 @@ func (a *app) diskCmd() *cobra.Command {
 	p.Flags().BoolVar(&apply, "apply", false, "reclaim disposable data after checking live processes and work")
 	p.Flags().BoolVar(&dry, "dry-run", false, "only list what each cache would free, with sizes (the default)")
 	p.Flags().BoolVar(&report, "report", false, "also list the user cache directory's largest entries no disk.caches policy covers")
-	c.AddCommand(p, a.diskHoldersCmd())
+	c.AddCommand(p, a.diskHoldersCmd(), a.diskUsageCmd())
 	return c
 }
 

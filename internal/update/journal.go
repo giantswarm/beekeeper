@@ -44,6 +44,11 @@ type Journal struct {
 	InstalledAt time.Time         `json:"installedAt"`
 	Probation   string            `json:"probation"`            // prepared, pending, passed, rolling-back, rolled-back
 	Quarantine  map[string]string `json:"quarantine,omitempty"` // digest -> reason
+	// Watched says a recovery controller supervises this candidate's probation:
+	// its verdict decides, and an update waits for it.
+	Watched bool `json:"watched,omitempty"`
+	// Observed is the controller's durable record of this probation.
+	Observed *Observed `json:"observed,omitempty"`
 }
 
 type installation struct {
@@ -129,7 +134,7 @@ func openInstallation(ctx context.Context, path string) (*installation, error) {
 		return nil, err
 	}
 	if !ok {
-		return nil, errors.New("update lock unavailable")
+		return nil, ErrUpdateLocked
 	}
 	return &installation{target: target, dir: dir, external: external, lock: l, ctx: ctx}, nil
 }
@@ -179,7 +184,7 @@ func (i *installation) verify(b Binary) (string, error) {
 		return "", err
 	}
 	if d != b.Digest {
-		return "", errors.New("modified recovery binary")
+		return "", errModifiedRecovery
 	}
 	return p, nil
 }
@@ -369,6 +374,9 @@ func (i *installation) settleProbation(ctx context.Context, health Health) error
 	if j.Probation != probationPending || strings.TrimPrefix(j.Candidate.Version, "v") != strings.TrimPrefix(currentVersion(), "v") {
 		return nil
 	}
+	if j.Watched {
+		return ErrProbationWatched
+	}
 	if _, failed := j.Quarantine[j.Candidate.Digest]; failed {
 		return nil
 	}
@@ -391,6 +399,9 @@ func (i *installation) replace(staged, version string) error {
 	}
 	if err := i.recover(j); err != nil {
 		return err
+	}
+	if held := j.Held(); held != "" {
+		return fmt.Errorf("recovery failed, updates are held: %s", held)
 	}
 	d, err := digest(staged)
 	if err != nil {
@@ -453,9 +464,15 @@ func (i *installation) replace(staged, version string) error {
 	if movingPast {
 		displacedVersion = j.Candidate.Version
 	}
-	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine}
+	j = &Journal{Schema: 1, Displaced: Binary{Version: displacedVersion, Digest: oldDigest}, Previous: previous, Candidate: candidate, InstalledAt: time.Now().UTC(), Probation: probationPrepared, Quarantine: quarantine, Watched: previous != nil && optionsFrom(i.ctx).Recovery != nil}
 	if err := i.write(j); err != nil {
 		return err
+	}
+	if j.Watched && !i.launchController(previous) {
+		j.Watched = false
+		if err := i.write(j); err != nil {
+			return err
+		}
 	}
 	f, err := os.Open(filepath.Clean(staged))
 	if err != nil {
@@ -506,7 +523,7 @@ func CompleteProbation(ctx context.Context, path, version string) error {
 // Rollback requires a guard that holds the state lock, verifies the previous
 // version can write the CURRENT state, and invokes restore under that lock.
 // No state snapshot is ever restored. A nil guard is refused.
-func Rollback(ctx context.Context, path, reason string, guard func(string, func() error) error) error {
+func Rollback(ctx context.Context, path, reason string, guard func(previous, failed string, restore func() error) error) error {
 	if guard == nil || reason == "" {
 		return errors.New("rollback requires a state compatibility guard and reason")
 	}
@@ -528,11 +545,13 @@ func Rollback(ctx context.Context, path, reason string, guard func(string, func(
 	if j.Probation == probationRolledBack {
 		return nil
 	}
+	if j.Observed != nil {
+		j.Observed.Held = ""
+	}
 	if j.Probation != probationPending && j.Probation != probationRollingBack {
 		return errors.New("only a pending candidate can be rolled back")
 	}
-	candidateVersion, err := releaseSemver(j.Candidate.Version)
-	if err != nil || candidateVersion.Prerelease() != "" || candidateVersion.Metadata() != "" {
+	if v, err := releaseSemver(j.Candidate.Version); err != nil || v.Metadata() != "" {
 		return errors.New("unversioned candidate state cannot be recovered automatically")
 	}
 	p, err := i.verify(*j.Previous)
@@ -546,7 +565,7 @@ func Rollback(ctx context.Context, path, reason string, guard func(string, func(
 	if err := i.write(j); err != nil {
 		return err
 	}
-	return guard(j.Previous.Version, func() error {
+	return guard(j.Previous.Version, j.Candidate.Version, func() error {
 		// Quarantine is durable before replacement. Recovery uses this intent to
 		// finish the transaction after a crash, without touching any state data.
 		j.Probation = probationRollingBack
