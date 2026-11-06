@@ -38,8 +38,6 @@ const removeParked = "parked"
 
 const removeUnused = "unused"
 
-
-
 // gitT runs git in dir for a test.
 func gitT(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -431,7 +429,7 @@ func TestTrimHarnessRequiresCompleteHeadPulls(t *testing.T) {
 
 // Cleanup only touches scratch checkouts; all process data is injected.
 func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
-	for _, name := range []string{removeUnused, removeActive, removeParked, removeDesktop, "process unavailable", "roster unavailable", "canonical child", "canonical parent"} {
+	for _, name := range []string{removeUnused, removeActive, removeParked, removeDesktop, "process unavailable", "roster unavailable", litCanonicalChild, "canonical parent"} {
 		t.Run(name, func(t *testing.T) {
 			a, _ := stubApp(t)
 			plat.Machine = ungatedMachine{Machine: plat.Machine, table: proc.NewTable()}
@@ -456,7 +454,7 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 					t.Fatal(err)
 				}
 				live = alias
-				if name == "canonical child" {
+				if name == litCanonicalChild {
 					live = filepath.Join(alias, "nopr", "child")
 					if err := os.MkdirAll(filepath.Join(dir, "child"), 0700); err != nil {
 						t.Fatal(err)
@@ -464,7 +462,7 @@ func TestCleanRemovedWorktreeChecksLiveUsers(t *testing.T) {
 				}
 			}
 			switch name {
-			case removeActive, removeParked, "canonical child", "canonical parent":
+			case removeActive, removeParked, litCanonicalChild, "canonical parent":
 				if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 					agent := state.Agent{Party: state.Party{Session: removeOther}, Task: removeTask}
 					if name == removeParked {
