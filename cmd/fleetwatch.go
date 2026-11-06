@@ -6,21 +6,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/giantswarm/beekeeper/internal/alerts"
-	"github.com/giantswarm/beekeeper/internal/lease"
-	"golang.org/x/time/rate"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
+
+	"github.com/giantswarm/beekeeper/internal/alerts"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/identity"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/merge"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/upgrade"
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
+)
+
+const (
+	fleetWatchParty = "fleet-watch"
+	fleetHarnesses  = "harnesses"
 )
 
 // fleetWatch has one owner. A round finishes before the next starts; workers
@@ -112,8 +119,8 @@ func (w *fleetWatch) read(ctx context.Context, env v1alpha1.Environment) fleetRe
 	}
 	result := fleetReading{env: env}
 	sources := []struct{ key, tool, resource string }{
-		{"agents", cfg.Kagent, ""}, {"alerts", cfg.Alertmanager, ""},
-		{"templates", cfg.Kubernetes, "agenttemplates"}, {"harnesses", cfg.Kubernetes, "harnesses"},
+		{agentsName, cfg.Kagent, ""}, {alertsName, cfg.Alertmanager, ""},
+		{"templates", cfg.Kubernetes, "agenttemplates"}, {fleetHarnesses, cfg.Kubernetes, fleetHarnesses},
 		{"releases", cfg.Kubernetes, "helmreleases.helm.toolkit.fluxcd.io"},
 	}
 	for _, kind := range upgrade.Kinds {
@@ -204,7 +211,7 @@ func (w *fleetWatch) publish(env v1alpha1.Environment, key string, levels map[st
 		if old[k] == levels[k] {
 			continue
 		}
-		ev := state.Event{At: w.s.now().UTC(), By: state.Party{Name: "fleet-watch", Team: env.Spec.Team}, Verb: "watch.fleet", Detail: levels[k]}
+		ev := state.Event{At: w.s.now().UTC(), By: state.Party{Name: fleetWatchParty, Team: env.Spec.Team}, Verb: "watch.fleet", Detail: levels[k]}
 		if err := w.s.store.Audit(&env, env.Spec.Team, ev); err != nil {
 			return err
 		}
@@ -221,7 +228,7 @@ func fleetList(raw, field string) ([]json.RawMessage, error) {
 	if err := json.Unmarshal([]byte(raw), &object); err != nil {
 		return nil, err
 	}
-	if t := object["truncated"]; len(t) > 0 && string(t) != "null" && string(t) != "false" {
+	if t := object["truncated"]; len(t) > 0 && !slices.Contains([]string{"null", strconv.FormatBool(false)}, string(t)) {
 		return nil, errors.New("truncated fleet list")
 	}
 	value, ok := object[field]
@@ -252,11 +259,11 @@ func (w *fleetWatch) apply(r fleetReading) error {
 		key := installation + "/" + read.key
 		var err error
 		switch read.key {
-		case "agents":
+		case agentsName:
 			err = w.applyAgents(r.env, key, read.raw)
-		case "alerts":
+		case alertsName:
 			err = w.applyAlerts(r.env, key, read.raw)
-		case "templates", "harnesses":
+		case "templates", fleetHarnesses:
 			var items []json.RawMessage
 			items, err = fleetList(read.raw, "items")
 			levels := map[string]string{}
@@ -384,7 +391,7 @@ func (w *fleetWatch) applyAgents(env v1alpha1.Environment, key, raw string) erro
 }
 
 func (w *fleetWatch) applyAlerts(env v1alpha1.Environment, key, raw string) error {
-	items, err := fleetList(raw, "alerts")
+	items, err := fleetList(raw, alertsName)
 	if err != nil {
 		return err
 	}
@@ -429,7 +436,7 @@ func (w *fleetWatch) applyAlerts(env v1alpha1.Environment, key, raw string) erro
 			if len(context) > 0 {
 				line += "; last 30m: " + strings.Join(context, "; ")
 			}
-			if err := w.s.store.Audit(&env, env.Spec.Team, state.Event{At: w.s.now().UTC(), By: state.Party{Name: "fleet-watch", Team: env.Spec.Team}, Verb: "watch.fleet", Detail: line}); err != nil {
+			if err := w.s.store.Audit(&env, env.Spec.Team, state.Event{At: w.s.now().UTC(), By: state.Party{Name: fleetWatchParty, Team: env.Spec.Team}, Verb: "watch.fleet", Detail: line}); err != nil {
 				return err
 			}
 		}
@@ -448,7 +455,7 @@ func (w *fleetWatch) applyUpgrades(env v1alpha1.Environment, objects []upgrade.O
 	running := upgrade.Detect(objects, now, func(cluster string) bool { return upgrade.HeldClusters(st, now)(installation, cluster) })
 	desired := *st
 	desired.Holds = slices.Clone(st.Holds)
-	upgrade.Reconcile(&desired, installation, running, now, state.Party{Name: "fleet-watch", Team: env.Spec.Team})
+	upgrade.Reconcile(&desired, installation, running, now, state.Party{Name: fleetWatchParty, Team: env.Spec.Team})
 	// Kubernetes store writes one Hold per update, retaining optimistic conflict
 	// checks. Never reconcile several holds in a single store transaction.
 	targets := map[string]bool{}
@@ -478,7 +485,7 @@ func (w *fleetWatch) applyUpgrades(env v1alpha1.Environment, objects []upgrade.O
 			}
 			copyState := *st
 			copyState.Holds = slices.Clone(st.Holds)
-			upgrade.Reconcile(&copyState, installation, running, now, state.Party{Name: "fleet-watch", Team: env.Spec.Team})
+			upgrade.Reconcile(&copyState, installation, running, now, state.Party{Name: fleetWatchParty, Team: env.Spec.Team})
 			st.Holds = slices.DeleteFunc(st.Holds, func(h state.Hold) bool { return h.Target == target })
 			for _, h := range copyState.Holds {
 				if h.Target == target {
@@ -490,7 +497,7 @@ func (w *fleetWatch) applyUpgrades(env v1alpha1.Environment, objects []upgrade.O
 			if reflect.DeepEqual(before, after) {
 				return nil, nil
 			}
-			return []state.Event{{At: now.UTC(), By: state.Party{Name: "fleet-watch", Team: env.Spec.Team}, Verb: "watch.upgrade", Detail: "UPGRADE " + target}}, nil
+			return []state.Event{{At: now.UTC(), By: state.Party{Name: fleetWatchParty, Team: env.Spec.Team}, Verb: "watch.upgrade", Detail: "UPGRADE " + target}}, nil
 		})
 		if err != nil {
 			return err
@@ -530,7 +537,7 @@ func (w *fleetWatch) applyLanes(env v1alpha1.Environment, raw string) error {
 				ready, why := merge.Ready(cfg, hrs, m, w.s.now(), settle)
 				if ready {
 					st.Merges = slices.Delete(st.Merges, i, i+1)
-					return []state.Event{{At: w.s.now().UTC(), By: state.Party{Name: "fleet-watch", Team: env.Spec.Team}, Verb: "watch.lane", Detail: "LANE SETTLED " + lane.Name}}, nil
+					return []state.Event{{At: w.s.now().UTC(), By: state.Party{Name: fleetWatchParty, Team: env.Spec.Team}, Verb: "watch.lane", Detail: "LANE SETTLED " + lane.Name}}, nil
 				}
 				timeout := w.s.cfg.Merge.SettleTimeout.Duration
 				if timeout == 0 {
@@ -568,6 +575,6 @@ func (w *fleetWatch) expireGrants(env v1alpha1.Environment) error {
 		if count == len(pending) {
 			return nil, nil
 		}
-		return []state.Event{{At: w.s.now().UTC(), By: state.Party{Name: "fleet-watch", Team: env.Spec.Team}, Verb: "watch.grants", Detail: "GRANT EXPIRED " + env.Spec.Installation}}, nil
+		return []state.Event{{At: w.s.now().UTC(), By: state.Party{Name: fleetWatchParty, Team: env.Spec.Team}, Verb: "watch.grants", Detail: "GRANT EXPIRED " + env.Spec.Installation}}, nil
 	})
 }

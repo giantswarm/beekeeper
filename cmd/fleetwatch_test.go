@@ -29,6 +29,8 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
+const fleetNoItems = `{"items":[]}`
+
 func fleetFixture(t *testing.T, count int) (*fleetWatch, []v1alpha1.Environment) {
 	t.Helper()
 	scheme, err := kube.Scheme()
@@ -45,7 +47,7 @@ func fleetFixture(t *testing.T, count int) (*fleetWatch, []v1alpha1.Environment)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&v1alpha1.Environment{}, &v1alpha1.Hold{}, &v1alpha1.MergeLane{}).Build()
 	s := &server{store: kube.New(c), cfg: &config.Config{}, now: time.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	s.cfg.Serve.FleetWatch = config.FleetWatch{Kagent: "instances", Kubernetes: "list", Alertmanager: "alerts", Concurrency: 2}
+	s.cfg.Serve.FleetWatch = config.FleetWatch{Kagent: "instances", Kubernetes: "list", Alertmanager: alertsName, Concurrency: 2}
 	return &fleetWatch{s: s, baseline: map[string]map[string]string{}, agents: map[string]map[string]fleetAgent{}, changed: map[string]time.Time{}, alertState: map[string]*alerts.Installation{}}, envs
 }
 
@@ -85,10 +87,10 @@ func TestFleetWatchBoundedSources(t *testing.T) {
 		switch tool {
 		case "instances":
 			return `{"instances":[]}`, nil
-		case "alerts":
+		case alertsName:
 			return `{"alerts":[]}`, nil
 		default:
-			return `{"items":[]}`, nil
+			return fleetNoItems, nil
 		}
 	}
 	if err := w.round(context.Background()); err != nil {
@@ -152,7 +154,7 @@ func TestFleetWatchAlertsAndTemplates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := fleetReading{env: env, reads: []fleetRead{{key: "templates", raw: `{"items":[{"metadata":{"name":"template"},"status":{"conditions":[{"type":"Admitted","status":"False","reason":"Denied"}]}}]}`}, {key: "agents", err: errors.New("unavailable")}}}
+	r := fleetReading{env: env, reads: []fleetRead{{key: "templates", raw: `{"items":[{"metadata":{"name":"template"},"status":{"conditions":[{"type":"Admitted","status":"False","reason":"Denied"}]}}]}`}, {key: agentsName, err: errors.New("unavailable")}}}
 	if err := w.apply(r); err == nil {
 		t.Fatal("missing source error")
 	}
@@ -202,7 +204,7 @@ func TestFleetWatchUpgradeHold(t *testing.T) {
 	// Read via the same complete-list path used for every CAPI source.
 	r := fleetReading{env: envs[0], reads: []fleetRead{{key: "clusters.v1beta2.cluster.x-k8s.io", raw: `{"items":[` + raw + `]}`}}}
 	for _, kind := range upgrade.Kinds[1:] {
-		r.reads = append(r.reads, fleetRead{key: kind, raw: `{"items":[]}`})
+		r.reads = append(r.reads, fleetRead{key: kind, raw: fleetNoItems})
 	}
 	if err := w.apply(r); err != nil {
 		t.Fatal(err)
@@ -217,7 +219,7 @@ func TestFleetWatchUpgradeHold(t *testing.T) {
 	if err := w.apply(r); err != nil {
 		t.Fatal(err)
 	}
-	r.reads[0].raw = `{"items":[]}`
+	r.reads[0].raw = fleetNoItems
 	if err := w.apply(r); err != nil {
 		t.Fatal(err)
 	}
@@ -257,10 +259,10 @@ func TestFleetWatchThroughMuster(t *testing.T) {
 				return mcp.NewToolResultText(`{"instances":[{"id":"remote-agent","state":"FAILED"}]}`), nil
 			}
 			return mcp.NewToolResultText(`{"instances":[]}`), nil
-		case "alerts":
+		case alertsName:
 			return mcp.NewToolResultText(`{"alerts":[]}`), nil
 		default:
-			return mcp.NewToolResultText(`{"items":[]}`), nil
+			return mcp.NewToolResultText(fleetNoItems), nil
 		}
 	})
 	handler := mcpserver.NewStreamableHTTPServer(m, mcpserver.WithStateLess(true))
@@ -341,10 +343,10 @@ func TestFleetWatchInterval(t *testing.T) {
 		switch tool {
 		case "instances":
 			return `{"instances":[]}`, nil
-		case "alerts":
+		case alertsName:
 			return `{"alerts":[]}`, nil
 		default:
-			return `{"items":[]}`, nil
+			return fleetNoItems, nil
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
