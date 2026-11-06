@@ -191,7 +191,7 @@ func (a *app) executionAuthorizationsCmd() *cobra.Command {
 					if json.Unmarshal(out, &pull) != nil {
 						return nil, errors.New("invalid merge reconciliation")
 					}
-					grant.Outcome = "unconfirmed"
+					grant.Outcome = verdictUnconfirmed
 					if pull.State == superloop.Merged && pull.Head == grant.Head {
 						grant.Outcome = execution.MergeSucceeded
 					}

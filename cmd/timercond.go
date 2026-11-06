@@ -288,6 +288,17 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not read the current park (%v)", f.t.ID, err)
 		return
 	}
+	if strings.EqualFold(f.t.Wake, guideRoleAlias) {
+		h := guideRole.get(st).Holder
+		if h == nil {
+			w.emitNow("timer", "TIMER WAKE FAILED: #%d: no session holds the guide role", f.t.ID)
+			return
+		}
+		f.t.Wake = h.Session
+		if f.t.Wake == "" {
+			f.t.Wake = h.Name
+		}
+	}
 	if !f.t.WakeParkAt.IsZero() {
 		p := wakeTargetPark(st, f.t.Wake)
 		if p == nil || !p.Checks || !p.At.Equal(f.t.WakeParkAt) || !p.By.Is(f.t.By) {
@@ -349,7 +360,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
 	// An agents start the command runs says which timer started it, its
 	// time and how late it fired (agentStartTimer).
-	c.Env = append(os.Environ(), envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
+	c.Env = append(os.Environ(), envTimerCommand+"=run", envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		if out, err := os.Create(path); err == nil { //nolint:gosec // under the state directory, named by the timer id
 			defer func() { _ = out.Close() }()

@@ -43,7 +43,7 @@ func enqueue(slotDir, what string) (*ticket, error) {
 	}
 	name := fmt.Sprintf("%020d-%d", time.Now().UnixNano(), os.Getpid())
 	tmp := filepath.Join(dir, "."+name)
-	if err := os.WriteFile(tmp, []byte(oneLine(what)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(oneLine(what)+"\n"), 0o600); err != nil { //nolint:gosec // a path of this tool's own state
 		return nil, err
 	}
 	l := flock.New(tmp)
@@ -80,11 +80,11 @@ func waiters(dir, before string) []string {
 		p := filepath.Join(dir, n)
 		l := flock.New(p)
 		if ok, err := l.TryLock(); err == nil && ok {
-			_ = os.Remove(p)
+			_ = os.Remove(p) //nolint:gosec // a path of this tool's own state
 			_ = l.Unlock()
 			continue
 		}
-		raw, _ := os.ReadFile(filepath.Clean(p))
+		raw, _ := os.ReadFile(filepath.Clean(p)) //nolint:gosec // a path of this tool's own state
 		out = append(out, strings.TrimSpace(string(raw)))
 	}
 	return out
@@ -95,7 +95,7 @@ func (t *ticket) leave() {
 	if t == nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(t.dir, t.name))
+	_ = os.Remove(filepath.Join(t.dir, t.name)) //nolint:gosec // a path of this tool's own state
 	_ = t.lock.Unlock()
 }
 

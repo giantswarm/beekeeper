@@ -521,3 +521,105 @@ func TestUnconfirmedTurnRetryAndConfirm(t *testing.T) {
 		t.Fatalf("Drain after Confirm = (%v, %v), want empty", msgs, err)
 	}
 }
+
+func TestReadQueueReportsReadError(t *testing.T) {
+	inbox := filepath.Join(t.TempDir(), "test.in")
+	if err := os.Mkdir(QueuePath(inbox), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readQueue(inbox)
+	if !errors.Is(err, syscall.EISDIR) {
+		t.Fatalf("readQueue with directory = %v, want EISDIR", err)
+	}
+}
+
+func TestReadQueueEmpty(t *testing.T) {
+	for _, contents := range []string{"missing", "", " \n\t"} {
+		t.Run(contents, func(t *testing.T) {
+			inbox := filepath.Join(t.TempDir(), "test.in")
+			if contents != "missing" {
+				if err := os.WriteFile(QueuePath(inbox), []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			q, err := readQueue(inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := json.Marshal(q)
+			if err != nil || string(b) != "{}" {
+				t.Fatalf("readQueue = %s, %v, want empty queue", b, err)
+			}
+		})
+	}
+}
+
+func TestQueueOperationsPreserveUnreadableQueue(t *testing.T) {
+	operations := map[string]func(string, string) error{
+		"Send": func(_ string, inbox string) error { return Send(inbox, "new wake") },
+		"Drain": func(_ string, inbox string) error {
+			_, err := Drain(inbox)
+			return err
+		},
+		"Confirm": func(_ string, inbox string) error { return Confirm(inbox) },
+		"RecordThread": func(stateDir, inbox string) error {
+			return RecordThread(stateDir, inbox, "new-thread")
+		},
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			inbox := InboxPath(stateDir, "test-agent")
+			if err := MakeInbox(inbox); err != nil {
+				t.Fatal(err)
+			}
+			fifo, err := openInboxRDWR(inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = fifo.Close() }()
+			if err := Send(inbox, "existing wake"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Drain(inbox); err != nil {
+				t.Fatal(err)
+			}
+			if err := Send(inbox, "pending wake"); err != nil {
+				t.Fatal(err)
+			}
+			if err := RecordThread(stateDir, inbox, "existing-thread"); err != nil {
+				t.Fatal(err)
+			}
+			path := QueuePath(inbox)
+			before, err := os.ReadFile(path) //nolint:gosec // a path of this test
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chmod(path, 0o600) }()
+			if _, err := os.ReadFile(path); err == nil { //nolint:gosec // a path of this test
+				t.Skip("environment permits reading files with mode 000")
+			} else if !errors.Is(err, os.ErrPermission) {
+				t.Fatal(err)
+			}
+			if err := operation(stateDir, inbox); !errors.Is(err, os.ErrPermission) {
+				t.Errorf("%s = %v, want permission error", name, err)
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(path) //nolint:gosec // a path of this test
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Errorf("%s changed unreadable queue: before %s, after %s", name, before, after)
+			}
+			if got := ReadThread(stateDir, inbox); got != "existing-thread" {
+				t.Errorf("thread = %q, want existing-thread", got)
+			}
+		})
+	}
+}

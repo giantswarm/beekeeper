@@ -57,6 +57,13 @@ func (s *Server) ReceiveSource(ctx context.Context, ref Ref, chunk SourceChunk) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// No journal exists yet: this record is the upload's inventory entry, written
+	// before the bundle, so a start that never lands can still be retired.
+	if !prepared {
+		if err := atomicFile(filepath.Join(filepath.Dir(p), sourceOwnerFile), mustJSON(ref)); err != nil {
+			return err
+		}
+	}
 	flags := os.O_CREATE | os.O_RDWR
 	if prepared {
 		flags = os.O_RDONLY
