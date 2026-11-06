@@ -31,8 +31,13 @@
 #       repository: giantswarm/beekeeper # default repair owner
 # Probes: exit 0 healthy, 1 fatal, 2 deliberately disabled, others unknown.
 # Output is discarded; put no credentials in probe arguments. A malformed
-# main config is still detected with the unit's pinned --state-dir; repairs
-# wait until admission can load, rather than guessing machine limits.
+# main config is detected with the unit's pinned --state-dir. A healthy scan
+# saves validated settings in stateDir/fatal-recovery.yaml (mode 0600, bound
+# to the original config path). If that config later breaks, one repair owner
+# starts through normal admission using the snapshot; stop, holds and capacity
+# still apply. Only loading the original config clears its incident. Without
+# a valid snapshot the outage remains blocked. Harness probes run bounded
+# startup config preflights without inference, in addition to --version.
 # Clones belong to the person; sessions create checkouts under worktrees.
 projects:
   dir: ~/projects

@@ -22,6 +22,7 @@ import (
 )
 
 const (
+	fatalCoreRepository    = "giantswarm/beekeeper"
 	fatalProbeTimeout      = 20 * time.Second
 	fatalSentinelName      = "fatal sentinel"
 	fatalAsFlag            = "--as"
@@ -72,6 +73,17 @@ func (a *app) fatalCmd() *cobra.Command {
 		dir = a.cfg.StateDir
 		return nil
 	}
+	c.AddCommand(&cobra.Command{Use: "preflight <harness>", Hidden: true, Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.loadConfig(); err != nil {
+				return err
+			}
+			// Discard parse errors: configuration can contain credential values.
+			if err := a.fatalHarnessConfig(cmd.Context(), args[0]); err != nil {
+				return errors.New("harness startup preflight failed")
+			}
+			return nil
+		}})
 	c.AddCommand(&cobra.Command{Use: executionStatus, Short: "Show outages, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := resolve(); err != nil {
@@ -174,6 +186,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		return err
 	}
 	now := time.Now().UTC()
+	recoveryPath := filepath.Join(dir, "fatal-recovery.yaml")
 	store, err := state.Open(dir)
 	if err != nil {
 		return err
@@ -207,6 +220,21 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		cfg = nil
 	}
 	observe(fatal.Observation{ID: "configuration", Failed: pathErr != nil, Evidence: "beekeeper configuration cannot load"})
+	sourcePath := path
+	recovering := cfg == nil
+	if cfg != nil {
+		// Snapshot only validated bytes, atomically; a corrupt source never
+		// replaces the settings needed to admit its own repair.
+		cfg, err = config.RecoverySnapshot(path, recoveryPath)
+		if err != nil {
+			return err
+		}
+	} else if path != "" {
+		cfg, _ = config.LoadRecovery(path, recoveryPath)
+		if cfg != nil {
+			path = recoveryPath
+		}
+	}
 	for _, unit := range []string{"beekeeper-notify.service", "beekeeper-supervisor-loop.service", "beekeeper-timers.service"} {
 		observe(fatalService(ctx, unit))
 	}
@@ -245,13 +273,20 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			}
 			seen[c.Harness] = true
 			code, err := fatalProbe(ctx, c.Harness, "--version")
-			o := fatal.Observation{ID: "harness:" + c.Harness, Failed: err != nil || code != 0, Evidence: "configured harness cannot run --version"}
+			if err == nil && code == 0 {
+				var bin string
+				bin, err = os.Executable()
+				if err == nil {
+					code, err = fatalProbe(ctx, bin, workerGitHubConfigOption, path, "fatal", "preflight", c.Harness)
+				}
+			}
+			o := fatal.Observation{ID: "harness:" + c.Harness, Failed: err != nil || code != 0, Evidence: "configured harness fails non-model startup preflight"}
 			if ctx.Err() != nil {
 				o.Failed = false
 				o.Unknown = true
 			}
 			observe(o)
-			if o.Failed {
+			if o.Failed || o.Unknown {
 				broken = append(broken, c.Harness)
 			}
 		}
@@ -262,7 +297,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			}
 		}
 		for _, x := range q.Incidents {
-			if !observed[x.ID] {
+			if !observed[x.ID] && !recovering {
 				observe(fatal.Observation{ID: x.ID, Disabled: true})
 			}
 		}
@@ -296,10 +331,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		return errors.Join(err, q.Save(dir))
 	}
 	if cfg == nil {
-		_, err = fmt.Fprintln(a.out, "fatal repair blocked: configuration must load before normal capacity admission; outage retained")
+		_, err = fmt.Fprintln(a.out, "fatal repair blocked: no validated recovery configuration; outage retained")
 		for i := range q.Incidents {
 			if q.Incidents[i].Resolved.IsZero() {
-				q.Incidents[i].Outcome = "blocked: configuration cannot load; capacity admission unavailable"
+				q.Incidents[i].Outcome = "blocked: no validated recovery configuration"
 			}
 		}
 		return errors.Join(err, q.Save(dir))
@@ -361,7 +396,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if x == nil {
 		return q.Save(dir)
 	}
-	repo := "giantswarm/beekeeper"
+	repo := fatalCoreRepository
 	if mainRepo, ok := strings.CutPrefix(x.ID, "main:"); ok {
 		repo = mainRepo
 	}
@@ -419,6 +454,9 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 	}
 	brief := fmt.Sprintf("Repair fatal system outage %s in https://github.com/%s. Evidence: %s. You own this outage. Fix the component in its owning repository; a desk rule or note is an antipattern. Respect all holds, stop intent, capacity, secret rules, green CI and independent desk review. Never force-push. Do not re-enable a deliberately disabled component. Prove the failing probe passes before reporting done. Read beekeeper fatal status for the durable incident.\n", x.ID, repo, x.Evidence)
+	if recovering {
+		brief += fmt.Sprintf("The main configuration at %q cannot load. Admission uses validated recovery settings at %q. Repair the main file; only a successful scan of that original file clears the incident.\n", sourcePath, recoveryPath)
+	}
 	briefPath := filepath.Join(dir, "fatal-repair-brief.txt")
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err

@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
+	"github.com/giantswarm/beekeeper/internal/platform"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -371,5 +373,206 @@ func TestFatalFailedServiceRestartImmediatelyGetsOneRepairOwner(t *testing.T) {
 	}
 	if restarts != 1 || starts != 1 {
 		t.Fatalf("%d restarts %d workers", restarts, starts)
+	}
+}
+
+// The executable version is healthy even when startup's Codex TOML parser
+// fails. An existing incident must stay open and Codex must be excluded.
+func TestFatalCodexStartupFailureExcludesHarnessUntilVerified(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := a.store.Dir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	userConfig := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(userConfig, []byte("model = ["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf("stateDir: %q\ncodex:\n  configFile: %q\ncapacity:\n  providers:\n    codex: {command: [usage-probe]}\n    claude: {command: [usage-probe]}\n  choices:\n    - {harness: codex, model: test-codex}\n    - {harness: claude, model: test-claude}\nfatal: {repositories: []}\n", dir, userConfig)
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfgPath = path
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	q := fatal.Queue{}
+	q.Observe(fatal.Observation{ID: "harness:codex", Failed: true}, time.Now().Add(-time.Hour))
+	if err := q.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	preflights := 0
+	fakeFatalRun(t, func(args []string) (string, int) {
+		if slices.Contains(args, "is-enabled") {
+			return fatalDisabledState, 1
+		}
+		if slices.Contains(args, "preflight") && args[len(args)-1] == config.CodexHarness {
+			preflights++
+			if a.fatalHarnessConfig(t.Context(), config.CodexHarness) != nil {
+				return "", 1
+			}
+		}
+		return "version succeeds", 0
+	})
+	old := beekeeperRun
+	starts := 0
+	beekeeperRun = func(_ context.Context, args ...string) (string, int, error) {
+		starts++
+		i := slices.Index(args, fatalExcludeOption)
+		if i < 0 || args[i+1] != config.CodexHarness {
+			t.Fatalf("broken harness not excluded: %v", args)
+		}
+		return "", 0, nil
+	}
+	t.Cleanup(func() { beekeeperRun = old })
+	if err := a.fatalScan(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	q, err := fatal.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || preflights != 1 || !q.Incidents[0].Resolved.IsZero() {
+		t.Fatalf("starts=%d preflights=%d queue=%+v", starts, preflights, q)
+	}
+	if err := os.WriteFile(userConfig, []byte("model = 'valid'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.fatalScan(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	q, err = fatal.Read(dir)
+	if err != nil || q.Barrier("ordinary") != nil {
+		t.Fatalf("verified recovery: %+v %v", q, err)
+	}
+}
+
+func TestFatalMalformedConfigurationAdmitsOneRecoveryOwner(t *testing.T) {
+	for _, hold := range []string{ghNone, bgStopCmd, holdStarts, holdGitHub, fatalCoreRepository, "capacity"} {
+		t.Run(hold, func(t *testing.T) {
+			a, _ := stubApp(t)
+			dir := a.store.Dir()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			ceiling := 1
+			if hold == "capacity" {
+				ceiling = 0
+			}
+			valid := []byte(fmt.Sprintf("stateDir: %q\ncapacity: {ceiling: %d}\nfatal: {repositories: []}\n", dir, ceiling))
+			if err := os.WriteFile(path, valid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			a.cfgPath = path
+			fakeFatalRun(t, func(args []string) (string, int) {
+				if slices.Contains(args, "is-enabled") {
+					return fatalDisabledState, 1
+				}
+				return "", 0
+			})
+			// One healthy pass establishes the validated recovery settings.
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("fatal: ["), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if hold == bgStopCmd {
+					st.Stop = &state.Stop{Reason: "configured stop", At: time.Now()}
+				} else if hold != ghNone && hold != "capacity" {
+					st.Holds = []state.Hold{{Target: hold, Reason: "deliberate hold", At: time.Now()}}
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			starts := 0
+			old := beekeeperRun
+			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+				i := slices.Index(args, workerGitHubConfigOption)
+				if i < 0 || args[i+1] == path {
+					t.Fatalf("repair depends on malformed config: %v", args)
+				}
+				// The child loads the real snapshot through the normal config parser.
+				child, _ := stubApp(t)
+				child.cfgPath = args[i+1]
+				if err := child.loadConfig(); err != nil {
+					t.Fatal(err)
+				}
+				child.store = a.store
+				if child.cfg.Capacity.Ceiling != ceiling {
+					t.Fatal("capacity settings lost")
+				}
+				owner := args[slices.Index(args, fatalNameOption)+1]
+				plat = platform.Stub()
+				plat.Machine = roomyMachine{Machine: plat.Machine}
+				if _, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, forWorker); err != nil {
+					if hold != "capacity" || Code(err) != ExitRefused {
+						t.Fatalf("unexpected admission failure: %v", err)
+					}
+					return "", Code(err), nil
+				}
+				err := child.withKindAdmission(ctx, owner, func() error {
+					starts++
+					return child.store.Update(func(st *state.State) ([]state.Event, error) {
+						st.Agents = append(st.Agents, state.Agent{Party: state.Party{Name: owner}, Task: fatalRepairTask})
+						return nil, nil
+					})
+				})
+				return "", 0, err
+			}
+			t.Cleanup(func() { beekeeperRun = old })
+			for range 2 {
+				if err := a.fatalScan(t.Context(), dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := 0
+			if hold == ghNone {
+				want = 1
+			}
+			if starts != want {
+				t.Fatalf("started %d owners, want %d", starts, want)
+			}
+			q, err := fatal.Read(dir)
+			if err != nil || q.Barrier("ordinary") == nil {
+				t.Fatalf("configuration outage lost: %+v %v", q, err)
+			}
+			if err := os.WriteFile(path, valid, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			q, err = fatal.Read(dir)
+			if err != nil || q.Barrier("ordinary") != nil {
+				t.Fatalf("verified original config recovery did not clear: %+v %v", q, err)
+			}
+		})
+	}
+}
+
+func TestFatalPreflightRejectsMalformedHarnessSettings(t *testing.T) {
+	for _, harness := range []string{config.ClaudeHarness, config.AgyHarness, config.OmpHarness} {
+		t.Run(harness, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+			a, _ := stubApp(t)
+			path := filepath.Join(home, ".claude", "settings.json")
+			if harness == config.AgyHarness {
+				path = filepath.Join(home, ".gemini", "config", "hooks.json")
+			}
+			if harness == config.OmpHarness {
+				path = filepath.Join(home, "models.yml")
+				a.cfg.Omp.ModelsFile = path
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("[malformed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.fatalHarnessConfig(t.Context(), harness); err == nil {
+				t.Fatal("malformed startup settings accepted")
+			}
+		})
 	}
 }
