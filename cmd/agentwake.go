@@ -117,6 +117,10 @@ type wakeTarget struct {
 	profile string
 }
 
+// leaseResumeKey marks a lease resume whose turn must start without waiting
+// for a desktop import. Live CLI routing and overlap checks still apply.
+type leaseResumeKey struct{}
+
 // wakeAgent delivers msg from by to the registered agent q (wake).
 func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string) (err error) {
 	st, err := a.store.Read()
@@ -218,6 +222,9 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	}
 	if ag.Import.Pending(a.now) {
 		return a.importRefusal(by, ag)
+	}
+	if immediate, _ := ctx.Value(leaseResumeKey{}).(bool); immediate {
+		return a.resumeTurn(ctx, by, w, msg)
 	}
 	if line, err := a.turnInDesktop(ctx, w, msg, 0); err == nil {
 		_ = a.store.Record(event(by, "agents.wake", "%s: %s", ag.Name, line))
@@ -372,6 +379,12 @@ func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) err
 	return modelNotHeld{recorded: r.Model, want: w.model, why: err}
 }
 
+// desktopDeliveryError means a running CLI did not accept its task. The
+// caller must not treat its presence as successful delivery or resume beside it.
+type desktopDeliveryError struct{ error }
+
+func (e desktopDeliveryError) Unwrap() error { return e.error }
+
 // turnInDesktop has the desktop run msg as a turn of the session w, whose
 // row the person sees it run in: its desktop CLI, when one runs or the
 // desktop warms one within warm, takes msg by its socket; else a steward's
@@ -403,14 +416,17 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 		}
 	}
 	if sock := desktopSocketWithin(ctx, w.id, warm); sock != "" {
-		if err := a.peerSend(ctx, "uds:"+sock, msg); err != nil {
-			return "", fmt.Errorf("sending to its desktop CLI: %w", err)
+		if err := cliSend(ctx, a, "uds:"+sock, msg); err != nil {
+			return "", desktopDeliveryError{fmt.Errorf("sending to its desktop CLI: %w", err)}
 		}
 		return fmt.Sprintf("its desktop CLI took the message as its turn, in the desktop's row %s", w.host), nil
 	}
 	running := func() bool {
 		t, err := plat.Machine.Processes()
 		return err == nil && desktopTwin(t, w.id) != nil
+	}
+	if running() {
+		return "", desktopDeliveryError{errors.New("its desktop CLI runs and takes no message yet")}
 	}
 	s, err := a.sendThroughDesktop(ctx, w.host, msg, running)
 	if err != nil {
@@ -912,9 +928,8 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
-// says that the roster agent of that name (or session id) runs no CLI and
-// whether its import is pending, "" when a CLI carries the name or no agent
-// does.
+// describes the roster agent's CLI and message route when no CLI carries
+// the requested name, "" when a CLI carries it or no agent does.
 func (a *app) absentPeer(name string) string {
 	if a.loadConfig() != nil {
 		return ""
@@ -946,5 +961,9 @@ func absentAgent(st *state.State, sessions []*claude.Session, name string, now t
 	if i < 0 {
 		return ""
 	}
-	return noCLI(st.Agents[i], now) + ". A message by name reaches it once a CLI of it runs"
+	ag := st.Agents[i]
+	if s, ok := wakeLive(sessions, ag.Party, ag.Session); ok {
+		return runningCLI(ag, s) + fmt.Sprintf(". `beekeeper agents wake %q \"<message>\"` reaches its session", ag.Name)
+	}
+	return noCLI(ag, now) + ". A message by name reaches it once a CLI of it runs"
 }

@@ -148,8 +148,10 @@ type Hook struct {
 	// only for a command that creates one.
 	MaxLabs func() int
 	// Production is the installation the kube guard protects; empty, the
-	// guard is off.
+	// guard is off unless ProtectedContexts is set.
 	Production string
+	// ProtectedContexts lists additional contexts protected by the write gate.
+	ProtectedContexts []string
 	// ContextHint is how a refusal writes an installation's context
 	// ("login.example.com-<installation>"); empty, "<context>".
 	ContextHint string
@@ -171,7 +173,7 @@ type Hook struct {
 	Role func(role string) (string, error)
 	// Holds names the role a message by name addresses: a name the role's
 	// holder carries or carried on the roster ("Supervisor run 82" for a
-	// holder its desktop has since titled "klaus-lab-14"), or its session
+	// holder its desktop has since titled "fixture-lab-14"), or its session
 	// id; "" when it holds none. Such a message goes where Role sends it.
 	// Nil reads every name as written.
 	Holds func(name string) string
@@ -233,6 +235,8 @@ type Hook struct {
 	// in bypassPermissions; read only for a browser call in acceptEdits,
 	// nil refuses no browser call.
 	Started func(session string) bool
+	// GuardPersonalSearch applies the issue-search refusal to personal sessions too.
+	GuardPersonalSearch bool
 	// Apps lists the Apps the person owns and asked a consent for, what a
 	// Chrome call on a consent page is decided from (consent.go); read only
 	// for a browser call that acts on a page, nil decides no consent page.
@@ -243,6 +247,10 @@ type Hook struct {
 	// GraphQL is the GraphQL budget as beekeeper last read it, for a
 	// board-read refusal; nil or "", unknown.
 	GraphQL func() string
+	// ProjectsDir and the places enable protection against new direct entries
+	// in the home, projects and org folders (entries.go).
+	ProjectsDir                string
+	WorktreePlaces, HomePlaces []string
 	// PersonFolders are the person's folders (hooks.personFolders, absolute
 	// globs): no file is created directly in one, nor an untracked one in the
 	// main working tree of a checkout that sits directly in one (folders.go);
@@ -252,6 +260,8 @@ type Hook struct {
 	// read only for a command that moves or removes an existing directory
 	// (liveworktrees.go); nil guards no worktree.
 	LiveDirs func() []string
+	// WorktreeOwner reserves a new worktree or checks its live session owner.
+	WorktreeOwner func(session, dir string, create bool) string
 	// StopTask ends the gate a TaskStop of the session's task runs and says
 	// what it ended, "" for nothing; nil ends nothing.
 	StopTask func(session, task string) string
@@ -324,6 +334,10 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.desktopBrowserRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("storageRefusal")
+	if r := storageRefusal(ev, h.Shared); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("subscriptionRefusal")
 	if r := subscriptionRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -376,7 +390,14 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("labConfigRefusal")
+	if r := h.labConfigRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("folderRefusal")
+	if r := h.entryRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if r := h.folderRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
@@ -428,7 +449,7 @@ func (h Hook) decide(ev event) []byte {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("searchRefusal")
-	if r := h.searchRefusal(cmd, ev.Session); r != "" {
+	if r := h.searchRefusal(cmd, ev.Session, ev.CWD); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("deleteRefusal")
@@ -442,6 +463,10 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("secretGuard")
 	if l := (secretGuard{unlock: h.UnlockCommands, cwd: cwd, files: newSecretFiles(h.SecretFiles), transcripts: h.transcriptAccess(ev.Session)}).leak(cmd); l != nil {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: l.reason()})
+	}
+	h.beginCheck("crossGoRefusal")
+	if r := crossGoRefusal(cmd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
 	h.beginCheck("goCacheRefusal")
 	if r := h.goCacheRefusal(cmd); r != "" {
@@ -485,8 +510,12 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.ghBodyRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("ghPREditRefusal")
+	if r := h.ghPREditRefusal(origCmd, cwd); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	if wrapped.MatchString(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated, bg)
+		return h.rewrite(ev.ToolInput, cwd, cmd, gated, bg)
 	}
 
 	h.beginCheck("labRuntime")
@@ -516,9 +545,9 @@ func (h Hook) decide(ev event) []byte {
 	}
 
 	if !isHeavy(cmd) {
-		return h.rewrite(ev.ToolInput, cmd, gated || vaultCall.MatchString(cmd), bg)
+		return h.rewrite(ev.ToolInput, cwd, cmd, gated || vaultCall.MatchString(cmd), bg)
 	}
-	return h.rewrite(ev.ToolInput, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
+	return h.rewrite(ev.ToolInput, cwd, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }
 
 // gate puts "beekeeper gate --" before every blocking devctl command at a
@@ -1016,16 +1045,14 @@ func (h Hook) insertGate(cmd string, at []int, bg bool, bare map[int]bool) strin
 	return cmd
 }
 
-// backgroundExport starts every background Bash call: a beekeeper run
-// anywhere in it, reached directly, after a cd or export chain or through a
-// script, inherits it and waits the background wait.
+// backgroundExport gives detected background runs the longer slot wait.
 var backgroundExport = "export " + BackgroundEnv + "=1; "
 
 // rewrite allows the call with cmd as its command when changed, a
 // foreground call's timeout raised to the Bash tool's 10 minutes; a
-// background call's command always starts with backgroundExport.
-func (h Hook) rewrite(input map[string]any, cmd string, changed, bg bool) []byte {
-	if bg {
+// detected background run inherits backgroundExport.
+func (h Hook) rewrite(input map[string]any, cwd, cmd string, changed, bg bool) []byte {
+	if bg && (backgroundRun(cmd, cwd, 0) || h.Self != "" && strings.Contains(cmd, ShellQuote(h.Self)+" run --")) {
 		cmd, changed = backgroundExport+cmd, true
 	}
 	if !changed {
@@ -1233,14 +1260,15 @@ func (h *Hook) beginCheck(name string) {
 }
 
 func (h *Hook) recoverDecision(out *[]byte, deny func(string) []byte) {
-	if recover() == nil {
+	value := recover()
+	if value == nil {
 		return
 	}
 	check := "PreToolUse"
 	if h.check != nil {
 		check = *h.check
 	}
-	stack := debug.Stack()
+	stack := append([]byte(fmt.Sprintf("panic: %v\n", value)), debug.Stack()...)
 	*out = deny("Refused: internal panic in PreToolUse check " + check + "; failing closed. See beekeeper log (hook.panic).")
 	if h.Panic != nil {
 		h.Panic(check, stack)

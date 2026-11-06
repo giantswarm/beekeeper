@@ -15,6 +15,11 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const (
+	choiceMergeWord = "merge"
+	choiceWaitWord  = "wait"
+)
+
 // A decision's two options, the first recommended, and a name nobody has.
 const (
 	nobodyNamed = "nobody"
@@ -25,6 +30,8 @@ const (
 	optMerge    = "merge: the release ships tonight"
 	optWait     = "wait: the release ships Monday"
 )
+
+const alphaTeam = "alpha"
 
 func decisionNote(args ...string) []string {
 	return append(append(slices.Clone(decisionArgs), "--option", optMerge, "--option", optWait), args...)
@@ -67,7 +74,7 @@ func TestDecisionKeepsItsParts(t *testing.T) {
 	if n.Question != "approve "+prURL || n.StatusQuo != sqNow || !slices.Equal(n.Options, []string{optMerge, optWait}) || n.Recommend != 1 {
 		t.Fatalf("note %+v", n)
 	}
-	if label, cons, ok := n.Option(2); label != "wait" || cons != "the release ships Monday" || !ok {
+	if label, cons, ok := n.Option(2); label != choiceWaitWord || cons != "the release ships Monday" || !ok {
 		t.Fatalf("option 2: %q %q %v", label, cons, ok)
 	}
 	if err := addNote(a, "--recommend", "1", "a memo"); Code(err) != ExitUsage {
@@ -120,7 +127,7 @@ func TestNoteAnswerRecordsTheChoiceAndTheWords(t *testing.T) {
 	for _, an := range got {
 		said = append(said, an.Via+" "+an.Answer)
 	}
-	if want := []string{"terminal wait — if CI is green", "terminal merge", "terminal neither, ask Kim"}; !slices.Equal(said, want) {
+	if want := []string{"cli wait — if CI is green", "cli merge", "slack neither, ask Kim"}; !slices.Equal(said, want) {
 		t.Fatalf("answers %q, want %q", said, want)
 	}
 	if st, _ := a.store.Read(); len(st.Notes) != 1 || st.Notes[0].ID != 4 {
@@ -133,8 +140,8 @@ const laneQuestion = "Which lane? (a: b)"
 
 func TestAnswerEventsParse(t *testing.T) {
 	const words, comment = "portal: it rolls (with backstage)", "https://x/c"
-	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: "agent-one"}}
-	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Channel: channelSlack, Answer: words, Note: 4}
+	n := state.Note{ID: 4, Kind: noteDecision, For: "team:bumblebee", Text: laneQuestion, By: state.Party{Name: litAgentOne}}
+	rec := &recordedAnswer{About: privateThread, Thread: &board.Thread{About: privateThread}, Comment: comment, By: "Kim", Via: viaSlack, Answer: words, Note: 4}
 	an, ok := parseAnswered(answerEvent(state.Party{}, rec, &n))
 	if !ok || an.About != privateThread || an.For != "Kim" || an.Audience != n.For || an.Via != viaSlack || an.Comment != comment || an.Answer != words || an.ID != 4 || an.Asker != "agent-one" || an.Question != laneQuestion {
 		t.Fatalf("%+v %v", an, ok)
@@ -183,7 +190,7 @@ func TestDueDecisionsCloseWithTheirDefault(t *testing.T) {
 }
 
 func TestPassiveDefaultsCloseOnceAndStayAnswerable(t *testing.T) {
-	for _, dflt := range []string{"wait", ghNone, "nothing happens", "", "ask again"} {
+	for _, dflt := range []string{choiceWaitWord, ghNone, "nothing happens", "", "ask again"} {
 		t.Run(dflt, func(t *testing.T) {
 			n := state.Note{ID: 1, Kind: noteDecision, For: notePerson, Default: dflt, Due: relayNow.Add(-time.Minute)}
 			st := &state.State{Notes: []state.Note{n}}
@@ -368,5 +375,79 @@ func TestCloseDefaultedDropsEveryExpiredDefault(t *testing.T) {
 	}
 	if !slices.Equal(kept, []int{3, 4}) {
 		t.Fatalf("defaulted %v, want [3 4]", kept)
+	}
+}
+
+func TestNoteAnswerResolvesStoredLabelAndRefusesConflictingRelay(t *testing.T) {
+	a, _ := noteApp(t)
+	// Store the options in the reverse of their usual presentation order.
+	args := append(slices.Clone(decisionArgs), "--option", optWait, "--option", optMerge, "approve "+prURL)
+	if err := addNote(a, args...); err != nil {
+		t.Fatal(err)
+	}
+	for _, words := range []string{choiceMergeWord, "merge (Recommended)", optMerge, "merge — ship today"} {
+		if _, err := noteCommand(a, verbAnswer, "1", flagChoice, choiceWaitWord, words); err == nil || !strings.Contains(err.Error(), "relayed text") {
+			t.Fatalf("conflicting relay %q: %v", words, err)
+		}
+	}
+	st, _ := a.store.Read()
+	if len(st.Notes) != 1 {
+		t.Fatal("conflicting relay closed the note")
+	}
+	answers, err := a.answeredSince(time.Time{})
+	if err != nil || len(answers) != 0 {
+		t.Fatalf("conflicting relay recorded an answer: %+v, %v", answers, err)
+	}
+	if _, err := noteCommand(a, verbAnswer, "1", flagChoice, choiceWaitWord, "wait — until checks pass"); err != nil {
+		t.Fatal(err)
+	}
+	answers, err = a.answeredSince(time.Time{})
+	if err != nil || len(answers) != 1 || answers[0].Answer != "wait — until checks pass" {
+		t.Fatalf("answers %+v, %v", answers, err)
+	}
+}
+
+func TestAnswerTextRefusesAnotherOptionWithNumericChoice(t *testing.T) {
+	n := &state.Note{ID: 1, Options: []string{optWait, optMerge}}
+	if _, err := answerText(n, 1, "merge — ship today"); err == nil {
+		t.Fatal("accepted mismatched numeric choice")
+	}
+	if got, err := answerText(n, 1, ""); err != nil || got != choiceWaitWord {
+		t.Fatalf("answer %q, %v", got, err)
+	}
+}
+
+func TestResolveNoteChoiceUsesStoredOrder(t *testing.T) {
+	n := &state.Note{Options: []string{optWait, optMerge}}
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{choiceWaitWord, 1}, {choiceMergeWord, 2}, {"1", 1}, {"2", 2}, {"", 0}, {"0", 0},
+	} {
+		if got, err := resolveNoteChoice(n, tc.value); err != nil || got != tc.want {
+			t.Fatalf("%q: got %d, %v; want %d", tc.value, got, err, tc.want)
+		}
+	}
+	if _, err := resolveNoteChoice(n, "unknown"); err == nil {
+		t.Fatal("accepted an unknown option label")
+	}
+}
+
+func TestDefaultEventsIdentifyTheNotesTeam(t *testing.T) {
+	now := time.Now().UTC()
+	st := &state.State{}
+	for _, team := range []string{alphaTeam, "beta"} {
+		st.Notes = append(st.Notes, state.Note{ID: 3, Kind: noteDecision, By: state.Party{Team: team}, Due: now.Add(-time.Hour), Default: "wait for " + team})
+	}
+	actor := state.Party{Name: "timer", Team: "operations"}
+	_, events, due := closeDefaulted(st, "", actor, now)
+	if len(events) != 2 || len(due) != 2 {
+		t.Fatalf("defaults: %+v %+v", events, due)
+	}
+	for i, e := range events {
+		if e.NoteTeam != due[i].By.Team || e.By != actor || !strings.Contains(e.Detail, due[i].Default) {
+			t.Fatalf("event: %+v, note: %+v", e, due[i])
+		}
 	}
 }

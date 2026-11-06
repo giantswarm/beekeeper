@@ -40,7 +40,18 @@ func (rec builderRecord) file(name string) string {
 
 func (r Runner) remember(root, host, name string) error {
 	dir := filepath.Join(r.StateDir, "remote-build")
-	record := builderRecord{root, host, r.Config.Kubeconfig, r.Config.Context, r.Config.Namespace}
+	// Retirement may run outside this build directory. Persist the connection
+	// path before hashing it so its meaning and record identity stay stable.
+	// An empty path means the default kubeconfig; Abs would make it this
+	// directory.
+	kubeconfig := r.Config.Kubeconfig
+	if kubeconfig != "" {
+		var err error
+		if kubeconfig, err = filepath.Abs(kubeconfig); err != nil {
+			return fmt.Errorf("resolve builder kubeconfig: %w", err)
+		}
+	}
+	record := builderRecord{root, host, kubeconfig, r.Config.Context, r.Config.Namespace}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -121,6 +132,9 @@ func (r Runner) Sweep(ctx context.Context, finished []string, dryRun bool) error
 			_, statErr := os.Stat(rec.Root)
 			if !done[physicalRoot(rec.Root)] && !errors.Is(statErr, os.ErrNotExist) {
 				return statErr
+			}
+			if rec.Kubeconfig != "" && !filepath.IsAbs(rec.Kubeconfig) {
+				return fmt.Errorf("cannot retire builder %s: relative kubeconfig in ownership record; recover the original absolute kubeconfig path and retire the Job manually before removing this record", name)
 			}
 			if dryRun {
 				if r.Stdout != nil {

@@ -20,6 +20,7 @@ const (
 	matchingRefsPath = "/git/matching-refs/"
 	// behindCompare is a compare whose head is an ancestor of its base.
 	behindCompare = `{"status":"behind"}`
+	aheadCompare  = `{"status":"ahead"}`
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -150,9 +151,9 @@ func TestGitHubCandidateEligibility(t *testing.T) {
 				case "v0.171.0-rc.104":
 					return 404, `{}`, nil
 				case "v0.171.0-rc.103":
-					return 200, releaseJSON(tag, true, false), nil
+					return 404, `{}`, nil
 				case "v0.171.0-rc.102":
-					return 200, releaseJSON(tag, false, true), nil
+					return 404, `{}`, nil
 				case "v0.171.0-rc.101":
 					return 200, strings.TrimSuffix(releaseJSON(tag, true, true), "}") + `,"draft":true}`, nil
 				default:
@@ -246,7 +247,6 @@ func TestGitHubSkipsStableReleaseOlderThanReleaseCandidates(t *testing.T) {
 		nextPromoted    = "v0.172.0"
 		newestFinal     = "v0.172.2"
 		newestFinalSHA  = "0668790"
-		aheadCompare    = `{"status":"ahead"}`
 		comparePathPart = "/compare/"
 	)
 	refs := refsWithSHAJSON([][2]string{
@@ -356,10 +356,6 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		runningTag = "v0.171.0-rc.120"
 		runningSHA = "0dbeb8f"
 	)
-	oldCommit := currentCommit
-	t.Cleanup(func() { currentCommit = oldCommit })
-	currentCommit = func() string { return runningSHA }
-
 	refs := refsWithSHAJSON([][2]string{
 		{runningTag, runningSHA},
 		{"v0.171.0", "deadbeef"},
@@ -374,9 +370,69 @@ func TestGitHubSkipsReleaseBehindRunningCommit(t *testing.T) {
 		tag := strings.TrimPrefix(r.URL.Path, "/repos/giantswarm/beekeeper/releases/tags/")
 		return 200, releaseJSON(tag, true, true), nil
 	})
+	currentCommit = func() string { return runningSHA }
 	res, err := Run(context.Background(), io.Discard, true)
 	if err != nil || res.Newer || res.Latest != runningTag {
 		t.Fatalf("result=%+v err=%v; want Latest=%s Newer=false", res, err, runningTag)
+	}
+}
+
+// The binary stamp must take precedence even when refs cannot identify the
+// running commit. Reject a newer version at an older commit before fetching its
+// release, then continue to a release whose commit is ahead of the stamp.
+func TestGitHubLookupUsesStampedRunningCommit(t *testing.T) {
+	const (
+		runningTag = "v0.170.0"
+		runningSHA = "1111111"
+		olderTag   = "v0.172.0"
+		olderSHA   = "2222222"
+		newerTag   = "v0.171.0"
+		newerSHA   = "3333333"
+	)
+	for _, tc := range []struct {
+		name   string
+		tagSHA string
+	}{
+		{name: "running tag absent"},
+		{name: "running tag points elsewhere", tagSHA: "4444444"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refs := [][2]string{{olderTag, olderSHA}, {newerTag, newerSHA}}
+			if tc.tagSHA != "" {
+				refs = append(refs, [2]string{runningTag, tc.tagSHA})
+			}
+			var comparisons, releases []string
+			stubGitHub(t, runningTag, func(r *http.Request) (int, string, http.Header) {
+				switch r.URL.Path {
+				case "/repos/giantswarm/beekeeper/git/matching-refs/tags/v":
+					return 200, refsWithSHAJSON(refs), nil
+				case "/repos/giantswarm/beekeeper/compare/" + runningSHA + "..." + olderSHA:
+					comparisons = append(comparisons, olderSHA)
+					return 200, behindCompare, nil
+				case "/repos/giantswarm/beekeeper/compare/" + runningSHA + "..." + newerSHA:
+					comparisons = append(comparisons, newerSHA)
+					return 200, `{"status":"ahead"}`, nil
+				case "/repos/giantswarm/beekeeper/releases/tags/" + newerTag:
+					releases = append(releases, newerTag)
+					return 200, releaseJSON(newerTag, true, true), nil
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					return 500, `{}`, nil
+				}
+			})
+			currentCommit = func() string { return runningSHA }
+
+			res, err := Run(context.Background(), io.Discard, true)
+			if !errors.Is(err, ErrOutdated) || !res.Newer || res.Latest != newerTag {
+				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, newerTag)
+			}
+			if got := strings.Join(comparisons, ","); got != olderSHA+","+newerSHA {
+				t.Errorf("compared commits %q; want older then newer against the stamp", got)
+			}
+			if got := strings.Join(releases, ","); got != newerTag {
+				t.Errorf("fetched releases %q; want only %s", got, newerTag)
+			}
+		})
 	}
 }
 
@@ -473,7 +529,7 @@ func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
 					case h < b:
 						return 200, behindCompare, nil
 					case h > b:
-						return 200, `{"status":"ahead"}`, nil
+						return 200, aheadCompare, nil
 					}
 					return 200, `{"status":"identical"}`, nil
 				}
@@ -485,5 +541,58 @@ func TestGitHubReleaseBehindALaterBasesCandidates(t *testing.T) {
 				t.Fatalf("result=%+v err=%v; want Latest=%s ErrOutdated", res, err, tc.want)
 			}
 		})
+	}
+}
+
+// Public releases must never disappear behind an older complete release while
+// the release pipeline is still uploading the binary or its signature bundle.
+func TestGitHubPublicReleaseUploadWindow(t *testing.T) {
+	for _, checkOnly := range []bool{true, false} {
+		for _, assets := range []struct{ binary, bundle bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+			t.Run(fmt.Sprintf("check=%t/binary=%t/bundle=%t", checkOnly, assets.binary, assets.bundle), func(t *testing.T) {
+				calls := stubGitHub(t, githubStable, func(r *http.Request) (int, string, http.Header) {
+					if strings.Contains(r.URL.Path, matchingRefsPath) {
+						return 200, refsJSON(githubStable, "v0.171.0"), nil
+					}
+					if !strings.HasSuffix(r.URL.Path, "/releases/tags/v0.171.0") {
+						t.Fatalf("fell back to older release: %s", r.URL.Path)
+					}
+					return 200, releaseJSON("v0.171.0", assets.binary, assets.bundle), nil
+				})
+				var output strings.Builder
+				// Complete assets are checked without attempting a real installation.
+				res, err := Run(context.Background(), &output, checkOnly || (assets.binary && assets.bundle))
+				if assets.binary && assets.bundle {
+					if !errors.Is(err, ErrOutdated) || res.Latest != "v0.171.0" {
+						t.Fatalf("result=%+v err=%v", res, err)
+					}
+				} else if !errors.Is(err, errIncompleteLookup) || res.Latest != "" || res.Updated || output.Len() != 0 || !strings.Contains(err.Error(), "public release v0.171.0 is still being prepared") || strings.Contains(err.Error(), "online?") {
+					t.Fatalf("result=%+v err=%v output=%q", res, err, output.String())
+				}
+				if *calls != 2 {
+					t.Fatalf("calls=%d; want 2", *calls)
+				}
+			})
+		}
+	}
+}
+
+// A release whose assets never came does not hold updates back for good.
+func TestGitHubReleaseBeyondTheUploadWindowFallsBack(t *testing.T) {
+	const newest, previous = "v0.171.0", "v0.170.0"
+	published := time.Now().Add(-2 * assetUploadWindow).UTC().Format(time.RFC3339)
+	stubGitHub(t, "v0.169.0", func(r *http.Request) (int, string, http.Header) {
+		switch {
+		case strings.Contains(r.URL.Path, matchingRefsPath):
+			return 200, refsJSON(newest, previous), nil
+		case strings.HasSuffix(r.URL.Path, "/releases/tags/"+newest):
+			return 200, strings.TrimSuffix(releaseJSON(newest, false, false), "}") + `,"published_at":"` + published + `"}`, nil
+		}
+		return 200, releaseJSON(previous, true, true), nil
+	})
+	var output strings.Builder
+	res, err := Run(context.Background(), &output, true)
+	if !errors.Is(err, ErrOutdated) || res.Latest != previous {
+		t.Fatalf("result=%+v err=%v", res, err)
 	}
 }
