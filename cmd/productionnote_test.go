@@ -19,12 +19,11 @@ func TestProductionNoteAuthority(t *testing.T) {
 		name, channel, answer, question, want string
 		age                                   time.Duration
 	}{
-		{name: "approved", channel: channelTerminal, answer: "delete it"},
-		{name: "agent", channel: channelSession, answer: "delete it", want: "agent session"},
-		{name: "declined", channel: channelTerminal, answer: "no", want: "does not explicitly approve"},
-		{name: "different object", channel: channelTerminal, answer: "yes", question: strings.ReplaceAll(productionDelete, "stale", "other"), want: "exact command"},
-		{name: "expired", channel: channelTerminal, answer: "yes", age: 25 * time.Hour, want: "older"},
-		{name: "future", channel: channelTerminal, answer: "yes", age: -time.Hour, want: "future"},
+		{name: "approved", channel: viaCLI, answer: "delete it"},
+		{name: "declined", channel: viaCLI, answer: "no", want: "does not explicitly approve"},
+		{name: "different object", channel: viaCLI, answer: "yes", question: strings.ReplaceAll(productionDelete, "stale", "other"), want: "exact command"},
+		{name: "expired", channel: viaCLI, answer: "yes", age: 25 * time.Hour, want: "older"},
+		{name: "future", channel: viaCLI, answer: "yes", age: -time.Hour, want: "future"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := noteApp(t)
@@ -36,7 +35,8 @@ func TestProductionNoteAuthority(t *testing.T) {
 			if err := a.store.Record(ev); err != nil {
 				t.Fatal(err)
 			}
-			h := guard.Hook{Production: "production", ProductionNote: a.consumeProductionNote}
+			a.cfg.Kube.ProductionNoteDeletes = true
+			h := guard.Hook{Production: "production", ProductionNote: a.productionNoteAuthority()}
 			raw := []byte(fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":%q}}`, "BEEKEEPER_PROD_NOTE=42 "+productionDelete))
 			out := string(h.Decide(raw))
 			if tc.want != "" {
@@ -64,7 +64,7 @@ func TestProductionNoteAuthority(t *testing.T) {
 
 func TestProductionNoteConcurrentSingleUse(t *testing.T) {
 	a, _ := noteApp(t)
-	ev := state.Event{At: time.Now(), Verb: answerRecorded, Detail: fmt.Sprintf("o/r#1 answered by %q via terminal, note #42 asked by %q for %q: %q: yes", "person", "agent", "person", "Run `"+productionDelete+"`?")}
+	ev := state.Event{At: time.Now(), Verb: answerRecorded, Detail: fmt.Sprintf("o/r#1 answered by %q via cli, note #42 asked by %q for %q: %q: yes", "person", "agent", "person", "Run `"+productionDelete+"`?")}
 	if err := a.store.Record(ev); err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +80,43 @@ func TestProductionNoteConcurrentSingleUse(t *testing.T) {
 	wg.Wait()
 	if wins.Load() != 1 {
 		t.Fatalf("%d writes allowed", wins.Load())
+	}
+}
+
+// Merging the path opens nothing: unconfigured, the hook gets no authority and
+// a marked deletion meets the ordinary refusal, however good its answer.
+func TestProductionNoteIsOffByDefault(t *testing.T) {
+	a, _ := noteApp(t)
+	ev := state.Event{At: time.Now(), Verb: answerRecorded, Detail: fmt.Sprintf("o/r#1 answered by %q via cli, note #42 asked by %q for %q: %q: yes", "person", "agent", "person", "`"+productionDelete+"`")}
+	if err := a.store.Record(ev); err != nil {
+		t.Fatal(err)
+	}
+	if a.productionNoteAuthority() != nil {
+		t.Fatal("note authority without kube.productionNoteDeletes")
+	}
+	h := guard.Hook{Production: "production", ProductionNote: a.productionNoteAuthority()}
+	raw := []byte(fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":%q}}`, "BEEKEEPER_PROD_NOTE=42 "+productionDelete))
+	if out := string(h.Decide(raw)); !strings.Contains(out, "deny") || !strings.Contains(out, "a production cluster") {
+		t.Fatal(out)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.ProductionNotes) != 0 {
+		t.Fatalf("note consumed: %v, %v", st.ProductionNotes, err)
+	}
+}
+
+// This pins the limit the configuration key warns of, not a wanted behaviour:
+// switched on, an answer an agent recorded authorises as a person's does, since
+// answer.recorded proves nobody's hand. If this test ever fails because a
+// forged answer is refused, the warning can go.
+func TestProductionNoteCannotTellWhoAnswered(t *testing.T) {
+	a, _ := noteApp(t)
+	a.cfg.Kube.ProductionNoteDeletes = true
+	forged := state.Event{By: state.Party{Name: "an agent"}, At: time.Now(), Verb: answerRecorded, Detail: fmt.Sprintf("o/r#1 answered by %q via cli, note #42 asked by %q for %q: %q: yes", "person", "an agent", "person", "`"+productionDelete+"`")}
+	if err := a.store.Record(forged); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.consumeProductionNote(42, productionDelete); err != nil {
+		t.Fatalf("the documented limit changed: %v", err)
 	}
 }

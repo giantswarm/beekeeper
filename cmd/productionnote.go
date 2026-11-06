@@ -8,8 +8,23 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-// consumeProductionNote binds the person's fresh answer to the complete literal
-// command in the question. State.Update serializes concurrent hook processes.
+// productionNoteFresh is how long an answer authorises its deletion.
+const productionNoteFresh = 24 * time.Hour
+
+// productionNoteAuthority is what the hook consumes a note with, nil unless
+// kube.productionNoteDeletes switches the path on.
+func (a *app) productionNoteAuthority() func(int, string) error {
+	if !a.cfg.Kube.ProductionNoteDeletes {
+		return nil
+	}
+	return a.consumeProductionNote
+}
+
+// consumeProductionNote binds a note's fresh answer to the complete literal
+// command in its question. State.Update serializes concurrent hook processes.
+//
+// answer.recorded does not prove who answered: an agent able to record an answer
+// passes this check. That is why the path is off unless configured.
 func (a *app) consumeProductionNote(id int, command string) error {
 	if a.store == nil {
 		if a.cfg == nil {
@@ -25,16 +40,22 @@ func (a *app) consumeProductionNote(id int, command string) error {
 	if err != nil {
 		return err
 	}
-	an, ok := newestAnswer(evs, answerQuery{Note: id})
-	if !ok {
+	var an answered
+	found := false
+	for _, e := range evs {
+		if parsed, ok := parseAnswered(e); ok && parsed.ID == id {
+			an, found = parsed, true
+		}
+	}
+	if !found {
 		return fmt.Errorf("note #%d has no recorded answer", id)
 	}
 	now := time.Now().UTC()
-	if why := an.unverified(answerQuery{Note: id}, a.central, now); why != "" {
-		return fmt.Errorf("note #%d: %s", id, why)
-	}
 	if an.At.After(now) {
 		return fmt.Errorf("note #%d answer is in the future", id)
+	}
+	if now.Sub(an.At) > productionNoteFresh {
+		return fmt.Errorf("note #%d answer is older than %s", id, shortDur(productionNoteFresh))
 	}
 	// Require the whole command as a quoted code span, rather than inferring
 	// authority from object names appearing in unrelated prose.

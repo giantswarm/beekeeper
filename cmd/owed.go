@@ -31,7 +31,7 @@ const (
 // owed is r's outcome as this merge-child owes it to its owner.
 func (r childResult) owed(now time.Time) state.Owed {
 	o := state.Owed{Owner: r.spec.Owner, Line: r.outcome(), Gate: r.spec.Gate, Child: os.Getpid(),
-		Heard: heardFile(r.base, r.spec.Gate), Since: now.UTC(), Tried: now.UTC()}
+		Heard: heardFile(r.base, r.spec.Gate), Since: now.UTC(), Tried: now.UTC(), Cancelled: r.stoppedBy != (state.Party{})}
 	if repo, pr, ok := r.stoppedMerge(); ok {
 		stop := r.stop
 		if stop == 0 {
@@ -158,6 +158,9 @@ func (a *app) owedLine(ctx context.Context, o state.Owed) (string, bool) {
 			a.failedPay(o, fmt.Sprintf("GitHub does not answer for %s#%d (%v)", o.Repo, o.PR, err))
 			return "", false
 		}
+		if o.Cancelled {
+			return fmt.Sprintf("%s was cancelled on request; GitHub has not answered whether it merged: check the pull request, do not rerun it", o.Command), true
+		}
 		return fmt.Sprintf("%s was stopped by %s before devctl reported its end, and GitHub has not answered for %s#%d since: check the pull request, and run it again only if it is still open",
 			o.Command, o.Stop, o.Repo, o.PR), true
 	}
@@ -165,11 +168,25 @@ func (a *app) owedLine(ctx context.Context, o state.Owed) (string, bool) {
 	switch p.State {
 	case github.Merged:
 		at := p.MergedAt.UTC().Format(time.RFC3339)
-		_ = a.store.Log(event(gateParty, verbMerged, "%s#%d at %s per GitHub, its waiter stopped by %s before devctl reported it: release unknown", o.Repo, o.PR, at, o.Stop))
+		err := a.store.Update(func(*state.State) ([]state.Event, error) {
+			e := about(event(gateParty, verbMerged, "%s#%d at %s per GitHub, its waiter stopped by %s before devctl reported it: release unknown", o.Repo, o.PR, at, o.Stop),
+				state.Merge{Repo: o.Repo, PR: o.PR}.Key())
+			return a.mergeEvents([]state.Event{e})
+		})
+		if err != nil {
+			a.failedPay(o, fmt.Sprintf("recording the confirmed merge of %s#%d failed (%v)", o.Repo, o.PR, err))
+			return "", false
+		}
 		return fmt.Sprintf("%s; GitHub says %s#%d merged at %s: do not merge it again, `devctl release wait %s --pr %d` waits for its release",
 			stopped, o.Repo, o.PR, at, o.Repo, o.PR), true
 	case github.Closed:
+		if o.Cancelled {
+			return fmt.Sprintf("%s was cancelled on request; GitHub says %s#%d is closed without a merge: do not rerun it", o.Command, o.Repo, o.PR), true
+		}
 		return fmt.Sprintf("%s; GitHub says %s#%d is closed without a merge", stopped, o.Repo, o.PR), true
+	}
+	if o.Cancelled {
+		return fmt.Sprintf("%s was cancelled on request; GitHub says %s#%d is open, not merged: do not rerun it", o.Command, o.Repo, o.PR), true
 	}
 	return fmt.Sprintf("%s; GitHub says %s#%d is open, not merged: run the same command again", stopped, o.Repo, o.PR), true
 }

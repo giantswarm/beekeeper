@@ -45,6 +45,37 @@ check both. The remaining syscalls are split by build tag: `statfs` (`internal/m
 the gate's re-exec of a replaced binary (`internal/platform/binary_*.go`, Linux only, a no-op
 elsewhere) and the detached merge child (`internal/platform/detach_*.go`).
 
+## Diagnosing a failed go-build without a CircleCI token
+
+For this public repository, the CircleCI v1.1 job endpoint and each step's
+`output_url` are readable without authentication. Take the numeric job ID from
+the failed check's details link, then fetch the output (requires `curl` and `jq`):
+
+```bash
+job=13711 # replace with the failing job's number
+curl -fsSL "https://circleci.com/api/v1.1/project/github/giantswarm/beekeeper/$job" > job.json
+jq -r '.steps[].actions[] | .output_url // empty' job.json |
+  while IFS= read -r url; do
+    curl -fsSL "$url" | jq -r '.[].message'
+  done > job.log
+# Names, assertion diagnostics and cleanup errors are in the complete log.
+rg -n -C 4 -- '--- FAIL:|panic:|test timed out|^FAIL' job.log
+```
+
+This also works for main and tag jobs; it does not depend on `devctl ci jobs`
+or a worker receiving a CI credential. Private repositories require a separate
+authorized log reader. Keep fetched logs local: diagnostics may contain
+execution details that should not be copied into public comments.
+
+Job 13711 identified `TestARebaseableMergeQueuesAsBefore/not_computed`: its
+fake child acknowledged startup before finishing a spec copy, racing temporary
+directory cleanup under load. The fixture now completes its writes before
+publishing its PID, and callers read the spec immediately after that handoff.
+Track further flakes in [#439](https://github.com/giantswarm/beekeeper/issues/439)
+and [#1180](https://github.com/giantswarm/beekeeper/issues/1180).
+
+## Checks before committing
+
 Pre-commit runs golangci-lint (the version CI's `pre-commit` workflow pins) over every package, test
 files included, with the linters of `.golangci.yaml`: a bare `golangci-lint run ./...` lints what CI
 does, and main lints clean. `goconst` counts a string across a whole package, production and test
@@ -61,7 +92,8 @@ only to `generic-api-key`; other values and files remain scanned.
 The Kubernetes store's tests (`internal/state/kube`) and `beekeeper serve`'s (`cmd/serve_envtest_test.go`,
 every tool over streamable HTTP behind a test Dex from `internal/identity/identitytest`) run against
 envtest's kube-apiserver and skip without `KUBEBUILDER_ASSETS`: `make test-envtest` downloads it and runs them, as CI's
-`test-envtest` job does after `make check-crds`. The mailboxes' tests (`internal/mailbox`, and serve's, which need
+`test-envtest` job does after `make check-crds`. HTTP authentication and body-limit tests run without Postgres,
+including from a linked git worktree. The mailboxes' tests (`internal/mailbox`, and serve's, which need
 both) run against the Postgres `BEEKEEPER_TEST_DATABASE_URL` names, each in a database of its own, and skip without it;
 CI's job runs one beside it, and locally the same image does:
 
@@ -71,6 +103,15 @@ docker run -d --rm --name beekeeper-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127
 BEEKEEPER_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable' make test-envtest
 ``` The CRDs in `config/crd` and the deepcopy code are
 generated from `pkg/apis` by `make generate-crds`; edit the types, never the YAML.
+
+The Kubernetes writer publishes `Ready=True` with reason `StatePersisted` on
+Notes, Holds, RosterEntries, Environments and MergeLanes after writing their
+status, including claims and releases. Each condition observes the object's
+current generation. Ready means the writer persisted the state; an active hold,
+a busy roster entry or a nonempty queue can all be Ready. Objects that have not
+yet been written by beekeeper have no Ready condition. For example,
+`kubectl wait --for=condition=Ready environment/<name>` waits for that first
+successful write; use the appropriate resource and namespace for other kinds.
 
 A Note stores its filer and filing time in its initial spec as well as status. Kubernetes
 creates the object and writes its status separately; if the latter fails, the note still
@@ -125,6 +166,25 @@ Its scope and sandbox are stopped at test cleanup; no installed configuration is
 Try a change against the live machine without touching the real state: point a scratch
 configuration at a scratch state directory.
 
+To prove a candidate's secret verbs before installing it, run a command under
+its temporary broker (Linux):
+
+```sh
+./beekeeper --config /tmp/test-config.yaml sandbox scratch -- sh -c '
+  ./beekeeper secret fingerprint "file:///tmp/test-input.json#password"
+'
+```
+
+`sandbox scratch` copies the selected configuration and replaces its state,
+lease and runtime directories with private temporary directories. The child
+inherits `BEEKEEPER_CONFIG`; secret calls use the candidate's broker, including
+when `secret.session` is off. Use the candidate binary explicitly in the child.
+The broker does not start an egress proxy or install sandbox mounts. Its spool
+and vault socket are separate from the installed broker's. On command exit,
+failure or interrupt, the runner stops and reaps the broker before removing the
+temporary directories. Run outside the agent sandbox and use test secret sources
+and destinations: the configured sources and any requested writes remain real.
+
 The doctor releases a local lease when its session is no longer running,
 preserving any lab configuration drift for the next claimant. Person-held
 leases and remote holders are left alone. Each release is logged once as
@@ -159,17 +219,77 @@ EOF
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper sessions
 ```
 
+### GitHub App dry run with a built binary
+
+`BEEKEEPER_GITHUB_API_URL` and `BEEKEEPER_GITHUB_WEB_URL` override the
+in-process GitHub API and web base URLs at startup. Empty or unset values keep
+the public GitHub defaults; trailing slashes are removed. These apply to manifest
+conversion, App sign-in and the gate's in-process GitHub reads. They do not
+configure the separate `gh` executable: put a fake `gh` first on `PATH` for
+commands that invoke it (including App discovery and account lookup).
+
+To exercise the binary's wiring, build with `go build .`, start a local fake
+GitHub, and set both variables to its base URL. Use a scratch configuration and
+state, a disposable manifest and SOPS target, and fake vault/SOPS tools on `PATH`
+so the whole exercise uses test credentials. For example, with the fake server's
+base URL in `FAKE_GITHUB_URL` and the scratch configuration in `BEEKEEPER_CONFIG`:
+
+```bash
+export BEEKEEPER_GITHUB_API_URL="$FAKE_GITHUB_URL"
+export BEEKEEPER_GITHUB_WEB_URL="$FAKE_GITHUB_URL"
+./beekeeper app create example --manifest /tmp/manifest.json --org example --no-open --timeout 30s
+```
+
+The scratch configuration's `apps.secrets.example` must name the disposable
+SOPS target. Have the fake `gh` report the App absent and answer the account ID
+lookup. Open the loopback page printed by the command and submit its manifest
+form. The form must target the fake server's
+`/organizations/example/settings/apps/new`, including the state query parameter.
+The fake web handler reads the submitted manifest's `redirect_url` and redirects
+to it with `code=example-code` and the unchanged state. Its API handler must see
+an unauthenticated `POST /app-manifests/example-code/conversions` and return HTTP
+201 with a JSON object containing `id`, `slug`, `client_id`, `client_secret` and
+`pem` (dummy values suffice for the conversion; use a fixture private key for
+subsequent sign-in). The browser then reaches the fake server's installation
+page, and only the disposable SOPS target receives the dummy credentials.
+`--no-open` lets the test driver control the browser; it still performs the
+conversion and write. `secret github-app --dry-run` only validates metadata and
+does not exercise HTTP wiring.
+
+The fresh-process regression test can also be run without vault or SOPS tools:
+`go test ./cmd -run '^TestGitHubURLsFromEnvironment$' -count=1`. It verifies the
+public defaults, the manifest form action, conversion against a local fake API
+and the device flow against a local fake web endpoint.
+
 The merge gate runs against a fake devctl first on `PATH` (a script that sleeps and prints a
 devctl-shaped document) and scratch state, never a real merge. A lane with an `installation` also
 reads HelmReleases, which a fake `kubectl` can answer from a file. Feed the hook an event to see
-the rewrite, and run what it prints:
+the rewrite, and run what it prints. A hook proof requires a **real in-scope
+session ID**, never a made-up ID: out-of-scope events pass through without
+exercising the guard. Run `beekeeper sessions` with the configuration being
+proved and copy the ID of a session beekeeper started or knows; in a Claude
+Code tool shell, `$CLAUDE_CODE_SESSION_ID` supplies the current session ID.
+For agy, use the real conversation ID from its session record. Include that
+session's actual `cwd` (agy: `workspacePaths`). Scope also includes directories
+under `hooks.scope.dirs`; when that setting is unset, every session is in scope.
+A scope check verifies membership, not session liveness, so obtaining a real ID
+is still required.
+
+Save the exact event and check it before each proof. Use the same configuration,
+state and environment for the preflight and hook. `check-scope` exits nonzero
+with an explicit out-of-scope error rather than treating a pass-through as proof:
 
 ```bash
-echo '{"tool_name":"Bash","tool_input":{"command":"devctl pr merge giantswarm/marge 1"}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse
-echo '{"conversationId":"s1","workspacePaths":["/tmp"],"toolCall":{"name":"run_command","args":{"CommandLine":"devctl pr merge giantswarm/marge 1"}}}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse --format agy
-PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID=a \
+# Set SESSION_ID to the real ID obtained above, and SESSION_CWD to its cwd.
+: "${SESSION_ID:?real in-scope session ID required}"
+: "${SESSION_CWD:?session working directory required}"
+jq -n --arg id "$SESSION_ID" --arg cwd "$SESSION_CWD" \
+  '{session_id:$id,cwd:$cwd,tool_name:"Bash",tool_input:{command:"devctl pr merge giantswarm/marge 1"}}' > /tmp/bk-event.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-event.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook pretooluse < /tmp/bk-event.json
+# For agy, save its event shape with conversationId and workspacePaths instead;
+# check the same event, then invoke pretooluse --format agy.
+PATH=/tmp/fake:$PATH BEEKEEPER_CONFIG=/tmp/bk.yaml CLAUDE_CODE_SESSION_ID="$SESSION_ID" \
   ./beekeeper gate --wait 10s -- devctl pr merge giantswarm/marge 1
 BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper lanes
 ```
@@ -189,8 +309,10 @@ it is quiet, then `agents handover`. The started sessions get the scratch config
 `agents handover --prompt` shows the prompt without starting anything.
 
 ```bash
-echo '{"hook_event_name":"PermissionRequest","session_id":"<id>","permission_mode":"acceptEdits","tool_name":"WebSearch"}' |
-  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest
+jq -n --arg id "${SESSION_ID:?real started session ID required}" \
+  '{hook_event_name:"PermissionRequest",session_id:$id,permission_mode:"acceptEdits",tool_name:"WebSearch"}' > /tmp/bk-permission.json
+BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook check-scope < /tmp/bk-permission.json &&
+  BEEKEEPER_CONFIG=/tmp/bk.yaml ./beekeeper hook permissionrequest < /tmp/bk-permission.json
 ```
 
 The hook's merge rewrite is pinned against real commands: `internal/guard/testdata/merges.jsonl`
@@ -388,7 +510,7 @@ timer from the running watches.
 | `internal/mailbox` | The mailboxes of `beekeeper serve` in Postgres: one `messages` table and a dedupe table, migrated at start; at least once and in order, `Cap` per mailbox, expiry with a notice to the sender, `LISTEN`/`NOTIFY` on every change; `mailboxtest` gives a test a database of its own. |
 | `internal/notify` | Desktop notifications: the kinds, urgencies and quiet hours and the ledger `notify.json` under `notify.lock` that makes each event one notification across watches and holds the quiet hours' ones; the sender is `platform.Notifier`. |
 | `internal/alerts` | The installations' alerts: bounded `kubectl port-forward`s in their own process group, kept from tick to tick by the watch, the Alertmanager reading, the NEW/RESOLVED/FLAPPING lines with the severity floors and the flap damper, and the grouped snapshot (pure, tested against Alertmanager-shaped fixtures, recorded answers in `testdata/` and a fake `kubectl`), the baseline with the damper's records and its single owner, and recorded answers for `alerts replay`. |
-| `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<cluster>` holds the merge gate and `lease claim` read. |
+| `internal/upgrade` | Cluster upgrades: the detection over an installation's Clusters, control planes and node pools (pure, tested against a real upgrade replayed from `testdata/prod/<phase>/`, stripped to the fields read), the bounded parallel `kubectl` reading with the events that name the release upgraded from, and the automatic `upgrade:<installation>/<namespace>/<cluster>` holds the merge gate and `lease claim` read. |
 | `internal/guard` | The build guard: a capped run in a build slot with its `run.start`/`run.end` events, the PreToolUse hook's rewrite and refusals (a third lab, the person's folders, default-branch and force pushes, …) in both Claude Code (`--format claude`) and `agy` (`--format agy`) formats, and the PermissionRequest hook's decision. |
 | `internal/runrecord` | The shape of a run's event-log records (`run.start` / `run.end` / `run.fallback`), written by `internal/guard` for a local run and `internal/remotebuild` for a builder pod's, and read by `run stats`: where the run ran, what it built, its duration, exit and failure tail. A leaf so both writers share it. |
 | `internal/free` | What can be freed (dead sessions' dirs, throwaway temp dirs, orphaned workers) and what is only reported, as a report or the front end's TSV. |
@@ -448,7 +570,9 @@ a policy says, the step keeps:
 
 The scan of a large cache takes a while, so before removing anything the
 step reads the processes' references again, and right before it removes an
-entry it inspects that entry again: one a process opened meanwhile, one
+entry it inspects that entry again. In `files` mode it also rechecks the whole
+root for checkouts after refreshing process references, before deleting files.
+An entry a process opened meanwhile, one
 written since the scan, or one that now holds a checkout stays. A file is
 removed only if unchanged since the scan. The tools' own locks are only
 known to their cleaners: a cache whose tool locks it belongs in `command`
@@ -489,6 +613,13 @@ No cache is reclaimed while builds use it. New
 runs with `GOCACHE=off`; Go's existing cache-use lock also protects older
 runs and `cache clear go`. Unwrapped compiler processes and open files keep
 caches intact. The module cache is never cleared by this step.
+
+A direct `beekeeper run -- go build ./...` that exits 137 is retried once
+with `-p=2` appended to `GOFLAGS` and `GOMAXPROCS=4`, reducing peak compiler
+memory under the cap. The retry logs both bounds and preserves unrelated
+`GOFLAGS`. Exit 137 is treated as a possible cap kill; no kernel journal
+access is required. Other failures and commands are not retried. Shell
+wrappers such as `sh -c 'go build ./...'` do not use this retry.
 
 Finished worktrees under `doctor.worktreeRoots` and the state's `worktrees`
 place are removed with `git worktree remove` after the existing six-hour
@@ -614,7 +745,9 @@ disk:
 
 A central Note closes only with a recognised close event (`answer.recorded`,
 `note.defaulted`, `note.overtaken` or `note.done`). Its status stores that audit
-line atomically with the outcome. Closed Notes remain as history, outside the
+line atomically with the outcome. Answered Notes also retain the verbatim answer
+in `status.answer`, the caller's verified email in `status.answeredBy`, and the
+answer time in `status.answeredAt`. Closed Notes remain as history, outside the
 open notes and the 24-hour default-answer window, for 30 days after closure.
 Note-only updates, including the periodic default tick, collect older closed
 records; unrelated object updates leave collection to that tick. Cleanup first
@@ -663,7 +796,13 @@ worker for repair and another green published head. A restart reads GitHub befor
 a mutation whose completion record was lost. Successful coordinator merge actions are `supervisor.merge`,
 not worker merge grants. Tooling failures remain eligible for retry with failure backoff;
 the configuration refusal above retries each round. Neither grants a direct worker merge
-around queue validation. Merge goes never go through `answer verify`.
+around queue validation. No person is asked whether to merge: the loop merges after its
+reviews and their fixes, and `note add` refuses a decision that asks whether to merge.
+For an SSH worker's fixes, the loop retains the authenticated independent review result
+and its original head, author, verdict and body digest. The loop records its exact-head
+authorization before the executor accepts the new green head without another approval
+round; a pending ownership claim alone is insufficient. Worker merge grants continue
+to require approval of their head; an empty grant ID alone confers no loop authority.
 An already queued or running gate is observed without submitting
 another merge. Gate queue and policy refusals never become branch repair requests from
 words in their messages; only the pinned mutation child's structured result can request repair.
@@ -691,13 +830,6 @@ or recover every ownerless In Progress item. The broader 15-minute orphan sweep
 remains tracked in https://github.com/giantswarm/beekeeper/issues/2127, including
 pulls without saved review metadata and stale serve records from relieved or
 off-roster sessions.
-
-The guide's completed question dialog is recorded by the PostToolUse hook as `guide.dialog`.
-The receipt binds its active local note, session, thread, displayed head, selected option and
-verbatim text. `answer` verifies that receipt before recording channel `guide_dialog`; a
-command-line flag alone cannot select the channel. The guide keeps the note's option labels
-and order, and records a selection with `--choice`, or free text verbatim. An arbitrary worker
-relay still does not verify. The central instance retains its authenticated identity checks.
 
 The guide defaults to a 200k relay point. When a feed line arrives after an hour
 of guide inactivity, context above half that point also emits `GUIDE RELAY DUE`
@@ -839,9 +971,9 @@ Claude Code receives `--effort`, omp receives `--thinking`, and Codex receives
 `-c 'model_reasoning_effort="<level>"'` on both its first and resumed turns.
 The selected model must support the level. agy has no session effort option:
 an effort from the flag or a rule is refused instead of silently ignored, on
-local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude
-and Codex starts carry effort in the owned execution request and reuse it for
-later turns.
+local and SSH starts alike, also when `--harness auto` chooses agy. SSH Claude,
+Codex and omp starts carry effort in the owned execution request and reuse it
+for later turns.
 
 A Claude desktop-mode start with an effort runs its task headless, with its
 normal tool profile and sidebar import. Its wakes stay headless on that
@@ -852,3 +984,108 @@ wakes and handovers; no user settings file is changed.
 `guide.effort` selects the guide's session effort, ahead of the rules. The
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
+
+### Session worktree placement
+
+Configure clone discovery and session placement with:
+
+```yaml
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees]
+```
+
+`projects.worktrees` supplies ordered external roots; session hooks use the first root.
+Run `beekeeper install` to register Claude Code's `WorktreeCreate` and
+`WorktreeRemove` hooks. Creation uses
+`<projects.worktrees>/<repo>/worktree-<session-name>`, starting at the
+session's HEAD. Existing branches or paths cause an error rather than reuse.
+The worktree hook owns creation even outside the normal tool-hook scope,
+because Claude's creation hook replaces its default worktree implementation.
+The Bash guard rejects nested `.claude/worktrees` targets, including targets
+reached through symlinks, and names the configured external root.
+
+`beekeeper free --only worktrees` reports linked worktrees nested in clones
+under `projects.dir`. Add `--apply` to remove clean trees integrated into the
+default branch and move other trees into the external root. Git's merge
+simulation recognizes squash merges; conflicts or uncertain results retain
+the tree. The default branch is origin's default ref, falling back to local
+main or master. Refresh remote refs before cleanup when they are stale.
+Branches are always retained, including squash-merged branches. Locked trees
+and destination collisions are left for manual resolution. Migration refuses
+live worktrees and stops if process or roster information cannot be read.
+The removal hook similarly retains dirty or unmerged work and never forces
+removal.
+
+### Envtest assets for local runs
+
+`beekeeper run --local -- go test ./path/to/package` automatically provisions
+Kubernetes 1.37.0 envtest binaries using `setup-envtest` (release-0.25) into
+`<stateDir>/envtest` and exports `KUBEBUILDER_ASSETS` to the command. Local
+runs reuse the cached binaries; concurrent first runs share a setup lock.
+An explicit `KUBEBUILDER_ASSETS` takes precedence. First-time setup requires
+Go and network access; failures stop the run with a setup error. Commands
+that only print help or a version, and trivial commands, skip provisioning.
+Remote builder images must supply their own envtest assets and environment;
+use `--local` for tests that need the managed assets.
+
+## Supervisor workflow regression
+
+Issue #2255's `test-loop-workflow` CircleCI job runs on every branch and PR,
+without path filters, and on release tags. Run it locally with
+`make test-loop-workflow` (Go and Git are required). It builds the candidate and
+runs the public `supervisor loop --once`, `board next` and worker-start commands
+in subprocesses. The test executable supplies only the external GitHub CLI and
+Git trace wrapper; a local HTTP adapter supplies the budget API. The planner,
+`readLoopPull`/`parseLoopPull`, merge-result validation and gate are production
+code. Raw pull responses include base, head, branch, checks and reviews; raw
+project responses include metadata and a selectable issue. The merge adapter
+actually squashes the branch and pushes a local bare origin. Success requires
+that origin's base to match the reported merge commit, exactly one mutation,
+and durable completion of the saved review park on the next loop pass.
+
+This boundary fixture starts with a durable published review park and review
+round, rather than replacing parsed pulls with in-memory planner objects. The
+full worker/reviewer lifecycle harness is tracked separately in #2254. A failed
+public worker start is also exercised with its worker executable unavailable: it must not
+create a registration or merge proof. The fixture caps starts at zero to avoid
+any dependence on the runner's available capacity or subscriptions.
+
+The matrix covers the supported no-checkout policy, non-Go checkouts, current
+and diverged Go checkouts, a combined Go tree that fails while each branch's
+changes are valid, a head moving after planning, red checks, missing base,
+unavailable validation with no server queue, an unreadable queue, budget hold
+and failed start. A separate control builds a candidate through a Go overlay
+that removes the parsed base assignment (the historical regression); the same
+complete response must then fail before merge. Unknown GitHub calls fail the
+suite even if the application handles their error.
+
+Every subprocess gets an explicit environment, private configuration/state,
+file-only Git transport, offline module resolution and a small command PATH.
+No account credentials or production state are inherited. The fixture uses
+`LANG=C.UTF-8`; builds have a five-minute deadline, scenarios a ninety-second
+deadline, Go tests a twelve-minute deadline and the CI command a fifteen-minute
+outer deadline. There is no opt-in environment switch or skip path.
+
+On failures, the job stores sanitized command/event traces, command output and
+Git refs (both a listing and a bundle of the fixture origin) under the
+`loop-workflow` artifacts. `BEEKEEPER_TEST_LOOP_ARTIFACTS`
+selects the local artifact directory. Only known fixture files are retained;
+the fixture root is replaced by `<fixture>` and the configured identity is
+synthetic. Credentials and the runner environment are never uploaded.
+
+Required repository configuration prerequisite: after its first pipeline,
+add **`ci/circleci: test-loop-workflow`** to the required status checks in the
+branch protection/ruleset for main and protected release branches, using the
+CircleCI check's exact name as reported on the PR and selecting CircleCI as its
+source where supported. Keep this check required even for CI-only changes.
+Adding YAML does not change GitHub branch protection; a repository administrator
+must configure that rule before treating the check as a merge requirement.
+
+Release publication is also guarded without changing generated workflows:
+`make test` depends on the same uncached `test-loop-workflow` target. The
+generated `go-build` job invokes `make test`, and release asset/image publishing
+requires `go-build` (chart publication depends on the image publication).
+Consequently a workflow regression fails the release prerequisite, including
+on tags. The dedicated job gives PRs a stable required-check name and retained
+failure artifacts. Do not add path filters or a skip-on-missing-tool fallback.

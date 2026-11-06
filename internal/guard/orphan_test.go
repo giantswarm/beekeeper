@@ -178,3 +178,72 @@ func TestMemoryShortWaiterRetainsTicketBeforeItsTurn(t *testing.T) {
 		t.Fatal("second waiter acquired slot")
 	}
 }
+
+// A background run's queue budget must stop applying once setup is complete.
+// The holder alone must let the watch recover a failed launch, even when the
+// optional event recorder loses run.start.
+func TestLaunchingHolderBoundsRecoveryWithoutEvents(t *testing.T) {
+	o := Options{SlotDir: t.TempDir(), Wait: time.Hour, scope: "memcap-test-launch"}
+	writeHolder(o, 1, []string{"go", testCommand, "./launch-fixture"})
+	read := func() Holder {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(o.SlotDir, "1.holder"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, ok := ParseHolder(string(raw))
+		if !ok {
+			t.Fatalf("invalid holder: %s", raw)
+		}
+		return h
+	}
+	before := read()
+	if time.Until(before.StartDeadline) < time.Hour {
+		t.Fatal("setup lost its cache wait allowance")
+	}
+	start := time.Now()
+	if err := launchingHolder(o, 1); err != nil {
+		t.Fatal(err)
+	}
+	after := read()
+	if after.StartDeadline.Before(start.Add(scopeStartWait)) || after.StartDeadline.After(time.Now().Add(scopeStartWait)) {
+		t.Fatalf("launch deadline %s does not follow startup grace", after.StartDeadline)
+	}
+	after.StartDeadline = before.StartDeadline
+	if after != before {
+		t.Fatalf("launch changed holder identity: before %+v, after %+v", before, after)
+	}
+	// A joining run must never overwrite another wrapper's holder.
+	o.scope = "memcap-test-joined"
+	if err := launchingHolder(o, 1); err == nil {
+		t.Fatal("updated a different scope's holder")
+	}
+	if got := read(); got.Scope != before.Scope {
+		t.Fatalf("changed owner scope to %q", got.Scope)
+	}
+}
+
+func TestRunPublishesLaunchDeadlineBeforeStartEvent(t *testing.T) {
+	saved := plat.Capper
+	plat.Capper = &fakeCapper{}
+	t.Cleanup(func() { plat.Capper = saved })
+	o := Options{Max: "1M", SlotDir: t.TempDir(), Slots: 1, Wait: time.Hour, Stderr: io.Discard}
+	seen := false
+	o.Record = func(verb, _ string) {
+		if verb != VerbStart {
+			return
+		}
+		seen = true
+		raw, err := os.ReadFile(filepath.Join(o.SlotDir, "1.holder"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, ok := ParseHolder(string(raw))
+		if !ok || time.Until(h.StartDeadline) > scopeStartWait || time.Until(h.StartDeadline) <= 0 {
+			t.Fatalf("launch still has queue deadline: %s", raw)
+		}
+	}
+	if rc := Run(o, []string{"sh", "-c", "exit 23"}); rc != 23 || !seen {
+		t.Fatalf("exit %d, start event %v", rc, seen)
+	}
+}

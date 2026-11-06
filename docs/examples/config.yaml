@@ -11,6 +11,13 @@
 # for the machine above: tune them to yours or delete them.
 
 # stateDir: /home/ada/.local/state/beekeeper   # default: $XDG_STATE_HOME/beekeeper
+# Clones belong to the person; sessions create checkouts under worktrees.
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees] # layout: <repo>/<branch>
+home:
+  places: [~/.local/state] # session state, logs and backups; drafts use the scratchpad
+# agents.roots defaults to projects.worktrees when unset.
 identity:
   # Whose agents run here: every lease, hold, merge place and note this
   # machine's commands record names them, and lease, lanes and note list
@@ -22,6 +29,9 @@ identity:
 #   issuer: https://dex.example.com   # the Dex every caller's ID token is checked against
 #   clientIDs: [muster]     # the audiences accepted: muster's client, the installations' exchange client
 #   organization: example:everyone           # the group every member carries; anyone else is refused
+#   # Dex GitHub groups include the connector id: <connector>:<org>:<team>.
+#   # Match token groups exactly; prefixes are not added or removed.
+#   organizations: [giantswarm-github:giantswarm:employees]
 #   teams: {example:platform: platform}      # a Dex group and the team its members belong to
 #   supervisors: {platform: example:platform-supervisors}   # who releases a team's leases and lifts its holds
 #   muster: https://muster.example.com/mcp   # the muster a send_message to a kagent: address goes through, as the caller
@@ -56,6 +66,21 @@ kube:
   # as a component (login.example.com-production, production-ops). Unset, the
   # kube guard is off and snapshot says so.
   production: production
+  # Additional production-class contexts, including full test installations.
+  protectedContexts: [full-test, full-test-operations]
+  # Off by default. On, a recorded answer authorises one literal production
+  # kubectl delete, and an agent able to record an answer can forge that.
+  # productionNoteDeletes: false
+  # Exact queries allowed on protected clusters via:
+  # kubectl --context production exec pod/db -- psql -X -d app -c 'select * from conversations limit 5'
+  # Only SELECT *, column lists or count(*) FROM a named relation, optionally
+  # LIMIT, are supported. No expressions, filters, scripts or extra statements.
+  # Use trusted tables/views without side-effecting functions and a read-only
+  # database role. It holds on production and protectedContexts alike, on any
+  # pod the context reaches, never with -i or -t. Empty by default; every
+  # other exec remains refused.
+  readOnlyExecQueries:
+    - select * from conversations limit 5
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
   # refusals name it. Unset: the context named after the installation, else
@@ -74,6 +99,14 @@ kube:
 # SSO session completes it), swapped into the profile directory in one step.
 # watch and snapshot show the expiry. Unset, no keeper runs.
 teleport:
+  # Machine ID replaces SSO when bot.config is set. Ask the Teleport
+  # administrators for a scoped bot role, join token and tbot configuration.
+  # Keep the token in the private tbot config; paths must match its outputs.
+  # bot:
+  #   config: ~/.config/teleport/tbot.yaml
+  #   binary: tbot
+  #   certificate: ~/.local/share/teleport/identity/tlscert
+  #   kubeconfig: ~/.local/share/teleport/kubernetes/kubeconfig.yaml
   proxy: login.example.com:443   # tsh login --proxy
   auth: github              # tsh login --auth, the SSO connector; default: the cluster's
   # tsh: tsh                # the default
@@ -161,9 +194,10 @@ merge:
   stallAfter: 5m            # a lane's first arrived merge waits this long behind absent places, then the lane is stalled
   hungAfter: 45m            # the watch ends a running merge's devctl this long after its pull request merged (a closed one's this long after its start)
   busyBudget: 4h            # a merge with --update-branch whose base moved during every devctl update wait (exit 3) runs devctl again in its lane place this long from its first run
-  ciTimeout: 1h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeout: 2h             # devctl pr merge's --timeout (its CI wait) when the command names none; devctl's own 30m is shorter than a CI --update-branch restarts
+  ciTimeouts: {}           # per-repository overrides, e.g. {example-org/slow-repo: 3h}
   toolLimit: 9m             # a foreground gate call exits 76 this long after its start, below a desktop Bash call's 10m limit; the merge runs on and its outcome wakes the caller
-  devctlOwners: [giantswarm]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
+  devctlOwners: [giantswarm, teemow]   # the owners devctl pr merge serves; default: none, every merge is the plain squash merge
   admin: []                    # the repositories (owner/repo) whose merge go names gh pr merge --admin --match-head-commit after the approved review
 
 units:
@@ -346,7 +380,7 @@ doctor:                     # known faults the doctor (beekeeper doctor, every w
   dockerBuildCacheMaxGiB: 20  # the default; prunes Docker's build cache over this to 3/4; negative: off
   dockerEvery: 1h           # the default; how often a watch reads Docker's sizes
   freeEvery: 1h             # the default; how often a watch frees dead sessions' scratch and orphaned go-build dirs in /tmp; negative: off
-  worktreeRoots: [~/.local/state/klaus-lab/worktrees]  # the default; where a watch looks for workers' git worktrees
+  worktreeRoots: [~/.local/state/beekeeper/worktrees]  # the default; where a watch looks for workers' git worktrees
   worktreesEvery: 6h        # the default; how often it removes those whose pull request merged or closed, and the build output of idle ones; negative: off
 # disk:                     # beekeeper disk's cache pruning policies; built-in entries: tmp (/tmp, olderThan 24h) and transcripts (<stateDir>/transcripts, mode files, olderThan 30d, maxGiB 2)
 #   caches:
@@ -370,14 +404,15 @@ outbound:                   # what the hook refuses to let leave the machine (RE
   paths: [~/projects/notebook/plans]   # files whose Write and Edit are scanned like a post; a directory covers what is under it
   storeDeny:                # op item|document create|edit, vault kv put|patch refused (globs; empty: any)
     - {vault: Shared*, item: "*personal*"}
-  sweepRoots: [~]           # the watch looks here for world-readable private keys and credentials in git remote URLs
+  sweepRoots: [~/]          # the watch looks here for world-readable private keys and credentials in git remote URLs
   sweepDepth: 5
 
 hooks:
+  guardPersonalSearch: false # opt in to refusing CLI, REST and GraphQL issue searches across repositories in personal sessions; unreadable repositories silently disappear; list each repository instead
   transcriptGrants: {}      # supervisor-granted exact own-transcript files or fixture directories, by receiving session ID; no globs
   scope:                    # where the Claude Code hooks act; unset, in every session
     dirs: [~/projects/notebook, ~/projects/work]   # a session whose cwd or project lies under one; beekeeper's own starts, roles and roster agents always
-  personFolders: [~, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
+  personFolders: [~/, ~/projects, ~/projects/*]   # the person's folders: no new file directly in one, no untracked one in a checkout's main working tree there; unset, off
 
 scan:                       # the value scanner's index (README: What reaches the model); beekeeper scan index reads these
   sops: [~/projects/configs/*/secrets/*.enc.yaml]   # SOPS file globs (no **), decrypted by sops in beekeeper's process
@@ -389,8 +424,8 @@ sandbox:                    # the agent sandbox (README: The agent sandbox); bee
   allowWrite: [~/projects, ~/.cache, ~/go/pkg/mod]   # writable too: checkouts and worktrees, build and module caches
   domains: [proxy.golang.org, sum.golang.org, registry.npmjs.org, 127.0.0.1:6443]   # hosts commands reach besides GitHub; loopback by port only (a kind lab's API server)
   required: false          # true: a session the policy does not hold (not installed, started before) is refused every tool call but SendMessage
-  mask:                     # the default: GH_TOKEN and GITHUB_TOKEN, to GitHub's hosts only
-    - {name: GH_TOKEN, hosts: [github.com, api.github.com, uploads.github.com]}
+  # The broker's egress proxy keeps devctl's App token in memory and sets
+  # the GitHub request headers itself (README: The agent sandbox).
 
 plans:                      # note add --for <guide.person> links a pull request here only once merged, or open with its stage check green or at the grill stage (red only for missing stage outputs)
   repositories: [example-org/plans]   # owner/repo; unset, nothing is read; an epic's plan is the open or merged pull request naming it
@@ -404,6 +439,11 @@ sink:                       # dispatches a GitHub workflow on selected events, w
 
 apps:                       # where the organisation declares its GitHub Apps; beekeeper app allow records only a declared one
   repo: example/github      # the declaring repository, read on its default branch; unset, app allow refuses
+  # Declare every lab callback in callback_urls at App creation. Later callback
+  # edits require access confirmation. browse reports barrier: github_sudo with
+  # the blocked setting; it cannot answer an access confirmation challenge.
+  # app installation reads repository scope and probes device flow as metadata;
+  # token expiry remains unread when no authenticated evidence is available.
   manifest: apps/{name}/manifest.json   # an App's manifest (name, callback_urls), {name} for the App's name
   # template: apps/{name}/manifest.template.json   # a purpose's manifest template, {installation} and {baseDomain} in its strings (default: manifest's file as manifest.template.json)
   secrets:                  # by installation, the SOPS Secret beekeeper secret github-app writes an App's private-key and client-secret into
@@ -447,6 +487,7 @@ omp:
   sessionsDir: ~/.omp/agent/sessions   # the default; omp's session files, one folder per working directory
   modelsFile: ~/.omp/agent/models.yml  # the default; omp's providers, a vault provider's apiKey there the variable's name (SPARK_API_KEY)
   model: ""                 # agents start --harness omp without --model: an exact selector omp lists (provider/id); empty: the start is refused
+  servedBy: ""              # optional lease resource serving the model; held: refuse with holder/purpose, retry after release
   providers:                # providers whose key agents start hands over from the vault, by their name in modelsFile
     spark:
       apiKey: op://Shared/spark/credential   # the key's reference, never the key: it goes into the agent's environment alone

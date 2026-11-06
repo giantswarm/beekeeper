@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,7 +19,7 @@ import (
 // without an explicit target fails instead of reaching production; a
 // command that would set one is refused. Reads stay allowed everywhere.
 // False positives beat a production write. Without a production
-// installation (Hook.Production) it is off.
+// installation (Hook.Production) or protected contexts it is off.
 
 const (
 	envKubeconfig  = "KUBECONFIG"
@@ -104,8 +105,8 @@ type kubeEnv struct {
 }
 
 // KubeGuardOff says why the kube guard is off, "" while it is on.
-func KubeGuardOff(production string) string {
-	if production != "" {
+func KubeGuardOff(production string, protectedContexts ...string) string {
+	if production != "" || len(protectedContexts) > 0 {
 		return ""
 	}
 	return "kube guard off: kube.production is unset"
@@ -113,28 +114,8 @@ func KubeGuardOff(production string) string {
 
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
-	if strings.Contains(cmd, "BEEKEEPER_PROD_NOTE") {
-		m := productionNoteCommand.FindStringSubmatch(cmd)
-		if m == nil {
-			return "Refused: production note marker requires one literal kubectl delete with explicit context, namespace, kind and name."
-		}
-		id, err := strconv.Atoi(m[1])
-		if err != nil || id <= 0 {
-			return "Refused: invalid production note id."
-		}
-		if h.ProductionNote == nil {
-			return "Refused: production note verification is unavailable."
-		}
-		// Validate the normal guard first. Only the production-write refusal
-		// can be superseded; context and other refusals remain in force.
-		r := h.scanKube(m[2], kubeEnv{kubeconfig: h.Kubeconfig}, 0)
-		if !strings.Contains(r, "a production cluster (") {
-			return "Refused: note authority requires an explicitly targeted production write."
-		}
-		if err := h.ProductionNote(id, m[2]); err != nil {
-			return "Refused: production note: " + err.Error()
-		}
-		return ""
+	if h.ProductionNote != nil && strings.Contains(cmd, "BEEKEEPER_PROD_NOTE") {
+		return h.productionNoteRefusal(cmd)
 	}
 	return h.scanKube(cmd, kubeEnv{kubeconfig: h.Kubeconfig}, 0)
 }
@@ -158,7 +139,7 @@ func (h Hook) scanKube(cmd string, env kubeEnv, depth int) string {
 		}
 	}
 	for _, m := range contextFlag.FindAllStringSubmatch(sc.plain, -1) {
-		if env.wrapped == "" || IsProduction(m[1], h.Production) {
+		if env.wrapped == "" || IsProduction(m[1], h.Production) || slices.Contains(h.ProtectedContexts, m[1]) {
 			env.wrapped = m[1]
 		}
 	}
@@ -257,7 +238,7 @@ func (h Hook) simpleKube(words []string, env *kubeEnv, aliases map[string]string
 				args = append([]string{plugin}, args...)
 			}
 		}
-		if h.Production == "" {
+		if h.Production == "" && len(h.ProtectedContexts) == 0 {
 			continue
 		}
 		var r string
@@ -326,19 +307,19 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	if len(pos) > 1 {
 		sub = pos[1]
 	}
-	local := kubectlLocal[verb] || verb == verbVersion && flags["--client"] == flagOn || flags["--local"] == flagOn ||
-		strings.HasPrefix(flags[flagDryRun], "client") || flags[flagDryRun] == flagOn
+	local := verb != execCmd && (kubectlLocal[verb] || verb == verbVersion && flags["--client"] == flagOn || flags["--local"] == flagOn ||
+		strings.HasPrefix(flags[flagDryRun], "client") || flags[flagDryRun] == flagOn)
 	if (kubectlBuiltins[verb] || kubectlWrites[verb]) && !local && flags["--server"] == "" && flags["-s"] == "" {
 		if r := h.contextReason(at, "--context", flags, env, flags[flagKubeconfig]); r != "" {
 			return r
 		}
 	}
 	switch {
-	case verb == "config" && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
+	case verb == litConfig && (sub == "use-context" || sub == "use" || sub == "set" && len(pos) > 2 && pos[2] == "current-context"):
 		return switchReason(at)
 	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == verbLogin && flags["--self-contained"] == "":
 		return switchReason(at)
-	case kubectlBuiltins[verb] && !writeSub[verb][sub], dryRun(flags):
+	case kubectlBuiltins[verb] && !writeSub[verb][sub], verb != execCmd && dryRun(flags):
 		return ""
 	case !kubectlBuiltins[verb] && !kubectlWrites[verb] && (readOnlyPlugins[verb] || sub == "" || pluginReads[sub]):
 		// A plugin: its subcommand reads, or it has none.
@@ -347,7 +328,14 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	if f := flags[flagKubeconfig]; f != "" {
 		env.kubeconfig = expandHome(f)
 	}
-	return h.writeReason(at, flags["--context"], flags["--cluster"], env.kubeconfig)
+	reason := h.writeReason(at, flags["--context"], flags["--cluster"], env.kubeconfig)
+	if verb == execCmd && reason != "" {
+		if why := h.readOnlyExec(args); why != "" {
+			return reason + " Read-only exec refused: " + why + "."
+		}
+		return ""
+	}
+	return reason
 }
 
 // pluginValues: the value flags of a kubectl plugin's command line,
@@ -525,7 +513,10 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	}
 	target := ""
 	for _, n := range []string{context, cluster, kc.clusters[context]} {
-		if IsProduction(n, h.Production) {
+		if IsProduction(n, h.Production) || (n != "" && slices.Contains(h.ProtectedContexts, n)) ||
+			(n != "" && slices.ContainsFunc(h.ProtectedContexts, func(c string) bool {
+				return kc.clusters[c] != "" && kc.clusters[c] == n
+			})) {
 			target = n
 			break
 		}
@@ -533,7 +524,7 @@ func (h Hook) writeReason(at, context, cluster, kubeconfig string) string {
 	if target == "" {
 		return ""
 	}
-	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (" + h.Production + "). " +
+	return "Refused: `" + short(at) + "` writes to " + target + ", a production cluster (rule: kube production write gate). " +
 		"Agents never change production directly: changes go through a GitOps pull request and platformctl. " +
 		"Reads stay allowed (kubectl get, describe, logs, top, auth can-i; helm list, status, get; flux get), " +
 		"and so do writes to a lab with --context kind-<lab>."
@@ -620,6 +611,31 @@ func readKubeconfig(list string) kubeconfig {
 // has none or cannot be read.
 func CurrentContext(kubeconfig string) string {
 	return readKubeconfig(kubeconfig).current
+}
+
+// productionNoteRefusal judges a command carrying a note, with the note path
+// switched on. Only the production-write refusal can be superseded: context and
+// other refusals stay, and so does any context kube.protectedContexts protects,
+// production or not.
+func (h Hook) productionNoteRefusal(cmd string) string {
+	m := productionNoteCommand.FindStringSubmatch(cmd)
+	if m == nil {
+		return "Refused: production note marker requires one literal kubectl delete with explicit context, namespace, kind and name."
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil || id <= 0 {
+		return "Refused: invalid production note id."
+	}
+	env := kubeEnv{kubeconfig: h.Kubeconfig}
+	protected, production := h, h
+	protected.Production, production.ProtectedContexts = "", nil
+	if protected.scanKube(m[2], env, 0) != "" || !strings.Contains(production.scanKube(m[2], env, 0), "a production cluster (") {
+		return "Refused: note authority requires an explicitly targeted production write."
+	}
+	if err := h.ProductionNote(id, m[2]); err != nil {
+		return "Refused: production note: " + err.Error()
+	}
+	return ""
 }
 
 // Deliberately narrow: no expansions, redirections, extra flags, lists,

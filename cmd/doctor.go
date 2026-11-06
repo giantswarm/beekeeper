@@ -89,7 +89,8 @@ func (c chore) String() string {
 // taken off the roster once it reported its work done and its CLI is idle
 // (busy: a turn or a gated merge of its own runs), once it was relieved of
 // a role, or once it stayed idle or gone staleAfter (0: never) with no CLI running,
-// unless a keep marker or a timer that wakes it keeps it (a keep chore).
+// unless it is parked, or a keep marker or a timer that wakes it keeps it
+// (a keep chore).
 // A started session the roster keeps whose desktop record shows another
 // title than its roster name is retitled while its CLI runs no turn.
 // record reads a desktop session's record.
@@ -102,6 +103,12 @@ func planChores(st *state.State, sessions []*claude.Session, record func(host st
 			if why := stoppedExecutionWhy(st, ag); why != "" && !busy(ag.Party) {
 				out = append(out, chore{kind: choreRemove, agent: ag, why: why})
 			}
+			continue
+		}
+		// A parked local session may have been stopped by the watch to
+		// release memory. Its park, rather than CLI liveness or a stale
+		// done/role marker, owns its next wake and must stay on the roster.
+		if ag.Park != nil {
 			continue
 		}
 		if last, gone := goneAgent(cfg, st, sessions, ag, staleAfter, now); gone && !busy(ag.Party) {
@@ -259,9 +266,10 @@ type doctorRun struct {
 
 // doctorReport is what a run of the doctor found and did, a line each.
 type doctorReport struct {
-	chores []string
-	faults []faultFinding
-	notes  []string
+	appDrifts []string
+	chores    []string
+	faults    []faultFinding
+	notes     []string
 	// unagreed counts the finished workers whose archive waits on
 	// agents.archiveAgreement, said once for all, not per agent.
 	unagreed int
@@ -298,15 +306,20 @@ func staleLine(s staleBinary) string {
 // doctor finds the chores and the faults, and fixes what it may.
 func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 	var rep doctorReport
+	if line := a.teleportContextsLine(); line != "" {
+		rep.chores = append(rep.chores, line)
+	}
 	st, err := a.store.Read()
 	if err != nil {
 		return rep, err
 	}
+	rep.appDrifts = driftLines(a.appDrifts(ctx, st.Apps))
 	sessions, t, err := a.sessions()
 	if err != nil {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, a.doctorLabs(ctx, sessions, r)...)
+	rep.chores = append(rep.chores, a.doctorMCP(ctx, r.dryRun)...)
 	rep.staleLoop = a.staleLoopLine(ctx)
 	loopPID := a.loopPID()
 	rep.stale = slices.DeleteFunc(staleBinaries(t, os.Getpid(), replacedBinary), func(s staleBinary) bool {
@@ -643,6 +656,11 @@ func (a *app) removeAgents(chores []chore, by state.Party) ([]chore, error) {
 			if c.kind != choreRemove || i < 0 || c.stale && keptBy(st, st.Agents[i], a.now) != "" {
 				continue
 			}
+			// A worker can park after the snapshot used to plan cleanup.
+			// Recheck under the state lock before removing a local worker.
+			if st.Agents[i].Execution == nil && st.Agents[i].Park != nil {
+				continue
+			}
 			if st.Agents[i].Execution != nil && executionReserved(st, st.Agents[i]) {
 				continue
 			}
@@ -710,6 +728,8 @@ line:
   transient unit beekeeper-reopen-<id> that gives it its row and warms its
   CLI (agent.reopen in the log); the watch says NO DESKTOP ROW once per
   such worker meanwhile;
+- stops attached stdio MCP containers whose Docker client ended, naming
+  each container; detached services and containers with a live client stay;
 - releases leases whose local session ended, logging each release once;
 - stops configured kind labs after 15 minutes without a lease, preserving
   their containers and data; the next successful claim starts them again;
@@ -750,7 +770,7 @@ line:
   last; negative: off); each run that freed something is logged
   (free.apply);
 - with disk.prune: ask, removes finished workers' worktrees: a linked worktree under
-  doctor.worktreeRoots (~/.local/state/klaus-lab/worktrees) whose branch's newest pull
+  doctor.worktreeRoots (~/.local/state/beekeeper/worktrees) whose branch's newest pull
   request merged or closed six hours ago, untouched as long, goes whole
   (a worktree on a detached HEAD: untouched three days)
   when it holds nothing but build output (ignored files, and untracked
@@ -813,6 +833,7 @@ faults but remedying none.`,
 				return err
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
+			lines = append(lines, rep.appDrifts...)
 			if rep.unagreed > 0 {
 				lines = append(lines, unagreedLine(rep.unagreed))
 			}
@@ -877,6 +898,8 @@ faults but remedying none.`,
 			return nil
 		},
 	}
+	c.AddCommand(a.doctorRepositoryCmd())
+	c.AddCommand(a.retryArchiveCmd())
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what the doctor would do, fixing nothing")
 	c.Flags().StringArrayVar(&attended, "fault", nil, "run this fault's remedy although it may not run unattended (repeatable)")
 	return c

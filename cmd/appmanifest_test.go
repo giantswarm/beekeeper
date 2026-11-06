@@ -5,7 +5,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -67,7 +69,7 @@ func (w *browsingWriter) String() string {
 func manifestApp(t *testing.T) (*app, *fakeGitHub, *secrettest.Tools, string, string) {
 	t.Helper()
 	a, tools, repo := secretApp(t)
-	file := githubAppConfig(a, repo)
+	file := githubAppConfig(t, a, repo)
 	manifest := filepath.Join(t.TempDir(), "manifest.json")
 	if err := os.WriteFile(manifest, []byte(fixtureManifest), 0o600); err != nil {
 		t.Fatal(err)
@@ -173,8 +175,39 @@ func TestAppCreateManifestWritesTheSecret(t *testing.T) {
 	// the run is off the record, the App in beekeeper's ledger with the
 	// Secret that holds its credentials
 	if st, err := a.store.Read(); err != nil || len(st.AppRuns) != 0 || len(st.AppsCreated) != 1 || st.AppsCreated[0].Slug != fixtureApp ||
-		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || st.AppsCreated[0].Declared != manifest {
+		st.AppsCreated[0].Stored != file || st.AppsCreated[0].Org != fixtureOrg || !strings.HasPrefix(st.AppsCreated[0].Declared, a.store.Dir()+string(os.PathSeparator)) {
 		t.Errorf("after the run: runs %+v, ledger %+v, %v", st.AppRuns, st.AppsCreated, err)
+	}
+}
+
+func TestAppCreateManifestWebhookActive(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			a, _, tools, file, manifest := manifestApp(t)
+			raw := strings.Replace(fixtureManifest, `"hook_attributes": {`, fmt.Sprintf(`"hook_attributes": {"active": %t,`, active), 1)
+			if err := os.WriteFile(manifest, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			out, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, orgFlag, fixtureOrg, timeoutFlag, tenSeconds)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain, err := tools.Run(context.Background(), "", nil, nil, "sops", "decrypt", file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(plain), "webhook-secret:"); got != active {
+				t.Errorf("webhook-secret present = %v, want %v", got, active)
+			}
+			if active && !strings.Contains(string(plain), "webhook-secret: "+fixtureWebhook) {
+				t.Error("active webhook secret was not preserved")
+			}
+			if got := strings.Contains(stderr.String(), "#stringData.webhook-secret"); got != active {
+				t.Errorf("reported webhook-secret = %v, want %v", got, active)
+			}
+			noFixtureSecret(t, "output", out+stderr.String())
+		})
 	}
 }
 
@@ -255,6 +288,25 @@ func TestAppAllowPersonalAccountApp(t *testing.T) {
 	if _, err := runManifest(a, &stderr, fixtureOrg, manifestFlag, manifest, userFlag, fixtureUser, timeoutFlag, tenSeconds); err != nil {
 		t.Fatalf("app create --manifest --user: %v\n%s", err, stderr.String())
 	}
+	ledger, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable := ledger.AppsCreated[0].Declared
+	raw, err := os.ReadFile(filepath.Clean(durable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved["name"] != fixtureApp || saved[appRedirectField] != nil {
+		t.Fatalf("saved manifest = %v", saved)
+	}
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
 	a.cfg.Apps.Repo, a.cfg.Apps.Manifest = fixtureOrg+"/github", "apps/{name}/manifest.json"
 	person := fixtureUser
 	created := appsGH
@@ -298,13 +350,26 @@ func TestAppAllowPersonalAccountApp(t *testing.T) {
 		t.Errorf("app allow for an App declared nowhere = %v", err)
 	}
 	out, err := allow(clientIDFlag, fixtureClientID)
-	declared := manifest + " (App 4242 on " + fixtureUser + "'s own account)"
+	declared := durable + " (App 4242 on " + fixtureUser + "'s own account)"
 	if err != nil || out != "App "+fixtureApp+" on record, declared in "+declared+": its consent page with callback "+callback+" is answered by the hook\n" {
 		t.Fatalf("app allow = %q, %v", out, err)
 	}
 	st, err := a.store.Read()
 	if err != nil || len(st.Apps) != 1 || st.Apps[0].Org != fixtureUser || st.Apps[0].ClientID != fixtureClientID || st.Apps[0].Declared != declared {
 		t.Fatalf("the record = %+v, %v", st.Apps, err)
+	}
+	// Older entries may still point at a deleted source file.
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.AppsCreated[0].Declared = manifest
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allow(clientIDFlag, fixtureClientID); err == nil || !strings.Contains(err.Error(), "--manifest") || !strings.Contains(err.Error(), manifest) {
+		t.Fatalf("missing legacy manifest: %v", err)
+	}
+	if _, err := allow(clientIDFlag, fixtureClientID, manifestFlag, durable); err != nil {
+		t.Fatalf("explicit replacement: %v", err)
 	}
 	consent := "https://github.com/login/oauth/authorize?client_id=" + fixtureClientID + "&redirect_uri=https%3A%2F%2F" + callback + "%2Foauth%2Fproxy%2Fcallback&response_type=code&state=x"
 	title := "Authorize " + fixtureApp
@@ -351,7 +416,7 @@ func TestAppCreateManifestRefuses(t *testing.T) {
 		code int
 		want string
 	}{
-		"installation": {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
+		installCmd:     {[]string{"elsewhere", manifestFlag, manifest, orgFlag, fixtureOrg}, ExitUsage, `apps.secrets names no Secret for "elsewhere"`},
 		"nameless":     {[]string{fixtureOrg, manifestFlag, nameless, orgFlag, fixtureOrg}, ExitUsage, `names no App ("name")`},
 		"no file":      {[]string{fixtureOrg, manifestFlag, filepath.Join(dir, "absent.json"), orgFlag, fixtureOrg}, ExitUsage, "--manifest: "},
 		"known":        {[]string{fixtureOrg, manifestFlag, taken, orgFlag, fixtureOrg}, ExitRefused, "GitHub already knows an App named taken"},
