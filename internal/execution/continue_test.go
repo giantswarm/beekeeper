@@ -64,6 +64,7 @@ func TestContinueRunsTheSameUnitAgain(t *testing.T) {
 }
 
 func TestContinueRefusesWhatMustStayEnded(t *testing.T) {
+	const wantStopped = "stopped"
 	stored := Delivery{Stage: Uncertain, Envelope: Envelope{Sequence: 1}}
 	for name, test := range map[string]struct {
 		change  func(*Journal)
@@ -71,9 +72,9 @@ func TestContinueRefusesWhatMustStayEnded(t *testing.T) {
 		receipt string
 		want    string
 	}{
-		"stopped":         {change: func(j *Journal) { j.StopRequest = &StopRequest{ID: "stop", Reason: "operator"} }, want: "stopped"},
-		"acknowledged":    {change: func(j *Journal) { j.StopAcknowledged = true }, want: "stopped"},
-		"retired":         {change: func(j *Journal) { j.Retirement = &Retirement{} }, want: "retired"},
+		wantStopped:       {change: func(j *Journal) { j.StopRequest = &StopRequest{ID: "stop-1", Reason: "operator"} }, want: wantStopped},
+		"acknowledged":    {change: func(j *Journal) { j.StopAcknowledged = true }, want: wantStopped},
+		RetireRetired:     {change: func(j *Journal) { j.Retirement = &Retirement{} }, want: RetireRetired},
 		"never accepted":  {change: func(j *Journal) { j.Ready = false }, want: "first task"},
 		"no conversation": {change: func(j *Journal) { j.Request.Harness, j.Thread = HarnessCodex, ""; j.Digest = j.Request.Digest() }, want: "no conversation"},
 		"omp":             {change: func(j *Journal) { j.Request.Harness = HarnessOmp; j.Digest = j.Request.Digest() }, want: ErrUnsupported.Error()},

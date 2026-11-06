@@ -107,13 +107,13 @@ func TestEndedExecutionComesBackOnTheRosterByName(t *testing.T) {
 func TestEndedExecutionRefusalNamesWhyAndItsTranscript(t *testing.T) {
 	for name, change := range map[string]func(*state.ExecutionRecord){
 		"stopped": func(x *state.ExecutionRecord) {
-			x.StopRequest = &execution.StopRequest{ID: "stop", Reason: "operator"}
+			x.StopRequest = &execution.StopRequest{ID: "stop-1", Reason: "operator"}
 			x.Observation.StopAcknowledged = true
 		},
 		"retired": func(x *state.ExecutionRecord) {
 			x.Retirement = &state.ExecutionRetirement{Trigger: execution.RetireTriggerReport}
 		},
-		"omp": func(x *state.ExecutionRecord) { x.Request.Harness = execution.HarnessOmp },
+		execution.HarnessOmp: func(x *state.ExecutionRecord) { x.Request.Harness = execution.HarnessOmp },
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, r, _, continued := exitedExecutionApp(t)
