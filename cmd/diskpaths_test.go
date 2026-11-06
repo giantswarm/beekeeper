@@ -42,12 +42,52 @@ func TestScanDiskPaths(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := scanDiskPaths(ctx, []string{root}, 6, 100); len(got) != 0 {
+	if got := scanDiskPaths(ctx, []string{root}, 6, 100); len(got) != 1 || got[0].Path != root || !got[0].Partial {
 		t.Fatalf("canceled: %+v", got)
 	}
 	limited := scanDiskPaths(context.Background(), []string{root}, 6, 2)
-	if len(limited) > 1 || len(limited) == 1 && !limited[0].Partial {
+	if !slices.ContainsFunc(limited, func(p diskPath) bool { return p.Path == root && p.Partial }) {
 		t.Fatalf("entry bound: %+v", limited)
+	}
+	if got := scanDiskPaths(context.Background(), []string{filepath.Join(root, "missing")}, 6, 100); len(got) != 0 {
+		t.Fatalf("missing root: %+v", got)
+	}
+}
+
+// The entries a root's listing takes can leave nothing to measure with: what
+// was found still shows, as unread, and never as an empty inventory.
+func TestScanDiskPathsShowsWhatStayedUnread(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dir"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("1"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := scanDiskPaths(context.Background(), []string{root}, 6, 2)
+	if !slices.ContainsFunc(got, func(p diskPath) bool { return p.Path == filepath.Join(root, "dir") && p.Partial }) {
+		t.Fatalf("unmeasured directory: %+v", got)
+	}
+}
+
+// The state root's own files hold the audit log: they count, a large one by
+// name and the rest together.
+func TestScanDiskPathsCountsRootFiles(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "events.jsonl")
+	if err := os.WriteFile(log, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(log, diskPathFileMin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "state.json"), []byte("123"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := scanDiskPaths(context.Background(), []string{root}, 6, 100)
+	want := []diskPath{{Path: log, Bytes: diskPathFileMin}, {Path: filepath.Join(root, diskPathOtherFiles), Bytes: 3}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("files: %+v", got)
 	}
 }
 
@@ -89,14 +129,14 @@ func TestScanDiskPathsSharesItsBudget(t *testing.T) {
 func TestScanDiskPathsSkipsPlacesWithTheirOwnRoot(t *testing.T) {
 	home := t.TempDir()
 	state := filepath.Join(home, "beekeeper")
-	if err := os.MkdirAll(filepath.Join(state, "workspaces"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(state, "blobs"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(state, "workspaces", "file"), []byte("1234"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(state, "blobs", "file"), []byte("1234"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	got := scanDiskPaths(context.Background(), []string{home, state}, 6, 100, state)
-	if len(got) != 1 || got[0].Path != filepath.Join(state, "workspaces") || got[0].Bytes != 4 {
+	if len(got) != 1 || got[0].Path != filepath.Join(state, "blobs") || got[0].Bytes != 4 {
 		t.Fatalf("scan: %+v", got)
 	}
 }
@@ -121,30 +161,55 @@ func TestDiskUsageNamesOwners(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("SCCACHE_DIR", filepath.Join(dir, "cache", "sccache"))
 	nested := filepath.Join(dir, "projects", "repo", ".claude", "worktrees", "tree")
-	for path, size := range map[string]int{
-		filepath.Join(dir, "state", "workspaces", "file"):     8,
-		filepath.Join(dir, "cache", "othertool", "file"):      16,
-		filepath.Join(dir, "cache", "sccache", "file"):        4,
-		filepath.Join(nested, "file"):                         32,
-		filepath.Join(dir, "projects", "worktrees", "a", "f"): 2,
+	place := filepath.Join(dir, "projects", "worktrees")
+	gitfile := "gitdir: /repository/.git/worktrees/tree\n"
+	for path, content := range map[string]string{
+		filepath.Join(dir, "state", "blobs", "file"):     "12345678",
+		filepath.Join(dir, "state", "state.json"):        "12",
+		filepath.Join(dir, "cache", "othertool", "file"): "1234",
+		filepath.Join(dir, "cache", "sccache", "file"):   "123",
+		filepath.Join(nested, ".git"):                    gitfile,
+		filepath.Join(place, "repo", "a", ".git"):        gitfile,
+		filepath.Join(place, "repo", "a", "big"):         strings.Repeat("x", 64),
+		filepath.Join(place, "repo", "fix", "b", ".git"): gitfile,
+		filepath.Join(place, "repo", "leftover", "file"): "1",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, make([]byte, size), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	a := &app{cfg: &config.Config{StateDir: filepath.Join(dir, "state"), Projects: config.Projects{Dir: filepath.Join(dir, "projects"), Worktrees: []string{filepath.Join(dir, "projects", "worktrees")}}}}
+	a := &app{cfg: &config.Config{StateDir: filepath.Join(dir, "state"), Projects: config.Projects{Dir: filepath.Join(dir, "projects"), Worktrees: []string{place}}}}
 	got := map[string]string{}
+	bytes := map[string]int64{}
 	var sizes []int64
 	for _, r := range a.diskUsage(context.Background(), time.Minute) {
-		got[filepath.Base(r.Path)] = r.Owner
+		rel, err := filepath.Rel(dir, r.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[rel], bytes[rel] = r.Owner, r.Bytes
 		sizes = append(sizes, r.Bytes)
 	}
-	want := map[string]string{"workspaces": pluginName, "othertool": "othertool (" + diskOwnerNoPolicy + ")", "sccache": "cache sccache", "tree": "harness worktree", "a": "worktree"}
+	treeA, treeB := filepath.Join("projects", "worktrees", "repo", "a"), filepath.Join("projects", "worktrees", "repo", "fix", "b")
+	placeRow := filepath.Join("projects", "worktrees", "repo")
+	want := map[string]string{
+		filepath.Join("state", "blobs"):                                   pluginName,
+		filepath.Join("state", diskPathOtherFiles):                        pluginName,
+		filepath.Join("cache", "othertool"):                               "othertool (" + diskOwnerNoPolicy + ")",
+		filepath.Join("cache", "sccache"):                                 "cache sccache",
+		filepath.Join("projects", "repo", ".claude", "worktrees", "tree"): diskOwnerHarness,
+		treeA:    diskOwnerTree,
+		treeB:    diskOwnerTree,
+		placeRow: diskOwnerPlace,
+	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("owners: %v, want %v", got, want)
+	}
+	if n := int64(len(gitfile)); bytes[treeA] != n+64 || bytes[treeB] != n || bytes[placeRow] != 1 {
+		t.Fatalf("sizes: %v", bytes)
 	}
 	if !slices.IsSortedFunc(sizes, func(x, y int64) int { return cmp.Compare(y, x) }) {
 		t.Fatalf("not largest first: %v", sizes)

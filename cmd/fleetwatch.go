@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -228,16 +227,22 @@ func fleetList(raw, field string) ([]json.RawMessage, error) {
 	if err := json.Unmarshal([]byte(raw), &object); err != nil {
 		return nil, err
 	}
-	if t := object["truncated"]; len(t) > 0 && !slices.Contains([]string{"null", strconv.FormatBool(false)}, string(t)) {
-		return nil, errors.New("truncated fleet list")
+	if t := object["truncated"]; len(t) > 0 {
+		var truncated *bool // null and false are a whole list; anything else is not.
+		if err := json.Unmarshal(t, &truncated); err != nil || truncated != nil && *truncated {
+			return nil, errors.New("truncated fleet list")
+		}
 	}
 	value, ok := object[field]
-	if !ok || string(value) == "null" {
+	if !ok {
 		return nil, fmt.Errorf("fleet list missing %s", field)
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(value, &items); err != nil {
 		return nil, err
+	}
+	if items == nil { // JSON null: an empty list is [].
+		return nil, fmt.Errorf("fleet list missing %s", field)
 	}
 	return items, nil
 }

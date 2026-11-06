@@ -4,10 +4,6 @@ import (
 	"context"
 
 	"errors"
-	"github.com/giantswarm/beekeeper/internal/identity"
-	"github.com/giantswarm/beekeeper/internal/state"
-	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +12,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
+
+	"github.com/giantswarm/beekeeper/internal/identity"
+	"github.com/giantswarm/beekeeper/internal/state"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,7 +31,12 @@ import (
 	"github.com/giantswarm/beekeeper/pkg/apis/beekeeper/v1alpha1"
 )
 
-const fleetNoItems = `{"items":[]}`
+const (
+	fleetNoItems     = `{"items":[]}`
+	fleetTestAgents  = "instances"
+	fleetTestList    = "list"
+	fleetTestCluster = "cluster-b"
+)
 
 func fleetFixture(t *testing.T, count int) (*fleetWatch, []v1alpha1.Environment) {
 	t.Helper()
@@ -47,7 +54,7 @@ func fleetFixture(t *testing.T, count int) (*fleetWatch, []v1alpha1.Environment)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&v1alpha1.Environment{}, &v1alpha1.Hold{}, &v1alpha1.MergeLane{}).Build()
 	s := &server{store: kube.New(c), cfg: &config.Config{}, now: time.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	s.cfg.Serve.FleetWatch = config.FleetWatch{Kagent: "instances", Kubernetes: "list", Alertmanager: alertsName, Concurrency: 2}
+	s.cfg.Serve.FleetWatch = config.FleetWatch{Kagent: fleetTestAgents, Kubernetes: fleetTestList, Alertmanager: alertsName, Concurrency: 2}
 	return &fleetWatch{s: s, baseline: map[string]map[string]string{}, agents: map[string]map[string]fleetAgent{}, changed: map[string]time.Time{}, alertState: map[string]*alerts.Installation{}}, envs
 }
 
@@ -85,7 +92,7 @@ func TestFleetWatchBoundedSources(t *testing.T) {
 			return "", ctx.Err()
 		}
 		switch tool {
-		case "instances":
+		case fleetTestAgents:
 			return `{"instances":[]}`, nil
 		case alertsName:
 			return `{"alerts":[]}`, nil
@@ -167,7 +174,7 @@ func TestFleetWatchAlertsAndTemplates(t *testing.T) {
 }
 
 func TestFleetListRejectsIncomplete(t *testing.T) {
-	for _, raw := range []string{`{}`, `null`, `{"items":null}`, `{"items":[],"truncated":{"omitted":1}}`, `{"items":{}}`, `invalid`} {
+	for _, raw := range []string{`{}`, ` null `, `{"items":null}`, `{"items":[],"truncated":{"omitted":1}}`, `{"items":{}}`, `{broken`} {
 		if _, err := fleetList(raw, "items"); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
@@ -254,8 +261,8 @@ func TestFleetWatchThroughMuster(t *testing.T) {
 			return mcp.NewToolResultError("missing arguments"), nil
 		}
 		switch req.GetString("name", "") {
-		case "instances":
-			if args["cluster"] == "cluster-b" {
+		case fleetTestAgents:
+			if args["cluster"] == fleetTestCluster {
 				return mcp.NewToolResultText(`{"instances":[{"id":"remote-agent","state":"FAILED"}]}`), nil
 			}
 			return mcp.NewToolResultText(`{"instances":[]}`), nil
@@ -341,7 +348,7 @@ func TestFleetWatchInterval(t *testing.T) {
 			rounds <- time.Now()
 		}
 		switch tool {
-		case "instances":
+		case fleetTestAgents:
 			return `{"instances":[]}`, nil
 		case alertsName:
 			return `{"alerts":[]}`, nil

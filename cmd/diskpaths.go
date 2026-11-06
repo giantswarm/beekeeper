@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,10 @@ const diskPathTop = 3
 const diskPathDepth = 6
 const diskPathEntries = 50000
 const diskPathBudget = 2 * time.Second
+const diskPathFileMin = 16 << 20
+
+// diskPathOtherFiles stands for a root's smaller files in their shared row.
+const diskPathOtherFiles = "(other files)"
 
 type diskPath struct {
 	Path    string `json:"path"`
@@ -31,38 +36,82 @@ type diskPath struct {
 // Each root has its own entries and is read at the same time as the others,
 // and each directory of a root gets a fair share of what is left: a large
 // state directory must not leave the user cache, or the rest of itself,
-// unread. A directory in skip is measured through a root of its own.
+// unread. What stays unread shows: a directory found but not measured is a
+// partial row, and a root not read to its end is a partial row of its own.
+// A file of a root at diskPathFileMin or more has a row, its smaller files
+// share one. A directory in skip is measured elsewhere.
 func scanDiskPaths(ctx context.Context, roots []string, depth, limit int, skip ...string) []diskPath {
+	skipped := make(map[string]bool, len(skip))
+	for _, p := range skip {
+		skipped[p] = true
+	}
 	found := make([][]diskPath, len(roots))
 	var wg sync.WaitGroup
 	for i, root := range roots {
-		wg.Go(func() { found[i] = scanDiskRoot(ctx, root, depth, limit, skip) })
+		wg.Go(func() { found[i] = scanDiskRoot(ctx, root, depth, limit, skipped) })
 	}
 	wg.Wait()
 	return slices.Concat(found...)
 }
 
-func scanDiskRoot(ctx context.Context, root string, depth, limit int, skip []string) []diskPath {
+func scanDiskRoot(ctx context.Context, root string, depth, limit int, skip map[string]bool) []diskPath {
 	f, err := os.OpenInRoot(root, ".")
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	entries, _ := f.ReadDir(-1)
-	_ = f.Close()
-	remaining := limit - len(entries)
-	entries = slices.DeleteFunc(entries, func(e os.DirEntry) bool {
-		return !e.IsDir() || e.Type()&os.ModeSymlink != 0 || slices.Contains(skip, filepath.Join(root, e.Name()))
-	})
+	if err != nil {
+		return []diskPath{{Path: root, Partial: true}}
+	}
+	defer func() { _ = f.Close() }()
 	var out []diskPath
-	for i, e := range entries {
-		if ctx.Err() != nil || remaining <= 0 {
+	var dirs []string
+	var other int64
+	remaining, whole, partial := limit, false, false
+	for ctx.Err() == nil && remaining > 0 && !whole {
+		entries, err := f.ReadDir(min(128, remaining))
+		remaining -= len(entries)
+		for _, e := range entries {
+			path := filepath.Join(root, e.Name())
+			switch {
+			case e.Type()&os.ModeSymlink != 0 || skip[path]:
+			case e.IsDir():
+				dirs = append(dirs, path)
+			case e.Type().IsRegular():
+				info, err := e.Info()
+				if err != nil {
+					partial = true
+				} else if info.Size() >= diskPathFileMin {
+					out = append(out, diskPath{Path: path, Bytes: info.Size()})
+				} else {
+					other += info.Size()
+				}
+			}
+		}
+		if err != nil {
+			whole = err == io.EOF
 			break
 		}
-		share := remaining / (len(entries) - i)
-		left := max(1, share)
-		path := filepath.Join(root, e.Name())
-		n, p := diskPathSize(ctx, path, 1, depth, &left)
-		remaining -= max(1, share) - left
+	}
+	out = append(out, measureDiskDirs(ctx, dirs, depth, remaining, skip)...)
+	if other > 0 || partial {
+		out = append(out, diskPath{Path: filepath.Join(root, diskPathOtherFiles), Bytes: other, Partial: partial})
+	}
+	if !whole {
+		out = append(out, diskPath{Path: root, Partial: true})
+	}
+	return out
+}
+
+// measureDiskDirs has a row for every one of dirs, each measured with a fair
+// share of remaining; what a share leaves goes to the ones after it.
+func measureDiskDirs(ctx context.Context, dirs []string, depth, remaining int, skip map[string]bool) []diskPath {
+	out := make([]diskPath, 0, len(dirs))
+	for i, path := range dirs {
+		todo := len(dirs) - i
+		share := (max(remaining, 0) + todo - 1) / todo
+		left := share
+		n, p := diskPathSize(ctx, path, 1, depth, &left, skip)
+		remaining -= share - left
 		out = append(out, diskPath{Path: path, Bytes: n, Partial: p})
 	}
 	return out
@@ -70,7 +119,7 @@ func scanDiskRoot(ctx context.Context, root string, depth, limit int, skip []str
 
 // diskPathSize adds up the regular files under path, spending remaining on
 // every entry it reads.
-func diskPathSize(ctx context.Context, path string, level, depth int, remaining *int) (int64, bool) {
+func diskPathSize(ctx context.Context, path string, level, depth int, remaining *int, skip map[string]bool) (int64, bool) {
 	if ctx.Err() != nil || *remaining <= 0 {
 		return 0, true
 	}
@@ -96,11 +145,15 @@ func diskPathSize(ctx context.Context, path string, level, depth int, remaining 
 				continue
 			}
 			if e.IsDir() {
+				child := filepath.Join(path, e.Name())
+				if skip[child] {
+					continue
+				}
 				if level >= depth {
 					partial = true
 					continue
 				}
-				n, p := diskPathSize(ctx, filepath.Join(path, e.Name()), level+1, depth, remaining)
+				n, p := diskPathSize(ctx, child, level+1, depth, remaining, skip)
 				total += n
 				partial = partial || p
 			} else if e.Type().IsRegular() {
@@ -121,16 +174,23 @@ func diskPathSize(ctx context.Context, path string, level, depth int, remaining 
 	}
 }
 
-// diskPathRoots are the places read beyond the home's state and cache:
-// beekeeper's state by its subdirectories, the worktree places, and the
-// harness worktrees of the checkouts.
-func (a *app) diskPathRoots() []string {
-	roots := append([]string{a.cfg.StateDir}, a.cfg.Projects.Worktrees...)
+// diskHarnessRoots are the harness worktree directories of the checkouts.
+func (a *app) diskHarnessRoots() []string {
+	var roots []string
 	for _, checkout := range append(slices.Clone(a.cfg.Disk.Checkouts), filepath.Join(a.cfg.Projects.Dir, "*")) {
 		if nested, err := filepath.Glob(filepath.Join(checkout, ".claude", "worktrees")); err == nil {
 			roots = append(roots, nested...)
 		}
 	}
+	return roots
+}
+
+// diskPathRoots are the places read beyond the home's state and cache:
+// beekeeper's state by its subdirectories, the worktree places, and the
+// harness worktrees of the checkouts.
+func (a *app) diskPathRoots() []string {
+	roots := append([]string{a.cfg.StateDir}, a.cfg.Projects.Worktrees...)
+	roots = append(roots, a.diskHarnessRoots()...)
 	slices.Sort(roots)
 	return slices.Compact(slices.DeleteFunc(roots, func(p string) bool { return p == "" }))
 }
