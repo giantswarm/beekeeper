@@ -149,10 +149,10 @@ securityContext:
 # Further environment variables, volumes and mounts of serve's container,
 # and init containers of its pod (a sidecar is one with restartPolicy
 # Always): a private CA for the issuer (SSL_CERT_FILE), a local proxy to it.
-extraEnv: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
-extraVolumes: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
-extraVolumeMounts: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
-initContainers: []  # @schema item: object; itemRef: $k8s/_definitions.json#/definitions/io.k8s.api.core.v1.Container
+extraEnv: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.EnvVar
+extraVolumes: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Volume
+extraVolumeMounts: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.VolumeMount
+initContainers: []  # @schema item: object; itemRef: ../kubernetes-json-schema/v1.33.1/_definitions.json#/definitions/io.k8s.api.core.v1.Container
 
 nodeSelector: {}  # @schema additionalProperties: true
 tolerations: []  # @schema item: object
