@@ -92,7 +92,7 @@ func TestFreeNestedWorktrees(t *testing.T) {
 func TestSessionWorktreeHooks(t *testing.T) {
 	a, repo, base := nestedFixture(t)
 	cfgPath := filepath.Join(base, "config.yaml")
-	writeT(t, cfgPath, "stateDir: "+a.cfg.StateDir+"\nprojects:\n  dir: "+a.cfg.Projects.Dir+"\n  worktrees: "+a.cfg.Projects.Worktrees[0]+"\n")
+	writeT(t, cfgPath, "stateDir: "+a.cfg.StateDir+"\nprojects:\n  dir: "+a.cfg.Projects.Dir+"\n  worktrees: ["+a.cfg.Projects.Worktrees[0]+"]\n")
 	a.cfgPath = cfgPath
 	invoke := func(remove bool, input map[string]string) error {
 		raw, _ := json.Marshal(input)
