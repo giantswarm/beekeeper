@@ -3888,6 +3888,8 @@ cluster and namespace matchers; an empty matcher means unrestricted.
 
 ## Development
 
+Agents may list a team's member logins with `gh api --paginate 'orgs/<org>/teams/<slug>/members?per_page=100' --jq '.[].login'`. The membership hook allows this read-only GET (including explicit `--method GET`) as the one exception to its refusal of a team's members in the hook's description above; membership writes remain refused. An API permission error must be treated as an unavailable roster.
+
 Workers read Dependabot alert states with `beekeeper security alert <owner/repo> <number>`
 through their existing GitHub identity. The [security-scans rule and App setup](docs/security-scans.md)
 describe the read-only permission and how to handle inaccessible alerts.
