@@ -142,6 +142,7 @@ func TestWorkerGitHubAPIDispatchIsReadOnly(t *testing.T) {
 	for _, args := range [][]string{
 		{endpoint},
 		{endpoint, "--paginate", "--jq", ".[].title"},
+		{"graphql", "-f", "query=query { viewer { login } }"},
 		{endpoint, "-q", ".[].title", "-i"},
 		{endpoint, "-iq.[].title"},
 		{"-X", workerGitHubGet, endpoint, "-f", "state=open"},
@@ -170,7 +171,9 @@ func TestWorkerGitHubAPIDispatchIsReadOnly(t *testing.T) {
 		{endpoint, "--raw-field=title=fixture"},
 		{endpoint, "--field", workerGitHubTitleField},
 		{endpoint, "-if", workerGitHubTitleField},
-		{"graphql", "-f", "query=query { viewer { login } }"},
+		{"graphql", "-f", "query=mutation { addComment(input: {}) { clientMutationId } }"},
+		{"graphql", "-F", "query=@request.graphql"},
+		{"graphql", "-H", "X-HTTP-Method-Override: PUT", "-f", "query={ viewer { login } }"},
 		{endpoint, "--input", "fixture.json"},
 		{endpoint, "--input=-"},
 		{endpoint, "--hostname", "example.invalid"},

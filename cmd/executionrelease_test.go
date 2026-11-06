@@ -236,6 +236,40 @@ func TestTimedOutActivationIsReportedAndRetried(t *testing.T) {
 	}
 }
 
+// The caller's own deadline can be what failed the activation: once the host
+// answers that the process runs, the start completes all the same.
+func TestActivationReconciledAfterTheCallersDeadline(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var handle execution.Handle
+	launched := false
+	fake := &testExecutionTransport{}
+	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+		handle = fixtureHandle(a, r)
+		if r.RegistrationReceipt == "" {
+			return handle, nil
+		}
+		launched = true
+		cancel()
+		return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
+	}
+	fake.inspect = func(ctx context.Context, _ execution.Ref) (execution.Observation, error) {
+		if err := ctx.Err(); err != nil {
+			return execution.Observation{}, err
+		}
+		if launched {
+			return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true}, nil
+		}
+		return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
+	if err := a.startSSHExecution(ctx, "reconciled-worker", brief, options); err != nil {
+		t.Fatalf("a confirmed start failed on the caller's spent deadline: %v", err)
+	}
+}
+
 // A start that timed out and that nobody retried stops holding its host: past
 // the start's window the sync stops it; a start inside the window stays.
 func TestExecutionSyncStopsAStartThatNeverActivated(t *testing.T) {

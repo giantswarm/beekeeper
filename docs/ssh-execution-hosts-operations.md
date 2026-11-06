@@ -915,8 +915,11 @@ the field, and a failed update is an error that an identical retry repeats.
 
 A lost `gh pr create` answer settles by the owned branch: a pull request found
 there is returned. None found, the error says GitHub created none and why. Only
-a branch that cannot be read stays `PR creation outcome uncertain`. Creating and
-that read have their own 15-second limits, outside the attempt's 20 seconds.
+a branch that cannot be read stays `PR creation outcome uncertain`. Creating or
+updating and that read have their own 15-second limits, outside the attempt's
+20 seconds. A write also ends with the lease and starts only with a live one;
+only the read outlives it. An empty `--body-file` or `--title` is refused, since
+a pull request's body cannot be cleared this way.
 
 A failed Git step reports its stage and a fixed diagnosis, never Git's raw
 output, which may carry URLs or credentials: for example `publication Git push
@@ -1062,10 +1065,9 @@ Every other `gh` subcommand is refused unless the wrapper lists it as a read
 `run watch`, `run download`, `release download`, `release verify`, `release
 verify-asset`). `gh api` runs GET and HEAD only: `-f`/`-F` need an explicit
 `-X GET`, since gh otherwise sends POST, and `--input`, `--hostname` and
-GraphQL's POST are refused. On a host without the worker App, where `gh` runs on
-the host's own login, the execution guard passes a `gh api graphql` read whose
-query and variables are all literal and that holds no mutation. An empty
-`projectItems` is no proof an issue is off a board: it can omit another owner's.
+GraphQL's POST is refused, except a `gh api graphql` read whose query and
+variables are all literal and that holds no mutation, which the wrapper and the
+execution guard both pass. An empty `projectItems` is no proof an issue is off a board: it can omit another owner's.
 A worker may work in and
 open pull requests across multiple repositories in one task (using its primary
 workspace or additional checkouts cloned under `.beekeeper-scratch`). The runner

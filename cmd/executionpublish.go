@@ -30,6 +30,18 @@ const publishBundleLimit = 64 << 20
 // spent the attempt's time, and a retry would spend it the same way.
 const publishCreateTimeout = 15 * time.Second
 
+// publicationTitle and publicationBody name a pull request's fields in a
+// publication's result.
+const (
+	publicationTitle = "title"
+	publicationBody  = "body"
+)
+
+const (
+	publicationWriteDenied = "GitHub denied the coordinator's credential write access to the repository"
+	publicationUnreachable = "the coordinator could not reach GitHub"
+)
+
 type executionPublication struct {
 	Head         string `json:"head"`
 	BundleDigest string `json:"bundleDigest,omitempty"`
@@ -131,11 +143,11 @@ var publicationGitReasons = []struct{ match, reason string }{
 	{"Authentication failed", "the coordinator's GitHub credential was not accepted"},
 	{"could not read Username", "the coordinator has no usable GitHub credential"},
 	{"terminal prompts disabled", "the coordinator has no usable GitHub credential"},
-	{"Permission to", "GitHub denied the coordinator's credential write access to the repository"},
-	{"returned error: 403", "GitHub denied the coordinator's credential write access to the repository"},
+	{"Permission to", publicationWriteDenied},
+	{"returned error: 403", publicationWriteDenied},
 	{"Repository not found", "GitHub did not find the repository for the coordinator's credential"},
-	{"Could not resolve host", "the coordinator could not reach GitHub"},
-	{"Failed to connect", "the coordinator could not reach GitHub"},
+	{"Could not resolve host", publicationUnreachable},
+	{"Failed to connect", publicationUnreachable},
 	{"prerequisite commits", "the repository lacks prerequisite commits required by the bundle"},
 	{"vorausgesetzte Commits", "the repository lacks prerequisite commits required by the bundle"},
 	{"did not send all necessary objects", "the bundle is missing ancestor objects required to connect history"},
@@ -162,14 +174,14 @@ var publicationGHReasons = []struct{ match, reason string }{
 	{"submitted too quickly", "GitHub's secondary rate limit refused it"},
 	{"rate limit", "GitHub's rate limit refused it"},
 	{"HTTP 401", "the coordinator's GitHub credential was not accepted"},
-	{"HTTP 403", "GitHub denied the coordinator's credential write access to the repository"},
-	{"Resource not accessible", "GitHub denied the coordinator's credential write access to the repository"},
+	{"HTTP 403", publicationWriteDenied},
+	{"Resource not accessible", publicationWriteDenied},
 	{"HTTP 404", "GitHub did not find the repository for the coordinator's credential"},
 	{"HTTP 422", "GitHub rejected the request as invalid"},
 	{"HTTP 5", "GitHub answered with a server error"},
-	{"could not connect", "the coordinator could not reach GitHub"},
-	{"connection", "the coordinator could not reach GitHub"},
-	{"timeout", "GitHub did not answer in time"},
+	{"could not connect", publicationUnreachable},
+	{"connection", publicationUnreachable},
+	{timeoutComm, "GitHub did not answer in time"},
 }
 
 // publicationGHReason names why a gh call failed, never its raw output.
@@ -219,7 +231,7 @@ func publishGit(ctx context.Context, dir string, args ...string) (string, error)
 
 // ownedPulls lists the pull requests of the owned branch, in any state.
 func ownedPulls(ctx context.Context, repository, branch string) ([]publicationPull, error) {
-	raw, err := executionPublishGH(ctx, "pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--json", "url,state,title,body")
+	raw, err := executionPublishGH(ctx, "pr", "list", loopRepoFlag, repository, "--head", branch, "--state", "all", "--json", "url,state,"+publicationTitle+","+publicationBody)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +245,8 @@ func ownedPulls(ctx context.Context, repository, branch string) ([]publicationPu
 // settleCreatedPull answers a failed gh pr create by the owned branch: a pull
 // request found there is the lost answer's, its URL returned. None found, the
 // failure is GitHub's and said as such; only an unreadable branch stays
-// uncertain. Own timeouts: ctx may have run out, which is why create failed.
+// uncertain. A read may outlive the lease and ctx, which may be why create
+// failed; a write may not.
 func settleCreatedPull(ctx context.Context, repository, branch, reason string) (string, error) {
 	listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
 	defer cancel()
@@ -247,15 +260,19 @@ func settleCreatedPull(ctx context.Context, repository, branch, reason string) (
 	return "", fmt.Errorf("GitHub created no pull request for the owned branch: %s; the branch is pushed, and an identical publication creates it once that is resolved", reason)
 }
 
+// publicationWrite rechecks a publication's authority and gives one GitHub
+// write its own time, within the lease: a push may have spent the attempt's.
+type publicationWrite func() (context.Context, context.CancelFunc, error)
+
 // updatePublishedPull applies the title and body a republication names to its
 // existing pull request. A flag left out keeps the field; one that matches
 // changes nothing, so an identical retry writes nothing.
-func updatePublishedPull(ctx context.Context, repository, dir string, pull publicationPull, p executionPublication) ([]string, error) {
+func updatePublishedPull(repository, dir string, pull publicationPull, p executionPublication, write publicationWrite) ([]string, error) {
 	var updated []string
-	args := []string{"pr", "edit", pull.URL, "--repo", repository}
+	args := []string{"pr", "edit", pull.URL, loopRepoFlag, repository}
 	if title := strings.TrimSpace(p.Title); title != "" && title != strings.TrimSpace(pull.Title) {
 		args = append(args, "--title", p.Title)
-		updated = append(updated, "title")
+		updated = append(updated, publicationTitle)
 	}
 	if strings.TrimSpace(p.Body) != "" && strings.TrimSpace(p.Body) != strings.TrimSpace(pull.Body) {
 		bodyPath := filepath.Join(dir, "body.md")
@@ -263,12 +280,15 @@ func updatePublishedPull(ctx context.Context, repository, dir string, pull publi
 			return nil, err
 		}
 		args = append(args, "--body-file", bodyPath)
-		updated = append(updated, "body")
+		updated = append(updated, publicationBody)
 	}
 	if len(updated) == 0 {
 		return nil, nil
 	}
-	editCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
+	editCtx, cancel, err := write()
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 	if _, err := executionPublishGH(editCtx, args...); err != nil {
 		return nil, fmt.Errorf("commits are pushed to %s, but its %s was not updated: %s; retry publication to update it", pull.URL, strings.Join(updated, " and "), publicationGHReason(editCtx, err))
@@ -334,6 +354,17 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	}
 	if p.SyncBase && (p.BundleDigest != "" || p.Title != "" || p.Body != "") {
 		return result, refused("base synchronization cannot publish a PR")
+	}
+	write := func() (context.Context, context.CancelFunc, error) {
+		if _, err := checkAuthority(st, ref); err != nil {
+			return nil, nil, err
+		}
+		deadline := time.Now().Add(publishCreateTimeout)
+		if !recovered && r.Lease.ExpiresAt.Before(deadline) {
+			deadline = r.Lease.ExpiresAt
+		}
+		writeCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		return writeCtx, cancel, nil
 	}
 	root := filepath.Join(a.cfg.StateDir, "execution-publications")
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -510,7 +541,7 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		result.Head = p.Head
 		if len(pulls) == 1 {
 			result.URL = pulls[0].URL
-			if result.Updated, err = updatePublishedPull(ctx, r.Request.Repository, dir, pulls[0], p); err != nil {
+			if result.Updated, err = updatePublishedPull(r.Request.Repository, dir, pulls[0], p, write); err != nil {
 				return result, err
 			}
 		} else {
@@ -518,12 +549,12 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 			if err = os.WriteFile(bodyPath, []byte(p.Body), 0o600); err != nil {
 				return result, err
 			}
-			if _, liveErr := checkAuthority(st, ref); liveErr != nil {
-				return result, liveErr
+			createCtx, cancelCreate, writeErr := write()
+			if writeErr != nil {
+				return result, writeErr
 			}
-			createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), publishCreateTimeout)
 			defer cancelCreate()
-			raw, err = executionPublishGH(createCtx, "pr", "create", "--repo", r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
+			raw, err = executionPublishGH(createCtx, "pr", "create", loopRepoFlag, r.Request.Repository, "--base", base, "--head", result.Branch, "--title", p.Title, "--body-file", bodyPath)
 			if err != nil {
 				if result.URL, err = settleCreatedPull(ctx, r.Request.Repository, result.Branch, publicationGHReason(createCtx, err)); err != nil {
 					return result, err
@@ -768,6 +799,9 @@ func (a *app) executionPublishCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if cmd.Flags().Changed(publicationTitle) && strings.TrimSpace(title) == "" {
+			return refused("--title is empty: a pull request needs a title, and nothing was published")
+		}
 		p := executionPublication{Head: head, Title: title, SyncBase: syncBase}
 		if syncBase {
 			if title != "" || bodyPath != "" {
@@ -785,6 +819,11 @@ func (a *app) executionPublishCmd() *cobra.Command {
 			b, readErr := os.ReadFile(filepath.Clean(path))
 			if readErr != nil {
 				return readErr
+			}
+			// An empty file looks like no flag at the coordinator, which would
+			// keep the old body without a word.
+			if strings.TrimSpace(string(b)) == "" {
+				return refused("--body-file is empty: a pull request's body cannot be cleared, and nothing was published")
 			}
 			p.Body = string(b)
 		}
@@ -834,7 +873,7 @@ func (a *app) executionPublishCmd() *cobra.Command {
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 	}}
-	c.Flags().StringVar(&title, "title", "", "Conventional Commit title; on a republication it updates the existing pull request")
+	c.Flags().StringVar(&title, publicationTitle, "", "Conventional Commit title; on a republication it updates the existing pull request")
 	c.Flags().StringVar(&bodyPath, "body-file", "", "PR body file inside the owned workspace; on a republication it updates the existing pull request")
 	c.Flags().BoolVar(&syncBase, "sync-base", false, "fetch the default branch through the coordinator and merge it into the workspace")
 	return c

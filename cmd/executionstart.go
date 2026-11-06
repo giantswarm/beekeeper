@@ -432,6 +432,9 @@ func (a *app) activateExecution(ctx context.Context, ref execution.Ref) error {
 			if err := a.activationOutcome(ctx, client, ref, err); err != nil {
 				return err
 			}
+			// The host answered that the start took. The caller's time may be
+			// what failed, so the acceptance below keeps only its own bound.
+			ctx = context.WithoutCancel(ctx)
 		}
 	}
 	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)

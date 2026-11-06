@@ -16,8 +16,8 @@ func TestExecutionLogServesAWorkerItsProof(t *testing.T) {
 	a.cfg.Identity.Host = r.Coordinator
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		return []state.Event{
-			event(state.Party{Name: "supervisor"}, "fixture.rolled", "release rolled onto the coordinator"),
-			event(state.Party{Name: "supervisor"}, "fixture.other", "unrelated event"),
+			event(state.Party{Name: supervisorCommand}, "fixture.rolled", "release rolled onto the coordinator"),
+			event(state.Party{Name: supervisorCommand}, "fixture.other", "unrelated event"),
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -40,11 +40,11 @@ func TestExecutionLogServesAWorkerItsProof(t *testing.T) {
 
 	// The window is bounded, the newest events kept.
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		evs := []state.Event{event(state.Party{Name: "supervisor"}, "fixture.old", "oldest event")}
+		evs := []state.Event{event(state.Party{Name: supervisorCommand}, "fixture.old", "oldest event")}
 		for range 4 {
-			evs = append(evs, event(state.Party{Name: "supervisor"}, "fixture.bulk", "%s", strings.Repeat("x", executionLogLimit/2)))
+			evs = append(evs, event(state.Party{Name: supervisorCommand}, "fixture.bulk", "%s", strings.Repeat("x", executionLogLimit/2)))
 		}
-		return append(evs, event(state.Party{Name: "supervisor"}, "fixture.new", "newest event")), nil
+		return append(evs, event(state.Party{Name: supervisorCommand}, "fixture.new", "newest event")), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestWorkerBudgetNeedsALiveExecutionNotAGrant(t *testing.T) {
 		t.Fatalf("budget = %+v", result)
 	}
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Starts[0].Execution.StopRequest = &execution.StopRequest{Reason: "fixture"}
+		st.Starts[0].Execution.StopRequest = &execution.StopRequest{Reason: remoteMCPFixture}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)

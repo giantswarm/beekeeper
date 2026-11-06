@@ -20,6 +20,11 @@ import (
 
 const publicationClaudeVersion = "2.1.291"
 const publicationExpiredLease = "expired publication lease"
+const publicationFixturePush = "push"
+const publicationFixtureCreate = "pr create"
+const publicationFixtureEdit = "pr edit"
+const publicationFixtureTitle = "fix: fixture change"
+const publicationFixtureBody = "Resolve the fixture defect."
 const publicationFixturePRURL = "https://github.com/giantswarm/beekeeper/pull/42"
 
 type publicationRig struct {
@@ -93,16 +98,16 @@ func newPublicationRig(t *testing.T) *publicationRig {
 				return json.Marshal([]publicationPull{{URL: publicationFixturePRURL, State: "OPEN", Title: rig.title, Body: rig.body}})
 			}
 			return []byte(`[]`), nil
-		case "pr edit":
+		case publicationFixtureEdit:
 			rig.edits = append(rig.edits, args)
 			return nil, rig.refuseEdit
-		case "pr create":
+		case publicationFixtureCreate:
 			if rig.refuseCreate != nil {
 				return nil, rig.refuseCreate
 			}
 			rig.created = true
 			rig.creates++
-			rig.title, rig.body = "fix: fixture change", "Resolve the fixture defect."
+			rig.title, rig.body = publicationFixtureTitle, publicationFixtureBody
 			if rig.dropCreate {
 				return nil, errors.New("fixture lost creation reply")
 			}
@@ -149,7 +154,7 @@ func (rig *publicationRig) publication(t *testing.T, head string) executionPubli
 			t.Fatal(err)
 		}
 	}
-	return executionPublication{Head: head, BundleDigest: digest, Title: "fix: fixture change", Body: "Resolve the fixture defect."}
+	return executionPublication{Head: head, BundleDigest: digest, Title: publicationFixtureTitle, Body: publicationFixtureBody}
 }
 
 func TestExecutionPublicationPushCreateRecoverAndReviewFix(t *testing.T) {
@@ -231,7 +236,7 @@ func TestExecutionPublicationCreateOutlivesTheAttemptsDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	executionPublishGH = func(gh context.Context, args ...string) ([]byte, error) {
-		if strings.Join(args[:2], " ") == "pr create" {
+		if strings.Join(args[:2], " ") == publicationFixtureCreate {
 			cancel()
 			if gh.Err() != nil {
 				return nil, gh.Err()
@@ -287,7 +292,7 @@ func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(rig.edits) != 1 || slices.Contains(rig.edits[0], "--title") || !slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{"body"}) {
+	if len(rig.edits) != 1 || slices.Contains(rig.edits[0], "--title") || !slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{publicationBody}) {
 		t.Fatal("body update not applied alone", rig.edits, result)
 	}
 
@@ -298,8 +303,83 @@ func TestExecutionPublicationRepublishUpdatesTitleAndBody(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(rig.edits) != 1 || !slices.Contains(rig.edits[0], p.Title) || slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{"title"}) {
+	if len(rig.edits) != 1 || !slices.Contains(rig.edits[0], p.Title) || slices.Contains(rig.edits[0], "--body-file") || !slices.Equal(result.Updated, []string{publicationTitle}) {
 		t.Fatal("title update not applied alone", rig.edits, result)
+	}
+}
+
+// A lease that runs out during the push stops the pull request's write, and a
+// write that starts ends with the lease: only the settling read outlives it.
+func TestExecutionPublicationWritesStayWithinTheLease(t *testing.T) {
+	for name, tc := range map[string]struct {
+		existing bool
+		verb     string
+	}{"create": {false, publicationFixtureCreate}, "edit": {true, publicationFixtureEdit}} {
+		t.Run(name, func(t *testing.T) {
+			lease := func(rig *publicationRig, until time.Time) {
+				t.Helper()
+				if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					st.Starts[0].Execution.Lease = &execution.LeaseGrant{ExpiresAt: until}
+					return nil, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			publish := func(rig *publicationRig, p executionPublication) error {
+				return rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+					_, err := rig.a.publishExecution(t.Context(), st, rig.request.Ref, p)
+					return nil, err
+				})
+			}
+			// The lease ends while the push runs: no write starts.
+			rig := newPublicationRig(t)
+			p := rig.publication(t, rig.commit(t, "change.txt", "one\n"))
+			if tc.existing {
+				rig.created, rig.title, rig.body = true, publicationFixtureTitle, publicationFixtureBody
+				p.Title = "fix: changed title"
+			}
+			until := time.Now().Add(2 * time.Second)
+			lease(rig, until)
+			pushing := executionPublishGit
+			executionPublishGit = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+				out, err := pushing(ctx, dir, args...)
+				if args[0] == publicationFixturePush {
+					time.Sleep(time.Until(until) + 10*time.Millisecond)
+				}
+				return out, err
+			}
+			if err := publish(rig, p); err == nil || !strings.Contains(err.Error(), "live, leased") {
+				t.Fatalf("write past the lease = %v", err)
+			}
+			if rig.creates != 0 || len(rig.edits) != 0 {
+				t.Fatal("a write started after the lease ended", rig.creates, rig.edits)
+			}
+			executionPublishGit = pushing
+
+			// A write that starts carries the lease as its deadline.
+			rig = newPublicationRig(t)
+			p = rig.publication(t, rig.commit(t, "change.txt", "two\n"))
+			if tc.existing {
+				rig.created, rig.title, rig.body = true, publicationFixtureTitle, publicationFixtureBody
+				p.Title = "fix: changed title"
+			}
+			until = time.Now().Add(publishCreateTimeout / 2)
+			lease(rig, until)
+			fake := executionPublishGH
+			var deadline time.Time
+			executionPublishGH = func(ctx context.Context, args ...string) ([]byte, error) {
+				if strings.Join(args[:2], " ") == tc.verb {
+					deadline, _ = ctx.Deadline()
+				}
+				return fake(ctx, args...)
+			}
+			if err := publish(rig, p); err != nil {
+				t.Fatal(err)
+			}
+			if deadline.IsZero() || deadline.After(until) {
+				t.Fatalf("write deadline %v is past the lease %v", deadline, until)
+			}
+		})
 	}
 }
 
@@ -321,7 +401,7 @@ func TestExecutionPublicationNamesAFailedUpdate(t *testing.T) {
 	if err := coordinatorTestCall(t, rig.a, rig.request, executionPublish, p, &result, false); err != nil {
 		t.Fatal("identical retry did not update:", err)
 	}
-	if !slices.Equal(result.Updated, []string{"title", "body"}) {
+	if !slices.Equal(result.Updated, []string{publicationTitle, publicationBody}) {
 		t.Fatal("retry did not update both fields", result)
 	}
 }
@@ -392,7 +472,7 @@ func TestPublicationGitFailureNamesOnlyKnownStages(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err = publicationGitFailure(ctx, []string{"push"}, ""); !strings.Contains(err.Error(), "ran out of time") {
+	if err = publicationGitFailure(ctx, []string{publicationFixturePush}, ""); !strings.Contains(err.Error(), "ran out of time") {
 		t.Fatal(err)
 	}
 }
