@@ -304,8 +304,8 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	if len(pos) > 1 {
 		sub = pos[1]
 	}
-	local := kubectlLocal[verb] || verb == verbVersion && flags["--client"] == flagOn || flags["--local"] == flagOn ||
-		strings.HasPrefix(flags[flagDryRun], "client") || flags[flagDryRun] == flagOn
+	local := verb != execCmd && (kubectlLocal[verb] || verb == verbVersion && flags["--client"] == flagOn || flags["--local"] == flagOn ||
+		strings.HasPrefix(flags[flagDryRun], "client") || flags[flagDryRun] == flagOn)
 	if (kubectlBuiltins[verb] || kubectlWrites[verb]) && !local && flags["--server"] == "" && flags["-s"] == "" {
 		if r := h.contextReason(at, "--context", flags, env, flags[flagKubeconfig]); r != "" {
 			return r
@@ -316,7 +316,7 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 		return switchReason(at)
 	case verb == "ctx" && len(pos) > 1, verb == "gs" && sub == verbLogin && flags["--self-contained"] == "":
 		return switchReason(at)
-	case kubectlBuiltins[verb] && !writeSub[verb][sub], dryRun(flags):
+	case kubectlBuiltins[verb] && !writeSub[verb][sub], verb != execCmd && dryRun(flags):
 		return ""
 	case !kubectlBuiltins[verb] && !kubectlWrites[verb] && (readOnlyPlugins[verb] || sub == "" || pluginReads[sub]):
 		// A plugin: its subcommand reads, or it has none.
@@ -325,7 +325,14 @@ func (h Hook) kubectlRefusal(args []string, env kubeEnv, at string) string {
 	if f := flags[flagKubeconfig]; f != "" {
 		env.kubeconfig = expandHome(f)
 	}
-	return h.writeReason(at, flags["--context"], flags["--cluster"], env.kubeconfig)
+	reason := h.writeReason(at, flags["--context"], flags["--cluster"], env.kubeconfig)
+	if verb == execCmd && reason != "" {
+		if why := h.readOnlyExec(args); why != "" {
+			return reason + " Read-only exec refused: " + why + "."
+		}
+		return ""
+	}
+	return reason
 }
 
 // pluginValues: the value flags of a kubectl plugin's command line,

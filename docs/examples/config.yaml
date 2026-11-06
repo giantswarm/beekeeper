@@ -68,6 +68,16 @@ kube:
   production: production
   # Additional production-class contexts, including full test installations.
   protectedContexts: [full-test, full-test-operations]
+  # Exact queries allowed on protected clusters via:
+  # kubectl --context production exec pod/db -- psql -X -d app -c 'select * from conversations limit 5'
+  # Only SELECT *, column lists or count(*) FROM a named relation, optionally
+  # LIMIT, are supported. No expressions, filters, scripts or extra statements.
+  # Use trusted tables/views without side-effecting functions and a read-only
+  # database role. It holds on production and protectedContexts alike, on any
+  # pod the context reaches, never with -i or -t. Empty by default; every
+  # other exec remains refused.
+  readOnlyExecQueries:
+    - select * from conversations limit 5
   # An installation's kube context; {installation} is its name. It resolves
   # alerts.installations and leased installations without a context, and
   # refusals name it. Unset: the context named after the installation, else
