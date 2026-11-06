@@ -146,16 +146,17 @@ func guides(person string, n *state.Note) bool {
 }
 
 // noteAddressee is who a note filed --for who is for: guide.person when who is
-// another name of theirs, who itself when the desk knows it. A name nobody
+// another name of theirs or the guide, who itself when the desk knows it (the
+// supervisor is a role, read by the loop). A name nobody
 // here goes by is refused: its note would reach no guide. With guide.person
 // unset every note is the guide's; a central instance judges its own names.
 func (a *app) noteAddressee(who string) (string, error) {
 	person := a.cfg.Guide.Person
-	if person == "" || strings.HasPrefix(who, teamPrefix) {
+	if person == "" || strings.HasPrefix(who, teamPrefix) || strings.EqualFold(who, supervisorCommand) {
 		return who, nil
 	}
 	email := personEmail(a.cfg.Serve, who)
-	if strings.EqualFold(who, person) || board.ContainsFold(a.cfg.Guide.PersonNames, who) || email != "" && strings.EqualFold(email, personEmail(a.cfg.Serve, person)) {
+	if strings.EqualFold(who, person) || strings.EqualFold(who, guideName) || board.ContainsFold(a.cfg.Guide.PersonNames, who) || email != "" && strings.EqualFold(email, personEmail(a.cfg.Serve, person)) {
 		return person, nil
 	}
 	if email != "" || a.centralNotesOn() || board.ContainsFold(a.cfg.Board.People, who) {

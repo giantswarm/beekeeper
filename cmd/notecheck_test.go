@@ -122,13 +122,15 @@ func TestNoteAddresseeResolvesThePersonOrRefuses(t *testing.T) {
 	a.cfg.Serve.People = map[string]string{notePerson: patEmail, samName: samEmail}
 	a.cfg.Board.People = []string{boardPerson}
 	for who, want := range map[string]string{
-		"PAT":       notePerson,
-		"patricia":  notePerson,
-		patEmail:    notePerson,
-		samName:     samName,
-		samEmail:    samEmail,
-		boardPerson: boardPerson,
-		"team:bees": "team:bees",
+		"PAT":        notePerson,
+		"patricia":   notePerson,
+		patEmail:     notePerson,
+		samName:      samName,
+		samEmail:     samEmail,
+		boardPerson:  boardPerson,
+		"team:bees":  "team:bees",
+		"guide":      notePerson,
+		"Supervisor": "Supervisor",
 	} {
 		if got, err := a.noteAddressee(who); err != nil || got != want {
 			t.Errorf("noteAddressee(%q) = %q, %v, want %q", who, got, err, want)
