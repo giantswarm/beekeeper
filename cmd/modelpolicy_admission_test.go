@@ -297,7 +297,7 @@ func TestModelPolicyStartAgentDoesNotApplyWorkerRuleToOtherKinds(t *testing.T) {
 	a, out := stubApp(t)
 	a.cfg.Agents.Models = []config.AgentModelRule{{Kind: workerRole, Model: "worker-only-sonnet"}}
 	brief := filepath.Join(t.TempDir(), "brief.md")
-	if err := os.WriteFile(brief, []byte("Review the change."), 0o600); err != nil {
+	if err := os.WriteFile(brief, []byte("Review https://github.com/example/repo/pull/1.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, extra := range [][]string{
@@ -307,7 +307,7 @@ func TestModelPolicyStartAgentDoesNotApplyWorkerRuleToOtherKinds(t *testing.T) {
 		out.Reset()
 		c := a.agentStartCmd()
 		c.SilenceErrors, c.SilenceUsage = true, true
-		args := append([]string{"rev", brief, usageDirFlag, filepath.Dir(brief), testHarnessFlag, claudeComm, testDryRunFlag, usageForceFlag}, extra...)
+		args := testCheckoutArgs(t, filepath.Dir(brief), append([]string{"rev", brief, usageDirFlag, filepath.Dir(brief), testHarnessFlag, claudeComm, testDryRunFlag, usageForceFlag}, extra...))
 		c.SetArgs(args)
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)

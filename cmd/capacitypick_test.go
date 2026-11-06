@@ -292,8 +292,11 @@ func TestForcedReviewOfSelfHostedWorkNeverLandsOnASelfHostedProvider(t *testing.
 	r := newPickRig(t, `    - {harness: omp, model: local/qwen-x, provider: local}
 `+subscriptionChoices)
 	r.claude[1], r.codex[1] = 60, 60
+	if _, err := runGit(context.Background(), r.dir, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
 	brief := filepath.Join(r.dir, "brief.md")
-	if err := os.WriteFile(brief, []byte("Review the work.\n"), 0o600); err != nil {
+	if err := os.WriteFile(brief, []byte("Review the work.\nhttps://github.com/example/repo/pull/1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a, out := r.app(false)
@@ -340,14 +343,17 @@ func TestAgentsStartWithoutAHarnessTakesThePick(t *testing.T) {
     - {harness: claude, model: opus-x}
 `)
 	r.codex[1] = 51
+	if _, err := runGit(context.Background(), r.dir, "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
 	brief := filepath.Join(r.dir, "brief.md")
-	if err := os.WriteFile(brief, []byte("Work the task.\n"), 0o600); err != nil {
+	if err := os.WriteFile(brief, []byte("Work the task.\nhttps://github.com/example/repo/pull/1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a, out := r.app(false)
 	c := a.agentStartCmd()
 	c.SilenceErrors, c.SilenceUsage = true, true
-	c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, testDryRunFlag})
+	c.SetArgs([]string{"Picked", brief, usageDirFlag, r.dir, testBranchFlag, "test-task", testDryRunFlag})
 	if err := c.Execute(); err != nil {
 		t.Fatalf("agents start --dry-run: %v", err)
 	}

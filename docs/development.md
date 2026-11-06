@@ -985,6 +985,46 @@ wakes and handovers; no user settings file is changed.
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
 
+### Owned issue monitor
+
+`beekeeper issues poll` reconciles all open issues in repositories declared for
+`team-bumblebee` and `team-planeteers` by `giantswarm/github/repositories`.
+`--ownership owner/repo/directory` selects a different ownership record, never a
+repository allowlist. Run the command periodically from a trusted service with
+GitHub issue-write and team-membership-read permissions. Configure the two team
+Slack incoming webhooks in `BEEKEEPER_BUMBLEBEE_WEBHOOK` and
+`BEEKEEPER_PLANETEERS_WEBHOOK`; `--channels` maps team names to different environment
+variable names. Webhooks and Slack responses are never printed. Delivery goes only
+to `https://hooks.slack.com/`: the environment variable selects the webhook's
+`/services/...` path, and any other destination is refused.
+
+The monitor requests metadata only, never issue bodies or comments. Every poll
+checks active membership of the employees team live, including when an author
+was previously an employee. API failures classify human authors as external.
+Bots have a separate class. External issues receive `beekeeper-triage` and a plain
+Slack message containing only repository, title, author and canonical link.
+External titles are never persisted, included in reports or sent to workers.
+A person must re-file worthwhile external work in their own words.
+
+`issues queue` shows employee issue pointers with source `issue`. The supervisor
+consumes these before its project board, checks open state and membership again,
+and removes a pointer after starting its worker. `issues contributors` lists
+external logins per repository. `issues cleanup` groups the first scan's pointers
+by stale (180 days), duplicate label, overtaken label, or still-valid candidate.
+These are human review candidates: an overtaken label requires confirmation of
+the merged PR; the monitor does not infer semantic duplication or validity from
+untrusted prose. The cleanup snapshot is retained after subsequent scans.
+Unassigned bot issues are reported for cleanup; employee issues are queued;
+assigned employee/bot issues are owned; external issues always require triage.
+
+State and notification receipts live under `stateDir/issue-monitor`, serialized
+with a file lock and replaced atomically. Keep this directory across restarts.
+Successful notifications are checkpointed individually, so ordinary repeat polls
+and restarts do not repost them. An incoming webhook has no transactional
+idempotency receipt: a process crash after Slack accepts a message but before
+its local checkpoint can produce a duplicate. A failed poll should be retried;
+it does not claim that unreconciled repositories are covered.
+
 ### Session worktree placement
 
 Configure clone discovery and session placement with:

@@ -44,7 +44,7 @@ func TestModelPolicyPickAndStart(t *testing.T) {
 		}
 		c := a.agentStartCmd()
 		c.SilenceErrors, c.SilenceUsage = true, true
-		args := []string{"scan", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag}
+		args := testCheckoutArgs(t, r.dir, []string{"scan", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag})
 		want := pickGPT
 		if explicit {
 			args = append(args, "--model", pickOpus)
@@ -133,14 +133,14 @@ func TestModelPolicyConstraints(t *testing.T) {
 	}
 	c := a.agentStartCmd()
 	c.SilenceErrors, c.SilenceUsage = true, true
-	c.SetArgs([]string{"audit", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag, testHarnessFlag, claudeComm, modelFlag, pickOpus, taskKindArg, testTaskAudit})
+	c.SetArgs(testCheckoutArgs(t, r.dir, []string{"audit", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag, testHarnessFlag, claudeComm, modelFlag, pickOpus, taskKindArg, testTaskAudit}))
 	err = c.Execute()
 	if Code(err) != ExitRefused || !strings.Contains(err.Error(), modelPolicyPrefix) {
 		t.Fatalf("explicit forced target bypassed policy: %v", err)
 	}
 	c = a.agentStartCmd()
 	c.SilenceErrors, c.SilenceUsage = true, true
-	c.SetArgs([]string{"audit", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag, testHarnessFlag, claudeComm, modelFlag, "unclassified-model", taskKindArg, testTaskAudit})
+	c.SetArgs(testCheckoutArgs(t, r.dir, []string{"audit", brief, usageDirFlag, r.dir, testDryRunFlag, usageForceFlag, testHarnessFlag, claudeComm, modelFlag, "unclassified-model", taskKindArg, testTaskAudit}))
 	if err := c.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), "no configured") {
 		t.Fatalf("unclassified model bypassed policy: %v", err)
 	}
