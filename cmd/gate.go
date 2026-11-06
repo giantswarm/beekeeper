@@ -1583,6 +1583,7 @@ func (g *gateRun) refuseWith(code int, format string, args ...any) error {
 		g.drop(st)
 		if code == ExitGateRefused {
 			g.refusePair(st, why)
+			merge.Fail(st, state.Failed{Repo: g.repo, PR: g.pr, Lane: g.lane.Name, By: g.me, At: g.now, Exit: code, Reason: why})
 		}
 		return []state.Event{event(g.me, "merge.refused", "%s: %s", g.key(), why)}, nil
 	})
