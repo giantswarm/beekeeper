@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,39 @@ func TestWithReviewModelInline(t *testing.T) {
 	if err := json.Unmarshal([]byte(got[3]), &s); err != nil || s.Env[securityReviewEnv] != "claude-sonnet-5-5" {
 		t.Errorf("settings %q (%v), want the review model in env", got[3], err)
 	}
+}
+
+func TestWithReviewModelConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.json")
+	if err := os.WriteFile(path, []byte(`{"env":{"KEEP":"1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const workers = 32
+	const model = "opus"
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			<-start
+			for range 10 {
+				flags, err := withReviewModel(model, []string{settingsFlag, path})
+				if err != nil {
+					t.Errorf("concurrent review settings: %v", err)
+					return
+				}
+				raw, err := os.ReadFile(flags[1])
+				var settings struct {
+					Env map[string]string `json:"env"`
+				}
+				if err != nil || json.Unmarshal(raw, &settings) != nil || settings.Env[securityReviewEnv] != model || settings.Env["KEEP"] != "1" {
+					t.Errorf("concurrent settings must stay complete: %q (%v)", raw, err)
+					return
+				}
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
 }
 
 // A profile's settings file is copied per model with the review model added:

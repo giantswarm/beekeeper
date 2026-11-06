@@ -17,6 +17,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/omp"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/secret"
@@ -54,6 +55,9 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 	if err != nil {
 		return err
 	}
+	if err := a.ompServingLease(); err != nil {
+		return err
+	}
 	creds, err := a.ompCredentials(model)
 	if err != nil {
 		return err
@@ -69,6 +73,13 @@ func (a *app) startOmpAgent(ctx context.Context, sp agentStart) error {
 		if keys, err = ops.Handover(ctx, creds); err != nil {
 			return vaultExit(fmt.Errorf("%s: its provider's key: %w", sp.name, err))
 		}
+	}
+	var env strings.Builder
+	if keys != nil {
+		_, _ = keys.WriteTo(&env)
+	}
+	if err := omp.CheckLiveModel(ctx, a.cfg.Omp.ModelsFile, model, env.String(), a.cfg.Omp.ServedBy != ""); err != nil {
+		return err
 	}
 	shell, err := omp.WriteToolShell(a.cfg.StateDir)
 	if err != nil {
@@ -568,4 +579,24 @@ func whenOpen(ctx context.Context, inbox string, wait time.Duration, write func(
 		case <-time.After(awayPoll):
 		}
 	}
+}
+
+// ompServingLease refuses before recording or launching an agent. The supervisor
+// reports this error in its watch and retries on a later pass.
+func (a *app) ompServingLease() error {
+	res := a.cfg.Omp.ServedBy
+	if res == "" {
+		return nil
+	}
+	if res == "." || res == ".." || filepath.Base(res) != res {
+		return usageErr("omp.servedBy must name a lease resource")
+	}
+	h, err := lease.Dir(a.cfg.LeaseDir).Get(res)
+	if err != nil {
+		return err
+	}
+	if h != nil {
+		return refused("omp start waits on lease %q held by %s for %q; retry after lease release", res, h.Holder, h.Purpose)
+	}
+	return nil
 }

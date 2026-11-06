@@ -2,6 +2,8 @@ package lease
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,16 +15,22 @@ import (
 const (
 	lab      = "kind-1"
 	agentOne = "Agent one"
+	// since is the holders' claim time, matching now.
+	since = "2026-09-24T20:00:00Z"
+	// damagedOne is a resource whose holder record a test damages.
+	damagedOne = "damaged"
 )
 
 var (
-	now   = time.Date(2026, 9, 24, 20, 0, 0, 0, time.UTC)
-	ttl   = 30 * time.Minute
-	loop  = state.Party{Name: "supervisor loop"}
-	one   = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
-	two   = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
-	alex  = state.Party{Name: "alex"}
-	grant = func(to state.Party, at time.Time) state.Grant {
+	now  = time.Date(2026, 9, 24, 20, 0, 0, 0, time.UTC)
+	ttl  = 30 * time.Minute
+	loop = state.Party{Name: "supervisor loop"}
+	// damagedRes are the resources whose holder records a test damages.
+	damagedRes = []string{damagedOne, "also-damaged"}
+	one        = state.Party{Session: "s1", HostSession: "local_1", Name: agentOne}
+	two        = state.Party{Session: "s2", HostSession: "local_2", Name: "Agent two"}
+	alex       = state.Party{Name: "alex"}
+	grant      = func(to state.Party, at time.Time) state.Grant {
 		return state.Grant{Resource: lab, To: to, By: loop, At: at}
 	}
 )
@@ -93,7 +101,7 @@ func TestGrantExpiry(t *testing.T) {
 
 func TestDirClaimRelease(t *testing.T) {
 	d := Dir(t.TempDir())
-	h := Holder{Env: "browser", Session: "s1", Name: agentOne, Purpose: "proof", Since: "2026-09-24T20:00:00Z"}
+	h := Holder{Env: "browser", Session: "s1", Name: agentOne, Purpose: "proof", Since: since}
 	if cur, err := d.Claim("browser", h); err != nil || cur != nil {
 		t.Fatalf("Claim = %v, %v", cur, err)
 	}
@@ -152,7 +160,7 @@ const browserRes = "browser"
 
 func TestDirHand(t *testing.T) {
 	d := Dir(t.TempDir())
-	h := Holder{Env: browserRes, Session: "s1", Name: agentOne, Purpose: "a hand-over", Since: "2026-09-24T20:00:00Z"}
+	h := Holder{Env: browserRes, Session: "s1", Name: agentOne, Purpose: "a hand-over", Since: since}
 	if cur, err := d.Claim(browserRes, h); err != nil || cur != nil {
 		t.Fatalf("Claim = %v, %v", cur, err)
 	}
@@ -189,5 +197,69 @@ func TestToHead(t *testing.T) {
 	}
 	if !st.Grants[1].At.Equal(now) {
 		t.Errorf("the moved grant's time %v, want %v", st.Grants[1].At, now)
+	}
+}
+
+func TestDirListReportsDamagedHolder(t *testing.T) {
+	for _, kind := range []string{"truncated JSON", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			d := Dir(t.TempDir())
+			healthy := Holder{Env: "healthy", Session: "synthetic-session", Purpose: "test", Since: since}
+			if _, err := d.Claim("healthy", healthy); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(d.path("pending"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Multiple failures must all be reported, even before readable entries.
+			for _, res := range damagedRes {
+				if err := os.Mkdir(d.path(res), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				record := filepath.Join(d.path(res), "holder.json")
+				var err error
+				if kind == "directory" {
+					err = os.Mkdir(record, 0o700)
+				} else {
+					err = os.WriteFile(record, []byte(`{"env":`), 0o600)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			holders, err := d.List()
+			if err != nil {
+				t.Fatalf("List failed on damaged holder records: %v", err)
+			}
+			var got []string
+			for _, h := range holders {
+				got = append(got, h.Env)
+				if !slices.Contains(damagedRes, h.Env) {
+					continue
+				}
+				if h.Damaged == "" || h.Holder != "?" || !strings.Contains(h.Purpose, "release "+h.Env+" --force") {
+					t.Errorf("damaged lease %s listed as %+v", h.Env, h)
+				}
+			}
+			// The damaged leases are held, named, next to the readable ones.
+			if want := []string{"also-damaged", damagedOne, "pending", "healthy"}; !slices.Equal(got, want) {
+				t.Errorf("List = %q, want %q", got, want)
+			}
+			// Another resource is claimed; a damaged one stays held.
+			if cur, err := d.Claim("other", Holder{Env: "other", Since: since}); err != nil || cur != nil {
+				t.Errorf("claim of another resource: %+v, %v", cur, err)
+			}
+			if cur, err := d.Claim(damagedOne, Holder{Env: damagedOne, Since: since}); err != nil || cur == nil || cur.Damaged == "" {
+				t.Errorf("claim of a damaged lease: %+v, %v; want its damaged holder", cur, err)
+			}
+			for _, res := range damagedRes {
+				if err := d.Release(res); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if h, err := d.Get(damagedOne); err != nil || h != nil {
+				t.Errorf("Get after release = %+v, %v; want free", h, err)
+			}
+		})
 	}
 }
