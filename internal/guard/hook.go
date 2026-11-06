@@ -13,6 +13,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
+	worktreefs "github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 // start is where a command starts: start of line (indented or not), after
@@ -255,6 +256,8 @@ type Hook struct {
 	// main working tree of a checkout that sits directly in one (folders.go);
 	// empty, the guard is off.
 	PersonFolders []string
+	WorktreePlace string
+
 	// LiveDirs lists the folders live sessions and processes work in,
 	// read only for a command that moves or removes an existing directory
 	// (liveworktrees.go); nil guards no worktree.
@@ -388,6 +391,14 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("secretFileRefusal")
 	if r := h.secretFileRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if ev.ToolName == bashTool && h.WorktreePlace != "" {
+		cmd, _ := ev.ToolInput[commandKey].(string)
+		for _, p := range walkTargetsMode(cmd, ev.CWD, 0, false, true) {
+			if worktreefs.NestedSessionPath(p) {
+				return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: nested .claude/worktrees copies the checkout. Create worktrees under " + h.WorktreePlace + "/<repo>/<branch>."})
+			}
+		}
 	}
 	h.beginCheck("labConfigRefusal")
 	if r := h.labConfigRefusal(ev); r != "" {

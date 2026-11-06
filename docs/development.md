@@ -966,6 +966,38 @@ wakes and handovers; no user settings file is changed.
 supervisor is a loop, so `supervisor.effort` is the default it passes to the
 sessions it starts; a matching rule's effort wins over it. Both are optional.
 
+### Session worktree placement
+
+Configure clone discovery and session placement with:
+
+```yaml
+projects:
+  dir: ~/projects
+  worktrees: [~/projects/worktrees]
+```
+
+`projects.worktrees` supplies ordered external roots; session hooks use the first root.
+Run `beekeeper install` to register Claude Code's `WorktreeCreate` and
+`WorktreeRemove` hooks. Creation uses
+`<projects.worktrees>/<repo>/worktree-<session-name>`, starting at the
+session's HEAD. Existing branches or paths cause an error rather than reuse.
+The worktree hook owns creation even outside the normal tool-hook scope,
+because Claude's creation hook replaces its default worktree implementation.
+The Bash guard rejects nested `.claude/worktrees` targets, including targets
+reached through symlinks, and names the configured external root.
+
+`beekeeper free --only worktrees` reports linked worktrees nested in clones
+under `projects.dir`. Add `--apply` to remove clean trees integrated into the
+default branch and move other trees into the external root. Git's merge
+simulation recognizes squash merges; conflicts or uncertain results retain
+the tree. The default branch is origin's default ref, falling back to local
+main or master. Refresh remote refs before cleanup when they are stale.
+Branches are always retained, including squash-merged branches. Locked trees
+and destination collisions are left for manual resolution. Migration refuses
+live worktrees and stops if process or roster information cannot be read.
+The removal hook similarly retains dirty or unmerged work and never forces
+removal.
+
 ### Envtest assets for local runs
 
 `beekeeper run --local -- go test ./path/to/package` automatically provisions
