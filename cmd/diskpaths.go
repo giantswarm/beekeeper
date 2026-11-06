@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/giantswarm/beekeeper/internal/proc"
@@ -27,92 +28,114 @@ type diskPath struct {
 
 // Only metadata is read. Symlinks are never followed. Depth, entries and
 // deadline bound work; partial totals are lower bounds and never yield growth.
-func scanDiskPaths(ctx context.Context, roots []string, depth, limit int) []diskPath {
-	var out []diskPath
-	remaining := limit
-	var size func(string, int) (int64, bool)
-	size = func(path string, level int) (int64, bool) {
-		if ctx.Err() != nil || remaining <= 0 {
-			return 0, true
-		}
-		remaining--
-		f, err := os.OpenInRoot(path, ".")
-		if err != nil {
-			return 0, true
-		}
-		defer func() { _ = f.Close() }()
-		var total int64
-		partial := false
-		for {
-			if ctx.Err() != nil || remaining <= 0 {
-				return total, true
-			}
-			entries, err := f.ReadDir(128)
-			for _, e := range entries {
-				if ctx.Err() != nil || remaining <= 0 {
-					return total, true
-				}
-				remaining--
-				if e.Type()&os.ModeSymlink != 0 {
-					continue
-				}
-				if e.IsDir() {
-					if level >= depth {
-						partial = true
-						continue
-					}
-					n, p := size(filepath.Join(path, e.Name()), level+1)
-					total += n
-					partial = partial || p
-				} else if e.Type().IsRegular() {
-					info, err := e.Info()
-					if err != nil {
-						partial = true
-						continue
-					}
-					total += info.Size()
-				}
-			}
-			if err == io.EOF {
-				return total, partial
-			}
-			if err != nil {
-				return total, true
-			}
-		}
+// Each root has its own entries and is read at the same time as the others,
+// and each directory of a root gets a fair share of what is left: a large
+// state directory must not leave the user cache, or the rest of itself,
+// unread. A directory in skip is measured through a root of its own.
+func scanDiskPaths(ctx context.Context, roots []string, depth, limit int, skip ...string) []diskPath {
+	found := make([][]diskPath, len(roots))
+	var wg sync.WaitGroup
+	for i, root := range roots {
+		wg.Go(func() { found[i] = scanDiskRoot(ctx, root, depth, limit, skip) })
 	}
-	for _, root := range roots {
+	wg.Wait()
+	return slices.Concat(found...)
+}
+
+func scanDiskRoot(ctx context.Context, root string, depth, limit int, skip []string) []diskPath {
+	f, err := os.OpenInRoot(root, ".")
+	if err != nil {
+		return nil
+	}
+	entries, _ := f.ReadDir(-1)
+	_ = f.Close()
+	remaining := limit - len(entries)
+	entries = slices.DeleteFunc(entries, func(e os.DirEntry) bool {
+		return !e.IsDir() || e.Type()&os.ModeSymlink != 0 || slices.Contains(skip, filepath.Join(root, e.Name()))
+	})
+	var out []diskPath
+	for i, e := range entries {
 		if ctx.Err() != nil || remaining <= 0 {
 			break
 		}
-		f, err := os.OpenInRoot(root, ".")
-		if err != nil {
-			continue
-		}
-		for ctx.Err() == nil && remaining > 0 {
-			entries, err := f.ReadDir(128)
-			for _, e := range entries {
-				if ctx.Err() != nil || remaining <= 0 {
-					break
-				}
-				remaining--
-				if !e.IsDir() || e.Type()&os.ModeSymlink != 0 {
-					continue
-				}
-				path := filepath.Join(root, e.Name())
-				n, p := size(path, 1)
-				out = append(out, diskPath{Path: path, Bytes: n, Partial: p})
-			}
-			if err != nil {
-				break
-			}
-		}
-		_ = f.Close()
+		share := remaining / (len(entries) - i)
+		left := max(1, share)
+		path := filepath.Join(root, e.Name())
+		n, p := diskPathSize(ctx, path, 1, depth, &left)
+		remaining -= max(1, share) - left
+		out = append(out, diskPath{Path: path, Bytes: n, Partial: p})
 	}
 	return out
 }
 
-func readDiskPaths(ctx context.Context) []diskPath {
+// diskPathSize adds up the regular files under path, spending remaining on
+// every entry it reads.
+func diskPathSize(ctx context.Context, path string, level, depth int, remaining *int) (int64, bool) {
+	if ctx.Err() != nil || *remaining <= 0 {
+		return 0, true
+	}
+	*remaining--
+	f, err := os.OpenInRoot(path, ".")
+	if err != nil {
+		return 0, true
+	}
+	defer func() { _ = f.Close() }()
+	var total int64
+	partial := false
+	for {
+		if ctx.Err() != nil || *remaining <= 0 {
+			return total, true
+		}
+		entries, err := f.ReadDir(128)
+		for _, e := range entries {
+			if ctx.Err() != nil || *remaining <= 0 {
+				return total, true
+			}
+			*remaining--
+			if e.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			if e.IsDir() {
+				if level >= depth {
+					partial = true
+					continue
+				}
+				n, p := diskPathSize(ctx, filepath.Join(path, e.Name()), level+1, depth, remaining)
+				total += n
+				partial = partial || p
+			} else if e.Type().IsRegular() {
+				info, err := e.Info()
+				if err != nil {
+					partial = true
+					continue
+				}
+				total += info.Size()
+			}
+		}
+		if err == io.EOF {
+			return total, partial
+		}
+		if err != nil {
+			return total, true
+		}
+	}
+}
+
+// diskPathRoots are the places read beyond the home's state and cache:
+// beekeeper's state by its subdirectories, the worktree places, and the
+// harness worktrees of the checkouts.
+func (a *app) diskPathRoots() []string {
+	roots := append([]string{a.cfg.StateDir}, a.cfg.Projects.Worktrees...)
+	for _, checkout := range append(slices.Clone(a.cfg.Disk.Checkouts), filepath.Join(a.cfg.Projects.Dir, "*")) {
+		if nested, err := filepath.Glob(filepath.Join(checkout, ".claude", "worktrees")); err == nil {
+			roots = append(roots, nested...)
+		}
+	}
+	slices.Sort(roots)
+	return slices.Compact(slices.DeleteFunc(roots, func(p string) bool { return p == "" }))
+}
+
+func readDiskPaths(ctx context.Context, extra []string) []diskPath {
 	ctx, cancel := context.WithTimeout(ctx, diskPathBudget)
 	defer cancel()
 	home, _ := os.UserHomeDir()
@@ -130,7 +153,7 @@ func readDiskPaths(ctx context.Context) []diskPath {
 	if len(roots) == 2 {
 		roots = append(roots, "/var/lib/docker")
 	}
-	return scanDiskPaths(ctx, roots, diskPathDepth, diskPathEntries)
+	return scanDiskPaths(ctx, append(roots, extra...), diskPathDepth, diskPathEntries, extra...)
 }
 
 func diskPathGrowth(cur, prev []diskPath) {

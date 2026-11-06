@@ -282,7 +282,7 @@ func (l *supervisorLoop) watchConditions(ctx context.Context) error {
 			if found, _ := l.a.store.ReadFile(diskHoldingFile, &holding); found && holding.Text != "" && l.a.timeNow().Sub(holding.At) < time.Hour {
 				text += ". Holding the space: " + holding.Text
 			}
-			text += ". Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
+			text += ". `beekeeper disk usage` lists what holds the space by owner; the writers above are process counters, not what stayed on disk. Own the reclaim gap to the beekeeper disk step, the writer's free-space need to its repository."
 			fileAct := superloop.Action{Kind: superloop.KindFile, Key: diskKey}
 			line := fmt.Sprintf("%s reported at %s%s%s", loopParty.Name, l.a.timeNow().UTC().Format(time.RFC3339), fileReportSeparator, text)
 			if err := l.record(fileAct, line); err != nil {

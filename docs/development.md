@@ -710,6 +710,14 @@ each entry of its aside directories (`disk.holders.asideDirs`, default
 it was last written, its owner and whether it is eligible for removal.
 `--json` has every holder; `--min-mib` (100) hides the small ones.
 
+`beekeeper disk usage` is the wider view of what holds the disk: beekeeper's
+state by subdirectory, the user cache by program and every worktree, each with
+its owner. Process write counters name who wrote, not whose data stayed, so a
+reclaim starts from this view and from the `fastest-growing path` the watch adds
+to `DISK FILLING`. The watch reads the same places every two minutes; each root
+has its own entry budget and each directory a fair share of it, so a large state
+directory cannot leave the cache unmeasured.
+
 The owner is read from the name: a task number of three digits or more
 (`ao1011`, `go-build-153`) names the roster agent or session record whose
 task or issue is that issue or pull request number, open tasks first; a name without one is its

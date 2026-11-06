@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/giantswarm/beekeeper/internal/config"
 )
 
 const diskGrowthTestPath = "/cache/b"
@@ -42,6 +48,106 @@ func TestScanDiskPaths(t *testing.T) {
 	limited := scanDiskPaths(context.Background(), []string{root}, 6, 2)
 	if len(limited) > 1 || len(limited) == 1 && !limited[0].Partial {
 		t.Fatalf("entry bound: %+v", limited)
+	}
+}
+
+// A large directory spends its own share: its neighbours and the next root
+// are still measured whole.
+func TestScanDiskPathsSharesItsBudget(t *testing.T) {
+	big, small := t.TempDir(), t.TempDir()
+	for i := range 200 {
+		path := filepath.Join(big, "a-large", "f"+strconv.Itoa(i))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{filepath.Join(big, "b-small", "file"), filepath.Join(small, "cache", "file")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("12"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]diskPath{}
+	for _, p := range scanDiskPaths(context.Background(), []string{big, small}, 6, 40) {
+		got[filepath.Base(p.Path)] = p
+	}
+	if !got["a-large"].Partial {
+		t.Fatalf("large directory: %+v", got)
+	}
+	for _, name := range []string{"b-small", "cache"} {
+		if p, ok := got[name]; !ok || p.Partial || p.Bytes != 2 {
+			t.Fatalf("%s starved: %+v", name, got)
+		}
+	}
+}
+
+func TestScanDiskPathsSkipsPlacesWithTheirOwnRoot(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, "beekeeper")
+	if err := os.MkdirAll(filepath.Join(state, "workspaces"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "workspaces", "file"), []byte("1234"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := scanDiskPaths(context.Background(), []string{home, state}, 6, 100, state)
+	if len(got) != 1 || got[0].Path != filepath.Join(state, "workspaces") || got[0].Bytes != 4 {
+		t.Fatalf("scan: %+v", got)
+	}
+}
+
+func TestDiskPathRootsIncludeHarnessWorktrees(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "projects", "repo", ".claude", "worktrees")
+	if err := os.MkdirAll(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: &config.Config{StateDir: filepath.Join(dir, "state"), Projects: config.Projects{Dir: filepath.Join(dir, "projects"), Worktrees: []string{filepath.Join(dir, "projects", "worktrees")}}}}
+	got := a.diskPathRoots()
+	for _, want := range []string{a.cfg.StateDir, a.cfg.Projects.Worktrees[0], nested} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("roots %v lack %s", got, want)
+		}
+	}
+}
+
+func TestDiskUsageNamesOwners(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("SCCACHE_DIR", filepath.Join(dir, "cache", "sccache"))
+	nested := filepath.Join(dir, "projects", "repo", ".claude", "worktrees", "tree")
+	for path, size := range map[string]int{
+		filepath.Join(dir, "state", "workspaces", "file"):     8,
+		filepath.Join(dir, "cache", "othertool", "file"):      16,
+		filepath.Join(dir, "cache", "sccache", "file"):        4,
+		filepath.Join(nested, "file"):                         32,
+		filepath.Join(dir, "projects", "worktrees", "a", "f"): 2,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, make([]byte, size), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &app{cfg: &config.Config{StateDir: filepath.Join(dir, "state"), Projects: config.Projects{Dir: filepath.Join(dir, "projects"), Worktrees: []string{filepath.Join(dir, "projects", "worktrees")}}}}
+	got := map[string]string{}
+	var sizes []int64
+	for _, r := range a.diskUsage(context.Background(), time.Minute) {
+		got[filepath.Base(r.Path)] = r.Owner
+		sizes = append(sizes, r.Bytes)
+	}
+	want := map[string]string{"workspaces": pluginName, "othertool": "othertool (" + diskOwnerNoPolicy + ")", "sccache": "cache sccache", "tree": "harness worktree", "a": "worktree"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("owners: %v, want %v", got, want)
+	}
+	if !slices.IsSortedFunc(sizes, func(x, y int64) int { return cmp.Compare(y, x) }) {
+		t.Fatalf("not largest first: %v", sizes)
 	}
 }
 

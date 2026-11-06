@@ -378,8 +378,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 			r.err = errors.Join(r.err, m.retire(ctx, finished, r.dryRun))
 		}
 	}()
+	live := diskprune.NewRefs(append(slices.Clone(m.live), m.refs...))
 	for _, d := range m.dirs {
-		if diskprune.InUse(d, append(slices.Clone(m.live), m.refs...)) {
+		if live.Holds(d) {
 			r.kept[worktrees.KeptLive]++
 			continue
 		}
@@ -449,7 +450,7 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				}
 			}
 			harness := strings.Contains(filepath.ToSlash(t.Dir), "/.claude/worktrees/")
-			v = worktrees.Automatic(t, pull, gone, harness, diskprune.InUse(t.Dir, append(slices.Clone(m.live), m.refs...)), knownPushed, m.now)
+			v = worktrees.Automatic(t, pull, gone, harness, live.Holds(t.Dir), knownPushed, m.now)
 		}
 		if m.automatic && (v.Action == worktrees.Remove || v.Action == worktrees.Clean) {
 			if m.recheck != nil {
@@ -464,7 +465,8 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 					continue
 				}
 				m.refs = refs
-				if diskprune.InUse(t.Dir, append(slices.Clone(m.live), refs...)) {
+				live = diskprune.NewRefs(append(slices.Clone(m.live), refs...))
+				if live.Holds(t.Dir) {
 					r.kept[worktrees.KeptLive]++
 					continue
 				}

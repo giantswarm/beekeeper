@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `beekeeper disk prune`, `disk holders` and the worktree trim resolve live process references once per scan instead of once per candidate, and each measured disk root and directory has its own read budget, so a large state directory cannot hide the user cache (https://github.com/giantswarm/beekeeper/issues/3244).
 - Transcript guard: a repository script's `[[ ]]` patterns and `sed`, `awk`, `grep` and `perl` regexes no longer read as a recursive read of `/`; a glob the shell does not expand is refused only when it can reach a transcript store ([#3288](https://github.com/giantswarm/beekeeper/issues/3288)).
 - Codex hook: `spawn_agent` and the wait, list, interrupt and close tools, bare or under the `collaboration` namespace, pass the shared guard like a Claude subagent start ([#3289](https://github.com/giantswarm/beekeeper/issues/3289)).
 - `beekeeper agents publish` scans only the worker's own commits: after `--sync-base`, commits already on the default branch no longer stop a publication with a finding the worker did not add ([https://github.com/giantswarm/beekeeper/issues/3272](https://github.com/giantswarm/beekeeper/issues/3272)).
@@ -19,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `beekeeper disk usage` lists what holds the disk by owner: beekeeper's state by subdirectory, the user cache by program and every worktree, harness worktrees included (https://github.com/giantswarm/beekeeper/issues/3244).
+- An opt-in fleet watch in `beekeeper serve` reads each installation through central muster into the feed (https://github.com/giantswarm/beekeeper/issues/159).
 - `beekeeper board add` adds an issue idempotently with Team, Status (default Backlog) and optional Kind; `beekeeper board show` prints its board fields using issue-scoped reads (https://github.com/giantswarm/beekeeper/issues/486).
 
 - SSH execution hosts inventory what each execution owns before creating it and retire it through one resumable lifecycle: a final report, stop, failed start or crash revokes the worker's GitHub authorization with durable retry, preserves unpublished commits, edits and untracked files as a verified recovery bundle, and moves the owned worktree, repository, scratch, caches, toolchain downloads, source bundle and credential directory aside without deleting them. Parked workers and open desk reviews keep theirs. Workers' temporary files and caches now live in their owned root, so each build starts from a cold cache; `agents.execution.retention` sets how long moved-aside resources are kept (https://github.com/giantswarm/beekeeper/issues/2284).
