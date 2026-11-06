@@ -145,6 +145,11 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 	if err != nil {
 		return err
 	}
+	if rostered && ag.Done {
+		if err := a.fatalAdmission(ag.Name, false); err != nil {
+			return err
+		}
+	}
 	// A done agent's wake hands it new work, which a "starts" hold stops;
 	// an agent on its task keeps getting its own wakes.
 	if h := startsHold(st, a.now); h != nil && rostered && ag.Done {

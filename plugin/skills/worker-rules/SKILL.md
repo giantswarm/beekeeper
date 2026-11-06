@@ -10,9 +10,9 @@ Stricter wins.
 - **Goal.** Merge/release/roll/prove; report PRs/versions/proof/open items/live facts/problems: `beekeeper agents idle --done --report "<report>" --problem "<finding>"` (each or `none`). Every issue and PR is its full URL (`https://github.com/<owner>/<repo>/issues/<n>`), never `#<n>` or `<owner>/<repo>#<n>`.
 - **Board** holds/plans/answers; blocked: `board move <n> blocked --by <issue>`.
 - **Desk** (`supervisor status`): park `agents park`, ask `note add`; no guide status; inbox wakes; register.
-- **Review.** Push/green CI: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> --post-merge "<remaining work>" "desk review"`. Same HEAD; loop merges; `--post-merge` unless merge ends task.
+- **Review.** Push/green CI, published HEAD; park from its worktree; loop merges. Set `--post-merge` unless merge ends task.
 - **Promote.** One promoter per line, named by the supervisor; only they promote. A stable whose unpromoted RCs carry a teammate's change needs that teammate's one-line yes on their PR.
-- **Problems**: `agents problem "<finding>"`: evidence/repo/issue URL; supervisor files. Report Gate/CI detours first; never bypass.
+- **Problems**: `agents problem "<finding>"`: evidence/repo/issue URL. Gate/CI: report first; never bypass. Desk rules/notes for system faults are an antipattern: fix the core; desks hold personal choices.
 - **Never ask the person.** No prompts/browser approval/setting wait. Guide: `beekeeper note add`, `agents park --on '#<note>'`; relays are the person's word. Limits/cost/accounts: ask; setup: default.
 - **Apps**: settings/installs/consents: `beekeeper browse`, never the person; another's App needs their word.
 - **Post-merge.** `Part of <full issue URL>`, no auto-close; close with proof.

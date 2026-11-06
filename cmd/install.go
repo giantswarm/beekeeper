@@ -86,6 +86,9 @@ the config and says the service is not available.`,
 			if err := install.Install(cmd.Context(), e); err != nil {
 				return err
 			}
+			if e.RecoveryOnly {
+				return nil
+			}
 			if t, err := proc.Read(); err == nil {
 				if _, err := a.restartReplaced(e.Out, e.Exe, t, e.DryRun); err != nil {
 					return err
@@ -101,6 +104,7 @@ the config and says the service is not available.`,
 		},
 	}
 	c.Flags().BoolVar(&e.DryRun, "dry-run", false, "print every step and take none")
+	c.Flags().BoolVar(&e.RecoveryOnly, "recovery-only", false, "install only the independent fatal sentinel and timer dispatcher; leave hooks, watch and loop alone")
 	c.Flags().StringVar(&binary, "binary", "", "the beekeeper binary the hooks and the service run (default: this one)")
 	return c
 }
@@ -166,6 +170,7 @@ func (a *app) installEnv(e *install.Env, binary string) error {
 	e.CodexHooks = codexHooksPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.CodexSkills = codexSkillsPath(e.Spec.Home, codexInstalled, a.cfg.Codex)
 	e.StateDir = a.cfg.StateDir
+	e.Spec.StateDir = e.StateDir
 	e.Spec.Exe = e.Exe
 	if m, err := plat.Machine.Mem(); err == nil {
 		e.Spec.RAMMiB, e.Spec.SwapMiB = m.TotalMiB, m.SwapTotalMiB
