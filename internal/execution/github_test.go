@@ -137,12 +137,14 @@ func TestWorkerGitHubWriteClassification(t *testing.T) {
 	}
 }
 
+const graphQLEndpoint = "graphql"
+
 func TestWorkerGitHubAPIDispatchIsReadOnly(t *testing.T) {
 	const endpoint = "repos/example/private/issues"
 	for _, args := range [][]string{
 		{endpoint},
 		{endpoint, "--paginate", "--jq", ".[].title"},
-		{"graphql", "-f", "query=query { viewer { login } }"},
+		{graphQLEndpoint, "-f", "query=query { viewer { login } }"},
 		{endpoint, "-q", ".[].title", "-i"},
 		{endpoint, "-iq.[].title"},
 		{"-X", workerGitHubGet, endpoint, "-f", "state=open"},
@@ -171,9 +173,9 @@ func TestWorkerGitHubAPIDispatchIsReadOnly(t *testing.T) {
 		{endpoint, "--raw-field=title=fixture"},
 		{endpoint, "--field", workerGitHubTitleField},
 		{endpoint, "-if", workerGitHubTitleField},
-		{"graphql", "-f", "query=mutation { addComment(input: {}) { clientMutationId } }"},
-		{"graphql", "-F", "query=@request.graphql"},
-		{"graphql", "-H", "X-HTTP-Method-Override: PUT", "-f", "query={ viewer { login } }"},
+		{graphQLEndpoint, "-f", "query=mutation { addComment(input: {}) { clientMutationId } }"},
+		{graphQLEndpoint, "-F", "query=@request.graphql"},
+		{graphQLEndpoint, "-H", "X-HTTP-Method-Override: PUT", "-f", "query={ viewer { login } }"},
 		{endpoint, "--input", "fixture.json"},
 		{endpoint, "--input=-"},
 		{endpoint, "--hostname", "example.invalid"},

@@ -31,7 +31,7 @@ func GraphQLRead(args []string) bool {
 		switch {
 		case a == "":
 			return false
-		case a == "-f" || a == "-F" || a == "--field" || a == "--raw-field":
+		case a == "-f" || a == "-F" || a == ghFlagField || a == ghFlagRawField:
 			i++
 			if i == len(args) || !field(args[i]) {
 				return false
@@ -40,7 +40,7 @@ func GraphQLRead(args []string) bool {
 			if _, value, _ := strings.Cut(a, "="); !field(value) {
 				return false
 			}
-		case a == "--jq" || a == "-q" || a == "--template" || a == "-t" || a == "--cache":
+		case a == ghFlagJQ || a == "-q" || a == ghFlagTemplate || a == "-t" || a == "--cache":
 			i++
 			if i == len(args) || args[i] == "" {
 				return false
