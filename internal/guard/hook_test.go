@@ -136,11 +136,12 @@ func TestAgentlabProofTakesNoSlot(t *testing.T) {
 			t.Errorf("%q: want pass-through, got %+v", cmd, d)
 		}
 	}
-	for _, cmd := range []string{"go test ./...", "agentlab backstage-test && go test ./..."} {
-		d := decide(t, hook(), "/", cmd, nil)
-		if d == nil || d.UpdatedInput["command"] != self+" run -- zsh -c "+ShellQuote(cmd) {
-			t.Errorf("%q: want wrapped, got %+v", cmd, d)
-		}
+	if d := decide(t, hook(), "/", "go test ./...", nil); d == nil || d.UpdatedInput["command"] != slot("go test ./...") {
+		t.Errorf("a build: want wrapped, got %+v", d)
+	}
+	const beside = "agentlab backstage-test && "
+	if d := decide(t, hook(), "/", beside+"go test ./...", nil); d == nil || d.UpdatedInput["command"] != beside+slot("go test ./...") {
+		t.Errorf("a build beside a proof: want it alone wrapped, got %+v", d)
 	}
 }
 

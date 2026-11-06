@@ -28,7 +28,7 @@ func TestMembersRefusal(t *testing.T) {
 		"the members list, paginated":     {"gh api --paginate 'orgs/giantswarm/members?per_page=100' | jq -r '.[].login'", true, personInOrg},
 		"a membership":                    {"gh api orgs/giantswarm/memberships/fixture-person", true, personFixturePerson},
 		"the org's teams":                 {"gh api orgs/giantswarm/teams", true, personInOrg},
-		"a team's members":                {"gh api orgs/giantswarm/teams/team-bumblebee/members --jq '.[].login'", true, personInOrg},
+		"a team's members":                {"gh api orgs/example/teams/platform/members --jq '.[].login'", true, "beekeeper person --team <slug> --org <org>"},
 		"a team membership":               {"gh api orgs/giantswarm/teams/team-bumblebee/memberships/fixture-person", true, personInOrg},
 		"a team by id":                    {"gh api teams/1234/members", true, personAnyOrg},
 		"a login's orgs":                  {"gh api users/fixture-person/orgs", true, "beekeeper person fixture-person --org <org>"},
