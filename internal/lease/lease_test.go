@@ -53,7 +53,7 @@ func TestCheckAdmitsOnlyQueueHead(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Position != 2 || refusal.Ahead != one.Name {
 		t.Fatalf("queue refusal lacks position or predecessor: %v", err)
 	}
-	if idx, err := Check(st, Gate{Resource: "browser", Caller: two, Now: now, TTL: ttl}); err != nil || idx != -1 {
+	if idx, err := Check(st, Gate{Resource: browserRes, Caller: two, Now: now, TTL: ttl}); err != nil || idx != -1 {
 		t.Fatalf("unrelated resource blocked: %d, %v", idx, err)
 	}
 	st.Grants = st.Grants[1:]
