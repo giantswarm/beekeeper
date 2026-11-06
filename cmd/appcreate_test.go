@@ -136,7 +136,7 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: slug, "name": g.manifest["name"], clientIDKey: fixtureClientID,
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": fixtureAppID, appSlugField: slug, remoteMCPNameKey: g.manifest["name"], clientIDKey: fixtureClientID,
 			"client_secret": fixtureSecret, "webhook_secret": fixtureWebhook, "pem": keyPEM, "html_url": "https://github.com/apps/" + slug,
 			"owner": map[string]any{loginKey: fixtureOrg, "id": 77}})
 	case r.Method == http.MethodGet && r.URL.Path == "/app":
@@ -422,7 +422,7 @@ func TestAppCreateRefusesBeforeAnyClick(t *testing.T) {
 		code int
 		want string
 	}{
-		"undeclared": {[]string{appCreate, "nobody"}, "", ExitRefused, "App nobody is not declared: " + declaringRepo + " declares no App at apps/nobody/manifest.json"},
+		"undeclared": {[]string{appCreate, nobodyNamed}, "", ExitRefused, "App nobody is not declared: " + declaringRepo + " declares no App at apps/nobody/manifest.json"},
 		renamedApp:   {[]string{appCreate, renamedApp}, "", ExitRefused, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
 		"known":      {[]string{appCreate, "taken"}, "", ExitRefused, "GitHub already knows an App named taken (taken, id 7, owned by someone): https://github.com/apps/taken; nothing written"},
 		"shaped":     {[]string{appCreate, "shaped"}, "", ExitRefused, `"repositories" is "all" or a list of names, not "some"`},

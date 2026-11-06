@@ -433,12 +433,13 @@ func (c *Client) searchPlans(ctx context.Context, refs []string, past map[string
 			if err != nil {
 				return nil, err
 			}
-			query := fmt.Sprintf("%s is:pr %q sort:updated-desc", strings.Join(repos, " "), fmt.Sprintf("%s/%s/issues/%d", owner, repo, n))
+			query := fmt.Sprintf("(%s) is:pr (%q OR %q) sort:updated-desc", strings.Join(repos, " OR "),
+				fmt.Sprintf("%s/%s/issues/%d", owner, repo, n), fmt.Sprintf("%s/%s#%d", owner, repo, n))
 			var gone string
 			if past[strings.ToLower(ref)] {
 				gone = fmt.Sprintf(" comments(last:%d){nodes{body url createdAt}} commits(last:%d){nodes{commit{oid}}}", goComments, goCommits)
 			}
-			fmt.Fprintf(&q, "p%d:search(query:%s,type:ISSUE,first:10){nodes{...on PullRequest{%s%s}}}", i, quote(query), planFields, gone)
+			fmt.Fprintf(&q, "p%d:search(query:%s,type:ISSUE_ADVANCED,first:10){nodes{...on PullRequest{%s%s}}}", i, quote(query), planFields, gone)
 		}
 		var r map[string]struct {
 			Nodes []planPR `json:"nodes"`

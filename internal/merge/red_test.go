@@ -157,8 +157,8 @@ func TestSecurityScan(t *testing.T) {
 }
 
 func TestAcceptRed(t *testing.T) {
-	got := AcceptRed([]string{Tool, "pr", mergeVerb, failedRepo, "7", "--rebase"}, []string{e2e, "ci/circleci: helm e2e"})
-	want := []string{Tool, "pr", mergeVerb, AcceptRedFlag, e2e, AcceptRedFlag, "ci/circleci: helm e2e", failedRepo, "7", "--rebase"}
+	got := AcceptRed([]string{Tool, "pr", mergeVerb, failedRepo, "7", rebaseFlag}, []string{e2e, "ci/circleci: helm e2e"})
+	want := []string{Tool, "pr", mergeVerb, AcceptRedFlag, e2e, AcceptRedFlag, "ci/circleci: helm e2e", failedRepo, "7", rebaseFlag}
 	if !slices.Equal(got, want) {
 		t.Errorf("AcceptRed = %q, want %q", got, want)
 	}

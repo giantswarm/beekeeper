@@ -21,7 +21,8 @@ type AppManifest struct {
 	// Callbacks are the hosts (with a port where the URL has one) of the
 	// manifest's callback_urls, lower-case, each once; none for an App
 	// without callback URLs, one used through the device flow.
-	Callbacks []string
+	Callbacks    []string
+	CallbackURLs []string
 	// Source is where it was read: <repo>@<commit>:<path>.
 	Source string
 }
@@ -53,7 +54,7 @@ func ParseAppManifest(raw []byte, src string) (AppManifest, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return AppManifest{}, fmt.Errorf("%s: %w", src, err)
 	}
-	a := AppManifest{Name: strings.TrimSpace(m.Name), Source: src}
+	a := AppManifest{Name: strings.TrimSpace(m.Name), Source: src, CallbackURLs: m.CallbackURLs}
 	for _, c := range m.CallbackURLs {
 		u, err := url.Parse(c)
 		if err != nil || u.Host == "" {
@@ -243,3 +244,17 @@ func readFile(ctx context.Context, run GH, repo, file, sha string) ([]byte, erro
 
 // source is where a file was read: <repo>@<commit>:<path>.
 func source(repo, sha, file string) string { return fmt.Sprintf("%s@%.12s:%s", repo, sha, file) }
+
+// ReadPinnedAppManifest reads the exact declaration named by a consent record.
+func ReadPinnedAppManifest(ctx context.Context, run GH, src string) (AppManifest, error) {
+	repo, ref, ok := strings.Cut(src, "@")
+	commit, file, hasPath := strings.Cut(ref, ":")
+	if !ok || !hasPath || repo == "" || commit == "" || file == "" {
+		return AppManifest{}, fmt.Errorf("invalid pinned declaration %q", src)
+	}
+	raw, err := readFile(ctx, run, repo, file, commit)
+	if err != nil {
+		return AppManifest{}, err
+	}
+	return ParseAppManifest(raw, src)
+}

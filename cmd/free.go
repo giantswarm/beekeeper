@@ -30,7 +30,7 @@ func (a *app) freeCmd() *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "free [--apply] [--only SECTIONS] [--summary]",
-		Short: "Report what holds the memory and free what is stale",
+		Short: "Report memory and nested worktrees; free stale resources",
 		Long: `free shows where the memory is and, with --apply, frees what can be
 freed without touching running work (the sections --only picks from):
 
@@ -51,6 +51,9 @@ freed without touching running work (the sections --only picks from):
                 pytest, jest's cache) untouched for --stale-hours
   orphans       jest workers and Claude CLIs whose parent died, older than
                 --orphan-minutes (TERM, then KILL)
+  worktrees     nested <checkout>/.claude/worktrees under projects.dir:
+                merged and clean trees are removed; unmerged or dirty trees
+                move to projects.worktrees/<repo>/<branch>. Branches stay.
   swap          the swap reset, when RAM can take the swapped pages back
 
 Each section of dirs ends with how many it frees and their size. The
@@ -77,6 +80,7 @@ for a front end that lets the user pick (a dry run):
 
   section <key> <MiB> <count> <label>    what --apply --only <key> frees
                                          (swap: what the reset pulls back)
+  worktree <path> <classification>    nested session worktree
   kind    <name> <MiB> <up since>        a kind cluster
   cli     <pid> <MiB> <idle min> <cwd> <session id> <title> <roster>
           <role> <idle h> <stale>        a Claude CLI idle for --stale-hours
@@ -131,6 +135,9 @@ scan with the same options reuses its rows. Two rows say so:
 			if err != nil {
 				return err
 			}
+			if err := a.freeNestedWorktrees(o, a.out); err != nil {
+				return err
+			}
 			(&free.Run{Options: o, Machine: m, Out: a.out}).Do()
 			return nil
 		},
@@ -158,13 +165,16 @@ func (a *app) freeSummary(o free.Options, timeout time.Duration) error {
 	free.Nice(10)
 	s := free.Shared{
 		Dir:     filepath.Join(a.cfg.StateDir, "free"),
-		Key:     fmt.Sprintf("%+v", o),
+		Key:     fmt.Sprintf("masked-v1:%+v", o),
 		MaxAge:  30 * time.Second,
 		Timeout: timeout,
 	}
 	return s.Print(a.out, func(w io.Writer) error {
 		m, err := a.freeMachine()
 		if err != nil {
+			return err
+		}
+		if err := a.freeNestedWorktrees(o, w); err != nil {
 			return err
 		}
 		(&free.Run{Options: o, Machine: m, Out: w}).Do()

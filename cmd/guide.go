@@ -624,8 +624,8 @@ settled (GUIDE PROBLEM, the full report to file in its owning repository), and t
 relay: GUIDE RELAY DUE at guide.relayAt, taken or
 expired, and a restart of its CLI. Silent otherwise. What it said is kept
 in the state, so a restarted feed says nothing again; only a standing
-GUIDE RELAY DUE is said once more, by each feed and after a change of
-guide.relayAt. Runs until killed; --once polls once.
+GUIDE RELAY DUE is said by each feed and repeats every five minutes until
+a relay opens, and after a change of guide.relayAt. Runs until killed; --once polls once.
 
 The feed never re-executes itself. Once self-update replaced its binary it
 says GUIDE WATCH STALE, once, with the version it runs, the one installed
@@ -721,10 +721,11 @@ func (a *app) guideFeed(ctx context.Context) ([]string, error) {
 		evs := append(append(ce, re...), de...)
 		return lines, evs, seen || fed || len(lines) > 0 || len(evs) > 0
 	}
-	if _, _, changed := fire(st); !changed {
+	// Preserve the read-only preview when the writer fence refuses the callback.
+	lines, _, changed := fire(st)
+	if !changed {
 		return nil, ctx.Err()
 	}
-	var lines []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var evs []state.Event
 		lines, evs, _ = fire(st)

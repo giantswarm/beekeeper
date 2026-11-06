@@ -15,7 +15,7 @@ func (h Hook) checkWorktreeOwner(args []string, dir string, known bool) string {
 	if h.WorktreeOwner == nil || h.mergeSession == "" || len(args) == 0 {
 		return ""
 	}
-	create := len(args) > 1 && args[0] == "worktree" && args[1] == worktreeAdd
+	create := len(args) > 1 && args[0] == litWorktree && args[1] == worktreeAdd
 	if !create && args[0] != worktreeCommit && args[0] != pushSubcmd {
 		return ""
 	}

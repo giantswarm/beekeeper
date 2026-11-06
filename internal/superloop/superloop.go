@@ -140,6 +140,7 @@ type Pull struct {
 	Author, Title, Branch string
 	Files                 []string
 	ChangedFiles          int
+	Additions, Deletions  int
 	// Team is the team the team files say owns its repository, "" when
 	// none does.
 	Team string
@@ -318,6 +319,8 @@ type Input struct {
 	// resolving the merge's conflicts or not, or rebases onto it
 	// (github.ApprovalCovers); nil: never, every new head is a new review.
 	BaseMerged func(p Pull, approved string) bool
+	// NitsChecked is an explicit supervisor attestation against the approved head.
+	NitsChecked func(p Pull, approved string) bool
 	// Open reports whether an issue or pull request (owner/repo#n) is
 	// open; one it cannot read counts as open. nil: none is, so a merged
 	// pull request's worker is retired as before.
@@ -496,11 +499,14 @@ type ledger struct {
 	overridden map[string]bool
 	// red are the checks the loop woke a worker for, by redKey.
 	red map[string]bool
+	// episode identifies a new tracking episode after a close.
+	episode map[string]string
 }
 
 func newLedger(taken []Taken, answers []Answer) ledger {
 	l := ledger{keys: map[string]Taken{}, rounds: map[string][]round{}, ended: map[string]bool{}, reviewer: map[string]string{},
-		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]question{}, overridden: map[string]bool{}, red: map[string]bool{}}
+		goAgent: map[string]string{}, goHead: map[string]string{}, acts: map[string][]time.Time{}, asked: map[string]question{}, overridden: map[string]bool{}, red: map[string]bool{}, episode: map[string]string{}}
+	taken, l.episode = episodeTaken(taken)
 	for _, t := range taken {
 		l.keys[t.Key] = t
 		if slices.Contains([]string{KindReview, KindGo, KindForward, KindRework, KindAnswer, KindEnd, KindLeave, KindOwner}, t.Kind) {
@@ -566,6 +572,78 @@ func newLedger(taken []Taken, answers []Answer) ledger {
 		}
 	}
 	return l
+}
+
+// episodeTag gives every action after a reopen a distinct durable key,
+// including another review of the same head and another end of the same ref.
+const episodeTag = " reopened "
+
+// episodeTaken retains only the latest tracking episode of each pull request.
+// Legacy keys belong to its original episode. The planner uses keys without
+// the suffix internally; emitted actions restore it before execution.
+func episodeTaken(taken []Taken) ([]Taken, map[string]string) {
+	episodes := map[string]string{}
+	for _, t := range taken {
+		if _, episode := splitEpisode(t.Key); episode != "" && t.Ref != "" {
+			episodes[t.Ref] = episode
+		}
+	}
+	var active []Taken
+	for _, t := range taken {
+		if t.Ref == "" {
+			active = append(active, t)
+			continue
+		}
+		key, episode := splitEpisode(t.Key)
+		if t.Ref != "" && episode != episodes[t.Ref] {
+			continue
+		}
+		t.Key = key
+		active = append(active, t)
+	}
+	return active, episodes
+}
+
+// splitEpisode recognizes only a trailing episode timestamp. Check names and
+// other key text may themselves contain episodeTag.
+func splitEpisode(key string) (string, string) {
+	if i := strings.LastIndex(key, episodeTag); i >= 0 {
+		episode := key[i+len(episodeTag):]
+		if _, err := time.Parse(time.RFC3339Nano, episode); err == nil {
+			return key[:i], episode
+		}
+	}
+	return key, ""
+}
+
+// BaseActionKey removes a reopened episode suffix for action comparisons.
+// Durable claim and completion records must still use the full key.
+func BaseActionKey(key string) string {
+	base, _ := splitEpisode(key)
+	return base
+}
+
+// reopen discards the closed episode only after GitHub reports OPEN.
+func (l ledger) reopen(ref string) {
+	l.episode[ref] = l.keys[endKey(ref)].At.UTC().Format(time.RFC3339Nano)
+	for key, t := range l.keys {
+		if t.Ref == ref {
+			delete(l.keys, key)
+		}
+	}
+	for key := range l.red {
+		if strings.HasPrefix(key, "red "+ref+"@") {
+			delete(l.red, key)
+		}
+	}
+	delete(l.rounds, ref)
+	delete(l.ended, ref)
+	delete(l.reviewer, ref)
+	delete(l.goAgent, ref)
+	delete(l.goHead, ref)
+	delete(l.acts, ref)
+	delete(l.asked, ref)
+	delete(l.overridden, ref)
 }
 
 func (l ledger) has(key string) bool { _, ok := l.keys[key]; return ok }
@@ -696,7 +774,10 @@ func Tracked(workers []Worker, taken []Taken, answers []Answer, desk Desk) []str
 		}
 		// An open question about its ownership keeps it read: the owning
 		// team's reviews still reach its worker meanwhile.
-		if !l.ended[ref] || l.workerDue(ref, workers) {
+		requestedAgain := slices.ContainsFunc(workers, func(w Worker) bool {
+			return w.ParkedOn == ref && w.ReviewRequested && w.ParkedAt.After(l.keys[endKey(ref)].At) && fresh[ref]
+		})
+		if !l.ended[ref] || requestedAgain || l.workerDue(ref, workers) {
 			out = append(out, ref)
 		}
 	}
@@ -762,7 +843,10 @@ func Plan(in Input) []Action {
 	rounds := max(in.Rounds, 1)
 	var out []Action
 	add := func(a Action) {
-		if !l.has(a.Key) && !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
+		if l.has(a.Key) {
+			return
+		}
+		if !slices.ContainsFunc(out, func(b Action) bool { return b.Key == a.Key }) {
 			out = append(out, a)
 		}
 	}
@@ -809,6 +893,15 @@ func Plan(in Input) []Action {
 	slices.Sort(refs)
 	for _, ref := range refs {
 		p := in.Pulls[ref]
+		if p.State == Open && l.ended[ref] {
+			l.reopen(ref)
+			delete(swept.lastAct, ref)
+			for key := range swept.sweeps {
+				if strings.HasPrefix(key, ref+"@") {
+					delete(swept.sweeps, key)
+				}
+			}
+		}
 		if p.State == Merged && l.workerDue(ref, in.Workers) {
 			// The end action durably marks when the merge was observed. A
 			// quiet worker retains its inbox while waiting for its release.
@@ -1073,6 +1166,13 @@ func Plan(in Input) []Action {
 		}
 		return 0
 	})
+	// Keep canonical keys throughout planning: pending forwards are compared
+	// with event findings before actions receive their durable episode suffix.
+	for i := range out {
+		if episode := l.episode[out[i].Ref]; episode != "" {
+			out[i].Key += episodeTag + episode
+		}
+	}
 	return out
 }
 
@@ -1228,6 +1328,10 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 		// change of the worker's. Any other head asks for a park
 		// since the round opened.
 		if !p.Green {
+			return
+		}
+		if in.NitsChecked != nil && in.NitsChecked(p, reviewed) {
+			add(goAction(in, base, fmt.Sprintf("supervisor checked approval nits at head %s against approved head %s", short(p.Head), short(reviewed))))
 			return
 		}
 		if in.baseMerged(p, reviewed) {

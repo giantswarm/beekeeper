@@ -401,30 +401,165 @@ func TestTranscriptRuntimeRoots(t *testing.T) {
 	}
 }
 
+// A repository script's patterns and an edit's regexes are not transcript
+// reads, even where the guard cannot resolve a cd and must also consider "/".
+func TestTranscriptRepositoryCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "projects", "worktree")
+	if err := os.MkdirAll(filepath.Join(cwd, "scripts"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/bash
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+SUBDIR=$(git rev-parse --show-prefix)
+while [[ $d == */* ]]; do d=${d%/*}; dirs[$d]=1; done
+if [[ -n $d && $d == */* ]] || [ "$d" = */* ] || test "$d" = */*; then :; fi
+( cd "$ROOT/$SUBDIR" && "$@" ) && rc=0 || rc=$?
+`
+	if err := os.WriteFile(filepath.Join(cwd, "scripts", "remote"), []byte(script), 0o700); err != nil { //nolint:gosec // an executable fixture
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"REMOTE_CONTEXT=lab beekeeper run -- scripts/remote cargo fmt --check",
+		"scripts/remote cargo fmt --check",
+		`sed -i 's/.*foo/bar/' src/main.rs`,
+		`sed -E 's/\s*foo/bar/' src/main.rs`,
+		`sed 's/.*/x/' src/main.rs`,
+		`sed 's/.*\///' src/main.rs`,
+		`perl -pi -e 's/\s*foo/bar/' src/main.rs`,
+		`perl -pi -e 's/\s*$//' src/main.rs`,
+		`perl -pe 's/\s*$/\n/' src/main.rs`,
+		`perl -0pi -e 's/a\n.*b/c/s' src/main.rs`,
+		`awk '/^.*foo/ {print}' src/main.rs`,
+		`grep -rn 'a/.*b' src`,
+		`sed -i '/foo.*bar/d' src/main.rs`,
+		`grep -n '/usr/.*bin' src/main.rs`,
+		`awk '/a.*b/' src/main.rs`,
+	} {
+		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("repository command refused: %s: %+v", command, d)
+		}
+	}
+}
+
+// What the repository commands above may pass must not open a real read:
+// embedded globs that reach a store, and every whole-word glob as before.
+func TestTranscriptGlobsStayClosed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h := transcriptHook()
+	cwd := filepath.Join(home, "projects", "worktree")
+	if err := os.MkdirAll(cwd, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "projects", "link")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{
+		"cat /*/.codex/history.jsonl", "cat /*/*/*/*/*/.codex/history.jsonl", "cat ~/.c*/history.jsonl",
+		"grep -r token /*", "tar cf - /*/*", "ROOT=$(git rev-parse --show-toplevel); SUBDIR=$(git rev-parse --show-prefix); ( cd \"$ROOT/$SUBDIR\" && cat */* )",
+		`python3 -c 'import glob; print(glob.glob("/*/.codex/history.jsonl"))'`,
+		`python3 -c 'import glob; print(glob.glob("/**/*.jsonl", recursive=True))'`,
+		`python3 -c 'p = "x" + "/.c*/history.jsonl"; print(p)'`,
+		`perl -e 'print glob("/.*/sessions/other.jsonl")'`,
+		`perl -e 'print glob("~/.c*/history.jsonl")'`,
+		`perl -e 'print glob("` + link + `/.c*/history.jsonl")'`,
+		`awk 'BEGIN { system("cat /*/.codex/history.jsonl") }'`,
+		`sed '1e cat /*/.codex/history.jsonl' src/main.rs`,
+		`sed 'r ~/.codex/history.jsonl' src/main.rs`,
+		"sed p /*/.codex/history.jsonl", "grep token /*/.codex/history.jsonl", "grep -r token " + home[:2] + "*", "awk 1 /*/.codex/history.jsonl",
+		`sed 's/x/y/;r ` + filepath.Join(home, ".codex", "history.jsonl") + `' src/main.rs`,
+		`[[ $(cat ~/.codex/history.jsonl) == x ]]`,
+		`[[ -n $d && $(cat ~/.codex/history.jsonl) == x ]]`,
+		`[[ $(<~/.codex/history.jsonl) == x ]]`,
+		`[ "$(head ~/.codex/history.jsonl)" = x ]`,
+		`test() { cat "$@"; }; test ~/.codex/history.jsonl`,
+	} {
+		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny {
+			t.Errorf("not refused: %s: %+v", command, d)
+		}
+	}
+}
+
+func TestTranscriptInertRuntimeArguments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := filepath.Join(home, "worktree")
+	for _, command := range []string{
+		`echo process.env.HOME`,
+		`rg -n process.env.HOME src`,
+		`echo 'process.env.HOME'`,
+		`rg -n 'process.env.HOME' src`,
+		`sh -c 'echo process.env.HOME'`,
+	} {
+		if d := decide(t, transcriptHook(), cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
+			t.Errorf("inert argument refused: %s: %+v", command, d)
+		}
+	}
+}
+
+const testNodeCommand = "node"
+
+func TestTranscriptRuntimeProgramInputs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, tc := range []struct{ name, code string }{
+		{"python3", `import os; print(os.environ["HOME"])`},
+		{testNodeCommand, `console.log(process.env.HOME)`},
+		{"ruby", `puts ENV["HOME"]`},
+		{"perl", `print $ENV{HOME};`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := filepath.Join(home, "program")
+			if err := os.WriteFile(script, []byte("#!/usr/bin/env "+tc.name+"\n"+tc.code), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range []string{
+				tc.name + " <<'CODE'\n" + tc.code + "\nCODE",
+				tc.name + " <<< '" + tc.code + "'",
+				"printf '%s' '" + tc.code + "' | " + tc.name,
+				tc.name + " " + script,
+				tc.name + " < " + script,
+				script,
+			} {
+				if d := decide(t, transcriptHook(), home, command, nil); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "cannot resolve") {
+					t.Errorf("runtime program passed: %s: %+v", command, d)
+				}
+			}
+		})
+	}
+}
+
 func TestTranscriptOrdinaryWorktreeCommands(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	h := transcriptHook()
 	cwd := filepath.Join(home, "worktrees", "task")
+	sessions := filepath.Join(home, ".codex", "sessions")
+	projects := filepath.Join(home, ".claude", "projects")
+	foreign := filepath.Join(sessions, "other.jsonl")
 	for _, command := range []string{
 		`grep -n 'TestTranscript' cmd/*_test.go`,
-		"grep token fixture" + filepath.Join(home, ".codex", "sessions", "synthetic.jsonl"),
+		"grep token fixture" + filepath.Join(sessions, "synthetic.jsonl"),
 		"python3 <<'PY'\nfrom pathlib import Path\nPath('cmd/example_test.go').write_text('package cmd\\n')\nPY",
-		`du -sh ~/.cache/go-build ~/.local/state/example/worktrees ~/.local/state/beekeeper/runs ~/.local/state/beekeeper/tmp`,
-		`ssh "$REMOTE" 'sed -n 1,20p projects/desk/config/config.yaml'`,
-		`du -sh ~/.claude/projects ~/.codex/sessions`,
-		`df ~/.codex/sessions`,
-		`stat ~/.codex/sessions/other.jsonl`,
+		"du -sh " + filepath.Join(home, "cache") + " " + filepath.Join(home, "state", "worktrees"),
+		`ssh "$REMOTE" 'sed -n 1,20p projects/example/config/config.yaml'`,
+		"du -sh " + projects + " " + sessions,
+		"df " + sessions,
+		"stat " + foreign,
 	} {
 		if d := decide(t, h, cwd, command, nil); d != nil && d.PermissionDecision == decisionDeny {
 			t.Errorf("ordinary command refused: %s: %+v", command, d)
 		}
 	}
 	for _, command := range []string{
-		`cat ~/.codex/sessions/other.jsonl`,
-		`grep token ~/.claude/projects/project/other.jsonl`,
-		`du -sh < ~/.codex/sessions/other.jsonl`,
-		`du(){ cat "$1"; }; du ~/.codex/sessions/other.jsonl`,
+		"cat " + foreign,
+		"grep token " + filepath.Join(projects, "project", "other.jsonl"),
+		"du -sh < " + foreign,
+		`du(){ cat "$1"; }; du ` + foreign,
 	} {
 		if d := decide(t, h, cwd, command, nil); d == nil || d.PermissionDecision != decisionDeny {
 			t.Errorf("transcript reader passed: %s: %+v", command, d)

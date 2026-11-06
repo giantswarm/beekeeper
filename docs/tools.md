@@ -398,7 +398,7 @@ List the merge lanes: each lane's running merge, settling merge and queue.
 ```text
 Claim a shared installation for the calling agent.
 
-Refused while another holds it or while it upgrades.
+Returns held, queued or refused first. Queued behind a holder with your grant; refused otherwise or during upgrades. wait retries every 10s, at most 9m.
 ```
 
 ```json
@@ -418,6 +418,10 @@ Refused while another holds it or while it upgrades.
     },
     "purpose": {
       "description": "what the installation is for",
+      "type": "string"
+    },
+    "wait": {
+      "description": "foreground wait duration, at most 9m (default: claim once)",
       "type": "string"
     }
   },
@@ -651,7 +655,7 @@ Withdraw a note, closing it without an answer: its filer's, or the filer's team'
 ## `note_list`
 
 ```text
-List every open note, whoever it is for or filed it: decisions and sign-ins.
+List open notes for you or your team, or filed by you: decisions and sign-ins.
 ```
 
 ```json
@@ -758,7 +762,7 @@ A local: message is queued in your mailbox, a messageId sent again within 24h no
 ## `snapshot`
 
 ```text
-Show everything at once: leases, holds, lanes, every open note and the agents you may read.
+Show leases, holds, lanes, the open notes that concern you and the agents you may read.
 ```
 
 ```json

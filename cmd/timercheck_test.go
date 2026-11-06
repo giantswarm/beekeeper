@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -306,7 +307,7 @@ func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 			{ID: 1, Due: relayNow, When: cpWhen, Checked: relayNow.UTC(), Reason: "context gone", Unreadable: true, What: "a"},
 			{ID: 2, Due: relayNow, When: prMerged7, Checked: relayNow.UTC(), Reason: "not merged", What: "b"},
 			{ID: 3, Due: relayNow, Probe: probeHolds, What: "c"},
-			{ID: 4, Due: relayNow, What: "plain"},
+			{ID: 4, Due: relayNow, What: litPlain},
 		}
 		return nil, nil
 	}); err != nil {
@@ -340,5 +341,78 @@ func TestTimerListAndCheckSayWhatTheCheckFound(t *testing.T) {
 	}
 	if err := a.timerCheck(context.Background(), "9"); err == nil {
 		t.Fatal("checked a timer that is not open")
+	}
+}
+
+func TestTimerProbeWaitRejected(t *testing.T) {
+	a := &app{now: relayNow}
+	for _, probe := range []string{
+		"devctl rollout wait app",
+		"beekeeper gate -- devctl rollout wait app",
+		"/usr/bin/beekeeper gate -- /usr/bin/devctl rollout 'wait' app",
+	} {
+		_, err := a.timerFrom(timerSpec{probe: probe}, relayNow.Add(time.Minute))
+		if err == nil || !strings.Contains(err.Error(), "10 s budget") || !strings.Contains(err.Error(), "helmrelease-ready") {
+			t.Errorf("%q: %v", probe, err)
+		}
+	}
+	for _, probe := range []string{"devctl rollout status app", "beekeeper lease status resource", "echo 'devctl rollout wait app'", "test wait = wait"} {
+		if _, err := a.timerFrom(timerSpec{probe: probe}, relayNow.Add(time.Minute)); err != nil {
+			t.Errorf("%q: %v", probe, err)
+		}
+	}
+}
+
+func TestTimerProbeHelpDocumentsBudget(t *testing.T) {
+	c := (&app{}).timerCmd()
+	add, _, err := c.Find([]string{loopAdd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"10 s budget", "within seconds", "devctl … wait", "kubectl get helmrelease", "beekeeper lease status"} {
+		if !strings.Contains(add.Long, want) {
+			t.Errorf("help missing %q", want)
+		}
+	}
+}
+
+func TestTimerProbeTimeoutWatchLine(t *testing.T) {
+	// An expired deadline exercises the command runner without a ten second sleep.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, err := probeOutput(ctx, "exec sleep 30")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout: %v", err)
+	}
+	r := (timerCheck{cmd: "exec sleep 30"}).result(nil, err)
+	st := state.State{Timers: []state.Timer{{ID: 1, Due: relayNow, Probe: "exec sleep 30", What: appCheck}}}
+	lines, _, fires, _ := settleTimers(&st, map[int]checkResult{1: r}, relayNow)
+	if len(lines) != 1 || !strings.Contains(lines[0], "probe timed out after 10 s") || len(fires) != 0 {
+		t.Fatalf("lines %v, fires %v", lines, fires)
+	}
+	lines, _, _, _ = settleTimers(&st, map[int]checkResult{1: r}, relayNow.Add(time.Minute))
+	if len(lines) != 0 {
+		t.Fatalf("repeated unchanged timeout: %v", lines)
+	}
+	unmet := (timerCheck{}).result(nil, errors.New("exit status 1"))
+	if unmet.unreadable || strings.Contains(unmet.reason, "timed out") {
+		t.Fatalf("unmet: %+v", unmet)
+	}
+}
+
+func TestTimerProbeMarksInheritedSession(t *testing.T) {
+	t.Setenv(envTimerCommand, "outer")
+	out, err := probeOutput(t.Context(), `sh -c 'printf "%s" "$BEEKEEPER_TIMER_COMMAND"'`)
+	if err != nil || string(out) != "probe" {
+		t.Fatalf("probe subprocess marker = %q, %v", out, err)
+	}
+}
+
+// An agent a --run timer starts is its own session: the marker must not
+// follow it, or every lease claim it ever makes would be refused.
+func TestStartedAgentsDoNotInheritTheTimerMarker(t *testing.T) {
+	marker := envTimerCommand + "=run"
+	if env := cleanEnv([]string{marker, "KEPT=1"}, ""); slices.Contains(env, marker) || !slices.Contains(env, "KEPT=1") {
+		t.Fatalf("clean environment: %v", env)
 	}
 }

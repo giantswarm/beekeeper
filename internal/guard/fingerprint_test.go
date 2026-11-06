@@ -1,11 +1,13 @@
 package guard
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -70,7 +72,7 @@ func TestRedactNamesATokenPatternWithoutAnIndex(t *testing.T) {
 	if strings.Contains(out, tok) || !strings.Contains(out, "[redacted: github-pat]") {
 		t.Fatalf("the token survived: %q", out)
 	}
-	if rule := tokenRules[0].id; len(found) != 1 || found[0].Rule != rule || found[0].Name() != "pattern "+rule {
+	if rule := tokenRules[0].ID; len(found) != 1 || found[0].Rule != rule || found[0].Name() != "pattern "+rule {
 		t.Fatalf("findings = %+v", found)
 	}
 	allowedLine := "fixture " + tok + " // " + allowMarker
@@ -269,5 +271,121 @@ func TestIndexSOPSAndVaultReadTheirSourcesQuietly(t *testing.T) {
 	}
 	if _, f := ix.Redact("someone-long-name"); f != nil {
 		t.Fatal("a plain STRING field was indexed")
+	}
+}
+
+// firstUseRandom holds both callers after their initial missing-key reads.
+// Each caller receives a distinct synthetic key.
+type firstUseRandom struct {
+	mu    sync.Mutex
+	calls byte
+	ready chan struct{}
+}
+
+func (r *firstUseRandom) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	r.calls++
+	value := r.calls
+	if r.calls == 2 {
+		close(r.ready)
+	}
+	r.mu.Unlock()
+	<-r.ready
+	for i := range p {
+		p[i] = value
+	}
+	return len(p), nil
+}
+
+func TestAuditIndexKeyConcurrentFirstUse(t *testing.T) {
+	original := rand.Reader
+	rand.Reader = &firstUseRandom{ready: make(chan struct{})}
+	defer func() { rand.Reader = original }()
+	dir := filepath.Join(t.TempDir(), "scan")
+	type result struct {
+		ix  *Index
+		err error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() { ix, err := OpenIndex(dir); results <- result{ix, err} }()
+	}
+	opened := make([]*Index, 0, 2)
+	for range 2 {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		opened = append(opened, r.ix)
+	}
+	persisted, err := LoadIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ix := range opened {
+		if ix.Fingerprint(planted) != persisted.Fingerprint(planted) {
+			t.Errorf("caller %d fingerprint differs from persisted key", i)
+		}
+		ix.Add(plantedRef, planted)
+		if err := ix.Save(time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadIndex(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, found := loaded.Redact(planted); out != "[redacted: "+plantedRef+"]" || len(found) != 1 {
+			t.Errorf("caller %d index no longer redacts its value", i)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("temporary key files left behind: %d entries", len(entries))
+	}
+}
+
+func TestOpenIndexPreservesExistingKey(t *testing.T) {
+	dir := t.TempDir()
+	first, err := OpenIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Add(plantedRef, planted)
+	if err := first.Save(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	again, err := OpenIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Fingerprint(planted) != first.Fingerprint(planted) {
+		t.Fatal("existing key changed")
+	}
+	if out, found := again.Redact("ordinary text"); out != "ordinary text" || len(found) != 0 {
+		t.Fatal("ordinary text changed")
+	}
+	if _, found := again.Redact(planted); len(found) != 1 {
+		t.Fatal("existing index was not loaded")
+	}
+}
+
+func TestOpenIndexRejectsShortKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, indexKeyFile)
+	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenIndex(dir); err == nil {
+		t.Fatal("short key accepted")
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // a path of this test
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "short" {
+		t.Fatal("invalid key replaced")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ type fakeGH struct {
 }
 
 func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, error) {
-	method, path := "GET", ""
+	method, path := http.MethodGet, ""
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "-X":
@@ -60,16 +61,16 @@ func (f *fakeGH) run(_ context.Context, input []byte, args ...string) ([]byte, e
 	switch {
 	case strings.HasSuffix(path, "/o/r") || path == "repos/o/r":
 		return []byte(f.visibility + "\n"), nil
-	case method == "GET" && strings.Contains(path, "/git/ref/heads/"):
+	case method == http.MethodGet && strings.Contains(path, "/git/ref/heads/"):
 		if f.head == "" {
 			return []byte(`{"message":"Not Found"}`), errors.New("gh api: exit status 1: gh: Not Found (HTTP 404)")
 		}
 		return []byte(f.head + "\n"), nil
-	case method == "PATCH" && f.conflicts > 0:
+	case method == http.MethodPatch && f.conflicts > 0:
 		f.conflicts--
 		f.head = "moved"
 		return nil, errors.New("gh api: exit status 1: gh: Update is not a fast forward (HTTP 422)")
-	case method == "POST" && strings.HasSuffix(path, "/git/refs"), method == "PATCH":
+	case method == http.MethodPost && strings.HasSuffix(path, "/git/refs"), method == http.MethodPatch:
 		f.head = f.bodies[call]["sha"].(string)
 		return []byte(fmt.Sprintf(`{"object":{"sha":%q}}`, f.head)), nil
 	}
@@ -345,12 +346,11 @@ func TestUploadExistingBranchRetries(t *testing.T) {
 	}
 }
 
-// A repository that is not public, or a name that is not owner/repo, gets
-// nothing written.
+// An unknown visibility, or a name that is not owner/repo, gets nothing written.
 func TestUploadRefused(t *testing.T) {
 	for _, c := range []struct{ repo, vis, want string }{
-		{repo, "private", "not public"},
-		{repo, "internal", "not public"},
+		{repo, "", "unknown visibility"},
+		{repo, "unexpected", "unknown visibility"},
 		{"o/r/x", public, "not owner/repo"},
 		{"o", public, "not owner/repo"},
 	} {
@@ -360,9 +360,34 @@ func TestUploadRefused(t *testing.T) {
 			t.Errorf("%s %s: err = %v, want %q", c.repo, c.vis, err, c.want)
 		}
 		for _, call := range f.calls {
-			if !strings.HasPrefix(call, "GET") {
+			if !strings.HasPrefix(call, http.MethodGet) {
 				t.Errorf("%s %s: wrote %s", c.repo, c.vis, call)
 			}
+		}
+	}
+}
+
+// Private and internal images stay in the target repository. The returned
+// link uses the authenticated repository route, never a raw access token.
+func TestUploadRestrictedRepository(t *testing.T) {
+	for _, visibility := range []string{"private", "internal"} {
+		for _, head := range []string{"", "existing"} {
+			t.Run(visibility+"/"+head, func(t *testing.T) {
+				f := &fakeGH{visibility: visibility, head: head}
+				res, err := (Upload{GH: f.run, Repo: repo, Alt: "proof", Now: at}).Run(context.Background(), testPNG(t))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "https://github.com/o/r/blob/" + res.Commit + "/" + res.Path + "?raw=true"
+				if res.URL != want || res.Markdown != "![proof](../../../o/r/blob/"+res.Commit+"/"+res.Path+"?raw=true)" {
+					t.Fatalf("result = %+v, want %s", res, want)
+				}
+				for _, call := range f.calls {
+					if !strings.Contains(call, "repos/o/r") {
+						t.Errorf("call escaped repository: %s", call)
+					}
+				}
+			})
 		}
 	}
 }
