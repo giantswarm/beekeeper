@@ -15,10 +15,7 @@ MODULE         := $(shell go list -m)
 MAIN_SOURCE    := $(shell if test -e cmd/main.go; then echo cmd/main.go; else echo main.go; fi)
 OS             := $(shell go env GOOS)
 SOURCES        := $(shell find . -name '*.go')
-# Envtests do not stamp a version. gitsemver does not support linked worktrees.
-ifneq ($(MAKECMDGOALS),test-envtest)
 VERSION        := $(shell gitsemver get)
-endif
 # Expanded first in every recipe that stamps VERSION into its output, so a failed
 # `gitsemver get` fails the build instead of producing an unversioned binary.
 # Targets that do not ship a version (test, lint, ...) never expand it.
