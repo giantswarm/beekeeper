@@ -136,6 +136,33 @@ func TestTimerDispatcherSamplesItsOwnGitHubBudget(t *testing.T) {
 	}
 }
 
+func TestTimerDispatcherPreservesLongCheckIntervals(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	checked := a.now.Add(-10 * time.Minute)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Hour), When: prMerged7, Checked: checked, Every: time.Hour, Wake: "worker"}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := readBudget
+	readBudget = func(*app, context.Context) (github.Budget, error) {
+		t.Error("budget checked before timer interval")
+		return github.Budget{}, errors.New("unavailable")
+	}
+	t.Cleanup(func() { readBudget = old })
+	w, err := a.dispatchTimerPass(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.timerActs.Wait()
+	st, err := a.store.Read()
+	if err != nil || !st.Timers[0].Checked.Equal(checked) {
+		t.Fatal("deferred timer interval was restarted", err)
+	}
+}
+
 func TestFatalTimersDetectMissedTicksNotUnsatisfiedConditions(t *testing.T) {
 	now := time.Now().UTC()
 	for _, tc := range []struct {

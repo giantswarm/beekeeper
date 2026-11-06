@@ -97,9 +97,7 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 	}
 	now := batch.now
 	githubHeld := slices.ContainsFunc(st.Holds, func(h state.Hold) bool { return h.Target == holdGitHub && h.Active(now) })
-	needsGitHub := slices.ContainsFunc(st.Timers, func(t state.Timer) bool {
-		return checkOf(t).github && !t.Due.After(now) && (t.Checked.IsZero() || now.Sub(t.Checked) >= timerEvery)
-	})
+	needsGitHub := slices.ContainsFunc(st.Timers, func(t state.Timer) bool { return checkOf(t).github && timerDispatchCheckDue(t, now) })
 	if needsGitHub && !githubHeld {
 		// A standalone driver must sample its own budget: with no watch or
 		// loop, an unknown cached budget would otherwise defer CI wakes forever.
@@ -115,8 +113,8 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 	// Record it so overdue detection distinguishes a stopped scheduler from
 	// an intentional budget/hold wait, without calling the reference healthy.
 	for _, t := range st.Timers {
-		if checkOf(t).github && !t.Due.After(now) {
-			if _, ok := found[t.ID]; !ok && (t.Checked.IsZero() || now.Sub(t.Checked) >= timerEvery) {
+		if checkOf(t).github && timerDispatchCheckDue(t, now) {
+			if _, ok := found[t.ID]; !ok {
 				found[t.ID] = checkResult{unreadable: true, reason: "GitHub check deferred by admission"}
 			}
 		}
@@ -139,6 +137,14 @@ func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
 	}
 	w.actTimers(ctx, fires)
 	return w, nil
+}
+
+func timerDispatchCheckDue(t state.Timer, now time.Time) bool {
+	every := t.Every
+	if every <= 0 {
+		every = timerEvery
+	}
+	return t.Conditional() && !t.Due.After(now) && (t.Checked.IsZero() || now.Sub(t.Checked) >= every)
 }
 
 // A condition that is false but checked on schedule is not an outage. What
