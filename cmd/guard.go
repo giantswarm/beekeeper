@@ -741,7 +741,10 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				_, _ = w.Write(out)
 				return nil
 			}
-			out := peer.WithInstructionContext(a.cfg.StateDir, raw, h.Decide(raw))
+			out := h.Decide(raw)
+			if a.cfg != nil {
+				out = peer.WithInstructionContext(a.cfg.StateDir, raw, out)
+			}
 			a.recordGitHubCalls(raw, formatFlag, out)
 			if out != nil {
 				_, _ = w.Write(out)
