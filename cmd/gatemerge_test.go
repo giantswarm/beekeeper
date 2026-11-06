@@ -38,6 +38,9 @@ func fakeDevctl(t *testing.T, script string) {
 // labRepo is a repository devctl does not serve.
 const labRepo = "fixture-person/lab"
 
+// exampleOwnerRepo belongs to the additional owner of docs/examples/config.yaml.
+const exampleOwnerRepo = "example-org/lab"
+
 // devctlTo is the release a devctl window's merge produced.
 const devctlTo = "v8.1.0"
 
@@ -698,10 +701,10 @@ func TestExampleOwnerMergeUsesDevctlAndConfirmsRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeDevctl(t, `case "$*" in *--no-release-wait*) exit 7;; esac
-case "$*" in *"teemow/lab 7"*) ;; *) echo "unexpected arguments: $*" >&2; exit 7;; esac
+case "$*" in *"`+exampleOwnerRepo+` 7"*) ;; *) echo "unexpected arguments: $*" >&2; exit 7;; esac
 echo '`+mergedDoc+`'`)
 	stubGitHub(t, "", "")
-	g := runningMerge(t, labRepo, config.Lane{Name: labRepo, Installation: "staging"})
+	g := runningMerge(t, exampleOwnerRepo, config.Lane{Name: exampleOwnerRepo, Installation: "staging"})
 	g.cfg.Merge.DevctlOwners = cfg.Merge.DevctlOwners
 	if !g.runsDevctl() {
 		t.Fatal("example owner takes the plain merge route")
@@ -715,7 +718,7 @@ echo '`+mergedDoc+`'`)
 	if strings.Contains(got, "no release wait") || strings.Contains(got, github.SquashRoute) {
 		t.Errorf("plain route output: %s", got)
 	}
-	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, "teemow/lab#7 exit 0, release v1.2.4") || strings.Contains(d, github.SquashRoute) {
+	if d := lastEvent(t, g, testMergedWord); !strings.Contains(d, exampleOwnerRepo+"#7 exit 0, release v1.2.4") || strings.Contains(d, github.SquashRoute) {
 		t.Errorf("merged event: %q", d)
 	}
 }
