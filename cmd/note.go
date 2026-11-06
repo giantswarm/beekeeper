@@ -78,7 +78,13 @@ note's default and recommendation stand) or ask a different question.
 question. A --kind login note closes
 once its --until probe, a shell command the watch runs every tick, exits 0.
 A decision is refused without --ref: its answer is
-recorded on that thread (beekeeper answer). A note for a person whose
+recorded on that thread (beekeeper answer). With guide.person set, a --for
+that is one of guide.personNames, "guide", or carries the person's
+serve.people email, is filed for guide.person, so the guide sees it; one nobody
+on this desk goes by (not guide.person, serve.people, board.people, an email,
+team:<name> or supervisor) is refused, naming them. A central instance judges the names it is sent itself;
+one it is not sent, by --holds or by filing on the machine when it cannot be
+reached, is judged here. A note for a person whose
 --ref an answer of that person was recorded on within the last 72 hours
 (answer.recorded) is filed with a warning that quotes the answer.
 
@@ -197,6 +203,12 @@ fixes of its findings, once its checks are green, and asks nobody.`,
 				return usageErr("--until is a login's: --kind login")
 			}
 			n.Kind, draft.Due = draft.Kind, due
+			if a.managedExecutionID() == "" {
+				if forWho, err = a.noteAddressee(forWho, into.Central || a.centralNote(&n, holds, foldInto)); err != nil {
+					return err
+				}
+				n.For = forWho
+			}
 			if holds {
 				switch {
 				case n.Kind != noteDecision:

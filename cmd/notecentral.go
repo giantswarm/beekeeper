@@ -62,6 +62,9 @@ func (a *app) fileCentral(ctx context.Context, stderr io.Writer, me state.Party,
 	if u := (*central.Unreachable)(nil); errors.As(err, &u) && u.Sent {
 		return false, &exitError{code: ExitCentral, msg: u.Error() + ": the decision may be filed there, so it is not filed on this machine too; file it again once the central instance answers"}
 	} else if u != nil {
+		if _, why := a.noteAddressee(n.For, false); why != nil {
+			return false, &exitError{code: ExitCentral, msg: u.Error() + ": the decision is not filed, and not filed on this machine instead: " + why.Error()}
+		}
 		_, err = fmt.Fprintf(stderr, "%s: filed on this machine instead\n", u.Error())
 		return false, err
 	}

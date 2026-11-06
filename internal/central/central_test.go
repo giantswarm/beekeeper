@@ -329,6 +329,21 @@ func TestListenUnreachable(t *testing.T) {
 	}
 }
 
+// A tool the instance does not serve is a version mismatch, named as such:
+// the instance answered and nothing ran.
+func TestToolNotFoundIsNoOutage(t *testing.T) {
+	m := centraltest.New(t, backend(t), "beekeeper")
+	c, _ := client(t, m.URL)
+	_, err := c.Call(context.Background(), "note_list_v9", map[string]any{}, nil)
+	var u *central.Unreachable
+	if !errors.As(err, &u) || u.Sent || u.Missing != "x_beekeeper_note_list_v9" {
+		t.Fatalf("got %#v (%v), want the missing tool, unsent", err, err)
+	}
+	if msg := err.Error(); strings.Contains(msg, "unreachable") || !strings.Contains(msg, "another version") {
+		t.Fatalf("got %q, want the mismatch named", msg)
+	}
+}
+
 // Both tool calls and subscriptions must fail before invoking muster.
 func TestSandboxHostOnly(t *testing.T) {
 	t.Setenv("BEEKEEPER_SANDBOX", "1")

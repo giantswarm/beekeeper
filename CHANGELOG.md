@@ -9,9 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `guide.desk`: the guide's session writes files in this folder, its memory; commits stay the desk's ([#3296](https://github.com/giantswarm/beekeeper/issues/3296))
+- `beekeeper install` turns Claude Code's own memory off, on execution hosts too, and the hook refuses writes to Claude Code's, Codex's, agy's and omp's memory folders, naming the desk ([#3298](https://github.com/giantswarm/beekeeper/issues/3298))
+- `guide.personNames`: other names of the guide's person ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
+
 ### Fixed
 
 - `beekeeper disk prune`, `disk holders` and the worktree trim resolve live process references once per scan instead of once per candidate, and each measured disk root and directory has its own read budget, so a large state directory cannot hide the user cache (https://github.com/giantswarm/beekeeper/issues/3244).
+- `note add --for` files a note for another name of the guide's person for that person, and refuses a name nobody on the desk goes by, so a decision never lands where no guide sees it ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
+- A central instance that answers "tool not found" is named as a version mismatch, not as unreachable ([#3205](https://github.com/giantswarm/beekeeper/issues/3205))
+- The merge skill reads branch protection through the GitHub API, which needs no muster login ([#3208](https://github.com/giantswarm/beekeeper/issues/3208))
 - The supervisor loop's sweep lists up to GitHub's 1000 open pull requests, reads at most 50 anew in a pass, least recently read first, and counts the pull requests without a live owner in `supervisor status` (https://github.com/giantswarm/beekeeper/issues/3210).
 - The verdict of a desk review reaches the session that started it, and `beekeeper agents review <ref> --verdict` prints the desk verdicts, a commented one included (https://github.com/giantswarm/beekeeper/issues/3286).
 - A review start holds to half of the worker's disk floor, so a disk just under the floor no longer stops every review (https://github.com/giantswarm/beekeeper/issues/3206).

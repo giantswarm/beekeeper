@@ -116,6 +116,66 @@ func TestNoteAddFilesLocallyWhileCentralIsUnreachable(t *testing.T) {
 	}
 }
 
+// decisionForUnknown is a complete decision for a name only a central instance
+// could know.
+func decisionForUnknown() []string {
+	args := decisionNote("approve " + prURL + "?")
+	args[slices.Index(args, notePerson)] = unknownName
+	return args
+}
+
+const unknownName = "Nobody"
+
+// The central instance judges the names it is sent.
+func TestNoteAddLeavesAReachableCentralItsNames(t *testing.T) {
+	s := &noteAddStandIn{}
+	a, _, _ := centralNoteApp(t, s)
+	if err := addNote(a, decisionForUnknown()...); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.calls) != 1 || s.calls[0][paramFor] != unknownName {
+		t.Fatalf("note_add calls %v", s.calls)
+	}
+}
+
+// A name this machine cannot resolve is not filed here when the central
+// instance is out of reach: no guide would see the note.
+func TestNoteAddFallsBackOnlyForANameThisMachineKnows(t *testing.T) {
+	refusedHere := func(t *testing.T, a *app, err error) {
+		t.Helper()
+		if Code(err) != ExitCentral || !strings.Contains(err.Error(), "not filed on this machine") {
+			t.Fatalf("note add = %v, want it filed nowhere", err)
+		}
+		if st, _ := a.store.Read(); len(st.Notes) != 0 {
+			t.Fatalf("local notes = %v, want none", st.Notes)
+		}
+	}
+	t.Run("central down", func(t *testing.T) {
+		a, _, m := centralNoteApp(t, &noteAddStandIn{})
+		m.Close()
+		refusedHere(t, a, addNote(a, decisionForUnknown()...))
+	})
+	t.Run("tool missing", func(t *testing.T) {
+		a, _, _ := centralNoteApp(t, &noteAddStandIn{})
+		a.cfg.Central.Server = "no-such-server"
+		refusedHere(t, a, addNote(a, decisionForUnknown()...))
+	})
+}
+
+// --holds keeps a decision on this machine, whatever the central instance
+// would know.
+func TestNoteAddHoldsJudgesItsNameHere(t *testing.T) {
+	s := &noteAddStandIn{}
+	a, _, _ := centralNoteApp(t, s)
+	err := addNote(a, append(decisionForUnknown(), "--holds")...)
+	if Code(err) != ExitUsage || !strings.Contains(err.Error(), "names nobody on this desk") {
+		t.Fatalf("note add = %v, want the name refused", err)
+	}
+	if len(s.calls) != 0 {
+		t.Fatalf("note_add calls %v", s.calls)
+	}
+}
+
 func TestNoteAddDoesNotFileLocallyAfterProxyError(t *testing.T) {
 	a, _, m := centralNoteApp(t, &noteAddStandIn{})
 	m.Down(true)

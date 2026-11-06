@@ -37,9 +37,15 @@ type Unreachable struct {
 	// Sent marks a tool call that went out unanswered: the central
 	// instance may have acted on it.
 	Sent bool
+	// Missing is the tool the instance answered that it does not serve: it
+	// was reached, and nothing ran.
+	Missing string
 }
 
 func (e *Unreachable) Error() string {
+	if e.Missing != "" {
+		return fmt.Sprintf("the central instance (muster context %s) answered but serves no tool %s: its beekeeper is another version than this one, or muster does not expose the tool to you; update the older side or check central.server", e.Context, e.Missing)
+	}
 	return fmt.Sprintf("the central instance (muster context %s) is unreachable: %s", e.Context, e.Reason)
 }
 
@@ -53,6 +59,9 @@ type Refused struct {
 }
 
 func (e *Refused) Error() string { return e.Message }
+
+// toolNotFound is muster's failed result for a tool no server of its offers.
+const toolNotFound = "tool not found"
 
 // usageCode is beekeeper's exit code of a malformed call, which beekeeper
 // serve's failed results carry.
@@ -317,6 +326,9 @@ func (c *Client) result(tool string, res *mcp.CallToolResult, v any) (string, er
 			return text, &Refused{Message: text, Usage: code == usageCode}
 		case "error":
 			return text, errors.New(text)
+		}
+		if strings.Contains(text, toolNotFound) {
+			return text, &Unreachable{Context: c.cfg.Context, Reason: firstLine(text), Missing: c.Tool(tool)}
 		}
 		return text, &Unreachable{Context: c.cfg.Context, Reason: fmt.Sprintf("%s: %s", c.Tool(tool), firstLine(text)), Sent: true}
 	}
