@@ -21,6 +21,7 @@ import (
 )
 
 const scratchBrokerEnv = "BEEKEEPER_SCRATCH_BROKER"
+const scratchStateKey = "stateDir"
 
 // A scratch broker answers secret requests and readiness pings only.
 func secretBrokerOnly(only bool, handler sandbox.Handler) sandbox.Handler {
@@ -56,7 +57,7 @@ inputs and outputs in the selected configuration.`,
 			if err != nil {
 				return err
 			}
-			defer os.RemoveAll(dir)
+			defer func() { _ = os.RemoveAll(dir) }()
 			cfg := *a.cfg
 			cfg.StateDir = filepath.Join(dir, "state")
 			cfg.LeaseDir = filepath.Join(dir, "leases")
@@ -75,7 +76,7 @@ inputs and outputs in the selected configuration.`,
 			if values == nil {
 				values = map[string]any{}
 			}
-			values["stateDir"], values["leaseDir"] = cfg.StateDir, cfg.LeaseDir
+			values[scratchStateKey], values["leaseDir"] = cfg.StateDir, cfg.LeaseDir
 			data, err := yaml.Marshal(values)
 			if err != nil {
 				return err

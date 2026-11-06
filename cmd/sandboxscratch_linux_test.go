@@ -20,8 +20,13 @@ import (
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 )
 
+const (
+	scratchSuccess   = "success"
+	scratchUnchanged = "unchanged"
+)
+
 func TestScratchSecretBrokerLifecycle(t *testing.T) {
-	for _, outcome := range []string{"success", "failure", "interrupt", "vault-socket"} {
+	for _, outcome := range []string{scratchSuccess, "failure", "interrupt", "vault-socket"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
 			installed := filepath.Join(dir, "installed")
@@ -30,7 +35,7 @@ func TestScratchSecretBrokerLifecycle(t *testing.T) {
 				if err := os.Mkdir(path, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(path, "sentinel"), []byte("unchanged"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(path, "sentinel"), []byte(scratchUnchanged), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -39,9 +44,9 @@ func TestScratchSecretBrokerLifecycle(t *testing.T) {
 			if err := os.WriteFile(producer, []byte("#!/bin/sh\n[ \"$BEEKEEPER_SANDBOX_BROKERED\" = 1 ] || exit 19\nprintf 'scratch-test-value\\n'\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			cfg := map[string]any{"stateDir": installed, "leaseDir": installed, "secret": map[string]any{"store": map[string]any{"read": []string{producer}}}}
+			cfg := map[string]any{scratchStateKey: installed, "leaseDir": installed, ghSecret: map[string]any{"store": map[string]any{"read": []string{producer}}}}
 			if outcome == "vault-socket" {
-				cfg["secret"] = map[string]any{"session": true, "fileRoots": []string{dir}, "signinCommand": []string{"false"}}
+				cfg[ghSecret] = map[string]any{"session": true, "fileRoots": []string{dir}, "signinCommand": []string{"false"}}
 				if err := os.WriteFile(filepath.Join(dir, "input.json"), []byte(`{"value":"scratch-test-value"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -107,10 +112,10 @@ esac
 				}
 			}
 			err = call.Wait()
-			if (outcome == "success" || outcome == "vault-socket") && err != nil {
+			if (outcome == scratchSuccess || outcome == "vault-socket") && err != nil {
 				t.Fatalf("scratch: %v\n%s", err, output.String())
 			}
-			if outcome != "success" && outcome != "vault-socket" && err == nil {
+			if outcome != scratchSuccess && outcome != "vault-socket" && err == nil {
 				t.Fatal("expected failure")
 			}
 			if outcome == "failure" {
@@ -149,7 +154,7 @@ esac
 					t.Fatalf("installed directory changed: %v, %v", entries, err)
 				}
 				data, err := os.ReadFile(filepath.Join(path, "sentinel"))
-				if err != nil || string(data) != "unchanged" {
+				if err != nil || string(data) != scratchUnchanged {
 					t.Fatal(fmt.Sprint("installed sentinel changed: ", err))
 				}
 			}
