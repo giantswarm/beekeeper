@@ -193,7 +193,8 @@ same start gate a real start is, and prints its verdict: the auto choice,
 and with --force the verdict it goes over; a verdict without room refuses
 the dry run with exit 3 too (--force aside).
 
-A start that delivers no turn of the task fails: it exits non-zero, logs
+A warm desktop CLI gets up to 15 seconds per attempt to accept the task,
+with one retry if delivery fails. A start that delivers no turn of the task fails: it exits non-zero, logs
 "task not delivered" with the reason, and the roster's REACHABLE (and the
 watch's AGENTS STOPPED line) says "task not delivered" until agents wake
 delivers a turn.
@@ -206,6 +207,8 @@ created from the freshly fetched origin default branch. A --review start
 instead requires a pull request URL in its brief and creates a detached
 <state>/worktrees/<repo>/review-<number>. Existing destinations are refused.
 A brief spanning repositories must be split into one task per repository.
+The supervisor loop's starts are outside these rules: it knows a repository,
+not a checkout, so they run in agents.dir and their briefs say where to work.
 Before sending a brief, start runs the same checks as beekeeper lint briefs.
 A finding is printed to stderr with its file, line and rule; the start goes on,
 so a generated brief quoting its issue never stops a worker.
@@ -371,6 +374,9 @@ work, which takes no choice on a self-hosted provider.`,
 				}
 				sp := agentStart{name: name, kind: a.selectionKind, task: task, model: model, effort: effortLevel}
 				if dryRun {
+					if err := a.kindGate(name); err != nil {
+						return err
+					}
 					return h.DryRun(cmd.Context(), a, sp, nil)
 				}
 				return a.withKindAdmission(cmd.Context(), name, func() error { return h.Start(cmd.Context(), a, sp) })
@@ -407,19 +413,24 @@ work, which takes no choice on a self-hosted provider.`,
 			if err := a.sandboxPaths([]string{briefFile}, []string{dir}); err != nil {
 				return err
 			}
-			dir, err = a.startCheckout(dir)
-			if err != nil {
-				return err
+			// The supervisor loop has a repository, no checkout: its workers
+			// and reviewers start in agents.dir, and a resumed or replaced
+			// worker keeps a branch and worktree that already exist.
+			worktreeManaged := a.as != loopParty.Name
+			if worktreeManaged {
+				dir, err = a.startCheckout(dir)
+				if err != nil {
+					return err
+				}
 			}
 			brief, err := readBrief(briefFile)
 			if err != nil {
 				return err
 			}
-			if err := singleTaskRepository(brief); err != nil {
-				return err
-			}
-			if _, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true); err != nil {
-				return err
+			if worktreeManaged {
+				if _, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true); err != nil {
+					return err
+				}
 			}
 			warnBriefLint(cmd.ErrOrStderr(), briefFile)
 			// The timer whose command runs this start, from its
@@ -508,11 +519,14 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				rules, err := a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true)
-				if err != nil {
-					return err
+				rules := ""
+				if worktreeManaged {
+					rules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, true)
+					if err != nil {
+						return err
+					}
 				}
-				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
+				sp := agentStart{name: name, role: workerRole, kind: a.selectionKind, brief: rules + a.workerPrompt(taskPrompt(brief), gaps...), dir: dir, model: model, effort: effortLevel, mode: mode}
 				h, _ := harnessByName(harness)
 				return h.DryRun(cmd.Context(), a, sp, gaps)
 			}
@@ -521,7 +535,7 @@ work, which takes no choice on a self-hosted provider.`,
 			// A timer's start says what the gate did to it in the log.
 			origHarness, origModel := harness, model
 			autoPick := origHarness == harnessAuto
-			baseBrief := workerPrompt(taskPrompt(brief), gaps...)
+			baseBrief := a.workerPrompt(taskPrompt(brief), gaps...)
 			worktreeRules := ""
 			var timerLine string
 			for {
@@ -592,7 +606,7 @@ work, which takes no choice on a self-hosted provider.`,
 						return err
 					}
 				}
-				if worktreeRules == "" {
+				if worktreeManaged && worktreeRules == "" {
 					worktreeRules, err = a.prepareStartWorktree(cmd.Context(), dir, branch, brief, review || ofSelfHosted, false)
 					if err != nil {
 						return err
@@ -865,6 +879,10 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
+	if err := a.requireClaudeLogin(); err != nil {
+		return startedAgent{}, err
+	}
+
 	st, err := a.store.Read()
 	if err != nil {
 		return startedAgent{}, err
@@ -949,7 +967,7 @@ func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, erro
 	var handed []string
 	err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 		var err error
-		reg, err = recordStart(st, s, sp.task, sp.serves, live)
+		reg, err = a.recordStart(st, s, sp.task, sp.serves, live)
 		if err != nil {
 			return nil, err
 		}
@@ -1094,11 +1112,15 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		}
 	}
 	w := wakeTarget{name: sp.name, id: id, host: "local_" + id, dir: dir, mode: state.ModeBypass, model: sa.want}
-	line, err := a.turnInDesktop(ctx, w, taskTurn, twinWait)
+	line, err := a.startDesktopTurn(ctx, w, taskTurn, twinWait)
 	if err == nil {
 		sa.turn = "its task runs as a desktop turn: " + line
 		_ = a.store.Record(event(by, verbStart, "%s: %s", sp.name, sa.turn))
 		return sa, nil
+	}
+	var delivery desktopDeliveryError
+	if errors.As(err, &delivery) {
+		return sa, err
 	}
 	sa.turn = fmt.Sprintf("the desktop runs no turn of it (%v): its task runs headless", err)
 	if errors.As(err, new(modelNotHeld)) {
@@ -1111,6 +1133,25 @@ func (a *app) startVisible(ctx context.Context, d desk, sp agentStart, bin, unit
 		return sa, err
 	}
 	return sa, nil
+}
+
+// startDesktopTurn retries a warm CLI's delivery once. A CLI that is still
+// warming must take the task itself; asking a steward to start it cannot
+// establish that an already running CLI received the task.
+func (a *app) startDesktopTurn(ctx context.Context, w wakeTarget, msg string, wait time.Duration) (string, error) {
+	var err error
+	for range 2 {
+		var line string
+		line, err = a.turnInDesktop(ctx, w, msg, wait)
+		if err == nil {
+			return line, nil
+		}
+		var delivery desktopDeliveryError
+		if !errors.As(err, &delivery) || ctx.Err() != nil {
+			break
+		}
+	}
+	return "", err
 }
 
 // resumeSeededTask refuses a seeded desktop start whose requested model
@@ -2083,8 +2124,18 @@ func workerPrompt(prompt string, inline ...string) string {
 		}
 		rules = b.String()
 	}
-	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\n%s",
-		project.Version(), rules, prompt)
+	return fmt.Sprintf("Beekeeper %s gives every worker it starts these rules; they hold for the whole task.\n\n%s\n\nYour worktree path: `<root>/<repo>/<branch>-%s` (replace root, repo and branch; keep this unique session suffix). Use the workspace provided by beekeeper instead when BEEKEEPER_EXECUTION_ID is set.\n\n%s",
+		project.Version(), rules, uuid.NewString(), prompt)
+}
+
+// workerPrompt adds this desk's configured paths to the shipped Git rule.
+func (a *app) workerPrompt(prompt string, inline ...string) string {
+	return strings.Replace(workerPrompt(prompt, inline...), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1)
+}
+
+func (a *app) entryRules() string {
+	home, _ := os.UserHomeDir()
+	return guard.EntryRules(home, a.cfg.Projects.Dir, a.cfg.Projects.Worktrees, a.cfg.Home.Places, scratchpadMark)
 }
 
 // topicSkills names topics as the skills a worker loads.
@@ -2413,4 +2464,12 @@ func titleTranscript(projectsDir, id, name string) error {
 func unitEnded(ctx context.Context, unit string) bool {
 	s := plat.Launcher.State(ctx, unit)
 	return s == "inactive" || s == "failed"
+}
+
+func (a *app) recordStart(st *state.State, s state.Start, task, serves string, live func(state.Party) bool) (registration, error) {
+	reg, err := recordStart(st, s, task, serves, live)
+	if err != nil {
+		return reg, err
+	}
+	return reg, a.handRegistration(st, reg, s.Party)
 }

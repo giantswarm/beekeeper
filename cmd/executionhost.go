@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -63,7 +64,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, refused("execution rules are empty, oversized or credential-shaped")
 	}
 	var rules strings.Builder
-	rules.WriteString(plugin.WorkerRules())
+	rules.WriteString(strings.Replace(plugin.WorkerRules(), "Own worktree;", "Own worktree; "+a.entryRules()+" ", 1))
 	for _, topic := range plugin.Topics {
 		rules.WriteString("\n\n" + plugin.Skill(topic))
 	}
@@ -109,6 +110,9 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
+	if err := s.LoadCoordinatorBundle(); err != nil {
+		return nil, err
+	}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -169,7 +173,7 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 }
 
 func (a *app) executionHook() guard.Hook {
-	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
+	return guard.Hook{Transcripts: a.transcriptPolicy(), Self: mustSelf(), Shell: a.cfg.Shell, Outbound: outboundGuard(a.cfg.Outbound), Upstream: guard.Upstream{Orgs: a.cfg.GitHub.AllowedOrgs, Review: a.cfg.GitHub.UpstreamReview}, SecretFiles: append(append([]string(nil), a.cfg.Secret.Files...), a.cfg.Secret.TokenFile), UnlockCommands: a.cfg.Secret.UnlockCommands, Production: a.cfg.Kube.Production, ProtectedContexts: a.cfg.Kube.ProtectedContexts, ReadOnlyExecQueries: a.cfg.Kube.ReadOnlyExecQueries, Kubeconfig: kubeconfigList(), MachineKubeconfig: machineKubeconfig(), ProjectsDir: a.cfg.Projects.Dir, WorktreePlaces: a.cfg.Projects.Worktrees, HomePlaces: a.cfg.Home.Places, PersonFolders: a.cfg.Hooks.PersonFolders, GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 }
 
 // executionGuardDecision picks the guard for the hook's format. A hook in
@@ -325,7 +329,7 @@ func (a *app) checkExecutionCommand(cmd *cobra.Command) error {
 	}
 	path := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 	switch path {
-	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents rerun", "agents merge", "agents mcp-proxy", "run", "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
+	case "agents github-cli", "agents github-git", "budget", "agents publish", "agents review", "agents rerun", "agents merge", "agents mcp-proxy", workerGitHubRunGroup, "run stats", "run tail", "agents idle", "agents park", "agents note", "agents problem", "note add", "log add", "transcripts", "transcripts list", "transcripts search", "transcripts read", "transcripts request":
 		return nil
 	case supervisorCommand, "supervisor status":
 		return refused("supervisor status is coordinator-only; run beekeeper supervisor status on the coordinator")
@@ -432,7 +436,7 @@ func (a *app) executionHostCmds() []*cobra.Command {
 		defer cancel()
 		return s.Run(ctx, j.Handle.Ref)
 	}}
-	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
+	return append(a.executionGitHubCommands(), []*cobra.Command{hostRPC, guardCmd, run, a.executionPublishCmd(), a.executionReviewCmd(), a.executionRerunCmd(), a.executionMergeCmd(), a.executionAuthorizationsCmd(), a.executionCoordinatorCmd(), a.executionMCPCmd(), a.executionHostsCmd(), a.executionInspectCmd(), a.executionLogsCmd(), a.executionStopCmd(), a.executionRecoverCmd(), a.executionMessagesCmd()}...)
 }
 
 func (a *app) executionHostsCmd() *cobra.Command {
@@ -481,19 +485,56 @@ func (a *app) executionHostsCmd() *cobra.Command {
 			return err
 		}
 		caps, probeErr := a.probeExecution(cmd.Context(), h)
-		// Show per-harness diagnostics even when every configured harness is
-		// unavailable. The failed probe still refuses admission and exits nonzero.
-		if probeErr != nil && len(caps.Readiness) == 0 {
-			return probeErr
+		// Audit independently of readiness so a policy/tool failure does not
+		// hide leftovers. An unreachable audit is explicitly unknown.
+		var audit []execution.ResourceFinding
+		auditErr := (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-audit", execution.Ref{}, nil, &audit)
+		if auditErr != nil {
+			audit = []execution.ResourceFinding{{Ref: execution.Ref{Host: h.Identity}, State: execution.Unknown, Reason: "resource inventory unreachable or unavailable", Retry: "restore host access and retry hosts check; do not clean unknown resources"}}
 		}
+		if auditErr == nil {
+			st, err := a.store.Peek()
+			if err != nil {
+				return err
+			}
+			var registered []execution.Ref
+			for _, start := range st.Starts {
+				if start.Execution != nil {
+					registered = append(registered, start.Execution.Handle.Ref)
+				}
+			}
+			execution.ReportOrphans(audit, a.cfg.Identity.Host, registered)
+		}
+		caps.ResourceAudit = audit
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}
-		if probeErr != nil {
-			return probeErr
+		if probeErr != nil || auditErr != nil {
+			return errors.Join(probeErr, auditErr)
 		}
 		return checkHostRelease(caps.Version)
 	}})
+	var releaseEvidence bool
+	reconcile := &cobra.Command{Use: "reconcile <host> <execution> <generation>", Short: "Reconcile one terminal execution; retain recovery work", Args: cobra.ExactArgs(3), RunE: func(cmd *cobra.Command, args []string) error {
+		if a.managedExecutionID() != "" {
+			return refused("managed workers cannot reconcile host resources")
+		}
+		h, err := a.executionHost(args[0])
+		if err != nil {
+			return err
+		}
+		generation, err := strconv.ParseUint(args[2], 10, 64)
+		if err != nil {
+			return err
+		}
+		ref := execution.Ref{Host: h.Identity, Execution: execution.ExecutionID(args[1]), Generation: generation}
+		if err := ref.Validate(); err != nil {
+			return err
+		}
+		return (execution.SSHTransport{Host: h}).Call(cmd.Context(), "resource-reconcile", ref, releaseEvidence, &struct{}{})
+	}}
+	reconcile.Flags().BoolVar(&releaseEvidence, "release-evidence", false, "Attest this execution log is no longer needed for review or recovery; allow removal after 30 days")
+	c.AddCommand(reconcile)
 	c.AddCommand(&cobra.Command{Use: "provision-tools", Short: "On an idle execution host: install missing pinned Go and gh from checksum-verified official releases", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.managedExecutionID() != "" {
 			return refused("managed workers cannot provision host tools")
@@ -530,7 +571,30 @@ func (a *app) catalogHost(selector string) (execution.Host, error) {
 	if !ok || selector == executionLocal {
 		return h, usageErr("unknown SSH execution host %q", selector)
 	}
-	return h, h.ValidateCatalog()
+	if err := h.ValidateCatalog(); err != nil {
+		return h, err
+	}
+	st, err := a.store.Peek()
+	if err != nil {
+		return h, err
+	}
+	return h, validateRetainedExecutionRoute(st, selector, h)
+}
+
+func validateRetainedExecutionRoute(st *state.State, selector string, h execution.Host) error {
+	// Retained journals can still be inspected, stopped or reconciled after
+	// exit. Keep their route until their records are retired, including when
+	// another selector names the same physical host.
+	for _, start := range st.Starts {
+		r := start.Execution
+		if r == nil || r.Endpoint == nil || (r.Selector != selector && r.Handle.Ref.Host != h.Identity) {
+			continue
+		}
+		if r.Handle.Ref.Host != h.Identity || *r.Endpoint != h.Endpoint {
+			return refused("execution host %s route changed while retained execution %s depends on its approved endpoint; restore the original host identity and SSH executable/config route before continuing", selector, r.Handle.Ref.Execution)
+		}
+	}
+	return nil
 }
 
 // executionHost is the agents.hosts entry selector names, pinned to the

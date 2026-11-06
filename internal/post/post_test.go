@@ -12,7 +12,7 @@ func TestCheckPasses(t *testing.T) {
 		"- [giantswarm/giantswarm#37853](https://github.com/giantswarm/giantswarm/issues/37853) epic\n" +
 		"- note 84 and timer 53, see [the docs](https://example.com/x)\n" +
 		"- `#12 in code` and &#35; and C# and a -> b\n" +
-		"— written by Timo's agents (hourly status)"
+		"— written by Alex's agents (hourly status)"
 	if p := Check(msg); len(p) != 0 {
 		t.Errorf("Check = %q", p)
 	}
@@ -28,7 +28,7 @@ func TestCheckRefuses(t *testing.T) {
 		{"Slack's link syntax", "<https://github.com/giantswarm/beekeeper/pull/109|beekeeper#109>", "Slack's link syntax"},
 		{"a wrong repository", "[beekeeper#109](https://github.com/giantswarm/devctl/pull/109)", "labelled beekeeper#109 but links giantswarm/devctl#109"},
 		{"a wrong number", "[beekeeper#109](https://github.com/giantswarm/beekeeper/pull/108)", "labelled beekeeper#109 but links giantswarm/beekeeper#108"},
-		{"a wrong owner", "[giantswarm/beekeeper#109](https://github.com/teemow/beekeeper/pull/109)", "labelled giantswarm/beekeeper#109"},
+		{"a wrong owner", "[giantswarm/beekeeper#109](https://github.com/fixture-person/beekeeper/pull/109)", "labelled giantswarm/beekeeper#109"},
 		{"a bare number as label", "[#109](https://github.com/giantswarm/beekeeper/pull/109)", "labelled #109"},
 		{"a label without a ref", "[the reporter](https://github.com/giantswarm/beekeeper/pull/109)", "needs the label beekeeper#109"},
 		{"a ref label on another link", "[beekeeper#109](https://example.com)", "links no GitHub pull request"},
@@ -43,7 +43,7 @@ func TestCheckTheFirstReport(t *testing.T) {
 	// The shape of the 22:52 report: linked and bare references mixed.
 	msg := "*Lab status — last hour (21:52–22:52 EEST)*\n\nMerged & shipped:\n" +
 		"• [agent-platform#713](https://github.com/giantswarm/agent-platform/pull/713) v1.2.3, gpm#313\n" +
-		"Waiting on Timo:\n• #84 /refine of #37817"
+		"Waiting on Alex:\n• #84 /refine of #37817"
 	if p := Check(msg); len(p) != 3 {
 		t.Errorf("Check = %q, want the three bare references", p)
 	}

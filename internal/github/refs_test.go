@@ -76,7 +76,7 @@ func TestRefStatesBoundsEachTryByItsBatch(t *testing.T) {
 func TestRefStatesResolvesAPersonalAccountRepository(t *testing.T) {
 	var acting []string
 	run := ownerLink(&acting, func(query string) string {
-		if strings.Contains(query, `owner:"teemow"`) {
+		if strings.Contains(query, `owner:"fixture-person"`) {
 			return `{"data":{"r0":{"issueOrPullRequest":{"state":"OPEN"}}}}`
 		}
 		return `{"data":{"r0":{"issueOrPullRequest":{"state":"MERGED"}},"r1":{"issueOrPullRequest":{"state":"OPEN"}}}}`

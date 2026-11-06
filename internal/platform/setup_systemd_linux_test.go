@@ -3,6 +3,9 @@
 package platform
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -52,9 +55,12 @@ func TestSystemdSetupFiles(t *testing.T) {
 		t.Errorf("without a desktop scope: files %d, skipped %v", len(files), skipped)
 	}
 
-	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, TeleportEvery: 5 * time.Minute})
+	files, _ = systemdSetup{}.Files(SetupSpec{ConfigDir: "/c", Exe: testExe, TeleportEvery: 5 * time.Minute, TeleportLoginTimeout: 20 * time.Minute})
 	if len(files) != 5 {
 		t.Fatalf("with the keeper: files %v", files)
+	}
+	if !strings.Contains(string(files[3].Content), "TimeoutStartSec=2460s\n") {
+		t.Error("keeper service does not allow two configured 20-minute login attempts plus cleanup")
 	}
 	for i, want := range []struct {
 		path, content string
@@ -86,5 +92,70 @@ func TestCalendar(t *testing.T) {
 		if got := calendar(every); got != want {
 			t.Errorf("calendar(%s) = %q, want %q", every, got, want)
 		}
+	}
+}
+
+func TestTeleportBotService(t *testing.T) {
+	files, _ := (systemdSetup{}).Files(SetupSpec{ConfigDir: "/config", TeleportEvery: time.Minute, TeleportBotBinary: "/bin/tbot", TeleportBotConfig: "/config/bot.yaml"})
+	for _, f := range files {
+		if filepath.Base(f.Path) != teleportServiceUnit {
+			continue
+		}
+		unit := string(f.Content)
+		for _, want := range []string{`ExecStart="/bin/tbot" start --config "/config/bot.yaml"`, "Restart=always", "UMask=0077"} {
+			if !strings.Contains(unit, want) {
+				t.Fatalf("unit lacks %q: %s", want, unit)
+			}
+		}
+		if !f.Service || strings.Contains(unit, "renew") || strings.Contains(unit, "graphical") {
+			t.Fatalf("not a headless supervised service: %s", unit)
+		}
+		return
+	}
+	t.Fatal("bot unit missing")
+}
+
+func TestSystemdSetupNeedsStop(t *testing.T) {
+	const enabled, disabled = "enabled", "disabled"
+	bin := t.TempDir()
+	command := filepath.Join(bin, "systemctl")
+	script := `#!/bin/sh
+case "$2" in
+is-enabled) echo "$TEST_ENABLED" ;;
+is-active) echo "$TEST_ACTIVE" ;;
+*) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil { //nolint:gosec // executable test fixture
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	for _, state := range []struct {
+		enabled, active    string
+		started, needsStop bool
+	}{
+		{enabled, "active", true, true},
+		{enabled, "inactive", false, true},
+		{enabled, "failed", false, true},
+		{disabled, "active", false, true},
+		{disabled, "activating", false, true},
+		{disabled, "deactivating", false, true},
+		{disabled, "reloading", false, true},
+		{enabled, "activating", false, true},
+		{disabled, "inactive", false, false},
+		{disabled, "failed", false, false},
+		{disabled, "", false, false},
+	} {
+		t.Run(state.enabled+"/"+state.active, func(t *testing.T) {
+			t.Setenv("TEST_ENABLED", state.enabled)
+			t.Setenv("TEST_ACTIVE", state.active)
+			s := systemdSetup{}
+			if got := s.Started(context.Background(), "/units/test.service"); got != state.started {
+				t.Errorf("Started = %v, want %v", got, state.started)
+			}
+			if got := s.NeedsStop(context.Background(), "/units/test.service"); got != state.needsStop {
+				t.Errorf("NeedsStop = %v, want %v", got, state.needsStop)
+			}
+		})
 	}
 }

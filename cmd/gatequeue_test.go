@@ -98,7 +98,9 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	noSystemd(t)
 	dir := t.TempDir()
 	self = filepath.Join(dir, "beekeeper")
-	script := "#!/bin/sh\necho $$ > \"$2.pid\"\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + "\n"
+	// The PID acknowledges all fixture writes, so awaitPID cannot return while
+	// cp still races TempDir cleanup (the flaky cmd test in #1180 and #439).
+	script := "#!/bin/sh\ncp \"$2.spec\" " + filepath.Join(dir, "spec") + " && echo $$ > \"$2.pid\"\n"
 	if err := os.WriteFile(self, []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
@@ -107,12 +109,9 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 	t.Cleanup(func() { selfExe = was })
 	return self, func() childSpec {
 		t.Helper()
-		var raw []byte
-		var err error
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-			if raw, err = os.ReadFile(filepath.Join(dir, "spec")); err == nil && json.Valid(raw) { //nolint:gosec // the test's file
-				break
-			}
+		raw, err := os.ReadFile(filepath.Join(dir, "spec")) //nolint:gosec // the test's file
+		if err != nil {
+			t.Fatal(err)
 		}
 		var spec childSpec
 		if err := json.Unmarshal(raw, &spec); err != nil {
@@ -120,6 +119,34 @@ func stubSelf(t *testing.T) (self string, launched func() childSpec) {
 		}
 		return spec
 	}
+}
+
+// Returning from launchChild must mean that the fake child's last fixture
+// write is complete, including when a caller immediately ends its subtest.
+func TestQueuedChildAcknowledgesFixtureWrites(t *testing.T) {
+	// Delay cp past awaitPID's poll so publishing the PID before the copy
+	// reliably exposes an unfinished write, without depending on machine load.
+	realCP, err := exec.LookPath("cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cp"), []byte("#!/bin/sh\nsleep 1\nexec \"$BEEKEEPER_TEST_REAL_CP\" \"$@\"\n"), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	t.Setenv("BEEKEEPER_TEST_REAL_CP", realCP)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Run("handoff", func(t *testing.T) {
+		self, launched := stubSelf(t)
+		base := filepath.Join(t.TempDir(), "child")
+		if _, err := launchChild(childSpec{Argv: []string{self}}, base); err != nil {
+			t.Fatal(err)
+		}
+		spec := launched()
+		if !slices.Equal(spec.Argv, []string{self}) {
+			t.Fatalf("child argv %q, want %q", spec.Argv, []string{self})
+		}
+	})
 }
 
 // aheadName is the session of the merge ahead in a busy lane.
@@ -203,7 +230,7 @@ func TestAGatedDetachedMergeRunsBlocking(t *testing.T) {
 // The queued run takes over the place of the gate it came from; any other
 // live gate of the same pull request is refused as a second merge (exit 3)
 // and leaves the place alone.
-func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
+func TestASecondMergeOfAQueuedOneReusesItsPlace(t *testing.T) {
 	stubGitHub(t, github.Open, "")
 	busy, queued := sleeper(t), sleeper(t)
 	seed := func() *app {
@@ -212,8 +239,8 @@ func TestASecondMergeOfAQueuedOneIsRefused(t *testing.T) {
 			state.Merge{Repo: scratchRepo, PR: 7, Lane: scratchRepo, By: state.Party{Session: "s1", Name: ownerName}, PID: queued, Phase: state.Waiting, Joined: time.Now(), Seen: time.Now()})
 	}
 	a := seed()
-	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateDuplicate {
-		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateDuplicate)
+	if err := a.gate(context.Background(), mergeArgv(scratchRepo), 0, 0, false); Code(err) != ExitGateQueued {
+		t.Fatalf("exit %d (%v), want %d", Code(err), err, ExitGateQueued)
 	}
 	st, _ := a.store.Read()
 	if i := slices.IndexFunc(st.Merges, func(m state.Merge) bool { return m.PR == 7 && m.PID == queued }); i < 0 {
@@ -241,8 +268,8 @@ func lastEventOf(t *testing.T, a *app, verb string) string {
 }
 
 // A place whose merge is not in the gate leaves its lane once its pull
-// request closes and settles it once merged; a place whose gate waits, and
-// one asked less than a check ago, are not asked.
+// request closes and settles it once merged, including a live waiting gate;
+// one asked less than a check ago is not asked.
 func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	now := time.Now()
 	alive := sleeper(t)
@@ -252,7 +279,7 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 		state.Merge{Repo: scratchRepo, PR: 3, Lane: scratchRepo, Phase: state.Waiting, Seen: now},
 		state.Merge{Repo: scratchRepo, PR: 4, Lane: scratchRepo, Phase: state.Waiting, PID: alive, Seen: now},
 		state.Merge{Repo: scratchRepo, PR: 5, Lane: scratchRepo, Phase: state.Waiting, Seen: now, Checked: now.Add(-time.Second)})
-	pulls := map[int]github.Pull{1: {State: github.Closed}, 2: {State: github.Merged, MergedAt: now}, 3: {State: github.Open}}
+	pulls := map[int]github.Pull{1: {State: github.Closed}, 2: {State: github.Merged, MergedAt: now}, 3: {State: github.Open}, 4: {State: github.Merged, MergedAt: now}}
 	was := pullState
 	t.Cleanup(func() { pullState = was })
 	var asked []int
@@ -263,21 +290,21 @@ func TestClosedAndMergedPlacesLeaveTheirLane(t *testing.T) {
 	if err := a.checkPlaces(context.Background(), watchParty, now, "", "", 0, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(asked, []int{1, 2, 3}) {
-		t.Errorf("asked about %v, want [1 2 3]", asked)
+	if !slices.Equal(asked, []int{1, 2, 3, 4}) {
+		t.Errorf("asked about %v, want [1 2 3 4]", asked)
 	}
 	st, _ := a.store.Read()
 	phase := map[int]string{}
 	for _, m := range st.Merges {
 		phase[m.PR] = m.Phase
 	}
-	if _, ok := phase[1]; ok || phase[2] != state.Settling || phase[3] != state.Waiting || phase[4] != state.Waiting || phase[5] != state.Waiting {
+	if _, ok := phase[1]; ok || phase[2] != state.Settling || phase[3] != state.Waiting || phase[4] != state.Settling || phase[5] != state.Waiting {
 		t.Errorf("phases %v", phase)
 	}
 	if d := lastEventOf(t, a, "merge.dropped"); d != "o/r#1: closed without a merge, its place in lane o/r is dropped" {
 		t.Errorf("dropped %q", d)
 	}
-	if d := lastEventOf(t, a, testMergedWord); !strings.HasPrefix(d, "o/r#2 outside the gate at ") {
+	if d := lastEventOf(t, a, testMergedWord); !strings.HasPrefix(d, "o/r#4 outside the gate at ") {
 		t.Errorf("merged %q", d)
 	}
 }

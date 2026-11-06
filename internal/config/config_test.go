@@ -12,6 +12,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/alerts"
 )
 
+const negativeSecond = "-1s"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/state")
 	c, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
@@ -514,6 +516,9 @@ func TestExampleConfig(t *testing.T) {
 		c.Shell != "zsh" || c.KindClusters(1<<30) != 2 || c.MemcapMax(1<<30) != "12G" {
 		t.Errorf("kube %+v, shell %q, kind %d, memcap %s", c.Kube, c.Shell, c.KindClusters(1<<30), c.MemcapMax(1<<30))
 	}
+	if got := strings.Join(c.Kube.ProtectedContexts, ","); got != "full-test,full-test-operations" {
+		t.Errorf("protected contexts = %q", got)
+	}
 	w := c.Watch
 	for got, want := range map[int]int{w.AvailMin(1): 10240, w.SwapMax(1): 10000, w.OOMDHeadroomMin(1): 1024,
 		w.ScopeAnonMax(1): 28000, w.GTTMax(1): 24576, w.TmpMax(1): 20000, w.DiskMin(1): 102400} {
@@ -522,7 +527,7 @@ func TestExampleConfig(t *testing.T) {
 		}
 	}
 	if c.Guide.Skill != "beekeeper:guide" || c.Guide.Person != "Ada" ||
-		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || c.Ollama.URL == "" ||
+		c.GitHub.ProbeRepo != "example-org/tools" || !c.Merge.DevctlServes("giantswarm/x") || !c.Merge.DevctlServes("teemow/x") || c.Ollama.URL == "" ||
 		c.Alerts.Tenant != "example-org" || len(c.Alerts.Installations) != 3 || len(c.Lanes) != 2 ||
 		c.Board.Project != 12 || len(c.Board.Order) != 7 || !c.Board.Order[1].SubIssues || c.Board.Epics.Go != "in progress" || len(c.Board.Epics.Planning) != 1 || c.Board.StaleAfter.Hours() != 8760 {
 		t.Errorf("config = %+v", c)
@@ -1255,7 +1260,7 @@ func TestCodexUsageDefaultWithBoundsOnly(t *testing.T) {
 }
 
 func TestWatchBatchInterval(t *testing.T) {
-	for _, value := range []string{"1m", "-1s"} {
+	for _, value := range []string{"1m", negativeSecond} {
 		c, err := parse("test.yaml", []byte("watch: {batchInterval: "+value+"}"))
 		if err != nil {
 			t.Fatal(err)
@@ -1264,5 +1269,128 @@ func TestWatchBatchInterval(t *testing.T) {
 		if c.Watch.BatchInterval.Duration != want {
 			t.Errorf("batch interval = %s, want %s", c.Watch.BatchInterval, want)
 		}
+	}
+}
+
+func TestTeleportBotConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "teleport:\n  bot:\n    config: ~/bot.yaml\n    certificate: ~/identity/tlscert\n    kubeconfig: ~/kubernetes/kubeconfig.yaml\nkube:\n  kubeconfig: [/existing]\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Teleport.Enabled() || c.Teleport.Bot.Binary != "tbot" || !filepath.IsAbs(c.Teleport.Bot.Config) {
+		t.Fatalf("bot: %+v", c.Teleport)
+	}
+	if len(c.Kube.Kubeconfig) != 2 || c.Kube.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig || c.Kube.Kubeconfig[1] != "/existing" || c.Alerts.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig {
+		t.Fatalf("kubeconfig selection: %v %v", c.Kube.Kubeconfig, c.Alerts.Kubeconfig)
+	}
+	if err := os.WriteFile(path, []byte("teleport:\n  bot:\n    config: /bot.yaml\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("accepted bot without output paths")
+	}
+}
+
+func TestLoadNamesUnparsableKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "watch.interval") {
+		t.Fatalf("want key in parse error, got %v", err)
+	}
+}
+
+func TestLeasableInstallations(t *testing.T) {
+	c := Config{Resources: []string{leasableShared}}
+	c.Alerts.Installations = []Installation{{Name: leasableCustomer}, {Name: leasableShared}, {Name: leasableCustomer}}
+	if got, want := c.Leasable(), []string{leasableShared, leasableCustomer, Browser}; !slices.Equal(got, want) {
+		t.Fatalf("Leasable() = %v, want %v", got, want)
+	}
+	if !c.IsLeasable(leasableCustomer) || c.IsLeasable("unknown") {
+		t.Fatal("only configured installations should be leasable")
+	}
+}
+
+func TestMergeCITimeouts(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    example-org/slow-repo: 3h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for repo, want := range map[string]time.Duration{
+		"example-org/other":     2 * time.Hour,
+		"EXAMPLE-ORG/SLOW-REPO": 3 * time.Hour,
+	} {
+		if got := c.Merge.TimeoutFor(repo); got != want {
+			t.Errorf("TimeoutFor(%q) = %s, want %s", repo, got, want)
+		}
+	}
+	if err := os.WriteFile(p, []byte("merge:\n  ciTimeout: 4h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Merge.TimeoutFor("example-org/other"); got != 4*time.Hour {
+		t.Errorf("configured fallback = %s, want 4h", got)
+	}
+}
+
+func TestMergeCITimeoutsRejectInvalidOverrides(t *testing.T) {
+	for _, value := range []string{"example-org/repo: 0s", "example-org/repo: -1h", "repo: 3h"} {
+		t.Run(value, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(p, []byte("merge:\n  ciTimeouts:\n    "+value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "merge.ciTimeouts") {
+				t.Fatalf("Load error = %v, want invalid CI timeout override", err)
+			}
+		})
+	}
+}
+
+const (
+	leasableShared   = "shared"
+	leasableCustomer = "customer"
+)
+
+func TestProjectsPaths(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("BEEKEEPER_EXECUTION_HOME", base)
+	p := filepath.Join(base, "config.yaml")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != filepath.Join(base, "projects") || !slices.Equal(c.Projects.Worktrees, []string{filepath.Join(base, "projects", "worktrees")}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects:\n  dir: /projects\n  worktrees: [/worktrees]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Projects.Dir != "/projects" || !slices.Equal(c.Projects.Worktrees, []string{"/worktrees"}) {
+		t.Fatalf("%+v", c.Projects)
+	}
+	if err := os.WriteFile(p, []byte("projects: {worktrees: [relative]}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err == nil {
+		t.Fatal("accepted relative worktree root")
 	}
 }

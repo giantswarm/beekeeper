@@ -248,7 +248,7 @@ func (a *app) reseed(sessions []*claude.Session) func(*state.State, state.Start)
 	return func(st *state.State, s state.Start) (time.Time, bool) {
 		if done == nil {
 			done = map[string]bool{}
-			evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == "agents.done" })
+			evs, _ := a.store.Events(0, func(e state.Event) bool { return e.Verb == executionDone })
 			for _, e := range evs {
 				done[e.By.Session] = true
 			}

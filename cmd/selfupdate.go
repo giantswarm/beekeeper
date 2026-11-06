@@ -69,6 +69,7 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 
 func (a *app) selfUpdateCmd() *cobra.Command {
 	var check, pluginsOnly bool
+	var version string
 	c := &cobra.Command{
 		Use:   selfUpdateCmdName,
 		Short: "Replace this binary with the latest signed release (--check only asks)",
@@ -77,6 +78,10 @@ than this binary, install its binary for this OS and architecture over the
 running executable. A pre-release (a release candidate) looks among the
 pre-releases too, a release only among releases. --check only reports both
 versions: exit 125 when a newer release exists, 0 when this is the latest.
+
+--version <tag> selects an exact release, including a release candidate
+(for example --version v0.125.0-rc.3), even when older than this binary.
+--check --version <tag> reports that release without installing it.
 
 Release binaries are signed in CI (cosign, keyless) and published next to
 their Sigstore bundle. The download is installed only after that bundle
@@ -134,8 +139,12 @@ reset. A development build (version dev) is refused.`,
 			if a.json {
 				w = io.Discard
 			}
+			if !check {
+				a.warnUpdateConfig(w)
+			}
 			started := time.Now()
 			ctx := update.WithOptions(cmd.Context(), update.Options{
+				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {
 					return a.canaryRelease(ctx, w, path, version)
 				},
@@ -182,8 +191,10 @@ reset. A development build (version dev) is refused.`,
 			return err
 		},
 	}
+	c.Flags().StringVar(&version, "version", "", "install an exact release tag, including a pre-release (works with --check)")
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
+	c.MarkFlagsMutuallyExclusive("version", syncPluginsFlag)
 	_ = c.Flags().MarkHidden(syncPluginsFlag)
 	return c
 }
@@ -331,4 +342,14 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 		}
 	}
 	return nil
+}
+
+// warnUpdateConfig runs before handing control to a newer binary, which may
+// understand configuration that this installed version cannot read.
+func (a *app) warnUpdateConfig(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "WARNING: configuration changes made with a newer release may be unreadable by the currently installed binary. Before changing configuration, finish the update and restart older beekeeper processes; validate configuration before reverting.")
+
+	if err := a.loadConfig(); err != nil {
+		_, _ = fmt.Fprintf(w, "WARNING: the installed binary cannot read the configuration: %v. A newer release may accept or write values this version cannot read; repair the configuration before reverting.\n", err)
+	}
 }
