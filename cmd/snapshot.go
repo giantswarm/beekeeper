@@ -253,7 +253,7 @@ func (a *app) takeSnapshot(ctx context.Context, oomSince time.Time, withBudget, 
 	s.Models, _ = hostModels(ctx, a.cfg)
 	s.Tmp, _ = machine.ReadDisk("/tmp")
 	s.Root, _ = machine.ReadDisk("/")
-	s.DiskPaths = readDiskPaths(ctx)
+	s.DiskPaths = readDiskPaths(ctx, a.diskPathRoots())
 	s.Slots = machine.ReadSlots(a.slotView())
 	s.BuildCPU = machine.ReadBuildCPU(free.BuildCPUSample)
 	s.KubeContext = guard.CurrentContext(machineKubeconfig())

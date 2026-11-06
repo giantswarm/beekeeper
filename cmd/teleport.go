@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/alerts"
@@ -21,6 +22,9 @@ import (
 
 // teleportFile is the keeper's record in the state directory.
 const teleportFile = "teleport.json"
+
+// teleportRenewLock serializes the full renewal, outside the swapped home.
+const teleportRenewLock = "teleport-renew.lock"
 
 // teleportPurpose is the purpose of the browser lease a renewal holds.
 const teleportPurpose = "Teleport login renewal"
@@ -252,6 +256,19 @@ Doctor names installations it could not write and why.`,
 			if t.Bot.Enabled() {
 				return usageErr("Machine ID renews automatically through beekeeper-teleport.service; no SSO renewal is used")
 			}
+			lock := flock.New(filepath.Join(a.cfg.StateDir, teleportRenewLock))
+			locked, err := lock.TryLock()
+			if err != nil {
+				return fmt.Errorf("lock the Teleport renewal: %w", err)
+			}
+			if !locked {
+				if keeper {
+					_, err := fmt.Fprintln(a.out, "teleport: a renewal is already running; waiting for the next run")
+					return err
+				}
+				return refused("a Teleport renewal is already running")
+			}
+			defer func() { _ = lock.Unlock() }()
 			me, err := a.caller()
 			if err != nil {
 				return err
