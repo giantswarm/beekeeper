@@ -12,9 +12,159 @@ import (
 	"testing"
 	"time"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/fatal"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
+
+func TestFatalRecoveryStartsAfterObservationBudgetExpires(t *testing.T) {
+	a, _ := stubApp(t)
+	dir := a.store.Dir()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := fmt.Sprintf("stateDir: %q\nfatal:\n  repositories: []\n  checks:\n", dir)
+	for i := range 16 {
+		raw += fmt.Sprintf("    - name: slow-%d\n      probe: [slow-probe]\n", i)
+	}
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfgPath = path
+	oldTimeout, oldRun := fatalObservationTimeout, fatalRun
+	fatalObservationTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { fatalObservationTimeout, fatalRun = oldTimeout, oldRun })
+	restarts, slow := 0, 0
+	fatalRun = func(ctx context.Context, _ string, args []string) (string, string, int, error) {
+		if args[0] == "slow-probe" {
+			slow++
+			<-ctx.Done()
+			return "", "", 0, ctx.Err()
+		}
+		if slices.Contains(args, "is-enabled") {
+			return fatalEnabledState, "", 0, nil
+		}
+		if slices.Contains(args, "is-active") {
+			code := 3
+			if restarts > 0 {
+				code = 0
+			}
+			return "", "", code, nil
+		}
+		if slices.Contains(args, "start") {
+			if ctx.Err() != nil {
+				t.Fatal("recovery inherited exhausted observation context")
+			}
+			restarts++
+		}
+		return "", "", 0, nil
+	}
+	if err := a.fatalScan(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if slow != 16 || restarts != 1 {
+		t.Fatalf("%d slow probes, %d restarts", slow, restarts)
+	}
+}
+
+func TestFatalMalformedConfigRecoversUsingValidatedAdmission(t *testing.T) {
+	for _, held := range []string{"", bgStopCmd, holdStarts, holdGitHub, sshTestRepository, loopCapacity} {
+		t.Run("hold="+held, func(t *testing.T) {
+			a, _ := stubApp(t)
+			dir := a.store.Dir()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			raw := fmt.Sprintf("stateDir: %q\nfatal: {repositories: []}\n", dir)
+			if held == loopCapacity {
+				raw += "capacity: {local: {ceiling: 0}}\n"
+			}
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a.cfgPath = path
+			fakeFatalRun(t, func(args []string) (string, int) {
+				if slices.Contains(args, "is-enabled") {
+					return fatalDisabledState, 1
+				}
+				return "", 0
+			})
+			// A healthy unattended scan seeds the same trusted admission file as install.
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("fatal: ["), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				if held == bgStopCmd {
+					st.Stop = &state.Stop{At: a.now}
+				}
+				if held != "" && held != bgStopCmd && held != loopCapacity {
+					st.Holds = []state.Hold{{Target: held, At: a.now}}
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			oldRun := beekeeperRun
+			starts := 0
+			beekeeperRun = func(ctx context.Context, args ...string) (string, int, error) {
+				if args[1] != config.RecoveryPath(dir) {
+					t.Fatal("launch did not use trusted admission", args)
+				}
+				cfg, err := config.Load(args[1])
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner := args[slices.Index(args, fatalNameOption)+1]
+				child := *a
+				child.cfg, child.cfgPath = cfg, args[1]
+				if err := child.withKindAdmission(ctx, owner, func() error { return nil }); err != nil {
+					t.Fatal(err)
+				}
+				if held == loopCapacity {
+					_, _, err := child.startGateWithOptions(ctx, owner, config.ClaudeHarness, "", false, false, nil, forWorker)
+					if Code(err) != ExitRefused {
+						t.Fatalf("capacity not enforced: %v", err)
+					}
+					return "", ExitRefused, nil
+				}
+				brief, err := os.ReadFile(args[len(args)-1])
+				if err != nil || !strings.Contains(string(brief), path) {
+					t.Fatal("original config repair path absent", err)
+				}
+				starts++
+				// The repair backend restores the main config; a later scan must verify it.
+				return "", 0, os.WriteFile(path, []byte(raw), 0600)
+			}
+			t.Cleanup(func() { beekeeperRun = oldRun })
+			var out bytes.Buffer
+			c := New()
+			c.SetOut(&out)
+			c.SetArgs([]string{workerGitHubConfigOption, path, "fatal", "--state-dir", dir, "scan"})
+			if err := c.ExecuteContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			q, err := fatal.Read(dir)
+			if err != nil || q.Barrier("ordinary") == nil {
+				t.Fatal("unverified incident cleared", err)
+			}
+			if held != "" {
+				if starts != 0 || q.Incidents[0].Attempts != 0 {
+					t.Fatalf("held repair started: %+v", q)
+				}
+				return
+			}
+			if starts != 1 {
+				t.Fatalf("%d repairs", starts)
+			}
+			if err := a.fatalScan(t.Context(), dir); err != nil {
+				t.Fatal(err)
+			}
+			q, err = fatal.Read(dir)
+			if err != nil || q.Barrier("ordinary") != nil {
+				t.Fatal("passing config did not resolve incident", err)
+			}
+		})
+	}
+}
 
 const (
 	fatalUnavailable   = "unavailable"

@@ -31,8 +31,11 @@
 #       repository: giantswarm/beekeeper # default repair owner
 # Probes: exit 0 healthy, 1 fatal, 2 deliberately disabled, others unknown.
 # Output is discarded; put no credentials in probe arguments. A malformed
-# main config is still detected with the unit's pinned --state-dir; repairs
-# wait until admission can load, rather than guessing machine limits.
+# main config uses the private last-known-good fatal-admission.yaml saved
+# at installation and on valid scans, with the unit's pinned --state-dir.
+# Recovery still reads current stop, holds and capacity. Without a validated
+# snapshot it detects the outage and fails closed. Observation is bounded
+# separately so slow probes leave time for recovery.
 # Clones belong to the person; sessions create checkouts under worktrees.
 projects:
   dir: ~/projects

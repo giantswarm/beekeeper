@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,11 +16,83 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
+const timerDispatchRepairWorker = "repair worker"
+
+func TestTimerDispatcherStopCancelsEarlierCommandAndResumeRetries(t *testing.T) {
+	for _, repeat := range []string{"", state.RepeatDaily} {
+		t.Run("repeat="+repeat, func(t *testing.T) {
+			a, _ := stubApp(t)
+			a.out = io.Discard
+			ready := filepath.Join(t.TempDir(), "ready")
+			// The shell waits on a child: cancellation must kill both.
+			tm := state.Timer{ID: 42, Due: a.now.Add(-time.Minute), Repeat: repeat,
+				Run: fmt.Sprintf("touch %s; sleep 60 & wait", ready)}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Timers = []state.Timer{tm}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			d := newTimerDispatchSession(t.Context())
+			defer d.close()
+			if _, err := d.pass(a); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("command did not start")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Stop = &state.Stop{At: a.now}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stopped := make(chan error, 1)
+			go func() { _, err := d.pass(a); stopped <- err }()
+			select {
+			case err := <-stopped:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("stop did not cancel and drain active command")
+			}
+			st, err := a.store.Read()
+			if err != nil || len(st.Timers) != 1 || !st.Timers[0].Due.Equal(tm.Due) || !st.Timers[0].Fired.IsZero() {
+				t.Fatalf("interrupted occurrence lost: %+v, %v", st, err)
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				st.Stop = nil
+				st.Timers[0].Run = probeHolds
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w, err := d.pass(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.timerActs.Wait()
+			st, err = a.store.Read()
+			if err != nil || len(st.Timers) > 0 && !st.Timers[0].Due.After(tm.Due) {
+				t.Fatalf("resume did not retry occurrence: %+v, %v", st, err)
+			}
+		})
+	}
+}
+
 func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Wake: "repair worker", What: "proof finished"}}
+		st.Timers = []state.Timer{{ID: 1, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: "proof finished"}}
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -43,6 +118,48 @@ func TestTimerDispatcherWorksWithoutWatchOrLoopAndClaimsOnce(t *testing.T) {
 	}
 }
 
+func TestTimerDispatcherStopRetainsInterruptedWake(t *testing.T) {
+	a, _ := stubApp(t)
+	a.out = io.Discard
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Timers = []state.Timer{{ID: 1, Due: a.now, Wake: timerDispatchRepairWorker}}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	old := wakeOwner
+	wakeOwner = func(_ *app, ctx context.Context, _ state.Party, _, _, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	t.Cleanup(func() { wakeOwner = old })
+	d := newTimerDispatchSession(t.Context())
+	defer d.close()
+	if _, err := d.pass(a); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wake did not start")
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Stop = &state.Stop{At: a.now}
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.pass(a); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.store.Read()
+	if err != nil || len(st.Timers) != 1 || st.Timers[0].Wake != timerDispatchRepairWorker || !st.Timers[0].Fired.IsZero() {
+		t.Fatalf("interrupted wake lost: %+v %v", st, err)
+	}
+}
+
 func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	a, _ := stubApp(t)
 	a.out = io.Discard
@@ -61,7 +178,7 @@ func TestTimerDispatcherKeepsTickingDuringEarlierAction(t *testing.T) {
 	var batches []*watcher
 	for id := 1; id <= 2; id++ {
 		if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
-			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: "repair worker", What: "proof finished"})
+			st.Timers = append(st.Timers, state.Timer{ID: id, Due: a.now.Add(-time.Minute), Wake: timerDispatchRepairWorker, What: "proof finished"})
 			return nil, nil
 		}); err != nil {
 			t.Fatal(err)

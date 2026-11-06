@@ -280,6 +280,7 @@ func (w *watcher) actTimers(ctx context.Context, fires []timerFire) {
 // wakeTimer wakes a fired timer's agent with its message; a wake that fails
 // is a line, so the supervisor's watch still has the text.
 func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
+	original := f
 	// A timer may have fired before the agent replaced its wait. Read the
 	// current park at delivery, including parks off the roster; a stale
 	// repeating timer must never turn a session waiting on a person.
@@ -332,6 +333,11 @@ func (w *watcher) wakeTimer(ctx context.Context, f timerFire) {
 			w.emitNow("timer", "TIMER WAKE QUEUED: #%d for %q; delivery pending: %s", f.t.ID, f.t.Wake, truncate(f.t.What, 200))
 			return
 		}
+		if ctx.Err() != nil {
+			if _, err := w.rearmInterruptedTimer(original); err != nil {
+				w.emitNow("timer", "TIMER WAKE RETRY FAILED: #%d: %v", f.t.ID, err)
+			}
+		}
 		w.emitNow("timer", "TIMER WAKE FAILED: #%d could not wake %q (%v): %s", f.t.ID, f.t.Wake, err, truncate(f.t.What, 200))
 		return
 	}
@@ -358,6 +364,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	rctx, cancel := context.WithTimeout(ctx, timerRunTimeout)
 	defer cancel()
 	c := exec.CommandContext(rctx, "sh", "-c", f.t.Run) //nolint:gosec // the command its timer's setter gave on this machine
+	mergeCheckGroup(c)                                  // cancellation ends the shell and its child commands
 	// An agents start the command runs says which timer started it, its
 	// time and how late it fired (agentStartTimer).
 	c.Env = append(os.Environ(), envTimerCommand+"=run", envTimerID+"="+strconv.Itoa(f.t.ID), envTimerDue+"="+f.t.Due.UTC().Format(time.RFC3339), envTimerLate+"="+f.late)
@@ -379,25 +386,7 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 		// Shutdown waits for timerActs before handing over to another watch.
 		// Restore the due occurrence before that handover, including a
 		// repeating timer whose next occurrence was already scheduled.
-		rearmed := false
-		err := w.store.Update(func(st *state.State) ([]state.Event, error) {
-			retry := f.t
-			retry.Checked, retry.Fired = time.Time{}, time.Time{}
-			retry.Held = "previous command interrupted"
-			for i, t := range st.Timers {
-				if t.ID != retry.ID {
-					continue
-				}
-				if t.Repeat != "" && t.Run == retry.Run && t.Due.Equal(f.nextDue) {
-					st.Timers[i] = retry
-					rearmed = true
-				}
-				return []state.Event{event(watchParty, "timer.failed", "#%d interrupted: %s", retry.ID, retry.Run)}, nil
-			}
-			st.Timers = append(st.Timers, retry)
-			rearmed = true
-			return []state.Event{event(watchParty, "timer.failed", "#%d interrupted; re-armed: %s", retry.ID, retry.Run)}, nil
-		})
+		rearmed, err := w.rearmInterruptedTimer(f)
 		if err != nil {
 			w.emitNow("timer", "TIMER FAILED: #%d `%s` interrupted (%v); could not re-arm (%v): %s", f.t.ID, f.t.Run, runErr, err, f.t.What)
 		} else if rearmed {
@@ -409,4 +398,28 @@ func (w *watcher) runTimer(ctx context.Context, f timerFire) {
 	}
 	_ = w.store.Log(event(watchParty, "timer.ran", "#%d exit %d (%s): %s", f.t.ID, rc, path, f.t.Run))
 	w.emitNow("timer", "TIMER RAN: #%d exit %d, output in %s: %s", f.t.ID, rc, path, truncate(f.t.What, 200))
+}
+
+// Retain the interrupted occurrence without overwriting a changed timer.
+func (w *watcher) rearmInterruptedTimer(f timerFire) (bool, error) {
+	rearmed := false
+	err := w.store.Update(func(st *state.State) ([]state.Event, error) {
+		retry := f.t
+		retry.Checked, retry.Fired = time.Time{}, time.Time{}
+		retry.Held = "previous action interrupted"
+		for i, t := range st.Timers {
+			if t.ID != retry.ID {
+				continue
+			}
+			if t.Repeat != "" && t.Run == retry.Run && t.Wake == retry.Wake && t.Due.Equal(f.nextDue) {
+				st.Timers[i] = retry
+				rearmed = true
+			}
+			return []state.Event{event(watchParty, "timer.failed", "#%d interrupted: %s", retry.ID, retry.Run)}, nil
+		}
+		st.Timers = append(st.Timers, retry)
+		rearmed = true
+		return []state.Event{event(watchParty, "timer.failed", "#%d interrupted; re-armed: %s", retry.ID, retry.Run)}, nil
+	})
+	return rearmed, err
 }

@@ -40,6 +40,9 @@ const (
 
 var fatalRun = runArgv
 
+// Observation cannot spend the time reserved for admission and recovery.
+var fatalObservationTimeout = time.Minute
+
 var fatalSessionAlive = func(a *app, p state.Party) (bool, error) {
 	sessions, _, err := a.sessions()
 	if err != nil {
@@ -195,7 +198,10 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			_, _ = fmt.Fprintf(a.out, "%s: probe unavailable; health unknown\n", o.ID)
 		}
 	}
+	observationCtx, cancelObservation := context.WithTimeout(ctx, fatalObservationTimeout)
+	defer cancelObservation()
 	path, pathErr := config.Path(a.cfgPath)
+	mainPath := path
 	var cfg *config.Config
 	if pathErr == nil {
 		cfg, pathErr = config.Load(path)
@@ -208,7 +214,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	}
 	observe(fatal.Observation{ID: "configuration", Failed: pathErr != nil, Evidence: "beekeeper configuration cannot load"})
 	for _, unit := range []string{"beekeeper-notify.service", "beekeeper-supervisor-loop.service", "beekeeper-timers.service"} {
-		observe(fatalService(ctx, unit))
+		observe(fatalService(observationCtx, unit))
 	}
 	timers := fatalTimers(st, now)
 	observe(fatal.Observation{ID: "timers:overdue", Failed: timers.overdue > 0, Disabled: timers.disabled, Evidence: timers.evidence()})
@@ -218,8 +224,11 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			return fmt.Errorf("fatal state directory differs from configuration; reinstall to pin it")
 		}
 		a.cfg = cfg
+		if err := config.SaveRecovery(dir, path); err != nil {
+			return err
+		}
 		for _, c := range cfg.Fatal.Checks {
-			code, err := fatalProbe(ctx, c.Probe...)
+			code, err := fatalProbe(observationCtx, c.Probe...)
 			o := fatalResult("check:"+c.Name, code, err)
 			observe(o)
 			if (o.Failed || o.Unknown || o.Disabled) && c.Harness != "" {
@@ -232,7 +241,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 				observe(fatal.Observation{ID: "main:" + repo, Unknown: true})
 				continue
 			}
-			observe(fatalMain(ctx, repo, path))
+			observe(fatalMain(observationCtx, repo, path))
 		}
 		seen := map[string]bool{}
 		choices := cfg.Capacity.Choices
@@ -244,9 +253,9 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 				continue
 			}
 			seen[c.Harness] = true
-			code, err := fatalProbe(ctx, c.Harness, "--version")
+			code, err := fatalProbe(observationCtx, c.Harness, "--version")
 			o := fatal.Observation{ID: "harness:" + c.Harness, Failed: err != nil || code != 0, Evidence: "configured harness cannot run --version"}
-			if ctx.Err() != nil {
+			if observationCtx.Err() != nil {
 				o.Failed = false
 				o.Unknown = true
 			}
@@ -283,7 +292,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 		// Notification is best effort; the durable status and event survive a
 		// desktop that is itself unavailable.
-		_, _ = fatalProbe(ctx, "notify-send", "beekeeper system health", msg)
+		_, _ = fatalProbe(observationCtx, "notify-send", "beekeeper system health", msg)
 	}
 	transitions = nil
 	if why := a.noStart(st); why != "" {
@@ -296,13 +305,16 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		return errors.Join(err, q.Save(dir))
 	}
 	if cfg == nil {
-		_, err = fmt.Fprintln(a.out, "fatal repair blocked: configuration must load before normal capacity admission; outage retained")
-		for i := range q.Incidents {
-			if q.Incidents[i].Resolved.IsZero() {
-				q.Incidents[i].Outcome = "blocked: configuration cannot load; capacity admission unavailable"
-			}
+		recoveryPath := config.RecoveryPath(dir)
+		cfg, err = config.LoadRecovery(dir)
+		if err != nil {
+			_, printErr := fmt.Fprintln(a.out, "fatal repair blocked: no validated recovery admission configuration; outage retained")
+			return errors.Join(printErr, q.Save(dir))
 		}
-		return errors.Join(err, q.Save(dir))
+		a.cfg = cfg
+		// Only the launch uses the trusted snapshot. The repair must restore and
+		// verify the original main configuration, never edit its admission copy.
+		path = recoveryPath
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -406,7 +418,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.transition", Detail: msg}); err != nil {
 				return err
 			}
-			_, _ = fatalProbe(ctx, "notify-send", "beekeeper system health", msg)
+			_, _ = fatalProbe(observationCtx, "notify-send", "beekeeper system health", msg)
 		}
 		_, _ = fmt.Fprintf(a.out, "%s: %s\n", x.ID, x.Outcome)
 		if err := q.Save(dir); err != nil {
@@ -419,6 +431,9 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		}
 	}
 	brief := fmt.Sprintf("Repair fatal system outage %s in https://github.com/%s. Evidence: %s. You own this outage. Fix the component in its owning repository; a desk rule or note is an antipattern. Respect all holds, stop intent, capacity, secret rules, green CI and independent desk review. Never force-push. Do not re-enable a deliberately disabled component. Prove the failing probe passes before reporting done. Read beekeeper fatal status for the durable incident.\n", x.ID, repo, x.Evidence)
+	if pathErr != nil {
+		brief += fmt.Sprintf("The main configuration %q cannot load. Restore it using the validated admission snapshot %q as reference, then verify the original path loads. Do not change the snapshot.\n", mainPath, path)
+	}
 	briefPath := filepath.Join(dir, "fatal-repair-brief.txt")
 	if err := os.WriteFile(briefPath, []byte(brief), 0600); err != nil {
 		return err
@@ -459,7 +474,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	if err := store.Record(state.Event{At: now, By: state.Party{Name: fatalSentinelName}, Verb: "fatal.repair", Detail: fmt.Sprintf("%s: owner %q; attempt %d; %s", x.ID, x.Owner, x.Attempts, x.Outcome)}); err != nil {
 		return err
 	}
-	_, _ = fatalProbe(ctx, "notify-send", "beekeeper system repair", x.ID+": "+x.Outcome)
+	_, _ = fatalProbe(observationCtx, "notify-send", "beekeeper system repair", x.ID+": "+x.Outcome)
 	return q.Save(dir)
 }
 

@@ -45,14 +45,13 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		return refused("another timer dispatcher runs")
 	}
 	defer func() { _ = l.Unlock() }()
-	var batches sync.WaitGroup
-	var active atomic.Int32
-	defer func() { cancel(); batches.Wait() }()
+	d := newTimerDispatchSession(ctx)
+	defer d.close()
 	tick := time.NewTicker(timerTick)
 	defer tick.Stop()
 	binary := loopBinary()
 	for {
-		if binary != nil && binary.Replaced() && active.Load() == 0 {
+		if binary != nil && binary.Replaced() && d.active.Load() == 0 {
 			return binary.Exec()
 		}
 		// Reload limits and paths without sharing mutable config with actions
@@ -67,14 +66,12 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		}
 		current := *a
 		current.cfg, current.now, current.loopNow = cfg, time.Now(), nil
-		w, err := current.dispatchTimerPass(ctx)
+		_, err = d.pass(&current)
 		if err != nil {
 			return err
 		}
-		active.Add(1)
-		batches.Go(func() { defer active.Add(-1); w.timerActs.Wait() })
 		if once {
-			batches.Wait()
+			d.batches.Wait()
 			return nil
 		}
 		select {
@@ -83,6 +80,55 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// Each running epoch owns the contexts of all earlier batches. Stop drains
+// them before a new epoch can dispatch the interrupted occurrences on resume.
+type timerDispatchSession struct {
+	parent  context.Context
+	ctx     context.Context
+	cancel  context.CancelFunc
+	batches sync.WaitGroup
+	active  atomic.Int32
+}
+
+func newTimerDispatchSession(ctx context.Context) *timerDispatchSession {
+	d := &timerDispatchSession{parent: ctx}
+	d.ctx, d.cancel = context.WithCancel(ctx)
+	return d
+}
+
+func (d *timerDispatchSession) close() {
+	d.cancel()
+	d.batches.Wait()
+}
+
+func (d *timerDispatchSession) pass(a *app) (*watcher, error) {
+	st, err := a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if st.Stop != nil {
+		d.close()
+		d.ctx, d.cancel = context.WithCancel(d.parent)
+		return &watcher{app: a.snapshotAtNow()}, nil
+	}
+	w, err := a.dispatchTimerPass(d.ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.active.Add(1)
+	d.batches.Go(func() { defer d.active.Add(-1); w.timerActs.Wait() })
+	// Stop may have arrived while checks were running.
+	st, err = a.store.Read()
+	if err != nil {
+		return nil, err
+	}
+	if st.Stop != nil {
+		d.close()
+		d.ctx, d.cancel = context.WithCancel(d.parent)
+	}
+	return w, nil
 }
 
 func (a *app) dispatchTimerPass(ctx context.Context) (*watcher, error) {
