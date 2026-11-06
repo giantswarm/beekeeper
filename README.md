@@ -2689,6 +2689,18 @@ its last change, unchanged for an hour, nothing held inside). A run that freed s
 `FREED` line with the count and size of each and one `free.apply` event; a failed one is
 `FREE FAILED` until a run succeeds; the `TMPFS` line says when it ran last. `beekeeper doctor`
 frees the same (`--dry-run` says what it would); a negative `doctor.freeEvery` turns both off.
+`beekeeper snapshot` lists the top three immediate child directories across
+`~/.local/state`, `~/.cache`, and Docker's configured data root (falling back to
+`/var/lib/docker`). Each entry shows logical file size and growth since that
+caller's previous snapshot; JSON retains all measured directories. The watch
+samples every two minutes and adds the fastest-growing measured path to
+`DISK FILLING` alongside the writing processes. These are independent
+measurements, not proof that a particular process wrote that path.
+Scans read metadata only, skip symlinks, and stop at six directory levels,
+50,000 entries, or a two-second deadline (including Docker root discovery).
+Unreadable or truncated trees show partial lower bounds; growth is unknown
+until two complete readings exist. Missing or inaccessible roots are skipped.
+
 Disk reclamation is automatic by default (`disk.prune: auto`): every `disk.every` (1h)
 the watch trims Go and sccache caches only when they exceed their caps, and applies
 the `disk.caches` policies (application and package-manager caches by path or glob,
