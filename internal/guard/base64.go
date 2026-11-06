@@ -167,8 +167,8 @@ func (ix *Index) carries(d string, depth int, patterns bool) (name string, ref, 
 		if !patterns {
 			break
 		}
-		if slices.ContainsFunc(r.keywords, func(k string) bool { return strings.Contains(d, k) }) && r.re.MatchString(d) {
-			return r.id, false, true
+		if slices.ContainsFunc(r.Keywords, func(k string) bool { return strings.Contains(d, k) }) && r.RE.MatchString(d) {
+			return r.ID, false, true
 		}
 	}
 	if inner := ix.encodedSpans(d, depth+1, patterns); len(inner) > 0 {

@@ -78,8 +78,8 @@ A lab lease named under labs in the configuration stands for its kind cluster: t
 cluster runs, a claim names it, and a running kind cluster no lab lease maps
 is listed as unmapped.
 
-A free lease is claimed directly: the supervisor is the supervisor loop, and
-no session's grant gates a claim. ` + "`beekeeper lease grant`" + ` queues a session for a
+A free lease with no queued grants is claimed directly. Otherwise only the
+first grantee may claim after the current holder releases. ` + "`beekeeper lease grant`" + ` queues a session for a
 held resource, so its claim can park on it. A claim that is refused exits 3:
 gate the action on it (claim && act), never run the action after a failed
 claim.
@@ -399,18 +399,24 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 		if err != nil {
 			return nil, err
 		}
+		proof, err := dir.PreviousProof(res)
+		if err != nil {
+			return nil, err
+		}
 		host, _ := os.Hostname()
 		cur, err := dir.Claim(res, lease.Holder{
-			Env:         res,
-			Holder:      os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
-			Session:     me.Session,
-			HostSession: me.HostSession,
-			Name:        me.Name,
-			Person:      me.Person,
-			Team:        me.Team,
-			Host:        me.Host,
-			Purpose:     purpose,
-			Since:       a.now.UTC().Format("2006-01-02T15:04:05Z"),
+			Env:              res,
+			Holder:           os.Getenv("USER") + "@" + strings.SplitN(host, ".", 2)[0],
+			Session:          me.Session,
+			HostSession:      me.HostSession,
+			Name:             me.Name,
+			Person:           me.Person,
+			Team:             me.Team,
+			Host:             me.Host,
+			Purpose:          purpose,
+			DestructiveProof: lease.IsDestructiveProof(purpose),
+			PreviousProof:    proof,
+			Since:            a.now.UTC().Format("2006-01-02T15:04:05Z"),
 
 			UpgradeUnblock: unblock,
 			BudgetGiB:      budget,
@@ -427,6 +433,9 @@ func (a *app) claimLocal(res, purpose string, me state.Party, budget int) (strin
 			st.Grants = slices.Delete(st.Grants, idx, idx+1)
 		}
 		msg = claimHeldLine(a.now, a.now, "claimed "+res+lab)
+		if proof != nil {
+			msg += fmt.Sprintf("\nprevious destructive proof by %q: %s", proof.By, proof.Purpose)
+		}
 		if labRaw != nil {
 			if err := dir.KeepLabConfig(res, labRaw); err != nil {
 				labNote = fmt.Sprintf("\nagentlab.yaml not kept (%v): the release compares nothing", err)

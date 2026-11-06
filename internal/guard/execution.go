@@ -11,6 +11,8 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+
+	"github.com/giantswarm/beekeeper/internal/policycontent"
 )
 
 const coordinatorMCPPrefix = "mcp__coordinator__"
@@ -589,6 +591,9 @@ func executionResolve(p string) string {
 // ExecutionRulesAllowed rejects authentication stores before opening a rules
 // file. Rules are an operator-owned document, never provider credentials.
 func ExecutionRulesAllowed(p string, extra []string) bool {
+	if !policycontent.RulesAllowed(p, extra) {
+		return false
+	}
 	if newSecretFiles(extra).match(p) != "" {
 		return false
 	}

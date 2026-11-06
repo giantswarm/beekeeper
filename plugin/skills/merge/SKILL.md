@@ -12,7 +12,7 @@ description: "Loop-owned merges, promotions and tags through the gate."
 - **Protection:** `devctl repo status <owner/repo>`; `gh api …/protection` is 403.
 - **No rollout during cluster upgrades.**
 - **Overlap:** read PRs/commits; name it in your PR or build on the other. If blocked: `board block <yours> --by <other>`, `agents park --on <other-pr>`. No coordination wait.
-- **RCs:** prove live, promote; never ask the person.
+- **RCs:** prove live; worker-rules govern promotion.
 - **Commits:** Conventional, ≤72 characters; no major bumps.
 - **Behind:** before approval a behind branch merges its base and pushes, never on a rebase line; then the merge does. A conflict or merge commit (77): a fresh branch and PR off base.
 - **Desk review** after push/green CI, one call: `cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review"`. Other dirs or unpushed heads record plain waits; re-run there.

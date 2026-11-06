@@ -331,6 +331,10 @@ func (a *app) startBackground(ctx context.Context, sp agentStart, dir string, pr
 // variables. A running session is sent its messages by name instead:
 // claude --bg --resume would start a copy of it beside it.
 func (a *app) resumeBackground(ctx context.Context, w wakeTarget, msg string) error {
+	if err := a.requireClaudeLogin(); err != nil {
+		return err
+	}
+
 	bin, err := exec.LookPath("claude")
 	if err != nil {
 		return err

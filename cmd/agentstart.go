@@ -839,6 +839,10 @@ type startedAgent struct {
 // transient user unit and imports it into the desktop once the transcript
 // holds its first reply, which carries its model.
 func (a *app) startAgent(ctx context.Context, sp agentStart) (startedAgent, error) {
+	if err := a.requireClaudeLogin(); err != nil {
+		return startedAgent{}, err
+	}
+
 	st, err := a.store.Read()
 	if err != nil {
 		return startedAgent{}, err
