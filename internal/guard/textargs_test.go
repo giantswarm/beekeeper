@@ -8,28 +8,28 @@ import (
 
 func TestHookTextPayloads(t *testing.T) {
 	h := kubeHook(machineKC)
-	h.Production = "production"
+	h.Production = "fixtureprod"
 	for _, command := range []string{
 		`beekeeper agents idle --done --report "Blocked; muster auth login is required"`,
 		"beekeeper agents idle --done --report 'Report:\nmuster auth login is required'",
 		`beekeeper agents idle --done --report="Blocked; muster auth login is required"`,
-		`beekeeper timer add 1m "Probe mentions kubectl --context production apply"`,
-		`beekeeper timer add 1m 'Report; muster auth login is required' --probe 'echo "--context production"'`,
+		`beekeeper timer add 1m "Probe mentions kubectl --context fixtureprod apply"`,
+		`beekeeper timer add 1m 'Report; muster auth login is required' --probe 'echo "--context fixtureprod"'`,
 		`timeout 5 beekeeper agents idle --report "Report; muster auth login is required"`,
 		`env MODE=test beekeeper agents idle --report "Report; muster auth login is required"`,
 		`beekeeper agents idle --report $'Report; muster auth login is required'`,
 		`beekeeper note add 'Report; muster auth login is required'`,
 		`gh issue create --body 'Report; muster auth login is required'`,
 		`gh pr create --body="Report; muster auth login is required"`,
-		`beekeeper timer add 1m '--context production' ; kubectl --context kind-lab get pods`,
+		`beekeeper timer add 1m '--context fixtureprod' ; kubectl --context kind-fixture get pods`,
 	} {
 		t.Run(command, func(t *testing.T) { wantPassed(t, h, command) })
 	}
 	for _, command := range []string{
 		`beekeeper agents idle --report 'Done'; muster auth login`,
 		`beekeeper agents idle --report "$(muster auth login)"`,
-		`beekeeper timer add 1m "$(kubectl --context production apply -f manifest.yaml)"`,
-		`kubectl --context production apply -f manifest.yaml`,
+		`beekeeper timer add 1m "$(kubectl --context fixtureprod apply -f manifest.yaml)"`,
+		`kubectl --context fixtureprod apply -f manifest.yaml`,
 	} {
 		t.Run(command, func(t *testing.T) {
 			d := decide(t, h, "/", command, nil)
