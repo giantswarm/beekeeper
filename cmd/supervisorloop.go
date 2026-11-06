@@ -1293,6 +1293,7 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	} else {
 		tracked = append(tracked, swept...)
 	}
+	sweepReads := 0
 	unread := map[string]bool{}
 	unreviewedEnded := map[string]bool{}
 	pullHeld := false
@@ -1313,7 +1314,15 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 			unread[ref] = true
 			continue
 		}
-		p, err := l.observePull(ctx, ref, loopPullChanged(in, ref))
+		changed := loopPullChanged(in, ref)
+		if slices.Contains(swept, ref) && l.sweepReadDue(ref, changed) {
+			if sweepReads >= sweepReadsPerPass {
+				unread[ref] = true
+				continue
+			}
+			sweepReads++
+		}
+		p, err := l.observePull(ctx, ref, changed)
 		if err != nil {
 			unread[ref] = true
 			if errors.Is(err, errLoopLater) {
@@ -1426,6 +1435,11 @@ func (l *supervisorLoop) pass(ctx context.Context) error {
 	}
 	if in.Ownerless, err = l.markOwnerless(in, claims, ownerless, unread); err != nil {
 		return err
+	}
+	if !l.dryRun {
+		if err := l.reportSweep(in.Ownerless, unread); err != nil {
+			return err
+		}
 	}
 	actions := append(superloop.Plan(in), orphanedReviewClaims(claims, in)...)
 	if !l.dryRun {
@@ -1930,7 +1944,7 @@ func (l *supervisorLoop) reconcile(ctx context.Context, st *state.State, act sup
 			!slices.ContainsFunc(st.ReviewParks, func(rp state.ReviewPark) bool { return strings.EqualFold(rp.On, act.Ref) }) && !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target })
 	case superloop.KindDone:
 		done = !slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return ag.Name == c.target }) ||
-			logged("agents.remove", func(d string) bool { return d == c.target })
+			logged("agents.remove", func(d string) bool { return removedAgent(d, c.target) })
 	case superloop.KindClassify:
 		// An unclassified park's wake claims the agent's name; a note for
 		// the guide claims its question.
@@ -2296,6 +2310,24 @@ func (l *supervisorLoop) run(ctx context.Context, args ...string) (string, error
 	return out, nil
 }
 
+// remove takes name off the roster, saying why in the log. An agent already
+// gone is removed: the doctor or a person can take it off between the pass's
+// reading and this call, and a step must not fail forever on work done.
+func (l *supervisorLoop) remove(ctx context.Context, name, reason string) error {
+	_, err := l.run(ctx, agentsName, loopRemove, name, "--"+reasonFlagName, reason)
+	if err == nil || Code(err) != ExitRefused {
+		return err
+	}
+	st, readErr := l.a.store.Read()
+	if readErr != nil {
+		return err
+	}
+	if slices.ContainsFunc(st.Agents, func(ag state.Agent) bool { return strings.EqualFold(ag.Name, name) }) {
+		return err
+	}
+	return nil
+}
+
 // act takes one transition and says what it did.
 func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop.Action) (string, error) {
 	a := l.a
@@ -2367,7 +2399,7 @@ func (l *supervisorLoop) act(ctx context.Context, st *state.State, act superloop
 		if err := l.claim(act, act.Agent); err != nil {
 			return "", err
 		}
-		if _, err := l.run(ctx, agentsName, loopRemove, act.Agent); err != nil {
+		if err := l.remove(ctx, act.Agent, cmp.Or(act.Message, "supervisor loop: task done")); err != nil {
 			return "", err
 		}
 		if act.Message != "" {
@@ -2673,7 +2705,7 @@ func (l *supervisorLoop) endReviewWorkers(ctx context.Context, st *state.State) 
 				}
 			}
 		}
-		if _, err := l.run(ctx, agentsName, loopRemove, ag.Name); err != nil {
+		if err := l.remove(ctx, ag.Name, "supervisor loop: desk review of "+on+" requested; its park stays saved for the review and the merge"); err != nil {
 			l.sayOnce("remove "+ag.Name, "SUPERVISOR REMOVE FAILED %s: %v", ag.Name, err)
 			continue
 		}
@@ -3473,6 +3505,9 @@ func boardBudgetLow(b *state.Budget, floor int, now time.Time) bool {
 // 3 after printing its document with no pick: that is the board's answer,
 // nothing free, never a failure to retry.
 func (l *supervisorLoop) readNextItem(ctx context.Context) (*loopBoardItem, error) {
+	if next, err := l.a.nextMonitoredIssue(ctx); next != nil || err != nil {
+		return next, err
+	}
 	out, code, err := beekeeperRun(ctx, l.as(loopBoard, "next", "--json")...)
 	if err != nil {
 		return nil, err
@@ -3523,6 +3558,9 @@ type loopBoardItem struct {
 }
 
 func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, next loopBoardItem) (string, error) {
+	if err := l.a.allowMonitoredIssue(ctx, next.Ref); err != nil {
+		return "", err
+	}
 	if err := l.incidentStart(next.Ref); err != nil {
 		return "", err
 	}
@@ -3594,6 +3632,9 @@ func (l *supervisorLoop) startItem(ctx context.Context, act superloop.Action, ne
 			}
 			return "", errLoopLater
 		}
+		return "", err
+	}
+	if err := l.a.monitoredIssueStarted(ctx, next.Ref); err != nil {
 		return "", err
 	}
 	if place.remote() {

@@ -471,7 +471,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	startCmd := aZero.agentStartCmd()
 	startCmd.SilenceErrors = true
 	startCmd.SilenceUsage = true
-	startCmd.SetArgs([]string{busyOne, brief, dirFlag, dir})
+	startCmd.SetArgs(testCheckoutArgs(t, dir, []string{busyOne, brief, dirFlag, dir}))
 	if err := startCmd.Execute(); Code(err) != ExitRefused || !strings.Contains(err.Error(), noStartCeilingZero) {
 		t.Errorf("agents start at ceiling 0 = exit %d (%v), want ExitRefused naming ceiling 0", Code(err), err)
 	}
@@ -483,7 +483,7 @@ func TestCapacityCeilingZeroAndUnset(t *testing.T) {
 	forceCmd := aZero.agentStartCmd()
 	forceCmd.SilenceErrors = true
 	forceCmd.SilenceUsage = true
-	forceCmd.SetArgs([]string{busyOne, brief, dirFlag, dir, modeFlag, config.ModeBackground, forceFlag})
+	forceCmd.SetArgs(testCheckoutArgs(t, dir, []string{busyOne, brief, dirFlag, dir, modeFlag, config.ModeBackground, forceFlag}))
 	if err := forceCmd.Execute(); err != nil {
 		t.Fatalf("agents start --force at ceiling 0 = %v", err)
 	}

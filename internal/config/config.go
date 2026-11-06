@@ -975,6 +975,9 @@ type Agents struct {
 	// agents handover, a role's successor): the desk's checkout, whose
 	// project instructions every session loads. Empty: the caller's.
 	Dir string `yaml:"dir"`
+	// WorktreesDir is the place for worktrees created by agents start.
+	// Empty uses <stateDir>/worktrees.
+	WorktreesDir string `yaml:"worktreesDir"`
 	// Roots are the folders under which an agent may run instead, with
 	// --dir: the worktrees of the desk's repositories. Any other folder is
 	// refused while Dir is set.
@@ -2290,6 +2293,9 @@ type Guide struct {
 	WaitingTTL Duration `yaml:"waitingTTL"`
 }
 
+// DefaultLoopGraphQLLimit is supervisor.graphQLLimit when unset.
+const DefaultLoopGraphQLLimit = 1500
+
 // Supervisor configures the supervisor, which is the supervisor loop: the
 // user service beekeeper install always installs. No session holds a
 // supervisor role.
@@ -2297,6 +2303,10 @@ type Supervisor struct {
 	// ReviewModel overrides reviewer model selection. The review command
 	// defaults to opus, the strongest Claude review model alias.
 	ReviewModel string `yaml:"reviewModel"`
+	// GraphQLLimit is the GraphQL points an hour the loop's board reads may
+	// spend of their window (1500): past it the board waits for the reset,
+	// while pull reads, reviews and merges go on. A busy desk raises it.
+	GraphQLLimit int `yaml:"graphQLLimit"`
 	// ReviewLightLines selects diff-only review below this changed-line count.
 	// Zero defaults to 150; negative disables the size shortcut.
 	ReviewLightLines int `yaml:"reviewLightLines"`
@@ -3491,6 +3501,9 @@ func (c *Config) defaults() error {
 	if c.Supervisor.ReviewRounds == 0 {
 		c.Supervisor.ReviewRounds = 1
 	}
+	if c.Supervisor.GraphQLLimit == 0 {
+		c.Supervisor.GraphQLLimit = DefaultLoopGraphQLLimit
+	}
 	if c.Supervisor.ClassifierConfidence == 0 {
 		c.Supervisor.ClassifierConfidence = 0.8
 	}
@@ -4266,6 +4279,9 @@ func (c *Config) validateEach(report func(error)) {
 	}
 	if k := c.Capacity; k.Ceiling < 0 {
 		report(fmt.Errorf("capacity.ceiling: %d is negative", k.Ceiling))
+	}
+	if n := c.Supervisor.GraphQLLimit; n < 0 {
+		report(fmt.Errorf("supervisor.graphQLLimit: %d is negative", n))
 	}
 	if c.Capacity.ReviewHeadroom < 0 {
 		report(fmt.Errorf("capacity.reviewHeadroom: %d is negative", c.Capacity.ReviewHeadroom))

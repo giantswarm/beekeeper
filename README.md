@@ -2284,7 +2284,9 @@ and a crash both start a fresh session.
   extra subscription sessions above a positive worker ceiling for `--review` starts, and as
   many above a positive `capacity.local.ceiling`.
   Reviews run before new workers within a supervisor pass. Memory, swap, load, lab
-  and build guards, usage window stops and weekly pace still apply. `capacity` and
+  and build guards, usage window stops and weekly pace still apply; disk holds a
+  review only under half of the worker floor, since a review builds little and the
+  watch prunes from the full floor on. `capacity` and
   its JSON show the reserve, occupancy above the worker ceiling and busy sessions.
   Filing findings starts no filer session.
 - **Capacity:** the supervisor keeps up to `capacity.ceiling` agents busy (10
@@ -2417,6 +2419,21 @@ counter: zero turns until the answer, then exactly one answer turn. It uses
 an advanced clock and no paid model calls.
 
 ### Agents started without a click
+
+Local worker starts by hand require `--dir <checkout> --branch <new-branch>`.
+The supervisor loop's starts are outside this rule: it knows a repository, not a
+checkout, so they run in `agents.dir` and their briefs say where to work.
+The directory must be exactly one main repository checkout; parent folders,
+organisation folders and linked worktrees are refused with accepted checkout
+paths. The session launches in the checkout to load its repository instructions,
+then works in `<stateDir>/worktrees/<repo>/<branch>`, created from the freshly
+fetched origin default branch (`agents.worktreesDir` overrides the worktree
+place). Review starts require a PR URL in the brief and
+use a detached `<stateDir>/worktrees/<repo>/review-<number>` instead. Existing
+worktree destinations are refused. The prompt forbids commits, stashes and
+checkouts in the main checkout. Split tasks spanning repositories into one task
+per repository. `--dry-run` previews the path and rules without fetching or
+creating a worktree.
 
 `beekeeper agents start <name> <brief file>` starts an agent the way a person would start a
 session and hand it a brief, without the click. The first prompt is the worker rules beekeeper
@@ -2639,6 +2656,13 @@ its item again, and logs its unfinished task and latest hand-over note as an
 new activity restores its slot. Setting `agents.staleAfter` negative disables
 stale retirement. The doctor also reopens a worker whose session the desktop
 never imported, once the desktop runs fewer CLIs than its cap ([above](#agents-started-without-a-click)).
+
+`beekeeper agents review <owner/repo>#<n> --verdict` prints the pull request's desk
+verdicts as the loop and the merge gate read them, with the head each judged (exit 3
+when there is none): GitHub refuses APPROVE and REQUEST_CHANGES on a pull request of the
+reviewer's own login, so a verdict there is a COMMENT review with no review state. The
+session that started a review gets its verdict: the watch wakes it with the reviewer's
+final report.
 
 `beekeeper agents review <owner/repo>#<n>` starts a fresh independent reviewer
 in a checkout of that repository. It requires green CI at the pinned head and

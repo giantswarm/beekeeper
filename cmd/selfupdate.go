@@ -18,6 +18,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
+	"github.com/giantswarm/beekeeper/pkg/project"
 )
 
 // runUpdate is the update; the tests replace it.
@@ -68,8 +69,8 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 }
 
 func (a *app) selfUpdateCmd() *cobra.Command {
-	var check, pluginsOnly bool
-	var version string
+	var check, pluginsOnly, completeProbation, rollback bool
+	var rollbackReason, version string
 	c := &cobra.Command{
 		Use:   selfUpdateCmdName,
 		Short: "Replace this binary with the latest signed release (--check only asks)",
@@ -90,6 +91,21 @@ https://circleci.com/api/v2/projects/..., issuer https://oidc.circleci.com, neve
 GitHub identity); a release without
 a bundle, or a download that does not match it, is refused and the binary
 stays as it is.
+
+The installation journal and verified recovery bytes are retained beside the
+executable, or in this account's state when it cannot write there. The next
+update run by the installed candidate repeats the local health checks and
+promotes it to last-known-good; a failed check quarantines it and the update
+moves past it. --complete-probation does the same at once, and alone lifts a
+recovery fence. The first protected install has no verified recovery target.
+--rollback --rollback-reason restores the previous
+verified binary only when the live state writer is compatible; it never
+restores a state snapshot. Recovery fences newer writers, including processes
+still running the candidate. State already advanced by a newer release needs
+an explicit lossless migration or a compatible signed release instead.
+An executable directory this account cannot write takes sudo -n for the final
+replacement alone: the journal is written first, and nothing else runs with
+privilege.
 
 The new binary is renamed over the old one in one step, and every
 beekeeper started afterwards is the new one. A running beekeeper watch (the
@@ -132,6 +148,43 @@ reset. A development build (version dev) is refused.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if completeProbation || rollback {
+				path, err := os.Executable()
+				if err != nil {
+					return err
+				}
+				if completeProbation {
+					if err := a.canaryRelease(cmd.Context(), a.out, path, project.Version()); err != nil {
+						if qerr := update.Quarantine(cmd.Context(), path, "post-install health checks failed"); qerr != nil {
+							return errors.Join(err, qerr)
+						}
+						return err
+					}
+					if err := a.loadConfig(); err != nil {
+						return err
+					}
+					store, err := state.Open(a.cfg.StateDir)
+					if err != nil {
+						return err
+					}
+					if err := update.CompleteProbation(cmd.Context(), path, project.Version()); err != nil {
+						return err
+					}
+					return store.ResumeRecoveredWrites(project.Version())
+				}
+				if err := a.loadConfig(); err != nil {
+					return err
+				}
+				store, err := state.Open(a.cfg.StateDir)
+				if err != nil {
+					return err
+				}
+				if err := update.Rollback(cmd.Context(), path, rollbackReason, store.RecoverVersion); err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(a.out, "Restored the verified recovery binary. Restart candidate processes at a quiet moment; manually re-arm alerts and guide watches. Newer state writers remain fenced.")
+				return err
+			}
 			if pluginsOnly {
 				return a.syncInstalledPlugins(cmd.Context())
 			}
@@ -147,6 +200,14 @@ reset. A development build (version dev) is refused.`,
 				Version: version,
 				Canary: func(ctx context.Context, path, version string) error {
 					return a.canaryRelease(ctx, w, path, version)
+				},
+				Health: func(ctx context.Context, path, _ string) error {
+					why := canaryFailure(ctx, a.cfgPath, path)
+					if why == "" {
+						return nil
+					}
+					_, _ = fmt.Fprintf(w, "The installed candidate failed its health check (%s); quarantining it.\n", why)
+					return errors.New(why)
 				},
 				Skip: a.isSkippedRelease,
 			})
@@ -192,9 +253,14 @@ reset. A development build (version dev) is refused.`,
 		},
 	}
 	c.Flags().StringVar(&version, "version", "", "install an exact release tag, including a pre-release (works with --check)")
+	c.Flags().BoolVar(&completeProbation, "complete-probation", false, "run health checks and promote the installed candidate to last-known-good")
+	c.Flags().BoolVar(&rollback, "rollback", false, "restore the verified previous binary only if live state is compatible")
+	c.Flags().StringVar(&rollbackReason, "rollback-reason", "", "durable quarantine reason for the failed candidate")
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
-	c.MarkFlagsMutuallyExclusive("version", syncPluginsFlag)
+	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag)
+	c.MarkFlagsMutuallyExclusive("version", "complete-probation", "rollback", syncPluginsFlag)
+	c.MarkFlagsRequiredTogether("rollback", "rollback-reason")
 	_ = c.Flags().MarkHidden(syncPluginsFlag)
 	return c
 }
@@ -323,11 +389,23 @@ func (a *app) skipRelease(version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
+	why := canaryFailure(ctx, a.cfgPath, path)
+	if why == "" {
+		return nil
+	}
+	a.skipRelease(version, why)
+	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
+	return fmt.Errorf("skipping %s: %s", version, why)
+}
+
+// canaryFailure runs the canary checks on the binary at path and says why the
+// first failed, "" when all passed.
+func canaryFailure(ctx context.Context, cfgPath, path string) string {
 	for _, check := range canaryChecks {
 		name := strings.Join(check, " ")
 		args := check
-		if a.cfgPath != "" {
-			args = append([]string{"--" + configFlag, a.cfgPath}, check...)
+		if cfgPath != "" {
+			args = append([]string{"--" + configFlag, cfgPath}, check...)
 		}
 		out, err := runCanaryCheck(ctx, path, args...)
 		if err != nil {
@@ -335,13 +413,10 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 			if detail == "" {
 				detail = oneLine(err.Error())
 			}
-			why := fmt.Sprintf("canary %s failed: %s", name, detail)
-			a.skipRelease(version, why)
-			_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
-			return fmt.Errorf("skipping %s: %s", version, why)
+			return fmt.Sprintf("canary %s failed: %s", name, detail)
 		}
 	}
-	return nil
+	return ""
 }
 
 // warnUpdateConfig runs before handing control to a newer binary, which may

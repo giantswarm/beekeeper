@@ -142,7 +142,7 @@ func TestAgentStartRefusesAKindAtItsCap(t *testing.T) {
 	for _, flag := range []string{"--force", testDryRunFlag} {
 		c := a.agentStartCmd()
 		c.SilenceErrors, c.SilenceUsage = true, true
-		c.SetArgs([]string{filerTwo, brief, flag})
+		c.SetArgs(testCheckoutArgs(t, filepath.Dir(brief), []string{filerTwo, brief, usageDirFlag, filepath.Dir(brief), flag}))
 		c.SetContext(t.Context())
 		err := c.Execute()
 		if Code(err) != ExitRefused || !strings.Contains(err.Error(), "no start filer:") {
