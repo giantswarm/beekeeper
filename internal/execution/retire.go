@@ -72,6 +72,9 @@ const (
 	toolchainDir        = "go"
 	stateDir            = "state"
 	cargoDir            = "cargo"
+	homeDir             = "home"
+	envAccountHome      = "HOME"
+	envConfigHome       = "XDG_CONFIG_HOME"
 	scratchDir          = ".beekeeper-scratch"
 	// retiredPurgeBatch bounds the moved-aside resources one retirement removes,
 	// so a host's backlog never holds up the retirement that found it.
@@ -216,6 +219,11 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 		"GOPATH": gopath, "GOMODCACHE": filepath.Join(gopath, "pkg", "mod"),
 		"XDG_STATE_HOME": state, "CARGO_HOME": cargo,
 	}
+	home, err := s.ownedHome(j, env)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(routed, home)
 	out := slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
 		_, ok := routed[k]
@@ -225,6 +233,39 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 		out = append(out, k+"="+routed[k])
 	}
 	return out, nil
+}
+
+// ownedHome moves a worker's HOME into its owned root, so what it writes to a
+// literal ~ path retires with it. What the account's home provides stays reachable
+// by explicit path: Git and GitHub configuration, and through EnvHome the
+// component's own state; every harness login lives in a configured directory, and
+// ssh reads the account database, not HOME. A claude without configDir has its
+// login in the account's home, and agy already runs on a home of its own. Both
+// keep theirs, as does a host with sharedHome.
+func (s *Server) ownedHome(j Journal, env []string) (map[string]string, error) {
+	values := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		values[k] = v
+	}
+	account := values[envAccountHome]
+	login := j.Request.Harness != HarnessClaude || s.Config.Harnesses[HarnessClaude].ConfigDir != ""
+	if !filepath.IsAbs(account) || values[EnvHome] != "" || !login || s.Config.SharedHome {
+		return nil, nil
+	}
+	home := filepath.Join(s.executionDir(j.Handle.Ref), homeDir)
+	if err := ownedDirectory(home); err != nil {
+		return nil, err
+	}
+	routed := map[string]string{envAccountHome: home, EnvHome: account}
+	if values[envConfigHome] == "" {
+		routed[envConfigHome] = filepath.Join(account, ".config")
+	}
+	gitconfig := filepath.Join(account, ".gitconfig")
+	if _, err := os.Stat(gitconfig); err == nil {
+		routed["GIT_CONFIG_GLOBAL"] = gitconfig
+	}
+	return routed, nil
 }
 
 // Retire takes a terminal execution through its one retirement: work is

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -114,11 +115,18 @@ func KubeGuardOff(production string, protectedContexts ...string) string {
 
 // kubeRefusal returns why the hook refuses cmd, "" when it passes.
 func (h Hook) kubeRefusal(cmd string) string {
+	if h.ProductionNote != nil && strings.HasPrefix(cmd, "BEEKEEPER_PROD_NOTE=") {
+		return h.productionNoteRefusal(cmd)
+	}
 	if r := h.scanKube(commandText(cmd), kubeEnv{kubeconfig: h.Kubeconfig}, 0); r != "" {
 		return r
 	}
-	for _, later := range laterCommands(cmd) {
-		if r := h.kubeRefusal(later); r != "" {
+	// A note authorises a command run now, under this check. What an argument
+	// runs later is judged without one, so it meets the ordinary refusal.
+	later := h
+	later.ProductionNote = nil
+	for _, command := range laterCommands(cmd) {
+		if r := later.kubeRefusal(command); r != "" {
 			return r
 		}
 	}
@@ -617,6 +625,35 @@ func readKubeconfig(list string) kubeconfig {
 func CurrentContext(kubeconfig string) string {
 	return readKubeconfig(kubeconfig).current
 }
+
+// productionNoteRefusal judges a command carrying a note, with the note path
+// switched on. Only the production-write refusal can be superseded: context and
+// other refusals stay, and so does any context kube.protectedContexts protects,
+// production or not.
+func (h Hook) productionNoteRefusal(cmd string) string {
+	m := productionNoteCommand.FindStringSubmatch(cmd)
+	if m == nil {
+		return "Refused: production note marker requires one literal kubectl delete with explicit context, namespace, kind and name."
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil || id <= 0 {
+		return "Refused: invalid production note id."
+	}
+	env := kubeEnv{kubeconfig: h.Kubeconfig}
+	protected, production := h, h
+	protected.Production, production.ProtectedContexts = "", nil
+	if protected.scanKube(m[2], env, 0) != "" || !strings.Contains(production.scanKube(m[2], env, 0), "a production cluster (") {
+		return "Refused: note authority requires an explicitly targeted production write."
+	}
+	if err := h.ProductionNote(id, m[2]); err != nil {
+		return "Refused: production note: " + err.Error()
+	}
+	return ""
+}
+
+// Deliberately narrow: no expansions, redirections, extra flags, lists,
+// selectors, multiple names or shell operators can share a note's authority.
+var productionNoteCommand = regexp.MustCompile(`^BEEKEEPER_PROD_NOTE=([0-9]+) (kubectl --context [a-zA-Z0-9_.-]+ delete [a-z][a-z0-9.-]* [a-z0-9][a-z0-9.-]* --namespace [a-z0-9][a-z0-9-]*)$`)
 
 // kindCmd is the kind command-line tool.
 const kindCmd = "kind"

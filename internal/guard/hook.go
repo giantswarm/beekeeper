@@ -150,6 +150,9 @@ type Hook struct {
 	// Production is the installation the kube guard protects; empty, the
 	// guard is off unless ProtectedContexts is set.
 	Production string
+	// ProductionNote consumes a single-use authority for an exact command. Nil,
+	// the default, no note authorises anything (kube.productionNoteDeletes).
+	ProductionNote func(id int, command string) error
 	// ProtectedContexts lists additional contexts protected by the write gate.
 	ProtectedContexts []string
 	// ReadOnlyExecQueries is the exact restricted SELECT allowlist for psql exec.
@@ -165,6 +168,9 @@ type Hook struct {
 	// guide asks; read only for an AskUserQuestion call and a call that
 	// does work (guide.go).
 	Guide func(session string) (bool, string)
+	// GuideDesk is guide.desk: the folder the guide's session writes files in,
+	// its memory, and where a refused write to a harness's memory is sent.
+	GuideDesk string
 	// CheckQuestion names what one of the guide's questions lacks for its
 	// person to answer it, as `note add` checks a note; nil checks nothing.
 	CheckQuestion func(Question) []string
@@ -326,6 +332,10 @@ func (h Hook) Decide(input []byte) (out []byte) {
 
 func (h Hook) decide(ev event) []byte {
 	h.mergeSession = ev.Session
+	h.beginCheck("memoryRefusal")
+	if r := h.memoryRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("guideRefusal")
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -445,6 +455,14 @@ func (h Hook) decide(ev event) []byte {
 	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
+	// Defer consuming authority until the other command guards have passed.
+	var consumeProduction func() error
+	if verify := h.ProductionNote; verify != nil {
+		h.ProductionNote = func(id int, command string) error {
+			consumeProduction = func() error { return verify(id, command) }
+			return nil
+		}
+	}
 	h.beginCheck("kubeRefusal")
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -530,6 +548,12 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("ghPREditRefusal")
 	if r := h.ghPREditRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if consumeProduction != nil {
+		h.beginCheck("productionNote")
+		if err := consumeProduction(); err != nil {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: production note: " + err.Error()})
+		}
 	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cwd, cmd, gated, bg)
@@ -1224,8 +1248,11 @@ func LabCluster(dir string) (string, bool) {
 	return "agentlab", true
 }
 
+// executionHomeEnv is the managed home of a session on an execution host.
+const executionHomeEnv = "BEEKEEPER_EXECUTION_HOME"
+
 func guardHomeDir() (string, error) {
-	if h := os.Getenv("BEEKEEPER_EXECUTION_HOME"); filepath.IsAbs(h) {
+	if h := os.Getenv(executionHomeEnv); filepath.IsAbs(h) {
 		return filepath.Clean(h), nil
 	}
 	return os.UserHomeDir()

@@ -141,7 +141,10 @@ func TestResourceAuditAndRetention(t *testing.T) {
 	if _, err := os.Lstat(log); !os.IsNotExist(err) {
 		t.Fatal("released expired log remains", err)
 	}
-	for _, p := range []string{h.Workspace, orphan, unrelated, link, filepath.Join(f.s.Root, id+".json")} {
+	if _, err := os.Lstat(filepath.Join(f.s.Config.WorkspaceRoot, retiredWorkspaces, retiredLabel(f.r.Ref))); !os.IsNotExist(err) {
+		t.Fatal("a never launched execution stayed past retention", err)
+	}
+	for _, p := range []string{orphan, unrelated, link, filepath.Join(f.s.Root, id+".json")} {
 		if _, err := os.Lstat(p); err != nil {
 			t.Fatal("retained/unowned resource lost", p, err)
 		}

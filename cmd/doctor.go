@@ -270,9 +270,6 @@ type doctorReport struct {
 	chores    []string
 	faults    []faultFinding
 	notes     []string
-	// unagreed counts the finished workers whose archive waits on
-	// agents.archiveAgreement, said once for all, not per agent.
-	unagreed int
 	// stale are the running beekeeper processes of a binary an install
 	// replaced, the watches apart (WATCH STALE names them): their saves of
 	// the state are refused.
@@ -406,7 +403,7 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 			return rep, err
 		}
 	}
-	rosterLines, unagreed, err := a.finishRoster(ctx, chores, sessions, record, busy, r.by, "beekeeper doctor")
+	rosterLines, err := a.finishRoster(ctx, chores, sessions, record, busy, r.by, "beekeeper doctor")
 	if err != nil {
 		return rep, err
 	}
@@ -416,7 +413,6 @@ func (a *app) doctor(ctx context.Context, r doctorRun) (doctorReport, error) {
 		return rep, err
 	}
 	rep.chores = append(rep.chores, orphanLines...)
-	rep.unagreed += unagreed
 	st, err = a.store.Read()
 	if err != nil {
 		return rep, err
@@ -555,16 +551,15 @@ func (a *app) backgroundStartsToStop(ctx context.Context, st *state.State, sessi
 // relieved background starts that already left the roster.
 func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*claude.Session,
 	record func(string) (*claude.Record, bool), busy func(state.Party) bool, by state.Party, byCmd string,
-) ([]string, int, error) {
+) ([]string, error) {
 	var lines []string
-	var unagreed int
 	removed, err := a.removeAgents(chores, by)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	st, err := a.store.Read()
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	var archive []state.Party
 	for _, c := range removed {
@@ -575,7 +570,7 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 	}
 	owed, err := a.owedArchives(sessions, record, busy, by)
 	if err != nil {
-		return lines, 0, err
+		return lines, err
 	}
 	lines = append(lines, owed.lines...)
 	for _, p := range slices.Concat(owed.retry, a.backgroundStartsToStop(ctx, st, sessions, busy)) {
@@ -589,17 +584,13 @@ func (a *app) finishRoster(ctx context.Context, chores []chore, sessions []*clau
 			owedLines := owe(st, outcomes, a.now)
 			var evs []state.Event
 			for i, l := range owedLines {
-				if outcomes[i].unagreed {
-					unagreed++
-					continue
-				}
 				lines = append(lines, fmt.Sprintf("%q: %s", archive[i].Name, l))
 				evs = append(evs, event(by, "agents.archive", "%s: %s", archive[i].Name, l))
 			}
 			return evs, nil
 		})
 	}
-	return lines, unagreed, nil
+	return lines, nil
 }
 
 const whyReportedDone = "it reported its work done"
@@ -834,9 +825,6 @@ faults but remedying none.`,
 			}
 			lines := append(slices.Clone(rep.chores), rep.notes...)
 			lines = append(lines, rep.appDrifts...)
-			if rep.unagreed > 0 {
-				lines = append(lines, unagreedLine(rep.unagreed))
-			}
 			for _, f := range rep.faults {
 				lines = append(lines, f.String())
 			}
@@ -973,8 +961,7 @@ func (w *watcher) doctor(ctx context.Context) {
 }
 
 // sayChores says the doctor's chore lines, each once per watch (a stay that
-// repeats is not said again), its notes, and the finished workers waiting on
-// agents.archiveAgreement as one summary while any do.
+// repeats is not said again), and its notes.
 func (w *watcher) sayChores(rep doctorReport) {
 	if w.doctored == nil {
 		w.doctored = map[string]bool{}
@@ -988,13 +975,6 @@ func (w *watcher) sayChores(rep doctorReport) {
 	for _, l := range rep.notes {
 		w.emitNow("doctor", "DOCTOR %s", l)
 	}
-	w.check("doctor-unagreed", rep.unagreed > 0, "DOCTOR %s", unagreedLine(rep.unagreed))
-}
-
-// unagreedLine says how many finished workers' desktop sessions stay
-// unarchived for want of the person's agreement.
-func unagreedLine(n int) string {
-	return fmt.Sprintf("%d finished workers' desktop sessions stay unarchived: set agents.archiveAgreement to the person's agreement for a steward to archive them", n)
 }
 
 // checkAgyHooks checks ~/.gemini/config/hooks.json when agy is installed.

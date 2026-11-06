@@ -197,7 +197,7 @@ func (t SSHTransport) Call(ctx context.Context, op string, ref Ref, payload, res
 	if err := t.Host.Validate(); err != nil {
 		return err
 	}
-	if op != checkOperation && op != inventoryOperation && op != "resource-audit" {
+	if op != checkOperation && op != inventoryOperation && op != "resource-audit" && op != bundleStatusOperation && op != bundleSyncOperation {
 		if err := ref.Validate(); err != nil {
 			return err
 		}

@@ -729,7 +729,9 @@ And in ~/.codex/hooks.json (or $CODEX_HOME/hooks.json) for codex:
 				Apps:    func() []guard.App { return a.allowedAppsForSession(session) }, Shared: sharedUploads,
 				GoCache: goCacheDir(), GoModCache: goModCacheDir()}
 			if h.ConfigErr == nil {
+				h.ProductionNote = a.productionNoteAuthority()
 				h.MergeGo, h.GatedOwners = a.hookMergeGo, a.cfg.Merge.DevctlOwners
+				h.GuideDesk = a.cfg.Guide.Desk
 				h.ReadOnlyExecQueries = a.cfg.Kube.ReadOnlyExecQueries
 				h.Shell, h.Production, h.ContextHint = a.cfg.Shell, a.cfg.Kube.Production, a.cfg.Kube.Context("<installation>")
 				h.ProtectedContexts = a.cfg.Kube.ProtectedContexts

@@ -374,7 +374,7 @@ func TestArchiveSteward(t *testing.T) {
 // A warmed steward archives its own session as "self", after the others.
 func TestArchiveRequestOfAWarmedSteward(t *testing.T) {
 	s := steward{host: stewardA, sock: "/s/2.sock"}
-	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor", "agreed")
+	msg := archiveRequest(s, []string{stewardA, stewardB}, "beekeeper doctor")
 	if !strings.Contains(msg, strconv.Quote(stewardB)+`, "self"`) {
 		t.Errorf("request %q", msg)
 	}

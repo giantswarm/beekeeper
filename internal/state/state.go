@@ -871,6 +871,12 @@ type Start struct {
 	// Once relieved or taken over, its session stays the person's to close: nothing stops or
 	// archives it.
 	Role string `json:"role,omitempty"`
+	// Conversation is the harness's own id of the conversation where it
+	// differs from the start's (agy): its transcript's id, which outlives the
+	// link files removed with the session's inbox.
+	Conversation string `json:"conversation,omitempty"`
+	// Task is the task an ended worker held last (EndedWorkers).
+	Task string `json:"task,omitempty"`
 
 	rest rest
 }
@@ -1175,9 +1181,11 @@ type Handover struct {
 
 // State is the whole document.
 type State struct {
-	Handovers         []Handover `json:"handovers,omitempty"`
-	Emergency         *Emergency `json:"emergency,omitempty"`
-	AutoInstallPaused bool       `json:"autoInstallPaused,omitempty"`
+	// ProductionNotes are consumed authorities, retained across hook processes.
+	ProductionNotes   map[int]time.Time `json:"productionNotes,omitempty"`
+	Handovers         []Handover        `json:"handovers,omitempty"`
+	Emergency         *Emergency        `json:"emergency,omitempty"`
+	AutoInstallPaused bool              `json:"autoInstallPaused,omitempty"`
 	// LabIdle records when a configured kind lab was first seen unleased.
 	LabIdle map[string]time.Time `json:"labIdle,omitempty"`
 	// Guide is the guide's role: the person's decisions. The supervisor is
@@ -1190,7 +1198,8 @@ type State struct {
 	Released map[string]time.Time `json:"released,omitempty"`
 	Holds    []Hold               `json:"holds,omitempty"`
 	Agents   []Agent              `json:"agents,omitempty"`
-	// EndedWorkers retain local removed identities for orphan-process cleanup.
+	// EndedWorkers retain local removed identities for orphan-process cleanup
+	// and for a wake or resume by name (endedWorker).
 	// They grant no start permissions; Starts remains the authorization ledger.
 	EndedWorkers []Start `json:"endedWorkers,omitempty"`
 	// Parks are the parks of sessions off the roster (agents park by a
