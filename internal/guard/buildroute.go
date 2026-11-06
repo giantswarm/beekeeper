@@ -17,12 +17,15 @@ var (
 	// shellStateWords change the shell a later command runs in, or read what
 	// only that shell knows, so a command moved to a shell of its own would
 	// lose them.
-	shellStateWords = wordSet("source . eval exec alias unalias unset trap shift read readarray mapfile getopts hash shopt setopt unsetopt")
+	shellStateWords = wordSet("source . eval exec alias unalias unset trap shift read readarray mapfile getopts hash shopt setopt unsetopt " +
+		"builtin command emulate")
 	// setupWords do no work of their own: a line of them and builds has
 	// nothing to run ahead of the slot.
 	setupWords = wordSet("cd pushd popd true : set export")
 	// shellParam is a parameter a child shell can inherit: a plain name.
 	shellParam = regexp.MustCompile(`^[A-Za-z_]\w*$`)
+	// shellOwnParams are plain names only the running shell answers for.
+	shellOwnParams = wordSet("PIPESTATUS RANDOM SECONDS LINENO BASHPID BASH_COMMAND FUNCNAME _")
 )
 
 // buildLeaf is one pipeline of a list of commands: its bytes in the line, the
@@ -40,8 +43,9 @@ type buildList struct {
 	cmd    string
 	leaves []buildLeaf
 	// sets are the line's top-level set commands, which each routed command
-	// repeats: set -o pipefail and set -e must hold inside it too.
-	sets []string
+	// behind them repeats: set -o pipefail and set -e must hold inside it too,
+	// and a set further on must not.
+	sets []shellSet
 }
 
 // routeBuilds returns cmd with only its heavy commands under `beekeeper run`,
@@ -72,7 +76,7 @@ func (h Hook) routeBuilds(cmd string) string {
 	}
 	out := cmd
 	for _, sp := range slices.Backward(spans) {
-		inner := strings.Join(append(slices.Clone(l.sets), cmd[sp[0]:sp[1]]), "; ")
+		inner := strings.Join(append(l.setsBefore(sp[0]), cmd[sp[0]:sp[1]]), "; ")
 		out = out[:sp[0]] + ShellQuote(h.Self) + " run -- " + ShellQuote(h.Shell) + " -c " + ShellQuote(inner) + out[sp[1]:]
 	}
 	return out
@@ -85,6 +89,9 @@ func (l *buildList) add(st *syntax.Stmt, stmt int, op string) bool {
 	}
 	if b, ok := st.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
 		return len(st.Redirs) == 0 && l.add(b.X, stmt, op) && l.add(b.Y, stmt, b.Op.String())
+	}
+	if changesShell(st) {
+		return false
 	}
 	start, end := st.Pos().Offset(), stmtEnd(st)
 	leaf := buildLeaf{start: start, end: end, op: op, stmt: stmt}
@@ -108,7 +115,7 @@ func (l *buildList) classify(st *syntax.Stmt, leaf *buildLeaf, op string) (mayRu
 	switch c := st.Cmd.(type) {
 	case *syntax.DeclClause:
 		leaf.setup = true
-		return false, c.Variant.Value == "export"
+		return false, c.Variant.Value == exportCmd
 	case *syntax.BinaryCmd:
 		return l.pipeline(c)
 	case *syntax.CallExpr:
@@ -120,11 +127,11 @@ func (l *buildList) classify(st *syntax.Stmt, leaf *buildLeaf, op string) (mayRu
 			return false, false
 		}
 		leaf.setup = setupWords[name]
-		if name == "set" {
+		if name == verbSet {
 			if op != "" || c.Assigns != nil || len(st.Redirs) > 0 || !literalWords(c.Args) {
 				return false, false
 			}
-			l.sets = append(l.sets, l.cmd[leaf.start:leaf.end])
+			l.sets = append(l.sets, shellSet{leaf.start, l.cmd[leaf.start:leaf.end]})
 		}
 		return name == "" || strings.Contains(name, "/"), true
 	}
@@ -224,4 +231,48 @@ func portable(st *syntax.Stmt) bool {
 // literalWords reports whether every word is plain text.
 func literalWords(words []*syntax.Word) bool {
 	return !slices.ContainsFunc(words, func(w *syntax.Word) bool { return w.Lit() == "" })
+}
+
+// changesShell reports whether a statement's expansions read what only this
+// shell knows, such as each stage's status of the pipeline before it, or change
+// the shell they run in, or may end it: ${x:=y} and arithmetic assign, ${x:?y}
+// exits. In a child shell a later command would miss the one and outlive the
+// other.
+func changesShell(st *syntax.Stmt) bool {
+	found := false
+	syntax.Walk(st, func(n syntax.Node) bool {
+		switch x := n.(type) {
+		case *syntax.ArithmExp, *syntax.BinaryArithm, *syntax.UnaryArithm:
+			found = true
+		case *syntax.ParamExp:
+			if x.Param != nil && shellOwnParams[x.Param.Value] {
+				found = true
+			}
+			if x.Exp != nil {
+				switch x.Exp.Op {
+				case syntax.AssignUnset, syntax.AssignUnsetOrNull, syntax.ErrorUnset, syntax.ErrorUnsetOrNull:
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// shellSet is a top-level set command and where it stands in the line.
+type shellSet struct {
+	at   uint
+	text string
+}
+
+// setsBefore are the set commands in force at offset at.
+func (l *buildList) setsBefore(at uint) []string {
+	var out []string
+	for _, s := range l.sets {
+		if s.at < at {
+			out = append(out, s.text)
+		}
+	}
+	return out
 }

@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"regexp"
 	"slices"
 	"strings"
@@ -25,14 +26,20 @@ func graphqlRoute(cmd, cwd string) string {
 	if strings.Contains(cmd, ghRepoEnv+"=") {
 		return cmd
 	}
-	sc := scanShell(cmd)
+	sc, line := scanShell(cmd), cmd
 	segs := sc.segments()
 	for _, sg := range slices.Backward(segs) {
 		words := segWords(sc, sg)
 		if len(words) < 2 || words[0] != "gh" || ghAPIEndpoint(words) != executionGraphQL {
 			continue
 		}
-		repo := graphqlRepo(words, cwd)
+		var input []string
+		for _, hd := range sc.heredocs {
+			if hd.op >= sg.start && hd.op < sg.end {
+				input = append(input, line[hd.start:hd.end])
+			}
+		}
+		repo := graphqlRepo(words, ghAPIBodies(words, cwd)+strings.Join(input, "\n"))
 		if repo == "" {
 			continue
 		}
@@ -44,8 +51,9 @@ func graphqlRoute(cmd, cwd string) string {
 
 // graphqlRepo is the repository a read's query names, "" for a mutation, for
 // none, or for repositories of several owners, which no one identity reads.
-func graphqlRepo(words []string, cwd string) string {
-	body := strings.Join(words, "\n") + "\n" + ghAPIBodies(words, cwd)
+func graphqlRepo(words []string, input string) string {
+	query, vars := graphqlRequest(input)
+	body := strings.Join(words, "\n") + "\n" + query
 	if graphqlMutation.MatchString(body) {
 		return ""
 	}
@@ -54,7 +62,7 @@ func graphqlRepo(words []string, cwd string) string {
 		if m[1] == m[3] {
 			return ""
 		}
-		o, n := graphqlValue(m[2], words), graphqlValue(m[4], words)
+		o, n := graphqlValue(m[2], words, vars), graphqlValue(m[4], words, vars)
 		if m[1] == "name" {
 			o, n = n, o
 		}
@@ -72,8 +80,8 @@ func graphqlRepo(words []string, cwd string) string {
 }
 
 // graphqlValue is a query's literal, or the value of its variable as the
-// call's -f or -F word gives it; "" for one it does not.
-func graphqlValue(v string, words []string) string {
+// call's -f or -F word or its JSON request gives it; "" for one neither does.
+func graphqlValue(v string, words []string, vars map[string]any) string {
 	if name, ok := strings.CutPrefix(v, "$"); ok {
 		for i, w := range words {
 			for _, flag := range []string{"-f", "-F", flagRawField, flagField} {
@@ -89,7 +97,23 @@ func graphqlValue(v string, words []string) string {
 				}
 			}
 		}
+		if s, ok := vars[name].(string); ok && shellSafe.MatchString(s) {
+			return s
+		}
 		return ""
 	}
 	return strings.Trim(v, `"`)
+}
+
+// graphqlRequest reads what the call sends: a JSON request's query and
+// variables, whose quotes JSON escapes, or anything else as plain query text.
+func graphqlRequest(input string) (string, map[string]any) {
+	var req struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if json.Unmarshal([]byte(input), &req) != nil || req.Query == "" {
+		return input, nil
+	}
+	return req.Query, req.Variables
 }

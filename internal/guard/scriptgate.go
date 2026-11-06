@@ -278,7 +278,7 @@ func (h Hook) segmentUngated(cmd string, sc shellScan, segs []segment, i int, di
 				}
 				return nil, ""
 			}
-			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", textCode), ""
+			return h.textUngated(p.arg, name+"'s code ("+p.opt+")", textInline), ""
 		case programScript:
 			return h.scriptUngated(p.arg, mode, true, dirs, vars, depth)
 		case programInput:
@@ -325,7 +325,7 @@ func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name
 	for k, w := range words {
 		switch {
 		case w == "<<<" && k+1 < len(words):
-			return h.textUngated(words[k+1], "the here-string "+name+" reads", kindOf(mode == modeShell))
+			return h.textUngated(words[k+1], "the here-string "+name+" reads", inlineKindOf(mode == modeShell))
 		case w == "<" && k+1 < len(words):
 			u, _ := h.scriptUngated(words[k+1], mode, false, dirs, vars, depth)
 			return u
@@ -339,7 +339,7 @@ func (h Hook) inputUngated(cmd string, sc shellScan, segs []segment, i int, name
 			continue
 		}
 		body := cmd[hd.start:hd.end]
-		if u := h.textUngated(body, "the here-document "+name+" reads", kindOf(mode == modeShell)); u != nil {
+		if u := h.textUngated(body, "the here-document "+name+" reads", inlineKindOf(mode == modeShell)); u != nil {
 			return u
 		}
 		if mode == modeShell && len(dirs) > 0 {
@@ -446,6 +446,10 @@ const (
 	// textCode is an interpreter's program: a command its string literals run
 	// (codeUngated); its comments and its prose run nothing.
 	textCode
+	// textInline is a program written in the call itself, read as textCode,
+	// but whose literals are data when it can run nothing (inertProgram). A
+	// file named as a program stays textCode: what it holds is not in view.
+	textInline
 	// textAny is text that writes or feeds what runs (a call that writes the
 	// script it runs, the stages before an interpreter's input): a command
 	// anywhere in it.
@@ -461,6 +465,14 @@ func kindOf(shell bool) textKind {
 	return textCode
 }
 
+// inlineKindOf is the text kind of a program written in the call.
+func inlineKindOf(shell bool) textKind {
+	if shell {
+		return textShell
+	}
+	return textInline
+}
+
 // textUngated finds the first blocking devctl command in text that the gate
 // does not precede, as the text's kind runs it.
 func (h Hook) textUngated(text, where string, kind textKind) *ungated {
@@ -472,8 +484,8 @@ func (h Hook) textUngated(text, where string, kind textKind) *ungated {
 	case textShell:
 		at = firstShellUngated(text)
 		fix = at >= 0
-	case textCode:
-		at = codeUngated(text)
+	case textCode, textInline:
+		at = codeUngated(text, kind == textInline)
 	case textAny:
 		for _, m := range looseOwned.FindAllStringIndex(text, -1) {
 			if !looseGated.MatchString(text[:m[0]]) {
@@ -532,10 +544,13 @@ func firstShellUngated(text string) int {
 // interpreter's program runs that the gate does not precede, -1 for none. A
 // program runs a command from a string literal: one the literal starts with (a
 // command string, the first word of an argument list) or one after a shell
-// operator in it (a command line a shell runs). A command a comment names, or
-// prose in a literal (a document's text, a CHANGELOG entry), runs nothing.
-func codeUngated(code string) int {
+// operator in it (a command line a shell runs). A command a comment names,
+// prose in a literal (a document's text, a CHANGELOG entry), or a quoted
+// literal of an inline program that can run nothing (inertProgram), runs
+// nothing.
+func codeUngated(code string, inline bool) int {
 	lits := stringLiterals(code)
+	inert := inline && inertProgram(code, lits)
 	k := 0
 	for _, m := range looseOwned.FindAllStringIndex(code, -1) {
 		for k < len(lits) && lits[k][1] <= m[0] {
@@ -548,6 +563,8 @@ func codeUngated(code string) int {
 			}
 		case !literalCommand.MatchString(code[lits[k][0]:m[0]]):
 			continue // prose: the command is no word a shell or a program runs
+		case inert && code[lits[k][0]-1] != '`':
+			continue // data: nothing in the program runs a string
 		}
 		if !looseGated.MatchString(code[:m[0]]) {
 			return m[0]
@@ -565,7 +582,48 @@ var (
 	// quotedCommand is a Perl or Ruby command quote that opens before a
 	// command: qx(…), %x{…}.
 	quotedCommand = regexp.MustCompile(`(?:\bqx|%x)\s*[^\w\s]\s*$`)
+	// runsStrings: anything in a program's code, outside its literals, that
+	// may run a string or reach what does, in the interpreters of interpreters.
+	runsStrings = regexp.MustCompile(`(?i)subprocess|system|popen|exec|spawn|eval|fork|compile|__\w+__|getattr|setattr|globals|locals|\bvars\b|` +
+		`\bpty\b|ctypes|require|\bimport\s*\(|\buse\s|\bsend\b|deno|bun\b|child_process|passthru|\bqx\b|open3`)
+	// pipeOpen is Perl's and Ruby's open of a command: the | stands in a literal.
+	pipeOpen = regexp.MustCompile(`\bopen\b[^\n]*\|`)
+	// programImport is a Python import statement: the module of a from, or
+	// an import's list.
+	programImport = regexp.MustCompile(`(?m)(?:^|;)[ \t]*(?:from[ \t]+([\w.]+)[ \t]+import\b|import[ \t]+([^\n;#]+))`)
+	// textModules only compute and read and write text and files: no import of
+	// these runs a string, as any other module may.
+	textModules = wordSet("re json sys pathlib textwrap string collections itertools functools typing dataclasses datetime math difflib csv tomllib yaml")
 )
+
+// inertProgram reports whether a program has no way to run a string: outside
+// its literals nothing runsStrings names stands in it, and it imports
+// textModules alone. Its literals are then data, whatever they spell. An
+// import or a word this cannot place keeps the program able to run one.
+func inertProgram(code string, lits [][2]int) bool {
+	bare := []byte(code)
+	for _, l := range lits {
+		for i := l[0]; i < l[1] && i < len(bare); i++ {
+			bare[i] = ' '
+		}
+	}
+	if runsStrings.Match(bare) || pipeOpen.MatchString(code) {
+		return false
+	}
+	for _, m := range programImport.FindAllSubmatch(bare, -1) {
+		mods := strings.Split(string(m[2]), ",")
+		if len(m[1]) > 0 {
+			mods = []string{string(m[1])}
+		}
+		for _, mod := range mods {
+			root, _, _ := strings.Cut(strings.TrimSpace(mod), ".")
+			if root, _, _ = strings.Cut(root, " "); !textModules[root] {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // stringLiterals are the contents of the program's string literals, in their
 // order: quoted by ', " or ` (a template, a Perl or Ruby command), or by three
