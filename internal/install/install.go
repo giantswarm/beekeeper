@@ -97,10 +97,11 @@ func Install(ctx context.Context, e Env) error {
 		})
 	}
 	if len(m.Previous) > 0 {
-		m.Previous = nil
-		complete := m.encode()
 		p.add("record", e.manifest(), "install completed", func() error {
-			return writeFile(e.manifest(), complete)
+			// Earlier steps can clear pending service work. Keep ownership until
+			// those steps finish and encode their final state here.
+			m.Previous = nil
+			return writeFile(e.manifest(), m.encode())
 		})
 	}
 	return p.run(e.Out, e.DryRun)
