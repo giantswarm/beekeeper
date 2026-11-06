@@ -19,6 +19,7 @@ import (
 )
 
 const forwardTestApp = "alerts"
+const forwardTestAppLabel = "app"
 
 func TestServicePod(t *testing.T) {
 	for _, tt := range []struct {
@@ -32,7 +33,7 @@ func TestServicePod(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: plain.service, Namespace: plain.namespace},
-				Spec: corev1.ServiceSpec{Selector: map[string]string{"app": forwardTestApp}, Ports: []corev1.ServicePort{{Port: 9093, TargetPort: tt.target}}}}
+				Spec: corev1.ServiceSpec{Selector: map[string]string{forwardTestAppLabel: forwardTestApp}, Ports: []corev1.ServicePort{{Port: 9093, TargetPort: tt.target}}}}
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: plain.namespace, Labels: svc.Spec.Selector},
 				Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: forwardTestApp, Ports: []corev1.ContainerPort{{Name: "web", ContainerPort: 9095}}}}},
 				Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
@@ -41,7 +42,7 @@ func TestServicePod(t *testing.T) {
 			unready.Status.Conditions = nil
 			unrelated := pod.DeepCopy()
 			unrelated.Name = "a-unrelated"
-			unrelated.Labels = map[string]string{"app": "other"}
+			unrelated.Labels = map[string]string{forwardTestAppLabel: "other"}
 			client := kubefake.NewClientset(svc, pod, unready, unrelated)
 			name, port, err := servicePod(context.Background(), client.CoreV1(), plain)
 			if err != nil || name != "ready" || port != tt.want {
@@ -63,7 +64,7 @@ func TestServicePodRejectsMissingSelectorAndPort(t *testing.T) {
 	if _, _, err := servicePod(context.Background(), client.CoreV1(), plain); err == nil {
 		t.Fatal("accepted missing selector")
 	}
-	svc.Spec.Selector = map[string]string{"app": forwardTestApp}
+	svc.Spec.Selector = map[string]string{forwardTestAppLabel: forwardTestApp}
 	if _, err := client.CoreV1().Services(plain.namespace).Update(context.Background(), svc, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
