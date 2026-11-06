@@ -42,6 +42,13 @@ func RepositoryIdentity(raw string) string {
 	return strings.ToLower(r)
 }
 
+// WorkerGitName and WorkerGitEmail are the commit identity of a prepared
+// workspace whose execution user has none of their own.
+const (
+	WorkerGitName  = "beekeeper"
+	WorkerGitEmail = "beekeeper@execution.invalid"
+)
+
 func (s *Server) git(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return s.gitEnv(ctx, dir, nil, args...)
 }
@@ -52,6 +59,23 @@ func (s *Server) gitEnv(ctx context.Context, dir string, extra []string, args ..
 	// operator's unrelated Git settings.
 	args = append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}, args...)
 	return s.command(ctx, dir, append(append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull), extra...), "git", args...)
+}
+
+// ensureGitIdentity gives the workspace repository a commit identity where
+// the execution user's own configuration names none, so the worker can commit
+// and agents publish --sync-base can merge on a host nobody configured. The
+// read runs with the worker's configuration, which gitEnv leaves out.
+func (s *Server) ensureGitIdentity(ctx context.Context, repository string) error {
+	for _, key := range [][2]string{{"user.name", WorkerGitName}, {"user.email", WorkerGitEmail}} {
+		value, err := s.command(ctx, repository, append(cleanEnvironment("", ""), "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1"), "git", "config", "--get", key[0])
+		if err == nil && strings.TrimSpace(string(value)) != "" {
+			continue
+		}
+		if _, err := s.git(ctx, repository, "config", key[0], key[1]); err != nil {
+			return errors.New("cannot set the workspace's Git commit identity")
+		}
+	}
+	return nil
 }
 
 func (s *Server) unshallowWorkspaceRepository(ctx context.Context, repository, commit string) {
@@ -210,6 +234,9 @@ func (s *Server) workspace(ctx context.Context, j *Journal) error {
 		if err := atomicFile(exclude, append(contents, []byte("\n/.beekeeper-scratch/\n")...)); err != nil {
 			return err
 		}
+	}
+	if err := s.ensureGitIdentity(ctx, repository); err != nil {
+		return err
 	}
 	// Validate the actual pinned source, including Go requirements absent from
 	// a stale host checkout or from an organization-admitted repository.

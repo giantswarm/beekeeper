@@ -28,6 +28,9 @@ type opClass struct {
 	// options says the class matches the note's options too, not only its
 	// question: an option set of "file it" or "who fixes it" is the ask.
 	options bool
+	// unless marks a question that names the class's words without being its
+	// ask: a request for log output of a reviewer's start asks for no review.
+	unless *regexp.Regexp
 }
 
 // opClasses are the operational asks a worker's note may not put to a
@@ -41,9 +44,10 @@ var opClasses = []opClass{
 		options: true,
 	},
 	{
-		name:  "review",
-		match: regexp.MustCompile(`(?i)^(please\s+)?review\b|\b(desk|independent) reviews?\b|\breviewers?\b|\b(arrange|start|request|trigger|staff|schedule|assign|kick off|get|need)\b[^.?!]{0,40}\breview`),
-		where: `the supervisor loop starts the desk review when the worker parks on its pull request (beekeeper agents park --on <owner/repo#n> "desk review") and sends its findings or its go through the inbox`,
+		name:   "review",
+		match:  regexp.MustCompile(`(?i)^(please\s+)?review\b|\b(desk|independent) reviews?\b|\breviewers?\b|\b(arrange|start|request|trigger|staff|schedule|assign|kick off|get|need)\b[^.?!]{0,40}\breview`),
+		unless: regexp.MustCompile(`(?i)\b(logs?|log output|journal)\b`),
+		where:  `the supervisor loop starts the desk review when the worker parks on its pull request (beekeeper agents park --on <owner/repo#n> "desk review") and sends its findings or its go through the inbox`,
 	},
 	{
 		name:  "ci",
@@ -147,6 +151,9 @@ func operational(d noteDraft, plans config.Plans) (opClass, bool) {
 		return opClass{}, false
 	}
 	for _, c := range opClasses {
+		if c.unless != nil && c.unless.MatchString(d.Question) {
+			continue
+		}
 		if c.match.MatchString(d.Question) {
 			return c, true
 		}
@@ -213,7 +220,7 @@ func (a *app) routeWorkerNote(ctx context.Context, stderr io.Writer, me state.Pa
 		return refused("note refused: %s. Do not file it again", why)
 	}
 	if s := settledAsk(ctx, stderr, linked); len(s) > 0 {
-		where := "nobody: its ask is settled; take the next step from the board (beekeeper board next) or report the task over (beekeeper agents idle --done)"
+		where := "nobody: its ask is settled; take the next step from the board (beekeeper board next) or report the task over (beekeeper agents idle --done). A worker on an SSH host reads its proof from the coordinator's event log itself (beekeeper log)"
 		a.logRedirect(stderr, me, "superseded", q, strings.Join(s, "; "))
 		return refused("note refused: it is superseded (%s); it goes to %s. Do not file it again", strings.Join(s, "; "), where)
 	}

@@ -34,7 +34,15 @@ const (
 
 // shapers are the flags that print something else than GitHub's JSON: a
 // filter or a template.
-var shapers = map[string]bool{"-q": true, "--jq": true, "-t": true, "--template": true}
+// The gh api flags more than one reader names.
+const (
+	ghFlagJQ       = "--jq"
+	ghFlagField    = "--field"
+	ghFlagRawField = "--raw-field"
+	ghFlagTemplate = "--template"
+)
+
+var shapers = map[string]bool{"-q": true, ghFlagJQ: true, "-t": true, ghFlagTemplate: true}
 
 // errNoBody is the error of a read gh answered with exit 0 and an empty or
 // cut-off body.
@@ -216,8 +224,8 @@ type apiCall struct {
 
 // apiValued are gh api's flags that take a value.
 var apiValued = map[string]bool{
-	"-X": true, "--method": true, "-H": true, "--header": true, "-f": true, "--raw-field": true, "-F": true, "--field": true,
-	"-q": true, "--jq": true, "-t": true, "--template": true, "--input": true, "--hostname": true, "--cache": true, "-p": true, "--preview": true,
+	"-X": true, "--method": true, "-H": true, "--header": true, "-f": true, ghFlagRawField: true, "-F": true, ghFlagField: true,
+	"-q": true, ghFlagJQ: true, "-t": true, ghFlagTemplate: true, "--input": true, "--hostname": true, "--cache": true, "-p": true, "--preview": true,
 }
 
 func parseAPI(args []string) apiCall {
@@ -249,7 +257,7 @@ func parseAPI(args []string) apiCall {
 		switch name {
 		case "-X", "--method":
 			a.method = value
-		case "-f", "--raw-field", "-F", "--field":
+		case "-f", ghFlagRawField, "-F", ghFlagField:
 			a.body = true
 			k, v, _ := strings.Cut(value, "=")
 			a.fields[k] = v

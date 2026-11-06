@@ -34,13 +34,22 @@ func TestPublicationIdentityReadsExecutionHome(t *testing.T) {
 		"GIT_COMMITTER_NAME=Execution User", "GIT_COMMITTER_EMAIL=execution@example.invalid",
 	}
 
+	// A workspace prepared before it carried an identity still merges: no
+	// host identity falls back to the prepared workspace's.
 	t.Setenv(execution.EnvHome, "")
-	if got, err := publicationIdentity(t.Context(), workspace); err == nil && slices.Equal(got, want) {
-		t.Fatalf("without an execution home the managed HOME has no identity, got %v", got)
+	got, err := publicationIdentity(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback := []string{
+		"GIT_AUTHOR_NAME=" + execution.WorkerGitName, "GIT_AUTHOR_EMAIL=" + execution.WorkerGitEmail,
+		"GIT_COMMITTER_NAME=" + execution.WorkerGitName, "GIT_COMMITTER_EMAIL=" + execution.WorkerGitEmail,
+	}; !slices.Equal(got, fallback) {
+		t.Fatalf("without an execution home identity = %v, want %v", got, fallback)
 	}
 
 	t.Setenv(execution.EnvHome, user)
-	got, err := publicationIdentity(t.Context(), workspace)
+	got, err = publicationIdentity(t.Context(), workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

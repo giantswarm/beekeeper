@@ -258,7 +258,7 @@ func (a *app) logCmd() *cobra.Command {
 	var n int
 	var verb, since, until string
 	c := &cobra.Command{
-		Use:   "log",
+		Use:   logName,
 		Short: "The event log: every claim, grant, hold, registration, note and build run",
 		Long: `The event log: every claim, grant, hold, registration, note and build run.
 

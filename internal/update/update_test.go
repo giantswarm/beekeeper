@@ -926,7 +926,13 @@ func TestRunExactReleaseCandidate(t *testing.T) {
 			exe, original := installed(t)
 			validator := &acceptingValidator{}
 			newValidator = func() selfupdate.Validator { return validator }
-			ctx := WithOptions(context.Background(), Options{Version: tag})
+			ctx := WithOptions(context.Background(), Options{
+				Version: tag,
+				Skip: func(string) bool {
+					t.Fatal("an explicit version must bypass earlier skip records")
+					return true
+				},
+			})
 			res, err := Run(ctx, io.Discard, check)
 			if res.Latest != tag || !res.Newer {
 				t.Fatalf("result = %+v", res)
