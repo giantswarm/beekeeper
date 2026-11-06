@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-const viewerQueryCommand = "gh api graphql -f query='{ viewer { login } }'"
-
 // slot is a command as the hook routes it through a build slot.
 func slot(cmd string) string {
 	return ShellQuote(self) + " run -- " + ShellQuote(testShell) + " -c " + ShellQuote(cmd)
@@ -132,7 +130,7 @@ func TestGraphQLRoute(t *testing.T) {
 			`gh api graphql -f query='mutation { x(repository(owner: "example", name: "notes")) { id } }'`},
 		{"two owners", `gh api graphql -f query='{ a: repository(owner: "one", name: "x") { id } b: repository(owner: "two", name: "y") { id } }'`,
 			`gh api graphql -f query='{ a: repository(owner: "one", name: "x") { id } b: repository(owner: "two", name: "y") { id } }'`},
-		{"no repository", viewerQueryCommand, viewerQueryCommand},
+		{"no repository", literalViewerGraphQLCommand, literalViewerGraphQLCommand},
 		{"a variable no flag sets", `gh api graphql -f query='query($o: String!) { repository(owner: $o, name: "x") { id } }'`,
 			`gh api graphql -f query='query($o: String!) { repository(owner: $o, name: "x") { id } }'`},
 		{"text about a query", `echo 'gh api graphql repository(owner: "example", name: "notes")'`,
