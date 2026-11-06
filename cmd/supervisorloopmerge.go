@@ -335,13 +335,29 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			})
 		}
 		if act.Message == strings.ToLower(superloop.Closed) {
-			act.Agent = rp.Agent
-			act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
-			if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
-				return "", err
+			if strings.TrimSpace(*rp.PostMerge) != "" || (rp.Serves != "" && !strings.EqualFold(rp.Serves, act.Ref) && l.open(ctx, rp.Serves)) {
+				act.Agent = rp.Agent
+				act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
+				if err := l.wakeOrStartFixer(ctx, st, act); err != nil {
+					return "", err
+				}
+				clearReviewPark()
+				return "closed; worker told to continue its task", nil
 			}
-			clearReviewPark()
-			return "closed; worker told to continue its task", nil
+			err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+				current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
+				for i := range current.Agents {
+					worker := &current.Agents[i]
+					if worker.Is(rp.Party) && worker.Park != nil && worker.Park.ReviewHead != "" {
+						reportIdle(worker, l.a.timeNow())
+						worker.Done = true
+					}
+				}
+				endNotes(current, rp.Party, l.a.timeNow())
+				clearRecords(current, rp.Party)
+				return nil, nil
+			})
+			return "closed; task already settled", err
 		}
 		if work := strings.TrimSpace(*rp.PostMerge); work != "" {
 			act.Agent = rp.Agent
@@ -411,6 +427,22 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		})
 	}()
 	if act.Message == strings.ToLower(superloop.Closed) {
+		serves := cmp.Or(loopServes(st, ag), loopTaskServes(ag, act.Ref))
+		if strings.TrimSpace(*ag.Park.PostMerge) == "" && (serves == "" || strings.EqualFold(serves, act.Ref) || !l.open(ctx, serves)) {
+			err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
+				i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
+				if i < 0 || current.Agents[i].Done {
+					return nil, nil
+				}
+				worker := &current.Agents[i]
+				reportIdle(worker, time.Now())
+				worker.Done = true
+				endNotes(current, worker.Party, l.a.timeNow())
+				clearRecords(current, worker.Party)
+				return []state.Event{event(worker.Party, superloop.VerbDone, "%s done: %s", worker.Name, worker.LastTask)}, nil
+			})
+			return "closed; task already settled", err
+		}
 		act.Agent = ag.Name
 		act.Message = fmt.Sprintf("%s closed without merging. Continue or finish the owning task, and report what remains open.", act.URL)
 		if err := l.wake(ctx, act); err != nil {

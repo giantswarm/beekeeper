@@ -74,9 +74,11 @@ func leftSwept(head string) string { return "swept@" + short(head) }
 // a review, and an epic's plan waits for its person.
 func Ownerless(in Input) []string {
 	l := newLedger(in.Taken, in.Answers)
+	absorbed := absorbedByMerged(in)
 	var out []string
 	for ref, p := range in.Pulls {
-		if orphanable(in, l, ref, p) && liveOwner(in, l, ref, p) == "" {
+		p.Ref = cmp.Or(p.Ref, ref)
+		if absorbed[strings.ToLower(ref)] == "" && orphanable(in, l, ref, p) && liveOwner(in, l, ref, p) == "" {
 			out = append(out, ref)
 		}
 	}
@@ -87,7 +89,11 @@ func Ownerless(in Input) []string {
 // orphanable reports whether p is a pull request the sweep may give an
 // owner: open, not a draft, the desk's own, still tracked.
 func orphanable(in Input, l ledger, ref string, p Pull) bool {
+	p.Ref = cmp.Or(p.Ref, ref)
 	if p.State != Open || p.Head == "" || p.Draft {
+		return false
+	}
+	if absorbedByMerged(in)[strings.ToLower(ref)] != "" {
 		return false
 	}
 	if reason, _ := in.Desk.unread(ref); reason != "" {

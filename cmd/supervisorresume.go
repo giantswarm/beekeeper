@@ -179,6 +179,12 @@ func (l *supervisorLoop) restartQuota(ctx context.Context, st *state.State, ag s
 	if !ok {
 		return fmt.Errorf("no task reference")
 	}
+	if l.unreadRepo(ref) != "" {
+		return errLoopLater
+	}
+	if (review != nil || superloop.IsPull(ref) && ag.Park != nil && ag.Park.RefKind == github.RefPullRequest) && !l.open(ctx, ref) {
+		return errLoopLater
+	}
 	var brief string
 	if review != nil {
 		brief = filepath.Join(l.a.store.Dir(), "supervisor-loop", briefName.ReplaceAllString(review.key, "-")+".md")
@@ -298,6 +304,10 @@ func (l *supervisorLoop) restartPark(ctx context.Context, ag state.Agent, ref st
 	var startErr error
 	if !ok || (!pullPark && l.a.cfg.Supervisor.WorkerBrief == "") {
 		startErr = fmt.Errorf("no task reference or supervisor.workerBrief")
+	} else if l.unreadRepo(ref) != "" {
+		startErr = fmt.Errorf("repository of %s is not owned by supervisor", ref)
+	} else if pullPark && !l.open(ctx, ref) {
+		startErr = fmt.Errorf("pull request %s is not open", ref)
 	} else {
 		file, def := l.a.cfg.Supervisor.WorkerBrief, ""
 		url := fmt.Sprintf("https://github.com/%s/issues/%d", r.Repo, r.N)

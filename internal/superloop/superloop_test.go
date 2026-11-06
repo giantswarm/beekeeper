@@ -1504,3 +1504,65 @@ func TestPlanOverlapMatchesRefsAndDefaultOwnerCaseInsensitively(t *testing.T) {
 		t.Fatalf("unexpected KindOwner action: %+v", *ownerAct)
 	}
 }
+
+func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
+	got := ParseAbsorbedPulls(
+		"o/r#100",
+		"fix: combine #101 and #102",
+		"Supersedes https://github.com/o/r/pull/101 and o/r#102.\nCloses https://github.com/o/r/issues/50\nFixes #51\n",
+	)
+	if want := []string{"o/r#101", "o/r#102"}; !slices.Equal(got, want) {
+		t.Fatalf("ParseAbsorbedPulls = %v, want %v", got, want)
+	}
+
+	t0 := time.Date(2026, 11, 6, 8, 0, 0, 0, time.UTC)
+	const (
+		origA    = "o/r#101"
+		origB    = "o/r#102"
+		combined = "o/r#100"
+	)
+	in := Input{
+		Now:  t0.Add(OrphanWait + time.Minute),
+		Desk: Desk{Authors: []string{deskAuthor}},
+		Workers: []Worker{
+			{Name: PullWorkerName(origA), Started: true},
+			{Name: ReviewerName(origB, 1), Started: true},
+			{Name: "saved fixer", ParkedOn: origB, ParkedAt: t0, ParkedHead: head1, ReviewRequested: true, Saved: true},
+		},
+		Taken: []Taken{
+			{Key: "review " + origB + "@" + head1, Kind: KindReview, Ref: origB, Agent: PullWorkerName(origB), At: t0},
+		},
+		Ownerless: map[string]time.Time{
+			origA: t0,
+			origB: t0,
+		},
+		Pulls: map[string]Pull{
+			origA:    {Ref: origA, URL: "https://github.com/o/r/pull/101", Author: deskAuthor, State: Open, Head: head1, Red: []Check{{Name: "test"}}},
+			origB:    {Ref: origB, URL: "https://github.com/o/r/pull/102", Author: deskAuthor, State: Open, Head: head1, Green: true},
+			combined: {Ref: combined, URL: "https://github.com/o/r/pull/100", Author: deskAuthor, State: Merged, Head: head2, Absorbs: []string{origA, origB}},
+		},
+	}
+	if gotOwnerless := Ownerless(in); len(gotOwnerless) != 0 {
+		t.Fatalf("Ownerless kept absorbed PRs: %v", gotOwnerless)
+	}
+	acts := Plan(in)
+	var doneAgents []string
+	var endedRefs []string
+	for _, a := range acts {
+		switch a.Kind {
+		case KindDone:
+			doneAgents = append(doneAgents, a.Agent)
+		case KindEnd:
+			endedRefs = append(endedRefs, a.Ref)
+		case KindRework, KindReview, KindForward, KindRed, KindOwner:
+			t.Fatalf("planned %s for absorbed PR: %+v", a.Kind, a)
+		}
+	}
+	slices.Sort(doneAgents)
+	if want := []string{ReviewerName(origB, 1), PullWorkerName(origA)}; !slices.Equal(doneAgents, want) {
+		t.Fatalf("retired agents = %v, want %v (actions: %+v)", doneAgents, want, acts)
+	}
+	if !slices.Equal(endedRefs, []string{origB}) {
+		t.Fatalf("ended refs = %v, want [%s]", endedRefs, origB)
+	}
+}
