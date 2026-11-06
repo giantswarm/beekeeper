@@ -52,35 +52,45 @@ an otherwise eligible candidate.
 
 The staged runner (`beekeeper self-update --stage-canary <path>`) executes the
 verified candidate binary in an isolated temporary environment (`HOME`,
-`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `BEEKEEPER_CONFIG` isolated from live desk
-state) and refuses if `<path>` resolves to the running executable. When
-`--canary-bundle <bundle>` is provided, the candidate binary is verified against
-its Sigstore bundle before execution.
+`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `TMPDIR`, `BEEKEEPER_CONFIG`, and a
+restricted `PATH` isolated from live desk state and credentials) from its first
+invocation (`version`) onward, and refuses if `<path>` resolves to the running
+executable. In live sandbox mode, `--canary-bundle <bundle>` is required and the
+candidate binary (plus any `--canary-sibling <sibling>` and `<sibling>.bundle`)
+is verified against its Sigstore bundle before any candidate subprocess runs.
+Recorded fixture runs (`--canary-recorded`) prefix `run` with `recorded:`,
+cannot emit sibling release evidence, and are rejected by `ValidateEvidence` and
+the installer gate so fixture runs can never grant release eligibility.
 
 The staged scenario exercises the full workflow boundary with real
 `supervisor loop --once` passes:
 
 1. Board scan (`board next --json`) and deterministic worker start
-   (`agents start` in background mode).
-2. Worker branch creation, commit push, pull request publication, and
+   (`agents start` in background mode) or fresh candidate-bound sandbox branch
+   (`canary/<run>/cand-<sha256[:12]>`) and pull request creation.
+2. Worker branch creation, commit push, pull request publication with the exact
+   ownership record (`beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>`
+   and `candidate-sha256: <sha256>`), and
    `agents park --on <owner/repo#n> "desk review"`.
-3. Independent exact-head reviewer start (`agents start --review`) and exact-head
-   approval review comment.
+3. Independent exact-head review approval (`Head reviewed: `<sha>``) and
+   required check rollup verification.
 4. Coordinator merge validation (`checkReviewedMerge`), merge queue inspection,
    exact-head merge (`gh pr merge --match-head-commit <sha>`), and verification
-   that the origin base branch advanced to the observed merge commit SHA.
+   on the created pull request and origin base branch that the observed merge
+   commit SHA landed.
 
-Any failure, timeout, missing permission, unavailable sandbox, or missing merge
-observation emits `status: "failed"` with a non-empty `reason` and exits
-non-zero.
+Any failure, timeout, missing permission, unavailable sandbox, cleanup failure,
+or missing merge observation emits `status: "failed"` with a non-empty `reason`
+and exits non-zero.
 
 ## Sandbox GitHub App permissions and setup
 
 Live sandbox runs require explicit `--canary-repo <owner>/<repo>`,
-`--canary-allow-org <org>`, and `--canary-project <number>`. The runner refuses
-empty values, repositories outside `--canary-allow-org`, and the production
-release repository (`giantswarm/beekeeper`). No personal desk defaults are ever
-used.
+`--canary-allow-org <org>`, `--canary-project <number>`, and
+`--canary-bundle <bundle>`. The runner refuses empty values, repositories
+outside `--canary-allow-org`, and production repositories
+(`giantswarm/beekeeper`, `giantswarm/devctl`). No personal desk defaults are
+ever used.
 
 Configure a dedicated GitHub App installed **only** on the sandbox repository and
 project with least-privilege permissions:
@@ -98,9 +108,12 @@ Required sandbox repository settings:
 
 - Default branch `main` protected with required status check `test` and squash
   merge enabled.
-- Automatic branch deletion or cleanup enabled; `CleanupSandboxRun` also sweeps
-  only resources matching `canary/<run>-*` or `canary-run: <run>` on entry and
-  exit so interrupted runs leave unrelated resources untouched.
+- Automatic branch deletion or cleanup enabled; `CleanupSandboxRun` enumerates
+  open pull requests with pagination (`gh api --paginate`) on entry and exit,
+  closes and deletes only branches with the delimited prefix `canary/<run>/` and
+  matching `beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>` line,
+  verifies zero owned open pull requests remain, and propagates any cleanup error
+  into a failed canary verdict.
 - Credentials (`BEEKEEPER_CANARY_REPO`, `BEEKEEPER_CANARY_ALLOW_ORG`,
   `BEEKEEPER_CANARY_PROJECT`, and the sandbox GitHub App credentials) are held in
   the protected CircleCI `architect` context on tag builds (`/v.*/`) and are
@@ -108,16 +121,21 @@ Required sandbox repository settings:
 
 ## Publishing and rollout order
 
-On tag builds (`/v.*/`), CircleCI runs `publish-canary-evidence` after
-`go-build`, `test-loop-workflow`, and `upload-release-assets`:
+On tag builds (`/v.*/`), CircleCI runs `publish-canary-evidence`
+(`.circleci/publish-canary-evidence.sh`) after `go-build`, `test-loop-workflow`,
+and `upload-release-assets`:
 
 1. `go-build` compiles and signs the cross-platform binaries, and
    `upload-release-assets` attaches `<binary>` and `<binary>.bundle` to the
    GitHub Release so `beekeeper self-update --check` can discover the candidate
    while staging is pending.
-2. `publish-canary-evidence` runs `./beekeeper-linux-amd64 self-update --stage-canary`
-   to execute the isolated canary workflow and emit `<binary>.canary.json` bound
-   to each platform binary's SHA-256, version, commit, OS, and architecture.
+2. `publish-canary-evidence` requires `BEEKEEPER_CANARY_REPO`,
+   `BEEKEEPER_CANARY_ALLOW_ORG`, and `BEEKEEPER_CANARY_PROJECT` (failing closed
+   without falling back to `--canary-recorded`), copies `./beekeeper-linux-amd64`
+   to a separate runner executable so the staged candidate is never the running
+   binary, verifies `./beekeeper-linux-amd64.bundle` and every sibling's
+   `<binary>.bundle`, and emits `<binary>.canary.json` bound to each platform
+   binary's SHA-256, version, commit, OS, and architecture.
 3. `architect/cosign-sign-verify` (`kind: blob`) signs and verifies every
    `<binary>.canary.json` into `<binary>.canary.json.bundle` using the CircleCI
    OIDC identity.

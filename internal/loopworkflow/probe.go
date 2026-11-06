@@ -21,8 +21,19 @@ const (
 	// controller's minute between evaluations.
 	ProbeTimeout = 25 * time.Second
 
-	gitAdd    = "add"
-	gitRemote = "remote"
+	gitAdd        = "add"
+	gitRemote     = "remote"
+	envLang       = "LANG=C.UTF-8"
+	envTZ         = "TZ=UTC"
+	envGitGlobal  = "GIT_CONFIG_GLOBAL=/dev/null"
+	envGitSystem  = "GIT_CONFIG_NOSYSTEM=1"
+	envGitPrompt  = "GIT_TERMINAL_PROMPT=0"
+	partyLoop       = "supervisor loop"
+	verbLoop        = "supervisor.loop"
+	verbBudgetState = "watch.budget-state"
+	detailStarted   = "started"
+	detailFalse     = "false"
+	successStatus   = "SUCCESS"
 )
 
 // ErrInconclusive marks a probe that says nothing about the candidate: the
@@ -113,9 +124,9 @@ func (p *probe) prepare(server string) (err error) {
 	}
 	home := p.path("home")
 	p.env = []string{
-		"HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_STATE_HOME=" + home, "PATH=" + p.path("bin"), "LANG=C.UTF-8", "TZ=UTC",
+		"HOME=" + home, "XDG_CONFIG_HOME=" + home, "XDG_STATE_HOME=" + home, "PATH=" + p.path("bin"), envLang, envTZ,
 		"BEEKEEPER_CONFIG=" + p.path("config.yaml"), "FIXTURE_DIR=" + p.dir, "FIXTURE_GIT=" + p.git, "FIXTURE_CASE=no-checkout",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ALLOW_PROTOCOL=file", "GIT_TERMINAL_PROMPT=0",
+		envGitGlobal, envGitSystem, "GIT_ALLOW_PROTOCOL=file", envGitPrompt,
 		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid", "GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.invalid",
 		"HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1", "NO_PROXY=127.0.0.1",
 	}
@@ -165,7 +176,7 @@ func pullPayload(head string, reviews []any) ([]byte, error) {
 		stateField: openState, "url": "https://github.com/fixture/project/pull/1", "baseRefName": mainBranch, "headRefName": changeBranch, "headRefOid": head,
 		authorField: map[string]any{loginField: fixtureBot}, "title": fixtureChangeMsg, "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": cleanStatus,
 		"changedFiles": 1, "files": []any{map[string]any{"path": readmeFile}},
-		"statusCheckRollup": []any{map[string]any{nameField: "test", "status": completedStatus, "conclusion": "SUCCESS"}},
+		"statusCheckRollup": []any{map[string]any{nameField: "test", "status": completedStatus, "conclusion": successStatus}},
 		reviewsField:        reviews,
 	})
 }
@@ -184,10 +195,10 @@ func (p *probe) seed(head string) error {
 	}); err != nil {
 		return err
 	}
-	by := state.Party{Name: "supervisor loop"}
+	by := state.Party{Name: partyLoop}
 	for _, e := range []state.Event{
-		{At: p.now.Add(-time.Minute), By: by, Verb: "supervisor.loop", Detail: "started"},
-		{At: p.now, By: by, Verb: "watch.budget-state", Detail: "false"},
+		{At: p.now.Add(-time.Minute), By: by, Verb: verbLoop, Detail: detailStarted},
+		{At: p.now, By: by, Verb: verbBudgetState, Detail: detailFalse},
 		{At: p.now, By: by, Verb: "supervisor.review", Subject: "fixture/project#1", Detail: "[review fixture/project#1@" + head + "] fixture-reviewer"},
 	} {
 		if err := store.Record(e); err != nil {

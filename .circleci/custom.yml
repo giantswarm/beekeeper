@@ -120,34 +120,7 @@ jobs:
     - run:
         name: Run staged sandbox canary on release candidate and build evidence blobs
         no_output_timeout: 10m
-        command: |
-          set -euo pipefail
-          mkdir -p /tmp/canary-artifacts
-          chmod +x ./beekeeper-linux-amd64
-          siblings=()
-          for bin in ./beekeeper-*-*; do
-            case "$bin" in
-              *.bundle|*.canary.json|./beekeeper-linux-amd64) continue ;;
-            esac
-            if [ -f "$bin" ]; then
-              siblings+=(--canary-sibling "$bin")
-            fi
-          done
-          mode=(--canary-recorded)
-          if [ -n "${BEEKEEPER_CANARY_REPO:-}" ] && [ -n "${BEEKEEPER_CANARY_ALLOW_ORG:-}" ] && [ -n "${BEEKEEPER_CANARY_PROJECT:-}" ]; then
-            mode=(--canary-repo "$BEEKEEPER_CANARY_REPO" --canary-allow-org "$BEEKEEPER_CANARY_ALLOW_ORG" --canary-project "$BEEKEEPER_CANARY_PROJECT")
-          fi
-          ./beekeeper-linux-amd64 self-update \
-            --stage-canary ./beekeeper-linux-amd64 \
-            "${mode[@]}" \
-            --canary-run "circleci-${CIRCLE_WORKFLOW_ID:-local}-${CIRCLE_BUILD_NUM:-0}" \
-            --canary-output ./beekeeper-linux-amd64.canary.json \
-            "${siblings[@]}"
-          : > /tmp/.cosign_canary_blobs
-          for ev in ./beekeeper-*-*.canary.json; do
-            echo "${ev} ${ev}.bundle" >> /tmp/.cosign_canary_blobs
-            cp "$ev" /tmp/canary-artifacts/
-          done
+        command: bash .circleci/publish-canary-evidence.sh
     - architect/cosign-sign-verify:
         kind: blob
         refs_file: /tmp/.cosign_canary_blobs

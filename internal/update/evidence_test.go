@@ -30,7 +30,7 @@ func (*refusingEvidence) Validate(string, []byte, []byte) error {
 
 func TestEvidenceGate(t *testing.T) {
 	for _, route := range []string{"latest", "pinned", "given"} {
-		for _, scenario := range []string{CanaryStatusSuccess, scenarioAbsent, probationPending, CanaryStatusFailed, scenarioTampered, "schema", "version", "digest", "os", "arch", "merge", "run"} {
+		for _, scenario := range []string{CanaryStatusSuccess, scenarioAbsent, probationPending, CanaryStatusFailed, scenarioTampered, "schema", "version", "digest", "os", "arch", "merge", "run", "recorded"} {
 			t.Run(route+"/"+scenario, func(t *testing.T) {
 				t.Setenv("XDG_STATE_HOME", t.TempDir())
 				rel := release(latestV)
@@ -65,6 +65,8 @@ func TestEvidenceGate(t *testing.T) {
 					e.MergeCommit = ""
 				case "run":
 					e.Run = ""
+				case "recorded":
+					e.Run = RecordedRunPrefix + "sandbox-run"
 				}
 				if scenario != scenarioAbsent {
 					rel.assets = append(rel.assets, fakeAsset{3, binaryName() + ".canary.json"}, fakeAsset{4, binaryName() + ".canary.json.bundle"})

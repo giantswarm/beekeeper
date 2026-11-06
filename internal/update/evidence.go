@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/giantswarm/go-selfupdate"
 	selfupdatecosign "github.com/giantswarm/selfupdate-cosign"
@@ -46,15 +47,54 @@ func ValidateEvidence(data []byte, version, digest string) (CanaryEvidence, erro
 // ValidateEvidenceFor validates raw canary evidence JSON for a target OS/Arch
 // against the expected release version tag and candidate binary SHA-256 digest.
 func ValidateEvidenceFor(data []byte, version, digest, goos, goarch string) (CanaryEvidence, error) {
-	return validateEvidenceTarget(data, version, digest, goos, goarch)
+	return validateEvidenceTarget(data, version, digest, goos, goarch, false)
 }
 
-// CanaryEvidence status values.
+// ValidateRecordedEvidenceFor validates raw canary evidence JSON produced by a
+// local/CI recorded fixture run (--canary-recorded). Recorded evidence is
+// always rejected by ValidateEvidence, ValidateEvidenceFor, and requireEvidence
+// so fixture runs can never grant release installation eligibility.
+func ValidateRecordedEvidenceFor(data []byte, version, digest, goos, goarch string) (CanaryEvidence, error) {
+	return validateEvidenceTarget(data, version, digest, goos, goarch, true)
+}
+
+// CanaryEvidence status values and run prefixes.
 const (
 	CanaryStatusSuccess = "success"
 	CanaryStatusFailed  = "failed"
 	CanaryStatusPending = "pending"
+	RecordedRunPrefix   = "recorded:"
 )
+
+type funcValidator struct {
+	fn func(name string, data, bundle []byte) error
+}
+
+func (v funcValidator) Validate(name string, data, bundle []byte) error {
+	return v.fn(name, data, bundle)
+}
+
+func (funcValidator) GetValidationAssetName(relFilename string) string {
+	return relFilename + ".bundle"
+}
+
+// SetUpdateTargetForTest configures the target executable path, running version,
+// and signature bundle validator for integration tests, returning a restore func.
+func SetUpdateTargetForTest(exePath, version string, verify func(name string, data, bundle []byte) error) func() {
+	prevExe, prevVer, prevVal, prevEvVal := executable, currentVersion, newValidator, evidenceValidator
+	executable = func() (string, error) { return exePath, nil }
+	currentVersion = func() string { return version }
+	if verify != nil {
+		newValidator = func() selfupdate.Validator { return funcValidator{fn: verify} }
+		evidenceValidator = func() selfupdate.Validator { return funcValidator{fn: verify} }
+	}
+	return func() {
+		executable = prevExe
+		currentVersion = prevVer
+		newValidator = prevVal
+		evidenceValidator = prevEvVal
+	}
+}
 
 var evidenceValidator = func() selfupdate.Validator { return selfupdatecosign.New(Repository) }
 var checkEvidence = requireEvidence
@@ -147,10 +187,10 @@ func requireEvidence(ctx context.Context, source selfupdate.Source, rel *selfupd
 }
 
 func validateEvidence(data []byte, version, digest string) (CanaryEvidence, error) {
-	return validateEvidenceTarget(data, version, digest, runtime.GOOS, runtime.GOARCH)
+	return validateEvidenceTarget(data, version, digest, runtime.GOOS, runtime.GOARCH, false)
 }
 
-func validateEvidenceTarget(data []byte, version, digest, goos, goarch string) (CanaryEvidence, error) {
+func validateEvidenceTarget(data []byte, version, digest, goos, goarch string, allowRecorded bool) (CanaryEvidence, error) {
 	var e CanaryEvidence
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -165,6 +205,9 @@ func validateEvidenceTarget(data []byte, version, digest, goos, goarch string) (
 	}
 	if e.Run == "" || (e.Status == CanaryStatusSuccess && e.MergeCommit == "") || (e.Status == CanaryStatusFailed && e.Reason == "") {
 		return e, fmt.Errorf("incomplete canary evidence")
+	}
+	if !allowRecorded && strings.HasPrefix(e.Run, RecordedRunPrefix) && e.Status == CanaryStatusSuccess {
+		return e, fmt.Errorf("recorded fixture canary evidence cannot grant release eligibility")
 	}
 	if e.Status != CanaryStatusSuccess && e.Status != CanaryStatusFailed && e.Status != CanaryStatusPending {
 		return e, fmt.Errorf("unknown canary status")
