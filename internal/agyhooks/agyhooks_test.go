@@ -5,14 +5,16 @@ import (
 	"testing"
 )
 
+const nullDefinition = `null`
+
 const guard = `{
   "PreInvocation": [{"type": "command", "command": "/opt/bin/beekeeper hook preinvocation", "timeout": 30}],
   "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/opt/bin/beekeeper hook pretooluse --format agy", "timeout": 30}]}]
 }`
 
-// agy refuses an entry whose lifecycle event lists a matcher wrapper, whose
-// tool event lists a command without a matcher's hooks, or whose command hook
-// names no command; it accepts flat lifecycle commands and matchers with
+// agy refuses an entry whose lifecycle event lists a matcher wrapper or
+// whose command hook names no command. A tool matcher without hooks runs
+// nothing but is accepted, as are flat lifecycle commands and matchers with
 // commands under the tool events.
 func TestEntryRejects(t *testing.T) {
 	const invalidHookLists = "not an object of hook lists"
@@ -27,13 +29,13 @@ func TestEntryRejects(t *testing.T) {
 			"PreInvocation: command hook must specify 'command'"},
 		{"a matcher under another lifecycle event", `{"PostInvocation": [{"hooks": [{"type": "command", "command": "/usr/bin/true"}]}]}`,
 			"PostInvocation: command hook must specify 'command'"},
-		{"a blank command", `{"PreInvocation": [{"type": "command", "command": "  "}]}`, "PreInvocation: command hook must specify 'command'"},
-		{"a matcher without hooks", `{"PreToolUse": [{"matcher": "*"}]}`, "PreToolUse: a matcher without hooks"},
-		{"a flat command under PreToolUse", `{"PreToolUse": [{"type": "command", "command": "/usr/bin/true"}]}`, "PreToolUse: a matcher without hooks"},
+		{"an empty command", `{"PreInvocation": [{"type": "command", "command": ""}]}`, "PreInvocation: command hook must specify 'command'"},
+		{"a matcher without hooks", `{"PreToolUse": [{"matcher": "*"}]}`, ""},
+		{"a flat command under PreToolUse", `{"PreToolUse": [{"type": "command", "command": "/usr/bin/true"}]}`, ""},
 		{"a matcher hook without its command", `{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command"}]}]}`, "PreToolUse: command hook must specify 'command'"},
 		{"an event that is no list", `{"PreToolUse": {"matcher": "*"}}`, invalidHookLists},
 		{"an entry that is no object", `"/usr/bin/true"`, invalidHookLists},
-		{"null", `null`, invalidHookLists},
+		{"null", nullDefinition, ""},
 	} {
 		got := EntryRejects([]byte(c.raw))
 		if c.want == "" && got != "" || c.want != "" && !strings.HasPrefix(got, c.want) {
@@ -46,7 +48,7 @@ func TestEntryRejects(t *testing.T) {
 // it: Rejects names the first such entry in file order, whoever owns it.
 func TestRejectsTheWholeFileForAnyEntry(t *testing.T) {
 	stale := `{"PreInvocation": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/bin/stale"}]}]}`
-	broken := `{"PreToolUse": [{"matcher": "*"}]}`
+	broken := `{"PreToolUse": [{"matcher": "*", "hooks": [{}]}]}`
 	for _, c := range []struct {
 		name, raw, want string
 	}{

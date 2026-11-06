@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1942,6 +1943,7 @@ func (g *gateRun) mergeArgv() ([]string, error) {
 	}
 	if g.pr != 0 && g.runsDevctl() {
 		argv = merge.CITimeout(argv, g.cfg.Merge.TimeoutFor(g.repo))
+		argv = append(slices.Clone(argv), "--progress")
 	}
 	if g.handCut() != "" || g.plugins() || g.releasePR() || g.overlaps() {
 		argv = merge.NoReleaseWait(argv)
@@ -2442,6 +2444,17 @@ func recordRun(st *state.State, i int, lane config.Lane, by state.Party, r runOu
 	m := &st.Merges[i]
 	key, repo, pr, out, rc, handCut := m.Key(), m.Repo, m.PR, r.out, r.rc, m.HandCut
 	var ev []state.Event
+	// The detached gate, rather than its submitting loop, owns the actual
+	// merge outcome. Record it atomically with the merge's terminal event.
+	if m.By.Name == loopParty.Name && pr > 0 && (out.Merged || r.unanswered != nil || st.Stop == nil && rc != github.SquashRed && rc != github.SquashNotApplicable && rc != github.SquashRefused && rc != ExitGateRefused && rc != ExitGateUnread) {
+		reason := fmt.Sprintf("merge-command-exit-%d", rc)
+		if out.Merged {
+			reason = ""
+		}
+		o := throughputOutcome{At: now, Operation: runMerge, Reason: reason, Candidate: normalizeLoopVersion(loopRunningVersion()), URL: publicPullURL(fmt.Sprintf("https://github.com/%s/pull/%d", repo, pr)), Success: out.Merged, Unknown: r.unanswered != nil}
+		b, _ := json.Marshal(o)
+		ev = append(ev, event(loopParty, throughputOutcomeVerb, "%s", b))
+	}
 	switch {
 	case out.Merged:
 		merge.Retry(st, repo, pr)

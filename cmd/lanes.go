@@ -34,7 +34,9 @@ type laneView struct {
 	// Pairs say, by key, what each of the lane's paired merges lands with
 	// (the gate's --pair): its sibling and where that is.
 	Pairs map[string]string `json:"pairs,omitempty"`
-	Stale string            `json:"stale,omitempty"`
+	// Progress is the detached child's current phase and activity clock.
+	Progress *mergeProgress `json:"progress,omitempty"`
+	Stale    string         `json:"stale,omitempty"`
 	// Pace is how long one place has held the lane of late (lanePace), Drain
 	// how long its queue takes at that pace: its waiting places and the
 	// running one.
@@ -210,8 +212,9 @@ pull request GitHub reports merged or closed while its devctl runs on (hung
 after the merge) has its devctl ended; its outcome is recorded as when its
 gate ends it: a merge settles its lane by the settle rule, its release
 unconfirmed. A running merge whose pull request is open is refused: devctl
-merges it on. The watch ends such a hung run by itself merge.hungAfter (45m)
-after the merge.`,
+merges it on. The watch ends such a hung run after merge.hungAfter (45m)
+after the merge, once devctl has also been silent for its current phase
+timeout.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pr, err := dropArg(args[1])
@@ -494,6 +497,7 @@ func (a *app) laneViews(st *state.State) []laneView {
 		seen[name] = true
 		v := laneView{Lane: merge.Queue(st, name), Installation: installation}
 		if v.Running != nil {
+			v.Progress = readMergeProgress(mergeBase(a.store.Dir(), v.Running.Repo, v.Running.PR))
 			v.Stale = staleMerge(st, *v.Running)
 		}
 		for _, m := range v.Waiting {
@@ -671,6 +675,9 @@ func (a *app) printLanes(views []laneView) {
 		switch {
 		case v.Running != nil:
 			status = fmt.Sprintf("running %s by %s since %s%s", v.Running.Key(), quotedOwner(v.Running.By), clock(a.now, v.Running.Started), v.paired(v.Running.Key()))
+			if v.Progress != nil {
+				status += fmt.Sprintf(", phase %s for %s", v.Progress.Phase, dur(a.now.Sub(v.Progress.Since)))
+			}
 			if v.Stale != "" {
 				status += ", STALE: " + v.Stale
 			}
@@ -1018,6 +1025,9 @@ func (a *app) endHung(ctx context.Context, by state.Party, now time.Time, after 
 	for _, m := range st.Merges {
 		if m.Phase != state.Running || m.PR == 0 || !proc.Alive(m.Child) || !pick(m) ||
 			readPID(mergeBase(a.store.Dir(), m.Repo, m.PR)) != m.Child {
+			continue
+		}
+		if after > 0 && !silentMerge(mergeBase(a.store.Dir(), m.Repo, m.PR), m.Started, now, after) {
 			continue
 		}
 		p, err := pullState(ctx, m.Repo, m.PR)

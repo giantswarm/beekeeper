@@ -28,8 +28,11 @@ updated is held. With
 on these hosts when the coordinator is out of room (or always with
 `supervisor.hostsFirst`, for what a host can run: a repository no host maps
 and a choice of a harness no host has an adapter for start locally within
-`capacity.local.ceiling`). Reviewers stay on the coordinator, where they can
-read GitHub and post the public review required for merge authorization.
+`capacity.local.ceiling`). Reviewers follow the same host preferences, including
+Codex reviewers without a worker GitHub App. On an execution host,
+`beekeeper agents review` reads the assigned PR and its closing issues,
+`--diff` reads the diff, and `--body-file <file>` posts the exact-head comment
+review through the coordinator for merge authorization.
 The [design](docs/ssh-execution-hosts.md) records the contract and the remaining
 coordinator lease and merge authorization work.
 
@@ -2157,6 +2160,17 @@ FAILED` with the reason). Once it has been down two minutes every watch says `SU
 DOWN` once and the standby sends a critical `no-supervisor` notification, again after
 `notify.repeat` while the gap lasts; the loop back is `SUPERVISOR LOOP BACK`, once. A watch under
 a scratch configuration (`--config`, `BEEKEEPER_CONFIG`) restarts no service.
+
+The loop's service can be alive while release work makes no progress. Both watches also
+evaluate durable merge and worker-start outcomes, at most once a minute. Three consecutive
+failures with the same normalized reason for one operation file one incident for the guide;
+a successful corresponding operation resets that streak, including across restarts.
+An approved, exact-head, green PR selected by the loop's merge policy also files an incident
+once it has waited `watch.throughputAfter` (default `2h`). The report includes the running
+candidate version, oldest eligible wait and public PR URLs. Recovery is filed once.
+Capacity and budget refusals, stops, red CI and pending review do not add failures.
+Missing observations get one minute for initialization; unreadable observations, or a snapshot
+older than three minutes, report unknown rather than healthy. Retry backoff is independent.
 
 ### Fresh successors (the guide)
 
