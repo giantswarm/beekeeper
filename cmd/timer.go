@@ -25,6 +25,11 @@ when a timer is due; it stays in every hand-over until marked done. A timer
 can wait on a condition and wake an agent or run a command itself (timer
 add --help); such a timer closes when it fires.
 
+The installed timer dispatcher (timer dispatch) checks and fires timers
+independently of the watch and supervisor loop. Disabling either does not
+disable timers. Existing watches and loops share the same transactional
+claims with the dispatcher, so they can coexist without double firing.
+
 Without a subcommand, lists the open timers; -v adds what the last check
 of each condition found.`,
 		Args: cobra.NoArgs,
@@ -190,7 +195,7 @@ left as it is; the watch fires it on its own check.`,
 	}
 	list := listCmd("List the open timers", func() error { return a.timerList(verbose) })
 	list.Flags().BoolVarP(&verbose, "verbose", "v", false, "add what the last check of each condition found")
-	c.AddCommand(add, done, check, list)
+	c.AddCommand(add, done, check, list, a.timerDispatchCmd())
 	return c
 }
 

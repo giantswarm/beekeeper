@@ -16,9 +16,14 @@ const testExe = "/b/beekeeper"
 
 func TestFatalSentinelIsIndependentAndPinsState(t *testing.T) {
 	files, _ := (systemdSetup{}).Files(SetupSpec{ConfigDir: "/config", Exe: testExe, ConfigPath: "/config/main.yaml", StateDir: "/state with spaces"})
-	var service, timer string
+	var service, timer, dispatcher string
 	for _, f := range files {
 		switch filepath.Base(f.Path) {
+		case "beekeeper-timers.service":
+			dispatcher = string(f.Content)
+			if !f.Service {
+				t.Fatal("dispatcher not installed")
+			}
 		case "beekeeper-fatal.service":
 			service = string(f.Content)
 			if f.Service {
@@ -38,6 +43,9 @@ func TestFatalSentinelIsIndependentAndPinsState(t *testing.T) {
 	}
 	if !strings.Contains(timer, "OnUnitInactiveSec=1min") || strings.Contains(service, "Requires=") || strings.Contains(service, "After=") {
 		t.Fatal("sentinel depends on monitored services")
+	}
+	if !strings.Contains(dispatcher, "timer dispatch") || strings.Contains(dispatcher, "Requires=") || strings.Contains(dispatcher, "After=") {
+		t.Fatal("timers still depend on watch/loop")
 	}
 }
 

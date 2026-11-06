@@ -14,7 +14,9 @@
 # The independent fatal sentinel is installed as its own timer on systemd.
 # It monitors enabled watch/loop services, configured harnesses, installed
 # guards and the core repository's default-branch CI. Disabled components
-# stay disabled. Stop/holds/capacity still govern repairs; three attempts,
+# stay disabled. A separate timer dispatcher fires timers without watch or
+# supervisor; missed timer firing/check deadlines are fatal after 2m grace.
+# Stop/holds/capacity still govern repairs; three attempts,
 # ten minutes apart, with only one repair owner at a time. Only a passing
 # probe clears an outage; unreadable is unknown. Inspect: beekeeper fatal status.
 # fatal:

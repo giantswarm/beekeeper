@@ -181,9 +181,11 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		cfg = nil
 	}
 	observe(fatal.Observation{ID: "configuration", Failed: pathErr != nil, Evidence: "beekeeper configuration cannot load"})
-	for _, unit := range []string{"beekeeper-notify.service", "beekeeper-supervisor-loop.service"} {
+	for _, unit := range []string{"beekeeper-notify.service", "beekeeper-supervisor-loop.service", "beekeeper-timers.service"} {
 		observe(fatalService(ctx, unit))
 	}
+	timers := fatalTimers(st, now)
+	observe(fatal.Observation{ID: "timers:overdue", Failed: timers.overdue > 0, Disabled: timers.disabled, Evidence: timers.evidence()})
 	broken := []string{}
 	if cfg != nil {
 		if cfg.StateDir != dir {
