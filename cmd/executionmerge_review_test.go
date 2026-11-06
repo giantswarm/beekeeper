@@ -14,7 +14,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
-const installationA = "installation-a"
+const (
+	installationA = "installation-a"
+	testReviewID  = "100"
+)
 
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	t.Helper()
@@ -35,10 +38,11 @@ func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 		t.Fatal(err)
 	}
 	pull := &superloop.Pull{State: superloop.Open, Head: head, Green: true, Reviews: []superloop.Review{{ID: "worker-review", Head: head, Verdict: superloop.Approved, At: now.Add(time.Second)}}}
-	old, login := readLoopPull, readDeskLogin
-	t.Cleanup(func() { readLoopPull, readDeskLogin = old, login })
+	old, login, fixed := readLoopPull, readDeskLogin, readReviewerFixedHead
+	t.Cleanup(func() { readLoopPull, readDeskLogin, readReviewerFixedHead = old, login, fixed })
 	readLoopPull = func(context.Context, string) (superloop.Pull, error) { return *pull, nil }
 	readDeskLogin = func(context.Context) (string, error) { return loopDesk, nil }
+	readReviewerFixedHead = func(context.Context, string, string, string) (bool, error) { return true, nil }
 	use := execution.MergeUse{ID: "review-grant", Ref: r.Ref, Repository: r.Repository, PR: 7, Head: head}
 	assignMergeReview(t, a, use, 1)
 	return a, use, pull
@@ -162,7 +166,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 	old := readDeskReview
 	t.Cleanup(func() { readDeskReview = old })
 	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
-		if repository != use.Repository || pr != use.PR || id != "100" {
+		if repository != use.Repository || pr != use.PR || id != testReviewID {
 			t.Fatal("review fetched from a different repository or URL")
 		}
 		return *review, nil
@@ -600,7 +604,7 @@ func TestExecutionMergeReviewerAppliesOwnFindingsAndApprovesNewHead(t *testing.T
 	old := readDeskReview
 	t.Cleanup(func() { readDeskReview = old })
 	readDeskReview = func(_ context.Context, repository string, pr int, id string) (superloop.Review, error) {
-		if repository != use.Repository || pr != use.PR || id != "100" {
+		if repository != use.Repository || pr != use.PR || id != testReviewID {
 			t.Fatal("review fetched from a different repository or URL")
 		}
 		return review, nil

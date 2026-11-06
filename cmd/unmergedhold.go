@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,8 +55,9 @@ func readRepoOpenPullsWithGH(ctx context.Context, gh github.GH, repo string) ([]
 	search := "draft:false"
 	seen := map[string]bool{}
 	var all []unmergedPull
+	limitArg := strconv.Itoa(unmergedPullPageLimit)
 	for range 20 {
-		out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", search, "--limit", "100", "--json", unmergedPullFields)
+		out, err := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", search, "--limit", limitArg, "--json", unmergedPullFields)
 		if err != nil {
 			return nil, err
 		}
@@ -121,7 +123,7 @@ func findOpenPullClosingIssues(ctx context.Context, gh github.GH, repo string, p
 		if !ok || !strings.EqualFold(r.Repo, repo) {
 			continue
 		}
-		out, ghErr := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", fmt.Sprintf("draft:false %d", r.N), "--limit", "100", "--json", unmergedPullFields)
+		out, ghErr := gh(ctx, "pr", "list", "--repo", repo, "--state", "open", "--search", fmt.Sprintf("draft:false %d", r.N), "--limit", strconv.Itoa(unmergedPullPageLimit), "--json", unmergedPullFields)
 		if ghErr != nil {
 			return "", "", ghErr
 		}
