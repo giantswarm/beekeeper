@@ -12,7 +12,10 @@ import (
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
-const productionDelete = "kubectl --context production delete job stale --namespace monitoring"
+const (
+	productionDelete = "kubectl --context production delete job stale --namespace monitoring"
+	noteApproval     = "yes"
+)
 
 func TestProductionNoteAuthority(t *testing.T) {
 	for _, tc := range []struct {
@@ -21,9 +24,9 @@ func TestProductionNoteAuthority(t *testing.T) {
 	}{
 		{name: "approved", channel: viaCLI, answer: "delete it"},
 		{name: "declined", channel: viaCLI, answer: "no", want: "does not explicitly approve"},
-		{name: "different object", channel: viaCLI, answer: "yes", question: strings.ReplaceAll(productionDelete, "stale", "other"), want: "exact command"},
-		{name: "expired", channel: viaCLI, answer: "yes", age: 25 * time.Hour, want: "older"},
-		{name: "future", channel: viaCLI, answer: "yes", age: -time.Hour, want: "future"},
+		{name: "different object", channel: viaCLI, answer: noteApproval, question: strings.ReplaceAll(productionDelete, "stale", "other"), want: "exact command"},
+		{name: "expired", channel: viaCLI, answer: noteApproval, age: 25 * time.Hour, want: "older"},
+		{name: "future", channel: viaCLI, answer: noteApproval, age: -time.Hour, want: "future"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, _ := noteApp(t)
