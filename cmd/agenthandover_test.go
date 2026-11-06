@@ -36,7 +36,7 @@ const (
 func TestHandoversDue(t *testing.T) {
 	party := func(id string) state.Party { return state.Party{Session: id, Name: "test: " + id} }
 	agents := []state.Agent{}
-	ids := []string{dueID, "tool", "merging", "small", "said", "sup", "relieved", holderGone, "parked", "parked-small"}
+	ids := []string{dueID, "tool", "merging", litSmall, "said", "sup", "relieved", holderGone, "parked", "parked-small"}
 	for _, id := range ids {
 		agents = append(agents, state.Agent{Party: party(id), LastTask: countTask})
 	}
