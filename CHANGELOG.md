@@ -9,8 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `guide.desk`: the guide's session writes files in this folder, its memory; commits stay the desk's ([#3296](https://github.com/giantswarm/beekeeper/issues/3296))
+- `beekeeper install` turns Claude Code's own memory off, on execution hosts too, and the hook refuses writes to Claude Code's, Codex's, agy's and omp's memory folders, naming the desk ([#3298](https://github.com/giantswarm/beekeeper/issues/3298))
+- `guide.personNames`: other names of the guide's person ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
+
 ### Fixed
 
+- `note add --for` files a note for another name of the guide's person for that person, and refuses a name nobody on the desk goes by, so a decision never lands where no guide sees it ([#3214](https://github.com/giantswarm/beekeeper/issues/3214))
+- A central instance that answers "tool not found" is named as a version mismatch, not as unreachable ([#3205](https://github.com/giantswarm/beekeeper/issues/3205))
+- The merge skill reads branch protection through the GitHub API, which needs no muster login ([#3208](https://github.com/giantswarm/beekeeper/issues/3208))
 - Transcript guard: a repository script's `[[ ]]` patterns and `sed`, `awk`, `grep` and `perl` regexes no longer read as a recursive read of `/`; a glob the shell does not expand is refused only when it can reach a transcript store ([#3288](https://github.com/giantswarm/beekeeper/issues/3288)).
 - Codex hook: `spawn_agent` and the wait, list, interrupt and close tools, bare or under the `collaboration` namespace, pass the shared guard like a Claude subagent start ([#3289](https://github.com/giantswarm/beekeeper/issues/3289)).
 - `beekeeper agents publish` scans only the worker's own commits: after `--sync-base`, commits already on the default branch no longer stop a publication with a finding the worker did not add ([https://github.com/giantswarm/beekeeper/issues/3272](https://github.com/giantswarm/beekeeper/issues/3272)).

@@ -71,13 +71,25 @@ func (h Hook) guideRefusal(ev event) string {
 	if guide, _ := h.Guide(ev.Session); !guide {
 		return ""
 	}
+	if slices.Contains(editTools, ev.ToolName) && h.guideDeskFile(ev.Session, absIn(ev.CWD, toolFile(ev))) {
+		return ""
+	}
 	return "Refused: " + what + " is work outside the guide's role (code, commits, merges, reviews, browser clicks). " +
 		"File it in this turn as an issue in its owning repository and put it on the board (`beekeeper board move <owner/repo#n> <status>`), " +
 		"saying what to do, on which issue or PR (its full URL), and the person's words that asked for it; " +
 		"the supervisor loop schedules it from the board, no session a message reaches. " +
 		"Tell the person in one line that it is filed, with its URL; never ask them to do it themselves. " +
 		"Whatever else they asked that the guide's own tools allow (a command, a board move, an issue), run at once, then carry on guiding. " +
-		"Stuck operational state (a hold, a pinned release, a parked session) is not such work: the guide is its escalation point and sets, narrows or lifts it itself with `beekeeper` to carry out what the person decided, then reports."
+		"Stuck operational state (a hold, a pinned release, a parked session) is not such work: the guide is its escalation point and sets, narrows or lifts it itself with `beekeeper` to carry out what the person decided, then reports." +
+		h.deskHint()
+}
+
+// deskHint is what a refusal adds of the folder the guide may write in.
+func (h Hook) deskHint() string {
+	if h.GuideDesk == "" {
+		return ""
+	}
+	return " Files of the guide's own memory go in `" + h.GuideDesk + "` (guide.desk), which the guide edits and the desk commits."
 }
 
 // work names the work ev does, "" for a call that asks, relays or reads.

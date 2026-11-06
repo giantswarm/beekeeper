@@ -75,6 +75,9 @@ func (h Hook) DecideExecution(raw []byte, session, workspace string, protected [
 	if h.ExecutionMCP && strings.HasPrefix(ev.ToolName, coordinatorMCPPrefix) {
 		return h.Decide(raw)
 	}
+	if r := h.memoryRefusal(ev); r != "" {
+		return ExecutionDeny(r)
+	}
 	switch ev.ToolName {
 	case bashTool:
 		command, ok := ev.ToolInput[commandKey].(string)
@@ -168,6 +171,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 		if !target(cwd) {
 			return ExecutionDenyCodex("tool working directory is outside its owned workspace")
 		}
+		if r := h.memoryTargets(writeTargets(command, cwd, 0)); r != "" {
+			return ExecutionDenyCodex(r)
+		}
 		if err := executionShell(command, workspace, cwd, protected, 0); err != nil {
 			return ExecutionDenyCodex(err.Error())
 		}
@@ -178,6 +184,9 @@ func (h Hook) DecideExecutionCodex(raw []byte, session, workspace string, protec
 			return ExecutionDenyCodex(reason)
 		}
 		for _, hdr := range headers {
+			if r := h.memoryTargets([]string{absIn(ev.CWD, hdr.target)}); r != "" {
+				return ExecutionDenyCodex(r)
+			}
 			if !target(hdr.target) {
 				return ExecutionDenyCodex("patch target is outside its owned workspace")
 			}
@@ -241,6 +250,9 @@ func (h Hook) DecideExecutionAgy(raw []byte, session, workspace string, protecte
 			return ExecutionDenyAgy("tool is not supported by the managed remote adapter; use component commands for notes and reports")
 		}
 		return ExecutionDenyAgy(errReason)
+	}
+	if r := h.memoryRefusal(ev); r != "" {
+		return ExecutionDenyAgy(r)
 	}
 	baseCWD := workspace
 	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {

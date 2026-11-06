@@ -30,7 +30,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: notePerson}}}, &out
+	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: notePerson}, Serve: config.Serve{People: map[string]string{"Sam": "sam@example.com"}}}}, &out
 }
 
 func addNote(a *app, args ...string) error {
@@ -108,6 +108,45 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 	}
 	if !strings.HasSuffix(out.String(), "note #2\n") {
 		t.Fatalf("printed %q", out.String())
+	}
+}
+
+func TestNoteAddresseeResolvesThePersonOrRefuses(t *testing.T) {
+	a, _ := noteApp(t)
+	a.cfg.Guide.PersonNames = []string{"Patricia"}
+	a.cfg.Serve.People = map[string]string{notePerson: "pat@example.com", "Sam": "sam@example.com"}
+	a.cfg.Board.People = []string{"robin"}
+	for who, want := range map[string]string{
+		"PAT":             notePerson,
+		"patricia":        notePerson,
+		"pat@example.com": notePerson,
+		"Sam":             "Sam",
+		"sam@example.com": "sam@example.com",
+		"robin":           "robin",
+		"team:bees":       "team:bees",
+	} {
+		if got, err := a.noteAddressee(who); err != nil || got != want {
+			t.Errorf("noteAddressee(%q) = %q, %v, want %q", who, got, err, want)
+		}
+	}
+	if _, err := a.noteAddressee("Nobody"); Code(err) != ExitUsage || !strings.Contains(err.Error(), "guide.personNames") {
+		t.Fatalf("an unknown name: %v", err)
+	}
+	a.cfg.Guide.Person = ""
+	if got, err := a.noteAddressee("Nobody"); err != nil || got != "Nobody" {
+		t.Fatalf("with guide.person unset every note is the guide's: %q, %v", got, err)
+	}
+}
+
+func TestNoteForAnotherNameOfThePersonReachesTheQueue(t *testing.T) {
+	a, _ := noteApp(t)
+	a.cfg.Guide.PersonNames = []string{"Patricia"}
+	if err := addNote(a, "--for", "Patricia", "--status-quo", sqNow, "--why", whyNow, "--default", dfltOK, "--due", "3h", "--ref", prURL, "approve "+prURL); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := a.store.Read()
+	if len(st.Notes) != 1 || !guides(notePerson, &st.Notes[0]) {
+		t.Fatalf("notes %+v, want one the guide sees", st.Notes)
 	}
 }
 

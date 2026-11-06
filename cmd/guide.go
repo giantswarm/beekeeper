@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/giantswarm/beekeeper/internal/board"
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/feed"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -142,6 +143,25 @@ func guides(person string, n *state.Note) bool {
 	}
 	who, _ := noteFor(n)
 	return strings.EqualFold(who, person)
+}
+
+// noteAddressee is who a note filed --for who is for: guide.person when who is
+// another name of theirs, who itself when the desk knows it. A name nobody
+// here goes by is refused: its note would reach no guide. With guide.person
+// unset every note is the guide's; a central instance judges its own names.
+func (a *app) noteAddressee(who string) (string, error) {
+	person := a.cfg.Guide.Person
+	if person == "" || strings.HasPrefix(who, teamPrefix) {
+		return who, nil
+	}
+	email := personEmail(a.cfg.Serve, who)
+	if strings.EqualFold(who, person) || board.ContainsFold(a.cfg.Guide.PersonNames, who) || email != "" && strings.EqualFold(email, personEmail(a.cfg.Serve, person)) {
+		return person, nil
+	}
+	if email != "" || a.centralNotesOn() || board.ContainsFold(a.cfg.Board.People, who) {
+		return who, nil
+	}
+	return "", usageErr("--for %q names nobody on this desk, so no guide would see the note: the guide's person is %q (guide.person; guide.personNames adds other names of theirs), others are in serve.people, board.people, an email or team:<name>", who, person)
 }
 
 // guideQueue is the queue of the guide of person: the open notes filed for

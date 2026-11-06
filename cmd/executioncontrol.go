@@ -351,6 +351,10 @@ func (a *app) applyExecutionControl(ctx context.Context, st *state.State, me sta
 			return "", nil, refused("remote notes support ordinary decisions with a thread only")
 		}
 		// Revalidate against coordinator policy, never the host's guide policy.
+		var err error
+		if n.For, err = a.noteAddressee(n.For); err != nil {
+			return "", nil, err
+		}
 		d.Question = n.Question
 		d.StatusQuo = n.StatusQuo
 		d.Default = n.Default

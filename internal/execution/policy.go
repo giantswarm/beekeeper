@@ -356,8 +356,9 @@ func preToolUseMatcher(matcher, command string) map[string]any {
 func (s *Server) settings() []byte {
 	cmd := quote(s.Executable) + " --config " + quote(s.ConfigPath) + " agents execution-guard"
 	b, _ := json.Marshal(map[string]any{
-		hooksKey:      preToolUse(cmd),
-		"permissions": map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
+		hooksKey:            preToolUse(cmd),
+		"permissions":       map[string]any{"deny": []string{"SendMessage", "AskUserQuestion", "Task", "Agent"}},
+		"autoMemoryEnabled": false,
 	})
 	return b
 }

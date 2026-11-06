@@ -165,6 +165,9 @@ type Hook struct {
 	// guide asks; read only for an AskUserQuestion call and a call that
 	// does work (guide.go).
 	Guide func(session string) (bool, string)
+	// GuideDesk is guide.desk: the folder the guide's session writes files in,
+	// its memory, and where a refused write to a harness's memory is sent.
+	GuideDesk string
 	// CheckQuestion names what one of the guide's questions lacks for its
 	// person to answer it, as `note add` checks a note; nil checks nothing.
 	CheckQuestion func(Question) []string
@@ -326,6 +329,10 @@ func (h Hook) Decide(input []byte) (out []byte) {
 
 func (h Hook) decide(ev event) []byte {
 	h.mergeSession = ev.Session
+	h.beginCheck("memoryRefusal")
+	if r := h.memoryRefusal(ev); r != "" {
+		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
 	h.beginCheck("guideRefusal")
 	if r := h.guideRefusal(ev); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
