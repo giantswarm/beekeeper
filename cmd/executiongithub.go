@@ -22,6 +22,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/secret"
+	"github.com/giantswarm/beekeeper/internal/state"
 )
 
 // Only these responses, over the authenticated SSH callback, carry a short-lived
@@ -111,14 +112,35 @@ func (a *app) workerGitHubOAuthPath() string {
 	return filepath.Join(a.cfg.StateDir, "execution-github", "oauth.json")
 }
 
+// executionEnded says why the coordinator serves an execution no more, "" for
+// one it serves.
+func (a *app) executionEnded(st *state.State, r *state.ExecutionRecord) string {
+	switch {
+	case r == nil:
+		return "this coordinator holds no record of the execution"
+	case r.Request.Coordinator != a.cfg.Identity.Host:
+		return "the execution belongs to another coordinator"
+	case r.StopRequest != nil:
+		return "the execution has a stop request"
+	case r.Terminal() || r.Completed:
+		return "the execution has ended; a new execution gets its own access"
+	case st.Stop != nil:
+		return "beekeeper is stopped; access returns when the stop lifts"
+	}
+	return ""
+}
+
 func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) error {
 	st, err := a.store.Read()
 	if err != nil {
 		return err
 	}
 	r, _ := executionRecord(st, ref)
-	if r == nil || !r.Request.GitHub || r.Request.Coordinator != a.cfg.Identity.Host || r.StopRequest != nil || r.Terminal() || r.Completed || st.Stop != nil {
-		return errors.New("worker GitHub access revoked")
+	if why := a.executionEnded(st, r); why != "" {
+		return errors.New("worker GitHub access revoked: " + why)
+	}
+	if !r.Request.GitHub {
+		return errors.New("worker has no scoped GitHub credential: github.workerApp was not configured on the coordinator when this execution started; gh uses the host's own login")
 	}
 	if r.Request.LeaseRequired && (r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now())) {
 		return errors.New("worker GitHub execution lease expired")
@@ -155,8 +177,10 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 		return nil, errors.New("unauthenticated execution callback")
 	}
 	if req.Operation == workerGitHubBudget {
-		if err := a.workerGitHubLive(req.Ref, workerGitHubRequest{Repository: strings.ToLower(r.Request.Repository)}); err != nil {
-			return nil, err
+		// The budget is the coordinator's, so reading it needs a live execution,
+		// not a scoped credential: a host's own gh login spends it the same.
+		if why := a.executionEnded(st, r); why != "" {
+			return nil, errors.New("worker GitHub access revoked: " + why)
 		}
 		var request workerBudgetRequest
 		if execution.Decode(req.Payload, &request) != nil {

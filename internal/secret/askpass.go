@@ -96,6 +96,25 @@ func (o *Ops) CopyToGit(ctx context.Context, src Ref, argv []string, user string
 // askpassExe is the binary the askpass helper runs: this beekeeper.
 var askpassExe = os.Executable
 
+// askpassSocket is the socket's name in its directory; askpassSocketLimit the
+// longest path a Unix socket binds to everywhere (sun_path is 104 bytes on
+// macOS, 108 on Linux, with its terminator).
+const (
+	askpassSocket      = "s"
+	askpassSocketLimit = 103
+)
+
+// askpassDir is the helper's 0700 directory: under TMPDIR, or under /tmp when
+// TMPDIR is too deep for a socket to bind in it, as a build slot's can be.
+func askpassDir() (string, error) {
+	dir, err := os.MkdirTemp("", "beekeeper-askpass-")
+	if err != nil || len(filepath.Join(dir, askpassSocket)) <= askpassSocketLimit {
+		return dir, err
+	}
+	_ = os.Remove(dir)
+	return os.MkdirTemp("/tmp", "beekeeper-askpass-")
+}
+
 // askpassGit runs git with a temporary askpass helper, a script in a 0700
 // directory that runs this beekeeper as secret askpass <socket> <prompt>.
 // beekeeper answers on the socket, from its memory, a process of git's
@@ -105,12 +124,12 @@ func askpassGit(ctx context.Context, v, user, ref string, argv []string) (int, s
 	if err != nil {
 		return 0, "", err
 	}
-	dir, err := os.MkdirTemp("", "beekeeper-askpass-")
+	dir, err := askpassDir()
 	if err != nil {
 		return 0, "", err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	sock := filepath.Join(dir, "s")
+	sock := filepath.Join(dir, askpassSocket)
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		return 0, "", err

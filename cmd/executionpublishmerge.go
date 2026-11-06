@@ -19,7 +19,9 @@ var publicationIdent = regexp.MustCompile(`^(.*) <([^<>\r\n]+)> [0-9]+ [+-][0-9]
 // Copy the identities, not the global configuration, into the sanitized merge.
 // A harness may run under a managed HOME of its own (agy does) that holds no
 // Git configuration; the execution user's home, as the host names it, is the
-// one whose global configuration carries the worker's identity.
+// one whose global configuration carries the worker's identity. A host with
+// none, or a workspace prepared before its identity was set, falls back to the
+// one a prepared workspace carries (execution.WorkerGitName).
 func publicationIdentity(ctx context.Context, workspace string) ([]string, error) {
 	env := os.Environ()
 	if home := os.Getenv(execution.EnvHome); filepath.IsAbs(home) {
@@ -32,7 +34,8 @@ func publicationIdentity(ctx context.Context, workspace string) ([]string, error
 		c.Env = env
 		out, err := c.Output()
 		if err != nil {
-			return nil, errors.New("cannot resolve worker Git commit identity for base merge; configure user.name and user.email")
+			identity = append(identity, "GIT_"+role+"_NAME="+execution.WorkerGitName, "GIT_"+role+"_EMAIL="+execution.WorkerGitEmail)
+			continue
 		}
 		fields := publicationIdent.FindStringSubmatch(strings.TrimSpace(string(out)))
 		if len(fields) != 3 || fields[1] == "" {

@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	executionToolInput  = "tool_input"
-	executionToolName   = "tool_name"
-	executionFixture    = "fixture"
-	executionWorkingDir = "cwd"
+	executionToolInput          = "tool_input"
+	executionToolName           = "tool_name"
+	executionFixture            = "fixture"
+	executionWorkingDir         = "cwd"
+	literalViewerGraphQLCommand = `gh api graphql -f query='{ viewer { login } }'`
 )
 
 func executionEvent(tool string, input map[string]any, cwd string) []byte {
@@ -24,6 +25,48 @@ func executionDenied(b []byte) bool {
 		Hook hookOutput `json:"hookSpecificOutput"`
 	}
 	return json.Unmarshal(b, &out) == nil && out.Hook.PermissionDecision == decisionDeny
+}
+
+// A read-only GraphQL query passes where every field of it is literal; the
+// board hook's own hint recommends one. A write, or what the guard cannot read,
+// stays with the coordinator.
+func TestExecutionGuardAllowsLiteralGraphQLReads(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Hook{Upstream: Upstream{Orgs: []string{allowedOrg}}}
+	const query = "query='query($n:Int!){repository(owner:\"giantswarm\",name:\"beekeeper\"){issue(number:$n){projectItems(first:5){nodes{id}}}}}'"
+	for _, cmd := range []string{
+		"gh api graphql -f " + query + " -F n=3199",
+		"gh api graphql --raw-field " + query + " --field n=3199 --jq .data",
+		"gh api graphql -F " + query + " -F n=3199 --paginate --slurp",
+		literalViewerGraphQLCommand,
+		"GH_REPO=giantswarm/beekeeper gh api graphql -f query='{ viewer { login } }' -q .data.viewer.login",
+	} {
+		if executionDenied(h.DecideExecution(executionEvent(bashTool, map[string]any{commandKey: cmd}, workspace), executionFixture, workspace, nil)) {
+			t.Errorf("read-only query was denied: %s", cmd)
+		}
+	}
+	for _, cmd := range []string{
+		"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
+		"gh api graphql -f query='  # read\nMutation { addComment(input: {}) { clientMutationId } }'",
+		"gh api graphql -f query='subscription { x }'",
+		"gh api graphql --field=query='mutation { x }'",
+		`gh api graphql -f query="$Q"`,
+		"gh api graphql -f query=$(cat q.graphql)",
+		"gh api graphql -F query=@request.json",
+		"gh api graphql --input request.json",
+		"gh api graphql -f query='{ a }' -F n=@secret.txt",
+		"gh api graphql -f query='{ a }' -f query='mutation { b }'",
+		"gh api graphql -X PUT -f query='{ a }'",
+		"gh api graphql",
+		"gh api repos/giantswarm/beekeeper/issues -f title=fixture",
+	} {
+		if !executionDenied(h.DecideExecution(executionEvent(bashTool, map[string]any{commandKey: cmd}, workspace), executionFixture, workspace, nil)) {
+			t.Errorf("command was not denied: %s", cmd)
+		}
+	}
 }
 
 func TestExecutionGuardFailsClosedAndRefusesRemoteAuthority(t *testing.T) {
