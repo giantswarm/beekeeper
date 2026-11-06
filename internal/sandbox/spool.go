@@ -90,6 +90,9 @@ const (
 	// OpGate runs a gated devctl command (beekeeper gate) on the host,
 	// where devctl reads its keychain and the gate starts its units.
 	OpGate = "gate"
+
+	// OpProtection reads classic branch protection; no write arguments are accepted.
+	OpProtection = "protection"
 	// OpAgents runs a beekeeper agents start, wake or resume on the host,
 	// where the user's service manager starts the agent's unit.
 	OpAgents = "agents"

@@ -103,6 +103,14 @@ creation rule's recipient and where its identity is, no value read.`,
 					// A dry check creates no state directory or audit files.
 					load = a.loadConfig
 				}
+				if scratch := os.Getenv(scratchBrokerEnv); scratch != "" {
+					if err := a.loadConfig(); err != nil {
+						return err
+					}
+					if scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+						return refused("a scratch secret call must use its scratch configuration")
+					}
+				}
 				if err := load(); err != nil {
 					return err
 				}
@@ -168,11 +176,15 @@ anything is not equal.`,
 				return vaultExit(run(cmd, args))
 			}
 			inSandbox := os.Getenv(sandbox.Env) != ""
+			scratch := os.Getenv(scratchBrokerEnv)
+			if scratch != "" && scratch != sandbox.SpoolDir(a.cfg.StateDir) {
+				return refused("a scratch secret call must use its scratch configuration")
+			}
 			beforeConsumer := args
 			if dash := cmd.ArgsLenAtDash(); cmd.Name() == "copy" && dash >= 0 {
 				beforeConsumer = args[:dash]
 			}
-			if inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
+			if scratch != "" || inSandbox || a.cfg.Secret.Session && !githubAppDryCommand(cmd) && a.secretNeedsBroker(append([]string{cmd.Name()}, callArgs(cmd, beforeConsumer)...)) {
 				return a.secretBrokered(cmd, args, inSandbox)
 			}
 			return vaultExit(run(cmd, args))
@@ -418,6 +430,11 @@ top-level or line keys, for other text each line's head before its first
     values.sops.yaml#connectors.0.config.clientSecret
   beekeeper secret copy k8s://<context>/<namespace>/<name>/<key>#CLIENT_SECRET \
     values.sops.yaml#connectors.0.config.clientSecret
+
+A vault field may also be the destination. This silently copies an existing
+item's password into its labelled field, preserving the source and other fields:
+
+  beekeeper secret copy op://<vault>/<item>/password op://<vault>/<item>/client-secret
 
 The source may also be one value of a plain file on the host,
 file://<absolute path>#<path>, under a directory of secret.fileRoots: a
@@ -682,6 +699,9 @@ failing or answering nothing within a minute) exits 78.`,
 				n, err := ops.CopyValue(ctx, src[0], dst[0])
 				if err := a.secretLog(err, "copy", "%s%s to %s: %s", src[0], encodedAs(enc), dst[0], outcome(err, fmt.Sprintf("%d bytes", n))); err != nil {
 					return err
+				}
+				if dst[0].Op != "" {
+					return nil
 				}
 				return a.secretPrint(secret.Key{Name: dst[0].String(), Bytes: n}, fmt.Sprintf("wrote %s: %d bytes\n", dst[0], n))
 			}
@@ -1245,11 +1265,14 @@ written: one that cannot be read stops the rotation with nothing changed.`,
 			if err != nil {
 				return err
 			}
-			ops, ix, err := a.secretOpsIndexed()
+			files, err := a.scanFiles()
 			if err != nil {
 				return err
 			}
-			files, err := a.scanFiles()
+			if err := a.sandboxPaths(files, files); err != nil {
+				return err
+			}
+			ops, ix, err := a.secretOpsIndexed()
 			if err != nil {
 				return err
 			}

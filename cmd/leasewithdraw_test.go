@@ -33,7 +33,7 @@ func TestLeaseReleaseWithdrawsTheCallersQueuedGrant(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute), claimGrant(labOne, claimFirst, 4*time.Minute))
 	claimAgent(t, a)
 	stubWakes(t)
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof", "--park"); Code(err) != ExitRefused || !strings.Contains(out, "parked on lease agentlab-1") {
 		t.Fatalf("a parked claim: %q, exit %d", out, Code(err))
 	}
@@ -112,7 +112,7 @@ func TestLeaseRevokeResumesTheParkedGrantee(t *testing.T) {
 	a := claimApp(t, claimGrant(labOne, claimMe, 5*time.Minute))
 	claimAgent(t, a)
 	woke := stubWakes(t)
-	holdLease(t, a, labOne, claimOther)
+	holdStartingLease(t, a, labOne, claimOther)
 	if out, err := runLease(a, "claim", labOne, "-p", "my proof", "--park"); Code(err) != ExitRefused || !strings.Contains(out, "parked on lease agentlab-1") {
 		t.Fatalf("a parked claim: %q, exit %d", out, Code(err))
 	}

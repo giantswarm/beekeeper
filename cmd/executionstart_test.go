@@ -66,6 +66,9 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 				if err != nil || len(st.Agents) != 1 || len(st.Starts) != 1 || st.Agents[0].Execution == nil || *st.Agents[0].Execution != r.Ref {
 					t.Fatal("SSH start preceded durable roster registration")
 				}
+				if endpoint := st.Starts[0].Execution.Endpoint; endpoint == nil || *endpoint != a.cfg.Agents.Hosts[sshTestSelector].Endpoint {
+					t.Fatal("SSH start preceded durable endpoint pin")
+				}
 				if handle.Ref.Execution != "" && handle.Ref != r.Ref {
 					t.Fatal("recovery allocated another execution")
 				}
@@ -159,7 +162,7 @@ func TestExecutionAdmissionKeepsTargetGuardsAndUnknownReservations(t *testing.T)
 	if v.Room != 0 || !strings.Contains(strings.Join(v.Blocks, ";"), "target memory pressure") {
 		t.Fatal("provider narrowing removed the target machine guard")
 	}
-	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "unconfirmed-worker"}, Execution: &execution.Ref{Host: host.Identity, Execution: "missing", Generation: 1}}}}
+	st := &state.State{Agents: []state.Agent{{Party: state.Party{Name: "unconfirmed-worker"}, Execution: &execution.Ref{Host: host.Identity, Execution: workerGitHubMissingRef, Generation: 1}}}}
 	resources.Blocks = nil
 	v = a.executionCapacity(st, nil, a.cfg.Capacity, host, resources, nil, nil, false, nil, forWorker, claudeComm, bgModel)
 	if v.Room != 0 || len(v.Providers[claudeComm].Busy) != 1 || executionHostBusy(st, host.Identity) != 1 {

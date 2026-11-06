@@ -16,9 +16,9 @@ func (a *app) agentArchivableCmd() *cobra.Command {
 		Long: `Confirms, for each desktop session named by its local_ id, that it is a
 finished worker beekeeper started: one of beekeeper's starts, off the
 roster, holding or having held no role a relay did not relieve, its desktop
-record unarchived and its CLI in no turn (the calling session's own turn
-aside). A steward asked to archive runs this first and archives only what
-it confirms.
+record unarchived, its task reported done with agents idle --done, and its
+CLI in no turn. A steward asked to archive runs this first and archives only
+what it confirms.
 
 A session the person started is never confirmed. Exits 3 when any named
 session is not confirmed, with why.`,
@@ -52,9 +52,8 @@ session is not confirmed, with why.`,
 }
 
 // archivableHost is the name of the finished worker whose desktop session
-// host is, and why it is not archivable, "" when it is. The turn of self,
-// the steward asking, does not count.
-func (a *app) archivableHost(st *state.State, host string, self state.Party) (name, why string) {
+// host is, and why it is not archivable, "" when it is.
+func (a *app) archivableHost(st *state.State, host string, _ state.Party) (name, why string) {
 	i := slices.IndexFunc(st.Starts, func(s state.Start) bool { return s.HostSession == host })
 	if i < 0 {
 		return "", "beekeeper did not start it (a session the person started is never archived)"
@@ -70,7 +69,10 @@ func (a *app) archivableHost(st *state.State, host string, self state.Party) (na
 	if got != host {
 		return p.Name, "its start names another desktop session"
 	}
-	if s, ok := a.runningTurn(p); ok && !p.Is(self) {
+	if why := a.unfinishedWorker(st, p); why != "" {
+		return p.Name, why
+	}
+	if s, ok := a.runningTurn(p); ok {
 		return p.Name, fmt.Sprintf("its CLI %d is in a turn", s.PID)
 	}
 	return p.Name, ""

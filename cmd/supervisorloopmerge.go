@@ -145,6 +145,11 @@ func (l *supervisorLoop) mergePull(ctx context.Context, _ *state.State, act supe
 	}
 	gateArgs := []string{gateCmdName, "--wait", "0s", "--limit", "0", "--reviewed-head", act.Head, "--", devctlBinary, "pr", superloop.KindMerge, ref.Repo, fmt.Sprint(ref.N)}
 	out, code, err := beekeeperRun(ctx, l.as(gateArgs...)...)
+	if err != nil && ctx.Err() == nil {
+		if saveErr := a.operationOutcome(runMerge, "merge-command-unavailable", act.URL, false); saveErr != nil {
+			return "", saveErr
+		}
+	}
 	// Read after every outcome, including a lost response: a restart never
 	// repeats a mutation already observed merged.
 	p, readErr := readLoopPull(ctx, act.Ref)
@@ -351,6 +356,18 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; other pull requests still await review or merge", nil
 		}
+		// A wake queues the continuation without clearing the current park.
+		// Its review record may already be gone after an earlier merge, so
+		// the last saved request cannot prove that the owner has finished.
+		if slices.ContainsFunc(st.Agents, func(worker state.Agent) bool {
+			p := worker.Park
+			return worker.Is(rp.Party) && !worker.Done && p != nil &&
+				!strings.EqualFold(p.On, act.Ref) && p.ReviewHead != "" &&
+				p.PostMerge != nil && strings.TrimSpace(*p.PostMerge) != ""
+		}) {
+			clearReviewPark()
+			return "merged; worker still has post-merge work", nil
+		}
 		if rp.Serves != "" && rp.Serves != act.Ref && l.open(ctx, rp.Serves) {
 			act.Agent = rp.Agent
 			act.Message = fmt.Sprintf("The supervisor merged %s. The task at %s is still open or its closure could not be confirmed. Continue its remaining work, or verify it is complete and report done.", act.URL, issueURL(rp.Serves))
@@ -360,10 +377,8 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 			clearReviewPark()
 			return "merged; worker woken for remaining open work", nil
 		}
-		if rp.Serves != "" && rp.Serves != act.Ref && l.a.cfg.Board.Owner != "" {
-			if _, err := l.run(ctx, loopBoard, "move", rp.Serves, "Done"); err != nil {
-				return "", err
-			}
+		if err := l.moveServedDone(ctx, rp.Serves, act.Ref); err != nil {
+			return "", err
 		}
 		err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 			current.ReviewParks = slices.DeleteFunc(current.ReviewParks, func(p state.ReviewPark) bool { return strings.EqualFold(p.On, act.Ref) })
@@ -424,10 +439,8 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 		}
 		return "merged; worker woken for remaining open work", nil
 	}
-	if serves != "" && serves != act.Ref && l.a.cfg.Board.Owner != "" {
-		if _, err := l.run(ctx, loopBoard, "move", serves, "Done"); err != nil {
-			return "", err
-		}
+	if err := l.moveServedDone(ctx, serves, act.Ref); err != nil {
+		return "", err
 	}
 	err := l.a.store.Update(func(current *state.State) ([]state.Event, error) {
 		i := slices.IndexFunc(current.Agents, func(other state.Agent) bool { return other.Is(ag.Party) })
@@ -446,13 +459,27 @@ func (l *supervisorLoop) endMerged(ctx context.Context, st *state.State, act sup
 	return "merged; task closed without waking worker", err
 }
 
+// moveServedDone moves the task ref served to Done. A saved Serves can name a
+// pull request, which the board refuses as no issue: that must not fail the end.
+func (l *supervisorLoop) moveServedDone(ctx context.Context, serves, ref string) error {
+	if serves == "" || serves == ref || l.a.cfg.Board.Owner == "" {
+		return nil
+	}
+	_, err := l.run(ctx, loopBoard, "move", serves, "Done")
+	if err != nil && Code(err) == ExitRefused && strings.Contains(err.Error(), " is no issue:") {
+		return nil
+	}
+	return err
+}
+
 // The reasons a reviewed merge stops for desk policy, before and after a
 // branch update alike.
 const (
-	reasonDeskStopped    = "the desk is stopped"
-	reasonMergeHeld      = "merge held by desk policy"
-	mergeableConflicting = "CONFLICTING"
-	mergeMethodRebase    = "rebase"
+	reasonDeskStopped      = "the desk is stopped"
+	reasonMergeHeld        = "merge held by desk policy"
+	reasonMergeHeadChanged = "merge head moved or current CI is not green"
+	mergeableConflicting   = "CONFLICTING"
+	mergeMethodRebase      = "rebase"
 )
 
 // reviewedMerge is the gate's mutation child. A branch behind its base it
@@ -488,7 +515,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	}
 	if p.State != superloop.Open || p.Head != head || !p.Green {
 		doc.ExitCode = github.SquashRefused
-		doc.Reason = "merge head moved or current CI is not green"
+		doc.Reason = reasonMergeHeadChanged
 		return doc
 	}
 	if latestReviewRequestsChanges(p) {
@@ -531,6 +558,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		if !ok {
 			continue
 		}
+		key = superloop.BaseActionKey(key)
 		// The sweep's go again for a head whose go was never carried out
 		// is the same authority, keyed by its stretch without an owner.
 		if key == "go "+ref+"@"+head || superloop.IsSweep(key) && strings.HasPrefix(key, "go "+ref+"@"+head+" ") {
@@ -664,6 +692,42 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
 		return doc
 	}
+	// Validation and branch-update waits can outlive the review that admitted
+	// this run. Refresh authority after all checks, immediately before the
+	// mutation; --match-head-commit alone cannot detect a withdrawn approval.
+	p, err = readLoopPull(ctx, ref)
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if p.State != superloop.Open || p.Head != merging || !p.Green {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeadChanged
+		return doc
+	}
+	if p.Draft || p.Mergeable == mergeableConflicting {
+		doc.ExitCode, doc.Reason = github.SquashRefused, "branch became draft or conflicts with its base"
+		return doc
+	}
+	st, err = a.store.Read()
+	if err != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, err.Error()
+		return doc
+	}
+	if why, _, authErr := a.checkMergeHeadAuthority(ctx, st, p, merging); authErr != nil {
+		doc.ExitCode, doc.Reason = github.SquashTooling, authErr.Error()
+		return doc
+	} else if why != "" {
+		doc.ExitCode, doc.Reason = github.SquashRefused, why
+		return doc
+	}
+	if st.Stop != nil {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonDeskStopped
+		return doc
+	}
+	if _, held := merge.BlockingFor(st, time.Now(), loopParty.Name, repo, number, a.cfg.LaneOf(repo)); held {
+		doc.ExitCode, doc.Reason = github.SquashRefused, reasonMergeHeld
+		return doc
+	}
 	argv := []string{"gh", "pr", superloop.KindMerge, fmt.Sprint(number), "--repo", repo, "--" + method, "--delete-branch", "--match-head-commit", merging}
 	// A merge queue retests the merge group when the base advances; --admin
 	// would bypass it. Without a queue the lane's own merge-result check
@@ -703,7 +767,7 @@ func (a *app) reviewedMerge(ctx context.Context, repo string, number int, head s
 	case p.State != superloop.Open || p.Head != merging || !p.Green:
 		doc.ExitCode = github.SquashRefused
 		if doc.Reason == "" {
-			doc.Reason = "merge head moved or current CI is not green"
+			doc.Reason = reasonMergeHeadChanged
 		}
 	case ghMergePolicyRefused(doc.Reason):
 		doc.ExitCode = github.SquashRefused
@@ -734,7 +798,7 @@ var readReviewedBehind = func(ctx context.Context, p superloop.Pull) (int, error
 	if !ok {
 		return 0, fmt.Errorf("invalid pull request")
 	}
-	out, err := github.RunGH(ctx, "api", "repos/"+ref.Repo+"/compare/"+url.PathEscape(p.Base)+"..."+url.PathEscape(p.Head), "--jq", ".behind_by")
+	out, err := github.RunGH(github.ActingOn(ctx, ref.Repo), "api", "repos/"+ref.Repo+"/compare/"+url.PathEscape(p.Base)+"..."+url.PathEscape(p.Head), "--jq", ".behind_by")
 	if err != nil {
 		return 0, err
 	}
@@ -800,12 +864,25 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 			latest = r
 		}
 	}
+	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
+		first := ""
+		if latest != nil {
+			first, _, _ = strings.Cut(strings.TrimSpace(latest.Body), "\n")
+		}
+		if first != deskReviewApproved {
+			return "merge.requireReview requires an approved Desk review (opus) comment on the head", false, nil
+		}
+	}
 	approvedHead := ""
 	if latest != nil && latest.Verdict == superloop.Approved {
 		approvedHead = cmp.Or(latest.Head, latest.Commit)
-		if sameCommit(approvedHead, head) {
+		if sameCommit(approvedHead, head) || st.ReviewNitsChecked(p.Ref, head, approvedHead) {
 			return "", false, nil
 		}
+	}
+
+	if a != nil && a.cfg != nil && a.cfg.Merge.RequireReview {
+		return fmt.Sprintf("head %s requires an approved independent review; an exact-head go alone is insufficient", shortSHA(head)), false, nil
 	}
 
 	type goRecord struct {
@@ -836,6 +913,7 @@ func (a *app) checkMergeHeadAuthority(ctx context.Context, st *state.State, p su
 		for _, e := range evs {
 			if e.By == loopParty && strings.EqualFold(e.Subject, p.Ref) {
 				if key, _, ok := keyed(e.Detail); ok {
+					key = superloop.BaseActionKey(key)
 					if after, ok := strings.CutPrefix(key, "go "+p.Ref+"@"); ok && after != "" {
 						switch e.Verb {
 						case loopGoVerb:
@@ -1004,9 +1082,13 @@ var readReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) (bool, 
 	if !ok || p.Base == "" {
 		return false, fmt.Errorf("merge queue: invalid base")
 	}
+	ctx = github.ActingOn(ctx, ref.Repo)
 	owner, name, _ := strings.Cut(ref.Repo, "/")
 	out, err := github.RunGH(ctx, "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id}}}", "-f", "owner="+owner, "-f", "name="+name, "-f", "branch="+p.Base)
 	if err != nil {
+		if queue, restErr := readReviewedMergeQueueREST(ctx, ref.Repo, p.Base); restErr == nil {
+			return queue, nil
+		}
 		return false, fmt.Errorf("merge queue unavailable: %w", err)
 	}
 	var result struct {
@@ -1019,7 +1101,48 @@ var readReviewedMergeQueue = func(ctx context.Context, p superloop.Pull) (bool, 
 		return false, fmt.Errorf("reading merge queue: %w", err)
 	}
 	if len(result.Errors) != 0 || result.Data.Repository == nil {
+		if strings.Contains(string(out), "Could not resolve to a Repository") {
+			if queue, restErr := readReviewedMergeQueueREST(ctx, ref.Repo, p.Base); restErr == nil {
+				return queue, nil
+			}
+		}
 		return false, fmt.Errorf("reading merge queue of %s: %s", ref.Repo, oneLine(string(out)))
 	}
 	return result.Data.Repository.MergeQueue != nil && result.Data.Repository.MergeQueue.ID != "", nil
+}
+
+// readReviewedMergeQueueREST reads whether branch of repo has a merge queue
+// through the REST API when GraphQL cannot resolve the repository (for
+// example, a private user-owned repository with a token that reaches REST
+// only). Branch rules name a merge_queue rule where one is active; a
+// user-owned repository has no merge queue on GitHub.
+func readReviewedMergeQueueREST(ctx context.Context, repo, branch string) (bool, error) {
+	if out, err := github.RunGH(ctx, "api", "repos/"+repo+"/rules/branches/"+url.PathEscape(branch)); err == nil {
+		var rules []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(out, &rules) == nil {
+			return slices.ContainsFunc(rules, func(r struct {
+				Type string `json:"type"`
+			}) bool {
+				return r.Type == "merge_queue"
+			}), nil
+		}
+	}
+	out, err := github.RunGH(ctx, "api", "repos/"+repo)
+	if err != nil {
+		return false, err
+	}
+	var meta struct {
+		Owner struct {
+			Type string `json:"type"`
+		} `json:"owner"`
+	}
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return false, err
+	}
+	if strings.EqualFold(meta.Owner.Type, "User") {
+		return false, nil
+	}
+	return false, fmt.Errorf("owner type %q may have a merge queue", meta.Owner.Type)
 }

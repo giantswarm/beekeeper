@@ -39,6 +39,7 @@ import (
 // App is an App the person owns and asked a consent, or one permission
 // change, for.
 type App struct {
+	Drift string
 	// Name is the App's name as GitHub's consent page titles it.
 	Name string
 	// ClientID is the OAuth client id the consent URL carries, "" for a
@@ -255,6 +256,10 @@ func githubConsent(apps []App, u *url.URL, title string) Decision {
 		callback = strings.ToLower(r.Host)
 	}
 	for _, a := range apps {
+		matches := (clientID != "" && clientID == a.ClientID) || (clientID == chromeRedacted && strings.EqualFold(title, authorizeTitle+a.Name))
+		if matches && a.Drift != "" && !slices.Contains(a.Callbacks, callback) {
+			return Decision{Deny, "Refused: " + a.Drift}
+		}
 		if a.Google || a.GitLab != "" || a.OAuth != "" || !slices.Contains(a.Callbacks, callback) {
 			continue
 		}
@@ -329,6 +334,7 @@ func (h Hook) consent(ev event) []byte {
 	var pages map[string]Page
 	var checks map[string]pageCheck
 	allowed := ""
+	undecided := false
 	for i, c := range calls {
 		var d Decision
 		if c.navigate != "" {
@@ -372,8 +378,11 @@ func (h Hook) consent(ev event) []byte {
 				allowed = d.Reason
 			}
 		default:
-			return nil
+			undecided = true
 		}
+	}
+	if undecided {
+		return nil
 	}
 	return answer(hookOutput{PermissionDecision: Allow, Reason: allowed})
 }
@@ -492,8 +501,16 @@ func lastPage(transcript, tab string) (Page, bool) {
 // key, a navigation, another script, such a batch) or a change of its URL
 // followed.
 func lastPages(transcript string) map[string]Page {
+	return observePages(transcript, nil)
+}
+
+// observePages optionally visits every page recorded by the browser tools.
+func observePages(transcript string, observe func(Page)) map[string]Page {
 	pages, flows, forms, picks := map[string]Page{}, map[string]googleFlow{}, map[string]pageForm{}, map[string]pagePick{}
 	seen := func(tab string, p Page) {
+		if observe != nil {
+			observe(p)
+		}
 		if forms[tab].url != p.URL {
 			delete(forms, tab)
 		}

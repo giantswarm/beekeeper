@@ -21,7 +21,6 @@ import (
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
 	"github.com/giantswarm/beekeeper/internal/omp"
-	"github.com/giantswarm/beekeeper/internal/peer"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
@@ -207,11 +206,12 @@ func (a *app) wakeAgent(ctx context.Context, by state.Party, q, msg, mode string
 		if err != nil {
 			return err
 		}
-		if _, err := (peer.Sender{Dir: a.cfg.StateDir}).Send(ctx, name, msg); err != nil {
+		status, err := a.relayInstruction(ctx, s.ID, name, msg)
+		if err != nil {
 			return fmt.Errorf("waking %s: %w", ag.Name, err)
 		}
 		_ = a.store.Record(event(by, "agents.wake", "%s: sent by name to its running CLI %d", ag.Name, s.PID))
-		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): sent by name, it runs the message at its next tool call or as its next turn\n", ag.Name, s.PID)
+		_, err = fmt.Fprintf(a.out, "wake: %s runs (CLI %d): %s; instruction reaches its chat at the next tool or turn boundary\n", ag.Name, s.PID, status)
 		return err
 	}
 	if u := wakeRunning(ctx, w.id); u != "" {
@@ -264,6 +264,10 @@ func (a *app) resumeTurn(ctx context.Context, by state.Party, w wakeTarget, msg 
 		}
 		_ = a.store.Record(event(by, "agents.wake", "%s: sent to its desktop CLI %d, which started meanwhile, instead of resuming it headless", w.name, pid))
 		_, err = fmt.Fprintf(a.out, "wake: %s: its desktop CLI %d runs: sent the message to it instead of resuming the session headless beside it\n", w.name, pid)
+		return err
+	}
+
+	if err := a.requireClaudeLogin(); err != nil {
 		return err
 	}
 	unit := wakeUnit(w.id)
@@ -379,6 +383,12 @@ func (a *app) holdModel(ctx context.Context, w wakeTarget, r *claude.Record) err
 	return modelNotHeld{recorded: r.Model, want: w.model, why: err}
 }
 
+// desktopDeliveryError means a running CLI did not accept its task. The
+// caller must not treat its presence as successful delivery or resume beside it.
+type desktopDeliveryError struct{ error }
+
+func (e desktopDeliveryError) Unwrap() error { return e.error }
+
 // turnInDesktop has the desktop run msg as a turn of the session w, whose
 // row the person sees it run in: its desktop CLI, when one runs or the
 // desktop warms one within warm, takes msg by its socket; else a steward's
@@ -410,14 +420,17 @@ func (a *app) turnInDesktop(ctx context.Context, w wakeTarget, msg string, warm 
 		}
 	}
 	if sock := desktopSocketWithin(ctx, w.id, warm); sock != "" {
-		if err := a.peerSend(ctx, "uds:"+sock, msg); err != nil {
-			return "", fmt.Errorf("sending to its desktop CLI: %w", err)
+		if err := cliSend(ctx, a, "uds:"+sock, msg); err != nil {
+			return "", desktopDeliveryError{fmt.Errorf("sending to its desktop CLI: %w", err)}
 		}
 		return fmt.Sprintf("its desktop CLI took the message as its turn, in the desktop's row %s", w.host), nil
 	}
 	running := func() bool {
 		t, err := plat.Machine.Processes()
 		return err == nil && desktopTwin(t, w.id) != nil
+	}
+	if running() {
+		return "", desktopDeliveryError{errors.New("its desktop CLI runs and takes no message yet")}
 	}
 	s, err := a.sendThroughDesktop(ctx, w.host, msg, running)
 	if err != nil {
@@ -919,9 +932,8 @@ func sharedNameAddress(st *state.State, sessions []*claude.Session, name string,
 const socketAddress = "uds:"
 
 // absentPeer is the PreToolUse hook's lookup for a SendMessage by name: what
-// says that the roster agent of that name (or session id) runs no CLI and
-// whether its import is pending, "" when a CLI carries the name or no agent
-// does.
+// describes the roster agent's CLI and message route when no CLI carries
+// the requested name, "" when a CLI carries it or no agent does.
 func (a *app) absentPeer(name string) string {
 	if a.loadConfig() != nil {
 		return ""
@@ -953,5 +965,9 @@ func absentAgent(st *state.State, sessions []*claude.Session, name string, now t
 	if i < 0 {
 		return ""
 	}
-	return noCLI(st.Agents[i], now) + ". A message by name reaches it once a CLI of it runs"
+	ag := st.Agents[i]
+	if s, ok := wakeLive(sessions, ag.Party, ag.Session); ok {
+		return runningCLI(ag, s) + fmt.Sprintf(". `beekeeper agents wake %q \"<message>\"` reaches its session", ag.Name)
+	}
+	return noCLI(ag, now) + ". A message by name reaches it once a CLI of it runs"
 }

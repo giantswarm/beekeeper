@@ -51,10 +51,10 @@ func TestChangesRequestedHoldsUntilApprovedOrDismissed(t *testing.T) {
 		// 0c43ef0; the author replied and pushed three commits, the head
 		// 24a3274 at 10:42, and the merge ran over the request.
 		"the 3184 sequence": {f: feedback{headSHA: "24a3274", headAt: at("10:42"),
-			reviews: []ghReview{rv("marians", "COMMENTED", "6fde8fd", "05:26"), rv("teemow", "COMMENTED", "0c43ef0", "06:40"),
+			reviews: []ghReview{rv("marians", "COMMENTED", "6fde8fd", "05:26"), rv("fixture-person", "COMMENTED", "0c43ef0", "06:40"),
 				rv("marians", "CHANGES_REQUESTED", "0c43ef0", "07:33")},
-			reviewComments: []ghComment{cm("marians", "05:26"), cm("teemow", "06:40")},
-			comments:       []ghComment{cm("marians", "07:27"), cm("marians", "07:55"), cm("teemow", "09:42"), cm("teemow", "10:35")}},
+			reviewComments: []ghComment{cm("marians", "05:26"), cm("fixture-person", "06:40")},
+			comments:       []ghComment{cm("marians", "07:27"), cm("marians", "07:55"), cm("fixture-person", "09:42"), cm("fixture-person", "10:35")}},
 			want: []string{"marians CHANGES_REQUESTED"}},
 		"changes requested, then a comment of the same reviewer": {f: feedback{headSHA: "h", headAt: at("08:00"),
 			reviews: []ghReview{rv("pat", "CHANGES_REQUESTED", "old", "07:00"), rv("pat", "COMMENTED", "old", "07:30")}},
@@ -70,31 +70,31 @@ func TestChangesRequestedHoldsUntilApprovedOrDismissed(t *testing.T) {
 			reviews: []ghReview{rv("pat", "CHANGES_REQUESTED", "old", "07:00"), rv("kim", "APPROVED", "h", "09:00")}},
 			want: []string{patRequests}},
 		"the author's own feedback": {f: feedback{headSHA: "h", headAt: at("08:00"),
-			reviews:  []ghReview{rv("teemow", "CHANGES_REQUESTED", "h", "09:00")},
-			comments: []ghComment{cm("teemow", "09:30")}}},
+			reviews:  []ghReview{rv("fixture-person", "CHANGES_REQUESTED", "h", "09:00")},
+			comments: []ghComment{cm("fixture-person", "09:30")}}},
 		"desk review changes requested from author's login holds across new commits": {f: feedback{headSHA: "3d8e8a7f", headAt: at("09:00"),
-			reviews:  []ghReview{deskRv("teemow", "changes requested", "3d8e8a7f", "09:02")},
-			comments: []ghComment{cm("teemow", "09:10")}},
-			want: []string{"teemow CHANGES_REQUESTED"}},
+			reviews:  []ghReview{deskRv("fixture-person", "changes requested", "3d8e8a7f", "09:02")},
+			comments: []ghComment{cm("fixture-person", "09:10")}},
+			want: []string{"fixture-person CHANGES_REQUESTED"}},
 		"desk review changes requested superseded by desk review approved": {f: feedback{headSHA: "h2", headAt: at("09:30"),
-			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), deskRv("teemow", "approved", "h2", "09:40")}}},
+			reviews: []ghReview{deskRv("fixture-person", "changes requested", "h1", "09:02"), deskRv("fixture-person", "approved", "h2", "09:40")}}},
 		"desk review changes requested superseded by a member's desk approval": {f: feedback{headSHA: "h2", headAt: at("09:30"),
-			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), member(deskRv("kim", "approved.", "h2", "09:40"))}}},
+			reviews: []ghReview{deskRv("fixture-person", "changes requested", "h1", "09:02"), member(deskRv("kim", "approved.", "h2", "09:40"))}}},
 		"an outsider's desk approval is a comment, never a verdict": {f: feedback{headSHA: "h2", headAt: at("09:30"),
-			reviews: []ghReview{deskRv("teemow", "changes requested", "h1", "09:02"), deskRv("mallory", "approved", "h2", "09:40")}},
-			want: []string{"teemow CHANGES_REQUESTED", "mallory COMMENTED"}},
+			reviews: []ghReview{deskRv("fixture-person", "changes requested", "h1", "09:02"), deskRv("mallory", "approved", "h2", "09:40")}},
+			want: []string{"fixture-person CHANGES_REQUESTED", "mallory COMMENTED"}},
 		"an outsider's desk changes requested holds nothing past an answer": {f: feedback{headSHA: "h", headAt: at("09:00"),
 			reviews:  []ghReview{deskRv("mallory", "changes requested", "h", "09:10")},
-			comments: []ghComment{cm("teemow", "09:20")}}},
+			comments: []ghComment{cm("fixture-person", "09:20")}}},
 		"a desk review from the author's login answers earlier feedback": {f: feedback{headSHA: "h", headAt: at("08:00"),
 			comments: []ghComment{cm("pat", "09:00")},
-			reviews:  []ghReview{deskRv("teemow", "approved", "h", "09:30")}}},
+			reviews:  []ghReview{deskRv("fixture-person", "approved", "h", "09:30")}}},
 		"an unanswered comment after the head": {f: feedback{headSHA: "h", headAt: at("08:00"),
 			comments: []ghComment{cm("pat", "09:00")}},
 			want: []string{"pat "}},
 	} {
 		var got []string
-		for _, item := range tc.f.unanswered("teemow", "teemow") {
+		for _, item := range tc.f.unanswered("fixture-person", "fixture-person") {
 			got = append(got, item.Login+" "+item.State)
 		}
 		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
@@ -126,7 +126,7 @@ func TestReviewRefusalNamesTheReviewer(t *testing.T) {
 		{Kind: FeedbackReview, Login: "marians", State: "CHANGES_REQUESTED", URL: "u1"},
 		{Kind: FeedbackComment, Login: "kim", URL: "u2"},
 	}
-	got := reviewRefusal(open, "teemow")
+	got := reviewRefusal(open, "fixture-person")
 	for _, want := range []string{"changes requested: review CHANGES_REQUESTED by marians u1", "only the reviewer's approval or the review's dismissal clears it",
 		"unanswered review: 1 item(s) newer than the head wait for an answer: comment by kim u2"} {
 		if !strings.Contains(got, want) {
@@ -145,9 +145,9 @@ func TestReviewGuardReadsThePullRequest(t *testing.T) {
 		}
 		switch path {
 		case "user":
-			return []byte("teemow\n"), nil
+			return []byte("fixture-person\n"), nil
 		case "repos/o/r/pulls/7":
-			return []byte(`{"head":{"sha":"h"},"user":{"login":"teemow","type":"User"}}`), nil
+			return []byte(`{"head":{"sha":"h"},"user":{"login":"fixture-person","type":"User"}}`), nil
 		case "repos/o/r/pulls/7/reviews":
 			return []byte(`[{"user":{"login":"marians","type":"User"},"state":"CHANGES_REQUESTED","commit_id":"old","submitted_at":"2026-10-21T07:33:46Z","html_url":"u"}]`), nil
 		case "repos/o/r/pulls/7/comments", "repos/o/r/issues/7/comments":

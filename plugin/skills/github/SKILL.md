@@ -1,29 +1,27 @@
 ---
 name: github
-description: GitHub reads, builds, browser steps and waits on a beekeeper desk: the budget gate, scans, beekeeper run, headless turns, browse. Load before them.
+description: Load before GitHub scans, builds, browser or waits.
 ---
 
-# github — GitHub, builds, the browser and waits
+# github — GitHub
 
-- **Budget:** stop while `beekeeper budget --gate` refuses, until reset; code search adds
+- **Budget:** wait for reset if `beekeeper budget --gate` refuses; code search adds
   `--bucket code_search`.
-- **Membership:** `beekeeper person <login>`, never `gh api` members endpoints: private members
-  are misread.
-- **Dependabot alerts:** before/after remediation, `beekeeper security alert <owner/repo> <number>`.
-  Unreadable or dismissed is not fixed. App: Dependabot alerts read, accepted on installation.
-  No personal scopes or security-scan bypass.
-- **Scans:** list each repo (`gh issue list --repo <owner/repo> --search "<query>"`, `gh pr list`
-  likewise), never multi-repo `gh search`, which drops private repos. Unreadable is a problem,
-  never "no match".
+- **Personal-account GraphQL:** `GH_REPO=<owner/repo> gh api graphql`.
+- **Membership:** `beekeeper person <login>`, not `gh api` members endpoints: they misread private members.
+- **Board:** `beekeeper board add <owner/repo#n> --kind <kind>`; fields: `board show <owner/repo#n>`.
+- **Issue/PR scans:** list each repo (`gh issue list --repo <owner/repo>`, `gh pr list` likewise),
+  never multi-repo `gh search`: it drops private repos. Unreadable is never "no match".
+- **Code search:** 10 requests per minute. Across more than a few
+  repos, use `git clone --depth 1` under `<stateDir>/code-scans/<owner>/<repo>` and `rg`,
+  never per-repo `gh search code` loops. `stateDir`: configured state directory.
 - **Code scans** (govulncheck, trivy): fresh worktree of `origin/main`, never a shared clone;
   a finding names the commit and module versions.
-- **Headless turns** (a first or `wake` turn): foreground waits (`devctl pr wait`, bounded Bash);
+- **Headless** (first or `wake`): foreground waits (`devctl pr wait`, bounded Bash);
   background waits never wake them. End done or parked (`beekeeper:park`).
-- **No @-mention** (the hook refuses one): pings via `note add` to the supervisor.
-- **Builds**, tests, lints: `beekeeper run` (the hook does it). Exit 75: no slot, rerun in
-  background, never a loop. Exit 137: cap, bound parallelism. No heavy work under
+- **No @-mention**: pings via `note add` to the supervisor.
+- **Builds/tests/lints**: `beekeeper run` (hook does it). Exit 75: no slot, rerun in
+  background, never a loop. Exit 137: cap, bound parallelism. Avoid heavy work under
   `beekeeper watch` load or memory pressure.
-- **Browser:** headless: CLI Claude in Chrome tools; desktop: `beekeeper browse "<steps>"`.
-  Never wait on site approval. Own App grants: `beekeeper app allow` first; refusals are
-  barriers. Sign-in: `muster auth login --no-browser`, the printed URL in a browse step.
-- **Subagents:** only if the brief allows, each told force-push and secret rules.
+- **Browser / Dependabot:** before either, read [references/browser-and-security.md](references/browser-and-security.md).
+- **Subagents:** brief must allow; tell each force-push and secret rules.

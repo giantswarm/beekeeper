@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -246,6 +247,7 @@ func capped(t *testing.T) (state string, env []string) {
 	}
 	state = t.TempDir()
 	return state, append(os.Environ(), "BEEKEEPER_TEST_MAIN=1", "BEEKEEPER_CONFIG="+emptyTestConfig(t, filepath.Join(state, "config.yaml")),
+		"KUBEBUILDER_ASSETS=/test/envtest-assets",
 		"XDG_STATE_HOME="+state, "MEMCAP_STATE="+state, "MEMCAP_MAX=64M", "MEMCAP_WAIT=30s", "MEMCAP_TEST=1",
 		"CLAUDE_CODE_SESSION_ID=test-session", "CLAUDE_CODE_HOST_SESSION_ID=", "CLAUDE_CODE_SESSION_NAME=capped test")
 }
@@ -279,7 +281,7 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{"command": command, "run_in_background": bg}})
+	raw, _ := json.Marshal(map[string]any{executionHookTool: tToolBash, executionHookInput: map[string]any{hookTypeCommand: command, "run_in_background": bg}})
 	var o struct {
 		D struct {
 			UpdatedInput struct{ Command string } `json:"updatedInput"`
@@ -293,6 +295,15 @@ func rewriteCall(t *testing.T, command string, bg bool) string {
 		t.Fatal(err)
 	}
 	return o.D.UpdatedInput.Command
+}
+
+// The command inherits the caller's explicit envtest assets unchanged.
+func TestRunExportsEnvtestAssets(t *testing.T) {
+	_, env := capped(t)
+	out, errOut, rc := zsh(t, env, rewrite(t, `printf '%s' "$KUBEBUILDER_ASSETS"; if false; then go test; fi`))
+	if rc != 0 || out != "/test/envtest-assets" {
+		t.Fatalf("rc %d, stdout %q, stderr %q", rc, out, errOut)
+	}
 }
 
 func TestRunKeepsTheCallersShellSemantics(t *testing.T) {
@@ -408,14 +419,19 @@ func TestBackgroundCallsRunWaitTheBackgroundDefault(t *testing.T) {
 	holdSlots(t, state)
 	self, _ := os.Executable()
 	dir := t.TempDir()
+	binary := filepath.Join(dir, "beekeeper")
+	if err := os.Symlink(self, binary); err != nil {
+		t.Fatal(err)
+	}
+	self = binary
 	script := filepath.Join(dir, "build.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+guard.ShellQuote(self)+" run --class build -- true\n"), 0o700); err != nil { //nolint:gosec // an executable script
 		t.Fatal(err)
 	}
 	for shape, cmd := range map[string]string{
-		"direct": self + " run --class build -- true",
-		"chain":  "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
-		"script": script,
+		litDirect: self + " run --class build -- true",
+		"chain":   "cd " + guard.ShellQuote(dir) + " && export FOO=1 && " + self + " run --class build -- true",
+		"script":  script,
 	} {
 		_, errOut, rc := zsh(t, env, "timeout 3 "+testShell+" -c "+guard.ShellQuote(rewriteCall(t, cmd, true)))
 		if rc != 124 || !strings.Contains(errOut, guard.LogPrefix+"waiting up to 60m (the background default) for a build slot") {
@@ -468,7 +484,12 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	dir, env := capped(t)
-	if _, errOut, rc := zsh(t, env, rewrite(t, `echo  built;  if false; then go test ./...; fi`)); rc != 0 {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // a test fixture
+		t.Fatal(err)
+	}
+	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, errOut, rc := zsh(t, env, rewrite(t, `echo built; go test ./...`)); rc != 0 {
 		t.Fatalf("rc %d, stderr %q", rc, errOut)
 	}
 	evs := runEvents(t, dir)
@@ -480,7 +501,7 @@ func TestRunRecordsItsStartAndEnd(t *testing.T) {
 		e := evs[i]
 		if e.Verb != verb || e.By.Session != "test-session" || e.By.Name != "capped test" || guard.RunScope(e.Detail) != scope ||
 			!guard.IsTestScope(scope) || !strings.HasSuffix(scope, ".scope") ||
-			guard.RunCommand(e.Detail) != "echo built; if false; then go test ./...; fi" {
+			guard.RunCommand(e.Detail) != litGoTest {
 			t.Errorf("event %d: %+v", i, e)
 		}
 	}
@@ -553,7 +574,7 @@ func TestRunTakesTheEnvSlots(t *testing.T) {
 	state, env := capped(t)
 	holdSlots(t, state)
 	self, _ := os.Executable()
-	out, errOut, rc := zsh(t, append(env, "MEMCAP_SLOTS=3"), self+` run --wait 1s -- sh -c 'cat "$MEMCAP_STATE/slots/3.holder"'`)
+	out, errOut, rc := zsh(t, append(env, "MEMCAP_SLOTS=3"), self+` run --wait 1s --class build -- sh -c 'cat "$MEMCAP_STATE/slots/3.holder"'`)
 	if rc != 0 || !strings.Contains(out, `"pid":`) {
 		t.Errorf("rc %d, stdout %q, stderr %q", rc, out, errOut)
 	}
@@ -594,7 +615,7 @@ func TestHookPreToolUseFormatAgy(t *testing.T) {
 		}
 		var out strings.Builder
 		c := New()
-		c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse", "--format=agy"})
+		c.SetArgs([]string{"--" + configFlag, cfgPath, configHookVerb, configPreToolUse, "--format=agy"})
 		c.SetIn(strings.NewReader(string(raw)))
 		c.SetOut(&out)
 		c.SetErr(&out)
@@ -677,7 +698,7 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 		t.Helper()
 		raw, err := json.Marshal(map[string]any{
 			"session_" + "id":      "sess-1",
-			"cwd":                  cwd,
+			executionOmpCwd:        cwd,
 			"hook_event_" + "name": "PreToolUse",
 			"tool_" + "name":       tool,
 			"tool_" + "input":      input,
@@ -695,16 +716,21 @@ func TestHookPreToolUseFormatCodex(t *testing.T) {
 		t.Errorf("malformed JSON: got %v, want deny", badRes)
 	}
 
-	// Broken config fails closed.
+	// Broken config fails closed, past the recovery commands.
 	brokenCfg := filepath.Join(dir, "broken.yaml")
 	if err := os.WriteFile(brokenCfg, []byte("invalid: [yaml\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	validRaw := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"git status"}}`
-	brokenRes := runCodexRaw(t, brokenCfg, validRaw)
+	brokenCall := `{"hook_event_name":"PreToolUse","cwd":"` + outRoot + `","tool_name":"Bash","tool_input":{"command":"%s"}}`
+	brokenRes := runCodexRaw(t, brokenCfg, fmt.Sprintf(brokenCall, "rm config.yaml"))
 	brokenSpec, _ := brokenRes["hookSpecificOutput"].(map[string]any)
 	if brokenSpec["permissionDecision"] != wantDeny {
 		t.Errorf("broken config: got %v, want deny", brokenRes)
+	}
+	recoveryRes := runCodexRaw(t, brokenCfg, fmt.Sprintf(brokenCall, "git status"))
+	recoverySpec, _ := recoveryRes["hookSpecificOutput"].(map[string]any)
+	if recoverySpec["permissionDecision"] != appAllow || !strings.Contains(fmt.Sprint(recoverySpec["permissionDecisionReason"]), "broken.yaml") {
+		t.Errorf("broken config recovery: got %v, want allow naming the error", recoveryRes)
 	}
 
 	// Out of scope -> {} (pass).
@@ -755,4 +781,36 @@ func emptyTestConfig(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHookPersonalSearchOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			cfg := fmt.Sprintf("stateDir: %s\nhooks:\n  guardPersonalSearch: %v\n", filepath.Join(dir, "state"), enabled)
+			if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(map[string]any{
+				executionOmpSession: "personal", "cwd": dir, "tool_name": "Bash",
+				"tool_input": map[string]any{"command": `gh api graphql -f query='{ search(type: ISSUE, query: "org:example") { issueCount } }'`},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			c := New()
+			c.SetArgs([]string{"--" + configFlag, cfgPath, "hook", "pretooluse"})
+			c.SetIn(strings.NewReader(string(raw)))
+			c.SetOut(&out)
+			c.SetErr(&out)
+			if err := c.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if refused := strings.Contains(out.String(), "gh issue list --repo"); refused != enabled {
+				t.Fatalf("guard enabled=%v, output=%s", enabled, out.String())
+			}
+		})
+	}
 }

@@ -154,8 +154,16 @@ func answer(ctx context.Context, path, procDir string, h Handler) {
 		r = Reply{Error: err.Error()}
 	}
 	b, _ := json.Marshal(r)
-	tmp := out + tmpSuffix
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// The spool is sandbox-writable: never open an existing staging entry.
+	f, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+"-*"+tmpSuffix)
+	if err != nil {
+		return
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	_, err = f.Write(b)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
 		return
 	}
 	_ = os.Rename(tmp, out)
@@ -246,7 +254,8 @@ func safe(h Handler) Handler {
 // read reads the request at path, closed again before its holders are
 // looked for.
 func read(path string) ([]byte, os.FileInfo, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // a request in our own spool
+	// A substituted FIFO must not block open before we can inspect its type.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // a request in our own spool
 	if err != nil {
 		return nil, nil, err
 	}
@@ -254,6 +263,10 @@ func read(path string) ([]byte, os.FileInfo, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return nil, nil, err
+	}
+	// Check the opened inode: the listed path may have been replaced.
+	if !st.Mode().IsRegular() {
+		return nil, nil, errors.New("request is not a regular file")
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxRequest+1))
 	return raw, st, err

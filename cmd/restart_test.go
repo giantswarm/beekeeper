@@ -249,7 +249,7 @@ func TestRestartBrokerOn(t *testing.T) {
 		{name: "replaced and idle", bin: restartExe, start: before, want: "restart beekeeper-sandbox.service (pid 40): on " + restartExe + " now; install prepares the vault handover"},
 		{name: "serving a call", bin: restartExe, start: before, child: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary while it serves 1 call(s)"},
 		{name: "restart refused", bin: restartExe, start: before, failing: true, want: "due     beekeeper-sandbox.service (pid 40) stays on the replaced binary (refused): rerun beekeeper install to retry onto " + restartExe},
-		{name: "another binary", bin: "/opt/beekeeper", start: before},
+		{name: "another binary", bin: optBeekeeper, start: before},
 		{name: "started on the new binary", bin: restartExe, start: after},
 		{name: "no broker", bin: restartExe, start: before, down: true},
 	}

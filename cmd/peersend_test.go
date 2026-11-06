@@ -19,16 +19,20 @@ import (
 // fail is set. It returns the file of recorded inputs, one per line.
 func fakeRelay(t *testing.T, fail bool) string {
 	t.Helper()
-	dir := t.TempDir()
-	sent := filepath.Join(dir, "sent")
-	turn := `echo "$req" >> "` + sent + `"
-echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'`
+	turn := `echo '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"success\":true}"}]}}'`
 	if fail {
 		turn = `echo '{"type":"assistant","error":"authentication_failed","message":{"content":[]}}'
 echo '{"type":"result","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
 exit 1`
 	}
-	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\n" + turn + "\n"
+	return fakeRelayTurn(t, turn)
+}
+
+func fakeRelayTurn(t *testing.T, turn string) string {
+	t.Helper()
+	dir := t.TempDir()
+	sent := filepath.Join(dir, "sent")
+	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nreq=\"{${last#*\\{}\"\necho \"$req\" >> \"" + sent + "\"\n" + turn + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700); err != nil { //nolint:gosec // a test script
 		t.Fatal(err)
 	}
