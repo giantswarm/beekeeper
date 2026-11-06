@@ -69,7 +69,7 @@ func TestCodexHomeMemoriesCount(t *testing.T) {
 func TestExecutionMemoryRefusalNamesTheDesk(t *testing.T) {
 	dir := t.TempDir()
 	h := Hook{GuideDesk: "~/desk"}
-	raw, err := json.Marshal(map[string]any{"tool_name": writeTool, "session_id": "s", "cwd": dir, "tool_input": map[string]any{filePathKey: memoryFile}})
+	raw, err := json.Marshal(map[string]any{executionToolName: writeTool, sessionKey: "s", executionWorkingDir: dir, executionToolInput: map[string]any{filePathKey: memoryFile}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func deskHook(t *testing.T) (Hook, string) {
 }
 
 func sessionEvent(call map[string]any, session string) map[string]any {
-	call["session_id"] = session
+	call[sessionKey] = session
 	return call
 }
 

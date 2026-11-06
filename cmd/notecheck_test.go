@@ -22,6 +22,11 @@ const (
 	notePerson = "Pat"
 )
 
+const (
+	samEmail    = "sam@example.com"
+	boardPerson = "robin"
+)
+
 // noteApp is an app with guide.person Pat and a scratch store.
 func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 	t.Helper()
@@ -30,7 +35,7 @@ func noteApp(t *testing.T) (*app, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: notePerson}, Serve: config.Serve{People: map[string]string{"Sam": "sam@example.com"}}}}, &out
+	return &app{store: store, out: &out, as: agentOne, now: relayNow, cfg: &config.Config{Guide: config.Guide{Person: notePerson}, Serve: config.Serve{People: map[string]string{samName: samEmail}}}}, &out
 }
 
 func addNote(a *app, args ...string) error {
@@ -114,16 +119,16 @@ func TestNoteAddRefusesAndAcceptsForThePerson(t *testing.T) {
 func TestNoteAddresseeResolvesThePersonOrRefuses(t *testing.T) {
 	a, _ := noteApp(t)
 	a.cfg.Guide.PersonNames = []string{"Patricia"}
-	a.cfg.Serve.People = map[string]string{notePerson: "pat@example.com", "Sam": "sam@example.com"}
-	a.cfg.Board.People = []string{"robin"}
+	a.cfg.Serve.People = map[string]string{notePerson: patEmail, samName: samEmail}
+	a.cfg.Board.People = []string{boardPerson}
 	for who, want := range map[string]string{
-		"PAT":             notePerson,
-		"patricia":        notePerson,
-		"pat@example.com": notePerson,
-		"Sam":             "Sam",
-		"sam@example.com": "sam@example.com",
-		"robin":           "robin",
-		"team:bees":       "team:bees",
+		"PAT":       notePerson,
+		"patricia":  notePerson,
+		patEmail:    notePerson,
+		samName:     samName,
+		samEmail:    samEmail,
+		boardPerson: boardPerson,
+		"team:bees": "team:bees",
 	} {
 		if got, err := a.noteAddressee(who); err != nil || got != want {
 			t.Errorf("noteAddressee(%q) = %q, %v, want %q", who, got, err, want)
