@@ -14,6 +14,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/giantswarm/beekeeper/internal/worktrees"
 )
 
 const (
@@ -66,6 +70,12 @@ const (
 	temporaryDir        = "tmp"
 	cacheDir            = "cache"
 	toolchainDir        = "go"
+	stateDir            = "state"
+	cargoDir            = "cargo"
+	scratchDir          = ".beekeeper-scratch"
+	// retiredPurgeBatch bounds the moved-aside resources one retirement removes,
+	// so a host's backlog never holds up the retirement that found it.
+	retiredPurgeBatch = 8
 )
 
 // ErrUnfinished refuses the retirement of an execution that may still run or
@@ -178,7 +188,7 @@ func (s *Server) ownedResources(r Ref) []Resource {
 		{Owner: r, Kind: ResourceRepository, Path: filepath.Join(dir, "repository.git")},
 		{Owner: r, Kind: ResourceBranch, Ref: branch},
 		{Owner: r, Kind: ResourceUpstreamBranch, Ref: "refs/heads/" + GitHubBranch(r)},
-		{Owner: r, Kind: ResourceScratch, Path: filepath.Join(dir, "workspace", ".beekeeper-scratch")},
+		{Owner: r, Kind: ResourceScratch, Path: filepath.Join(dir, "workspace", scratchDir)},
 		{Owner: r, Kind: ResourceTemporary, Path: filepath.Join(dir, temporaryDir)},
 		{Owner: r, Kind: ResourceCache, Path: filepath.Join(dir, cacheDir)},
 		{Owner: r, Kind: ResourceToolchain, Path: filepath.Join(dir, toolchainDir)},
@@ -194,7 +204,8 @@ func (s *Server) ownedResources(r Ref) []Resource {
 func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 	dir := s.executionDir(j.Handle.Ref)
 	temporary, cache, gopath := filepath.Join(dir, temporaryDir), filepath.Join(dir, cacheDir), filepath.Join(dir, toolchainDir)
-	for _, p := range []string{temporary, cache, gopath} {
+	state, cargo := filepath.Join(dir, stateDir), filepath.Join(dir, cargoDir)
+	for _, p := range []string{temporary, cache, gopath, state, cargo} {
 		if err := ownedDirectory(p); err != nil {
 			return nil, err
 		}
@@ -203,6 +214,7 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 		"TMPDIR": temporary, "TMP": temporary, "TEMP": temporary, "GOTMPDIR": temporary,
 		"XDG_CACHE_HOME": cache, "GOCACHE": filepath.Join(cache, "go-build"),
 		"GOPATH": gopath, "GOMODCACHE": filepath.Join(gopath, "pkg", "mod"),
+		"XDG_STATE_HOME": state, "CARGO_HOME": cargo,
 	}
 	out := slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
 		k, _, _ := strings.Cut(kv, "=")
@@ -216,11 +228,21 @@ func (s *Server) ownedEnvironment(j Journal, env []string) ([]string, error) {
 }
 
 // Retire takes a terminal execution through its one retirement: work is
-// preserved durably, then its owned resources move aside, nothing is deleted.
-// Report, stop, failed start and crash all arrive here; a retry resumes at the
-// recorded stage, so an interrupted retirement never starts over or is skipped.
-// An error always leaves the retirement unfinished.
+// preserved durably, then its owned resources move aside. Report, stop, failed
+// start and crash all arrive here; a retry resumes at the recorded stage, so an
+// interrupted retirement never starts over or is skipped. An error always leaves
+// the retirement unfinished. Once this one holds, the coordinator's call also
+// removes what earlier retirements proved disposable and kept past retention:
+// nothing else on a host ever deletes a retired resource.
 func (s *Server) Retire(ctx context.Context, r Ref, q RetireRequest) (Retirement, error) {
+	x, err := s.retire(ctx, r, q)
+	if err == nil {
+		s.purgeRetired(ctx)
+	}
+	return x, err
+}
+
+func (s *Server) retire(ctx context.Context, r Ref, q RetireRequest) (Retirement, error) {
 	if err := q.validate(); err != nil {
 		return Retirement{}, err
 	}
@@ -270,6 +292,7 @@ func (s *Server) advanceRetirement(ctx context.Context, j *Journal, p string) er
 			return err
 		}
 		j.Retirement.Recovery, j.Retirement.Stage, j.Retirement.LastError = recovery, RetirePreserved, ""
+		j.Disposable = s.provedDisposable(ctx, *j, recovery)
 		if err := atomicFile(p, mustJSON(j)); err != nil {
 			return err
 		}
@@ -424,6 +447,148 @@ func (s *Server) preserveWork(ctx context.Context, j Journal) (*Recovery, error)
 	}
 	aside := filepath.Join(s.Config.WorkspaceRoot, retiredWorkspaces, retiredLabel(j.Handle.Ref), "repository.git")
 	return &Recovery{Ref: ref, Commit: commit, Base: j.Handle.Commit, Head: head, Branch: branch, Dirty: status != "", Bundle: bundle, BundleDigest: digest, Repository: aside}, nil
+}
+
+// provedDisposable says a retirement keeps nothing a person could want: no
+// worker ever ran, or preservation found a tree on its starting commit and it
+// holds no ignored file, which no bundle carries, beyond the designated scratch
+// directory. Anything it cannot read is no proof.
+func (s *Server) provedDisposable(ctx context.Context, j Journal, recovery *Recovery) bool {
+	if recovery != nil {
+		return false
+	}
+	if !j.ActivationAttempted {
+		return true
+	}
+	workspace := j.Handle.Workspace
+	if _, err := os.Lstat(workspace); workspace == "" || err != nil {
+		return false
+	}
+	inert, err := s.inertGit(ctx, filepath.Join(s.executionDir(j.Handle.Ref), "repository.git"))
+	if err != nil {
+		return false
+	}
+	status, err := s.gitEnv(ctx, workspace, nil, append(slices.Clone(inert), "status", "--porcelain", "-z", "--untracked-files=all", "--ignored")...)
+	if err != nil {
+		return false
+	}
+	for entry := range strings.SplitSeq(string(status), "\x00") {
+		if entry != "" && !strings.HasPrefix(entry, "!! "+scratchDir+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// purgeRetired removes what retirements proved disposable once retention
+// passed. One that cannot be removed records why and stays; it never fails the
+// retirement that found it, and the next one tries again.
+func (s *Server) purgeRetired(ctx context.Context) {
+	paths, err := s.journalFiles()
+	if err != nil {
+		return
+	}
+	purged := 0
+	for _, p := range paths {
+		if purged == retiredPurgeBatch || ctx.Err() != nil {
+			return
+		}
+		id := strings.TrimSuffix(filepath.Base(p), ".json")
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		var j Journal
+		if err := readJSON(p, &j); err != nil || string(j.Handle.Ref.Execution) != id || !s.purgeDue(j) {
+			continue
+		}
+		if err := s.purgeRetirement(ctx, j.Handle.Ref); err == nil {
+			purged++
+		}
+	}
+}
+
+func (s *Server) purgeDue(j Journal) bool {
+	x := j.Retirement
+	return x != nil && x.Stage == RetireRetired && j.Disposable && x.Recovery == nil && j.PurgedAt.IsZero() &&
+		!x.RetainUntil.IsZero() && !s.now().Before(x.RetainUntil)
+}
+
+// purgeRetirement rechecks under the execution's lock what purgeRetired read
+// without it. The journal, log and control receipts stay as evidence.
+func (s *Server) purgeRetirement(ctx context.Context, r Ref) error {
+	l, p, err := s.lock(ctx, r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = l.Unlock() }()
+	j, err := s.Read(r)
+	if err != nil {
+		return err
+	}
+	if !s.purgeDue(j) {
+		return nil
+	}
+	if !sameResources(j.Resources, s.ownedResources(r)) {
+		err = errors.New("execution inventory names resources this execution does not own")
+	}
+	for _, res := range j.Resources {
+		if err != nil {
+			break
+		}
+		if res.Aside != "" {
+			err = s.removeAside(res)
+		}
+	}
+	if err != nil {
+		j.Retirement.LastError = err.Error()
+		return errors.Join(err, atomicFile(p, mustJSON(j)))
+	}
+	if err := os.Remove(filepath.Join(s.Root, retiredResources, retiredLabel(r))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	j.PurgedAt, j.Retirement.LastError = s.now(), ""
+	return atomicFile(p, mustJSON(j))
+}
+
+// removeAside removes one moved-aside directory under the same containment as
+// moveAside: its root and parents must be real and it must overlap nothing
+// provisioned. The removal follows no symlink a worker left inside it.
+func (s *Server) removeAside(res Resource) error {
+	root := s.Root
+	if res.Kind == ResourceExecutionRoot {
+		root = s.Config.WorkspaceRoot
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err != nil || resolved != filepath.Clean(root) {
+		return errors.New("retirement root is missing or resolves through a symlink")
+	}
+	if !strictlyWithin(root, res.Aside) {
+		return errors.New("owned resource escapes its root")
+	}
+	for _, p := range s.protectedPaths() {
+		if within(p, res.Aside) || within(res.Aside, p) {
+			return errors.New("owned resource overlaps a provisioned path")
+		}
+	}
+	parent := filepath.Dir(res.Aside)
+	if resolved, err := filepath.EvalSymlinks(parent); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil || resolved != parent {
+		return errors.New("owned resource resolves through a symlink")
+	}
+	info, err := os.Lstat(res.Aside)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("retired %s is not a real directory; it is left in place", res.Kind)
+	}
+	if err := worktrees.RemoveAll(res.Aside); err != nil {
+		return err
+	}
+	return syncDirectory(parent)
 }
 
 // writeRecoveryBundle publishes a verified bundle: a reader sees a whole one
