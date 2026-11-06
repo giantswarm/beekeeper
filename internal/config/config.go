@@ -821,11 +821,13 @@ type BuildOutput struct {
 // Auto reports whether the disk step runs without a person's answer.
 func (d Disk) Auto() bool { return d.Prune == "" || d.Prune == DiskPruneAuto }
 
-// Teleport configures the Teleport login's keeper: a periodic user unit
-// that renews the SSO login before it expires, under the browser lease.
+// Teleport configures either the supervised Machine ID bot or the periodic
+// SSO keeper, which renews under the browser lease.
 type Teleport struct {
-	// Proxy is tsh login's --proxy (login.example.com:443); empty, no
-	// keeper runs and the watch reads no login.
+	// Bot selects headless Machine ID operation instead of SSO renewal.
+	Bot TeleportBot `yaml:"bot"`
+	// Proxy is tsh login's --proxy. Without a proxy or a bot, no keeper
+	// runs and the watch reads no identity.
 	Proxy string `yaml:"proxy"`
 	// Auth is tsh login's --auth, the SSO connector; empty, the cluster's
 	// default.
@@ -847,10 +849,26 @@ type Teleport struct {
 	Every Duration `yaml:"every"`
 }
 
+// TeleportBot points at an administrator-provisioned tbot configuration and outputs.
+// The configuration, rather than beekeeper's config or argv, holds the join token.
+type TeleportBot struct {
+	Config      string `yaml:"config"`
+	Binary      string `yaml:"binary"`
+	Certificate string `yaml:"certificate"`
+	Kubeconfig  string `yaml:"kubeconfig"`
+}
+
+// Enabled reports whether Machine ID replaces SSO.
+func (b TeleportBot) Enabled() bool { return b.Config != "" }
+
 // Enabled reports whether a keeper is configured.
-func (t Teleport) Enabled() bool { return t.Proxy != "" }
+func (t Teleport) Enabled() bool { return t.Proxy != "" || t.Bot.Enabled() }
 
 func (t *Teleport) defaults(home string) {
+	setStr(&t.Bot.Binary, "tbot")
+	t.Bot.Config = homePath(home, t.Bot.Config)
+	t.Bot.Certificate = homePath(home, t.Bot.Certificate)
+	t.Bot.Kubeconfig = homePath(home, t.Bot.Kubeconfig)
 	setStr(&t.Tsh, "tsh")
 	setStr(&t.Home, os.Getenv("TELEPORT_HOME"))
 	setStr(&t.Home, filepath.Join(home, ".tsh"))
@@ -3538,6 +3556,10 @@ func (c *Config) defaults() error {
 	setStr(&c.Plans.Check, DefaultPlansCheck)
 	c.Sink.defaults()
 	c.Teleport.defaults(home)
+	if b := c.Teleport.Bot; b.Enabled() {
+		c.Kube.Kubeconfig = append([]string{b.Kubeconfig}, c.Kube.Kubeconfig...)
+		c.Alerts.Kubeconfig = append([]string{b.Kubeconfig}, c.Alerts.Kubeconfig...)
+	}
 	setStr(&c.Shell, os.Getenv("SHELL"))
 	setStr(&c.Shell, "sh")
 
@@ -4154,6 +4176,13 @@ func (c *Config) validateEach(report func(error)) {
 		}
 		if st.Search != "" && (len(st.Status)+len(st.Kind)+len(st.Labels) > 0 || st.SubIssues || st.Unblocked) {
 			report(fmt.Errorf("board.order[%d] %q: a search step matches no board fields", i, st.Name))
+		}
+	}
+	if b := c.Teleport.Bot; b.Enabled() {
+		for name, value := range map[string]string{"config": b.Config, "certificate": b.Certificate, "kubeconfig": b.Kubeconfig} {
+			if !filepath.IsAbs(value) {
+				report(fmt.Errorf("teleport.bot.%s: an absolute path is required", name))
+			}
 		}
 	}
 	if t := c.Teleport; t.WarnBefore.Duration > t.RenewBefore.Duration {

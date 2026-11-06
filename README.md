@@ -709,7 +709,53 @@ beekeeper keeps that login:
 What the keeper needs: a graphical session whose default browser holds the SSO session (the keeper's
 unit starts after `graphical-session.target` and inherits the user manager's display variables), and
 the profile directory on the same filesystem as the state directory. A headless desk needs a
-Machine ID bot (`tbot`) from the Teleport administrators instead; beekeeper does not run one.
+Machine ID bot (`tbot`) from the Teleport administrators instead. Configure bot mode below
+for a supervised user service with no browser or browser lease.
+
+### Teleport Machine ID
+
+Ask the Teleport administrators for a bot with a role restricted to the required Kubernetes
+clusters, Kubernetes users/groups and permissions, plus a join token and the joining instructions.
+Install a `tbot` version compatible with the Teleport cluster. Have the administrators supply a
+`tbot` configuration with persistent bot storage, onboarding using that token, a Kubernetes
+output for the required clusters, and an identity output containing a public TLS certificate.
+Keep this configuration and its token private (mode 0600); the token belongs in that file or a
+protected token file it references, never in beekeeper's command line. Preserve the persistent
+bot storage across service restarts; do not share it between bot instances.
+
+```yaml
+teleport:
+  bot:
+    config: ~/.config/teleport/tbot.yaml
+    binary: tbot
+    certificate: ~/.local/share/teleport/identity/tlscert
+    kubeconfig: ~/.local/share/teleport/kubernetes/kubeconfig.yaml
+```
+
+`bot.config` selects Machine ID instead of SSO, even if `teleport.proxy` remains set.
+`bot.binary` defaults to `tbot`. `bot.certificate` must name the public certificate in the
+configured identity output (commonly `tlscert`; use `tls.crt` if that output enables specific TLS
+extensions). `bot.kubeconfig` must name the generated Kubernetes output kubeconfig. All three
+file paths are required and accept `~/`. The output paths must match the administrator's tbot
+configuration. Its Kubernetes output defines the available context names; use those names in
+beekeeper's installation context configuration.
+
+Run `beekeeper install` after changing modes or configuration. On Linux with systemd,
+it installs `beekeeper-teleport.service` running `tbot start --config=...`, enabled at user manager
+startup and restarted after exit. The existing timer can also start the service; it performs no
+SSO renewal in bot mode. To keep it running without a logged-in session, arrange user lingering
+with the system administrator. Bot supervision requires a systemd user manager.
+
+Beekeeper prepends the generated kubeconfig to its installation and alert kubeconfig lists.
+For other tools, include that file in `KUBECONFIG` or select it explicitly; existing user contexts
+are preserved. `beekeeper teleport`, `watch`, and `snapshot` read the public certificate's expiry
+and report an inactive bot service, missing/invalid certificate, or approaching/expired identity.
+`teleport.warnBefore` controls the warning threshold. `beekeeper teleport renew` refuses SSO
+renewal in bot mode; tbot owns renewal. Inspect the user service locally for diagnostics if it
+fails. If the bot identity has expired, ask the administrators to reset/rejoin the bot as required.
+
+See the [Teleport Machine ID configuration reference](https://goteleport.com/docs/reference/machine-id/configuration/)
+for the tbot storage, onboarding and output settings.
 
 ## Deletes
 

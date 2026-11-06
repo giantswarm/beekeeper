@@ -237,6 +237,9 @@ type SetupSpec struct {
 	// TeleportLoginTimeout is each login attempt's configured timeout;
 	// the keeper's unit allows both attempts and cleanup.
 	TeleportLoginTimeout time.Duration
+	// TeleportBotConfig and TeleportBotBinary run tbot in place of the SSO
+	// keeper's service.
+	TeleportBotConfig, TeleportBotBinary string
 	// Notify runs the standby watch with --notify (watch.notify).
 	Notify bool
 	// ConfigPath is the explicit configuration the loop service reads.

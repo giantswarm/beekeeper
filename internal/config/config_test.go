@@ -1272,6 +1272,30 @@ func TestWatchBatchInterval(t *testing.T) {
 	}
 }
 
+func TestTeleportBotConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "teleport:\n  bot:\n    config: ~/bot.yaml\n    certificate: ~/identity/tlscert\n    kubeconfig: ~/kubernetes/kubeconfig.yaml\nkube:\n  kubeconfig: [/existing]\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Teleport.Enabled() || c.Teleport.Bot.Binary != "tbot" || !filepath.IsAbs(c.Teleport.Bot.Config) {
+		t.Fatalf("bot: %+v", c.Teleport)
+	}
+	if len(c.Kube.Kubeconfig) != 2 || c.Kube.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig || c.Kube.Kubeconfig[1] != "/existing" || c.Alerts.Kubeconfig[0] != c.Teleport.Bot.Kubeconfig {
+		t.Fatalf("kubeconfig selection: %v %v", c.Kube.Kubeconfig, c.Alerts.Kubeconfig)
+	}
+	if err := os.WriteFile(path, []byte("teleport:\n  bot:\n    config: /bot.yaml\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("accepted bot without output paths")
+	}
+}
+
 func TestLoadNamesUnparsableKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
