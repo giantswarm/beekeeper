@@ -384,6 +384,15 @@ func (a *app) syncExecutionHost(ctx context.Context, selector string) error {
 			}
 			continue
 		}
+		opCtx, cancel = withTimeout(ctx)
+		stopped, unactivatedErr := a.stopUnactivated(opCtx, a.executionClient(h), r, time.Now())
+		cancel()
+		if unactivatedErr != nil {
+			failures = append(failures, unactivatedErr.Error())
+		}
+		if stopped {
+			continue
+		}
 		if r.Phase == executionPending && r.StartUnsent {
 			// No start left the coordinator: the host holds nothing to
 			// reconcile. The starting process or the release above settles

@@ -88,7 +88,9 @@ func TestExecutionStartThroughHarnessRegistersBeforeSSHAndRecoversLostReply(t *t
 			}
 			a.executionTransport = func(execution.Host) execution.Transport { return fake }
 			out, err := runAgents(a, agentStartName, "--name", "remote-worker", brief, "--host", sshTestSelector, "--repo", sshTestRepository, "--ref", mainBranch, "--model", bgModel)
-			if interrupt != "" {
+			// A lost activation reply settles by the host's journal: the process
+			// runs, so the start took and nothing activates it twice.
+			if interrupt == execution.Prepared {
 				if err == nil {
 					t.Fatal("interrupted start reported success")
 				}

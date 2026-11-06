@@ -141,6 +141,11 @@ func TestExecutionSyncReleasesStaleUnacknowledgedReservation(t *testing.T) {
 		}
 		return execution.Observation{Handle: *journal, ProcessState: execution.Prepared}, nil
 	}
+	stops := 0
+	fake.stop = func(context.Context, execution.Ref, execution.StopRequest) (execution.Ack, error) {
+		stops++
+		return execution.Ack{}, nil
+	}
 	a.executionTransport = func(execution.Host) execution.Transport { return fake }
 	ref := startUnacknowledged(t, a, brief, "stale-worker")
 	reserved := func() *state.ExecutionRecord {
@@ -172,8 +177,8 @@ func TestExecutionSyncReleasesStaleUnacknowledgedReservation(t *testing.T) {
 	h := fixtureHandle(a, rec.Request)
 	journal = &h
 	_ = a.syncExecutionHost(context.Background(), sshTestSelector)
-	if reserved().Released() {
-		t.Fatal("a reservation its host holds a journal of was released")
+	if reserved().Released() || stops != 1 {
+		t.Fatalf("a reservation its host holds a journal of was released, or not stopped (%d stops)", stops)
 	}
 	journal = nil
 	if err := a.syncExecutionHost(context.Background(), sshTestSelector); err != nil {
@@ -185,6 +190,149 @@ func TestExecutionSyncReleasesStaleUnacknowledgedReservation(t *testing.T) {
 	}
 	if rec, _ := executionRecord(st, ref); !rec.Released() || executionHostBusy(st, ref.Host) != 0 || len(st.Agents) != 0 || len(countAgents(st, nil, a.now, a.cfg).Busy) != 0 {
 		t.Fatal("the stale unacknowledged reservation kept its slots")
+	}
+}
+
+// A start whose activation timed out says what it left behind, and the same
+// start activates that execution instead of failing on its reserved name.
+func TestTimedOutActivationIsReportedAndRetried(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	var handle execution.Handle
+	starts, ready := 0, false
+	fake := &testExecutionTransport{}
+	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+		handle = fixtureHandle(a, r)
+		if r.RegistrationReceipt == "" {
+			return handle, nil
+		}
+		starts++
+		if starts == 1 {
+			return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
+		}
+		ready = true
+		return handle, nil
+	}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		if ready {
+			return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true}, nil
+		}
+		return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
+	err := a.startSSHExecution(t.Context(), "timed-out-worker", brief, options)
+	if err == nil || !strings.Contains(err.Error(), "exists on its host, prepared, and no process runs") {
+		t.Fatalf("timed-out activation = %v", err)
+	}
+	if err := a.startSSHExecution(t.Context(), "timed-out-worker", brief, options); err != nil {
+		t.Fatalf("the same start did not reconcile: %v", err)
+	}
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts != 2 || len(st.Starts) != 1 {
+		t.Fatalf("retry reserved anew: %d activations, %d records", starts, len(st.Starts))
+	}
+}
+
+// The caller's own deadline can be what failed the activation: once the host
+// answers that the process runs without a stop request, the start completes;
+// a stop request on either post-activation inspection fails safe.
+func TestActivationReconciledAfterTheCallersDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		stopOnInspectAfter int
+		wantErr            bool
+		wantInspections    int
+	}{
+		{name: "ready running", wantInspections: 2},
+		{name: "stop requested on reconciliation", stopOnInspectAfter: 1, wantErr: true, wantInspections: 1},
+		{name: "stop requested on acceptance", stopOnInspectAfter: 2, wantErr: true, wantInspections: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, brief := sshStartTestApp(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var handle execution.Handle
+			launched, activations, postChecks := false, 0, 0
+			fake := &testExecutionTransport{}
+			fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+				handle = fixtureHandle(a, r)
+				if r.RegistrationReceipt == "" {
+					return handle, nil
+				}
+				activations++
+				launched = true
+				cancel()
+				return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
+			}
+			fake.inspect = func(ctx context.Context, _ execution.Ref) (execution.Observation, error) {
+				if err := ctx.Err(); err != nil {
+					return execution.Observation{}, err
+				}
+				if launched {
+					postChecks++
+					stop := tc.stopOnInspectAfter > 0 && postChecks >= tc.stopOnInspectAfter
+					return execution.Observation{Handle: handle, ProcessState: execution.Running, Ready: true, StopRequested: stop}, nil
+				}
+				return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
+			}
+			a.executionTransport = func(execution.Host) execution.Transport { return fake }
+			options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
+			err := a.startSSHExecution(ctx, "reconciled-worker", brief, options)
+			if tc.wantErr && Code(err) != ExitRefused {
+				t.Fatalf("stop-requested start did not fail safe: %v", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("a confirmed start failed on the caller's spent deadline: %v", err)
+			}
+			if activations != 1 || postChecks != tc.wantInspections {
+				t.Fatalf("activations=%d postChecks=%d, want 1 and %d", activations, postChecks, tc.wantInspections)
+			}
+		})
+	}
+}
+
+// A start that timed out and that nobody retried stops holding its host: past
+// the start's window the sync stops it; a start inside the window stays.
+func TestExecutionSyncStopsAStartThatNeverActivated(t *testing.T) {
+	a, brief := sshStartTestApp(t)
+	var stops []execution.StopRequest
+	var handle execution.Handle
+	fake := &testExecutionTransport{}
+	fake.start = func(_ context.Context, r execution.StartRequest) (execution.Handle, error) {
+		handle = fixtureHandle(a, r)
+		if r.RegistrationReceipt == "" {
+			return handle, nil
+		}
+		return execution.Handle{}, &execution.UnreachableError{Operation: agentStartName, Cause: context.DeadlineExceeded}
+	}
+	fake.inspect = func(context.Context, execution.Ref) (execution.Observation, error) {
+		return execution.Observation{Handle: handle, ProcessState: execution.Prepared}, nil
+	}
+	fake.stop = func(_ context.Context, _ execution.Ref, q execution.StopRequest) (execution.Ack, error) {
+		stops = append(stops, q)
+		return execution.Ack{}, nil
+	}
+	a.executionTransport = func(execution.Host) execution.Transport { return fake }
+	options := executionStartOptions{Host: sshTestSelector, Repository: sshTestRepository, GitRef: mainBranch, Harness: claudeComm, Model: bgModel}
+	if err := a.startSSHExecution(t.Context(), "unactivated-worker", brief, options); err == nil {
+		t.Fatal("a timed-out activation reported success")
+	}
+	_ = a.syncExecutionHost(t.Context(), sshTestSelector)
+	if len(stops) != 0 {
+		t.Fatalf("a start inside its window was stopped: %+v", stops)
+	}
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.Starts[0].Execution.StartSentAt = st.Starts[0].Execution.StartSentAt.Add(-2 * unstartedReleaseAfter)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.syncExecutionHost(t.Context(), sshTestSelector)
+	if len(stops) != 1 || !strings.Contains(stops[0].Reason, "never activated") {
+		t.Fatalf("stale prepared start not stopped: %+v", stops)
 	}
 }
 
