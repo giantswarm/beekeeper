@@ -28,10 +28,10 @@ func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call)
 	switch {
 	case call == "api user --jq .login":
-		return []byte("teemow\n"), nil
+		return []byte("fixture-person\n"), nil
 	case strings.HasPrefix(call, "pr view"):
 		return []byte(f.pull), nil
-	case call == "api --paginate repos/teemow/lab/pulls/7/reviews":
+	case call == "api --paginate repos/fixture-person/lab/pulls/7/reviews":
 		if len(f.reviews) == 0 {
 			return []byte("[]"), nil
 		}
@@ -40,14 +40,14 @@ func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
 			f.reviews = f.reviews[1:]
 		}
 		return []byte(r), nil
-	case call == "api --paginate repos/teemow/lab/pulls/7/comments":
+	case call == "api --paginate repos/fixture-person/lab/pulls/7/comments":
 		return []byte("[]"), nil
-	case call == "api --paginate repos/teemow/lab/issues/7/comments":
+	case call == "api --paginate repos/fixture-person/lab/issues/7/comments":
 		if f.comments == "" {
 			return []byte("[]"), nil
 		}
 		return []byte(f.comments), nil
-	case strings.HasPrefix(call, "api repos/teemow/lab/commits/"):
+	case strings.HasPrefix(call, "api repos/fixture-person/lab/commits/"):
 		return []byte(headAt + "\n"), nil
 	case strings.HasPrefix(call, "pr checks"):
 		c := f.checks[0]
@@ -75,11 +75,11 @@ const pendingCI = `[{"name":"ci","bucket":"pending"}]`
 // headAt is the head commit's committer date.
 const headAt = "2026-10-11T10:00:00Z"
 
-const openPull = `{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","headRefOid":"1234567890","headRefName":"fix","title":"fix: it","author":{"login":"teemow","is_bot":false}}`
+const openPull = `{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","headRefOid":"1234567890","headRefName":"fix","title":"fix: it","author":{"login":"fixture-person","is_bot":false}}`
 
 func squash(f *fakeGH) SquashDoc {
 	now := time.Unix(0, 0)
-	return Squash{GH: f.run, Repo: "teemow/lab", Number: 7, Timeout: time.Minute, Poll: 30 * time.Second,
+	return Squash{GH: f.run, Repo: "fixture-person/lab", Number: 7, Timeout: time.Minute, Poll: 30 * time.Second,
 		Now: func() time.Time { return now }, Sleep: func(d time.Duration) { now = now.Add(d) }}.Run(context.Background())
 }
 
@@ -92,7 +92,7 @@ func TestSquashMergesAGreenHead(t *testing.T) {
 		t.Fatalf("doc %+v", doc)
 	}
 	joined := strings.Join(f.calls, "\n")
-	for _, want := range []string{"sha=1234567890", "commit_title=fix: it (#7)", "merge_method=squash", "api -X DELETE repos/teemow/lab/git/refs/heads/fix"} {
+	for _, want := range []string{"sha=1234567890", "commit_title=fix: it (#7)", "merge_method=squash", "api -X DELETE repos/fixture-person/lab/git/refs/heads/fix"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no %q in the calls:\n%s", want, joined)
 		}
@@ -110,8 +110,8 @@ func TestSquashRefusesAndWaits(t *testing.T) {
 		"merged":    {pull: strings.Replace(openPull, "OPEN", "MERGED", 1), want: SquashNotApplicable},
 		"draft":     {pull: strings.Replace(openPull, `"isDraft":false`, `"isDraft":true`, 1), want: SquashNotApplicable},
 		"conflict":  {pull: strings.Replace(openPull, "MERGEABLE", "CONFLICTING", 1), want: SquashNotApplicable},
-		"a person":  {pull: strings.Replace(openPull, `"login":"teemow"`, `"login":"someone"`, 1), want: SquashRefused},
-		"a bot":     {pull: strings.Replace(openPull, `"login":"teemow","is_bot":false`, `"login":"renovate","is_bot":true`, 1), checks: `[]`, want: SquashMerged},
+		"a person":  {pull: strings.Replace(openPull, `"login":"fixture-person"`, `"login":"someone"`, 1), want: SquashRefused},
+		"a bot":     {pull: strings.Replace(openPull, `"login":"fixture-person","is_bot":false`, `"login":"renovate","is_bot":true`, 1), checks: `[]`, want: SquashMerged},
 		"red":       {pull: openPull, checks: `[{"name":"ci","bucket":"fail"}]`, want: SquashRed},
 		"timeout":   {pull: openPull, checks: pendingCI, want: SquashTimeout},
 		"no checks": {pull: openPull, checks: "none", want: SquashMerged},
@@ -130,7 +130,7 @@ func TestSquashRefusesAndWaits(t *testing.T) {
 
 // review is one review by login in state, on commit, submitted at.
 func review(login, state, commit, at string) string {
-	return fmt.Sprintf(`{"user":{"login":%q,"id":1,"type":"User"},"state":%q,"commit_id":%q,"submitted_at":%q,"html_url":"https://github.com/teemow/lab/pull/7#r"}`, login, state, commit, at)
+	return fmt.Sprintf(`{"user":{"login":%q,"id":1,"type":"User"},"state":%q,"commit_id":%q,"submitted_at":%q,"html_url":"https://github.com/fixture-person/lab/pull/7#r"}`, login, state, commit, at)
 }
 
 // A reviewer's unanswered feedback refuses the merge (5) with devctl's
@@ -150,7 +150,7 @@ func TestSquashRefusesAnUnansweredReview(t *testing.T) {
 		"a comment after the head":         {comments: `[{"user":{"login":"pat","type":"User"},"created_at":"2026-10-11T11:00:00Z","html_url":"u"}]`, want: SquashRefused, open: 1},
 		"landed while the checks ran":      {reviews: []string{`[]`, `[` + review("pat", "COMMENTED", head, "2026-10-11T11:00:00Z") + `]`}, want: SquashRefused, open: 1},
 		"answered by the author": {reviews: []string{`[` + review("pat", "COMMENTED", head, "2026-10-11T11:00:00Z") + `]`},
-			comments: `[{"user":{"login":"teemow","type":"User"},"created_at":"2026-10-11T12:00:00Z","html_url":"u"}]`, want: SquashMerged},
+			comments: `[{"user":{"login":"fixture-person","type":"User"},"created_at":"2026-10-11T12:00:00Z","html_url":"u"}]`, want: SquashMerged},
 		"approved since":      {reviews: []string{`[` + review("pat", "COMMENTED", head, "2026-10-11T11:00:00Z") + `,` + review("pat", "APPROVED", head, "2026-10-11T12:00:00Z") + `]`}, want: SquashMerged},
 		"older than the head": {reviews: []string{`[` + review("pat", "COMMENTED", "old", "2026-10-11T09:00:00Z") + `]`}, want: SquashMerged},
 		"a bot's":             {comments: `[{"user":{"login":"renovate[bot]","type":"Bot"},"created_at":"2026-10-11T11:00:00Z","html_url":"u"}]`, want: SquashMerged},

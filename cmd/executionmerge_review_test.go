@@ -14,6 +14,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
+const installationA = "installation-a"
+
 func mergeReviewRig(t *testing.T) (*app, execution.MergeUse, *superloop.Pull) {
 	t.Helper()
 	a, r := executionTestApp(t)
@@ -85,7 +87,7 @@ func TestExecutionMergeUnrelatedAndExceptedHolds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			a, use, pull := mergeReviewRig(t)
 			completeMergeReview(t, a, use, &pull.Reviews[0])
-			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: "installation-a"}}
+			a.cfg.Lanes = []config.Lane{{Name: "selected", Repositories: []string{use.Repository}, Installation: installationA}}
 			old := readHelmReleases
 			t.Cleanup(func() { readHelmReleases = old })
 			readHelmReleases = func(context.Context, config.Lane) ([]merge.HelmRelease, error) { return nil, nil }
@@ -180,7 +182,7 @@ func completeMergeReview(t *testing.T, a *app, use execution.MergeUse, review *s
 func TestExecutionMergeFixWindowPreservesRepairReadinessWaiver(t *testing.T) {
 	a, use, pull := mergeReviewRig(t)
 	completeMergeReview(t, a, use, &pull.Reviews[0])
-	lane := config.Lane{Name: "repair-lane", Repositories: []string{use.Repository}, Installation: "installation-a"}
+	lane := config.Lane{Name: "repair-lane", Repositories: []string{use.Repository}, Installation: installationA}
 	a.cfg.Lanes = []config.Lane{lane}
 	st, err := a.store.Read()
 	if err != nil {
@@ -517,7 +519,7 @@ func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
 	assignMergeReview(t, a, use, 1)
 	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		round := executionReviewRound(st, use)
-		round.Reviewer.Host = "spaceage"
+		round.Reviewer.Host = "host-b"
 		round.Reviewer.HostSession = "remote-review-session"
 		return nil, nil
 	}); err != nil {
@@ -536,5 +538,45 @@ func TestExecutionMergeAcceptsAuthenticatedRemoteReviewer(t *testing.T) {
 	forged.Session = "another-session"
 	if sameReviewSession(forged, executionReviewRound(st, use).Result.By) {
 		t.Fatal("another remote session authenticated as reviewer")
+	}
+}
+
+// The merge authority consumes the same authenticated completion result when
+// the independent reviewer is a Codex execution on a host, with no worker App.
+func TestExecutionMergeAcceptsRemoteCodexReviewer(t *testing.T) {
+	a, use, pull := mergeReviewRig(t)
+	if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+		st.DeskReviews = nil
+		start := &st.Starts[len(st.Starts)-1]
+		start.Host = "review-host"
+		start.Session = "remote-codex-review-session"
+		start.Harness = execution.HarnessCodex
+		record := *st.Starts[0].Execution
+		record.Handle.Ref.Execution = "independent-review-execution"
+		record.Handle.Ref.Host = "review-host"
+		record.Request.Harness = execution.HarnessCodex
+		record.Request.Ref = record.Handle.Ref
+		start.Execution = &record
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.assignExecutionReview(context.Background(), superloop.Action{Ref: use.Repository + "#7", Head: use.Head, Round: 1, Agent: hostFixtureWorker}); err != nil {
+		t.Fatal(err)
+	}
+	approved := superloop.Review{ID: "remote-review", Verdict: superloop.Approved}
+	completeMergeReview(t, a, use, &approved)
+	pull.Reviews = []superloop.Review{approved}
+	grant, err := a.issueExecutionMerge(context.Background(), use.Ref, use.Repository, use.PR, use.Head, loopParty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	use.ID = grant.ID
+	st, err := a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.executionMergeLive(context.Background(), st, use); err != nil {
+		t.Fatal(err)
 	}
 }

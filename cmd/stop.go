@@ -261,13 +261,17 @@ func fullHold(h state.Hold) bool {
 // fails.
 func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string) {
 	running := func(m state.Merge) bool { return m.Phase == state.Running }
-	var children []state.Merge
+	var children, waiting []state.Merge
 	for _, m := range st.Merges {
-		if running(m) && m.Child != 0 && proc.Alive(m.Child) {
+		switch {
+		case !running(m):
+		case m.Child != 0 && proc.Alive(m.Child):
 			children = append(children, m)
+		case m.Child == 0 && m.PID != 0 && proc.Alive(m.PID):
+			waiting = append(waiting, m)
 		}
 	}
-	if len(children) == 0 {
+	if len(children) == 0 && len(waiting) == 0 {
 		return nil, nil
 	}
 	said, err := stopMerges(a.store, me, running, true, func(state.Merge) string { return "beekeeper stop" })
@@ -277,6 +281,11 @@ func (a *app) endMerges(st *state.State, me state.Party) (lines, failed []string
 	for _, m := range children {
 		if proc.Alive(m.Child) {
 			failed = append(failed, fmt.Sprintf("the devctl of %s (merge-child pid %d) still runs", m.Key(), m.Child))
+		}
+	}
+	for _, m := range waiting {
+		if proc.Alive(m.PID) {
+			failed = append(failed, fmt.Sprintf("the gate of %s (pid %d) still waits before its devctl starts", m.Key(), m.PID))
 		}
 	}
 	return said, failed

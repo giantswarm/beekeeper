@@ -59,7 +59,7 @@ func secretApp(t *testing.T) (*app, *secrettest.Tools, string) {
 	secretRun = tools.Run
 	t.Cleanup(func() { secretRun = prev })
 	repo := t.TempDir()
-	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plain := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\n  namespace: team-a\ndata:\n  password: " + base64.StdEncoding.EncodeToString([]byte(secretValue)) + "\n"
@@ -109,7 +109,7 @@ func TestSecretOperationsReturnNoValueAndAreLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{copyOp, src, dst, "--name", "db-copy", "--namespace", "team-b"},
+		{copyOp, src, dst, nameFlag, "db-copy", "--namespace", "team-b"},
 		{compareOp, src, dst},
 		{compareOp, src + "#data.password", dst + "#data.password"},
 		{fingerprintOp, src},
@@ -422,7 +422,7 @@ func TestBrokeredSecretHoldsItsFilesToTheSandbox(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
@@ -524,7 +524,7 @@ func gitCheckout(t *testing.T, url string) string {
 	t.Helper()
 	dir := t.TempDir()
 	const gitInit = "init"
-	for _, args := range [][]string{{gitInit, "-q"}, {"remote", "add", "origin", url}} {
+	for _, args := range [][]string{{gitInit, "-q"}, {"remote", loopAdd, "origin", url}} {
 		c := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // the test's own git calls
 		c.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := c.CombinedOutput(); err != nil {
@@ -573,7 +573,7 @@ func TestSecretSetNewSecretAndPodConsumers(t *testing.T) {
 		{append([]string{setOp, file, newKey, generateFlag, "--"}, pod...), ExitRefused},
 		{append([]string{copyOp, file + "#stringData.secretKey", "--"}, pod...), ExitRefused},
 		{[]string{setOp, file, newKey, generateFlag, "--stdin-json", "{}", "--stdin-field", "k"}, ExitUsage},
-		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, "--name", "y"}, ExitUsage},
+		{[]string{setOp, filepath.Join(repo, "y.sops.yaml"), newKey, generateFlag, nameFlag, "y"}, ExitUsage},
 	} {
 		a.out = &bytes.Buffer{}
 		calls := len(tools.Calls)
@@ -1017,4 +1017,31 @@ func TestStoreSourceConsumerArgumentDoesNotRequireBroker(t *testing.T) {
 		t.Fatalf("consumer argument wrongly required a broker: %v", err)
 	}
 	noSecret(t, "consumer response", out)
+}
+
+func TestSecretCopyVaultFieldRepairsPasswordSilently(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
+			a, tools, _ := secretApp(t)
+			a.json = jsonOutput
+			dst := "op://Shared/db/client-secret"
+			if jsonOutput {
+				tools.Vault[dst] = "old-value"
+			}
+			other := "op://Shared/db/other"
+			tools.Vault[other] = "keep-value"
+			out, err := runSecret(a, copyOp, dbRef, dst)
+			if err != nil || out != "" {
+				t.Fatalf("copy output = %q, error = %v", out, err)
+			}
+			if tools.Vault[dst] != secretValue || tools.Vault[dbRef] != secretValue || tools.Vault[other] != "keep-value" {
+				t.Fatal("copy did not repair the labelled field while preserving existing fields")
+			}
+			events, err := a.store.Events(0, func(e state.Event) bool { return e.Verb == copyVerb })
+			if err != nil || len(events) != 1 {
+				t.Fatalf("copy events: %d, %v", len(events), err)
+			}
+			noSecret(t, "copy logs and command lines", fmt.Sprint(events, tools.Calls))
+		})
+	}
 }
