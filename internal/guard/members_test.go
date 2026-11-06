@@ -28,7 +28,7 @@ func TestMembersRefusal(t *testing.T) {
 		"the members list, paginated":     {"gh api --paginate 'orgs/giantswarm/members?per_page=100' | jq -r '.[].login'", true, personInOrg},
 		"a membership":                    {"gh api orgs/giantswarm/memberships/fixture-person", true, personFixturePerson},
 		"the org's teams":                 {"gh api orgs/giantswarm/teams", true, personInOrg},
-		"a team's members":                {"gh api orgs/example/teams/platform/members --jq '.[].login'", false, ""},
+		"a team's members":                {"gh api orgs/example/teams/platform/members --jq '.[].login'", true, "beekeeper person --team <slug> --org <org>"},
 		"a team membership":               {"gh api orgs/giantswarm/teams/team-bumblebee/memberships/fixture-person", true, personInOrg},
 		"a team by id":                    {"gh api teams/1234/members", true, personAnyOrg},
 		"a login's orgs":                  {"gh api users/fixture-person/orgs", true, "beekeeper person fixture-person --org <org>"},
@@ -150,39 +150,5 @@ func TestDecideRefusesMembersRead(t *testing.T) {
 	}
 	if d := decide("person", "gh api orgs/giantswarm/members/fixture-person"); d != nil && d.PermissionDecision == decisionDeny {
 		t.Errorf("the person's own member check refused: %+v", d)
-	}
-}
-
-func TestTeamMembersRead(t *testing.T) {
-	const worker = "sess-worker"
-	h := Hook{Self: hookSelf, Shell: hookShell, Started: func(s string) bool { return s == worker }}
-	for _, tc := range []struct {
-		command string
-		refused bool
-	}{
-		{"gh api --paginate 'orgs/example/teams/platform/members?per_page=100' --jq '.[].login'", false},
-		{"gh api -X GET /orgs/example/teams/platform/members", false},
-		{"timeout 30 gh api --method=GET orgs/example/teams/platform/members/", false},
-		{"gh api -XGET orgs/example/teams/platform/members -f role=all", false},
-		{"gh api orgs/example/teams/platform/members -X POST", true},
-		{"gh api orgs/example/teams/platform/members --method=DELETE", true},
-		{"gh api orgs/example/teams/platform/members -f role=all", true},
-		{"gh api orgs/example/teams/platform/members -frole=all", true},
-		{"gh api orgs/example/teams/platform/members -Frole=all", true},
-		{"gh api orgs/example/teams/platform/members --raw-field=role=all", true},
-		{"gh api orgs/example/teams/platform/members --input=body.json", true},
-		{"gh api orgs/example/teams/platform/members --input body.json", true},
-		{"gh api orgs/example/teams/platform/memberships/example-user -X PUT", true},
-		{"gh api orgs/example/teams/platform/members; gh api orgs/example/members", true},
-	} {
-		t.Run(tc.command, func(t *testing.T) {
-			ev := toolEvent(bashTool, map[string]any{commandKey: tc.command})
-			ev["cwd"] = t.TempDir()
-			ev["session_id"] = worker
-			d := decideEvent(t, h, ev)
-			if got := d != nil && d.PermissionDecision == decisionDeny; got != tc.refused {
-				t.Fatalf("decision = %+v, want refused %v", d, tc.refused)
-			}
-		})
 	}
 }

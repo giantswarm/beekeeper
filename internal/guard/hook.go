@@ -531,6 +531,10 @@ func (h Hook) decide(ev event) []byte {
 	if r := h.ghPREditRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
 	}
+	h.beginCheck("graphqlRoute")
+	if routed := graphqlRoute(cmd, cwd); routed != cmd {
+		cmd, gated = routed, true
+	}
 	if wrapped.MatchString(cmd) {
 		return h.rewrite(ev.ToolInput, cwd, cmd, gated, bg)
 	}
@@ -563,6 +567,10 @@ func (h Hook) decide(ev event) []byte {
 
 	if !isHeavy(cmd) {
 		return h.rewrite(ev.ToolInput, cwd, cmd, gated || vaultCall.MatchString(cmd), bg)
+	}
+	h.beginCheck("routeBuilds")
+	if routed := h.routeBuilds(cmd); routed != "" {
+		return h.rewrite(ev.ToolInput, cwd, routed, true, bg)
 	}
 	return h.rewrite(ev.ToolInput, cwd, ShellQuote(h.Self)+" run -- "+ShellQuote(h.Shell)+" -c "+ShellQuote(cmd), true, bg)
 }

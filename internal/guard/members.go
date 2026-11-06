@@ -13,8 +13,6 @@ import (
 const ghAPISub = "api"
 
 var (
-	// teamMembersPath permits only the collection read, never a membership write.
-	teamMembersPath = regexp.MustCompile(`^(?:https?://api\.github\.com)?/?orgs/[^/?#]+/teams/[^/?#]+/members/?(?:\?[^#]*)?$`)
 	// membersPath: a REST path whose answer under the App's token an agent's
 	// gh carries misclassifies a colleague: the org's members and a login's
 	// membership (404 for a private member), the org's teams and a team's
@@ -48,12 +46,6 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 		if ep == "" {
 			continue
 		}
-		if teamMembersPath.MatchString(ep) {
-			method := ghAPIMethod(words[commandAt(words)+1:])
-			if method == "" || method == "GET" {
-				continue
-			}
-		}
 		var what, person string
 		switch m := membersPath.FindStringSubmatch(ep); {
 		case m != nil:
@@ -70,7 +62,7 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 		return "Refused: " + what + " reads membership with the App's token an agent's `gh` carries, which sees public " +
 			"memberships only: its 404 for a private member reads as \"not a member\", and the team endpoints answer 403. " +
 			"Read membership with `" + person + "`, which answers member, not a member, or permission missing from the " +
-			"person's own login; a team's roster is a question to the supervisor."
+			"person's own login; a team's logins with `beekeeper person --team <slug> --org <org>`, read the same way."
 	}
 	return ""
 }
