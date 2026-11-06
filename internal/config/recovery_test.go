@@ -54,3 +54,20 @@ func TestRecoverySnapshotCannotChangePinnedStore(t *testing.T) {
 		t.Fatal("snapshot with another store admitted")
 	}
 }
+
+func TestRecoverySnapshotBindsOriginalSource(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(source, []byte(fmt.Sprintf("stateDir: %q\n", dir)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRecovery(dir, source); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := RecoverySource(dir); err != nil || got != source {
+		t.Fatalf("original source lost: %q %v", got, err)
+	}
+	if _, err := LoadRecoveryForSource(dir, source+"other"); err == nil {
+		t.Fatal("snapshot admitted another source")
+	}
+}

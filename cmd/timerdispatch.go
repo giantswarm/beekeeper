@@ -47,10 +47,34 @@ func (a *app) runTimerDispatcher(ctx context.Context, once bool) error {
 	defer func() { _ = l.Unlock() }()
 	d := newTimerDispatchSession(ctx)
 	defer d.close()
+	// Observe stop even during --once's wait for an action. The installed
+	// service receives SIGTERM from stop; foreground dispatch has no such unit.
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				st, err := a.store.Read()
+				if err != nil || st.Stop != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() { cancel(); <-monitorDone }()
 	tick := time.NewTicker(timerTick)
 	defer tick.Stop()
 	binary := loopBinary()
 	for {
+		if ctx.Err() != nil {
+			return nil
+		}
 		if binary != nil && binary.Replaced() && d.active.Load() == 0 {
 			return binary.Exec()
 		}

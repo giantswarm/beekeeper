@@ -75,6 +75,16 @@ func (a *app) fatalCmd() *cobra.Command {
 		dir = a.cfg.StateDir
 		return nil
 	}
+	c.AddCommand(&cobra.Command{Use: "preflight <harness>", Hidden: true, Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.loadConfig(); err != nil {
+				return errors.New("preflight configuration cannot load")
+			}
+			if err := a.fatalHarnessConfig(cmd.Context(), args[0]); err != nil {
+				return errors.New("harness startup preflight failed")
+			}
+			return nil
+		}})
 	c.AddCommand(&cobra.Command{Use: executionStatus, Short: "Show outages, repair owners, attempts and verified outcomes", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := resolve(); err != nil {
@@ -201,6 +211,19 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 	observationCtx, cancelObservation := context.WithTimeout(ctx, fatalObservationTimeout)
 	defer cancelObservation()
 	path, pathErr := config.Path(a.cfgPath)
+	if pathErr != nil && path == "" {
+		path = os.Getenv("BEEKEEPER_CONFIG")
+	}
+	if path != "" {
+		var absErr error
+		path, absErr = filepath.Abs(path)
+		if absErr != nil {
+			pathErr = absErr
+		}
+	}
+	if pathErr == nil && path == config.RecoveryPath(dir) {
+		path, pathErr = config.RecoverySource(dir)
+	}
 	mainPath := path
 	var cfg *config.Config
 	if pathErr == nil {
@@ -213,20 +236,49 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		cfg = nil
 	}
 	observe(fatal.Observation{ID: "configuration", Failed: pathErr != nil, Evidence: "beekeeper configuration cannot load"})
+	recovering := cfg == nil
+	if recovering {
+		cfg, err = config.LoadRecoveryForSource(dir, mainPath)
+		if err != nil {
+			cfg = nil
+		} else {
+			path = config.RecoveryPath(dir)
+		}
+	} else if err := config.SaveRecovery(dir, path); err != nil {
+		return err
+	}
+	// Establish repair harness health before optional probes can exhaust the
+	// observation budget. Recovery settings must receive the same preflight.
+	broken := []string{}
+	if cfg != nil {
+		a.cfg = cfg
+		seen := map[string]bool{}
+		choices := cfg.Capacity.Choices
+		if len(choices) == 0 {
+			choices = []config.Choice{{Harness: config.ClaudeHarness}}
+		}
+		for _, choice := range choices {
+			if seen[choice.Harness] {
+				continue
+			}
+			seen[choice.Harness] = true
+			o := fatalHarness(observationCtx, path, choice.Harness)
+			observe(o)
+			if o.Failed || o.Unknown {
+				broken = append(broken, choice.Harness)
+			}
+		}
+	}
 	for _, unit := range []string{"beekeeper-notify.service", "beekeeper-supervisor-loop.service", "beekeeper-timers.service"} {
 		observe(fatalService(observationCtx, unit))
 	}
 	timers := fatalTimers(st, now)
 	observe(fatal.Observation{ID: "timers:overdue", Failed: timers.overdue > 0, Disabled: timers.disabled, Evidence: timers.evidence()})
-	broken := []string{}
 	if cfg != nil {
 		if cfg.StateDir != dir {
 			return fmt.Errorf("fatal state directory differs from configuration; reinstall to pin it")
 		}
 		a.cfg = cfg
-		if err := config.SaveRecovery(dir, path); err != nil {
-			return err
-		}
 		for _, c := range cfg.Fatal.Checks {
 			code, err := fatalProbe(observationCtx, c.Probe...)
 			o := fatalResult("check:"+c.Name, code, err)
@@ -243,27 +295,6 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			}
 			observe(fatalMain(observationCtx, repo, path))
 		}
-		seen := map[string]bool{}
-		choices := cfg.Capacity.Choices
-		if len(choices) == 0 {
-			choices = []config.Choice{{Harness: config.ClaudeHarness}}
-		}
-		for _, c := range choices {
-			if seen[c.Harness] {
-				continue
-			}
-			seen[c.Harness] = true
-			code, err := fatalProbe(observationCtx, c.Harness, "--version")
-			o := fatal.Observation{ID: "harness:" + c.Harness, Failed: err != nil || code != 0, Evidence: "configured harness cannot run --version"}
-			if observationCtx.Err() != nil {
-				o.Failed = false
-				o.Unknown = true
-			}
-			observe(o)
-			if o.Failed {
-				broken = append(broken, c.Harness)
-			}
-		}
 		for _, o := range fatalGuards(dir, cfg) {
 			observe(o)
 			if o.Failed {
@@ -271,7 +302,7 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 			}
 		}
 		for _, x := range q.Incidents {
-			if !observed[x.ID] {
+			if !observed[x.ID] && !recovering {
 				observe(fatal.Observation{ID: x.ID, Disabled: true})
 			}
 		}
@@ -305,16 +336,8 @@ func (a *app) fatalScan(ctx context.Context, dir string) error {
 		return errors.Join(err, q.Save(dir))
 	}
 	if cfg == nil {
-		recoveryPath := config.RecoveryPath(dir)
-		cfg, err = config.LoadRecovery(dir)
-		if err != nil {
-			_, printErr := fmt.Fprintln(a.out, "fatal repair blocked: no validated recovery admission configuration; outage retained")
-			return errors.Join(printErr, q.Save(dir))
-		}
-		a.cfg = cfg
-		// Only the launch uses the trusted snapshot. The repair must restore and
-		// verify the original main configuration, never edit its admission copy.
-		path = recoveryPath
+		_, printErr := fmt.Fprintln(a.out, "fatal repair blocked: no validated recovery admission configuration; outage retained")
+		return errors.Join(printErr, q.Save(dir))
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
