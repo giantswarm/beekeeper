@@ -6,6 +6,7 @@
 package superloop
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"slices"
@@ -112,7 +113,10 @@ const (
 // Pull is a tracked pull request as GitHub reports it.
 type Pull struct {
 	// Closes names the issues closed by this pull request.
-	Closes                []string
+	Closes []string
+	// Absorbs names the original pull requests a combining pull request
+	// supersedes or folds in.
+	Absorbs               []string
 	Draft                 bool
 	Mergeable, MergeState string
 	ReviewDecision        string
@@ -858,7 +862,9 @@ func Plan(in Input) []Action {
 		if cur, ok := parked[w.ParkedOn]; IsPull(w.ParkedOn) && w.ReviewRequested && (!ok || !w.ParkedAt.Before(cur.ParkedAt)) {
 			parked[w.ParkedOn] = w
 		}
-		started[w.Name] = w.Started
+		if !w.Saved {
+			started[w.Name] = w.Started
+		}
 	}
 	// retire takes a session the loop is done with off the roster; one
 	// its person started, one gone already, or one whose own done the
@@ -886,13 +892,45 @@ func Plan(in Input) []Action {
 		}
 	}
 	swept := sweptBy(in.Taken)
+	absorbed := absorbedByMerged(in)
 	refs := make([]string, 0, len(in.Pulls))
 	for ref := range in.Pulls {
 		refs = append(refs, ref)
 	}
 	slices.Sort(refs)
 	for _, ref := range refs {
+		by := absorbed[strings.ToLower(ref)]
+		if by == "" {
+			continue
+		}
 		p := in.Pulls[ref]
+		p.Ref = cmp.Or(p.Ref, ref)
+		why := fmt.Sprintf("%s was absorbed by merged combining pull request %s", cmp.Or(p.URL, ref), by)
+		for _, w := range in.Workers {
+			if w.Saved || w.Name == "" {
+				continue
+			}
+			if strings.EqualFold(w.Name, PullWorkerName(ref)) ||
+				(l.reviewer[ref] != "" && strings.EqualFold(w.Name, l.reviewer[ref])) ||
+				(strings.EqualFold(w.ParkedOn, ref) && in.serving(w, ref, in.Now) == "") {
+				retire(ref, retiredWorker, w.Name, why)
+			}
+		}
+		for i := range l.rounds[ref] {
+			retire(ref, fmt.Sprintf("reviewer r%d", i+1), ReviewerName(ref, i+1), why)
+		}
+		if !l.ended[ref] {
+			if _, isParked := parked[ref]; len(l.rounds[ref]) > 0 || isParked {
+				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: "absorbed by " + by})
+			}
+		}
+	}
+	for _, ref := range refs {
+		if absorbed[strings.ToLower(ref)] != "" {
+			continue
+		}
+		p := in.Pulls[ref]
+		p.Ref = cmp.Or(p.Ref, ref)
 		if p.State == Open && l.ended[ref] {
 			l.reopen(ref)
 			delete(swept.lastAct, ref)
@@ -939,8 +977,8 @@ func Plan(in Input) []Action {
 			continue
 		}
 		ask, asked := l.asked[ref]
-		if p.State == Merged || p.State == Closed {
-			if len(l.rounds[ref]) > 0 {
+		if p.State != Open {
+			if (p.State == Merged || p.State == Closed) && len(l.rounds[ref]) > 0 {
 				add(Action{Key: endKey(ref), Kind: KindEnd, Ref: ref, URL: p.URL, Message: strings.ToLower(p.State)})
 			}
 			continue
@@ -1188,7 +1226,7 @@ func planPull(in Input, l ledger, rounds int, ref string, p Pull, parked map[str
 	if agent == "" {
 		agent = l.reviewer[ref]
 	}
-	if agent == "" || p.Head == "" {
+	if agent == "" || p.State != Open || p.Head == "" {
 		return
 	}
 	base := Action{Ref: ref, URL: p.URL, Agent: agent, Head: p.Head}
@@ -1663,6 +1701,122 @@ var issueURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/issues/\d
 
 // pullURL is a pull request's URL.
 var pullURL = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+
+var (
+	absorbLead       = regexp.MustCompile(`(?i)\b(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original\s+(?:pr|pull\s+request)s?)\b`)
+	absorbHeader     = regexp.MustCompile(`(?i)^(?:#+\s*|\*\*\s*)?(?:combin(?:e|es|ed|ing)|supersed(?:e|es|ed|ing)|absorb(?:s|ed|ing)?|fold(?:s|ed|ing)?\s+(?:in|from)|original)(?:\s+(?:original|pr|prs|pull\s+requests?))*\s*:?\s*(?:\*\*)?$`)
+	absorbFirstGap   = regexp.MustCompile(`(?i)^[\s:]*(?:(?:from|with|in|original|originals|pr|prs|pull\s+requests?)\b[\s:]*)*$`)
+	absorbNextGap    = regexp.MustCompile(`(?i)^[\s,]*(?:(?:and|&|\+|pr|prs|pull\s+requests?)\b[\s,]*)*$`)
+	absorbBulletLead = regexp.MustCompile(`^(?:[-*+]|\d+\.)\s+`)
+	shortPullMention = regexp.MustCompile(`(?:https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+))|(?:https://github\.com/[\w.-]+/[\w.-]+/issues/\d+)|\b([\w.-]+/[\w.-]+)#(\d+)\b|(?:^|[^\w/.-])(?:pr\s*#?|pull\s+request\s*#?|#)(\d+)\b`)
+)
+
+// ParseAbsorbedPulls extracts the original pull requests (owner/repo#n) that a
+// combining pull request explicitly supersedes or absorbs from its title and body.
+func ParseAbsorbedPulls(selfRef, title, body string) []string {
+	repo := repoOf(selfRef)
+	var out []string
+	addRef := func(r string) {
+		if r == "" || strings.EqualFold(r, selfRef) {
+			return
+		}
+		if !slices.ContainsFunc(out, func(existing string) bool { return strings.EqualFold(existing, r) }) {
+			out = append(out, r)
+		}
+	}
+	scanList := func(rest string) {
+		cursor := 0
+		first := true
+		for _, loc := range shortPullMention.FindAllStringSubmatchIndex(rest, -1) {
+			matchStart := loc[0]
+			if loc[10] >= 0 && matchStart < loc[10] {
+				if c := rest[matchStart]; c != '#' && c != 'p' && c != 'P' {
+					matchStart++
+				}
+			}
+			gap := rest[cursor:matchStart]
+			if first {
+				if !absorbFirstGap.MatchString(gap) {
+					break
+				}
+			} else if !absorbNextGap.MatchString(gap) {
+				break
+			}
+			switch {
+			case loc[2] >= 0 && loc[3] >= 0:
+				addRef(rest[loc[2]:loc[3]] + "#" + rest[loc[4]:loc[5]])
+			case loc[6] >= 0 && loc[7] >= 0:
+				addRef(rest[loc[6]:loc[7]] + "#" + rest[loc[8]:loc[9]])
+			case loc[10] >= 0 && loc[11] >= 0:
+				if repo == "" {
+					return
+				}
+				addRef(repo + "#" + rest[loc[10]:loc[11]])
+			default:
+				// An /issues/<n> link is not an absorbed pull request.
+				return
+			}
+			cursor = loc[1]
+			first = false
+		}
+	}
+	scanLine := func(line string) {
+		for _, lead := range absorbLead.FindAllStringIndex(line, -1) {
+			scanList(line[lead[1]:])
+		}
+	}
+	scanLine(title)
+	inCombineList := false
+	for line := range strings.Lines(body) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			inCombineList = false
+			continue
+		}
+		if absorbHeader.MatchString(trimmed) {
+			inCombineList = true
+			continue
+		}
+		if inCombineList {
+			if m := absorbBulletLead.FindStringIndex(trimmed); m != nil {
+				scanList(trimmed[m[1]:])
+				continue
+			}
+			inCombineList = false
+		}
+		scanLine(trimmed)
+	}
+	return out
+}
+
+// absorbedByMerged maps each lower-cased pull request ref absorbed by a merged
+// combining pull request in in.Pulls to the combining pull request's ref.
+func absorbedByMerged(in Input) map[string]string {
+	out := map[string]string{}
+	refs := make([]string, 0, len(in.Pulls))
+	for ref := range in.Pulls {
+		refs = append(refs, ref)
+	}
+	slices.Sort(refs)
+	for _, ref := range refs {
+		p := in.Pulls[ref]
+		if p.State != Merged {
+			continue
+		}
+		combiningRef := cmp.Or(p.Ref, ref)
+		absorbs := p.Absorbs
+		if len(absorbs) == 0 && p.Title != "" {
+			absorbs = ParseAbsorbedPulls(combiningRef, p.Title, "")
+		}
+		for _, orig := range absorbs {
+			key := strings.ToLower(orig)
+			if key != "" && !strings.EqualFold(key, combiningRef) && out[key] == "" {
+				out[key] = combiningRef
+			}
+		}
+	}
+	return out
+}
 
 // filedReportClause matches a clause in a report that names newly filed issues,
 // keeping dots inside URLs and version tokens while stopping at sentence ends.

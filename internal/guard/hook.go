@@ -150,6 +150,9 @@ type Hook struct {
 	// Production is the installation the kube guard protects; empty, the
 	// guard is off unless ProtectedContexts is set.
 	Production string
+	// ProductionNote consumes a single-use authority for an exact command. Nil,
+	// the default, no note authorises anything (kube.productionNoteDeletes).
+	ProductionNote func(id int, command string) error
 	// ProtectedContexts lists additional contexts protected by the write gate.
 	ProtectedContexts []string
 	// ReadOnlyExecQueries is the exact restricted SELECT allowlist for psql exec.
@@ -445,6 +448,14 @@ func (h Hook) decide(ev event) []byte {
 	if w := h.Upstream.bashWrite(cmd, cwd); w != nil {
 		return h.refuseUpstream(ev.Session, *w)
 	}
+	// Defer consuming authority until the other command guards have passed.
+	var consumeProduction func() error
+	if verify := h.ProductionNote; verify != nil {
+		h.ProductionNote = func(id int, command string) error {
+			consumeProduction = func() error { return verify(id, command) }
+			return nil
+		}
+	}
 	h.beginCheck("kubeRefusal")
 	if r := h.kubeRefusal(cmd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
@@ -530,6 +541,12 @@ func (h Hook) decide(ev event) []byte {
 	h.beginCheck("ghPREditRefusal")
 	if r := h.ghPREditRefusal(origCmd, cwd); r != "" {
 		return answer(hookOutput{PermissionDecision: decisionDeny, Reason: r})
+	}
+	if consumeProduction != nil {
+		h.beginCheck("productionNote")
+		if err := consumeProduction(); err != nil {
+			return answer(hookOutput{PermissionDecision: decisionDeny, Reason: "Refused: production note: " + err.Error()})
+		}
 	}
 	h.beginCheck("graphqlRoute")
 	if routed := graphqlRoute(cmd, cwd); routed != cmd {

@@ -110,9 +110,6 @@ func (a *app) hostRuntime() (*execution.Server, error) {
 		return nil, err
 	}
 	s := &execution.Server{Config: cfg, Root: filepath.Join(a.cfg.StateDir, "execution"), Executable: exe, ConfigPath: configPath, Version: project.Version(), SecurityDigest: execution.Digest(security), Rules: []byte(rules.String()), Launcher: plat.Launcher}
-	if err := s.LoadCoordinatorBundle(); err != nil {
-		return nil, err
-	}
 	s.GuardProbe = func() error {
 		const probeSession = "probe"
 		h := a.executionHook()
@@ -506,11 +503,16 @@ func (a *app) executionHostsCmd() *cobra.Command {
 			execution.ReportOrphans(audit, a.cfg.Identity.Host, registered)
 		}
 		caps.ResourceAudit = audit
+		caps.PolicyBundle = a.hostBundleReport(cmd.Context(), h)
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(caps); err != nil {
 			return err
 		}
 		if probeErr != nil || auditErr != nil {
 			return errors.Join(probeErr, auditErr)
+		}
+		// A host merely behind passes: its next start receives the bundle.
+		if b := caps.PolicyBundle; b != nil && b.Problem != "" {
+			return refused("execution host %s cannot run the coordinator policy bundle: %s", h.Identity, b.Problem)
 		}
 		return checkHostRelease(caps.Version)
 	}})

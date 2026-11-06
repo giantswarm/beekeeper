@@ -306,6 +306,9 @@ func (s *Server) Start(ctx context.Context, r StartRequest) (Handle, error) {
 	if caps.Harnesses[r.Harness] == "" {
 		return Handle{}, errors.New("execution host does not offer harness " + r.Harness + ": " + caps.Unavailable[r.Harness])
 	}
+	if _, err := s.boundTo(r.BundleDigest); err != nil {
+		return Handle{}, err
+	}
 	blocks := caps.Resources.Blocks
 	if r.Builds {
 		blocks = append(append([]string(nil), blocks...), caps.Resources.BuildBlocks...)
@@ -747,6 +750,18 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			switch req.Operation {
 			case "resource-audit":
 				value, err = s.AuditResources(ctx)
+			case bundleStatusOperation:
+				var digest string
+				err = Decode(req.Payload, &digest)
+				if err == nil {
+					value, err = s.BundleStatus(digest)
+				}
+			case bundleSyncOperation:
+				var b CoordinatorBundle
+				err = Decode(req.Payload, &b)
+				if err == nil {
+					value, err = s.InstallBundle(ctx, b)
+				}
 			case "resource-reconcile":
 				var release bool
 				err = Decode(req.Payload, &release)

@@ -630,8 +630,8 @@ pull requests and those closed within the grace stay, including harness
 worktrees. For unmerged tasks, publication must be verified against
 current remote heads, not stale local tracking refs or a closed pull
 request's head. A network failure keeps the worktree.
-Running sessions, unarchived desktop sessions, active or parked roster
-agents, process references, locks, uncommitted changes and
+Running sessions, desktop sessions active in the last seven days, active or
+parked roster agents, process references, locks, uncommitted changes and
 unpushed commits prevent removal. Finished workers holding work lose only
 regenerable build output. Unlike the legacy worktree doctor, the automatic
 disk step keeps unfinished tasks' build output.
