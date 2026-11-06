@@ -16,7 +16,7 @@ import (
 func TestMergeProgressTracksPhasesAndSilence(t *testing.T) {
 	base := filepath.Join(t.TempDir(), gitMerge)
 	start := time.Now().UTC()
-	p := newMergeProgress(base, []string{"--timeout", "9m", "--release-timeout=30m"}, start)
+	p := newMergeProgress(base, []string{timeoutFlag, "9m", "--release-timeout=30m"}, start)
 	for i, step := range []struct{ line, phase string }{
 		{"poll 1: waiting for checks\n", "CI"},
 		{"poll 2: green\n", gitMerge},

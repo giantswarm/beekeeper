@@ -40,7 +40,7 @@ func argumentTimeout(argv []string, flag string, fallback time.Duration) time.Du
 
 func newMergeProgress(base string, argv []string, now time.Time) *mergeProgress {
 	p := &mergeProgress{Phase: "CI", Since: now, Last: now, base: base,
-		ciTimeout:      argumentTimeout(argv, "--timeout", time.Hour),
+		ciTimeout:      argumentTimeout(argv, timeoutFlag, time.Hour),
 		releaseTimeout: argumentTimeout(argv, "--release-timeout", time.Hour)}
 	p.Timeout = p.ciTimeout
 	p.save()
