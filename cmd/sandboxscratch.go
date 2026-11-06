@@ -110,10 +110,10 @@ inputs and outputs in the selected configuration.`,
 			defer func() {
 				_ = broker.Process.Signal(syscall.SIGTERM)
 				select {
-				case <-done: //nolint:errcheck // shutdown only drains the already reported process exit
+				case <-done: //nolint:errcheck // The broker was deliberately stopped.
 				case <-time.After(brokeredStopDelay):
 					_ = broker.Process.Kill()
-					<-done //nolint:errcheck // shutdown only drains the already reported process exit
+					<-done //nolint:errcheck // Reap the killed broker; its exit error is expected.
 				}
 			}()
 			deadline := time.Now().Add(10 * time.Second)

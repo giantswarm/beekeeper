@@ -264,7 +264,10 @@ func TestInitialGuideRunReservesLaunch(t *testing.T) {
 					}
 					cancel()
 					select {
-					case <-waiting: //nolint:errcheck // only assert that the cancelled start finishes
+					case err := <-waiting:
+						if err != nil {
+							t.Errorf("role start after cancellation: %v", err)
+						}
 					case <-time.After(time.Second):
 						t.Error("role start did not honor cancellation")
 					}

@@ -153,7 +153,8 @@ its workspace: the coordinator checks the pull request against the
 execution's own published branch and the workspace's HEAD, and a park after
 a new publication asks for that head's review. Every other park (including one whose
 publication cannot be verified) records a plain wait: no reviewer, merge
-go or findings forwarded. The command says which it recorded. Request review in one shell call:
+go or findings forwarded. The command says which it recorded. A bot's pull request the desk
+did not open gets the same review once its login is in supervisor.ownership.bots. Request review in one shell call:
 cd "<worktree>" && beekeeper agents park --on <owner/repo#n> "desk review". A new task or agents idle ends the
 park. --as <name> parks the registered agent of that name, whatever
 session registered it: a session of another harness or a wrapper script
