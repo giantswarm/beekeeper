@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -212,7 +213,7 @@ func (s Squash) Run(ctx context.Context) SquashDoc {
 	reason := fmt.Sprintf("squash-merged as %s", short(merged.Sha))
 	if p.IsCrossRepository {
 		reason += "; the head lives in a fork and is left alone"
-	} else if _, err := s.GH(ctx, "api", "-X", "DELETE", fmt.Sprintf("repos/%s/git/refs/heads/%s", s.Repo, p.HeadRefName)); err != nil &&
+	} else if _, err := s.GH(ctx, "api", "-X", "DELETE", fmt.Sprintf("repos/%s/git/refs/heads/%s", s.Repo, url.PathEscape(p.HeadRefName))); err != nil &&
 		!strings.Contains(err.Error(), "HTTP 422") {
 		reason += fmt.Sprintf("; the branch %s is not deleted: %v", p.HeadRefName, err)
 	}

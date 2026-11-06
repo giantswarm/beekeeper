@@ -14,6 +14,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/claude"
 	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/guard"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/post"
 	"github.com/giantswarm/beekeeper/internal/sandbox"
 	"github.com/giantswarm/beekeeper/internal/state"
@@ -24,6 +25,7 @@ import (
 type agentFields state.Agent
 
 type agentView struct {
+	MergeWaiting []string `json:"mergeWaiting,omitempty"`
 	agentFields
 	// Reachable: "live" (the CLI runs), "live, first turn running" or
 	// "live, wake turn running" (a headless turn of agents start or agents
@@ -116,11 +118,12 @@ or "wake turn running".`,
 	fullFlag(c, &full)
 	var name, harness string
 	register := &cobra.Command{
-		Use:   "register",
+		Use:   "register [name]",
 		Short: "Register the calling session as an idle agent",
 		Long: `Register the calling session as an idle agent, named by its title unless
---name overrides it. A caller whose parent chain passes two claude session
-CLIs, a claude started inside another session, is refused with the name of
+a positional name or --name overrides it. If both are given, they must match.
+A caller whose parent chain passes two claude session CLIs, a claude started
+inside another session, is refused with the name of
 that parent session, whose ids it inherits and whose entry stays as it is.
 
 Workers launched by agents start are already registered. Repeating register
@@ -132,8 +135,14 @@ Their agents park commands use that same identity without an extra flag.
 message route to such a session, so agents resume and the watch never wake
 it headless, which would start a second, unrelated Claude Code session; it
 leaves its own park with agents resume, no agent named.`,
-		Args: cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				if cmd.Flags().Changed("name") && name != args[0] {
+					return refused("positional name %q differs from --name %q", args[0], name)
+				}
+				name = args[0]
+			}
 			h, ok := harnessByName(harness)
 			if !ok {
 				return usageErr("--harness %s is not a harness beekeeper knows: claude, omp, agy or codex", harness)
@@ -168,6 +177,9 @@ leaves its own park with agents resume, no agent named.`,
 			if name != "" {
 				me.Name = name
 			}
+			if err := titleTaken(sessions, me.Name, me); err != nil {
+				return err
+			}
 			live := func(p state.Party) bool {
 				_, ok := claude.Live(sessions, p)
 				return ok
@@ -175,7 +187,7 @@ leaves its own park with agents resume, no agent named.`,
 			var reg registration
 			err = a.store.Update(func(st *state.State) ([]state.Event, error) {
 				var err error
-				reg, err = registerAgent(st, me, live, a.now.UTC())
+				reg, err = a.registerAgent(st, me, live, a.now.UTC())
 				if err != nil {
 					return nil, err
 				}
@@ -332,9 +344,9 @@ completion is refused under --as.`,
 				reportIdle(ag, a.now)
 				endNotes(st, ag.Party, a.now)
 				ag.Done = finished
-				verb := "agents.idle"
+				verb := litAgentsIdle
 				if finished {
-					verb = "agents.done"
+					verb = executionDone
 				}
 				evs := []state.Event{event(me, verb, "%s done: %s", ag.Name, ag.LastTask)}
 				if finished {
@@ -456,6 +468,7 @@ started is never archived nor stopped.`,
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
+	c.AddCommand(a.agentReviewCmd())
 	c.AddCommand(register, a.onHost(a.agentStartCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.onHost(a.agentWakeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentReopenCmd(), a.agentDesktopCmd(), a.agentHandoverCmd(), a.agentNoteCmd(), a.agentBroadcastCmd(), a.agentKeepCmd(), a.agentParkCmd(), a.onHost(a.agentResumeCmd(), sandbox.OpAgents, agentsBrokeredTimeout+time.Minute), a.agentArchivableCmd(), assign, idle, a.agentProblemCmd(), remove, list)
 	c.AddCommand(a.executionHostCmds()...)
 	return c
@@ -661,6 +674,11 @@ func (a *app) agentViews(st *state.State, sessions []*claude.Session) []agentVie
 	desktop := a.desktopMode() && t != nil && !plat.Opener.Running(t).IsZero()
 	for _, ag := range st.Agents {
 		v := agentView{agentFields: agentFields(ag), Model: ag.Model, Reachable: "not running", Browser: agentBrowser(a.cfg, ag), Kept: keptBy(st, ag, a.now)}
+		for _, m := range st.Merges {
+			if m.Phase == state.Waiting && m.By.Is(ag.Party) {
+				v.MergeWaiting = append(v.MergeWaiting, m.Key()+": "+a.mergeWaitReason(st, m))
+			}
+		}
 		if ag.Execution != nil {
 			v.Reachable = "SSH reachability unknown; process unknown"
 			if r, _ := executionRecord(st, *ag.Execution); r != nil {
@@ -777,10 +795,33 @@ func (a *app) printAgents(views []agentView) {
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", truncate(v.Name, 30), truncate(task, 60), clock(a.now, since), cmp.Or(truncate(v.Model, 32), "-"), truncate(sdkChildrenCell(v.SDKChildren), 48), cmp.Or(v.Browser, "-"), v.Reachable, cmp.Or(truncate(v.Kept, 50), "-"))
 	}
 	_ = w.Flush()
+	for _, v := range views {
+		for _, why := range v.MergeWaiting {
+			_, _ = fmt.Fprintf(a.out, "%s merge waiting: %s\n", quotedOwner(v.Party), why)
+		}
+	}
 	if headless > 0 {
 		_, _ = fmt.Fprintf(a.out, "%s in a headless turn: Claude Desktop's sidebar shows the row idle, this roster is the busy view\n", plural(headless, "agent"))
 	}
 	if rowless > 0 {
 		_, _ = fmt.Fprintf(a.out, "%s without a desktop row: the desktop never imported the session (at its cap of CLIs, say); the standby watch imports one whose headless turn runs, the doctor reopens one whose CLI does not run, once the desktop has room\n", plural(rowless, "agent"))
 	}
+}
+
+// registerAgent transfers the replaced roster entries' claims under the state lock.
+func (a *app) registerAgent(st *state.State, me state.Party, live func(state.Party) bool, now time.Time) (registration, error) {
+	reg, err := registerAgent(st, me, live, now)
+	if err != nil {
+		return reg, err
+	}
+	return reg, a.handRegistration(st, reg, me)
+}
+
+func (a *app) handRegistration(st *state.State, reg registration, to state.Party) error {
+	for _, old := range reg.replaced {
+		if _, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), old.Party, to); err != nil {
+			return err
+		}
+	}
+	return nil
 }

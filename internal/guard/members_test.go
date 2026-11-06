@@ -9,9 +9,9 @@ import (
 
 // The beekeeper person calls the members refusals name.
 const (
-	personTeemow = "beekeeper person teemow --org giantswarm"
-	personInOrg  = "beekeeper person <login> --org giantswarm"
-	personAnyOrg = "beekeeper person <login> --org <org>"
+	personFixturePerson = "beekeeper person fixture-person --org giantswarm"
+	personInOrg         = "beekeeper person <login> --org giantswarm"
+	personAnyOrg        = "beekeeper person <login> --org <org>"
 )
 
 func TestMembersRefusal(t *testing.T) {
@@ -22,28 +22,28 @@ func TestMembersRefusal(t *testing.T) {
 		refused bool
 		person  string
 	}{
-		"the org's member check":          {"gh api orgs/giantswarm/members/teemow", true, personTeemow},
-		"by path, with a method":          {"/usr/bin/gh api -X GET /orgs/giantswarm/members/teemow", true, personTeemow},
-		"the full URL, with the headers":  {"gh api -i https://api.github.com/orgs/giantswarm/members/teemow", true, personTeemow},
+		"the org's member check":          {"gh api orgs/giantswarm/members/fixture-person", true, personFixturePerson},
+		"by path, with a method":          {"/usr/bin/gh api -X GET /orgs/giantswarm/members/fixture-person", true, personFixturePerson},
+		"the full URL, with the headers":  {"gh api -i https://api.github.com/orgs/giantswarm/members/fixture-person", true, personFixturePerson},
 		"the members list, paginated":     {"gh api --paginate 'orgs/giantswarm/members?per_page=100' | jq -r '.[].login'", true, personInOrg},
-		"a membership":                    {"gh api orgs/giantswarm/memberships/teemow", true, personTeemow},
+		"a membership":                    {"gh api orgs/giantswarm/memberships/fixture-person", true, personFixturePerson},
 		"the org's teams":                 {"gh api orgs/giantswarm/teams", true, personInOrg},
-		"a team's members":                {"gh api orgs/giantswarm/teams/team-bumblebee/members --jq '.[].login'", false, ""},
-		"a team membership":               {"gh api orgs/giantswarm/teams/team-bumblebee/memberships/teemow", true, personInOrg},
+		"a team's members":                {"gh api orgs/example/teams/platform/members --jq '.[].login'", false, ""},
+		"a team membership":               {"gh api orgs/giantswarm/teams/team-bumblebee/memberships/fixture-person", true, personInOrg},
 		"a team by id":                    {"gh api teams/1234/members", true, personAnyOrg},
-		"a login's orgs":                  {"gh api users/teemow/orgs", true, "beekeeper person teemow --org <org>"},
-		"after a cd, with a header":       {"cd /tmp && gh api -H 'Accept: application/vnd.github+json' orgs/giantswarm/members/teemow", true, personTeemow},
+		"a login's orgs":                  {"gh api users/fixture-person/orgs", true, "beekeeper person fixture-person --org <org>"},
+		"after a cd, with a header":       {"cd /tmp && gh api -H 'Accept: application/vnd.github+json' orgs/giantswarm/members/fixture-person", true, personFixturePerson},
 		"with variables":                  {`gh api "orgs/$ORG/members/$LOGIN"`, true, "beekeeper person $LOGIN --org $ORG"},
-		"under a timeout":                 {"timeout 30 gh api orgs/giantswarm/members/teemow", true, personTeemow},
+		"under a timeout":                 {"timeout 30 gh api orgs/giantswarm/members/fixture-person", true, personFixturePerson},
 		"graphql membersWithRole":         {`gh api graphql -f query='{ organization(login: "giantswarm") { membersWithRole(first: 100) { nodes { login } } } }'`, true, personAnyOrg},
 		"graphql a team's members, lines": {"gh api graphql -f query='\nquery {\n  organization(login: \"giantswarm\") {\n    team(slug: \"team-bumblebee\") { members(first: 100) { nodes { login } } }\n  }\n}'", true, personAnyOrg},
 		"graphql the org's teams":         {`gh api graphql -f query='{ organization(login: "giantswarm") { teams(first: 50) { nodes { slug } } } }'`, true, personAnyOrg},
-		"graphql a user's organizations":  {`gh api graphql -f query='{ user(login: "teemow") { organizations(first: 10) { nodes { login } } } }'`, true, personAnyOrg},
+		"graphql a user's organizations":  {`gh api graphql -f query='{ user(login: "fixture-person") { organizations(first: 10) { nodes { login } } } }'`, true, personAnyOrg},
 		"graphql from a heredoc":          {"gh api graphql -f query=@- <<'EOF'\n{ organization(login: \"giantswarm\") { membersWithRole(first: 1) { totalCount } } }\nEOF", true, personAnyOrg},
 		"graphql the board":               {`gh api graphql -f query='{ organization(login: "giantswarm") { projectV2(number: 273) { items(first: 20, query: "repo:giantswarm/beekeeper") { nodes { id } } } } }'`, false, ""},
 		"graphql a repository":            {`gh api graphql -f query='{ repository(owner: "giantswarm", name: "beekeeper") { issue(number: 566) { title } } }'`, false, ""},
-		"beekeeper person":                {"beekeeper person teemow", false, ""},
-		"beekeeper person, another org":   {"beekeeper person teemow --org giantswarm --refresh", false, ""},
+		"beekeeper person":                {"beekeeper person fixture-person", false, ""},
+		"beekeeper person, another org":   {"beekeeper person fixture-person --org giantswarm --refresh", false, ""},
 		"an issue read":                   {"gh api repos/giantswarm/beekeeper/issues/566", false, ""},
 		"a repository's collaborators":    {"gh api repos/giantswarm/beekeeper/collaborators", false, ""},
 		"the caller's own memberships":    {"gh api user/memberships/orgs/giantswarm", false, ""},
@@ -107,7 +107,7 @@ func TestGHAPIEndpoint(t *testing.T) {
 	const members = "orgs/giantswarm/members"
 	for cmd, want := range map[string]string{
 		"gh api orgs/giantswarm":                                                   "orgs/giantswarm",
-		"gh api -X GET orgs/giantswarm/members/teemow":                             "orgs/giantswarm/members/teemow",
+		"gh api -X GET orgs/giantswarm/members/fixture-person":                     "orgs/giantswarm/members/fixture-person",
 		"gh api --method=GET --paginate orgs/giantswarm/members":                   members,
 		"gh api -XGET /orgs/giantswarm/teams":                                      "/orgs/giantswarm/teams",
 		"gh api -f body=orgs/giantswarm/members repos/a/b/issues/1/comments":       "repos/a/b/issues/1/comments",
@@ -119,7 +119,7 @@ func TestGHAPIEndpoint(t *testing.T) {
 		"gh api":                              "",
 		"gh api --paginate":                   "",
 		"gh issue view 566":                   "",
-		"beekeeper person teemow":             "",
+		"beekeeper person fixture-person":     "",
 		"echo gh api orgs/giantswarm/members": "",
 		`gh api -H "Accept: application/vnd.github+json" orgs/giantswarm/memberships/x`: "orgs/giantswarm/memberships/x",
 	} {
@@ -139,16 +139,16 @@ func TestDecideRefusesMembersRead(t *testing.T) {
 		ev["session_id"] = session
 		return decideEvent(t, h, ev)
 	}
-	if d := decide(worker, "beekeeper person teemow"); (d != nil && d.PermissionDecision == decisionDeny) || read {
+	if d := decide(worker, "beekeeper person fixture-person"); (d != nil && d.PermissionDecision == decisionDeny) || read {
 		t.Errorf("beekeeper person refused (%+v) or the start read for it (%v)", d, read)
 	}
 	if d := decide(worker, "gh api repos/giantswarm/beekeeper/issues/566"); (d != nil && d.PermissionDecision == decisionDeny) || read {
 		t.Errorf("an issue read refused (%+v) or the start read for it (%v)", d, read)
 	}
-	if d := decide(worker, "gh api orgs/giantswarm/members/teemow"); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "`beekeeper person teemow --org giantswarm`") {
+	if d := decide(worker, "gh api orgs/giantswarm/members/fixture-person"); d == nil || d.PermissionDecision != decisionDeny || !strings.Contains(d.Reason, "`beekeeper person fixture-person --org giantswarm`") {
 		t.Errorf("a worker's member check not refused naming beekeeper person: %+v", d)
 	}
-	if d := decide("person", "gh api orgs/giantswarm/members/teemow"); d != nil && d.PermissionDecision == decisionDeny {
+	if d := decide("person", "gh api orgs/giantswarm/members/fixture-person"); d != nil && d.PermissionDecision == decisionDeny {
 		t.Errorf("the person's own member check refused: %+v", d)
 	}
 }

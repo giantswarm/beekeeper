@@ -117,7 +117,7 @@ func TestWakeStartsBesideAStillLoadedWake(t *testing.T) {
 		t.Errorf("a dead wake unit counts as running: %q", u)
 	}
 	next := wakeUnit(id)
-	if err := launch(next, t.TempDir(), "", nil, []string{"sleep", "60"}); err != nil {
+	if err := launch(next, t.TempDir(), "", nil, []string{sleepComm, "60"}); err != nil {
 		t.Fatalf("the next wake beside a loaded one: %v", err)
 	}
 	stop(next)
@@ -262,5 +262,58 @@ func TestWakeDuringAPendingImport(t *testing.T) {
 	st, _ = a.store.Read()
 	if v := a.agentViews(st, nil); strings.HasPrefix(v[0].Reachable, "importing") {
 		t.Errorf("roster after the import: %q", v[0].Reachable)
+	}
+}
+
+type leaseResumeOpener struct {
+	platform.Opener
+	t *testing.T
+}
+
+func (o leaseResumeOpener) Running(*proc.Table) time.Time {
+	o.t.Fatal("lease resume tried the desktop route before starting its turn")
+	return time.Time{}
+}
+
+// A lease resume starts a turn immediately even when the desktop has a row
+// for the session but its CLI is absent. A pending import still blocks it.
+func TestLeaseResumeWithoutCLIStartsHeadless(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ready", true: "import pending"}[pending], func(t *testing.T) {
+			a, _ := stubApp(t)
+			plat.Machine = tableMachine{plat.Machine}
+			plat.Opener = leaseResumeOpener{Opener: plat.Opener, t: t}
+			l := &startRecorder{Launcher: plat.Launcher}
+			useLauncher(t, l)
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // an executable test fixture
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			writeFile(t, filepath.Join(a.cfg.Claude.ProjectsDir, "-w", rotationLogin+".jsonl"), `{"type":"user","cwd":"/w"}`+"\n")
+			a.cfg.Claude.DesktopDir = t.TempDir()
+			writeFile(t, filepath.Join(a.cfg.Claude.DesktopDir, "a", "b", "local_"+rotationLogin+".json"),
+				`{"sessionId":"local_`+rotationLogin+`","cliSessionId":"`+rotationLogin+`","cwd":"/w","title":"`+rotationName+`"}`)
+			rosterAgent(t, a, state.Agent{Party: rotationParty, Task: rotationTask,
+				Park: &state.Park{On: leaseParkOn("test-resource"), Waits: "waiting for a resource", At: a.now}})
+			if pending {
+				a.importPending(rotationLogin, time.Minute)
+			}
+			err := a.resumeParked(t.Context(), state.Party{Name: supervisorName}, rotationName)
+			if pending {
+				if err == nil || !strings.Contains(err.Error(), "import is pending") || len(l.started) != 0 {
+					t.Fatalf("pending import: starts %v, error %v", l.started, err)
+				}
+			} else if err != nil || len(l.started) != 1 || !strings.HasPrefix(l.started[0], wakePrefix(rotationLogin)) {
+				t.Fatalf("lease resume: starts %v, error %v", l.started, err)
+			}
+			st, err := a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (st.Agents[0].Park != nil) != pending {
+				t.Fatalf("park after resume: %+v", st.Agents[0].Park)
+			}
+		})
 	}
 }

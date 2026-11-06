@@ -41,3 +41,18 @@ func (l *supervisorLoop) otherReviewParks(party state.Party, ref string) bool {
 	}
 	return false
 }
+
+// reviewPostMerge inherits earlier work only when the new park omits it.
+// A supplied empty string explicitly declares that the task ends at merge.
+func reviewPostMerge(st *state.State, on string, current *state.Park, declared *string) *string {
+	if declared != nil {
+		return declared
+	}
+	if current != nil && strings.EqualFold(current.On, on) && current.PostMerge != nil {
+		return current.PostMerge
+	}
+	if rp, ok := st.ReviewParkFor(on); ok && rp.PostMerge != nil {
+		return rp.PostMerge
+	}
+	return new(string)
+}

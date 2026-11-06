@@ -59,7 +59,7 @@ func (h Hook) membersRefusal(cmd, session, cwd string) string {
 		case m != nil:
 			what = "`gh api " + ep + "`"
 			person = "beekeeper person " + cmp.Or(m[2], m[4], "<login>") + " --org " + cmp.Or(m[1], m[3], "<org>")
-		case ep == "graphql" && membersQuery.MatchString(cmd[sg.start:]+"\n"+ghAPIBodies(words, cwd)):
+		case ep == executionGraphQL && membersQuery.MatchString(cmd[sg.start:]+"\n"+ghAPIBodies(words, cwd)):
 			what, person = "this `gh api graphql` query", "beekeeper person <login> --org <org>"
 		default:
 			continue

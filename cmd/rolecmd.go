@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/lease"
 	"github.com/giantswarm/beekeeper/internal/state"
 )
 
@@ -150,9 +152,19 @@ func (a *app) runStart(ctx context.Context, rl role, takeOver bool) error {
 		// A holder restarting its CLI still holds the role.
 		sv := readHolder(rl.get(st), sessions, a.now, rl.cfg(a.cfg).RestartGrace.Duration)
 		var evs []state.Event
+		prev := rl.get(st).Holder
 		msg, evs, err = rl.start(st, me, sv.live || sv.restarting(), takeOver, a.now)
 		if err != nil {
 			return nil, err
+		}
+		if prev != nil && !prev.Is(me) {
+			handed, err := handClaims(st, lease.Dir(a.cfg.LeaseDir), prev.Party, rl.get(st).Holder.Party)
+			if err != nil {
+				return nil, err
+			}
+			if len(handed) > 0 {
+				evs = append(evs, event(me, "lease.handover", "%s", strings.Join(handed, ", ")))
+			}
 		}
 		evs = append(before, evs...)
 		// The start titles me with the run's name: never one another live
@@ -195,7 +207,9 @@ func (a *app) titleRun(ctx context.Context, me state.Party, name string) string 
 		}
 		return ""
 	}
-	if was := title(); was == "" || was == name {
+	// A session without a desktop record has no title to restore: a
+	// background role run must not wait on a steward for one.
+	if _, ok := claude.ReadRecord(a.cfg, host); !ok || title() == name {
 		return ""
 	}
 	// Not the caller itself: it is in this turn, so a request to it would

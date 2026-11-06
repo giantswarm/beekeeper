@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/giantswarm/beekeeper/internal/update"
 	"github.com/giantswarm/beekeeper/pkg/project"
 )
+
+const selfUpdateCheckFlag = "--check"
 
 // An update names the beekeeper processes it leaves on the old binary, pid
 // and command each, every watch with the command that re-arms it, and says
@@ -117,7 +120,7 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 
 	// Subsequent --check skips the failed release.
 	root = New()
-	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, "--check"})
+	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, selfUpdateCheckFlag})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -139,5 +142,84 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	}
 	if !slices.EqualFunc(ranChecks, wantChecks, slices.Equal) {
 		t.Errorf("canary checks = %v, want %v", ranChecks, wantChecks)
+	}
+}
+
+func TestSelfUpdateWarnsConfigCompatibility(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("watch:\n  interval: future-format\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runUpdate
+	t.Cleanup(func() { runUpdate = previous })
+	var out bytes.Buffer
+	stopped := errors.New("stop before installation")
+	called := false
+	runUpdate = func(_ context.Context, _ io.Writer, _ bool) (update.Result, error) {
+		called = true
+		if !strings.Contains(out.String(), "installed binary cannot read") || !strings.Contains(out.String(), "watch.interval") {
+			t.Fatalf("missing warning before update: %s", out.String())
+		}
+		return update.Result{}, stopped
+	}
+	root := New()
+	root.SetArgs([]string{"--" + configFlag, cfg, selfUpdateCmdName})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); !errors.Is(err, stopped) || !called {
+		t.Fatalf("update callback not reached: %v", err)
+	}
+}
+
+func TestSelfUpdateVersionFlag(t *testing.T) {
+	prev := runUpdate
+	t.Cleanup(func() { runUpdate = prev })
+	const tag = "v0.125.0-rc.3"
+	called := false
+	runUpdate = func(ctx context.Context, _ io.Writer, check bool) (update.Result, error) {
+		called = true
+		if !check || update.OptionsFrom(ctx).Version != tag {
+			t.Fatalf("check=%v options=%+v", check, update.OptionsFrom(ctx))
+		}
+		return update.Result{Current: tag, Latest: tag}, nil
+	}
+	root := New()
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, "--version", tag})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("update not called")
+	}
+}
+
+// Global flag values and later arguments must not be mistaken for commands.
+func TestReexecs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args string
+		want bool
+	}{
+		{"no arguments", "", false},
+		{"program only", "beekeeper", false},
+		{"gate wrapper", "beekeeper gate -- devctl pr merge o/r 1", true},
+		{"merge child", "beekeeper merge-child /state/merge", true},
+		{"config gate", "beekeeper --config /config.yaml gate -- devctl pr merge o/r 1", true},
+		{"config merge child", "beekeeper --config /config.yaml merge-child /state/merge", true},
+		{"inline config", "beekeeper --config=/config.yaml gate", true},
+		{"multiple globals", "beekeeper --json --as worker --config /config.yaml merge-child /state/merge", true},
+		{"gate config value", "beekeeper --config gate version", false},
+		{"merge child identity value", "beekeeper --as merge-child version", false},
+		{"later gate", "beekeeper version gate", false},
+		{"separator", "beekeeper -- gate", false},
+		{"missing config value", "beekeeper --config", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reexecs(&proc.Process{Args: strings.Fields(tc.args)}); got != tc.want {
+				t.Errorf("reexecs(%q) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
 	}
 }

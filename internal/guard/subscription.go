@@ -46,8 +46,8 @@ const sweptTags = `button|a|summary|input|\[role=["']?(?:button|menuitem|link)["
 // or a form value by ref) and its own words (the summary the model wrote, a
 // script's code).
 type target struct {
-	ref, words string
-	script     bool
+	ref, tab, words string
+	script          bool
 }
 
 // subscriptionRefusal returns why the hook refuses a Chrome call that clicks
@@ -56,7 +56,7 @@ func subscriptionRefusal(ev event) string {
 	if !isBrowserTool(ev.ToolName) {
 		return ""
 	}
-	var labels map[string]string
+	labels := map[string]map[string]string{}
 	for _, t := range clickTargets(ev.ToolName, ev.ToolInput) {
 		if m := controlWords.FindString(t.words); m != "" {
 			what := "the click's summary"
@@ -75,12 +75,12 @@ func subscriptionRefusal(ev event) string {
 		if t.ref == "" {
 			continue
 		}
-		if labels == nil {
-			labels = refLines(ev.TranscriptPath)
+		if labels[t.tab] == nil {
+			labels[t.tab] = refLines(ev.TranscriptPath, t.tab)
 		}
-		if m := controlWords.FindString(labels[t.ref]); m != "" {
+		if m := controlWords.FindString(labels[t.tab][t.ref]); m != "" {
 			return subscriptionReason(fmt.Sprintf("the click's %s is %s (%q) in the page as the session last read it: %s",
-				t.ref, SubscriptionControls, m, strings.TrimSpace(labels[t.ref])))
+				t.ref, SubscriptionControls, m, strings.TrimSpace(labels[t.tab][t.ref])))
 		}
 	}
 	return ""
@@ -107,11 +107,11 @@ func clickTargets(tool string, input map[string]any) []target {
 	case chromeComputer:
 		if action, _ := input[actionKey].(string); slices.Contains(clicking, action) {
 			ref, _ := input[refKey].(string)
-			return []target{{ref: ref, words: summary}}
+			return []target{{ref: ref, tab: tabOf(input[tabKey]), words: summary}}
 		}
 	case chromeForm:
 		ref, _ := input[refKey].(string)
-		return []target{{ref: ref, words: summary}}
+		return []target{{ref: ref, tab: tabOf(input[tabKey]), words: summary}}
 	case chromeScript:
 		if code, _ := input[textKey].(string); scriptedClick.MatchString(code) {
 			return []target{{words: code, script: true}}
@@ -133,16 +133,50 @@ func clickTargets(tool string, input map[string]any) []target {
 // refPattern is an element's ref in a page read (read_page, find).
 var refPattern = regexp.MustCompile(`\bref_\d+\b`)
 
-// refLines are the lines of the transcript's page reads that name each ref,
-// the last read's line for a ref read again.
-func refLines(transcript string) map[string]string {
+// refLines are the clicked tab's Chrome page-read labels, joined to their
+// actual tool calls. Unrelated tools and other tabs cannot replace a label.
+// A batch mixing tabs or page reads with other tools may add a subscription
+// label, but cannot clear one using a benign label that could come from
+// another tab or a non-read action.
+func refLines(transcript, tab string) map[string]string {
 	lines := map[string]string{}
-	scanResults(transcript, func(text string) {
+	scanJoined(transcript, func(call chromeAction, text string) {
+		tabs, readsOnly := refReadTabs(call.name, call.input)
+		if len(tabs) == 0 || tab != "" && !slices.Contains(tabs, tab) && !slices.Contains(tabs, "") {
+			return
+		}
+		certain := readsOnly && tab != "" && len(tabs) == 1 && tabs[0] == tab
 		for l := range strings.SplitSeq(text, "\n") {
+			if !certain && !controlWords.MatchString(l) {
+				continue
+			}
 			for _, ref := range refPattern.FindAllString(l, -1) {
 				lines[ref] = l
 			}
 		}
 	})
 	return lines
+}
+
+// refReadTabs names the tabs whose page reads a call's result contains,
+// and whether every result in the call comes from a page read.
+func refReadTabs(tool string, input map[string]any) ([]string, bool) {
+	switch chromeTool(tool) {
+	case chromeReadPage, chromeFind:
+		return []string{tabOf(input[tabKey])}, true
+	case chromeBatch:
+		var tabs []string
+		readsOnly := true
+		for _, action := range batchActions(input) {
+			actionTabs, only := refReadTabs(action.name, action.input)
+			readsOnly = readsOnly && only
+			for _, tab := range actionTabs {
+				if !slices.Contains(tabs, tab) {
+					tabs = append(tabs, tab)
+				}
+			}
+		}
+		return tabs, readsOnly
+	}
+	return nil, false
 }

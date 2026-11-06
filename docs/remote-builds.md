@@ -215,6 +215,11 @@ for retry; each journal records the original explicit cluster connection so
 changing desk configuration does not redirect cleanup to a different cluster.
 A worktree built through several connections keeps one journal per connection,
 and each retires, or retries, on its own.
+Relative kubeconfig paths are recorded as absolute paths from the build's
+working directory. Older journals containing relative paths are retained with
+an error, since their original working directory is unknown. Recover the
+original absolute kubeconfig path and use that connection to retire the builder
+Job manually before removing its ownership record.
 Ownership records stay in the machine's state directory; neither hostnames nor
 worktree paths are uploaded to Kubernetes. Other machines' builders stay.
 Builders created before this journal was introduced retire through their idle

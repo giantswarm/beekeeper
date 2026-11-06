@@ -61,7 +61,7 @@ const (
 func dexScratch(t *testing.T) (dir, patch string) {
 	t.Helper()
 	dir = t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".sops.yaml"), []byte("creation_rules:\n  - path_regex: .*\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	patch = filepath.Join(dir, "secret-values.yaml.patch")
@@ -172,7 +172,7 @@ privateKey:
 }
 
 func TestRevealAppIDKeys(t *testing.T) {
-	ids := []string{clientIDKey, "clientId", "client_id", "app-id", "appId", "app_id", "application-id", "applicationId", "application_id"}
+	ids := []string{clientIDKey, "clientId", "client_id", appIDKey, "appId", "app_id", "application-id", "applicationId", "application_id"}
 	var doc strings.Builder
 	doc.WriteString("oauth:\n")
 	for _, k := range ids {
