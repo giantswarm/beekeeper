@@ -142,7 +142,7 @@ func TestAppRecord(t *testing.T) {
 		{[]string{appAllow, recordedApp, wordFlag, "w"}, clientIDFlag + " <id> for a consent (the OAuth client id the App's consent URL carries), --permission \"<scope>: <level>\" for one permission change, --callback-url <url> for one callback URL, --delete for the App's deletion, --google --callback <host> for a Google OAuth client's consent, or several"},
 		{[]string{appAllow, recordedApp, permissionFlag, "Members", wordFlag, "w"}, `--permission names one change as "<scope>: <level>" (e.g. "Members: Read-only"), not "Members"`},
 		{[]string{appAllow, "undeclared", clientIDFlag, recordedClientID, wordFlag, "w"}, "App undeclared is not declared: " + declaringRepo + " declares no App at apps/undeclared/manifest.json"},
-		{[]string{appAllow, "renamed", clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
+		{[]string{appAllow, renamedApp, clientIDFlag, recordedClientID, wordFlag, "w"}, "App renamed is not declared: " + declaringRepo + "@0123456789ab:apps/renamed/manifest.json names the App another-app"},
 		{[]string{appAllow, "no-callback", clientIDFlag, recordedClientID, wordFlag, "w"}, "App no-callback has no consent page to record: " + declaringRepo + "@0123456789ab:apps/no-callback/manifest.json declares no callback URL (an App used through the device flow has none); a change of its permissions is recorded with --permission \"<scope>: <level>\""},
 		{[]string{"revoke", recordedApp}, "no App " + recordedApp + " is on record"},
 	} {

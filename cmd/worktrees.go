@@ -474,7 +474,9 @@ func (r *worktreeRun) trim(ctx context.Context, m worktreeMachine) {
 				errs = append(errs, err)
 				continue
 			}
-			if fresh.Locked || fresh.Head != t.Head || (v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
+			if fresh.Locked || fresh.Head != t.Head || fresh.Repo != t.Repo || fresh.Branch != t.Branch ||
+				fresh.Pushed != t.Pushed || fresh.Touched.After(t.Touched) ||
+				(v.Action == worktrees.Remove && (len(fresh.Work) > 0 || !knownPushed)) {
 				r.kept["worktree changed during inspection"]++
 				continue
 			}

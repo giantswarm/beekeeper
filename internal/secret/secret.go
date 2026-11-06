@@ -389,6 +389,10 @@ func (o *Ops) op(ctx context.Context, stdin io.Reader, args ...string) ([]byte, 
 
 // decrypt reads a SOPS file into its document.
 func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
+	snapshot, err := readSnapshot(file)
+	if err != nil {
+		return nil, err
+	}
 	env, err := o.ageEnv(ctx, file)
 	if err != nil {
 		return nil, err
@@ -402,6 +406,14 @@ func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", file, err)
 	}
+	current, err := readSnapshot(file)
+	if err != nil {
+		return nil, err
+	}
+	if *current != *snapshot {
+		return nil, ErrWriteConflict
+	}
+	doc.snapshot = snapshot
 	return doc, nil
 }
 
@@ -409,6 +421,14 @@ func (o *Ops) decrypt(ctx context.Context, file string) (*document, error) {
 // .sops.yaml nearest above file. The plaintext goes to sops on stdin; the
 // file is written from sops' output only, through a rename.
 func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
+	expected := doc.snapshot
+	if expected == nil {
+		var err error
+		expected, err = readSnapshot(file)
+		if err != nil {
+			return err
+		}
+	}
 	cfg, rel, err := sopsTarget(file)
 	if err != nil {
 		return err
@@ -425,7 +445,7 @@ func (o *Ops) encrypt(ctx context.Context, doc *document, file string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", file, err)
 	}
-	return writeFile(file, out)
+	return commitEncrypted(file, out, expected)
 }
 
 // sopsTypes are the flags that tell sops a file is YAML when its name

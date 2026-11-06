@@ -25,7 +25,16 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	if j.Phase != Activating || j.StopRequest != nil {
 		return errors.New("execution is not awaiting its first managed turn")
 	}
-	defer func() { runErr = errors.Join(runErr, s.RevokeGitHub(j)) }()
+	defer func() {
+		revokeErr := s.RevokeGitHub(j)
+		if j.Request.GitHub {
+			persistCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			persistErr := s.update(persistCtx, ref, func(current *Journal) error { current.RevocationFailed = revokeErr != nil; return nil })
+			runErr = errors.Join(runErr, persistErr)
+		}
+		runErr = errors.Join(runErr, revokeErr)
+	}()
 	p, err := s.InstalledPolicy()
 	if err != nil || p.Digest() != j.BoundPolicy() {
 		return errors.New("execution rules or guards changed before launch")
@@ -114,6 +123,9 @@ func (s *Server) Run(ctx context.Context, ref Ref) (runErr error) {
 	}
 	h := s.Config.Harnesses[j.Request.Harness]
 	env := append(s.toolPath(cleanEnvironment(h.ConfigDir, s.Executable)), EnvID+"="+string(ref.Execution), EnvCoordinator+"="+j.Request.Coordinator, "BEEKEEPER_CONFIG="+s.ConfigPath)
+	if env, err = s.ownedEnvironment(j, env); err != nil {
+		return err
+	}
 	env, err = s.GitHubEnvironment(j, env)
 	if err != nil {
 		return err

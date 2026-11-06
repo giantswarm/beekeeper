@@ -549,6 +549,7 @@ func hostUsed(st *state.State, selector string, id execution.HostID) bool {
 // hosts whose reconciliation failed or hit its deadline. Rotating the first
 // host prevents an unreachable endpoint monopolizing reconciliation.
 func (w *watcher) syncExecutions(ctx context.Context, st *state.State) *state.State {
+	st = w.retireEndedExecutions(ctx, st)
 	selectors := []string{}
 	active := map[string]bool{}
 	needsSync := map[string]bool{}

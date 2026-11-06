@@ -150,7 +150,7 @@ func stopDesk(t *testing.T) (*app, *haltLauncher, *[]string) {
 	}
 	t.Cleanup(func() { endStopped = orig })
 	worker := state.Party{Session: stopWorker, Name: agentSeven}
-	guide := state.Party{Session: stopGuide, Name: "Guide run 2"}
+	guide := state.Party{Session: stopGuide, Name: litGuideRun2}
 	err := a.store.Update(func(st *state.State) ([]state.Event, error) {
 		st.Guide = &state.Role{Holder: &state.Supervisor{Party: guide, Since: a.now.Add(-time.Hour)}}
 		st.Starts = append(st.Starts, state.Start{Party: worker, At: a.now.Add(-time.Hour)}, state.Start{Party: guide, At: a.now.Add(-time.Hour)},
