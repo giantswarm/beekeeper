@@ -71,7 +71,7 @@ func TestCoordinatorBundleRefusals(t *testing.T) {
 		{"traversal", func(b *CoordinatorBundle) { b.Artifacts[0].Artifact = "../escape" }},
 		{"skill entry", func(b *CoordinatorBundle) { b.Artifacts[1].Artifact = "skills/review/other.md" }},
 		{"credential", func(b *CoordinatorBundle) {
-			b.Artifacts[0].Content = []byte("-----BEGIN PRIVATE KEY-----")
+			b.Artifacts[0].Content = []byte(strings.Join([]string{"-----BEGIN", "PRIVATE", "KEY-----"}, " "))
 			b.Artifacts[0].Digest = Digest(b.Artifacts[0].Content)
 		}},
 		{"setting", func(b *CoordinatorBundle) { b.Settings = map[string]string{"hooks": "false"} }},
