@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	probeToolsRepo = "example/tools"
-	probeUserType  = "User"
-	probeOrgType   = "Organization"
+	probeRepositoryCommand = "repository"
+	probeToolsRepo         = "example/tools"
+	probeUserType          = "User"
+	probeOrgType           = "Organization"
 )
 
 func TestDoctorRepository(t *testing.T) {
@@ -32,11 +33,11 @@ func TestDoctorRepository(t *testing.T) {
 		var out bytes.Buffer
 		a := &app{out: &out, json: jsonOutput}
 		c := a.doctorCmd()
-		c.SetArgs([]string{"repository", probeToolsRepo, "giantswarm/beekeeper"})
+		c.SetArgs([]string{probeRepositoryCommand, probeToolsRepo, sshTestRepository})
 		if err := c.Execute(); err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{probeToolsRepo, "giantswarm/beekeeper", probeUserType, probeOrgType} {
+		for _, want := range []string{probeToolsRepo, sshTestRepository, probeUserType, probeOrgType} {
 			if !strings.Contains(out.String(), want) {
 				t.Fatalf("output missing %s: %s", want, out.String())
 			}
