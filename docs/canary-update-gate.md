@@ -55,29 +55,39 @@ verified candidate binary in an isolated temporary environment (`HOME`,
 `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `TMPDIR`, `BEEKEEPER_CONFIG`, and a
 restricted `PATH` isolated from live desk state and credentials) from its first
 invocation (`version`) onward, and refuses if `<path>` resolves to the running
-executable. In live sandbox mode, `--canary-bundle <bundle>` is required and the
-candidate binary (plus any `--canary-sibling <sibling>` and `<sibling>.bundle`)
-is verified against its Sigstore bundle before any candidate subprocess runs.
-Recorded fixture runs (`--canary-recorded`) prefix `run` with `recorded:`,
-cannot emit sibling release evidence, and are rejected by `ValidateEvidence` and
-the installer gate so fixture runs can never grant release eligibility.
+executable. When a sandbox GitHub token is present, the isolated environment
+provisions a sandbox-scoped Git credential helper (`git-credential-canary` and
+`GIT_ASKPASS`) inside its isolated `GIT_CONFIG_GLOBAL` that reads `GH_TOKEN` from
+the subprocess runtime environment without restoring host Git config or embedding
+tokens into files or remote URLs. In live sandbox mode, `--canary-bundle <bundle>`
+is required and the candidate binary (plus any `--canary-sibling <sibling>` and
+`<sibling>.bundle`) is verified against its Sigstore bundle before any candidate
+subprocess runs. Recorded fixture runs (`--canary-recorded`) prefix `run` with
+`recorded:`, cannot emit sibling release evidence, and are rejected by
+`ValidateEvidence` and the installer gate so fixture runs can never grant release
+eligibility.
 
 The staged scenario exercises the full workflow boundary with real
 `supervisor loop --once` passes:
 
 1. Board scan (`board next --json`) and deterministic worker start
-   (`agents start` in background mode) or fresh candidate-bound sandbox branch
-   (`canary/<run>/cand-<sha256[:12]>`) and pull request creation.
-2. Worker branch creation, commit push, pull request publication with the exact
-   ownership record (`beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>`
-   and `candidate-sha256: <sha256>`), and
+   (`supervisor loop --once` -> `agents start` -> `claude --bg`), creating a
+   fresh candidate-bound sandbox branch (`canary/<run>/cand-<sha256[:12]>`) and
+   pull request.
+2. Worker branch creation, authenticated HTTPS commit push, pull request
+   publication with the exact ownership record
+   (`beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>` and
+   `candidate-sha256: <sha256>`), and
    `agents park --on <owner/repo#n> "desk review"`.
-3. Independent exact-head review approval (`Head reviewed: `<sha>``) and
-   required check rollup verification.
+3. Independent reviewer dispatch (`supervisor loop --once` -> `agents start` for
+   `Review ...` -> `claude --bg`), exact-head review approval
+   (`Head reviewed: `<sha>``), `supervisor.review` event recording, and required
+   check rollup verification.
 4. Coordinator merge validation (`checkReviewedMerge`), merge queue inspection,
    exact-head merge (`gh pr merge --match-head-commit <sha>`), and verification
-   on the created pull request and origin base branch that the observed merge
-   commit SHA landed.
+   of durable candidate state records (`st.Starts`, `agents.start`,
+   `agents.park`, `supervisor.review`, `supervisor.merge`/`merged`) plus the
+   observed merge commit SHA on the created pull request and origin base branch.
 
 Any failure, timeout, missing permission, unavailable sandbox, cleanup failure,
 or missing merge observation emits `status: "failed"` with a non-empty `reason`
@@ -112,8 +122,11 @@ Required sandbox repository settings:
   open pull requests with pagination (`gh api --paginate`) on entry and exit,
   closes and deletes only branches with the delimited prefix `canary/<run>/` and
   matching `beekeeper-canary-owner: repo=<repo> run=<run> branch=<branch>` line,
-  verifies zero owned open pull requests remain, and propagates any cleanup error
-  into a failed canary verdict.
+  enumerates and deletes any remaining owned refs under
+  `repos/<repo>/git/matching-refs/heads/canary/<run>/` matching
+  `canary/<run>/cand-<hex>` (including branches pushed before PR creation),
+  verifies zero owned open pull requests or branches remain, and propagates any
+  cleanup error into a failed canary verdict.
 - Credentials (`BEEKEEPER_CANARY_REPO`, `BEEKEEPER_CANARY_ALLOW_ORG`,
   `BEEKEEPER_CANARY_PROJECT`, and the sandbox GitHub App credentials) are held in
   the protected CircleCI `architect` context on tag builds (`/v.*/`) and are

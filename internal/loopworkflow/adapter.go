@@ -51,6 +51,9 @@ const (
 // Serve runs this process as the fixture's GitHub CLI, Git wrapper or Claude CLI
 // and returns its exit code. Only a process started by that name inside a fixture is one.
 func Serve() (int, bool) {
+	if os.Getenv("CANARY_SANDBOX_DIR") != "" && filepath.Base(os.Args[0]) == claudeCmd {
+		return serveCanaryClaude(), true
+	}
 	if os.Getenv("FIXTURE_DIR") == "" {
 		return 0, false
 	}

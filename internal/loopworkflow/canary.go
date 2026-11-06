@@ -557,6 +557,64 @@ func isOwnedCanaryPR(repo, runID, headRefName, body string) bool {
 	return containsExactLine(body, canaryOwnershipMarker(repo, runID, headRefName))
 }
 
+func isOwnedCanaryBranch(runID, branch string) bool {
+	branch = strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
+	prefix := canaryBranchPrefix(runID)
+	if !strings.HasPrefix(branch, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(branch, prefix)
+	return strings.HasPrefix(rest, "cand-") && !strings.Contains(rest, "/")
+}
+
+type canaryPRMeta struct {
+	PRNum         int    `json:"prNum"`
+	HeadSHA       string `json:"headSHA"`
+	Branch        string `json:"branch"`
+	WorkerName    string `json:"workerName"`
+	WorkerSession string `json:"workerSession"`
+}
+
+type canaryReviewerMeta struct {
+	ReviewerName    string `json:"reviewerName"`
+	ReviewerSession string `json:"reviewerSession"`
+	PRNum           int    `json:"prNum"`
+	HeadSHA         string `json:"headSHA"`
+}
+
+func writeIsolatedGitAuth(dir, binDir string, env []string) ([]string, error) {
+	credHelper := filepath.Join(binDir, "git-credential-canary")
+	credScript := "#!/bin/sh\nif [ \"${1:-}\" = \"get\" ]; then\n  echo \"username=x-access-token\"\n  printf 'password=%s\\n' \"${GH_TOKEN:-}\"\nfi\n" //nolint:gosec // G101: shell script template reading runtime GH_TOKEN env var
+	if err := os.WriteFile(credHelper, []byte(credScript), 0o700); err != nil {                                                                         //nolint:gosec // isolated sandbox credential helper
+		return nil, err
+	}
+	askPass := filepath.Join(binDir, "git-askpass")
+	askScript := "#!/bin/sh\ncase \"${1:-}\" in\n  *Username*|*username*) echo \"x-access-token\" ;;\n  *) printf '%s\\n' \"${GH_TOKEN:-}\" ;;\nesac\n"
+	if err := os.WriteFile(askPass, []byte(askScript), 0o700); err != nil { //nolint:gosec // isolated sandbox askpass helper
+		return nil, err
+	}
+	gitConfigPath := filepath.Join(dir, "home", ".gitconfig")
+	var gitCfg strings.Builder
+	fmt.Fprintf(&gitCfg, "[credential]\n\thelper = !%s\n\tuseHttpPath = true\n", credHelper)
+	if caInfo := strings.TrimSpace(os.Getenv("BEEKEEPER_CANARY_SSL_CAINFO")); caInfo != "" {
+		fmt.Fprintf(&gitCfg, "[http]\n\tsslCAInfo = %s\n", caInfo)
+	}
+	if err := os.WriteFile(gitConfigPath, []byte(gitCfg.String()), 0o600); err != nil {
+		return nil, err
+	}
+	env = slices.DeleteFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "GIT_CONFIG_GLOBAL=") || strings.HasPrefix(kv, "GIT_ASKPASS=")
+	})
+	env = append(env,
+		"GIT_CONFIG_GLOBAL="+gitConfigPath,
+		"GIT_ASKPASS="+askPass,
+	)
+	if caInfo := strings.TrimSpace(os.Getenv("BEEKEEPER_CANARY_SSL_CAINFO")); caInfo != "" {
+		env = append(env, "GIT_SSL_CAINFO="+caInfo)
+	}
+	return env, nil
+}
+
 func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest string, cfg CanaryConfig, runID string) (mergeOID string, retErr error) {
 	ghBin, err := exec.LookPath(ghCmd)
 	if err != nil {
@@ -565,6 +623,13 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	gitBin, err := exec.LookPath(gitCmd)
 	if err != nil {
 		return "", fmt.Errorf("locating git CLI for sandbox canary: %w", err)
+	}
+	serverBin := strings.TrimSpace(cfg.Server)
+	if serverBin == "" {
+		serverBin, err = os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("locating runner executable for sandbox claude adapter: %w", err)
+		}
 	}
 
 	dir, env, err := newIsolatedCanaryEnv(cfg.Scratch)
@@ -577,13 +642,13 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return "", err
 	}
-	for name, target := range map[string]string{ghCmd: ghBin, gitCmd: gitBin} {
+	for name, target := range map[string]string{ghCmd: ghBin, gitCmd: gitBin, claudeCmd: serverBin} {
 		if err := os.Symlink(target, filepath.Join(binDir, name)); err != nil {
 			return "", err
 		}
 	}
-	claudeStub := filepath.Join(binDir, claudeCmd)
-	if err := os.WriteFile(claudeStub, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // isolated sandbox stub executable
+	env, err = writeIsolatedGitAuth(dir, binDir, env)
+	if err != nil {
 		return "", err
 	}
 
@@ -597,6 +662,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		sandboxToken = strings.TrimSpace(string(out))
 	}
 
+	viewerLogin := "canary-bot"
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
 		w.Header().Set("X-RateLimit-Limit", "5000")
@@ -606,7 +672,7 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		case "/repos/giantswarm/beekeeper":
 			_, _ = fmt.Fprint(w, `{}`)
 		case "/graphql":
-			_, _ = fmt.Fprintf(w, `{"data":{"viewer":{"login":"canary-bot"},"rateLimit":{"limit":5000,"remaining":4900,"used":100,"resetAt":%q}}}`, now.Add(time.Hour).Format(time.RFC3339))
+			_, _ = fmt.Fprintf(w, `{"data":{"viewer":{"login":%q},"rateLimit":{"limit":5000,"remaining":4900,"used":100,"resetAt":%q}}}`, viewerLogin, now.Add(time.Hour).Format(time.RFC3339))
 		case "/rate_limit":
 			_, _ = fmt.Fprint(w, `{"resources":{"search":{"limit":30,"remaining":30},"code_search":{"limit":10,"remaining":10}}}`)
 		default:
@@ -620,6 +686,15 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		apiURL = apiServer.URL
 	}
 
+	checkout := filepath.Join(dir, "checkouts", filepath.Base(cfg.Repo))
+	if err := os.MkdirAll(checkout, 0o700); err != nil {
+		return "", err
+	}
+	branch := canaryBranchName(runID, candidateDigest)
+	marker := canaryOwnershipMarker(cfg.Repo, runID, branch)
+	digestLine := "candidate-sha256: " + candidateDigest
+	projectLine := fmt.Sprintf("sandbox-project: %d", cfg.Project)
+
 	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
 	env = append(env,
 		"PATH="+binDir+":/usr/bin:/bin",
@@ -630,6 +705,14 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		"GIT_AUTHOR_EMAIL=canary@example.invalid",
 		"GIT_COMMITTER_NAME=Beekeeper Canary",
 		"GIT_COMMITTER_EMAIL=canary@example.invalid",
+		"CANARY_SANDBOX_DIR="+dir,
+		"CANARY_CHECKOUT_DIR="+checkout,
+		"CANARY_CANDIDATE_BIN="+candidatePath,
+		"CANARY_CANDIDATE_SHA256="+candidateDigest,
+		"CANARY_REPO="+cfg.Repo,
+		"CANARY_PROJECT="+strconv.Itoa(cfg.Project),
+		"CANARY_RUN_ID="+runID,
+		"CANARY_BRANCH="+branch,
 	)
 	for _, passthrough := range []string{"BEEKEEPER_CANARY_ORIGIN", "SANDBOX_DIR"} {
 		if val := os.Getenv(passthrough); val != "" {
@@ -650,18 +733,32 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		}
 	}()
 
-	checkout := filepath.Join(dir, "checkouts", filepath.Base(cfg.Repo))
-	if err := os.MkdirAll(checkout, 0o700); err != nil {
-		return "", err
+	runCmdWithEnv := func(workDir string, cmdEnv []string, bin string, args ...string) (string, error) {
+		c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // isolated sandbox command
+		c.Dir = workDir
+		c.Env = cmdEnv
+		out, cerr := c.CombinedOutput()
+		if cerr != nil {
+			return "", fmt.Errorf("%s %s: %w: %s", filepath.Base(bin), strings.Join(args, " "), cerr, tail(out))
+		}
+		return strings.TrimSpace(string(out)), nil
 	}
+	runCmd := func(workDir, bin string, args ...string) (string, error) {
+		return runCmdWithEnv(workDir, env, bin, args...)
+	}
+
+	if loginOut, lerr := runCmd(dir, ghBin, ghAPI, "user", "--jq", ".login"); lerr == nil && loginOut != "" {
+		viewerLogin = loginOut
+	}
+
 	stateDir := filepath.Join(dir, "state")
 	briefPath := filepath.Join(dir, "worker-brief.md")
 	if err := os.WriteFile(briefPath, []byte("Work {{.URL}} in {{.Repo}} (#{{.Number}}).\n"), 0o600); err != nil {
 		return "", err
 	}
 	cfgText := fmt.Sprintf(
-		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: %s\n  project: %d\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 2\n  availMinMiB: -1\n  swapGrowthMaxMiB: -1\nwatch:\n  loadMax: 1000\nidentity:\n  host: canary\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [%s]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [canary-bot]\n  reviewRounds: 1\n",
-		checkout, cfg.AllowOrg, cfg.Project, stateDir, checkout, cfg.AllowOrg, briefPath,
+		"agents:\n  mode: background\n  dir: %s\nboard:\n  owner: %s\n  project: %d\n  tidyEvery: -1s\n  order:\n  - name: ready\n    status: [Ready]\ncapacity:\n  ceiling: 2\n  availMinMiB: -1\n  swapGrowthMaxMiB: -1\nwatch:\n  loadMax: 1000\nidentity:\n  host: canary\nstateDir: %s\ndisk:\n  checkouts: [%s]\ngithub:\n  floor: -1\n  allowedOrgs: [%s]\nsupervisor:\n  workerBrief: %s\n  ownership:\n    authors: [%s]\n  reviewRounds: 1\n",
+		checkout, cfg.AllowOrg, cfg.Project, stateDir, checkout, cfg.AllowOrg, briefPath, viewerLogin,
 	)
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfgText), 0o600); err != nil {
 		return "", err
@@ -685,16 +782,19 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	}); err != nil {
 		return "", err
 	}
-
-	runCmd := func(workDir, bin string, args ...string) (string, error) {
-		c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // isolated sandbox command
-		c.Dir = workDir
-		c.Env = env
-		out, cerr := c.CombinedOutput()
-		if cerr != nil {
-			return "", fmt.Errorf("%s %s: %w: %s", filepath.Base(bin), strings.Join(args, " "), cerr, tail(out))
+	doneAt := now.Add(-30 * time.Second).UTC()
+	byLoop := state.Party{Name: partyLoop}
+	byPrior := state.Party{Name: "prior-worker"}
+	for _, ev := range []state.Event{
+		{At: now.Add(-time.Minute), By: byLoop, Verb: verbLoop, Detail: detailStarted},
+		{At: now.Add(-time.Minute), By: byLoop, Verb: verbBudgetState, Detail: detailFalse},
+		{At: doneAt, By: byPrior, Verb: "agents.done", Detail: "prior-worker done: setup"},
+		{At: doneAt, By: byPrior, Verb: "agents.report", Detail: fmt.Sprintf("prior-worker: https://github.com/%s/issues/1", cfg.Repo)},
+		{At: doneAt, By: byLoop, Verb: "supervisor.done", Detail: "[done prior-worker@" + doneAt.Format(time.RFC3339Nano) + "] off the roster"},
+	} {
+		if err := store.Record(ev); err != nil {
+			return "", err
 		}
-		return strings.TrimSpace(string(out)), nil
 	}
 
 	// Verify the candidate passes isolated command checks without touching live config/state.
@@ -723,84 +823,118 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		return "", err
 	}
 
-	branch := canaryBranchName(runID, candidateDigest)
-	marker := canaryOwnershipMarker(cfg.Repo, runID, branch)
-	digestLine := "candidate-sha256: " + candidateDigest
-	projectLine := fmt.Sprintf("sandbox-project: %d", cfg.Project)
-	body := strings.Join([]string{
-		"Automated staged release-candidate canary run.",
-		marker,
-		digestLine,
-		projectLine,
-	}, "\n")
+	// Pass 1: candidate's supervisor loop must admit the ready board item and
+	// start the deterministic worker via `agents start` -> `claude --bg`.
+	if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
+		if turnErr, rerr := os.ReadFile(filepath.Join(dir, "worker-turn-error.txt")); rerr == nil && len(turnErr) > 0 { //nolint:gosec // isolated sandbox error log
+			return "", fmt.Errorf("starting deterministic worker: %s (%w)", strings.TrimSpace(string(turnErr)), err)
+		}
+		return "", fmt.Errorf("running candidate supervisor loop pass 1 (worker start): %w", err)
+	}
+	prMetaRaw, err := os.ReadFile(filepath.Join(dir, "canary-pr.json")) //nolint:gosec // isolated sandbox worker metadata
+	if err != nil {
+		if turnErr, rerr := os.ReadFile(filepath.Join(dir, "worker-turn-error.txt")); rerr == nil && len(turnErr) > 0 { //nolint:gosec // isolated sandbox error log
+			return "", fmt.Errorf("deterministic worker turn failed: %s", strings.TrimSpace(string(turnErr)))
+		}
+		return "", errors.New("candidate supervisor loop did not start deterministic worker")
+	}
+	var prMeta canaryPRMeta
+	if err := json.Unmarshal(prMetaRaw, &prMeta); err != nil {
+		return "", fmt.Errorf("decoding deterministic worker metadata: %w", err)
+	}
+	if prMeta.PRNum <= 0 || prMeta.HeadSHA == "" || prMeta.Branch != branch || prMeta.WorkerName == "" || prMeta.WorkerSession == "" {
+		return "", fmt.Errorf("incomplete deterministic worker metadata: %+v", prMeta)
+	}
+	prRef := fmt.Sprintf("%s#%d", cfg.Repo, prMeta.PRNum)
 
-	if _, err := runCmd(checkout, gitBin, gitCheckout, "-b", branch); err != nil {
-		return "", err
-	}
-	canaryFile := filepath.Join(checkout, ".beekeeper-canary")
-	if err := os.WriteFile(canaryFile, []byte(body+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	if _, err := runCmd(checkout, gitBin, gitAdd, ".beekeeper-canary"); err != nil {
-		return "", err
-	}
-	if _, err := runCmd(checkout, gitBin, gitCommit, "-m", "chore(canary): stage "+runID); err != nil {
-		return "", err
-	}
-	headSHA, err := runCmd(checkout, gitBin, gitRevParse, gitHead)
+	// Verify the candidate recorded the worker start before the worker parks.
+	stAfterWorker, err := store.Read()
 	if err != nil {
 		return "", err
 	}
-	if _, err := runCmd(checkout, gitBin, gitPush, originRemote, branch); err != nil {
-		return "", err
+	if !slices.ContainsFunc(stAfterWorker.Starts, func(s state.Start) bool {
+		return s.Background && s.Session == prMeta.WorkerSession && s.Name == prMeta.WorkerName
+	}) {
+		return "", fmt.Errorf("candidate did not record background worker start for %s (%s)", prMeta.WorkerName, prMeta.WorkerSession)
 	}
 
-	createOut, err := runCmd(checkout, ghBin, "pr", "create", "--repo", cfg.Repo, "--base", mainBranch, "--head", branch, "--title", "chore(canary): stage "+runID, "--body", body)
-	if err != nil {
-		return "", fmt.Errorf("creating sandbox canary PR: %w", err)
-	}
-	prNum, err := parseCreatedPRNumber(createOut)
-	if err != nil {
-		return "", fmt.Errorf("parsing created sandbox PR number from %q: %w", createOut, err)
-	}
-	prRef := fmt.Sprintf("%s#%d", cfg.Repo, prNum)
-
-	// Park the candidate on the newly created sandbox PR so the candidate records
-	// its own exact-head review request in the isolated state store.
-	if _, err := runCmd(checkout, candidatePath, "--as", "canary worker", "agents", "park", "--on", prRef, "desk review"); err != nil {
-		return "", fmt.Errorf("parking candidate on %s: %w", prRef, err)
+	// The started worker session parks itself on the newly created sandbox PR.
+	workerEnv := append(slices.Clone(env),
+		"CLAUDE_CODE_SESSION_ID="+prMeta.WorkerSession,
+		"CLAUDE_CODE_SESSION_NAME="+prMeta.WorkerName,
+	)
+	if _, err := runCmdWithEnv(checkout, workerEnv, candidatePath, "--as", prMeta.WorkerName, "agents", "park", "--on", prRef, "desk review"); err != nil {
+		return "", fmt.Errorf("parking deterministic worker %s on %s: %w", prMeta.WorkerName, prRef, err)
 	}
 	if _, err := runCmd(checkout, gitBin, gitCheckout, mainBranch); err != nil {
 		return "", err
 	}
 
-	reviewBody := "Review: approved\nHead reviewed: `" + headSHA + "`"
-	if _, err := runCmd(dir, ghBin, "pr", "review", strconv.Itoa(prNum), "--repo", cfg.Repo, "--comment", "--body", reviewBody); err != nil {
-		return "", fmt.Errorf("posting exact-head review on %s: %w", prRef, err)
+	// Pass 2: candidate's supervisor loop must detect the parked PR, dispatch a
+	// separate independent reviewer via `agents start --review` -> `claude --bg`,
+	// and record `supervisor.review`.
+	if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
+		return "", fmt.Errorf("running candidate supervisor loop pass 2 (reviewer dispatch): %w", err)
 	}
-	reviewAt := time.Now().UTC()
-	byLoop := state.Party{Name: partyLoop}
-	for _, ev := range []state.Event{
-		{At: reviewAt.Add(-time.Minute), By: byLoop, Verb: verbLoop, Detail: detailStarted},
-		{At: reviewAt.Add(-time.Minute), By: byLoop, Verb: verbBudgetState, Detail: detailFalse},
-		{At: reviewAt, By: byLoop, Verb: "supervisor.review", Subject: prRef, Detail: "[review " + prRef + "@" + headSHA + "] canary-reviewer"},
-	} {
-		if err := store.Record(ev); err != nil {
-			return "", err
+	revMetaRaw, err := os.ReadFile(filepath.Join(dir, "reviewer-ran.json")) //nolint:gosec // isolated sandbox reviewer metadata
+	if err != nil {
+		return "", errors.New("candidate supervisor loop did not dispatch independent reviewer")
+	}
+	var revMeta canaryReviewerMeta
+	if err := json.Unmarshal(revMetaRaw, &revMeta); err != nil {
+		return "", fmt.Errorf("decoding independent reviewer metadata: %w", err)
+	}
+	if revMeta.PRNum != prMeta.PRNum || revMeta.HeadSHA != prMeta.HeadSHA || !strings.HasPrefix(revMeta.ReviewerName, "Review ") || revMeta.ReviewerSession == "" || revMeta.ReviewerSession == prMeta.WorkerSession {
+		return "", fmt.Errorf("invalid independent reviewer metadata: %+v (worker=%+v)", revMeta, prMeta)
+	}
+
+	// Passes 3 & 4: candidate's supervisor loop validates the merge worktree,
+	// checks statusCheckRollup and the exact-head review, and merges the PR.
+	for range 3 {
+		if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
+			return "", fmt.Errorf("running candidate supervisor loop (merge): %w", err)
 		}
 	}
 
-	// Drive the candidate's supervisor loop to validate the reviewed PR, merge
-	// worktree, check rollup, and execute exact-head merge.
-	for range 2 {
-		if _, err := runCmd(dir, candidatePath, "supervisor", "loop", "--once"); err != nil {
-			return "", fmt.Errorf("running candidate supervisor loop: %w", err)
-		}
+	// Verify durable candidate state records for worker start, park, independent
+	// reviewer start, supervisor.review, and merge before emitting evidence.
+	finalState, err := store.Read()
+	if err != nil {
+		return "", err
+	}
+	if !slices.ContainsFunc(finalState.Starts, func(s state.Start) bool {
+		return s.Background && s.Session == revMeta.ReviewerSession && s.Name == revMeta.ReviewerName
+	}) {
+		return "", fmt.Errorf("candidate did not record background reviewer start for %s (%s)", revMeta.ReviewerName, revMeta.ReviewerSession)
+	}
+	events, err := store.Events(0, nil)
+	if err != nil {
+		return "", err
+	}
+	if !slices.ContainsFunc(events, func(e state.Event) bool {
+		return e.Verb == "agents.start" && strings.Contains(e.Detail, prMeta.WorkerName)
+	}) {
+		return "", fmt.Errorf("candidate state lacks agents.start event for worker %s", prMeta.WorkerName)
+	}
+	if !slices.ContainsFunc(events, func(e state.Event) bool {
+		return e.Verb == "agents.park" && (e.Subject == prRef || strings.Contains(e.Detail, prRef))
+	}) {
+		return "", fmt.Errorf("candidate state lacks agents.park event for %s", prRef)
+	}
+	if !slices.ContainsFunc(events, func(e state.Event) bool {
+		return e.Verb == "supervisor.review" && (e.Subject == prRef || strings.Contains(e.Detail, prRef)) && strings.Contains(e.Detail, prMeta.HeadSHA)
+	}) {
+		return "", fmt.Errorf("candidate state lacks exact-head supervisor.review event for %s@%s", prRef, prMeta.HeadSHA)
+	}
+	if !slices.ContainsFunc(events, func(e state.Event) bool {
+		return (e.Verb == "supervisor.merge" || e.Verb == "merged") && (e.Subject == prRef || strings.Contains(e.Detail, prRef) || strings.Contains(e.Detail, prMeta.HeadSHA))
+	}) {
+		return "", fmt.Errorf("candidate state lacks merge event for %s", prRef)
 	}
 
 	// Verify the fresh PR created by this run was reviewed on headSHA, passed
 	// checks, and merged into origin.
-	viewOut, err := runCmd(dir, ghBin, "pr", "view", strconv.Itoa(prNum), "--repo", cfg.Repo, "--json", "number,state,headRefName,headRefOid,body,reviews,statusCheckRollup,mergeCommit")
+	viewOut, err := runCmd(dir, ghBin, "pr", "view", strconv.Itoa(prMeta.PRNum), "--repo", cfg.Repo, "--json", "number,state,headRefName,headRefOid,body,reviews,statusCheckRollup,mergeCommit")
 	if err != nil {
 		return "", fmt.Errorf("viewing sandbox PR %s: %w", prRef, err)
 	}
@@ -825,19 +959,19 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 	if err := json.Unmarshal([]byte(viewOut), &observed); err != nil {
 		return "", fmt.Errorf("decoding sandbox PR %s: %w", prRef, err)
 	}
-	if observed.Number != prNum || observed.HeadRefName != branch || observed.HeadRefOid != headSHA {
-		return "", fmt.Errorf("sandbox PR %s head mismatch: got #%d ref=%s oid=%s, want #%d ref=%s oid=%s", prRef, observed.Number, observed.HeadRefName, observed.HeadRefOid, prNum, branch, headSHA)
+	if observed.Number != prMeta.PRNum || observed.HeadRefName != branch || observed.HeadRefOid != prMeta.HeadSHA {
+		return "", fmt.Errorf("sandbox PR %s head mismatch: got #%d ref=%s oid=%s, want #%d ref=%s oid=%s", prRef, observed.Number, observed.HeadRefName, observed.HeadRefOid, prMeta.PRNum, branch, prMeta.HeadSHA)
 	}
-	if !isOwnedCanaryPR(cfg.Repo, runID, observed.HeadRefName, observed.Body) || !containsExactLine(observed.Body, digestLine) || !containsExactLine(observed.Body, projectLine) {
+	if !isOwnedCanaryPR(cfg.Repo, runID, observed.HeadRefName, observed.Body) || !containsExactLine(observed.Body, digestLine) || !containsExactLine(observed.Body, projectLine) || !containsExactLine(observed.Body, marker) {
 		return "", fmt.Errorf("sandbox PR %s ownership or candidate digest marker mismatch", prRef)
 	}
 	hasExactReview := slices.ContainsFunc(observed.Reviews, func(r struct {
 		Body string `json:"body"`
 	}) bool {
-		return strings.Contains(r.Body, "Review: approved") && strings.Contains(r.Body, "Head reviewed: `"+headSHA+"`")
+		return (strings.Contains(r.Body, "Review: approved") || strings.Contains(r.Body, "Desk review (opus): approved")) && strings.Contains(r.Body, "Head reviewed: `"+prMeta.HeadSHA+"`")
 	})
 	if !hasExactReview {
-		return "", fmt.Errorf("sandbox PR %s lacks exact-head approval for %s", prRef, headSHA)
+		return "", fmt.Errorf("sandbox PR %s lacks exact-head approval for %s", prRef, prMeta.HeadSHA)
 	}
 	if len(observed.Rollup) == 0 {
 		return "", fmt.Errorf("sandbox PR %s has empty statusCheckRollup", prRef)
@@ -852,6 +986,206 @@ func runLiveSandboxCanary(ctx context.Context, candidatePath, candidateDigest st
 		return "", fmt.Errorf("sandbox PR %s was not merged (state=%s mergeCommit=%s)", prRef, observed.State, observed.MergeCommit.OID)
 	}
 	return observed.MergeCommit.OID, nil
+}
+
+func serveCanaryClaude() int {
+	args := os.Args[1:]
+	sandboxDir := os.Getenv("CANARY_SANDBOX_DIR")
+	sessionsPath := filepath.Join(sandboxDir, "sessions.json")
+	readSessions := func() []map[string]any {
+		raw, err := os.ReadFile(sessionsPath) //nolint:gosec // isolated sandbox session state
+		if err != nil {
+			return []map[string]any{}
+		}
+		var rows []map[string]any
+		_ = json.Unmarshal(raw, &rows)
+		return rows
+	}
+	writeSessions := func(rows []map[string]any) error {
+		raw, err := json.Marshal(rows)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(sessionsPath, raw, 0o600) //nolint:gosec // isolated sandbox session state
+	}
+
+	switch {
+	case len(args) > 0 && args[0] == "plugin":
+		fmt.Println("[]")
+		return 0
+	case slices.Equal(args, []string{"-p", "/usage", "--output-format", "json"}):
+		reset := time.Now().UTC().Add(time.Hour).Format("Jan 2, 3:04pm")
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"result": fmt.Sprintf("Current session: 0%% used · resets %s (UTC)\nCurrent week (all models): 0%% used · resets %s (UTC)", reset, reset),
+		})
+		return 0
+	case len(args) > 0 && args[0] == "agents":
+		if err := json.NewEncoder(os.Stdout).Encode(readSessions()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	case len(args) > 0 && args[0] == "stop":
+		if len(args) > 1 {
+			short := args[1]
+			rows := slices.DeleteFunc(readSessions(), func(r map[string]any) bool {
+				id, _ := r["id"].(string)
+				sid, _ := r["sessionId"].(string)
+				return id == short || strings.HasPrefix(sid, short)
+			})
+			if err := writeSessions(rows); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		return 0
+	case slices.Contains(args, "--bg"):
+		name := "worker"
+		if idx := slices.Index(args, "-n"); idx >= 0 && idx+1 < len(args) {
+			name = args[idx+1]
+		}
+		rows := readSessions()
+		short := fmt.Sprintf("a1b2c3%02x", len(rows)+1)
+		sessionID := short + "-0000-0000-0000-000000000001"
+		rows = append(rows, map[string]any{
+			"id":        short,
+			"sessionId": sessionID,
+			nameField:   name,
+			"kind":      "bg",
+			"pid":       1,
+		})
+		if err := writeSessions(rows); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+
+		if strings.HasPrefix(name, "Review ") {
+			if err := runCanaryReviewerTurn(sandboxDir, name, sessionID); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		} else {
+			if err := runCanaryWorkerPublish(sandboxDir, name, sessionID); err != nil {
+				_ = os.WriteFile(filepath.Join(sandboxDir, "worker-turn-error.txt"), []byte(err.Error()+"\n"), 0o600) //nolint:gosec // isolated sandbox error log
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+		}
+		fmt.Printf("backgrounded · %s · %s\n", short, name)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown canary claude command: %v\n", args)
+		return 1
+	}
+}
+
+func runCanaryWorkerPublish(sandboxDir, workerName, workerSession string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	checkout := os.Getenv("CANARY_CHECKOUT_DIR")
+	repo := os.Getenv("CANARY_REPO")
+	runID := os.Getenv("CANARY_RUN_ID")
+	branch := os.Getenv("CANARY_BRANCH")
+	digest := os.Getenv("CANARY_CANDIDATE_SHA256")
+	project := os.Getenv("CANARY_PROJECT")
+	binDir := filepath.Join(sandboxDir, "bin")
+	gitBin := filepath.Join(binDir, gitCmd)
+	ghBin := filepath.Join(binDir, ghCmd)
+
+	run := func(bin string, a ...string) (string, error) {
+		c := exec.CommandContext(ctx, bin, a...) //nolint:gosec // isolated sandbox worker command
+		c.Dir = checkout
+		c.Env = os.Environ()
+		out, err := c.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("%s %s: %w: %s", filepath.Base(bin), strings.Join(a, " "), err, tail(out))
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+
+	marker := canaryOwnershipMarker(repo, runID, branch)
+	body := strings.Join([]string{
+		"Automated staged release-candidate canary run.",
+		marker,
+		"candidate-sha256: " + digest,
+		"sandbox-project: " + project,
+	}, "\n")
+
+	if _, err := run(gitBin, gitCheckout, "-b", branch); err != nil {
+		return err
+	}
+	canaryFile := filepath.Join(filepath.Clean(checkout), ".beekeeper-canary")
+	if err := os.WriteFile(canaryFile, []byte(body+"\n"), 0o600); err != nil { //nolint:gosec // G703: isolated sandbox checkout path
+		return err
+	}
+	if _, err := run(gitBin, gitAdd, ".beekeeper-canary"); err != nil {
+		return err
+	}
+	if _, err := run(gitBin, gitCommit, "-m", "chore(canary): stage "+runID); err != nil {
+		return err
+	}
+	headSHA, err := run(gitBin, gitRevParse, gitHead)
+	if err != nil {
+		return err
+	}
+	if _, err := run(gitBin, gitPush, originRemote, branch); err != nil {
+		return err
+	}
+	createOut, err := run(ghBin, "pr", "create", "--repo", repo, "--base", mainBranch, "--head", branch, "--title", "chore(canary): stage "+runID, "--body", body)
+	if err != nil {
+		return fmt.Errorf("creating sandbox canary PR: %w", err)
+	}
+	prNum, err := parseCreatedPRNumber(createOut)
+	if err != nil {
+		return fmt.Errorf("parsing created sandbox PR number from %q: %w", createOut, err)
+	}
+	meta := canaryPRMeta{
+		PRNum:         prNum,
+		HeadSHA:       headSHA,
+		Branch:        branch,
+		WorkerName:    workerName,
+		WorkerSession: workerSession,
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(sandboxDir, "canary-pr.json"), raw, 0o600) //nolint:gosec // isolated sandbox worker metadata
+}
+
+func runCanaryReviewerTurn(sandboxDir, reviewerName, reviewerSession string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	raw, err := os.ReadFile(filepath.Join(sandboxDir, "canary-pr.json")) //nolint:gosec // isolated sandbox worker metadata
+	if err != nil {
+		return fmt.Errorf("reading canary PR metadata for reviewer: %w", err)
+	}
+	var prMeta canaryPRMeta
+	if err := json.Unmarshal(raw, &prMeta); err != nil {
+		return err
+	}
+	repo := os.Getenv("CANARY_REPO")
+	ghBin := filepath.Join(sandboxDir, "bin", ghCmd)
+	body := "Desk review (opus): approved\nHead reviewed: `" + prMeta.HeadSHA + "`"
+	c := exec.CommandContext(ctx, ghBin, "pr", "review", strconv.Itoa(prMeta.PRNum), "--repo", repo, "--comment", "--body", body) //nolint:gosec // isolated sandbox reviewer command
+	c.Dir = sandboxDir
+	c.Env = os.Environ()
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("reviewer gh pr review: %w: %s", err, tail(out))
+	}
+	revMeta := canaryReviewerMeta{
+		ReviewerName:    reviewerName,
+		ReviewerSession: reviewerSession,
+		PRNum:           prMeta.PRNum,
+		HeadSHA:         prMeta.HeadSHA,
+	}
+	revRaw, err := json.Marshal(revMeta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(sandboxDir, "reviewer-ran.json"), revRaw, 0o600) //nolint:gosec // isolated sandbox reviewer metadata
 }
 
 func parseCreatedPRNumber(output string) (int, error) {
@@ -926,6 +1260,46 @@ func cleanupSandboxRunWithEnv(ctx context.Context, ghBin string, env []string, r
 			return fmt.Errorf("sandbox PR #%d for run %s remained open after cleanup", pr.Number, runID)
 		}
 	}
+
+	// Enumerate and delete owned remote branches independently of PR existence so
+	// branches left behind when push succeeds and PR creation fails (or when a
+	// prior attempt was interrupted before PR creation) are cleaned up safely.
+	listOwnedBranches := func() ([]string, error) {
+		out, err := runGH(ghAPI, "--paginate", fmt.Sprintf("repos/%s/git/matching-refs/heads/%s", repo, canaryBranchPrefix(runID)))
+		if err != nil {
+			return nil, fmt.Errorf("listing sandbox branches for run %s: %w: %s", runID, err, tail(out))
+		}
+		refs, err := decodePaginatedRefs(out)
+		if err != nil {
+			return nil, err
+		}
+		var branches []string
+		for _, r := range refs {
+			branch := strings.TrimPrefix(strings.TrimSpace(r.Ref), "refs/heads/")
+			if isOwnedCanaryBranch(runID, branch) {
+				branches = append(branches, branch)
+			}
+		}
+		return branches, nil
+	}
+
+	branches, err := listOwnedBranches()
+	if err != nil {
+		return err
+	}
+	for _, branch := range branches {
+		if delOut, derr := runGH(ghAPI, "-X", "DELETE", fmt.Sprintf("repos/%s/git/refs/heads/%s", repo, branch)); derr != nil {
+			return fmt.Errorf("deleting sandbox branch %s: %w: %s", branch, derr, tail(delOut))
+		}
+	}
+
+	remainingBranches, err := listOwnedBranches()
+	if err != nil {
+		return fmt.Errorf("verifying sandbox branch cleanup: %w", err)
+	}
+	if len(remainingBranches) > 0 {
+		return fmt.Errorf("sandbox branch %s for run %s remained after cleanup", remainingBranches[0], runID)
+	}
 	return nil
 }
 
@@ -952,6 +1326,27 @@ func decodePaginatedPRs(raw []byte) ([]sandboxOpenPR, error) {
 		var page []sandboxOpenPR
 		if err := dec.Decode(&page); err != nil {
 			return nil, fmt.Errorf("decoding open sandbox PRs: %w", err)
+		}
+		all = append(all, page...)
+	}
+	return all, nil
+}
+
+type sandboxGitRef struct {
+	Ref string `json:"ref"`
+}
+
+func decodePaginatedRefs(raw []byte) ([]sandboxGitRef, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	var all []sandboxGitRef
+	for dec.More() {
+		var page []sandboxGitRef
+		if err := dec.Decode(&page); err != nil {
+			return nil, fmt.Errorf("decoding sandbox git refs: %w", err)
 		}
 		all = append(all, page...)
 	}
