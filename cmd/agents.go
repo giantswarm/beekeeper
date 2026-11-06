@@ -355,7 +355,7 @@ completion is refused under --as.`,
 					}
 				}
 				if report != "" || len(found) > 0 {
-					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found})
+					st.WorkerReports = append(st.WorkerReports, state.WorkerReport{Finished: finished, By: me, At: a.now.UTC(), Task: ag.LastTask, Text: report, Problems: found, TellTo: reviewStarter(st, *ag, report)})
 				}
 				if report != "" {
 					evs = append(evs, event(me, "agents.report", "%s: %s", ag.Name, report))
@@ -389,6 +389,7 @@ completion is refused under --as.`,
 	idle.Flags().StringVar(&report, "report", "", `the final report for the supervisor, "-" from stdin (required with --done)`)
 	idle.Flags().StringArrayVar(&problems, "problem", nil, `a problem found: one line per broken function, workaround or follow-up, with evidence and owning repository, and its issue's URL once filed; "none" when there was none (required with --done)`)
 	var keepDesktop bool
+	var removeReason string
 	remove := &cobra.Command{
 		Use:   "remove <agent>",
 		Short: "Take an agent off the roster and archive or stop the session beekeeper started for it",
@@ -428,7 +429,7 @@ started is never archived nor stopped.`,
 					keepDesktop = true
 				}
 				removeAgent(st, i)
-				return []state.Event{event(me, "agents.remove", "%s", gone.Name)}, nil
+				return []state.Event{event(me, "agents.remove", "%s", removedDetail(gone.Name, removeReason))}, nil
 			})
 			if err != nil {
 				return err
@@ -466,6 +467,7 @@ started is never archived nor stopped.`,
 		},
 	}
 	remove.Flags().BoolVar(&keepDesktop, "keep-desktop", false, "leave the agent's desktop session in the sidebar")
+	remove.Flags().StringVar(&removeReason, reasonFlagName, "", "why it leaves the roster, kept in the log's agents.remove line")
 	list := listCmd("List the agents, idle ones first", func() error { return a.agentList(full) })
 	fullFlag(list, &full)
 	c.AddCommand(a.agentReviewCmd())
@@ -625,6 +627,23 @@ func problemsFound(lines []string, finished bool) ([]string, error) {
 		return nil, refused("--problem none next to %d finding(s): drop none", len(found))
 	}
 	return found, nil
+}
+
+// reasonFlagName is the flag that says why, here why an agent left the roster.
+const reasonFlagName = "reason"
+
+// removedDetail is an agents.remove line's detail: the agent's name and,
+// when given, why it left the roster.
+func removedDetail(name, reason string) string {
+	if reason = oneLine(reason); reason != "" {
+		return name + ": " + reason
+	}
+	return name
+}
+
+// removedAgent reports whether detail, an agents.remove line's, names name.
+func removedAgent(detail, name string) bool {
+	return detail == name || strings.HasPrefix(detail, name+": ")
 }
 
 func findAgent(st *state.State, q string) (int, error) {

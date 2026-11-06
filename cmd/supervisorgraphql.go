@@ -10,13 +10,14 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"github.com/giantswarm/beekeeper/internal/config"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const loopGraphQLFile = "loop-graphql.json"
-const loopGraphQLLimit = 1500
+const loopGraphQLLimit = config.DefaultLoopGraphQLLimit
 const loopPullStep = "pull"
 
 // The loop-owned watch samples the budget at most every 30 seconds. Keep
@@ -87,8 +88,40 @@ func sameGraphQLWindow(a, b time.Time) bool {
 	return diff <= 2*time.Minute
 }
 
-func (s loopGraphQLSpend) boardHeld(st *state.Budget, step string, floor int, now time.Time) bool {
-	if step != loopBoard || !now.Before(s.Reset) || s.Spent+loopGraphQLReserve <= loopGraphQLLimit-loopGraphQLProbeReserve {
+// loopGraphQLCap is supervisor.graphQLLimit, the allowance of the board's
+// reads in a window.
+func (a *app) loopGraphQLCap() int {
+	if a == nil || a.cfg == nil || a.cfg.Supervisor.GraphQLLimit <= 0 {
+		return loopGraphQLLimit
+	}
+	return a.cfg.Supervisor.GraphQLLimit
+}
+
+// overAllowance reports whether the spend leaves the board no room under
+// limit.
+func (s loopGraphQLSpend) overAllowance(limit int) bool {
+	return s.Spent+loopGraphQLReserve > limit-loopGraphQLProbeReserve
+}
+
+// heldLine says what the loop holds on s, "" when nothing: what whoever
+// waits on the loop reads in budget and supervisor status.
+func (a *app) heldLine(s loopGraphQLSpend) string {
+	now := a.timeNow()
+	st, err := a.store.Read()
+	if err != nil {
+		return ""
+	}
+	switch {
+	case s.floorHeld(now, a.cfg.GitHub.Floor):
+		return fmt.Sprintf("loop GitHub held: GraphQL under github.floor %d, no loop read until it recovers", a.cfg.GitHub.Floor)
+	case s.boardHeld(st.Budget, loopBoard, a.cfg.GitHub.Floor, now, a.loopGraphQLCap()):
+		return fmt.Sprintf("loop GitHub held: board reads wait until %s (%d of %d spent, supervisor.graphQLLimit); pull reads, reviews and merges go on", clock(a.now, s.Reset), s.Spent, a.loopGraphQLCap())
+	}
+	return ""
+}
+
+func (s loopGraphQLSpend) boardHeld(st *state.Budget, step string, floor int, now time.Time, limit int) bool {
+	if step != loopBoard || !now.Before(s.Reset) || !s.overAllowance(limit) {
 		return false
 	}
 	if st != nil && st.GraphQL != nil {
@@ -136,7 +169,8 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	if _, err := a.store.ReadFile(loopGraphQLFile, &spend); err != nil {
 		return err
 	}
-	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow()) {
+	limit := a.loopGraphQLCap()
+	if spend.boardHeld(st.Budget, step, a.cfg.GitHub.Floor, a.timeNow(), limit) {
 		return fmt.Errorf("loop GitHub allowance held until %s: %w", spend.Reset, errLoopLater)
 	}
 	b, err := readLoopGraphQLBudget(a, ctx)
@@ -149,7 +183,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 		reset = a.timeNow().Add(time.Hour)
 	}
 	liveHealthy := b.Remaining > a.cfg.GitHub.Floor && g.Remaining >= a.cfg.GitHub.Floor+loopGraphQLReserve
-	wasHeld := spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve || spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor)
+	wasHeld := spend.overAllowance(limit) || spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor)
 	releaseHold := liveHealthy && wasHeld && (spend.floorHeld(a.timeNow(), a.cfg.GitHub.Floor) ||
 		(!g.Reset.IsZero() && !sameGraphQLWindow(spend.Reset, g.Reset)) ||
 		g.Remaining > spend.Remaining ||
@@ -160,7 +194,7 @@ func (a *app) loopGitHub(ctx context.Context, step string, run func() error) err
 	accounts := graphQLAccounts(b)
 	spend.Remaining = g.Remaining
 	spend.Accounts = accounts
-	if !liveHealthy || (step == loopBoard && spend.Spent+loopGraphQLReserve > loopGraphQLLimit-loopGraphQLProbeReserve) {
+	if !liveHealthy || (step == loopBoard && spend.overAllowance(limit)) {
 		spend.HeldAt = a.timeNow()
 		if err := a.store.WriteFile(loopGraphQLFile, spend); err != nil {
 			return err
