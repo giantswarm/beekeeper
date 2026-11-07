@@ -64,8 +64,10 @@ func (a *app) fatalHarnessConfig(ctx context.Context, harness string) error {
 		if err := fatalJSONConfig(filepath.Join(home, ".gemini", "config", "hooks.json")); err != nil {
 			return err
 		}
-		if err := refuseUnguardedAgy(); err != nil {
-			return err
+		if a.cfg.Hooks.GuardsEnabled() {
+			if err := refuseUnguardedAgy(); err != nil {
+				return err
+			}
 		}
 		_, err := agyModels(ctx, config.AgyHarness)
 		return err

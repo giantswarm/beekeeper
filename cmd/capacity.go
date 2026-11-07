@@ -2037,7 +2037,8 @@ nothing; it makes no GitHub call.`,
 				return a.printJSON(struct {
 					*capacityView
 					Verdict string `json:"verdict"`
-				}{v, v.verdict()})
+					Guards  bool   `json:"guards"`
+				}{v, v.verdict(), a.cfg.Hooks.GuardsEnabled()})
 			}
 			p := func(format string, args ...any) { _, _ = fmt.Fprintf(a.out, format+"\n", args...) }
 			capLine := v.line(config.Capacity{Ceiling: v.Ceiling})
@@ -2045,6 +2046,9 @@ nothing; it makes no GitHub call.`,
 				capLine += "; " + v.Usage.capacitySuffix(a.now)
 			}
 			p("capacity: %s", capLine)
+			if !a.cfg.Hooks.GuardsEnabled() {
+				p("guards: off (hooks.guards=false; relay and result redaction remain active)")
+			}
 			p("review headroom: %d of %d used above worker ceiling %d (reviews only)", v.ReviewHeadroomUsed, v.ReviewHeadroom, v.WorkerCeiling)
 			if v.Local != nil {
 				p("local: %s", v.Local.line())
