@@ -123,6 +123,9 @@ func (v *acceptingValidator) Validate(asset string, binary, bundle []byte) error
 // stays the real one unless a test replaces it.
 func setup(t *testing.T, current string, src selfupdate.Source) {
 	t.Helper()
+	previousEvidence := checkEvidence
+	checkEvidence = func(context.Context, selfupdate.Source, *selfupdate.Release, string) error { return nil }
+	t.Cleanup(func() { checkEvidence = previousEvidence })
 	prevSource, prevTag, prevValidator, prevExe, prevVersion := newSource, newTagSource, newValidator, executable, currentVersion
 	newSource = func(bool) (selfupdate.Source, error) { return src, nil }
 	newTagSource = func(string) (selfupdate.Source, error) { return src, nil }

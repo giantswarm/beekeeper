@@ -3,6 +3,7 @@ package cmd
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/giantswarm/beekeeper/internal/claude"
+	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -24,6 +26,9 @@ import (
 
 // runUpdate is the update; the tests replace it.
 var runUpdate = update.Run
+
+// runStageCanary runs the staged release-candidate canary; the tests replace it.
+var runStageCanary = loopworkflow.StageCanary
 
 // selfUpdateCmdName is the self-update command's name.
 const selfUpdateCmdName = "self-update"
@@ -42,7 +47,7 @@ var budgetGateArgs = strings.Fields("budget --gate")
 // canaryChecks are the commands a candidate release must pass with the live
 // configuration before it replaces the running binary.
 var canaryChecks = [][]string{
-	{"version"},
+	{hostVersionFlag},
 	budgetGateArgs,
 	strings.Fields("supervisor status"),
 	{"capacity"},
@@ -70,8 +75,11 @@ var runInstalled = func(ctx context.Context, w io.Writer, path string, args ...s
 }
 
 func (a *app) selfUpdateCmd() *cobra.Command {
-	var check, pluginsOnly, completeProbation, rollback, controller, clearHold bool
+	var check, pluginsOnly, completeProbation, rollback, controller, clearHold, canaryRecorded bool
 	var rollbackReason, version, recoveryTarget string
+	var stageCanary, canaryBundle, canaryRepo, canaryAllowOrg, canaryRun, canaryScenario, canaryOutput string
+	var canaryProject int
+	var canarySiblings []string
 	var every, step time.Duration
 	c := &cobra.Command{
 		Use:   selfUpdateCmdName,
@@ -157,6 +165,19 @@ reset. A development build (version dev) is refused.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if stageCanary != "" {
+				return a.runStagedCanary(cmd.Context(), loopworkflow.CanaryConfig{
+					Candidate: stageCanary,
+					Bundle:    canaryBundle,
+					Recorded:  canaryRecorded,
+					Repo:      canaryRepo,
+					AllowOrg:  canaryAllowOrg,
+					Project:   canaryProject,
+					Run:       canaryRun,
+					Scenario:  canaryScenario,
+					Siblings:  canarySiblings,
+				}, canaryOutput)
+			}
 			if controller {
 				return a.runRecoveryController(cmd.Context(), a.out, recoveryTarget, every, cmp.Or(step, every))
 			}
@@ -272,26 +293,54 @@ reset. A development build (version dev) is refused.`,
 			return err
 		},
 	}
-	c.Flags().StringVar(&version, "version", "", "install an exact release tag, including a pre-release (works with --check)")
+	c.Flags().StringVar(&version, hostVersionFlag, "", "install an exact release tag, including a pre-release (works with --check)")
 	c.Flags().BoolVar(&completeProbation, "complete-probation", false, "run health checks and promote the installed candidate to last-known-good")
 	c.Flags().BoolVar(&rollback, "rollback", false, "restore the verified previous binary only if live state is compatible")
 	c.Flags().StringVar(&rollbackReason, "rollback-reason", "", "durable quarantine reason for the failed candidate")
 	c.Flags().BoolVar(&check, "check", false, "only report the running and the latest release; exit 125 when a newer one exists")
 	c.Flags().BoolVar(&pluginsOnly, syncPluginsFlag, false, "only bring the plugin up to date for this binary, once")
 	c.Flags().BoolVar(&clearHold, "clear-recovery-hold", false, "lift the hold of a failed recovery once its cause is dealt with")
+	c.Flags().StringVar(&stageCanary, "stage-canary", "", "run a staged release candidate through the isolated sandbox canary and emit canary evidence")
+	c.Flags().StringVar(&canaryBundle, "canary-bundle", "", "cosign bundle to verify against the staged candidate before running the canary")
+	c.Flags().BoolVar(&canaryRecorded, "canary-recorded", false, "run the staged canary against the isolated recorded fixture origin")
+	c.Flags().StringVar(&canaryRepo, "canary-repo", "", "explicit allowlisted sandbox repository (<owner>/<repo>) for the staged canary")
+	c.Flags().StringVar(&canaryAllowOrg, "canary-allow-org", "", "explicit allowlisted organization owning --canary-repo")
+	c.Flags().IntVar(&canaryProject, "canary-project", 0, "explicit sandbox GitHub ProjectV2 number for the staged canary")
+	c.Flags().StringVar(&canaryRun, "canary-run", "", "unique run identifier for the staged canary")
+	c.Flags().StringVar(&canaryScenario, "canary-scenario", "", "recorded fixture scenario for the staged canary")
+	c.Flags().StringVar(&canaryOutput, "canary-output", "", "write the resulting canary evidence JSON to this file")
+	c.Flags().StringSliceVar(&canarySiblings, "canary-sibling", nil, "cross-platform release binary from the same build to emit sibling canary evidence for on success")
 	c.Flags().BoolVar(&controller, recoveryControllerFlag, false, "run the recovery controller of a candidate in probation")
 	c.Flags().StringVar(&recoveryTarget, recoveryTargetFlag, "", "the installed executable the recovery controller supervises")
 	c.Flags().DurationVar(&every, recoveryEveryFlag, recoveryEvery, "time between two recovery evaluations")
 	c.Flags().DurationVar(&step, recoveryStepFlag, 0, "probation time one evaluation counts, by default that time")
-	for _, hidden := range []string{recoveryControllerFlag, recoveryTargetFlag, recoveryEveryFlag, recoveryStepFlag} {
+	for _, hidden := range []string{recoveryControllerFlag, recoveryTargetFlag, recoveryEveryFlag, recoveryStepFlag, "canary-scenario"} {
 		_ = c.Flags().MarkHidden(hidden)
 	}
 	c.MarkFlagsRequiredTogether(recoveryControllerFlag, recoveryTargetFlag)
-	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag)
-	c.MarkFlagsMutuallyExclusive("version", "complete-probation", "rollback", syncPluginsFlag)
+	c.MarkFlagsMutuallyExclusive("check", "complete-probation", "rollback", syncPluginsFlag, "stage-canary")
+	c.MarkFlagsMutuallyExclusive(hostVersionFlag, "complete-probation", "rollback", syncPluginsFlag, "stage-canary")
 	c.MarkFlagsRequiredTogether("rollback", "rollback-reason")
 	_ = c.Flags().MarkHidden(syncPluginsFlag)
 	return c
+}
+
+func (a *app) runStagedCanary(ctx context.Context, cfg loopworkflow.CanaryConfig, outPath string) error {
+	ev, err := runStageCanary(ctx, cfg)
+	if outPath = strings.TrimSpace(outPath); outPath != "" && ev.SHA256 != "" && ev.Version != "" {
+		raw, merr := json.MarshalIndent(ev, "", "  ")
+		if merr != nil {
+			return merr
+		}
+		raw = append(raw, '\n')
+		if werr := os.WriteFile(outPath, raw, 0o600); werr != nil {
+			return werr
+		}
+	}
+	if ev.SHA256 != "" {
+		_ = a.printJSON(ev)
+	}
+	return err
 }
 
 // syncByInstalled has the binary an update installed at path bring the plugins up
@@ -418,11 +467,15 @@ func (a *app) skipRelease(version, why string) {
 }
 
 func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version string) error {
-	why := canaryFailure(ctx, a.cfgPath, path)
+	name, why := canaryCheck(ctx, a.cfgPath, path)
 	if why == "" {
 		return nil
 	}
-	a.skipRelease(version, why)
+	// Live budget, status and capacity failures can be transient. Only
+	// the offline version probe diagnoses a broken local candidate.
+	if name == hostVersionFlag && ctx.Err() == nil {
+		a.skipRelease(version, why)
+	}
 	_, _ = fmt.Fprintf(w, "Skipping %s (%s); keeping the current binary.\n", version, why)
 	return fmt.Errorf("skipping %s: %s", version, why)
 }
@@ -430,6 +483,11 @@ func (a *app) canaryRelease(ctx context.Context, w io.Writer, path, version stri
 // canaryFailure runs the canary checks on the binary at path and says why the
 // first failed, "" when all passed.
 func canaryFailure(ctx context.Context, cfgPath, path string) string {
+	_, why := canaryCheck(ctx, cfgPath, path)
+	return why
+}
+
+func canaryCheck(ctx context.Context, cfgPath, path string) (string, string) {
 	for _, check := range canaryChecks {
 		name := strings.Join(check, " ")
 		args := check
@@ -442,10 +500,10 @@ func canaryFailure(ctx context.Context, cfgPath, path string) string {
 			if detail == "" {
 				detail = oneLine(err.Error())
 			}
-			return fmt.Sprintf("canary %s failed: %s", name, detail)
+			return name, fmt.Sprintf("canary %s failed: %s", name, detail)
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // warnUpdateConfig runs before handing control to a newer binary, which may

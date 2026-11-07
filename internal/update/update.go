@@ -197,7 +197,7 @@ func Run(ctx context.Context, w io.Writer, checkOnly bool) (Result, error) {
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := installRelease(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
 		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true
@@ -310,7 +310,7 @@ func selectVersion(ctx context.Context, w io.Writer, version string, checkOnly b
 	if res.Path, err = executable(); err != nil {
 		return res, fmt.Errorf("locating the running executable: %w", err)
 	}
-	if err := installRelease(ctx, up, rel, res.Path); err != nil {
+	if err := installRelease(ctx, up, rel, res.Path, source); err != nil {
 		return res, fmt.Errorf("updating %s failed (inspect the recovery journal before retrying): %w", res.Path, err)
 	}
 	res.Updated = true

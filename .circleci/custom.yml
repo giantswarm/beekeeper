@@ -97,6 +97,46 @@ jobs:
         name: Lint the chart and run its unit tests
         command: make helm-test
 
+  publish-canary-evidence:
+    docker:
+    - image: gsoci.azurecr.io/giantswarm/architect:8.6.43
+      entrypoint: /bin/bash
+    resource_class: medium
+    environment:
+      LANG: C.UTF-8
+    steps:
+    - checkout
+    - attach_workspace:
+        at: .
+    - architect/tools-info
+    - run:
+        name: Retry transient Rekor conflict lookups during blob signing
+        command: |
+          mkdir -p /tmp/beekeeper-cosign-bin
+          printf 'export BEEKEEPER_COSIGN_BINARY=%q\n' "$(command -v cosign)" >> "$BASH_ENV"
+          cp .circleci/cosign-retry.sh /tmp/beekeeper-cosign-bin/cosign
+          chmod 0755 /tmp/beekeeper-cosign-bin/cosign
+          echo 'export PATH=/tmp/beekeeper-cosign-bin:$PATH' >> "$BASH_ENV"
+    - run:
+        name: Run staged sandbox canary on release candidate and build evidence blobs
+        no_output_timeout: 10m
+        command: bash .circleci/publish-canary-evidence.sh
+    - architect/cosign-sign-verify:
+        kind: blob
+        refs_file: /tmp/.cosign_canary_blobs
+    - architect/generate-github-token
+    - run:
+        name: Upload signed canary evidence to GitHub Release
+        command: |
+          set -euo pipefail
+          for b in ./beekeeper-*-*.canary.json.bundle; do
+            cp "$b" /tmp/canary-artifacts/
+          done
+          gh release upload "$CIRCLE_TAG" ./beekeeper-*-*.canary.json ./beekeeper-*-*.canary.json.bundle --clobber
+    - store_artifacts:
+        path: /tmp/canary-artifacts
+        destination: canary-evidence
+
 workflows:
   build:
     jobs:
@@ -113,5 +153,16 @@ workflows:
     - test-stable-version
     - chart-test:
         filters:
+          tags:
+            only: /^v.*/
+    - publish-canary-evidence:
+        context: architect
+        requires:
+        - go-build
+        - test-loop-workflow
+        - upload-release-assets
+        filters:
+          branches:
+            ignore: /.*/
           tags:
             only: /^v.*/

@@ -42,7 +42,7 @@ mv -f -- "$dir/beekeeper" "$target"
 // installRelease holds the recovery lock through verification, canary checks
 // and durable replacement. Download, verification and the journal run as this
 // account; an installation it cannot write takes sudo for the replacement alone.
-func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string) error {
+func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate.Release, path string, source selfupdate.Source) error {
 	i, err := openInstallation(ctx, path)
 	if err != nil {
 		return fmt.Errorf("opening durable installation: %w", err)
@@ -80,6 +80,9 @@ func installRelease(ctx context.Context, up *selfupdate.Updater, rel *selfupdate
 	}
 	verifiedDigest, err := digest(staged)
 	if err != nil {
+		return err
+	}
+	if err := checkEvidence(ctx, source, rel, staged); err != nil {
 		return err
 	}
 	if canary != nil {

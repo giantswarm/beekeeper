@@ -1,5 +1,3 @@
-//go:build integration
-
 package loopworkflow
 
 import (
@@ -7,8 +5,8 @@ import (
 	"testing"
 )
 
-// The test executable doubles only as the external GitHub CLI and a Git
-// tracing wrapper. Beekeeper itself is always a separately built binary.
+// The test executable doubles only as the external GitHub CLI, Git tracing
+// wrapper, or sandbox Claude harness. Beekeeper itself is a separate binary.
 func TestMain(m *testing.M) {
 	if code, served := Serve(); served {
 		os.Exit(code)

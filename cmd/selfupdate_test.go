@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/giantswarm/beekeeper/internal/loopworkflow"
 	"github.com/giantswarm/beekeeper/internal/proc"
 	"github.com/giantswarm/beekeeper/internal/state"
 	"github.com/giantswarm/beekeeper/internal/update"
@@ -22,6 +23,8 @@ const (
 	selfUpdateRollbackFlag = "--rollback"
 	selfUpdateReasonFlag   = "--rollback-reason"
 	selfUpdateReason       = "candidate unhealthy"
+	selfUpdateStageFlag    = "--stage-canary"
+	selfUpdateVersionArg   = "--" + hostVersionFlag
 )
 
 // An update names the beekeeper processes it leaves on the old binary, pid
@@ -51,7 +54,7 @@ func TestLeftBehind(t *testing.T) {
 	}
 }
 
-func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
+func TestSelfUpdateCanaryChecksLiveConfigAndRetriesBudgetFailure(t *testing.T) {
 	const (
 		cfgSwitch            = "--" + configFlag
 		canaryCurrentVersion = "v1.4.0"
@@ -119,17 +122,17 @@ func TestSelfUpdateCanaryChecksLiveConfigAndSkipsFailingRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 1 || !strings.Contains(evs[0].Detail, canaryFailedVersion) || !strings.Contains(evs[0].Detail, "budget --gate") {
+	if len(evs) != 0 {
 		t.Fatalf("canary events = %+v", evs)
 	}
 
-	// Subsequent --check skips the failed release.
+	// Budget failures leave the candidate discoverable and retryable.
 	root = New()
 	root.SetArgs([]string{cfgSwitch, cfgPath, selfUpdateCmdName, selfUpdateCheckFlag})
 	root.SetOut(&out)
 	root.SetErr(io.Discard)
-	if err := root.Execute(); err != nil {
-		t.Fatalf("self-update --check after skip = %v", err)
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), canaryFailedVersion+" is newer") {
+		t.Fatalf("self-update --check after budget failure = %v", err)
 	}
 
 	// Verify all four canary checks run with --config when healthy.
@@ -180,6 +183,8 @@ func TestSelfUpdateRecoveryFlagsAreExclusiveAndRequireReason(t *testing.T) {
 		{selfUpdateCheckFlag, "--complete-probation"},
 		{"--complete-probation", selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
 		{selfUpdateCheckFlag, selfUpdateRollbackFlag, selfUpdateReasonFlag, selfUpdateReason},
+		{selfUpdateCheckFlag, selfUpdateStageFlag, "/tmp/candidate"},
+		{selfUpdateVersionArg, "v0.4.0", selfUpdateStageFlag, "/tmp/candidate"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			root := New()
@@ -232,7 +237,7 @@ func TestSelfUpdateVersionFlag(t *testing.T) {
 		return update.Result{Current: tag, Latest: tag}, nil
 	}
 	root := New()
-	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, "--version", tag})
+	root.SetArgs([]string{selfUpdateCmdName, selfUpdateCheckFlag, selfUpdateVersionArg, tag})
 	root.SetOut(io.Discard)
 	root.SetErr(io.Discard)
 	if err := root.Execute(); err != nil {
@@ -308,5 +313,51 @@ func TestSelfUpdateCanaryWithStoppedSupervisor(t *testing.T) {
 	}
 	if why := canaryFailure(context.Background(), "", "candidate"); !strings.Contains(why, "canary supervisor status failed") {
 		t.Fatalf("broken supervisor status passed canary: %q", why)
+	}
+}
+
+func TestSelfUpdateStageCanaryFlag(t *testing.T) {
+	prev := runStageCanary
+	t.Cleanup(func() { runStageCanary = prev })
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "candidate.canary.json")
+	var gotCfg loopworkflow.CanaryConfig
+	runStageCanary = func(_ context.Context, cfg loopworkflow.CanaryConfig) (update.CanaryEvidence, error) {
+		gotCfg = cfg
+		return update.CanaryEvidence{
+			Schema:      1,
+			Version:     "v0.99.0-rc.1",
+			Commit:      "0123456789abcdef0123456789abcdef01234567",
+			SHA256:      strings.Repeat("a", 64),
+			OS:          "canary-os",
+			Arch:        "canary-arch",
+			Status:      update.CanaryStatusSuccess,
+			Run:         cfg.Run,
+			MergeCommit: strings.Repeat("b", 40),
+		}, nil
+	}
+	var out bytes.Buffer
+	root := New()
+	root.SetArgs([]string{
+		selfUpdateCmdName,
+		selfUpdateStageFlag, "/staged/beekeeper",
+		"--canary-recorded",
+		"--canary-run", "run-123",
+		"--canary-output", outPath,
+	})
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotCfg.Candidate != "/staged/beekeeper" || !gotCfg.Recorded || gotCfg.Run != "run-123" {
+		t.Fatalf("StageCanary config = %+v", gotCfg)
+	}
+	written, err := os.ReadFile(outPath) //nolint:gosec // test output path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), `"status": "success"`) || !strings.Contains(out.String(), `"run": "run-123"`) {
+		t.Fatalf("unexpected canary output:\nfile=%s\nstdout=%s", written, out.String())
 	}
 }
