@@ -16,6 +16,7 @@ import (
 
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const publicationClaudeVersion = "2.1.291"
@@ -1124,5 +1125,129 @@ func TestCoordinatorRecoversStrandedPublicationTransfer(t *testing.T) {
 	}
 	if rig.a.hasUnrecoveredPublication(rec) {
 		t.Fatal("expected publication to be marked recovered")
+	}
+}
+
+const (
+	review3325SourceOnly    = "source only"
+	review3325DefaultTrunk  = "default trunk"
+	review3325WrongRepo     = "wrong repo"
+	review3325WrongBranch   = "wrong branch"
+	review3325WrongSession  = "wrong session"
+	review3325UnrelatedRepo = "unrelated repo"
+	review3325WrongRef      = "wrong ref"
+	review3325NewPR         = "new PR"
+	review3325Metadata      = "metadata"
+	review3325Authorized    = "authorized"
+	review3325Unassigned    = "unassigned"
+	review3325Superseded    = "superseded"
+	review3325Finished      = "finished"
+)
+
+func TestReview3325AssignedReviewerPublication(t *testing.T) {
+	for _, scenario := range []string{review3325Authorized, review3325Unassigned, claudeLoginExpired, review3325UnrelatedRepo, review3325WrongRef, review3325WrongSession, review3325Superseded, review3325Finished, review3325NewPR, review3325Metadata} {
+		t.Run(scenario, func(t *testing.T) {
+			rig := newPublicationRig(t)
+			const authorBranch = "fixture/author-repair"
+			if _, err := publishGit(context.Background(), rig.workspace, "push", rig.remote, rig.base+":refs/heads/"+authorBranch); err != nil {
+				t.Fatal(err)
+			}
+			head := rig.commit(t, "repair.txt", "repair\n")
+			p := rig.publication(t, head)
+			p.Title, p.Body = "", ""
+			rig.created = true
+			originalRead := readLoopPull
+			t.Cleanup(func() { readLoopPull = originalRead })
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: "giantswarm/beekeeper#42", State: superloop.Open, Branch: authorBranch, Head: rig.base}, nil
+			}
+			if err := rig.a.store.Update(func(st *state.State) ([]state.Event, error) {
+				start := &st.Starts[0]
+				start.Execution.Request.GitRef = authorBranch
+				round := state.DeskReview{ID: "repair-assignment", Ref: "giantswarm/beekeeper#42", Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
+				switch scenario {
+				case claudeLoginExpired:
+					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
+				case review3325UnrelatedRepo:
+					round.Ref = "other/repo#42"
+				case review3325WrongRef:
+					start.Execution.Request.GitRef = "fixture/unrelated"
+				case review3325WrongSession:
+					round.Reviewer = state.Party{Session: "different-session"}
+				case review3325Finished:
+					round.Result = &state.DeskReviewResult{}
+				case review3325NewPR:
+					rig.created = false
+				case review3325Metadata:
+					p.Title = "fix: metadata change"
+				}
+				if scenario != review3325Unassigned {
+					st.DeskReviews = append(st.DeskReviews, round)
+				}
+				if scenario == review3325Superseded {
+					next := round
+					next.ID = "next-assignment"
+					next.Round++
+					next.Reviewer = state.Party{Session: "next-session"}
+					st.DeskReviews = append(st.DeskReviews, next)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			st, err := rig.a.store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := rig.a.publishExecution(context.Background(), st, rig.request.Ref, p)
+			if scenario == review3325Authorized {
+				if err != nil || result.Branch != authorBranch || result.URL != publicationFixturePRURL {
+					t.Fatalf("authorized publication failed: %+v %v", result, err)
+				}
+			} else if scenario == review3325Unassigned || scenario == review3325WrongSession {
+				if err == nil && result.Branch == authorBranch {
+					t.Fatal("unassigned execution wrote author branch")
+				}
+			} else if err == nil {
+				t.Fatalf("invalid assignment %s admitted: %+v", scenario, result)
+			}
+			got, readErr := publishGit(context.Background(), rig.workspace, "ls-remote", rig.remote, "refs/heads/"+authorBranch)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			want := rig.base
+			if scenario == review3325Authorized {
+				want = head
+			}
+			if !strings.HasPrefix(got, want+"\t") {
+				t.Fatalf("author branch changed without authorization: %q", got)
+			}
+			if rig.creates != 0 || len(rig.edits) != 0 {
+				t.Fatal("reviewer created or edited metadata")
+			}
+		})
+	}
+}
+
+func TestReview3325GrantExpiresDuringBranchRead(t *testing.T) {
+	rig := newPublicationRig(t)
+	st, err := rig.a.store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := &st.Starts[0]
+	record := start.Execution
+	const branch = "fixture/lease-bound-review"
+	const ref = "giantswarm/beekeeper#42"
+	record.Request.GitRef = branch
+	st.DeskReviews = append(st.DeskReviews, state.DeskReview{ID: "lease-bound-round", Ref: ref, Head: rig.base, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()})
+	originalRead := readLoopPull
+	t.Cleanup(func() { readLoopPull = originalRead })
+	readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+		record.Lease.ExpiresAt = time.Now().Add(-time.Second)
+		return superloop.Pull{Ref: ref, State: superloop.Open, Branch: branch}, nil
+	}
+	if _, err := executionReviewWriteBranch(context.Background(), st, rig.request.Ref); err == nil {
+		t.Fatal("branch read outlived the lease but still returned a write grant")
 	}
 }

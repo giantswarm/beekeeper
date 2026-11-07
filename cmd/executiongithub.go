@@ -33,8 +33,11 @@ type workerGitHubToken struct {
 }
 
 type workerGitHubRequest struct {
-	Repository string `json:"repository"`
-	Write      bool   `json:"write"`
+	Repository  string `json:"repository"`
+	Write       bool   `json:"write"`
+	ResolvePush bool   `json:"resolve_push,omitempty"`
+	PushBranch  string `json:"push_branch,omitempty"`
+	PushReview  string `json:"push_review,omitempty"`
 }
 
 type workerOAuthTokenResponse struct {
@@ -161,6 +164,29 @@ func (a *app) workerGitHubLive(ref execution.Ref, request workerGitHubRequest) e
 	if request.Write && !slices.Contains(a.cfg.GitHub.AllowedOrgs, owner) {
 		return errors.New("worker GitHub repository is outside configured owners")
 	}
+	if request.PushBranch != "" {
+		branch := executionOwnedBranch(r)
+		if round := assignedExecutionReviewRound(st, ref); round != nil {
+			if request.PushReview != round.ID {
+				return refused("push review assignment changed")
+			}
+			if request.Repository != r.Request.Repository {
+				return refused("review push repository mismatch")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			branch, err = executionReviewWriteBranch(ctx, st, ref)
+			if err != nil {
+				return err
+			}
+		}
+		if assignedExecutionReviewRound(st, ref) == nil && request.PushReview != "" {
+			return refused("push review assignment ended")
+		}
+		if !request.Write || request.PushBranch != branch {
+			return refused("push branch authorization changed")
+		}
+	}
 	if a.cfg.GitHub.WorkerApp == nil || a.cfg.GitHub.WorkerApp.Validate() != nil {
 		return errors.New("worker GitHub App is no longer configured")
 	}
@@ -215,6 +241,27 @@ func (a *app) executionGitHub(ctx context.Context, host string, req execution.Ca
 	var request workerGitHubRequest
 	if req.Operation != workerGitHubIssue || execution.Decode(req.Payload, &request) != nil {
 		return nil, errors.New("invalid worker GitHub request")
+	}
+	if request.ResolvePush {
+		if !request.Write {
+			return nil, refused("push must target the execution repository")
+		}
+		if err := a.workerGitHubLive(req.Ref, request); err != nil {
+			return nil, err
+		}
+		branch := executionOwnedBranch(r)
+		reviewID := ""
+		if round := assignedExecutionReviewRound(st, req.Ref); round != nil {
+			reviewID = round.ID
+			if request.Repository != r.Request.Repository {
+				return nil, refused("review push repository mismatch")
+			}
+			branch, err = executionReviewWriteBranch(ctx, st, req.Ref)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return workerGitHubPushTarget{Branch: branch, ReviewID: reviewID}, nil
 	}
 	// Serialize issuance and revocation independently of the scheduling store;
 	// GitHub and vault I/O never hold its lock.

@@ -259,6 +259,7 @@ alone, until exit 3 says none is left.`,
 			if sc.prReferences, err = sessionPRReferences(cmd.Context(), cl.GH, st, sessions, me); err != nil {
 				return err
 			}
+			a.skipUnmergedBacklog(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			a.skipClaimed(cmd.Context(), cmd.ErrOrStderr(), cands, func() *board.Candidate { return nextFree(st, cands, sc).Pick })
 			var res nextResult
 			if claim {
@@ -543,9 +544,14 @@ func servingWork(st *state.State, sessions []*claude.Session, work []claude.Work
 		if i >= len(work) || holder || registered && agentIdle(st, p) || !registered && (s.LastActive.Before(since) || endedOwner(st, p)) {
 			continue
 		}
-		refs := work[i].Refs
+		refs := slices.Clone(work[i].Refs[:min(claude.Current, len(work[i].Refs))])
+		for _, c := range work[i].Created {
+			if !slices.ContainsFunc(refs, func(r string) bool { return strings.EqualFold(r, c) }) {
+				refs = append(refs, c)
+			}
+		}
 		if len(refs) > 0 || titleRef.MatchString(p.Name) {
-			out = append(out, sessionWork{party: p, refs: refs[:min(claude.Current, len(refs))], title: p.Name})
+			out = append(out, sessionWork{party: p, refs: refs, title: p.Name})
 		}
 	}
 	return out

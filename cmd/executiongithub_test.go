@@ -24,6 +24,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/secret/secrettest"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const (
@@ -577,5 +578,87 @@ func TestWorkerGitHubRefreshPersistenceFailureExplainsRecovery(t *testing.T) {
 	_, err := a.refreshWorkerGitHubToken(context.Background(), "")
 	if err == nil || !strings.Contains(err.Error(), "authorization is lost") || !strings.Contains(err.Error(), "beekeeper agents hosts github-login") {
 		t.Fatalf("missing persistence recovery instructions: %v", err)
+	}
+}
+
+func TestReview3325DirectPushAssignment(t *testing.T) {
+	for _, scenario := range []string{review3325Authorized, review3325SourceOnly, review3325DefaultTrunk, claudeLoginExpired, review3325WrongRepo, review3325WrongBranch, review3325WrongSession, review3325Superseded, workerGitHubCompleted} {
+		t.Run(scenario, func(t *testing.T) {
+			a, r := workerGitHubTestApp(t)
+			const branch = "fixture/foreign-source"
+			originalRead := readLoopPull
+			t.Cleanup(func() { readLoopPull = originalRead })
+			readLoopPull = func(context.Context, string) (superloop.Pull, error) {
+				return superloop.Pull{Ref: r.Repository + "#7", State: superloop.Open, Branch: branch}, nil
+			}
+			if err := a.store.Update(func(st *state.State) ([]state.Event, error) {
+				start := &st.Starts[0]
+				start.Execution.Request.GitRef = branch
+				start.Execution.Handle.Commit = strings.Repeat("a", 40)
+				start.Execution.Lease = &execution.LeaseGrant{ExpiresAt: time.Now().Add(time.Hour)}
+				round := state.DeskReview{ID: "assigned-push", Ref: r.Repository + "#7", Head: start.Execution.Handle.Commit, Round: 1, Reviewer: start.Party, AssignedAt: time.Now()}
+				switch scenario {
+				case review3325DefaultTrunk:
+					start.Execution.Request.GitRef = "trunk"
+				case claudeLoginExpired:
+					start.Execution.Lease.ExpiresAt = time.Now().Add(-time.Second)
+				case review3325WrongBranch:
+					start.Execution.Request.GitRef = "other/branch"
+				case review3325WrongSession:
+					round.Reviewer = state.Party{Session: "other-session"}
+				case workerGitHubCompleted:
+					round.Result = &state.DeskReviewResult{}
+				}
+				if scenario != review3325SourceOnly && scenario != review3325DefaultTrunk {
+					st.DeskReviews = append(st.DeskReviews, round)
+				}
+				if scenario == review3325Superseded {
+					next := round
+					next.ID = "next-round"
+					next.Round++
+					next.Reviewer = state.Party{Session: "next-session"}
+					st.DeskReviews = append(st.DeskReviews, next)
+				}
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			request := workerGitHubRequest{Repository: r.Repository, Write: true, ResolvePush: true}
+			if scenario == review3325WrongRepo {
+				request.Repository = "example/private"
+			}
+			var target workerGitHubPushTarget
+			err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &target, false)
+			switch scenario {
+			case review3325Authorized:
+				if err != nil || target.Branch != branch || target.ReviewID == "" {
+					t.Fatalf("assigned branch refused: %+v %v", target, err)
+				}
+			case review3325SourceOnly, review3325DefaultTrunk, review3325WrongSession:
+				if err == nil && target.Branch != execution.GitHubBranch(r.Ref) {
+					t.Fatalf("source or name granted foreign write: %+v", target)
+				}
+			default:
+				if err == nil {
+					t.Fatalf("invalid assignment admitted: %+v", target)
+				}
+			}
+			// Revalidation on credential use must reject a branch other than the
+			// resolved target, before any credential mint or network write.
+			if scenario == review3325Authorized {
+				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: target.ReviewID}); err != nil {
+					t.Fatalf("current round push refused: %v", err)
+				}
+				if err := a.workerGitHubLive(r.Ref, workerGitHubRequest{Repository: r.Repository, Write: true, PushBranch: branch, PushReview: "different-round"}); err == nil {
+					t.Fatal("another round borrowed the branch grant")
+				}
+			}
+			request.ResolvePush = false
+			request.PushBranch = "unrelated/branch"
+			var ignored workerGitHubToken
+			if err := coordinatorTestCall(t, a, r, workerGitHubIssue, request, &ignored, false); err == nil {
+				t.Fatal("mismatched branch reached credential issuance")
+			}
+		})
 	}
 }

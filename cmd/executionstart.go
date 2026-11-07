@@ -64,6 +64,15 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	if len(guard.CredentialShapes(brief)) > 0 {
 		return refused("brief contains credential-shaped data; provision credentials independently on the execution host")
 	}
+	issues := briefIssues(brief)
+	for _, iss := range issues {
+		if err := a.claimGate(ctx, name, iss, o.Force, o.DryRun); err != nil {
+			return err
+		}
+	}
+	if err := a.openPullStartGate(ctx, name, brief, issues, o.Review || o.ReviewOfSelfHosted, o.Force, o.DryRun); err != nil {
+		return err
+	}
 	k := a.liveCapacity()
 	if o.Harness == harnessAuto {
 		if len(k.Choices) == 0 {
@@ -151,7 +160,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 	workspace := path.Join(host.WorkspaceRoot, string(id), "workspace")
 	prompt := strings.ReplaceAll(taskPrompt(brief), scratchpadMark, path.Join(workspace, ".beekeeper-scratch"))
 	if o.Review {
-		prompt += "\n\nExecution review access: use `beekeeper agents review` to read the assigned pull request and linked issues, and `beekeeper agents review --diff` to read its diff through the coordinator. Post the required review with `beekeeper agents review --body-file <file>`; it returns the exact review URL for your completion report. If the assignment is not available yet, retry after the supervisor finishes recording the start. Review the assigned head; do not publish or park as an author.\n"
+		prompt += "\n\nExecution review access: use `beekeeper agents review` to read the assigned pull request and linked issues, and `beekeeper agents review --diff` to read its diff through the coordinator. If you fix your own review findings on the pull request branch, commit in this workspace, push the fast-forward fix with `beekeeper agents publish` (without `--title` or `--body-file`), and wait for green CI before posting your review. Post the required review with `beekeeper agents review --body-file <file>`; it returns the exact review URL for your completion report. If the assignment is not available yet, retry after the supervisor finishes recording the start. Do not create a new pull request or park as an author.\n"
 	} else if a.cfg.GitHub.WorkerApp != nil {
 		prompt += "\n\nWorker GitHub access: use gh for issues, PRs and checks across repositories you can reach. Cross-repository calls name --repo owner/repo; gh api uses repos/owner/repo/.... Commit in the owned workspace (or a cloned repository under .beekeeper-scratch) and push with git push origin HEAD:refs/heads/" + execution.GitHubBranch(execution.Ref{Execution: id, Generation: 1}) + ". Open each PR with gh pr create, then park on its URL for independent review. Merges stay on the coordinator. Never expose credential environment values.\n"
 	} else {
@@ -197,7 +206,7 @@ func (a *app) startSSHExecution(ctx context.Context, name, briefPath string, o e
 		endpoint := host.Endpoint
 		rec := &state.ExecutionRecord{Endpoint: &endpoint, Handle: execution.Handle{Ref: r.Ref, Repository: r.Repository, Unit: execution.UnitName(r.Ref), ConversationID: r.ConversationID}, Request: r, RequestDigest: r.Digest(), Selector: o.Host, Phase: executionPending, StartUnsent: true, Provider: provider, Bucket: bucket, ReservedAt: a.now.UTC(), Observation: execution.Observation{ProcessState: execution.Unknown, Reachability: execution.Unknown}}
 		s := state.Start{Party: state.Party{Session: r.ConversationID, Name: name, Host: string(host.Identity), Person: by.Person, Team: by.Team}, Mode: "acceptEdits", By: by, At: a.now.UTC(), Harness: r.Harness, Model: r.Model, Effort: r.Effort, Execution: rec}
-		if _, err := a.recordStart(current, s, task, briefIssue(brief), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
+		if _, err := a.recordStart(current, s, task, strings.Join(issues, ","), func(p state.Party) bool { _, live := claude.Live(sessions, p); return live }); err != nil {
 			return nil, err
 		}
 		ref := r.Ref

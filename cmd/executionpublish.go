@@ -21,6 +21,7 @@ import (
 	"github.com/giantswarm/beekeeper/internal/execution"
 	"github.com/giantswarm/beekeeper/internal/github"
 	"github.com/giantswarm/beekeeper/internal/state"
+	"github.com/giantswarm/beekeeper/internal/superloop"
 )
 
 const executionPublish = "publish"
@@ -79,16 +80,63 @@ func executionOwnedBranch(r *state.ExecutionRecord) string {
 		if r.Request.GitHub {
 			return execution.GitHubBranch(r.Handle.Ref)
 		}
-		if r.Published != nil && r.Published.Branch != "" {
-			return r.Published.Branch
-		}
-		if g := strings.TrimSpace(r.Request.GitRef); g != "" && g != "HEAD" && g != "main" && g != "master" && !publicationCommit(g) {
-			return g
-		}
 		return executionBranch(r.Handle.Ref)
 	}
 	return ""
 }
+
+func assignedExecutionReviewRound(st *state.State, ref execution.Ref) *state.DeskReview {
+	if st == nil {
+		return nil
+	}
+	_, i := executionRecord(st, ref)
+	if i < 0 || i >= len(st.Starts) {
+		return nil
+	}
+	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
+		candidate := &st.DeskReviews[n]
+		if sameReviewSession(candidate.Reviewer, st.Starts[i].Party) {
+			return candidate
+		}
+	}
+	return nil
+}
+
+// executionReviewWriteBranch derives the write grant from the latest durable
+// review assignment and its concrete execution session. Source selection alone
+// never grants write access. Callers also require a live execution lease.
+func executionReviewWriteBranch(ctx context.Context, st *state.State, ref execution.Ref) (string, error) {
+	r, i := executionRecord(st, ref)
+	round := assignedExecutionReviewRound(st, ref)
+	if r == nil || r.Completed || r.Terminal() || r.Lease == nil || !r.Lease.ExpiresAt.After(time.Now()) || i < 0 || round == nil || round.ID == "" || round.Round <= 0 || round.Result != nil || round.Head != r.Handle.Commit {
+		return "", refused("no active review branch assignment")
+	}
+	for n := len(st.DeskReviews) - 1; n >= 0; n-- {
+		candidate := &st.DeskReviews[n]
+		if strings.EqualFold(candidate.Ref, round.Ref) {
+			if candidate.ID != round.ID {
+				return "", refused("review branch assignment was superseded")
+			}
+			break
+		}
+	}
+	pr, ok := parseRef(round.Ref)
+	if !ok || !strings.EqualFold(pr.Repo, r.Request.Repository) || !sameReviewSession(round.Reviewer, st.Starts[i].Party) {
+		return "", refused("review branch assignment identity mismatch")
+	}
+	pull, err := readLoopPull(ctx, round.Ref)
+	if err != nil {
+		return "", err
+	}
+	if !r.Lease.ExpiresAt.After(time.Now()) {
+		return "", refused("review branch assignment expired during revalidation")
+	}
+	if pull.State != superloop.Open || !strings.EqualFold(pull.Ref, round.Ref) || pull.Branch == "" || pull.Branch != r.Request.GitRef {
+		return "", refused("review branch assignment no longer matches the open pull request")
+	}
+	return pull.Branch, nil
+}
+
 func publicationCommit(s string) bool {
 	b, err := hex.DecodeString(s)
 	return err == nil && len(b) == 20
@@ -358,6 +406,10 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 	if p.SyncBase && (p.BundleDigest != "" || p.Title != "" || p.Body != "") {
 		return result, refused("base synchronization cannot publish a PR")
 	}
+	reviewRound := assignedExecutionReviewRound(st, ref)
+	if reviewRound != nil && (strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Body) != "") {
+		return result, refused("reviewers may push self-fix commits to the assigned pull request branch, not create or edit pull request metadata")
+	}
 	write := func() (context.Context, context.CancelFunc, error) {
 		if _, err := checkAuthority(st, ref); err != nil {
 			return nil, nil, err
@@ -523,20 +575,65 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 		if reason := outboundGuard(a.cfg.Outbound).PublicationRefusal(p.Title+"\n"+p.Body, messages+"\n"+added.String()); reason != "" {
 			return result, refused("%s", reason)
 		}
+		if reviewRound != nil {
+			result.Branch, err = executionReviewWriteBranch(ctx, st, ref)
+			if err != nil {
+				return result, err
+			}
+		}
 		// Reconcile a lost create response by the exact owned branch. An existing
 		// PR takes only the title and body this publication names.
 		pulls, listErr := ownedPulls(ctx, r.Request.Repository, result.Branch)
 		if listErr != nil {
 			return result, listErr
 		}
-		if len(pulls) == 1 && pulls[0].State != "OPEN" {
+		if reviewRound != nil {
+			if len(pulls) != 1 || pulls[0].State != github.Open {
+				return result, refused("reviewer publication requires the assigned open pull request")
+			}
+			if prRef, ok := parseRef(pulls[0].URL); !ok || !strings.EqualFold(refName(prRef), reviewRound.Ref) {
+				return result, refused("reviewer publication must target the assigned pull request")
+			}
+		}
+		if len(pulls) == 1 && pulls[0].State != github.Open {
 			return result, refused("owned pull request is already closed; a new execution is required")
 		}
 		if len(pulls) == 0 && (strings.TrimSpace(p.Title) == "" || strings.TrimSpace(p.Body) == "") {
 			return result, refused("first publication requires --title and --body-file")
 		}
+		var absorbs, closing []string
+		if len(pulls) == 0 {
+			absorbs = superloop.ParseAbsorbedPulls(r.Request.Repository+"#0", p.Title, p.Body)
+			if len(absorbs) > 0 {
+				absorbedIssues, absorbErr := absorbedClosingIssues(ctx, st, absorbs)
+				if absorbErr != nil {
+					return result, absorbErr
+				}
+				p.Body = superloop.AppendClosingKeywords(r.Request.Repository+"#0", p.Body, absorbedIssues)
+			}
+			closing = superloop.ParseClosingIssues(r.Request.Repository+"#0", p.Title+"\n"+p.Body)
+			if len(closing) > 0 {
+				openPulls, listErr := readRepoOpenPullsWithGH(ctx, executionPublishGH, r.Request.Repository)
+				if listErr != nil {
+					return result, refused("open pull requests for %s cannot be read (%v); retry publication once GitHub is readable", r.Request.Repository, listErr)
+				}
+				matched, prURL, findErr := findOpenPullClosingIssues(ctx, executionPublishGH, r.Request.Repository, openPulls, result.Branch, closing, absorbs)
+				if findErr != nil {
+					return result, refused("open pull requests for %s cannot be read (%v); retry publication once GitHub is readable", r.Request.Repository, findErr)
+				}
+				if matched != "" {
+					return result, refused("%s already has an open pull request %s; update %s or combine with it instead of opening a duplicate PR", matched, prURL, prURL)
+				}
+			}
+		}
 		if _, liveErr := checkAuthority(st, ref); liveErr != nil {
 			return result, liveErr
+		}
+		if reviewRound != nil {
+			branch, authErr := executionReviewWriteBranch(ctx, st, ref)
+			if authErr != nil || branch != result.Branch {
+				return result, refused("review branch authorization changed")
+			}
 		}
 		if _, err = publishGit(ctx, repo, "push", remote, p.Head+":refs/heads/"+result.Branch); err != nil {
 			return result, err
@@ -564,6 +661,12 @@ func (a *app) publishExecutionWithMode(ctx context.Context, st *state.State, ref
 				}
 			} else {
 				result.URL = strings.TrimSpace(string(raw))
+			}
+			if len(closing) > 0 {
+				if _, idx := executionRecord(st, ref); idx >= 0 && idx < len(st.Starts) {
+					party := st.Starts[idx].Party
+					_ = recordSessionIssues(st, party, party, time.Now(), closing)
+				}
 			}
 		}
 	}

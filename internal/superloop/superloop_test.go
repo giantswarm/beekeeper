@@ -1603,3 +1603,107 @@ func TestParseAbsorbedPullsAndPlanWithdrawsRescueWorkers(t *testing.T) {
 		t.Fatalf("ended refs = %v, want [%s]", endedRefs, origB)
 	}
 }
+
+func TestParseClosingIssuesAndAppendClosingKeywords(t *testing.T) {
+	const selfRef = "o/r#400"
+	body := "Combines https://github.com/o/r/pull/401 and https://github.com/o/r/pull/402.\n" +
+		"Closes https://github.com/o/r/issues/50, /51 and #52\n" +
+		"Fixes:\n- https://github.com/o/r/issues/53\n- o/r#54\n\n" +
+		"Related: https://github.com/o/r/issues/99\n" +
+		"This does not fix https://github.com/o/r/issues/95\n" +
+		"- Does not close https://github.com/o/r/issues/96\n" +
+		"Do not resolve #97\n" +
+		"Partially fixes https://github.com/o/r/issues/98\n" +
+		"Use `Closes https://github.com/o/r/issues/90` in the footer.\n" +
+		"Closes `https://github.com/o/r/issues/91` when ready.\n" +
+		"> Closes https://github.com/o/r/issues/92\n" +
+		"    Closes https://github.com/o/r/issues/93\n" +
+		"```markdown\nCloses https://github.com/o/r/issues/94\nFixes #89\n```\n" +
+		"~~~\nResolves https://github.com/o/r/issues/88\n~~~\n"
+	got := ParseClosingIssues(selfRef, body)
+	want := []string{"o/r#50", "o/r#51", "o/r#52", "o/r#53", "o/r#54"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ParseClosingIssues = %v, want %v", got, want)
+	}
+	appended := AppendClosingKeywords(selfRef, "Combines https://github.com/o/r/pull/401.\nThis does not fix https://github.com/o/r/issues/51.\n```markdown\nCloses https://github.com/o/r/issues/52\n```\n\nCloses https://github.com/o/r/issues/50", []string{"o/r#50", "o/r#51", "https://github.com/o/r/issues/52"})
+	for _, wantLine := range []string{
+		"Closes https://github.com/o/r/issues/50",
+		"Closes https://github.com/o/r/issues/51",
+		"Closes https://github.com/o/r/issues/52",
+	} {
+		if !strings.Contains(appended, wantLine) {
+			t.Fatalf("AppendClosingKeywords missing %q in:\n%s", wantLine, appended)
+		}
+	}
+	if strings.Count(appended, "Closes https://github.com/o/r/issues/50") != 1 {
+		t.Fatalf("AppendClosingKeywords duplicated existing issue:\n%s", appended)
+	}
+}
+
+func TestReview3325MarkdownSafety(t *testing.T) {
+	const selfRef = "o/r#400"
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "multiline inline code span closing",
+			body: "Example:\n`code start\nCloses https://github.com/o/r/issues/55\nend`",
+		},
+		{
+			name: "lazy blockquote continuation closing",
+			body: "> Quoted comment\nCloses https://github.com/o/r/issues/55",
+		},
+		{
+			name: "lazy blockquote list closing",
+			body: "> Closes:\n- https://github.com/o/r/issues/55",
+		},
+		{
+			name: "parenthesized negation closing",
+			body: "Does not (fix https://github.com/o/r/issues/55).",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseClosingIssues(selfRef, tc.body); len(got) != 0 {
+				t.Fatalf("ParseClosingIssues(%q) = %v, want empty", tc.body, got)
+			}
+			appended := AppendClosingKeywords(selfRef, tc.body, []string{"o/r#55"})
+			if !strings.Contains(appended, "\n\nCloses https://github.com/o/r/issues/55") {
+				t.Fatalf("AppendClosingKeywords failed to append missing closing line to:\n%s", appended)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		title string
+		body  string
+	}{
+		{
+			name: "multiline inline code span absorb",
+			body: "Example:\n`code start\nCombines https://github.com/o/r/pull/55\nend`",
+		},
+		{
+			name: "lazy blockquote continuation absorb",
+			body: "> Quoted comment\nCombines https://github.com/o/r/pull/55",
+		},
+		{
+			name: "lazy blockquote list absorb",
+			body: "> Combines:\n- https://github.com/o/r/pull/55",
+		},
+		{
+			name: "parenthesized negation absorb",
+			body: "Do not (combine https://github.com/o/r/pull/55).",
+		},
+		{
+			name:  "parenthesized negation absorb in title",
+			title: "fix: do not (supersede #55)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseAbsorbedPulls(selfRef, tc.title, tc.body); len(got) != 0 {
+				t.Fatalf("ParseAbsorbedPulls(%q, %q) = %v, want empty", tc.title, tc.body, got)
+			}
+		})
+	}
+}
