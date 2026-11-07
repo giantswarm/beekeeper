@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -311,7 +310,9 @@ func TestRetainedRecoveryController(t *testing.T) {
 	writeErr := writer.Update(func(*state.State) ([]state.Event, error) { return nil, nil })
 	var fence map[string]any
 	fenced, fenceErr := d.store.ReadFile("recovery-writer.json", &fence)
-	if j.RolledBack() && (!fenced || fenceErr != nil || !errors.Is(writeErr, state.ErrRecoveryWriterFenced)) {
+	// This bridge keeps rc.224's state package, which predates the exported
+	// fence-error sentinel. Exercise its actual writer refusal contract.
+	if j.RolledBack() && (!fenced || fenceErr != nil || writeErr == nil || !strings.Contains(writeErr.Error(), "state writes fenced after binary recovery")) {
 		t.Fatalf("rollback failed to fence candidate writes: fence=%v, %v, write=%v\n%s", fenced, fenceErr, writeErr, out)
 	}
 	if !j.Settled() || j.RolledBack() || j.Observed == nil || !j.Observed.ProbePassed {
