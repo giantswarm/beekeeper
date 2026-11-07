@@ -530,14 +530,14 @@ func TestRetainedRecoveryController(t *testing.T) {
 	if path == "" {
 		t.Skip("set BEEKEEPER_TEST_RETAINED_CONTROLLER to the retained release binary")
 	}
-	good, err := os.ReadFile(path)
+	good, err := os.ReadFile(path) //nolint:gosec // explicit integration-test release executable
 	if err != nil {
 		t.Fatal(err)
 	}
 	var next []byte
 	candidate := os.Getenv("BEEKEEPER_TEST_RECOVERY_CANDIDATE")
 	if candidate != "" {
-		next, err = os.ReadFile(candidate)
+		next, err = os.ReadFile(candidate) //nolint:gosec // explicit integration-test release executable
 		if err != nil {
 			t.Fatal(err)
 		}
