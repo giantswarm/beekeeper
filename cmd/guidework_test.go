@@ -252,8 +252,8 @@ func TestGuideReportsStartNowAndRetainBoundaryAcrossFeeds(t *testing.T) {
 		t.Fatal("replayed history on another feed")
 	}
 	st.GuideWork = []state.GuideWork{
-		{ID: 1, Source: "old-a", Due: now.Add(-48 * time.Hour), Text: "first"},
-		{ID: 2, Source: "old-b", Due: now.Add(-48 * time.Hour), Text: "second"},
+		{ID: 1, Source: "old-a", Due: now.Add(-48 * time.Hour), Text: "historical problem alpha"},
+		{ID: 2, Source: "old-b", Due: now.Add(-48 * time.Hour), Text: "historical problem beta"},
 		{ID: 3, Due: now.Add(-48 * time.Hour), Text: "explicit guide task"},
 	}
 	guideReportEvents(st, nil, now)
