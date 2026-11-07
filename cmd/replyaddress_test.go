@@ -63,7 +63,7 @@ func TestGuideRepliesToACodexWorkerByRosterName(t *testing.T) {
 	if err := hookCmd.Execute(); err != nil {
 		t.Fatalf("hook pretooluse: %v", err)
 	}
-	if !strings.Contains(out.String(), "Delivered by beekeeper") || !strings.Contains(out.String(), "codex inbox of "+workerName) {
+	if !strings.Contains(out.String(), "Handled by beekeeper") || !strings.Contains(out.String(), "codex inbox of "+workerName) {
 		t.Fatalf("hook output %s, want the delivery to the codex inbox", out.String())
 	}
 	msgs, err := codex.Drain(inbox)
